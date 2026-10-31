@@ -55,6 +55,9 @@ M = [
  ("G4-7 terminal catch dropped on an fs promise", 4, [('const settled = p.then(closeLate, noop);', 'const settled = p.then(closeLate);')]),
  ("G4-8 account_state counted as a witness", 4, [('const WITNESS_CLASSES = ["sessions_json", "shell_snapshots"]', 'const WITNESS_CLASSES = ["sessions_json", "shell_snapshots", "account_state"]')]),
  ("G4-9 an all-inconclusive headline collapses to false", 4, [('        : TRIGGER_CLASSES.some((c) => results[c] === "inconclusive")\n          ? "inconclusive"\n          : "false",', '        : "false",')]),
+ ("G4-11 the post-open dev/ino re-check dropped", 4, [('      if (again.dev !== expect.dev || again.ino !== expect.ino || again.isSymbolicLink()) {', '      if (false) {')]),
+ ("G4-12 the slot refund on a pre-scan exit removed", 4, [('      if (!scanStarted) lim.starts.pop();', '')]),
+ ("G4-13 a cut class with entries reads unknown instead of counted", 4, [('  if (a.visited && a.entries > 0) return "counted"; // a lower bound is still a count, even when the class was cut off\n', '')]),
  ("G4-10 a symlinked class reads as zero instead of unknown", 4, [('      primary.symlink++;\n      cutAll(step);\n      return;', '      primary.symlink++;\n      return;')]),
 ]
 def apply(idx, path):
@@ -98,8 +101,8 @@ for ((i = 0; i < N; i++)); do
     FAILED=1
   fi
 done
-if [[ "$LANDED" -lt 20 ]]; then
-  printf 'FLOOR: only %d mutations landed (expected 20)\n' "$LANDED"
+if [[ "$LANDED" -lt 23 ]]; then
+  printf 'FLOOR: only %d mutations landed (expected 23)\n' "$LANDED"
   exit 1
 fi
 run_vitest; rc=$?

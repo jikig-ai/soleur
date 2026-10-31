@@ -15,6 +15,7 @@ import {
   SUNSET_UTC,
   TRIGGER_CLASSES,
   bucketCount,
+  buildResult,
   defaultCensusDeps,
   handleHomeCensus,
   resolveRoots,
@@ -321,6 +322,8 @@ describe("filesystem-call limit (import forms)", () => {
         if (!["lstat", "opendir"].includes(n)) bad.push(`fs import of ${n}`);
       }
     }
+    const ALLOWED_SPECS = new Set(["node:fs/promises", "node:perf_hooks", "node:os", "pino", "@sentry/nextjs", "@/lib/internal-auth"]);
+    for (const m of src.matchAll(/\bfrom\s*["']([^"']+)["']/g)) if (!ALLOWED_SPECS.has(m[1])) bad.push(`unreviewed import ${m[1]}`);
     for (const m of src.matchAll(/\bfs\.(\w+)/g)) if (!["lstat", "opendir"].includes(m[1])) bad.push(`fs.${m[1]}`);
     for (const m of src.matchAll(/\b(?:dir|d)\.(\w+)\(/g)) if (!["read", "close"].includes(m[1])) bad.push(`dir.${m[1]}`);
     return bad;
@@ -354,6 +357,8 @@ describe("filesystem-call limit (import forms)", () => {
         ["fs.promises.readFile(p);", "fs.promises"],
         ["dir.readSync();", "dir.readSync"],
         ["for await (const e of d.entries()) {}", "dir.entries"],
+        ["import { glob } from 'glob';", "unreviewed import glob"],
+        ["import { z } from '@/lib/anything-else';", "unreviewed import @/lib/anything-else"],
       ];
       for (const [i, [src, expected]] of cases.entries()) {
         const p = join(dir, `m${i}.ts`);
@@ -1087,10 +1092,10 @@ describe("trigger script schema parity", () => {
   const script = readFileSync(resolve(__dirname, "../../scripts/home-census-trigger.sh"), "utf8");
   const interp = /^INTERPRETATION="([^"]*)"$/m.exec(script)?.[1] ?? "";
   const program = (name: string) => {
-    const m = new RegExp(`${name}\\(\\) \\{[\\s\\S]*?jq -e[r]? --arg interp "\\$INTERPRETATION" '([\\s\\S]*?)'`).exec(script);
+    const m = new RegExp(`${name}\\(\\) \\{[\\s\\S]*?jq -es?r? --arg interp "\\$INTERPRETATION" '([\\s\\S]*?)'`).exec(script);
     return m?.[1] ?? "";
   };
-  const jq = (prog: string, json: unknown) => spawnSync("jq", ["-e", "--arg", "interp", interp, prog], { input: JSON.stringify(json) });
+  const jq = (prog: string, json: unknown) => spawnSync("jq", ["-es", "--arg", "interp", interp, prog], { input: JSON.stringify(json) });
 
   it("the script's INTERPRETATION equals the one the server emits", async () => {
     const { deps } = makeDeps();
@@ -1126,12 +1131,172 @@ describe("trigger script schema parity", () => {
   it("failure_class accepts every failure body the server emits and nothing else", async () => {
     const prog = program("failure_class");
     expect(prog.length).toBeGreaterThan(100);
+    const ERRORS = ["unavailable", "unauthorized", "sunset", "payload_too_large", "invalid_json", "invalid_body", "invalid_mode", "build_mismatch", "young_container", "busy", "rate_limited", "control_failed", "internal"];
+    for (const e of ERRORS) {
+      const r = jq(prog, { schema_version: 1, ok: false, error_class: e, interpretation: interp });
+      expect(r.stdout.toString().trim(), e).toBe(JSON.stringify(e));
+    }
+    expect(jq(prog, { schema_version: 1, ok: false, error_class: "busy", interpretation: "tampered" }).stdout.toString().trim()).toBe("");
+    expect(jq(prog, { schema_version: 1, ok: false, error_class: "busy", interpretation: interp, extra: "x" }).stdout.toString().trim()).toBe("");
+  });
+
+  it("body_valid accepts EVERY member of every closed set the server can emit (a real run is never lost to a stale list)", async () => {
+    const prog = program("body_valid");
     const { deps } = makeDeps();
-    const res = await handleHomeCensus(post({ run_id: 1, mode: "dry_run" }, "Bearer wrong"), deps);
-    const json = JSON.parse(await res.text());
-    const ok = jq(`select(${prog.replace(/^select\(/, "").replace(/\) \| \.error_class$/, "")}) | .error_class`, json);
-    expect(ok.stdout.toString().trim()).toBe('"unauthorized"');
-    json.extra = "x";
-    expect(jq(`select(${prog.replace(/^select\(/, "").replace(/\) \| \.error_class$/, "")}) | .error_class`, json).status).not.toBe(0);
+    const base = JSON.parse(await (await handleHomeCensus(post({ run_id: 8, mode: "dry_run" }), deps)).text());
+    const ok = (mut: (b: any) => void) => {
+      const b = JSON.parse(JSON.stringify(base));
+      mut(b);
+      return jq(prog, b).status === 0;
+    };
+    expect(ok(() => {})).toBe(true);
+    for (const v of ["none", "entry_cap", "time_cap", "load_shed", "class_budget"]) expect(ok((b) => (b.truncation_reason = v)), v).toBe(true);
+    for (const v of ["none", "env_home_rejected", "homedir_unavailable"]) expect(ok((b) => (b.roots_note = v)), v).toBe(true);
+    for (const v of ["true", "false", "unknown", "inconclusive"]) expect(ok((b) => (b.trigger_class_nonzero = v)), v).toBe(true);
+    for (const v of ["lt_1h", "lt_24h", "lt_7d", "ge_7d"]) expect(ok((b) => (b.uptime_bucket = v)), v).toBe(true);
+    for (const v of ["young", "mature"]) expect(ok((b) => (b.evidence = v)), v).toBe(true);
+    for (const v of ["passed", "failed"]) expect(ok((b) => (b.control = v)), v).toBe(true);
+    for (const v of ["dry_run", "real"]) expect(ok((b) => (b.mode = v)), v).toBe(true);
+    for (const v of ["synthetic", "container_home"]) expect(ok((b) => (b.data_source = v)), v).toBe(true);
+    for (const v of ["none_counted", "counted", "unknown", "inconclusive"]) expect(ok((b) => (b.classes[0].class_result = v)), v).toBe(true);
+    for (const v of ["0", "1-4", "5-19", "20-99", "100-999", "1000+"]) expect(ok((b) => (b.classes[1].n_symlink = v)), v).toBe(true);
+    for (const label of ["env_home", "home_soleur", "root"]) {
+      expect(ok((b) => (b.roots = [{ label, root_present: true, root_listable: false }])), label).toBe(true);
+    }
+    expect(ok((b) => (b.roots = []))).toBe(true);
+    expect(ok((b) => (b.build_sha = "dev"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review round 2: the invariants a mutant could still remove.
+// ---------------------------------------------------------------------------------------------
+describe("review round 2: scan-time invariants", () => {
+  beforeEach(resetState);
+  const real = { run_id: 41, mode: "real", expect_build_sha: SHA };
+  const meta = { runId: 1, mode: "real" as const, dataSource: "container_home" as const, buildSha: SHA, control: "passed" as const, uptimeS: 90_000, claudeConfigDirSet: false, rootsDistinct: true, rootsNote: "none" as const };
+  const T = "/home/t/.claude";
+  const mk = (extra: Record<string, Node> = {}): Record<string, Node> => ({ "/home": d(), "/home/t": d(), [T]: d(), ...extra });
+
+  it("a class cut by class_budget reads counted (a lower bound), and a later entry_cap stop wins the reason", async () => {
+    const tree = mk({ [`${T}/debug`]: d(), [`${T}/todos`]: d() });
+    for (let i = 0; i < 1_100; i++) tree[`${T}/debug/f${i}`] = f();
+    for (let i = 0; i < 5; i++) tree[`${T}/todos/g${i}`] = f();
+    const { scan } = await scanHome(scanOpts(memFs(tree), { entryCap: 1_003 }));
+    expect(scan.reason).toBe("entry_cap");
+    const body = buildResult(scan, meta);
+    expect(body.classes.find((c) => c.class === "debug")?.class_result).toBe("counted");
+    expect(body.classes.find((c) => c.class === "todos")?.class_result).toBe("counted"); // 2 entries seen before the stop: a lower bound
+    expect(body.classes.find((c) => c.class === "backups")?.class_result).toBe("unknown"); // never reached
+  });
+
+  it("projects has its own bounded budget", async () => {
+    const tree = mk({ [`${T}/projects`]: d(), [`${T}/projects/s`]: d() });
+    for (let i = 0; i < 5_200; i++) tree[`${T}/projects/s/f${i}`] = f();
+    const { scan } = await scanHome(scanOpts(memFs(tree)));
+    expect(scan.reason).toBe("class_budget");
+    expect(scan.classes.projects.entries).toBeGreaterThan(4_000);
+    expect(scan.classes.projects.entries).toBeLessThanOrEqual(5_000);
+    expect(scan.classes.projects.cut).toBe(true);
+  });
+
+  it("a stop in the middle of a class marks that class cut (a time-cap hit with 0 entries is unknown, not zero)", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = memFs(mk({ [`${T}/debug`]: d() }));
+      const stalled: CensusFs = { lstat: base.lstat, opendir: (p) => (p === `${T}/debug` ? new Promise(() => {}) : base.opendir(p)) };
+      const pending = scanHome(scanOpts(stalled, { timeCapMs: 100 }));
+      await vi.advanceTimersByTimeAsync(150);
+      const { scan } = await pending;
+      expect(scan.reason).toBe("time_cap");
+      expect(scan.classes.debug.cut).toBe(true);
+      expect(buildResult(scan, meta).classes.find((c) => c.class === "debug")?.class_result).toBe("unknown");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("every class of the multi-class sessions step is marked by a symlink, a listing error, a read error and a failed post-open lstat", async () => {
+    const sessionsClasses = ["sessions_json", "sessions_key", "other_under_claude"] as const;
+    const unknownAll = async (fs: CensusFs, label: string) => {
+      const { scan } = await scanHome(scanOpts(fs));
+      const body = buildResult(scan, meta);
+      for (const c of sessionsClasses) expect(body.classes.find((x) => x.class === c)?.class_result, `${label}: ${c}`).toBe("unknown");
+    };
+    await unknownAll(memFs(mk({ [`${T}/sessions`]: { t: "link" } })), "symlinked directory");
+    await unknownAll(memFs(mk({ [`${T}/sessions`]: { t: "eacces" } })), "unlistable directory");
+    const base = memFs(mk({ [`${T}/sessions`]: d(), [`${T}/sessions/1.json`]: f() }));
+    await unknownAll({ lstat: (p) => (p === `${T}/sessions` ? Promise.reject(Object.assign(new Error("x"), { code: "EACCES" })) : base.lstat(p)), opendir: base.opendir }, "lstat error at the step start");
+    await unknownAll({ lstat: base.lstat, opendir: async (p) => (p === `${T}/sessions` ? { read: () => Promise.reject(Object.assign(new Error("x"), { code: "EIO" })), close: async () => {} } : base.opendir(p)) }, "read error");
+    let n = 0;
+    await unknownAll({ lstat: (p) => (p === `${T}/sessions` && ++n === 2 ? Promise.reject(Object.assign(new Error("x"), { code: "EIO" })) : base.lstat(p)), opendir: base.opendir }, "failed post-open lstat");
+  });
+
+  it("other_under_claude is unknown when the scan stopped before the .claude listing ran", async () => {
+    const { scan } = await scanHome(scanOpts(memFs(homeTree()), { entryCap: 12 }));
+    expect(scan.truncated).toBe(true);
+    const body = buildResult(scan, meta);
+    expect(body.classes.find((c) => c.class === "other_under_claude")?.class_result).toBe("unknown");
+  });
+
+  it("a symlinked .claude makes the whole family unknown, never a count of the link target", async () => {
+    const tree = mk({ [`${T}/debug`]: d(), [`${T}/debug/a`]: f() });
+    tree[T] = { t: "link" };
+    const { scan } = await scanHome(scanOpts(memFs(tree)));
+    const body = buildResult(scan, meta);
+    expect(scan.classes.debug.entries).toBe(0);
+    for (const c of ["debug", "todos", "sessions_json", "projects", "other_under_claude"]) expect(body.classes.find((x) => x.class === c)?.class_result, c).toBe("unknown");
+  });
+
+  it("projects: a depth-1 file is counted, a symlinked slug makes the class unknown", async () => {
+    const files = await scanHome(scanOpts(memFs(mk({ [`${T}/projects`]: d(), [`${T}/projects/note.txt`]: f() }))));
+    expect(files.scan.classes.projects.entries).toBe(1);
+    const linked = await scanHome(scanOpts(memFs(mk({ [`${T}/projects`]: d(), [`${T}/projects/s1`]: { t: "link" } }))));
+    expect(linked.scan.classes.projects.symlink).toBe(1);
+    expect(linked.scan.classes.projects.entries).toBe(1); // counted, never opened
+    expect(buildResult(linked.scan, meta).classes.find((c) => c.class === "projects")?.class_result).toBe("counted");
+  });
+
+  it("the witness is exactly sessions_json or shell_snapshots", async () => {
+    const witness = async (extra: Record<string, Node>) => buildResult((await scanHome(scanOpts(memFs(mk(extra))))).scan, meta).activity_witness;
+    expect(await witness({ [`${T}/sessions`]: d(), [`${T}/sessions/1.json`]: f() })).toBe(true);
+    expect(await witness({ [`${T}/shell-snapshots`]: d(), [`${T}/shell-snapshots/s.sh`]: f() })).toBe(true);
+    expect(await witness({ [`${T}/sessions`]: d(), [`${T}/sessions/1.k.key`]: f() })).toBe(false); // a peer key file alone
+    expect(await witness({ "/home/t/.claude.json": f() })).toBe(false);
+  });
+
+  it("an unlistable /root is reported and not scanned: it does not turn every class into an error", async () => {
+    const tree: Record<string, Node> = { "/home": d(), "/home/soleur": d(), "/home/soleur/.claude": d(), "/home/soleur/.claude/sessions": d(), "/home/soleur/.claude/sessions/1.json": f(), "/root": { t: "eacces" } };
+    const { deps } = makeDeps({ fs: memFs(tree) });
+    const json = JSON.parse(await (await handleHomeCensus(post(real), deps)).text());
+    const root = json.roots.find((r: any) => r.label === "root");
+    expect(root).toEqual({ label: "root", root_present: true, root_listable: false });
+    expect(json.classes.find((c: any) => c.class === "tasks").class_result).toBe("none_counted");
+    expect(json.classes.every((c: any) => c.errors === "0")).toBe(true);
+  });
+
+  it("closeLate: a directory handle that resolves after the time cap is closed exactly once", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveOpen: (d: any) => void = () => {};
+      const close = vi.fn(async () => {});
+      const base = memFs(mk());
+      const fs: CensusFs = { lstat: base.lstat, opendir: (p) => (p === "/home/t" ? new Promise((r) => (resolveOpen = r)) : base.opendir(p)) };
+      const pending = scanHome(scanOpts(fs, { timeCapMs: 100 }));
+      await vi.advanceTimersByTimeAsync(150);
+      const { settled } = await pending;
+      resolveOpen({ read: async () => null, close });
+      await vi.advanceTimersByTimeAsync(10);
+      await settled;
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expect_build_sha 'dev' is refused as a malformed body, so a dev build never runs a real scan", async () => {
+    const { deps } = makeDeps({ env: { HOME: "/home/soleur" } });
+    const res = await handleHomeCensus(post({ run_id: 1, mode: "real", expect_build_sha: "dev" }), deps);
+    expect(res.status).toBe(400);
   });
 });

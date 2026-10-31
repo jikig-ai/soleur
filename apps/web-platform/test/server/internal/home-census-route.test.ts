@@ -332,6 +332,17 @@ describe("Sentry visibility of refusals", () => {
     expect(events[0].level).toBe("warning");
     expect(events[0].tags).toEqual({ error_class: "build_mismatch", mode: "real" });
   });
+  it("a dry_run whose control failed is never throttled away by the dry_run gap", async () => {
+    const { deps } = makeDeps();
+    const dead: ScanFn = async (o) => scanHome({ ...o, fs: fsOf({}) });
+    const events = await captured(async () => {
+      await handleHomeCensus(req({ run_id: 1 }), deps); // an info dry_run opens the gap
+      await handleHomeCensus(req({ run_id: 2 }), { ...deps, scan: dead }); // within the gap, but a failed control
+    });
+    expect(events).toHaveLength(2);
+    expect(events[1].level).toBe("error");
+    expect(events[1].tags.control).toBe("failed");
+  });
   it("an unauthenticated attempt emits nothing", async () => {
     const { deps } = makeDeps();
     const events = await captured(async () => {

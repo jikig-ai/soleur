@@ -73,6 +73,8 @@ type Step = {
   rel: string;
   kind: "file" | "dir";
   recurse?: boolean;
+  /** Classes this step fully enumerates (visited/absent are set only for these); the rest are classification fallbacks. */
+  own?: readonly ClassId[];
   classify?: (name: string) => ClassId;
   skipNames?: ReadonlySet<string>;
 };
@@ -89,6 +91,7 @@ const STEPS: readonly Step[] = [
   { ids: ["account_state"], rel: ".claude.json", kind: "file" },
   {
     ids: ["sessions_json", "sessions_key", "other_under_claude"],
+    own: ["sessions_json", "sessions_key"],
     rel: ".claude/sessions",
     kind: "dir",
     classify: (n) => (n.endsWith(".key") ? "sessions_key" : n.endsWith(".json") ? "sessions_json" : "other_under_claude"),
@@ -366,7 +369,7 @@ export const scanHome: ScanFn = async (opts) => {
           acc.errors++;
           continue;
         }
-        const counted = !step.recurse || depth >= DESCEND_DEPTH;
+        const counted = !step.recurse || depth >= DESCEND_DEPTH || !st.isDirectory();
         if (counted) acc.entries++;
         tally(acc, st, counted);
         if (step.recurse && depth < DESCEND_DEPTH && st.isDirectory() && !st.isSymbolicLink()) {
@@ -380,12 +383,19 @@ export const scanHome: ScanFn = async (opts) => {
     }
   }
 
+  const claudeState = new Map<RootLabel, "dir" | "absent" | "link" | "error">();
+
   async function scanStep(root: Root, step: Step): Promise<void> {
     const primary = classes[step.ids[0]];
-    for (const id of step.ids) {
+    for (const id of step.own ?? step.ids) {
       classes[id].visited = true;
     }
     try {
+      // An intermediate symlink (or an unreadable .claude) is invisible to lstat of the leaf: the whole family is unknown.
+      if (step.rel.startsWith(".claude") && claudeState.get(root.label) !== "dir" && claudeState.get(root.label) !== "absent") {
+        cutAll(step);
+        return;
+      }
       await scanStepInner(root, step, primary);
     } catch (e) {
       // a class that was in progress when the scan stopped is unknown, never zero
@@ -405,7 +415,7 @@ export const scanHome: ScanFn = async (opts) => {
       if (code !== "ENOENT" && code !== "ENOTDIR") bumpErr(step);
       return;
     }
-    for (const id of step.ids) classes[id].absent = false;
+    for (const id of step.own ?? step.ids) classes[id].absent = false;
     if (st.isSymbolicLink()) {
       // A symlink (including a class directory that is itself a link) is counted and never opened. The CLI would follow
       // it, so the class is unknown, never zero.
@@ -437,6 +447,13 @@ export const scanHome: ScanFn = async (opts) => {
           void Promise.resolve()
             .then(() => dir.close())
             .catch(noop);
+          try {
+            const cst = await call(() => opts.fs.lstat(`${root.path}/.claude`));
+            claudeState.set(root.label, cst.isSymbolicLink() ? "link" : cst.isDirectory() ? "dir" : "error");
+          } catch (e) {
+            if (e instanceof StopScan) throw e;
+            claudeState.set(root.label, errCode(e) === "ENOENT" ? "absent" : "error");
+          }
         }
       } catch (e) {
         if (e instanceof StopScan) throw e;
@@ -445,7 +462,10 @@ export const scanHome: ScanFn = async (opts) => {
     }
     for (const step of STEPS) {
       for (const root of opts.roots) {
-        if (!scan.roots.find((r) => r.label === root.label)?.present) continue;
+        // A root that exists but cannot be listed (for example another user's home) is reported and not scanned: it is
+        // not a per-class error, and counting it as one would make every class unknown.
+        const info = scan.roots.find((r) => r.label === root.label);
+        if (!info?.present || !info.listable) continue;
         await scanStep(root, step);
       }
     }
@@ -580,7 +600,7 @@ export type ErrorClass = (typeof ERROR_CLASSES)[number];
 function classResult(scan: InternalScan, id: ClassId, witness: boolean): ClassResult {
   const a = scan.classes[id];
   if (a.visited && a.entries > 0) return "counted"; // a lower bound is still a count, even when the class was cut off
-  if (!a.visited || a.cut || a.errors > 0) return "unknown";
+  if (!a.visited || a.cut || a.errors > 0 || (a.entries === 0 && a.symlink > 0)) return "unknown"; // a link may lead to content
   if ((TRIGGER_CLASSES as readonly string[]).includes(id) && !witness) return "inconclusive";
   return "none_counted";
 }

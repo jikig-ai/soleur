@@ -24,7 +24,9 @@ if [[ "$PASS" -le "$_p" || "$FAIL_MOVED" -lt 1 ]]; then printf 'instrument: a co
 
 SENTINEL="sentinel-token-ABCDEF0123456789"
 INTERP="counted in this container's writable layer at the run; not a statement about earlier containers, other hosts, or any time before or after the run"
-SHA="$(printf 'a%.0s' {1..40})"
+SHA="$(printf 'a%.0s' {1..40})"        # the discharged commit (a PR commit that is squashed away)
+SRV="$(printf 'c%.0s' {1..40})"        # the served build (the squash commit): a DIFFERENT sha, as in production
+TOP_REAL="$(cd "$HERE/../../.." && pwd)"
 OLD="$(printf 'b%.0s' {1..40})"
 
 # ---- the fakes ----------------------------------------------------------------------------------------------------
@@ -39,7 +41,9 @@ cat >"$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 echo "gh $*" >>"$FIX/calls.log"
 case "$*" in
-  "api repos/jikig-ai/soleur/issues/10455/comments --paginate") cat "$FIX/comments.json" ;;
+  "api repos/jikig-ai/soleur/issues/10455/comments --paginate")
+    # gh.lag: the first read after a claim was posted does not list it yet (eventual consistency)
+    if [[ -f "$FIX/gh.lag" && -s "$FIX/posted.log" && ! -f "$FIX/lag.done" ]]; then touch "$FIX/lag.done"; jq '.[:-1]' "$FIX/comments.json"; else cat "$FIX/comments.json"; fi ;;
   "issue comment 10455 -R jikig-ai/soleur --body "*)
     [[ -f "$FIX/gh.fail" ]] && exit 1
     all="$*"; body="${all#*--body }"
@@ -54,15 +58,18 @@ EOF
 cat >"$BIN/git" <<'EOF'
 #!/usr/bin/env bash
 echo "git $*" >>"$FIX/calls.log"
+echo "gitcwd $PWD" >>"$FIX/calls.log"
 DIS="$(cat "$FIX/dis")"; SERVED="$(cat "$FIX/served")"
 CLO=knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md
 SCRIPT=apps/web-platform/scripts/home-census-trigger.sh
 BOUND=":(glob)apps/web-platform/server/home-census* apps/web-platform/app/api/internal/home-census apps/web-platform/lib/internal-auth.ts apps/web-platform/server/sentry-scrub.ts apps/web-platform/sentry.server.config.ts $SCRIPT"
 case "$*" in
-  "rev-parse --show-toplevel") echo "$REPO_FAKE" ;;
-  "cat-file -e ${SERVED}^{commit}"|"cat-file -e ${DIS}^{commit}") [[ -f "$FIX/no.commit" ]] && exit 1; : ;;
+  "rev-parse --show-toplevel") echo "$TOP_FAKE" ;;
+  "cat-file -e ${SERVED}^{commit}") [[ -f "$FIX/no.served" ]] && exit 1; : ;;
+  "cat-file -e ${DIS}^{commit}") [[ -f "$FIX/no.discharged" ]] && exit 1; : ;;
   "fetch --no-tags origin refs/pull/"*"/head"|"fetch --no-tags origin main") : ;;
-  "show ${SERVED}:${CLO}") cat "$REPO_FAKE/$CLO" ;;
+  "show ${SERVED}:${CLO}") [[ -f "$FIX/no.clo" ]] && exit 128; cat "$REPO_FAKE/$CLO" ;;
+  "ls-tree -r --name-only ${SERVED} -- $BOUND") [[ -f "$FIX/no.tree" ]] && exit 0; echo "$SCRIPT" ;;
   "diff --quiet --no-ext-diff $DIS $SERVED -- $BOUND") [[ -f "$FIX/paths.differ" ]] && exit 1; : ;;
   "diff --quiet --no-ext-diff $DIS -- $SCRIPT") [[ -f "$FIX/script.differs" ]] && exit 1; : ;;
   "diff --stat $DIS $SERVED -- apps/web-platform/infra/vector.toml apps/web-platform/lib/routes.ts") [[ -f "$FIX/vector.changed" ]] && echo " apps/web-platform/infra/vector.toml | 2 +-"; : ;;
@@ -109,7 +116,7 @@ class_json() {
     | map({class: ., n_entries: "0", n_mode_bits_group_r: "0", n_mode_bits_other_r: "0", n_symlink: "0", errors: "0", absent: true, class_result: "none_counted"})'
 }
 result_json() { # evidence uptime_bucket
-  jq -nc --arg interp "$INTERP" --arg sha "$SHA" --arg ev "$1" --arg ub "$2" --argjson cls "$(class_json)" '{
+  jq -nc --arg interp "$INTERP" --arg sha "$SRV" --arg ev "$1" --arg ub "$2" --argjson cls "$(class_json)" '{
     schema_version: 1, ok: true, run_id: 1, mode: "real", data_source: "container_home", build_sha: $sha, control: "passed",
     evidence: $ev, uptime_bucket: $ub, sunset_utc: "2026-11-30T00:00:00Z", truncated: false, truncation_reason: "none",
     snapshot: "non_atomic", mode_bits_semantics: "file_mode_only_not_reachability", interpretation: $interp,
@@ -121,18 +128,19 @@ comment() { jq -nc --argjson id "$1" --arg a "$2" --arg b "$3" '{user: {id: $id}
 reset_fix() {
   rm -rf "$FIX"; mkdir -p "$FIX"
   printf '%s' "$SENTINEL" >"$FIX/token"
-  jq -nc --arg s "$SHA" '{status: "ok", build_sha: $s}' >"$FIX/health.json"
+  jq -nc --arg s "$SRV" '{status: "ok", build_sha: $s}' >"$FIX/health.json"
   result_json mature lt_7d >"$FIX/dry.json"; printf 200 >"$FIX/dry.code"
   result_json mature lt_7d >"$FIX/real.json"; printf 200 >"$FIX/real.code"
-  echo "$SHA" >"$FIX/dis"; echo "$SHA" >"$FIX/served"
+  echo "$SHA" >"$FIX/dis"; echo "$SRV" >"$FIX/served"
   printf '[%s]\n' "$(comment 54279 MEMBER "home-census C8 DISCHARGED sha=$SHA pr=77")" >"$FIX/comments.json"
   printf 'DISCHARGED sha=%s\n' "$SHA" >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"
   : >"$FIX/calls.log"
 }
 set_comments() { printf '[%s]\n' "$(IFS=,; echo "$*")" >"$FIX/comments.json"; }
 
-run() { # args...; sets RC, OUT
-  OUT="$(cd "$REPO" && env -i PATH="$BIN:/usr/bin:/bin" HOME="$TMP" FIX="$FIX" REPO_FAKE="$REPO" timeout 30s bash "$SCRIPT" "$@" 2>&1)"; RC=$?
+run() { # args...; sets RC, STDOUT (data channel), ERR, and OUT (both, stdout first)
+  STDOUT="$(cd "$REPO" && env -i PATH="$BIN:/usr/bin:/bin" HOME="$TMP" FIX="$FIX" REPO_FAKE="$REPO" TOP_FAKE="$TOP_REAL" HOME_CENSUS_READBACK_SLEEP=0 timeout 30s bash "${RUN_SCRIPT:-$SCRIPT}" "$@" 2>"$TMP/stderr.txt")"; RC=$?
+  ERR="$(cat "$TMP/stderr.txt")"; OUT="${STDOUT}${STDOUT:+$'\n'}${ERR}"
 }
 calls() { cat "$FIX/calls.log" 2>/dev/null; }
 no_unmodelled() { ! calls | grep -q UNMODELLED; }
@@ -174,17 +182,21 @@ check "doppler failure exits 3 and sends nothing" "$([[ $RC -eq 3 ]] && ! calls 
 
 # ---- dry_run happy path -------------------------------------------------------------------------------------------
 reset_fix; run --mode dry_run --run-id 5
-check "dry_run exits 0 and prints the validated body" "$([[ $RC -eq 0 ]] && jq -e '.schema_version == 1' <<<"$OUT" >/dev/null; echo $?)"
+check "dry_run exits 0 and prints the validated body on stdout" "$([[ $RC -eq 0 ]] && jq -e '.schema_version == 1' <<<"$STDOUT" >/dev/null && [[ -z "$ERR" ]]; echo $?)"
 check "token is absent from every argv in the call log" "$(! calls | grep -qF "$SENTINEL"; echo $?)"
 check "token reached curl on its stdin config channel" "$(grep -qF "Authorization: Bearer $SENTINEL" "$FIX/curl.stdin"; echo $?)"
 check "token never appears in the output" "$(! grep -qF "$SENTINEL" <<<"$OUT"; echo $?)"
-check "dry_run body built by jq with a numeric run_id and the served sha" "$(calls | grep -q '^BODY {"run_id":5,"mode":"dry_run","expect_build_sha":"'"$SHA"'"}$'; echo $?)"
+check "dry_run body built by jq with a numeric run_id and the served sha" "$(calls | grep -q '^BODY {"run_id":5,"mode":"dry_run","expect_build_sha":"'"$SRV"'"}$'; echo $?)"
 check "dry_run makes no gh or git call" "$(! calls | grep -qE '^(gh|git) '; echo $?)"
 check "no unmodelled argv" "$(no_unmodelled; echo $?)"
 
 # ---- real: happy path ---------------------------------------------------------------------------------------------
 reset_fix; run "${REAL_ARGS[@]}"
-check "real exits 0 and prints the validated body (last line; the vector/routes diff goes to stderr first)" "$([[ $RC -eq 0 ]] && jq -e '.ok == true' <<<"$(tail -n 1 <<<"$OUT")" >/dev/null; echo $?)"
+check "real exits 0 and prints exactly the validated body on stdout" "$([[ $RC -eq 0 ]] && jq -e '.ok == true and .mode == "real"' <<<"$STDOUT" >/dev/null && [[ "$(wc -l <<<"$STDOUT")" -eq 1 ]]; echo $?)"
+check "the bound-path diff and the served/discharged refs are the two DIFFERENT shas" "$(calls | grep -q "^git diff --quiet --no-ext-diff $SHA $SRV -- "; echo $?)"
+check "the CLO record is read from the SERVED commit" "$(calls | grep -q "^git show $SRV:knowledge-base/legal/audits/"; echo $?)"
+check "every git diff/status/ls-tree check ran from the repository root" "$(! calls | grep -A1 -E '^git (diff|status|ls-tree)' | grep '^gitcwd' | grep -qv "^gitcwd $TOP_REAL\$"; echo $?)"
+check "expect_build_sha sent is the SERVED sha" "$(calls | grep '^BODY .*"mode":"real"' | grep -q "\"expect_build_sha\":\"$SRV\""; echo $?)"
 claim_line="$(calls | grep -n '^gh issue comment .*run_id=1 claim' | head -1 | cut -d: -f1)"
 post_line="$(calls | grep -n '^REALPOST' | head -1 | cut -d: -f1)"
 check "the write-ahead claim is posted BEFORE the real request" "$([[ -n "$claim_line" && -n "$post_line" && "$claim_line" -lt "$post_line" ]]; echo $?)"
@@ -198,6 +210,7 @@ refused() { # name, expected rc
   check "$1: exit $2" "$([[ $RC -eq $2 ]]; echo $?)"
   check "$1: no real request" "$(! calls | grep -q '^REALPOST'; echo $?)"
   check "$1: no claim posted" "$([[ ! -s "$FIX/posted.log" ]]; echo $?)"
+  check "$1: nothing on stdout (the data channel)" "$([[ -z "$STDOUT" ]]; echo $?)"
 }
 reset_fix; set_comments; run "${REAL_ARGS[@]}"; refused "no C8 comment" 8
 reset_fix; set_comments "$(comment 99999 NONE "home-census C8 DISCHARGED sha=$SHA pr=77")"; run "${REAL_ARGS[@]}"; refused "C8 comment from an unpinned author is ignored" 8
@@ -206,7 +219,26 @@ reset_fix; run --mode real --run-id 1 --discharged-sha "$SHA" --pr 78; refused "
 reset_fix; run --mode real --run-id 1 --discharged-sha "$OLD" --pr 77; refused "--discharged-sha differs from the C8 comment" 8
 reset_fix; : >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"; run "${REAL_ARGS[@]}"; refused "sha absent from the committed CLO record" 8
 reset_fix; printf 'prose mentions DISCHARGED sha=%s in a sentence\n' "$SHA" >"$REPO/knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"; run "${REAL_ARGS[@]}"; refused "the sha only inside prose of the CLO record (the line must stand alone)" 8
-reset_fix; touch "$FIX/no.commit"; run "${REAL_ARGS[@]}"; check "an unavailable served commit exits 9" "$([[ $RC -eq 9 ]]; echo $?)"
+reset_fix; touch "$FIX/no.served"; run "${REAL_ARGS[@]}"; check "an unavailable served commit exits 9" "$([[ $RC -eq 9 ]]; echo $?)"
+reset_fix; touch "$FIX/no.discharged"; run "${REAL_ARGS[@]}"; refused "an unavailable discharged commit" 8
+reset_fix; touch "$FIX/no.clo"; run "${REAL_ARGS[@]}"; refused "the CLO record missing from the served build" 8
+reset_fix; touch "$FIX/no.tree"; run "${REAL_ARGS[@]}"; check "bound paths that match no file of the served build exit 9 (the diff would be vacuous)" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
+reset_fix; cp "$SCRIPT" "$TMP/copy.sh"; RUN_SCRIPT="$TMP/copy.sh" run "${REAL_ARGS[@]}"; refused "a copy of the script outside the checkout" 8
+reset_fix; touch "$FIX/gh.lag"; run "${REAL_ARGS[@]}"; check "a claim that appears only on the second read is accepted" "$([[ $RC -eq 0 ]]; echo $?)"
+reset_fix; printf 200 >"$FIX/real.code"; result_json mature lt_7d | jq '.mode = "dry_run" | .data_source = "synthetic"' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a dry_run-shaped 200 is not recorded as the real run (exit 10)" "$([[ $RC -eq 10 ]] && [[ -z "$STDOUT" ]]; echo $?)"
+reset_fix; { printf '{"leak":"/home/canary-path"}\n'; cat "$FIX/real.json"; } >"$FIX/t" && mv "$FIX/t" "$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a multi-document 200 body is refused and nothing is printed (exit 10)" "$([[ $RC -eq 10 ]] && ! grep -q canary-path <<<"$OUT"; echo $?)"
+reset_fix; printf '{"a":1}\n' >>"$FIX/dry.json"; run --mode dry_run --run-id 1
+check "a multi-document dry_run body is refused (exit 10)" "$([[ $RC -eq 10 ]] && [[ -z "$STDOUT" ]]; echo $?)"
+reset_fix; printf 503 >"$FIX/real.code"; jq -nc --arg i "$INTERP" '{schema_version: 1, ok: false, error_class: "control_failed", interpretation: $i}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a 503 with the exact failure shape is a definitive refusal (exit 11, error_class printed, done marker posted)" "$([[ $RC -eq 11 ]] && grep -q 'error_class=control_failed' <<<"$OUT" && grep -qx 'home-census run_id=1 done' "$FIX/posted.log"; echo $?)"
+reset_fix; printf 503 >"$FIX/real.code"; printf '<html>proxy RAYID</html>' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a 503 proxy page is ambiguous (exit 6, do not retry, no done marker, body not printed)" "$([[ $RC -eq 6 ]] && grep -q 'do not retry' <<<"$OUT" && ! grep -q done "$FIX/posted.log" && ! grep -q RAYID <<<"$OUT"; echo $?)"
+reset_fix; printf 429 >"$FIX/real.code"; jq -nc --arg i "$INTERP" '{schema_version: 1, ok: false, error_class: "rate_limited", interpretation: $i}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a 429 is a refusal (exit 11, error_class printed)" "$([[ $RC -eq 11 ]] && grep -q 'error_class=rate_limited' <<<"$OUT"; echo $?)"
+reset_fix; printf 409 >"$FIX/real.code"; jq -nc '{schema_version: 1, ok: false, error_class: "busy", interpretation: "tampered"}' >"$FIX/real.json"; run "${REAL_ARGS[@]}"
+check "a failure body with the wrong interpretation prints no error_class" "$([[ $RC -eq 11 ]] && ! grep -q 'error_class=' <<<"$OUT"; echo $?)"
 reset_fix; touch "$FIX/script.differs"; run "${REAL_ARGS[@]}"; refused "the trigger script differs from the discharged commit" 8
 reset_fix; touch "$FIX/script.dirty"; run "${REAL_ARGS[@]}"; refused "the trigger script has uncommitted changes" 8
 reset_fix; touch "$FIX/vector.changed"; run "${REAL_ARGS[@]}"
@@ -277,7 +309,10 @@ BAD='/home/canary-path'
 for m in \
   '.extra_key = "x"' 'del(.control)' '.interpretation = "'"$BAD"'"' '.classes[3].n_symlink = "'"$BAD"'"' '.classes[3].n_mode_bits_group_r = "7"' \
   '.classes[0].class_result = "clean"' '.classes[0].class = "'"$BAD"'"' '.classes |= reverse' '.roots = [{label: "'"$BAD"'", root_present: true, root_listable: true}]' \
-  '.build_sha = "'"$BAD"'"' '.mode = "'"$BAD"'"' '.trigger_class_nonzero = "maybe"' '.run_id = 1.5' '.ok = false' '.schema_version = 2' '.sunset_utc = "'"$BAD"'"'; do
+  '.build_sha = "'"$BAD"'"' '.mode = "'"$BAD"'"' '.trigger_class_nonzero = "maybe"' '.run_id = 1.5' '.ok = false' '.schema_version = 2' '.sunset_utc = "'"$BAD"'"' \
+  '.snapshot = "x"' '.mode_bits_semantics = "x"' '.outer_wrap_cohorts = "x"' '.truncated = "yes"' '.data_source = "root"' '.control = "ok"' '.evidence = "old"' \
+  '.roots_distinct = 1' '.activity_witness = "no"' '.classes[2].absent = "no"' '.claude_config_dir_set = "x"' '.classes[1].errors = "7"' '.truncation_reason = "depth_cap"' '.roots_note = "x"' \
+  '.roots = [{label: "root", root_present: "yes", root_listable: true}]' '.roots = [{label: "root", root_present: true}]' '.uptime_bucket = "lt_2h"' '.sunset_utc = "2026-11-30T00:00:00Z\n"'; do
   reset_fix; jq "$m" "$FIX/real.json" >"$FIX/t" && mv "$FIX/t" "$FIX/real.json"; run "${REAL_ARGS[@]}"
   check "schema rule '$m': exit 10 and nothing printed" "$([[ $RC -eq 10 ]] && ! grep -q 'canary-path' <<<"$OUT" && ! grep -q '"schema_version"' <<<"$OUT"; echo $?)"
 done
@@ -287,8 +322,8 @@ reset_fix; jq -nc '{status: "ok", build_sha: "dev"}' >"$FIX/health.json"; run "$
 check "a 'dev' build fails closed" "$([[ $RC -eq 9 ]] && ! calls | grep -q '^REALPOST'; echo $?)"
 
 # ---- floors (printf + exit 1, never through the helper they backstop) ----------------------------------------------
-if [[ "$PASS" -lt 129 ]]; then
-  printf 'FLOOR: only %d assertions ran (expected at least 129)\n' "$PASS"
+if [[ "$PASS" -lt 188 ]]; then
+  printf 'FLOOR: only %d assertions ran (expected at least 188)\n' "$PASS"
   exit 1
 fi
 printf 'home-census-trigger tests: %d passed, %d failed\n' "$PASS" "$FAIL"

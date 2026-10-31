@@ -29,9 +29,10 @@ never a statement about earlier containers or other hosts. A zero is never "clea
 ## Fields (decode table)
 
 - `evidence`: `young` under 24 h of process uptime, else `mature`. `uptime_bucket`: `lt_1h`, `lt_24h`, `lt_7d`, `ge_7d`.
-- `class_result` per class: `counted` (entries seen; a lower bound when the class was cut off), `none_counted` (nothing seen and a
-  session artifact was counted), `inconclusive` (a zero in a trigger class without that witness), `unknown` (not visited, cut off,
-  linked, or errors).
+- `class_result` per class: `counted` (entries seen; a lower bound when the class was cut off), `none_counted` (visited, nothing cut
+  off, no errors, zero entries; for a trigger class this also needs the session-artifact witness), `inconclusive` (a zero in a trigger
+  class without that witness), `unknown` (not visited, cut off, a link with nothing counted behind it, a symlinked `.claude`, or errors).
+  A root that exists but cannot be listed (for example another user's home) is reported in `roots` and is not scanned.
 - `activity_witness`: a session artifact was counted (`sessions_json` or `shell_snapshots` nonzero). `account_state` is not a witness:
   any CLI start writes it.
 - `trigger_class_nonzero`: a routing label, never quoted. `true` if any of `history_jsonl`, `debug`, `todos`, `tasks` is counted; else
@@ -49,7 +50,7 @@ is offline and prints `HOME_CENSUS_TRIGGER_SELF_CHECK_OK`; it checks the trigger
 
 `<N>` is the next unused `run_id`: above every `home-census run_id=N claim` comment on #10455, starting at 1.
 Two real starts must be at least 3600 s apart (a server limiter per process); a real run inside that hour is refused with
-`rate_limited` after its claim was written, so wait the hour.
+`rate_limited` after its claim was written, so wait the hour. Run the script from the repository checkout (it refuses a copy).
 
 ## Steps (no SSH, no `docker exec`)
 
@@ -72,8 +73,8 @@ Two real starts must be at least 3600 s apart (a server limiter per process); a 
 Exit codes of the script: 0 ok, 2 usage, 3 secret, 4 unauthorized or not found, 5 forbidden, 6 server error (a real run: the scan may
 have run, read Sentry and Better Stack and do not retry; a dry_run: safe to retry), 7 the real request did not complete (ambiguous; same
 rule), 8 governance refusal, 9 build mismatch, 10 a 2xx body failed the allowlist schema (a real run: the scan ran), 11 refused by the
-server (the closed `error_class` is printed when the body is the exact failure shape), 12 the preflight did not complete (safe to
-retry), 78 shell tracing refused. The public `done` marker is posted for every outcome that reached the server except exit 6 and 7;
+server (409, 410, 429, and a 503 whose body is the exact closed failure shape; the `error_class` is printed), 12 the preflight did not
+complete (safe to retry), 78 shell tracing refused. A 503 without that shape (a proxy page) exits 6. The public `done` marker is posted for every outcome that reached the server except exit 6 and 7;
 for those the executor posts `home-census run_id=N done` by hand after reading Sentry and Better Stack.
 
 | Outcome | What it means | Next |
@@ -172,8 +173,7 @@ After a mature zero with the witness present no scheduled repeat is owed; repeat
 
 ## Not measured
 
-`/workspaces`, `/tmp/.cs`, `CLAUDE_CONFIG_DIR`, the second web host, the canary container and outer-wrap cohorts are unmeasured, not
-safe. Adding any of them needs a fresh typed message from the controller. A hung filesystem call leaves the route answering 409
+`/workspaces`, `/tmp/.cs`, `CLAUDE_CONFIG_DIR`, the second web host, the canary container and outer-wrap cohorts are unmeasured. Adding any of them needs a fresh typed message from the controller. A hung filesystem call leaves the route answering 409
 `busy` until the process restarts; that is deliberate.
 
 ## Retention

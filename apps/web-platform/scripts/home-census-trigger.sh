@@ -15,8 +15,8 @@
 #
 # Exit codes: 0 ok | 2 usage | 3 doppler/secret | 4 401/404 | 5 403 | 6 5xx | 7 timeout after scan (ambiguous: read
 # Sentry and Better Stack first, never auto-retry) | 8 governance refusal | 9 build mismatch | 10 body failed the
-# allowlist schema | 11 server refused (409/410/429/503; the closed error_class is printed when the body is the exact failure
-# shape) | 12 preflight request did not complete (no scan runs in dry_run: safe to retry) | 78 xtrace refusal.
+# allowlist schema | 11 server refused (409/410/429, and a 503 whose body is the exact closed failure shape; the closed error_class
+# is printed) | 12 preflight request did not complete (no scan runs in dry_run: safe to retry) | 78 xtrace refusal.
 #
 # RETIREMENT: delete with the route (#11714).
 set -euo pipefail
@@ -35,6 +35,9 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIA
       GH_REPO GH_HOST GIT_DIR GIT_EXTERNAL_DIFF GIT_WORK_TREE GIT_INDEX_FILE GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM \
       GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_SSH_COMMAND GIT_ASKPASS BASH_ENV ENV
 for v in $(compgen -e | grep -E '^GIT_CONFIG_(KEY|VALUE)_[0-9]+$' || true); do unset "$v"; done
+
+# A replace ref in the caller's clone must not be able to change the commits the checks read.
+export GIT_NO_REPLACE_OBJECTS=1
 
 ROUTE_URL="https://app.soleur.ai/api/internal/home-census"
 HEALTH_URL="https://app.soleur.ai/health"
@@ -127,7 +130,7 @@ trusted_comments() { # prints one body per line, from pinned authors only
   gh api "repos/${REPO}/issues/${ISSUE}/comments" --paginate 2>/dev/null \
     | jq -r --argjson ids "$ids" --argjson assoc "$assoc" \
         '.[] | select(((.user.id|tostring) as $i | ($ids | index($i)) != null) and (.author_association as $a | ($assoc | index($a)) != null)) | .body
-        | gsub("\r"; "") | select(test("^(home-census C8 DISCHARGED sha=[0-9a-f]{40} pr=[0-9]+|home-census run_id=[0-9]+ (claim|done))$"))'
+        | gsub("\r"; "") | select(test("\\A(home-census C8 DISCHARGED sha=[0-9a-f]{40} pr=[0-9]+|home-census run_id=[0-9]+ (claim|done))\\z"))'
 }
 
 RESP=""
@@ -149,16 +152,17 @@ INTERPRETATION="counted in this container's writable layer at the run; not a sta
 # Allowlist schema for a 2xx body: exact key set, every value from its closed set, classes in the module's order.
 # Anything that does not validate is never printed.
 body_valid() {
-  jq -e --arg interp "$INTERPRETATION" '
+  jq -es --arg interp "$INTERPRETATION" '
     def bucket: IN("0","1-4","5-19","20-99","100-999","1000+");
     def order: ["history_jsonl","debug","todos","tasks","history_dir","projects","sessions_json","sessions_key","shell_snapshots","account_state","backups","last_cleanup","statsig","file_history","other_under_claude"];
+    def valid:
     ((keys | sort) == (["schema_version","ok","run_id","mode","data_source","build_sha","control","evidence","uptime_bucket","sunset_utc","truncated","truncation_reason","snapshot","mode_bits_semantics","interpretation","claude_config_dir_set","outer_wrap_cohorts","roots","roots_distinct","roots_note","activity_witness","trigger_class_nonzero","classes"] | sort))
     and .schema_version == 1 and .ok == true
     and (.run_id | type == "number" and . >= 1 and . <= 1000000000 and . == floor)
     and (.mode | IN("dry_run","real")) and (.data_source | IN("synthetic","container_home"))
-    and (.build_sha | test("^([0-9a-f]{40}|dev)$")) and (.control | IN("passed","failed"))
+    and (.build_sha | test("\\A([0-9a-f]{40}|dev)\\z")) and (.control | IN("passed","failed"))
     and (.evidence | IN("young","mature")) and (.uptime_bucket | IN("lt_1h","lt_24h","lt_7d","ge_7d"))
-    and (.sunset_utc | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00Z$"))
+    and (.sunset_utc | test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T00:00:00Z\\z"))
     and (.truncated | type == "boolean") and (.truncation_reason | IN("none","entry_cap","time_cap","load_shed","class_budget"))
     and .snapshot == "non_atomic" and .mode_bits_semantics == "file_mode_only_not_reachability" and .interpretation == $interp
     and (.claude_config_dir_set | type == "boolean") and .outer_wrap_cohorts == "unmeasured"
@@ -168,14 +172,22 @@ body_valid() {
     and ((.classes | map(.class)) == order)
     and (.classes | all(.[]; ((keys | sort) == ["absent","class","class_result","errors","n_entries","n_mode_bits_group_r","n_mode_bits_other_r","n_symlink"])
         and ([.n_entries,.n_mode_bits_group_r,.n_mode_bits_other_r,.n_symlink,.errors] | all(bucket))
-        and (.absent | type == "boolean") and (.class_result | IN("none_counted","counted","unknown","inconclusive"))))
+        and (.absent | type == "boolean") and (.class_result | IN("none_counted","counted","unknown","inconclusive"))));
+    length == 1 and (.[0] | type == "object") and (.[0] | valid)
   ' "$1" >/dev/null 2>&1
 }
 
 # error_class of a non-2xx body, printed ONLY when the body is exactly the closed failure shape (a proxy page is never echoed).
 failure_class() {
-  jq -er --arg interp "$INTERPRETATION" 'select(((keys | sort) == ["error_class","interpretation","ok","schema_version"]) and .schema_version == 1 and .ok == false and .interpretation == $interp
-      and (.error_class | IN("unavailable","unauthorized","sunset","payload_too_large","invalid_json","invalid_body","invalid_mode","build_mismatch","young_container","busy","rate_limited","control_failed","internal"))) | .error_class' "$RESP" 2>/dev/null || true
+  jq -es --arg interp "$INTERPRETATION" 'select(length == 1) | .[0] | select(((keys | sort) == ["error_class","interpretation","ok","schema_version"]) and .schema_version == 1 and .ok == false and .interpretation == $interp
+      and (.error_class | IN("unavailable","unauthorized","sunset","payload_too_large","invalid_json","invalid_body","invalid_mode","build_mismatch","young_container","busy","rate_limited","control_failed","internal"))) | .error_class' -r "$RESP" 2>/dev/null || true
+}
+
+server_error() { # $1 = mode, $2 = tag
+  if [[ "$1" == "real" ]]; then
+    die 6 "home-census-trigger: server error (status class 5xx$2). The scan may have run. Read Sentry and Better Stack first; do not retry."
+  fi
+  die 6 "home-census-trigger: server error (status class 5xx$2); no scan runs in dry_run, safe to retry"
 }
 
 status_exit() { # $1 = dry_run|real; maps a non-2xx answer to an exit code and a closed-set message
@@ -185,11 +197,10 @@ status_exit() { # $1 = dry_run|real; maps a non-2xx answer to an exit code and a
   case "$HTTP_CODE" in
     401|404) die 4 "home-census-trigger: unauthorized or not found (status class 4xx)${tag}" ;;
     403) die 5 "home-census-trigger: forbidden (status class 4xx); the body is not printed" ;;
-    5*)
-      if [[ "$1" == "real" ]]; then
-        die 6 "home-census-trigger: server error (status class 5xx${tag}). The scan may have run. Read Sentry and Better Stack first; do not retry."
-      fi
-      die 6 "home-census-trigger: server error (status class 5xx${tag}); no scan runs in dry_run, safe to retry" ;;
+    # The server answers 503 only before any scan (secret not configured, or the control failed): with the exact closed
+    # failure shape it is a definitive refusal. A 503 without it (a proxy page) is ambiguous.
+    503) [[ -n "$cls" ]] && die 11 "home-census-trigger: refused by the server (status 503)${tag}"; server_error "$1" "$tag" ;;
+    5*) server_error "$1" "$tag" ;;
     *) die 11 "home-census-trigger: refused by the server (status ${HTTP_CODE})${tag}" ;;
   esac
 }
@@ -206,7 +217,7 @@ if [[ "$MODE" == "dry_run" ]]; then
   [[ "$rc" -eq 0 ]] || die 12 "home-census-trigger: the preflight request did not complete (curl exit $rc); no scan runs in dry_run, safe to retry"
   if [[ "$HTTP_CODE" == 2* ]]; then
     body_valid "$RESP" || die 10 "home-census-trigger: the preflight body failed the allowlist schema; it is not printed"
-    cat "$RESP"; echo; exit 0
+    jq -c . "$RESP"; exit 0
   fi
   status_exit dry_run
 fi
@@ -218,7 +229,11 @@ TRUSTED="$(trusted_comments)" || die 8 "home-census-trigger: could not read the 
 DIS_LINE="$(grep -E '^home-census C8 DISCHARGED sha=[0-9a-f]{40} pr=[0-9]+$' <<<"$TRUSTED" | tail -n 1 || true)"
 [[ -n "$DIS_LINE" ]] || die 8 "home-census-trigger: no C8 DISCHARGED comment from a pinned author; nothing was sent"
 [[ "$DIS_LINE" == "home-census C8 DISCHARGED sha=${DISCHARGED} pr=${PR}" ]] || die 8 "home-census-trigger: --discharged-sha/--pr do not match the C8 DISCHARGED comment; nothing was sent"
-git rev-parse --show-toplevel >/dev/null 2>&1 || die 8 "home-census-trigger: not inside the repository"
+TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die 8 "home-census-trigger: not inside the repository"
+# Pathspecs are relative to the current directory: every git check below runs from the repository root, or a subdirectory
+# would turn the bound-path comparison into a no-op. The script that runs must be the checkout's copy.
+cd "$TOP" || die 8 "home-census-trigger: cannot enter the repository root"
+[[ "$(readlink -f "${BASH_SOURCE[0]}")" == "$(readlink -f "${TOP}/${SCRIPT_REL}")" ]] || die 8 "home-census-trigger: run the script from the repository checkout (this is not ${SCRIPT_REL})"
 
 # (2) Both commits must be available locally. The PR head is fetched into FETCH_HEAD only, to make the discharged
 # commit available after a squash merge; no ancestry is inferred from it (the census-path diff below is the binding).
@@ -228,9 +243,12 @@ git cat-file -e "${SERVED}^{commit}" 2>/dev/null || die 9 "home-census-trigger: 
 git cat-file -e "${DISCHARGED}^{commit}" 2>/dev/null || die 8 "home-census-trigger: the discharged commit is not available locally; nothing was sent"
 
 # (3) The CLO record of the SERVED build (not the working tree) carries this sha as a line of its own.
-git show "${SERVED}:${CLO_RECORD}" 2>/dev/null | grep -qxF -- "DISCHARGED sha=${DISCHARGED}" || die 8 "home-census-trigger: the CLO record of the served build does not carry this sha; nothing was sent"
+CLO_TEXT="$(git show "${SERVED}:${CLO_RECORD}" 2>/dev/null)" || die 8 "home-census-trigger: the CLO record is missing from the served build; nothing was sent"
+grep -qxF -- "DISCHARGED sha=${DISCHARGED}" <<<"$CLO_TEXT" || die 8 "home-census-trigger: the CLO record of the served build does not carry this sha; nothing was sent"
 
 # (4) The served build's bound paths equal the discharged commit's, and the script that is running is the reviewed one.
+# The pathspecs must match files of the served build, or the comparison below would pass vacuously.
+[[ -n "$(git ls-tree -r --name-only "$SERVED" -- "${CENSUS_PATHS[@]}" 2>/dev/null)" ]] || die 9 "home-census-trigger: the bound paths match no file of the served build; nothing was sent"
 git diff --quiet --no-ext-diff "$DISCHARGED" "$SERVED" -- "${CENSUS_PATHS[@]}" || die 9 "home-census-trigger: the bound paths of the served build differ from the discharged commit; nothing was sent"
 git diff --quiet --no-ext-diff "$DISCHARGED" -- "$SCRIPT_REL" || die 8 "home-census-trigger: this trigger script differs from the discharged commit; nothing was sent"
 [[ -z "$(git status --porcelain -- "$SCRIPT_REL" 2>/dev/null)" ]] || die 8 "home-census-trigger: this trigger script has uncommitted changes; nothing was sent"
@@ -261,7 +279,13 @@ fi
 # means the posting account is not the pinned one (the cap would then be unenforced), and a count above two means a
 # concurrent run. gh failure fails closed.
 gh issue comment "$ISSUE" -R "$REPO" --body "home-census run_id=${RUN_ID} claim" >/dev/null 2>&1 || die 8 "home-census-trigger: could not post the claim comment; nothing was sent"
-RECHECK="$(trusted_comments)" || die 8 "home-census-trigger: could not re-read the tracker comments after the claim; nothing was sent"
+# The listing can lag the post: read back up to three times before failing closed.
+RECHECK=""
+for _try in 1 2 3; do
+  RECHECK="$(trusted_comments)" || die 8 "home-census-trigger: could not re-read the tracker comments after the claim; nothing was sent"
+  grep -qxF -- "home-census run_id=${RUN_ID} claim" <<<"$RECHECK" && break
+  [[ "$_try" -lt 3 ]] && sleep "${HOME_CENSUS_READBACK_SLEEP:-2}"
+done
 grep -qxF -- "home-census run_id=${RUN_ID} claim" <<<"$RECHECK" || die 8 "home-census-trigger: the claim is not visible as a pinned-author comment (wrong posting account?); nothing was sent"
 [[ "$(grep -cE '^home-census run_id=[0-9]+ claim$' <<<"$RECHECK" || true)" -le 2 ]] || die 8 "home-census-trigger: more than two claims exist after posting (a concurrent run?); nothing was sent"
 
@@ -277,11 +301,15 @@ mark_done() { gh issue comment "$ISSUE" -R "$REPO" --body "home-census run_id=${
 AFTER="$(served_sha || true)"
 case "$HTTP_CODE" in
   2*)
-    if body_valid "$RESP" && [[ "$AFTER" == "$SERVED" ]] && [[ "$(jq -r '.build_sha' "$RESP")" == "$SERVED" ]]; then
-      mark_done; cat "$RESP"; echo; exit 0
+    # It must be THIS run's real result: a dry_run-shaped 200 is not recorded as the run.
+    if body_valid "$RESP" && [[ "$AFTER" == "$SERVED" ]] \
+       && jq -es --arg sha "$SERVED" --arg rid "$RUN_ID" '.[0] | .build_sha == $sha and .mode == "real" and .data_source == "container_home" and .control == "passed" and .run_id == ($rid | tonumber)' "$RESP" >/dev/null 2>&1; then
+      mark_done; jq -c . "$RESP"; exit 0
     fi
     mark_done
     die 10 "home-census-trigger: the response failed the allowlist schema or the build changed during the call; the scan ran, so read Sentry and Better Stack; the body is not printed" ;;
+  # A 503 with the exact failure shape is definitive (the server answers it only before any scan): record it as done.
+  503) [[ -z "$(failure_class)" ]] || mark_done; status_exit real ;;
   5*) status_exit real ;;
   *) mark_done; status_exit real ;;
 esac

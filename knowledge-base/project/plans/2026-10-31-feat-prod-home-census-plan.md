@@ -35,9 +35,8 @@ emits ONE bucketed-counts object to the HTTP caller, one Sentry info event and o
 route is passive: nothing arms it, so a deploy cannot run it. It has a sunset constant after which it returns 410.
 
 **The finding that shaped the design.** `/home/soleur` is the container's writable layer (Dockerfile `useradd -m soleur` and
-`USER soleur`; the prod `docker run` in `ci-deploy.sh` binds only `/mnt/data/workspaces` and mounts `/tmp` as tmpfs). Every container
-start wipes it. So no zero-deploy path exists, the deploy that ships the census also wipes the HOME it measures, and a census sees only
-sessions since the container started. A zero is therefore never "clean"; it is "counted in this container's writable layer at the run". The
+`USER soleur`; the prod `docker run` in `ci-deploy.sh` binds only `/mnt/data/workspaces` and mounts `/tmp` as tmpfs). Every container recreation (each deploy) wipes it; a restart-policy restart does not. So no zero-deploy path exists, the deploy that ships the census also wipes the HOME it measures, and a census sees only
+sessions since the container was created. A zero is therefore never "clean"; it is "counted in this container's writable layer at the run". The
 design labels this in every response (`interpretation`, `evidence`, `uptime_bucket`).
 
 ## Enhancement Summary
@@ -174,8 +173,7 @@ against misreading a young result, not a security control; the script sends it o
   `ENOENT` (the mutant goes RED, the genuine case stays green) and run the real-adapter canary only against a temp directory the test
   creates, never `/` or `/proc`.
 - **Per-class verdict (deepen-plan, user-impact):** each class also carries `class_result` (`none_counted`|`counted`|`unknown`); a class
-  that was cut off or has `errors` above `0` is `unknown`, never `none_counted`. The run carries `activity_witness` (boolean: true when any
-  already-conceded class `sessions_json`, `shell_snapshots` or `account_state` is nonzero). Without the witness a zero in the four trigger
+  that was cut off or has `errors` above `0` is `unknown`, never `none_counted`. The run carries `activity_witness` (boolean: true when a session artifact, `sessions_json` or `shell_snapshots`, is nonzero; `account_state` is not a witness). Without the witness a zero in the four trigger
   classes is reported as `inconclusive`, because the G2 test showed the CLI in SDK mode does not write those classes and zero is
   therefore the expected output even when the exposure is real. If `claude_config_dir_set` is true the `interpretation` variant says so.
   The wording rules below are keyed to these enums.
@@ -314,7 +312,7 @@ informational and used for purge sizing). `shell_snapshots`, `account_state` and
 a nonzero in `other_under_claude` is a flag to the CLO, not a trigger. **Trigger:** any nonzero bucket in one of the four classes, at
 young or mature evidence. A zero never triggers. **Ordered steps:**
 
-0. **Freeze first (CLO, deepen round):** the moment the executor receives a nonzero in a trigger class, step 3 below takes effect, ahead of steps 1 and 2 (the step 2 addendum commit in this public repo is the publication). Before Phase 6 the operator-side inventory of published or scheduled isolation claims (docs site, legal pages, the distribution queue) is listed in the runbook so the freeze is executable, and a CTO owner and a time-box for the relocation decision are named, because the exposure continues until the next container start wipes the HOME.
+0. **Freeze first (CLO, deepen round):** the moment the executor receives a nonzero in a trigger class, step 3 below takes effect, ahead of steps 1 and 2 (the step 2 addendum commit in this public repo is the publication). Before Phase 6 the operator-side inventory of published or scheduled isolation claims (docs site, legal pages, the distribution queue) is listed in the runbook so the freeze is executable, and a CTO owner and a time-box for the relocation decision are named, because the exposure continues until the container is next recreated.
 1. Anchor = the Sentry event timestamp (conservative), cross-checked with the Better Stack row time and the HTTP `Date` header; record it as the fresh awareness anchor.
 2. Append a dated re-open addendum to `knowledge-base/legal/audits/2026-10-31-clo-determination-10455-shared-home-sibling-read-art-4-12.md` and amend the provisional breach-register row in-cell with the E1 result, marking each superseded sentence. The Art. 33 clock still starts only on second-limb evidence (a demonstrated sibling read).
 3. Freeze every user statement about data isolation or safety and all public legal-document edits; support answers go through the CLO.
