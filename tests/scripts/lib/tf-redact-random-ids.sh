@@ -27,7 +27,12 @@
 # plugins/soleur/test/terraform-target-parity.test.ts (a step on a root with none may skip it).
 
 tf_redact_random_ids() {
+  # ANSI first (#11294 follow-up): a step without -no-color prints `ESC[0mESC[1mrandom_id.X: ... [id=<key>]ESC[0m`, and the
+  # `m` that ends ESC[1m is alphanumeric, so the address anchor below never matched and the line passed through. Colour
+  # carries no information the log needs; the CSI sequences are removed so every rule sees the plain line (line count kept).
+  local esc=$'\033'
   sed -E \
+    -e "s/${esc}\[[0-9;?]*[A-Za-z]//g" \
     -e '/(^|[^[:alnum:]_])random_(id|password|string|uuid|bytes)\./{
       s/\[id=[^]]*\]/[id=<redacted>]/g
       s/(\<id[[:space:]]+=[[:space:]]+)"[^"]*"/\1"<redacted>"/g

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1222
-# generated-at=2026-10-31T17:10:10Z
+# generated-at=2026-10-31T19:54:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -80,7 +80,7 @@ apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	7
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
-apps/web-platform/scripts/dev-ledger-parity.test.sh	2
+apps/web-platform/scripts/dev-ledger-parity.test.sh	1
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	8
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	8
@@ -99,7 +99,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/affected-tests.test.sh	8
 plugins/soleur/scripts/alpha-metrics.test.sh	5
-plugins/soleur/scripts/delegation-verify.test.sh	8
+plugins/soleur/scripts/delegation-verify.test.sh	6
 plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/merge-effect-class.test.sh	1
 plugins/soleur/scripts/pipeline-tally.test.sh	4
@@ -110,7 +110,7 @@ plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8
 plugins/soleur/scripts/sync-pr-behind.test.sh	7
 plugins/soleur/scripts/taste-profile-update.test.sh	3
 plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh	8
-plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	4
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	6
 plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	8
 plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	1
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	7
@@ -190,8 +190,8 @@ plugins/soleur/test/cto-interface-selector.test.sh	1
 plugins/soleur/test/debug-probe-residue.test.sh	6
 plugins/soleur/test/deploy-arm.test.sh	1
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	5
-plugins/soleur/test/destructive-command-guard-hook.test.sh	4
-plugins/soleur/test/destructive-command-guard-mutation.test.sh	5
+plugins/soleur/test/destructive-command-guard-hook.test.sh	1
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	4
 plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh	1
 plugins/soleur/test/digest-scrub.test.sh	4
 plugins/soleur/test/domain-model-headless-append.test.sh	1
@@ -255,8 +255,8 @@ plugins/soleur/test/monitor-pr-checks.test.sh	6
 plugins/soleur/test/net-issue-flow.test.sh	8
 plugins/soleur/test/notice-frontmatter.test.sh	6
 plugins/soleur/test/npm-publish-oidc.test.sh	6
-plugins/soleur/test/operator-9321-stages.test.sh	2
-plugins/soleur/test/operator-ack-guard.test.sh	2
+plugins/soleur/test/operator-9321-stages.test.sh	1
+plugins/soleur/test/operator-ack-guard.test.sh	1
 plugins/soleur/test/operator-agent-runnable.test.sh	4
 plugins/soleur/test/operator-digest-provision.test.sh	4
 plugins/soleur/test/operator-digest-skill.test.sh	6
@@ -353,7 +353,7 @@ scripts/betterstack-ingest-parity	4
 scripts/board/set-board-status	1
 scripts/capture-web-1-host-key	6
 scripts/capture-web-2-host-key	1
-scripts/cf-tunnel-liveness-gate-mutations	6
+scripts/cf-tunnel-liveness-gate-mutations	4
 scripts/check-backstop-revision	4
 scripts/check-cloudflare-token-drift	8
 scripts/check-deploy-script-parity	1
@@ -361,14 +361,14 @@ scripts/check-pa-22-live	8
 scripts/check-pa-22-unit	3
 scripts/check-tom4-rls-posture	7
 scripts/check-tom4-rls-posture-live	1
-scripts/check-web-host-escrow-config	6
+scripts/check-web-host-escrow-config	5
 scripts/ci-demand-census	7
 scripts/ci-deploy-sentry-post-fail-6475	6
-scripts/ci-draft-light	7
+scripts/ci-draft-light	6
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
 scripts/ci-pr-selection	2
-scripts/ci-push-dedupe	2
+scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
 scripts/compound-promote-draft-edit-10552	1
@@ -402,7 +402,7 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	5
 scripts/followthroughs/discord-blog-webhook-fallback	4
 scripts/followthroughs/dispatch-recovery-sweeper-11211	3
 scripts/followthroughs/inngest-bs-token-restage-7596	3
-scripts/followthroughs/inngest-hostmetrics-trim-11602	3
+scripts/followthroughs/inngest-hostmetrics-trim-11602	7
 scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
 scripts/followthroughs/inngest-trace-retention-5150	1
@@ -411,7 +411,7 @@ scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4
 scripts/followthroughs/registry-clientip-alert-7530	1
 scripts/followthroughs/sdk-bash-smoke-verdict-10548	1
-scripts/followthroughs/t5-skip-persistence-bound-7510	8
+scripts/followthroughs/t5-skip-persistence-bound-7510	5
 scripts/followthroughs/tty-ack-migration-9387	7
 scripts/generate-kb-index-live	7
 scripts/ghcr-read-retired-8036	3
@@ -441,7 +441,7 @@ scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
 scripts/jobs1-stopgap-7432	1
 scripts/learning-retrieval-bench	7
-scripts/lib/bearer-curl.test.sh	8
+scripts/lib/bearer-curl.test.sh	7
 scripts/lib/frontmatter-strip.test.sh	1
 scripts/lib/git-data-rotate-stamp.test.sh	1
 scripts/lib/git-data-store-dirty-scan.test.sh	1
@@ -502,7 +502,7 @@ scripts/lint-rule-bodies-live	7
 scripts/lint-rule-ids-live	6
 scripts/lint-shell-capture-exit	8
 scripts/lint-shell-capture-exit-live	7
-scripts/lint-shell-trace-credential-refusal	4
+scripts/lint-shell-trace-credential-refusal	8
 scripts/lint-shell-trace-credential-refusal-repo	2
 scripts/lint-skill-body-budget	4
 scripts/lint-supabase-deprecated-endpoints-unit	6
@@ -557,7 +557,7 @@ scripts/supabase-watchdog-classify	5
 scripts/sweep-followthroughs	8
 scripts/tenant-dpa-register-guard-live	2
 scripts/tenant-dpa-register-guard-unit	1
-scripts/test-affected-derive	2
+scripts/test-affected-derive	4
 scripts/test-affected-derive-cache	2
 scripts/test-affected-kb-consumers	4
 scripts/test-all-affected-a	4
@@ -569,7 +569,7 @@ scripts/test-all-corpus-weight-budget	3
 scripts/test-all-enumerate-toolchain	6
 scripts/test-all-fast-tier-budget	8
 scripts/test-all-group-affected	6
-scripts/test-all-infra-coverage-notice	7
+scripts/test-all-infra-coverage-notice	4
 scripts/test-all-killed-classification	5
 scripts/test-all-orphan-log-retention	3
 scripts/test-all-parallel-benchmark	4
@@ -605,7 +605,7 @@ scripts/zot-mirror-diagnosis	2
 scripts/zot-restart-loop-alarm	1
 scripts/zot-restart-loop-alarm-scrub	1
 scripts/zot-soak-6122-arms	4
-scripts/zot-upload-ceiling-7556	2
+scripts/zot-upload-ceiling-7556	8
 tests/commands/sync-domain-model	3
 tests/commands/sync-producer-reachability	5
 tests/commands/sync-rule-prune	8
@@ -613,7 +613,7 @@ tests/hooks/drop-sentinel-parity	8
 tests/hooks/emissions	4
 tests/hooks/incidents	1
 tests/scripts/apply-github-infra-mint-shape	2
-tests/scripts/argv-bearer-sweep	3
+tests/scripts/argv-bearer-sweep	7
 tests/scripts/assert-dev-doppler-scope-wiring	3
 tests/scripts/audit-bot-codeql-coverage	8
 tests/scripts/audit-ruleset-bypass	4
@@ -633,13 +633,13 @@ tests/scripts/dev-suite-mutex	8
 tests/scripts/dev-suite-mutex-wiring	5
 tests/scripts/dispatch-web-redeploy	3
 tests/scripts/eu-location-allowset-parity	8
-tests/scripts/git-data-birth-readiness-gate	8
+tests/scripts/git-data-birth-readiness-gate	7
 tests/scripts/git-data-boot-signal-poll	6
 tests/scripts/git-data-host-birth-gate	1
 tests/scripts/git-data-host-replace-gate	4
 tests/scripts/git-data-root-key-arm	5
 tests/scripts/git-data-root-token-census	2
-tests/scripts/git-data-rung2-evidence-capture	6
+tests/scripts/git-data-rung2-evidence-capture	5
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/git-data-wipe-wedge	1
 tests/scripts/hcloud-token-readonly-no-fallback-scan	1
@@ -660,7 +660,7 @@ tests/scripts/plan-gate-preamble	4
 tests/scripts/preapply-entrypoint-gate	7
 tests/scripts/registry-d10-workflow-wiring	4
 tests/scripts/registry-delivery-change	4
-tests/scripts/registry-delivery-change-mutation-battery	6
+tests/scripts/registry-delivery-change-mutation-battery	1
 tests/scripts/registry-heartbeat-poll	6
 tests/scripts/registry-host-replace-gate	7
 tests/scripts/registry-luks-recut-gate	7

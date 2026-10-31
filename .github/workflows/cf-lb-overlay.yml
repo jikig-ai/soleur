@@ -127,8 +127,10 @@ jobs:
         run: |
           set -uo pipefail
           set +e
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -no-color -input=false -out=tfplan -target=cloudflare_record.lb_staging
+            terraform plan -no-color -input=false -out=tfplan -target=cloudflare_record.lb_staging 2>&1 | tf_redact_random_ids
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (staging-record) failed (exit $rc). NOTHING applied."
@@ -151,8 +153,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
       - name: Settle wait (record must serve before the overlay arm runs)
         run: |
           set -euo pipefail
@@ -238,8 +242,10 @@ jobs:
         run: |
           set -uo pipefail
           set +e
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -no-color -input=false -out=tfplan
+            terraform plan -no-color -input=false -out=tfplan 2>&1 | tf_redact_random_ids
           rc=$?
           if [[ $rc -ne 0 ]]; then
             [[ -n "${PROBE_PID:-}" ]] && kill "$PROBE_PID" 2>/dev/null || true
@@ -264,8 +270,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
       - name: Hold probe through one monitor interval, then grade
         run: |
           set -euo pipefail
@@ -365,8 +373,10 @@ jobs:
         run: |
           set -uo pipefail
           set +e
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform plan -destroy -no-color -input=false -out=tfplan-destroy
+            terraform plan -destroy -no-color -input=false -out=tfplan-destroy 2>&1 | tf_redact_random_ids
           rc=$?
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan -destroy (staging-teardown) failed (exit $rc). NOTHING destroyed."
@@ -389,8 +399,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan-destroy
+            terraform apply -no-color -input=false -auto-approve tfplan-destroy 2>&1 | tf_redact_random_ids
       - name: Zone clean check (read-only)
         # CF edge drain is not instant — poll for a SUSTAINED non-200 rather than a
         # single shot, or a still-propagating edge spuriously reports "teardown
@@ -465,15 +477,19 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
-              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" 2>&1 | tf_redact_random_ids \
               -target=cloudflare_load_balancer_monitor.web \
               -target=cloudflare_load_balancer_pool.web_1 \
-              -target=cloudflare_load_balancer.app
-          rc=$?
+              -target=cloudflare_load_balancer.app 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
             echo "::error::terraform plan (ga-overlay) failed (exit $rc). NOTHING applied."
             exit $rc
@@ -495,8 +511,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false -auto-approve tfplan
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
       - name: Post-apply continuity check on app.soleur.ai
         run: |
           set -euo pipefail

@@ -42,6 +42,7 @@ import {
   isFileTool,
   isSafeTool,
   extractToolPath,
+  pathFieldsEscape,
   UNVERIFIED_PARAM_TOOLS,
 } from "./tool-path-checker";
 import { patternEscapesWorkspace } from "./tool-pattern-checker";
@@ -517,7 +518,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
       }
       const filePath = extractToolPath(toolInput);
-      const pathEscapes = !!filePath && !isPathInWorkspace(filePath, ctx.workspacePath);
+      const pathEscapes = pathFieldsEscape(toolInput, (p) => isPathInWorkspace(p, ctx.workspacePath));
       const patternEscapes = !pathEscapes && patternEscapesWorkspace(toolName, toolInput);
       if (pathEscapes || patternEscapes) {
         if (ctx.persona === "support") {
