@@ -508,6 +508,7 @@ jobs:
               -target=cloudflare_record.supabase_acme_challenge \
               -target=cloudflare_record.spf_root \
               -target=cloudflare_record.google_site_verification \
+              -target=cloudflare_record.google_gws_recovery \
               -target=cloudflare_record.protonmail_verification \
               -target=cloudflare_record.protonmail_mx_primary \
               -target=cloudflare_record.protonmail_mx_secondary \
