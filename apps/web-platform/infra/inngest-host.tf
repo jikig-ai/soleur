@@ -241,27 +241,28 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # `.key` is Computed/write-once (same handling as doppler_service_token.registry); rotate
 # via `terraform apply -replace=doppler_service_token.inngest`.
 #
-# access = "read/write" (was "read" — #6178). The cutover flip FSM
-# (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on soleur-inngest/prd
-# (armed→flipping→flushed→done, or →aborted/→rolled-back) via `doppler secrets set` under
-# THIS token; the flip script comment (:78) already documented that the boot token
-# "authorizes the write". Minting it read-only was the mismatch — the flip failed loud at its
-# FIRST transition (flag_set flipping, before any Redis/systemctl action), so the dedicated
-# scheduler could never complete the flip. Blast radius is UNCHANGED at the cross-project
-# level: this token still resolves ONLY the isolated `soleur-inngest/prd` set — there is no
-# path to `soleur/prd` or any other project, so a host compromise still cannot read/write
-# foreign secrets. The residual (an inngest-server RCE could now WRITE this host's OWN
-# isolated secrets, not just read them) is tracked in #6890 for a tighter split — a separate
-# root-only write token used only by the root-run flip oneshot (via a cloud-init systemd
-# drop-in whose EnvironmentFile wins), keeping inngest-server's deploy-readable token
-# read-only. No OCI image change needed; deferred out of the live cutover as hardening.
+# access = "read" — the BOOT token (split from the flip token; ADR-282 addendum "2026-10-30
+# (#9927 item 4, the flip-token design)"). Both on-host copies of this token (/etc/default/
+# inngest-doppler, 0600 root, and /etc/default/inngest-server, 0640 root:deploy) are read by
+# units that only ever READ soleur-inngest/prd, several of them under app-user accounts or in
+# deploy-user environments and shared log tails. A leak of this token can therefore read the
+# isolated config but can no longer overwrite the LUKS passphrase pair. Wording rule: the leak
+# surface is NARROWED, never "unreachable by deploy" — a deploy-user process is root-equivalent
+# through the docker group and NOPASSWD sudo (#11816), and the same value rides in `user_data`
+# (#11817).
 #
-# APPLY BEHAVIOR — this is NOT an in-place widen. Doppler service tokens are immutable, so
+# The write the cutover flip FSM needs (inngest-cutover-flip.sh:flag_set advances
+# INNGEST_CUTOVER_FLIP through the Doppler CLI's secret-write verb) now runs under
+# doppler_service_token.inngest_flip below, which only inngest-cutover-flip.service sees, through a
+# cloud-init drop-in. History: #6178 raised this token from "read" to "read/write" so that write
+# could work; the split follows the ADR addendum above, not a tracker.
+#
+# APPLY BEHAVIOR — this is NOT an in-place change. Doppler service tokens are immutable, so
 # `access` is ForceNew: changing it destroys+recreates the token → new `.key`. That `.key`
 # feeds user_data (below), and hcloud_server.inngest carries NO ignore_changes=[user_data],
-# so `terraform apply` REPLACES the live dedicated host (destroy+recreate, re-run cloud-init,
-# re-bake the new read/write token). The Redis AOF volume survives (separate resource);
-# the flip's /var/lock state slot does not.
+# so the apply REPLACES the live dedicated host (destroy+recreate, re-run cloud-init, re-bake
+# both tokens). That replace is the owner-gated `apply_target=inngest-host-replace` dispatch. The
+# Redis AOF volume survives (separate resource); the flip's /var/lock state slot does not.
 #
 # CORRECTED 2026-08-11 (#7228 P0-5). This used to add "DBSIZE==0 still guards a spurious
 # re-flush". It does not, and the direction matters: `run_preflush_flip` reads DBSIZE *after*
@@ -280,6 +281,32 @@ resource "doppler_service_token" "inngest" {
   project = doppler_project.inngest.name
   config  = doppler_environment.inngest_prd.slug
   name    = "inngest-boot"
+  access  = "read"
+}
+
+# The FLIP token (ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)"):
+# read/write on the SAME isolated soleur-inngest/prd root config, so the cutover flip FSM can write
+# INNGEST_CUTOVER_FLIP. It is written to a root-only 0600 file (/etc/default/inngest-flip) and read
+# ONLY by inngest-cutover-flip.service, through a cloud-init `write_files` drop-in whose later
+# EnvironmentFile= overrides DOPPLER_TOKEN (the project, config and config-dir variables still come
+# from the baked /etc/default/inngest-server). Same exposure class as doppler_service_token.
+# inngest_arm_write (read/write on the same config), and — like every token in `user_data` — it is
+# retrievable through the Hetzner metadata API by anyone with host access (residual, #11816 and
+# #11817).
+#
+# Created as a DEPENDENCY of hcloud_server.inngest's `user_data` (it is not `-target`ed on the
+# inngest_host_replace dispatch, which keeps its three targets); it is `-target`ed on the
+# `inngest_host` dispatch only so that the shape gate's allow set stays equal to that job's
+# -target set. NEVER publish its `.key` to a github_actions_secret: the #5566 rule would then force
+# a per-merge -target, and merging would mint a read/write token with nothing to read it. No
+# `lifecycle` block: the key must propagate to `user_data` in the same apply, and rotating it alone
+# is an owner-run `terraform apply -replace=doppler_service_token.inngest_flip
+# -target=doppler_service_token.inngest_flip` followed straight away by the gated host replace
+# (runbooks/inngest-server.md, "Flip-token split").
+resource "doppler_service_token" "inngest_flip" {
+  project = doppler_project.inngest.name
+  config  = doppler_environment.inngest_prd.slug
+  name    = "inngest-flip"
   access  = "read/write"
 }
 
@@ -323,7 +350,11 @@ locals {
   # MEASURED, and re-derivable: `bash apps/web-platform/infra/inngest-userdata-budget.sh --json`
   # renders through terraform's OWN templatefile/replace/base64gzip and reports
   #   raw 91,997 B → stripped 30,614 B → stored 10,892 B, headroom 21,876 B, 61,383 B of prose
-  #   removed, ZERO non-comment lines touched.
+  #   removed, ZERO non-comment lines touched. (That was the figure at #7695. It is STALE by about
+  #   21 KB: the template grew with later work. The current figure is the one the flip-token split
+  #   measured with BOTH token stubs high-entropy: see the ADR-282 build record and run
+  #   `bash apps/web-platform/infra/inngest-userdata-budget.sh` — the script enforces a 512 B cap
+  #   headroom floor.)
   # Those are BYTES (`wc -c`). An earlier revision of this comment said "61,102 B", which was
   # terraform `length()`'s GRAPHEME count mislabelled as bytes — 183 B below the provable byte
   # floor, and optimistic in the one direction a cap gate must never be. registry-userdata-budget.sh
@@ -339,13 +370,18 @@ locals {
     # builds its allowlist of devices it may touch from this id alone, so any other device is
     # refused rather than probed.
     inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
-    # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
-    # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
-    # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO
+    # Scoped Doppler BOOT token → 0600 root env file (and the 0640 root:deploy copy). READ-ONLY on the
+    # ISOLATED `soleur-inngest` project's `prd` root config (the flip FSM's write now runs under
+    # doppler_flip_token below — see the doppler_service_token.inngest note above). It is a SEPARATE project — NO
     # inheritance path to soleur/prd — so a host compromise still reaches ONLY this host's own
     # isolated secret set, never a foreign project. NEVER baked into user_data directly beyond
     # this scoped token (which is itself minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
+    # The FLIP token (read/write on the same isolated config): written to /etc/default/inngest-flip
+    # (0600 root) and read ONLY by inngest-cutover-flip.service through the cloud-init drop-in; see
+    # doppler_service_token.inngest_flip above and the ADR-282 addendum "2026-10-30 (#9927 item 4,
+    # the flip-token design)". The charset guard in cloud-init covers it before any write.
+    doppler_flip_token = doppler_service_token.inngest_flip.key
     # #9175: the Doppler CONFIG NAME the boot surface resolves (`--config`, the env-file
     # DOPPLER_CONFIG= lines) — rendered literally at every site. Prod is "prd", stated at
     # the call site rather than defaulted so the prod resolution is visible here; the
@@ -527,7 +563,14 @@ resource "hcloud_server" "inngest" {
     #   2. it evaluates inside `terraform plan`, which EVERY path that can destroy this host
     #      traverses: the `workflow_dispatch` apply targets that plan the resource, and the
     #      unscoped drift plan in infra-validation.yml. A failed precondition aborts the plan
-    #      BEFORE the destroy is executed. Precision, because an earlier revision of this list
+    #      BEFORE the destroy is executed — WHEN EVERY INPUT IS KNOWN AT PLAN TIME. When a token
+    #      `.key` feeding `user_data` is unknown at plan time (a Doppler service token that is
+    #      being created or replaced in the same plan, as on the first replace after the flip-token
+    #      split: the boot token is `-/+` and the flip token `+`), local.inngest_user_data_b64gz is
+    #      unknown, the precondition is DEFERRED to APPLY, and the destroy runs before the cap is
+    #      ever checked — the 2026-09-08 stranded-host shape. The pre-destroy size gate for that
+    #      case is the `inngest-userdata-budget.sh` step inside the `inngest_host_replace` job,
+    #      before its plan step (offline; it stubs the keys). Precision, because an earlier revision of this list
     #      also claimed the merge leg: the merge apply's `-target=` allow-list contains no
     #      `hcloud_server.*`, so `-target` PRUNES this resource and its precondition is NOT
     #      evaluated on merge. That is the same blind spot that let the over-cap payload sit for

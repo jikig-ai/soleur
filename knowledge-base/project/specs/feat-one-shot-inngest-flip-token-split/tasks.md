@@ -26,10 +26,10 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 ## Phase 2: Terraform
 
-- 2.1 `inngest-host.tf`: `doppler_service_token.inngest` to `access = "read"`; rewrite the comment (cite the ADR addendum by title, no `#6890`)
-- 2.2 `inngest-host.tf`: new `doppler_service_token.inngest_flip` (`inngest-flip`, `read/write`); `templatefile` var `doppler_flip_token`; refresh the stale MEASURED comment
-- 2.3 `inngest-provision-rehearsal/rehearsal.tf`: pass `doppler_flip_token = doppler_service_token.rehearsal.key` (read token; never arms the flip)
-- 2.4 `inngest-arm-write-token.tf`: rewrite the "Tracked as a follow-up" paragraph; disambiguate `FLIP_READ` from `inngest_flip`
+- [x] 2.1 `inngest-host.tf`: `doppler_service_token.inngest` to `access = "read"`; rewrite the comment (cite the ADR addendum by title, no `#6890`)
+- [x] 2.2 `inngest-host.tf`: new `doppler_service_token.inngest_flip` (`inngest-flip`, `read/write`); `templatefile` var `doppler_flip_token`; refresh the stale MEASURED comment
+- [x] 2.3 `inngest-provision-rehearsal/rehearsal.tf`: pass `doppler_flip_token = doppler_service_token.rehearsal.key` (read token; never arms the flip)
+- [x] 2.4 `inngest-arm-write-token.tf`: rewrite the "Tracked as a follow-up" paragraph; disambiguate `FLIP_READ` from `inngest_flip`
 
 ## Phase 3: Cloud-init (`cloud-init-inngest.yml`)
 
