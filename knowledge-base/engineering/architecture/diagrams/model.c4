@@ -725,7 +725,7 @@ model {
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
   github -> anthropic "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244)" { technology "HTTPS" }
-  github -> npmRegistry "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-309): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package" { technology "HTTPS (npm OIDC token exchange + registry PUT)" }
+  github -> npmRegistry "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-310): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package, and with the OIDC wiring but no trust entry it swallows the exchange failure and dies ENEEDAUTH" { technology "HTTPS (npm OIDC token exchange + registry PUT)" }
   evalharness -> anthropic "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-244)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }
   tunnel -> coordinator "Routes traffic" { technology "HTTPS" }

@@ -99,3 +99,46 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
   ralph-loop sessions on a Stop-hook-capable harness — everywhere else
   enforcement is prose + sentinel, with `SOLEUR_TALLY_CAP_IGNORED` as the
   ignored-verdict detector.
+
+## Amendment — 2026-10-31 (PR #11688)
+
+Default-branch ledgers are init-scoped. A ledger keyed to exactly `main` or
+`master` (derived, or via `--branch`; `feat-main`, `main-x` and a detached
+`HEAD` do not match) is shared by every session on the default branch and, under
+the original per-branch contract, accumulated forever: the `83/15/1/12` tally
+read for PR #11622 was the shared `main` ledger, not that run's cost (the run's
+own ledger read `19/2/2/4`). `pipeline-tally.sh init` on a default branch now
+resets an uncapped ledger with the fail-open outcome `default-branch-reset`
+(exit 0), sitting after `repaired` and before `capped-reset` in the precedence
+(fresh > reset > repaired > default-branch-reset > capped-reset > stale-reset >
+continued); counts and `warned_*` are cleared and `cap_<dim>` values are merged
+as for every other reset. `show` appends one last line,
+`note:default-branch-ledger (shared across sessions; not attributable to one
+run)`; the `tally:` line and the `cap:`/`warned:`/`capped:` tokens are
+unchanged, so `hooks/stop-hook.sh` and ship's render parse as before.
+
+A capped default-branch ledger is not scoped: it follows the ordinary capped
+rules, as on every branch (bare `init` keeps `capped`, raised `--max-*` is
+`capped-reset` with the counts kept, 24h idle is `stale-reset`). Every skill runs
+a bare `init`, and none of them may lift a budget stop. The latch is written by
+`gate`, not by `incr`, so a ledger that is at its cap but has not yet been
+through a `gate` is not yet capped and is scoped like any other.
+
+What this does not do. Only `init` scopes the ledger. `incr`, `gate` and `show`
+on `main` read whatever has accumulated since the last `init`, and sessions do
+run them there (the shared ledger's `agent_rounds` moved from 12 to 17 after the
+PR #11622 merge). Skills run `init` inside their worktrees, so `init` on `main`
+is rare and the scoping bites only when it happens; the `note:` line on `show`
+is the disclosure for the reads in between. A detached `HEAD` (branch `HEAD`) is
+not a default branch and still shares one ledger across detached sessions.
+
+Side effect, accepted: a concurrent session's `init` on `main` zeroes another
+session's counts, where before it only accumulated, and `init` is not idempotent
+there: a second `init` inside one run loses the first's counts.
+
+Rejected alternatives: record-only (document that a `main` read is cumulative)
+leaves the same defect in place, since the next reader repeats the
+misattribution; refusing default-branch ledgers outright (UNKNOWN) turns every
+post-merge shell on `main` into an UNKNOWN verdict; a per-session key would
+remove the shared ledger entirely and is left for a design change if `main`
+reads keep mattering.

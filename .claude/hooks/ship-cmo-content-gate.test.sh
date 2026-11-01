@@ -32,6 +32,8 @@ cat > "$BINDIR/gh" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$*" == *"pr view 123 --json title --jq .title"* ]]; then
   echo "${MOCK_PR_TITLE:-feat: add shiny thing}"
+elif [[ "$*" == *"pr view 123 --json headRefName --jq .headRefName"* ]]; then
+  echo "${MOCK_PR_HEAD:-feat-branch}"
 elif [[ "$*" == *"pr view --json number --jq .number"* ]]; then
   echo "123"
 else
@@ -84,6 +86,31 @@ assert_eq "feat PR with skip override passes" "" "$res"
 # 5. Feat PR with trailer -> pass
 res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability" "0" "$(printf 'cmo: review\n\nReviewed-By-CMO: skip (internal only)')")
 assert_eq "feat PR with Reviewed-By-CMO trailer passes" "" "$res"
+
+# 6. Session rooted at the main checkout: HEAD==main, the trailer lives only on
+#    the PR head ref (#11682). Pin origin/feat-branch at the feat tip first.
+git -C "$WORKDIR" update-ref refs/remotes/origin/feat-branch "$(git -C "$WORKDIR" rev-parse feat-branch)"
+git -C "$WORKDIR" checkout -q main
+res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
+assert_eq "main-checkout session sees trailer on origin/<headRef>" "" "$res"
+
+# 7. Same fixture but the PR head predates the trailer commit -> still deny
+git -C "$WORKDIR" update-ref refs/remotes/origin/feat-branch "$(git -C "$WORKDIR" rev-parse feat-branch^)"
+res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
+decision=$(echo "$res" | jq -r .decision 2>/dev/null || echo "")
+assert_eq "main-checkout session still denies without the trailer" "deny" "$decision"
+git -C "$WORKDIR" checkout -q feat-branch
+git -C "$WORKDIR" update-ref -d refs/remotes/origin/feat-branch
+
+# 8. Deleted head branch: no origin/<headRef>, no local pull ref — the lazy
+#    pull/N/head fetch still reaches the trailer (#11682 fallback arm).
+git init -q --bare "$TMPDIR/origin.git"
+git -C "$WORKDIR" push -q "$TMPDIR/origin.git" "feat-branch:refs/pull/123/head"
+git -C "$WORKDIR" remote add origin "$TMPDIR/origin.git"
+git -C "$WORKDIR" checkout -q main
+res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
+assert_eq "main-checkout session sees trailer via pull/N/head fetch" "" "$res"
+git -C "$WORKDIR" checkout -q feat-branch
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

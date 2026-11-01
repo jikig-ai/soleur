@@ -80,7 +80,7 @@
 #     Idempotent MERGE: creates the file if absent, preserves counters, merges
 #     --max-* flags into cap_<dim>. Prints `tally-init: <slug> <outcome>` where
 #     outcome ∈ fresh | continued | reset | capped-reset | stale-reset |
-#     repaired:
+#     repaired | default-branch-reset:
 #       fresh         no file existed; new ledger created
 #       continued     existing ledger kept; argv caps merged. A capped ledger
 #                     prints `continued capped=<dim>` — the latch is visible.
@@ -99,7 +99,30 @@
 #                     clean (fail-open) with SOLEUR_TALLY_ERROR
 #                     reason=unreadable; NEVER reported `continued`, because
 #                     nothing readable was preserved.
-#     CAP SEMANTICS: a ledger carrying `capped` is NOT reset by a bare `init` —
+#       default-branch-reset
+#                     the branch is exactly `main` or `master` (derived or
+#                     --branch; `feat-main`, `main-x` and a detached HEAD do
+#                     not match) and the ledger existed and was readable: a
+#                     default-branch ledger is shared across sessions, so init
+#                     scopes it to the run that is starting — counts/warned/
+#                     capped cleared, caps merged as for every reset. Precedence:
+#                     fresh > reset (--reset) > repaired > default-branch-reset >
+#                     capped-reset > stale-reset > continued. Applies to ledgers
+#                     that are NOT capped: a capped main/master ledger follows
+#                     the ordinary capped rules (bare init -> `continued
+#                     capped=<dim>`; raised caps -> capped-reset; 24h idle ->
+#                     stale-reset), so the CAP SEMANTICS latch below holds on
+#                     main as on every branch. Not idempotent
+#                     on main/master: each init there zeroes the counts, so a
+#                     second init inside one run loses the first's. Side
+#                     effect: a concurrent session's init on `main` zeroes
+#                     another session's counts (ADR-268 amendment
+#                     2026-10-31). Only `init` scopes the ledger: `incr`,
+#                     `gate` and `show` on main read whatever has accumulated
+#                     since the last init, which is why `show` carries the
+#                     note: line. A detached HEAD (branch `HEAD`) is not a
+#                     default branch and still shares one ledger.
+#     CAP SEMANTICS (holds on main/master too): a ledger carrying `capped` is NOT reset by a bare `init` —
 #     it reports `continued` and `capped` persists, so the next `gate` still
 #     returns STOP (a budget-capped run cannot be accidentally resumed under
 #     the same caps; livelock impossible). `capped` clears only via an explicit
@@ -129,7 +152,10 @@
 #     Absent/unreadable file → UNKNOWN. Else prints
 #     `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N`, a `cap:<dim>=<n>`
 #     token line when caps are set (the stop-hook floor reads this), and, when
-#     any is set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` tokens.
+#     any is set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` tokens. On a
+#     default-branch ledger (`main`/`master`) a last line
+#     `note:default-branch-ledger (shared across sessions; not attributable to
+#     one run)` follows; the `tally:` line and the tokens above are unchanged.
 #
 #   gate <dim> [n] [--branch <b>]
 #     Reads cap_<dim> from the FILE, never argv. Verdict on stdout:
@@ -224,6 +250,11 @@ _tally_shorthash() {
 # Map _tally_paths rc -> the right error reason (1=bad-branch, 2=lib-missing).
 _tally_paths_err() { case "$1" in 1) _tally_err bad-branch ;; *) _tally_err lib-missing ;; esac; }
 
+# Default branches: exact `main` or `master` only. `feat-main`, `main-x` and a
+# detached `HEAD` do not match. Their ledgers are shared across sessions (no
+# per-run key), so init scopes them to one run and show discloses it.
+_tally_is_default_branch() { [[ "${T_BRANCH:-}" == "main" || "${T_BRANCH:-}" == "master" ]]; }
+
 # Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds, or fail.
 _tally_dim() {
   case "$1" in
@@ -233,7 +264,8 @@ _tally_dim() {
   esac
 }
 
-# _tally_paths <branch-or-empty> -> T_SLUG T_COUNTERS_DIR T_FILE
+# _tally_paths <branch-or-empty> -> T_BRANCH T_SLUG T_COUNTERS_DIR T_FILE
+# (T_BRANCH = the resolved branch name, or the --branch value, or `HEAD`.)
 # rc 1 = unsafe branch token refused; rc 2 = no session-state root.
 # _tally_paths_err maps the rc to the right reason marker.
 _tally_paths() {
@@ -242,6 +274,7 @@ _tally_paths() {
     branch=$(git branch --show-current 2>/dev/null || true)
     [[ -n "$branch" ]] || branch="HEAD"
   fi
+  T_BRANCH="$branch"
   T_SLUG=$(_tally_slug "$branch")-$(_tally_shorthash "$branch")
   # `.`/`..` survive the slug transform and would compose a path outside
   # counters/ (mv deposits the tmp file in the state root). Same refusal
@@ -443,6 +476,20 @@ _tally_init_locked() {
     # a continuation.
     outcome="repaired"
     _tally_err unreadable
+  elif _tally_is_default_branch && [[ -z "$T_capped" ]]; then
+    # `main`/`master` ledgers are shared by every session on the default branch
+    # and would accumulate forever (a read there is not one run's cost), so an
+    # init scopes them to the run that is starting. Beats stale-reset and
+    # `continued`; --reset (explicit) and repaired (corrupt) keep their own
+    # names above. A CAPPED ledger is not scoped here: it falls through to the
+    # ordinary capped rules (raised caps -> capped-reset, bare -> `continued
+    # capped=<dim>`, or stale-reset after 24h idle), exactly as on any other
+    # branch — the sticky latch is the budget stop, and a bare init (every skill
+    # runs one) must not lift it. The latch is written by `gate`, not by `incr`: an
+    # uncapped-latched ledger that is merely at its cap is scoped like any other
+    # until a gate has run (ADR-268 amendment). A concurrent session's init on `main` still
+    # zeroes this session's counts — accepted (ADR-268 amendment 2026-10-31).
+    outcome="default-branch-reset"
   elif [[ -n "$T_capped" ]] && (( caps_given )); then
     # Raised-cap resume BEATS stale: an explicit `--max-*` argv is operator
     # intent to continue THIS run under a new budget, and the counts are the
@@ -461,7 +508,7 @@ _tally_init_locked() {
   fi
 
   case "$outcome" in
-    reset|stale-reset|repaired)
+    reset|stale-reset|repaired|default-branch-reset)
       # Fresh ledger — counts, warnings, capped cleared. cap_<dim> survive:
       # reset clears the ledger, never the budget.
       _tally_setf seats 0; _tally_setf ci_cycles 0
@@ -644,6 +691,10 @@ cmd_show() {
   [[ -n "$T_capped" ]] && ann="${ann}capped:${T_capped}=$(_tally_getf "cap_$T_capped")"
   ann="${ann% }"
   [[ -n "$ann" ]] && printf '%s\n' "$ann"
+  # Last line: a default-branch ledger is shared across sessions, so its counts
+  # are not attributable to one run. Carries none of the tally:/cap:/warned:/
+  # capped: tokens, so the stop-hook and ship's render parse as before.
+  _tally_is_default_branch && printf 'note:default-branch-ledger (shared across sessions; not attributable to one run)\n'
   return 0
 }
 
