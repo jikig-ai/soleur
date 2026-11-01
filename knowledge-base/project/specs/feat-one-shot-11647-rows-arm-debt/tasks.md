@@ -46,7 +46,7 @@ Never `git stash`. Read every file before editing it.
 
 ## Phase 2 — `scripts/lib/rows-range.sh` + retire the four copies (S2)
 
-- [ ] 2.1 New `scripts/lib/rows-range.sh`: `rows_parse_args "$@"` (reads
+- [x] 2.1 New `scripts/lib/rows-range.sh`: `rows_parse_args "$@"` (reads
       caller's `DECLARED_TOTAL`; refuse repeat/malformed/unknown/out-of-bounds
       → exit 2), `in_range [ord]` (optional ordinal check →
       `FATAL(harness)` exit 2), `rows_gate_floor` (`_site_seq ==
@@ -54,26 +54,26 @@ Never `git stash`. Read every file before editing it.
       per-block floor via `ROWS_COUNT_VAR`). **Never** spell `DECLARED_TOTAL=`
       or a literal `--rows <digits>-<digits>` anywhere in the file
       (Direction-1/Direction-2 census constraints)
-- [ ] 2.2 `plugins/soleur/test/scripts-shard-totality-mutations.sh`: delete
+- [x] 2.2 `plugins/soleur/test/scripts-shard-totality-mutations.sh`: delete
       :66-118 copy → `source "$REPO_ROOT/scripts/lib/rows-range.sh"` +
       `rows_parse_args "$@"`; keep `DECLARED_TOTAL=42` (:79); rename
       `_row_seq`→`_site_seq` (:1016-1026); keep `TOTAL == EXECUTED + 1` extra
-- [ ] 2.3 `scripts/lint-orphan-test-suites.test.sh`: delete :78-133 copy →
+- [x] 2.3 `scripts/lint-orphan-test-suites.test.sh`: delete :78-133 copy →
       lib source + call; keep `DECLARED_TOTAL=35   # the gated mutation rows
       M1..M35; C0/R1/R1b are unconditional` BYTE-IDENTICAL (totality-mutations
       `DECL-PREFIX-READER` anchor :998-1001); call sites `in_range "${_id#M}"`
       unchanged (:1155)
-- [ ] 2.4 `plugins/soleur/test/ci-pr-affected-replay.test.sh`: delete
+- [x] 2.4 `plugins/soleur/test/ci-pr-affected-replay.test.sh`: delete
       :62-123 copy → lib source + call; keep `DECLARED_TOTAL=582`; keep
       `_MUT_UNGATED`/`mutate_ungated` (:124-127); in_range call sites inside
       `ow_mutate` (:3746) and `mutate` (:4281) unchanged
-- [ ] 2.5 `scripts/test-all-affected.test.sh`: delete :325-375 copy → lib
+- [x] 2.5 `scripts/test-all-affected.test.sh`: delete :325-375 copy → lib
       source + call; keep `DECLARED_TOTAL=38`
-- [ ] 2.6 `scripts/lib/test-relevance-paths.sh`: add
+- [x] 2.6 `scripts/lib/test-relevance-paths.sh`: add
       `"scripts/lib/rows-range.sh"` to `LINT_ORPHAN_BATTERY_PATHS` (:171-179)
       and `TEST_ALL_AFFECTED_BATTERY_PATHS` (:207-213) — declared edge AND
       pr-gated arming on lib edits
-- [ ] 2.7 Verify: each battery per registered arm —
+- [x] 2.7 Verify: each battery per registered arm —
       `bash scripts/lint-orphan-test-suites.test.sh --rows 1-18` and `--rows 19-35`;
       `bash scripts/test-all-affected.test.sh --rows 1-13`, `--rows 14-32`,
       `--rows 33-36`, `--rows 37-38`;
@@ -83,33 +83,33 @@ Never `git stash`. Read every file before editing it.
       refusal applies — run clean);
       `bash plugins/soleur/test/scripts-shard-totality.test.sh` (Direction-1/2
       censuses, tiling arms, distinct legs)
-- [ ] 2.8 Ratchet check: run the affected-index audit
+- [x] 2.8 Ratchet check: run the affected-index audit
       (`scripts/ci-pr-affected-preactivation.sh` or the ratchet path used by
       `ci-pr-affected-replay.py --audit`); add accept rows to
       `scripts/ci-pr-affected-audit.accept.tsv` only if new (suite,
       `scripts/lib/rows-range.sh`) pairs are flagged — pr-gated arms are
       already covered by the 2.6 declared edges
-- [ ] 2.9 `git commit` Phase 2 alone
+- [x] 2.9 `git commit` Phase 2 alone
 
 ## Phase 3 — exit-code normalization (S3)
 
-- [ ] 3.1 `scripts/test-all-affected.test.sh`: :92 (missing required file) and
+- [x] 3.1 `scripts/test-all-affected.test.sh`: :92 (missing required file) and
       :109 (instrument self-test) `exit 1` → `exit 2`
-- [ ] 3.2 `scripts/lint-orphan-test-suites.test.sh`: `exit 1` → `exit 2` at
+- [x] 3.2 `scripts/lint-orphan-test-suites.test.sh`: `exit 1` → `exit 2` at
       :1206, :1210, :1214 (aggregation FATALs) and :1320, :1325, :1333, :1342
       (end-gate FATALs); `:1346` verdict stays 1; `mutate`'s `sys.exit(3)`
       untouched
-- [ ] 3.3 `plugins/soleur/test/ci-pr-affected-replay.test.sh`: `exit 1` →
+- [x] 3.3 `plugins/soleur/test/ci-pr-affected-replay.test.sh`: `exit 1` →
       `exit 2` on every battery-process `[FATAL]` path — :53, :57, :59, :140,
       :141, :145, :176, :179, :711, :740, :953, :1735, :1754, :2253, :2294,
       :2347, :2351, :2352, :2370, :5177, :5183, :5186, :5189, :5192, :5195;
       verdict tail (:5199-5200) and stub/fixture exits untouched
-- [ ] 3.4 `plugins/soleur/test/scripts-shard-totality-mutations.sh`: end-gate
+- [x] 3.4 `plugins/soleur/test/scripts-shard-totality-mutations.sh`: end-gate
       `FAIL:` lines (:1017, :1026, :1033) → `FATAL:` + `exit 2` (shape
       accounting, not verdicts); `:1040-1041` verdict exit stays 1
-- [ ] 3.5 Verify: `grep -n 'exit 1'` per file — remaining hits are verdicts or
+- [x] 3.5 Verify: `grep -n 'exit 1'` per file — remaining hits are verdicts or
       fixture/stub code only; run at least one arm per battery from 2.7
-- [ ] 3.6 `git commit` Phase 3 alone
+- [x] 3.6 `git commit` Phase 3 alone
 
 ## Phase 4 — per-block declared case floors (S4)
 
