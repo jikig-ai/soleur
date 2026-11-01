@@ -11,14 +11,14 @@ Derived from `knowledge-base/project/plans/2026-11-01-chore-fast-tier-always-on-
 ## Phase 1: Index demotion
 
 - [ ] 1.1 `scripts/lib/test-affected-paths.sh` — remove the 8 labels from `ALWAYS_ON_SUITES`.
-- [ ] 1.2 Extend `AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS` with root-anchored `glob:*.<ext>` edges for each PJ_EXTS extension (sh bash yml yaml tf tftpl template service tmpl).
+- [ ] 1.2 Extend `AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS` with dir-anchored `glob:<top-dir>/**.<ext>` rows (one per top-level dir for each ext in PJ_EXTS ∪ SWEEP_EXTS: sh bash yml yaml tf tftpl template service tmpl bats js ts tsx mjs cjs py), `**.md` for every top-level dir except `knowledge-base`, root-anchored `glob:*.<ext>` for root-level files; enumerate dirs via `git ls-files | awk -F/ 'NF>1{print $1}' | sort -u`.
 - [ ] 1.3 Add `AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS` — `scripts/test-all.sh`, `scripts/lib/{test-affected-paths,test-relevance-paths,affected-glob,test-affected-derive-cache,repo-write-boundary}.sh`, self, index.
 - [ ] 1.4 Add `AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS` — `plugins/soleur/scripts/lint-ratchet.py`, `plugins/soleur/scripts/ruff-requirements.txt`, `tests/scripts/fixtures/lint-ratchet/`, `tests/scripts/_git_fixture_env.py`, `ruff.toml`, `apps/web-platform/eslint.test-dirs.config.mjs`, self, index.
 - [ ] 1.5 Add `AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS` — `plugins/soleur/skills/pencil-setup/scripts/`, `plugins/soleur/test/test-helpers.sh`, self, index.
 - [ ] 1.6 Add `AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS` — `.github/workflows/scheduled-terraform-drift.yml`, `scripts/check-cloudflare-token-drift.sh`, `apps/web-platform/infra/doppler-config-inventory.txt`, `apps/web-platform/infra/token-drift-read-tokens.tf`, `knowledge-base/engineering/operations/runbooks/`, `plugins/soleur/test/test-helpers.sh`, self, index.
 - [ ] 1.7 Add `AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS` — `scripts/lint-encryption-posture.py`, `scripts/encryption-posture-ledger.json`, `scripts/encryption-posture-ledger.schema.json`, `apps/web-platform/infra/`, `apps/cla-evidence/infra/`, `infra/`, `plugins/soleur/skills/plan/references/plan-issue-templates.md`, self, index.
 - [ ] 1.8 Add `AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS` — `.github/workflows/secret-scan.yml`, `.gitleaks.toml`, `plugins/soleur/test/lib/gitleaks-probe.sh`, `plugins/soleur/test/test-helpers.sh`, self, index.
-- [ ] 1.9 Add `AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS` — `glob:*.sh`, `.github/workflows/`, `scripts/lint-gh-argv-arg.py`, index.
+- [ ] 1.9 Add `AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS` — `glob:*.sh` (root) + `glob:<top-dir>/**.sh` per top-level dir, `.github/workflows/`, `scripts/lint-gh-argv-arg.py`, index.
 - [ ] 1.10 Rewrite the `#9763 withdrawn-to-edge-selection` comment to name the resulting demoted set (AC3); move `grep-q-pipe-guard`'s re-promotion note out of the member list.
 - [ ] 1.11 Delete the 8 rows in `scripts/always-on-justifications.tsv`; verify `bash scripts/always-on-ledger.test.sh` green.
 
