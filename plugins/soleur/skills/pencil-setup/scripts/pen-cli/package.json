@@ -8,6 +8,7 @@
   },
   "overrides": {
     "undici": "8.12.2",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "minimatch": "11.0.1"
   }
 }

@@ -122,6 +122,13 @@
     },
     "@likec4/core": {
       "zod": "^4.6.6"
-    }
+    },
+    "rimraf": {
+      "glob": "^14.0.2"
+    },
+    "@sentry/bundler-plugins": {
+      "glob": "^14.0.2"
+    },
+    "minimatch": "^11.0.1"
   }
 }
