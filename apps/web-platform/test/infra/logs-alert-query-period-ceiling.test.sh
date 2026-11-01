@@ -25,7 +25,7 @@
 # its header line from it), and be at least 1: a lexer that finds nothing, a desync, or a rename of the resource
 # kind, is a failure. The lexer reads a quote inside `${...}` / `%{...}` as a NESTED string (skip_interp). Both kinds are held to the ceiling; .tf.json files are scanned too; a lifecycle
 # ignore_changes over query_period (or all) is a failure; a duplicate query_period, an unterminated string,
-# heredoc or block comment is a failure; the census entries must be LIVE lines inside INTENDED_DESTROYS.
+# heredoc or block comment is a failure; the four retired -target lines must be ABSENT from the apply workflow and the four #11631 census rows ABSENT from INTENDED_DESTROYS (the destroys applied; #11672).
 # FLOORS are exact and compared with `!=` (EXPECT_BLOCKS, MIN_PASSES): adding OR removing a case or an alert means
 # re-deriving them. ALLOW is keyed by (kind, file, name); a lifecycle ignore_changes list is bracket-matched.
 # The two ALLOW entries are GRANDFATHERED, not creatable: the API refuses a new alert above 900 (commit 744396abbb).
@@ -82,13 +82,13 @@ ALLOW = {
 }
 ALERT_KINDS = ("logtail_exploration_alert", "logtail_dashboard_alert")
 RETIRED = ("luks_monitor_host_timer_dark", "claude_cost_capture_dark")
-RETAINED_TARGETS = (
+GONE_TARGETS = (
     "-target=logtail_exploration.claude_cost_capture_dark",
     "-target=logtail_exploration_alert.claude_cost_capture_dark",
     "-target=logtail_exploration.luks_monitor_host_timer_dark",
     "-target=logtail_exploration_alert.luks_monitor_host_timer_dark",
 )
-CENSUS_ENTRIES = (
+GONE_CENSUS_ENTRIES = (
     '"logtail_exploration.claude_cost_capture_dark": "#11631"',
     '"logtail_exploration_alert.claude_cost_capture_dark": "#11631"',
     '"logtail_exploration.luks_monitor_host_timer_dark": "#11631"',
@@ -455,20 +455,30 @@ def main(infra_dir, apply_path, census_path):
     if parsed_total != naive_total or parsed_total < 1 or parsed_total > raw_total or parsed_total != anchored_total:
         bad.append("anti-vacuity:parsed=%d naive=%d raw=%d anchored=%d" % (parsed_total, naive_total, raw_total, anchored_total))
     apply_text = open(apply_path, encoding="utf-8").read()
-    for t in RETAINED_TARGETS:
-        if re.search(r"(?m)^[ \t]*" + re.escape(t) + r"( \\)?[ \t]*$", apply_text) is None:
-            bad.append("retained-destroy-target-missing:%s" % t)
+    # The destroys applied (run 41239555181) and the lines were removed (#11672): a bare -target on an address with no
+    # configuration plans a delete, so a leftover or re-added line is stale at best. Whole-line comments do not count.
+    live_apply = [l for l in apply_text.split("\n") if not l.lstrip().startswith("#")]
+    # Positive control: a known LIVE neighbour proves the target list was extracted, so an empty or mis-read workflow
+    # cannot read as "all four absent".
+    if not any(re.search(r'-target[=\s]+["\']?logtail_exploration_alert\.claude_cost_daily_burn(?![A-Za-z0-9_])', l) for l in live_apply):
+        bad.append("target-list-not-extracted")
+    # `-target=addr`, `-target "addr"`, `-target='addr'` and `-target addr` all reach terraform, so all four spellings count.
+    for t in GONE_TARGETS:
+        addr = t.split("=", 1)[1]
+        if any(re.search(r'-target[=\s]+["\']?' + re.escape(addr), l) for l in live_apply):
+            bad.append("retired-destroy-target-present:%s" % t)
     census_text = open(census_path, encoding="utf-8").read()
     # A LIVE entry: a non-comment line inside the INTENDED_DESTROYS dict, not a substring anywhere in the file (a
     # commented-out entry, or one moved to another dict, must not satisfy it).
     cm = re.search(r"(?ms)^INTENDED_DESTROYS = \{\n(.*?)^\}", census_text)
-    # Only the lines under the `"apps/web-platform/infra"` key count: the same address under another root's key (or
-    # another dict) is a claim about a different Terraform root.
-    km = re.search(r'(?ms)^    "apps/web-platform/infra": \{\n(.*?)^    \},', cm.group(1) + "\n" if cm else "")
-    live = [l.strip() for l in (km.group(1).split("\n") if km else []) if not l.strip().startswith("#")]
-    for e in CENSUS_ENTRIES:
-        if not any(re.fullmatch(re.escape(e) + r",?\s*(#.*)?", l) for l in live):
-            bad.append("census-intended-destroy-missing:%s" % e.split(":")[0].strip('"'))
+    # Every live line of the WHOLE dict counts, whatever root key it sits under: the rows are retired, so one re-added
+    # under any root is stale (a key-scoped read would let a re-add slip in under another root's key).
+    live = [l.strip() for l in (cm.group(1).split("\n") if cm else []) if not l.strip().startswith("#")]
+    if cm is None or not live:
+        bad.append("census-dict-not-extracted")
+    for e in GONE_CENSUS_ENTRIES:
+        if any(e in l for l in live):
+            bad.append("census-intended-destroy-present:%s" % e.strip('"'))
     for name, qp, ceiling, rel, grand in sorted(seen):
         print("alert %s query_period=%d ceiling=%d (%s)%s" % (name, qp, ceiling, rel, " grandfathered" if grand else ""))
     print("blocks parsed=%d naive=%d anchored=%d" % (parsed_total, naive_total, anchored_total))
@@ -528,8 +538,8 @@ variant("checker-oldign.py", "    for kind, val in ignore_changes_values(body):"
         "    return re.search(r\"ignore_changes\\s*=\\s*(?:all\\b|\\[[^\\]]*?\\bquery_period\\b[^\\]]*\\])\", body, re.S) is not None\n    for kind, val in ignore_changes_values(body):")
 variant("checker-byname.py", "ceiling = ALLOW.get((kind, rel, name), DEFAULT_CEILING)",
         "ceiling = max([v for (_k, _r, nm), v in ALLOW.items() if nm == name] or [DEFAULT_CEILING])")
-variant("checker-anykey.py", "live = [l.strip() for l in (km.group(1).split(\"\\n\") if km else [])",
-        "live = [l.strip() for l in (cm.group(1).split(\"\\n\") if cm else [])")
+variant("checker-anykey.py", "live = [l.strip() for l in (cm.group(1).split(\"\\n\") if cm else [])",
+        "km = re.search(r'(?ms)^    \"apps/web-platform/infra\": \\{\\n(.*?)^    \\},', cm.group(1) + \"\\n\" if cm else \"\")\n    live = [l.strip() for l in (km.group(1).split(\"\\n\") if km else [])")
 PYM
 
 # ── a working-tree snapshot of the .tf files, the apply workflow and the census ───────────────
@@ -612,7 +622,7 @@ BASE="$WORK/base"; snap "$BASE"
 
 echo "== the shipped tree =="
 cases=$((cases + 1))
-if run_checker "$BASE"; then pass "no logtail_exploration_alert exceeds its ceiling; the retired alerts are absent; the retained destroy targets and census entries are present"
+if run_checker "$BASE"; then pass "no logtail_exploration_alert exceeds its ceiling; the retired alerts, their destroy targets and their census rows are absent"
 else fail "the shipped tree violates the sentinel"; sed 's/^/        | /' "$WORK/out" >&2; fi
 sed 's/^/  | /' "$WORK/out"
 cases=$((cases + 1))
@@ -697,24 +707,32 @@ M4="$WORK/m4"; snap "$M4"; append "$M4" infra/betterstack-logs-alerts.tf 'resour
 expect_red M4 "$M4" 'retired-resource-redeclared:logtail_exploration.luks_monitor_host_timer_dark'
 M4B="$WORK/m4b"; snap "$M4B"; append "$M4B" infra/betterstack-logs-alerts.tf "$(mk_alert claude_cost_capture_dark 900)"; landed M4b 0
 expect_red M4b "$M4B" 'retired-resource-redeclared:logtail_exploration_alert.claude_cost_capture_dark'
-# M5: remove one of the four retained -target lines
+# M5: re-add one of the four retired -target lines to the apply workflow
 M5="$WORK/m5"; snap "$M5"
-"$PY" -I - "$M5/apply.yml" <<'PYD'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-lines = s.split("\n")
-idx = [i for i, l in enumerate(lines) if l.strip().startswith("-target=logtail_exploration_alert.luks_monitor_host_timer_dark")]
-if len(idx) != 1:
-    sys.exit(3)
-del lines[idx[0]]
-open(p, "w").write("\n".join(lines))
-PYD
+edit "$M5" apply.yml '              -target=logtail_exploration_alert.claude_cost_daily_burn \' '              -target=logtail_exploration_alert.claude_cost_daily_burn \
+              -target=logtail_exploration_alert.luks_monitor_host_timer_dark \'
 landed M5 $?
-expect_red M5 "$M5" 'retained-destroy-target-missing:-target=logtail_exploration_alert.luks_monitor_host_timer_dark'
+expect_red M5 "$M5" 'retired-destroy-target-present:-target=logtail_exploration_alert.luks_monitor_host_timer_dark'
+# M5c: the quoted spelling terraform also accepts (the workflow already uses it at the preflight step)
+M5C="$WORK/m5c"; snap "$M5C"
+edit "$M5C" apply.yml '              -target=logtail_exploration_alert.claude_cost_daily_burn \' '              -target=logtail_exploration_alert.claude_cost_daily_burn \
+              -target="logtail_exploration_alert.luks_monitor_host_timer_dark" \'
+landed M5c $?
+expect_red M5c "$M5C" 'retired-destroy-target-present:-target=logtail_exploration_alert.luks_monitor_host_timer_dark'
+# M5d: the live neighbour is not extracted (the target line is mangled), so "absent" proves nothing
+M5D="$WORK/m5d"; snap "$M5D"
+edit "$M5D" apply.yml '              -target=logtail_exploration_alert.claude_cost_daily_burn \' '              -target=logtail_exploration_alert.claude_cost_daily_burnX \'
+landed M5d $?
+expect_red M5d "$M5D" 'target-list-not-extracted'
+# M5e: the census dict header is respelled, so the read finds no dict and "absent" proves nothing
+M5E="$WORK/m5e"; snap "$M5E"
+edit "$M5E" census.sh 'INTENDED_DESTROYS = {' 'INTENDED_DESTROYS: dict = {'; landed M5e $?
+expect_red M5e "$M5E" 'census-dict-not-extracted'
+# M5b: re-add one of the four #11631 census rows to the live INTENDED_DESTROYS dict
 M5B="$WORK/m5b"; snap "$M5B"
-edit "$M5B" census.sh '"logtail_exploration.claude_cost_capture_dark": "#11631"' '"logtail_exploration.claude_cost_capture_dark_x": "#11631"'; landed M5b $?
-expect_red M5b "$M5B" 'census-intended-destroy-missing'
+edit "$M5B" census.sh '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",' '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",
+        "logtail_exploration.claude_cost_capture_dark": "#11631",'; landed M5b $?
+expect_red M5b "$M5B" 'census-intended-destroy-present'
 # M6: the discovery finds zero alert blocks (the resource kind is renamed)
 M6="$WORK/m6"; snap "$M6"
 "$PY" -I - "$M6/infra/betterstack-logs-alerts.tf" <<'PYR'
@@ -813,10 +831,11 @@ M17C="$WORK/m17c"; snap "$M17C"; append "$M17C" infra/betterstack-logs-alerts.tf
   }
 }"
 expect_green "M17c (ignore_changes over another attribute, must-PASS)" "$M17C"
-# M18: a census entry that is only a COMMENT is not a live entry
+# M18 (must-PASS): a retired census row that is only a COMMENT is not a live entry, so it does not count as present
 M18="$WORK/m18"; snap "$M18"
-edit "$M18" census.sh '        "logtail_exploration.claude_cost_capture_dark": "#11631",' '        # "logtail_exploration.claude_cost_capture_dark": "#11631",'; landed M18 $?
-expect_red M18 "$M18" 'census-intended-destroy-missing:logtail_exploration.claude_cost_capture_dark'
+edit "$M18" census.sh '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",' '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",
+        # "logtail_exploration.claude_cost_capture_dark": "#11631",'; landed M18 $?
+expect_green "M18 (a commented-out retired census row, must-PASS)" "$M18"
 # M19: an unterminated block comment would hide everything after it
 M19="$WORK/m19"; snap "$M19"; append "$M19" infra/betterstack-logs-alerts.tf "/* never closed
 $(mk_alert synth_hidden 86400)"; landed M19 0
@@ -899,13 +918,16 @@ M25="$WORK/m25"; snap "$M25"; printf '%s\n' "$(mk_alert inngest_luks_wrong_volum
 expect_red M25 "$M25" 'zz-synth-extra.tf:inngest_luks_wrong_volume:5400>900'
 expect_green "M25x (allowlisted by NAME only: the same name in another file slips through)" "$M25" "$WORK/checker-byname.py"
 
-# L4(c): the four census entries must sit under the "apps/web-platform/infra" key of INTENDED_DESTROYS.
+# L4(c): a retired census row re-added under ANY root key of INTENDED_DESTROYS is present (the dict is read whole).
 M29="$WORK/m29"; snap "$M29"
 edit "$M29" census.sh '    "apps/web-platform/infra": {
         "doppler_secret.ghcr_read_user"' '    "apps/other-root": {
+        "logtail_exploration.claude_cost_capture_dark": "#11631",
+    },
+    "apps/web-platform/infra": {
         "doppler_secret.ghcr_read_user"'; landed M29 $?
-expect_red M29 "$M29" 'census-intended-destroy-missing'
-expect_green "M29x (any key in INTENDED_DESTROYS satisfies the census check)" "$M29" "$WORK/checker-anykey.py"
+expect_red M29 "$M29" 'census-intended-destroy-present'
+expect_green "M29x (a checker scoped to the apps/web-platform/infra key alone misses the re-add)" "$M29" "$WORK/checker-anykey.py"
 
 echo "== harness rows =="
 # (a) the sentinel reads its ceiling: with the ceiling at 100000, M1 goes GREEN.
@@ -929,7 +951,7 @@ if (( passes + fails != cases )); then
 fi
 # EXACT floor: the measured pass count of this file, compared with `!=` (a case deleted, a block that stopped
 # running, AND an unaccounted case added all trip it). Changing a case means setting it to the count printed above.
-MIN_PASSES=110
+MIN_PASSES=116
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; re-derive the floor.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

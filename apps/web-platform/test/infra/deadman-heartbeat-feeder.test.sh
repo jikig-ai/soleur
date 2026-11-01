@@ -1960,7 +1960,7 @@ ssh_run = ssh_runs[0] if len(ssh_runs) == 1 else ""
 for res in want_res.values():
     need(re.search(r'^\s*-target=betteruptime_heartbeat\.' + res + r'\b', plan_run, re.M) is not None, "apply-target-missing-" + res)
     need(re.search(r'-target=betteruptime_heartbeat\.' + res + r'\b', ssh_run) is None, "apply-target-in-ssh-step-" + res)
-need(len(re.findall(r'^\s*-target=logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', plan_run, re.M)) == 4, "apply-retained-destroy-targets-not-4")
+need(len(re.findall(r'-target[=\s]+["\']?logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', "\n".join(l for l in plan_run.split("\n") if not l.lstrip().startswith("#")))) == 0, "apply-retired-destroy-targets-present")
 need(re.search(r'-target=logtail_exploration', ssh_run) is None, "apply-destroy-target-in-ssh-step")
 need(re.search(r'^\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",', table, re.M) is not None, "watchdog-row-workflowFile-line")
 row = re.search(r'\{\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",(.*?)\n  \},', table, re.S)
