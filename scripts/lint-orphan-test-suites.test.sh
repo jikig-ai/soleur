@@ -251,6 +251,22 @@ build_pristine() {
     cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
   done
 
+  # (4b) Every path-shaped operand of a SUITE_COMMAND record that exists in the
+  #     real tree. Surface 7's dead-target arm resolves each registration's file
+  #     operand and requires it to exist, so a sandbox missing the non-*.test.sh
+  #     targets (lint-*.sh, *.py, .mjs) reds every row for a reason unrelated to
+  #     any mutation — the C0/row-REJECTED class this battery measured red on
+  #     #11665. A token that is not a real repo path fails `-e` and is skipped,
+  #     so no argv0 resolver is duplicated here; a live-dead registration stays
+  #     dead in the sandbox (the live suite reports it).
+  while IFS= read -r _t; do
+    if [[ -n "$_t" && "$_t" != /* && "$_t" != ../* && "$_t" != */../* && -e "$REPO_ROOT/$_t" ]]; then
+      printf '%s\n' "$_t"
+    fi
+  done < <(bash "$REPO_ROOT/scripts/test-all.sh" --enumerate-commands 2>/dev/null \
+           | awk -F'\t' '$1=="SUITE_COMMAND"{for(i=3;i<=NF;i++) print $i}' \
+           | LC_ALL=C sort -u) | materialise || return 1
+
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
   # A COMMIT, not just a stage: since #8736 the sandbox runner derives its

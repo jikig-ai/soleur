@@ -36,6 +36,15 @@ describe("permanent auth-failure modules stay outside the diagnostic", () => {
     }
   }
 
+  // The leaf agent-auth-user-message imports (the one list of auth-mode causes) is part of the permanent surface: if it ever
+  // gained an import, a Sentry or observability import there would reach the permanent modules without tripping the direct
+  // checks above. Pinned import-free on comment-stripped source.
+  it("auth-mode-error.ts (the cause-list leaf) stays import-free", () => {
+    const src = code(readFileSync(resolve(SERVER, "auth-mode-error.ts"), "utf8"));
+    expect(src.length).toBeGreaterThan(200);
+    expect(src).not.toMatch(/(^|\n)\s*import\b|\brequire\s*\(|\bimport\s*\(/);
+  });
+
   it("agent-auth-user-message imports the matcher from agent-auth-match", () => {
     const src = code(readFileSync(resolve(SERVER, "agent-auth-user-message.ts"), "utf8"));
     expect(src).toMatch(/from\s+["']\.\/agent-auth-match["']/);

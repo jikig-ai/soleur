@@ -52,7 +52,7 @@ QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
 # `field=` is REQUIRED by the org events endpoint (HTTP 400 "No columns selected" without it,
 # measured 2026-09-11); the parse below reads .title and .id, which these columns carry.
-URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp"
+URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&sort=-timestamp"
 
 # The bearer rides curl's stdin config channel, never its argument list.
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \

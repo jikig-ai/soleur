@@ -4160,7 +4160,8 @@ _aff_runner_banner() {
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
 # #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+# #11662: +2 always-on (the anti-regrow guard pair: corpus-weight-budget + always-on-ledger); re-pinned at 122-5.
+_MIN_ALWAYS_ON_DECLARED=117
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5715,6 +5716,15 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #11662: the corpus-wide committed-weight budget — every committed weight
+  # <=600s or exempted in scripts/suite-weight-exemptions.tsv; unmeasured
+  # registrations red. Registered explicitly: scripts/*.test.sh is NOT
+  # auto-globbed (the #5417 orphan class).
+  run_suite "scripts/test-all-corpus-weight-budget" bash scripts/test-all-corpus-weight-budget.test.sh
+  # #11662: the always-on ledger — two-directional keys-parity against
+  # scripts/always-on-justifications.tsv plus the non-live membership ceiling
+  # (NON_LIVE_CAP), distinct from f1's pin-vs-list band.
+  run_suite "scripts/always-on-ledger" bash scripts/always-on-ledger.test.sh
   # #9814: the local weight-drift detector — warns when a suite's local actual
   # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
   run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
@@ -6888,6 +6898,7 @@ if want_scripts; then
   run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
+  run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -7051,6 +7062,8 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #10455: the notify-only home-census reminder probe. EXPLICIT because scripts/followthroughs/ matches no SUITE_GLOBS entry.
+  run_suite "scripts/followthroughs/home-census-run-10455" bash scripts/followthroughs/home-census-run-10455.test.sh
   # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
@@ -7060,6 +7073,10 @@ if want_webplat; then
   # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
   run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  # #10455: the home-census Guard 1/4 mutation battery (23 anchor-asserted mutants on a COPY of the app tree; the full
+  # run is reviewer-only behind HOME_CENSUS_MUTATIONS=1, the always-on part is the baseline, vacuity, landing and
+  # instrument control). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
+  run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
 
   # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
   # in THIS arm for the same reason as destroy-ask-mutation — it drives the

@@ -41,6 +41,8 @@ MIN_LOCKS = 5
 WATCHED_PACKAGES = {
     "@hono/node-server",
     "@opentelemetry/propagator-jaeger",
+    "@sentry/nextjs",
+    "body-parser",
     "brace-expansion",
     "fast-uri",
     "hono",
@@ -49,6 +51,7 @@ WATCHED_PACKAGES = {
     "liquidjs",
     "nanoid",
     "undici",
+    "zod",
 }
 
 # (manifest, package, major-line, minimum patched) -- the Phase 3 reconciliation table.
@@ -115,6 +118,33 @@ REQUIRED = [
     ("pen-cli", "fast-uri", 3, "3.1.9"),
     ("pen-cli", "brace-expansion", 5, "5.0.12"),
     ("pen-cli", "undici", 8, "8.12.2"),
+    # 2026-10-31 critical/high batch (#11646 shape). The next 16.4.1 bump
+    # (GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr CRITICAL + GHSA-p3m5-59mp-jv5r
+    # HIGH) was SPLIT OUT after e2e showed a deterministic dev-server crash on
+    # the bumped tree; it lands in its own PR with its own row re-added here.
+    # GHSA-mchm-gjx6-7h55 (CRITICAL): middleware bypass via tunnel route.
+    ("web-platform", "@sentry/nextjs", 10, "10.75.2"),
+    # GHSA-27r3-jxmh-p828 (HIGH): DoS via trailing bytes after compressed body.
+    # Three manifests carry body-parser on the same major-2 floor.
+    ("web-platform", "body-parser", 2, "2.4.0"),
+    ("pencil-setup", "body-parser", 2, "2.4.0"),
+    ("pen-cli", "body-parser", 2, "2.4.0"),
+    # GHSA-mrhx-c7xc-m3w5 (HIGH; CVE-2023-54404): memory exhaustion, range <4.6.6
+    # with NO lower bound -- zod 3.x copies count too, which is why the nested
+    # zod@3.25.76 under inngest/@likec4/core needed scoped overrides, not a pin.
+    # Two residual conditions, tracked rather than hidden: (1) the override
+    # satisfies the advisory's package-version predicate, but inngest@4.26.x
+    # imports the vendored `zod/v3` inside zod@4.6.6, whose code path carries the
+    # same class the GHSA patches on the v4 path -- no fixed inngest exists yet
+    # (4.26.2 still imports zod/v3); (2) the "@likec4/core" override is outside
+    # likec4's declared ^3.25.76 range and is LOAD-BEARING: deleting it
+    # re-vendors the nested zod@3.25.76 (runtime-inert but lockfile-visible --
+    # @likec4/core@1.50.0 itself imports no zod). Drop it only when the likec4
+    # 1.60 pin-train (#11696) lands native zod-4.
+    ("web-platform", "zod", 4, "4.6.6"),
+    ("pencil-setup", "zod", 4, "4.6.6"),
+    ("pen-cli", "zod", 4, "4.6.6"),
+    ("spike", "zod", 4, "4.6.6"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -146,6 +176,9 @@ FLOOR_ANCHORS = {
     ("@hono/node-server", 2): "2.0.10",
     ("undici", 8): "8.12.2",   # GHSA-xjj6-f33q-929c (HIGH); pen-cli override, see the pen-cli rows
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
+    ("@sentry/nextjs", 10): "10.75.2",  # GHSA-mchm-gjx6-7h55 (CRITICAL)
+    ("body-parser", 2): "2.4.0",      # GHSA-27r3-jxmh-p828 (HIGH)
+    ("zod", 4): "4.6.6",              # GHSA-mrhx-c7xc-m3w5 (HIGH; CVE-2023-54404)
 }
 
 # DISCHARGED 2026-09-02 (#7591) -- the next 15.x -> 16.x major this list was waiting for.
@@ -218,7 +251,7 @@ def main():
     print(f"{'manifest':14s} {'package':34s} {'line':>5s} {'required':>10s}  found")
     for manifest, pkg, major, minimum in REQUIRED:
         found = sorted({
-            v["version"] for k, v in packages[manifest].items()
+            v["version"] for k, v in packages.get(manifest, {}).items()
             if "node_modules/" in k and entry_name(k, v) == pkg and v.get("version")
             and ver(v["version"])[0] == major
         }, key=ver)
@@ -243,7 +276,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 27  # prior 21 + the six pen-cli lines (#11156)
+    MIN_ROWS = 35  # prior 27 + the eight rows of the 2026-10-31 critical/high batch
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -251,7 +284,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 27  # prior 21 + the six pen-cli lines, which all resolve
+    MIN_RESOLVED = 35  # prior 27 + the eight rows of the 2026-10-31 batch, which all resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "
@@ -344,12 +377,22 @@ def main():
             f"{MIN_ABSENT}. A discharged advisory's ratchet was deleted; an absence "
             f"assertion over an empty list passes while checking nothing.")
     anchor_manifest, anchor_path = ABSENT_PATH_ANCHOR
-    if anchor_path not in packages[anchor_manifest]:
+    if anchor_manifest not in packages or anchor_path not in packages[anchor_manifest]:
         failures.append(
             f"{anchor_manifest}: {anchor_path} is not installed, so every MUST_STAY_ABSENT "
             f"row below it is trivially absent and asserts nothing. Re-derive the paths "
             f"against the current tree before trusting this gate.")
     for manifest, pkg, path in MUST_STAY_ABSENT:
+        if manifest not in packages:
+            # A row naming a manifest not in LOCKS is an absence assertion over
+            # nothing -- fail loudly, the same reason MIN_ABSENT exists. The
+            # REQUIRED-loop .get() is fine (a dropped manifest reads as mass
+            # absence and trips MIN_RESOLVED/MIN_LOCKS); here nothing
+            # backstops a mistyped manifest but this check.
+            failures.append(
+                f"{manifest}: MUST_STAY_ABSENT row names a manifest not in LOCKS, "
+                f"so its absence assertion checks nothing.")
+            continue
         if path in packages[manifest]:
             failures.append(
                 f"{manifest}: {path} is back at "
