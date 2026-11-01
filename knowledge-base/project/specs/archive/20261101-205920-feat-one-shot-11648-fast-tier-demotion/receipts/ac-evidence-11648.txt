@@ -1,0 +1,59 @@
+# ac-evidence-11648.txt — AC evidence for the #11648 fast-tier always-on demotion
+#
+# AC1 — re-priced fixture: scripts/suite-durations.tsv copied to
+#   /tmp/suite-durations-repriced.tsv with the 8 rows at fresh 5-run merge_group
+#   medians (378173/24431/24076/19967/15753/11413/11824/13435 ms); the suite's own
+#   check_tier (extracted from scripts/test-all-fast-tier-budget.test.sh:50-101,
+#   LOCAL_FAST_CAP_MS=10000, LOCAL_FAST_TOTAL_CAP_MS=300000) run against the live
+#   index -> "AC1: re-priced fixture GREEN". The committed table is unmodified.
+#
+# AC2 — all 8 labels demoted to edge-selection; zero measurement-artifact keeps
+#   (thinnest margin lint-encryption-posture 11,413 ms > 10,000; see
+#   medians-11648.txt). --print-selection class for every demoted label is
+#   edge:declared (never always_on, never unclassified):
+#   --paths=scripts/lib/affected-glob.sh:
+#     scripts/test-all-group-affected      1 edge:declared   (subject lib selected)
+#     scripts/lint-gh-argv-arg-live        1 edge:declared   (glob:scripts/**.sh)
+#     .claude/hooks/grep-q-pipe-guard      1 edge:declared   (.sh in PJ_EXTS sweep)
+#     tests/scripts/lint-ratchet           0 edge:declared
+#     plugins/soleur/test/check-deps-adapter-drift.test.sh   0 edge:declared
+#     plugins/soleur/test/token-drift-workflow-causes.test.sh 0 edge:declared
+#     plugins/soleur/test/gitleaks-merge-commit.test.sh      0 edge:declared
+#     scripts/lint-encryption-posture      0 edge:declared
+#   --paths=scripts/test-all.sh degrades to MODE=full (runner-changed) as designed —
+#   the demoted suite's scripts/test-all.sh edge is covered by the runner-changed
+#   fallback, which selects everything.
+#
+# AC3 — the #9763 withdrawn-to-edge-selection comment block in
+#   scripts/lib/test-affected-paths.sh names the resulting demoted set with the
+#   AFFECTED_* array per label; `grep -q "withdrawn-to-edge-selection"` still passes.
+#
+# AC4 — LOCAL_FAST_CAP_MS/LOCAL_FAST_TOTAL_CAP_MS unchanged at 10000/300000
+#   (scripts/test-all-fast-tier-budget.test.sh:30-31, cap-literals arm green).
+#   _MIN_ALWAYS_ON_DECLARED=109 (scripts/test-all.sh) == 114-5; f1 literal "109"
+#   (scripts/test-all-affected.test.sh) — re-pin ledger line #11648 appended.
+#
+# AC5 — suite verdicts:
+#   scripts/always-on-ledger.test.sh            ALL PASS (14 assertions)
+#   scripts/lint-orphan-test-suites.sh          orphan test suites: none (786 covered)
+#   scripts/test-affected-kb-consumers.test.sh  31 passed, 0 failed
+#   ci-pr-affected-replay.py ratchet            exit=0 live=1510 baseline=1510
+#
+# AC6 — --print-selection spot checks (AC2 block above):
+#   in-scope paths select (group-affected on scripts/lib/affected-glob.sh,
+#   token-drift on knowledge-base/engineering/operations/runbooks/
+#   inngest-provision-rehearsal.md -> 1 edge:declared); out-of-scope paths decline
+#   (lint-ratchet/check-deps/gitleaks/encryption-posture all 0 edge:declared on both
+#   probes). The two whole-tree globs (grep-q-pipe-guard, lint-gh-argv-arg-live)
+#   select on .sh diffs — the truthful classification recorded in the comment.
+#
+# AC7 — scripts/test-all-affected.test.sh: full first run green on blocks 1-35
+#   (tg6 FAIL pre-fix, then killed at line 3782 by the mid-run edit); tg6 fixed
+#   7->9 (^glob:knowledge-base/**.sh carriers grew by the two new demoted glob
+#   carriers) and blocks 36-38 re-run via --rows 36-38.
+#   scripts/test-all-group-affected.test.sh: 28 passed, 0 failed.
+#
+# AC8 — caps unchanged; scripts/suite-durations.tsv unmodified (no hand-edits —
+#   verified rows still carry committed weights 3200/1222/2115/6108/6081/2954/
+#   5441/7092); all 8 labels still in scripts/suite-shard-legs.tsv (CI legs,
+#   merge_group, --full); no registration touched.

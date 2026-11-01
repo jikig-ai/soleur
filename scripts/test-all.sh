@@ -4161,7 +4161,10 @@ _aff_runner_banner() {
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
 # #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
 # #11662: +2 always-on (the anti-regrow guard pair: corpus-weight-budget + always-on-ledger); re-pinned at 122-5.
-_MIN_ALWAYS_ON_DECLARED=117
+# #11648: -8 always-on (the >10s drifted set: test-all-group-affected, lint-ratchet, check-deps-adapter-drift,
+# token-drift-workflow-causes, grep-q-pipe-guard, lint-encryption-posture, gitleaks-merge-commit,
+# lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
+_MIN_ALWAYS_ON_DECLARED=109
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -7289,7 +7292,7 @@ if want_scripts; then
       # arm's battery from the run_suite command token and dies on <unresolved>.
       run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
       run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-578
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-582
       continue
     fi
     run_suite "$f" bash "$f"

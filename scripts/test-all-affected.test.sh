@@ -2941,10 +2941,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "117" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 117 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair: 122-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "109" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 109 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection: 114-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 117) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 109) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 fi
@@ -3403,19 +3403,22 @@ else
 fi
 
 # The receipt carries the minted edge verbatim (real index, print arm). The
-# family is seven since #9294: the five tg walkers, repo-write-boundary.test.sh (#9969),
-# and the trio-baseline census, whose declared array carries the same ^glob:knowledge-base/**.sh edge
-# (it scans the CODE files under the knowledge base, never its prose).
+# family is nine since #11648: the five tg walkers, repo-write-boundary.test.sh (#9969),
+# the trio-baseline census (declared array carries the same ^glob:knowledge-base/**.sh edge —
+# it scans the CODE files under the knowledge base, never its prose), plus
+# grep-q-pipe-guard.test.sh and lint-gh-argv-arg-live, whose #11648 demotion edge sets each
+# carry ^glob:knowledge-base/**.sh (the guard sweeps kb code files; the linter os.walks every
+# tracked .sh). All nine decline a kb .md line, so each row lands here with selected=0.
 # The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
 # fixture the kb-consumers oracle would otherwise charge to this suite as a read.
 cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "7" ]]; then
-  pass "tg6: the seven kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "9" ]]; then
+  pass "tg6: the nine kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 7)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 9)"
 fi
 
 fi
@@ -3746,6 +3749,10 @@ _th6_missing=$(
       || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" .sh \
       || echo "trio-baseline-census:${_r}$(_th6_declined AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" .sh \
+      || echo "grep-q-pipe-guard:${_r}$(_th6_declined AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" .sh \
+      || echo "lint-gh-argv-arg-live:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then

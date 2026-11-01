@@ -38,11 +38,15 @@
 #       tip is the end state and fine; absent at the merge commit, or a read failure, is CANNOT ESTABLISH.
 #
 # WHAT A PASS CERTIFIES. Runs are listed newest first up to MAX_PAGES (40) pages per event, then read OLDEST first, at most MAX_UNITS (250) runs per sweep,
-# PLUS always the newest 10 merge_group runs (the pause check and the defects), which are dispatched FIRST and are exempt from the read budget: a PASS certifies the
-# earliest prefix of the LISTED runs plus the newest queue state, and the status line prints runs_listed, units_read and truncated=0|1. Reads run SOAK_PARALLEL (4) at a time under a
-# SOAK_BUDGET_S (300 s) deadline; the per-PR facts loop has its own SOAK_FACTS_BUDGET_S (180 s) allowance: past either, the remaining runs or PRs are left unread THIS sweep
-# (nothing persists between sweeps; truncated=1; a budget hit is NOT YET unless every criterion already holds on what was read, and is never CANNOT ESTABLISH). Measured serially on 2026-10-27: 265 jobs reads at 2.1 s and 264 job logs
-# at 1.1 s (about 15 minutes) against a sweeper job limit of 15 minutes for every tracker. GitHub's 1,000-result cap on a run listing means that beyond 1,000 runs the listing is the NEWEST 1,000 and the oldest-250 prefix MOVES forward as runs accumulate:
+# PLUS always the newest 10 merge_group runs (the pause check and the defects), which are dispatched FIRST but stay deadline-bound like every read — a cut one is
+# reported, never silent: a PASS certifies an ordered prefix of the LISTED runs plus the newest queue state, and the status line prints runs_listed, units_read and truncated=0|1. Reads run SOAK_PARALLEL (8) at a time under ONE
+# wall deadline END = T0 + SOAK_BUDGET_S (270 s, 30 s under the sweeper's 300 s per-probe kill, #11215): the listing loop, the read dispatch, the per-PR facts loop and the
+# baseline reads all gate against it, and each API read is capped at min(60 s, END - SECONDS - 5) so no in-flight read can carry the probe past the kill. SOAK_FACTS_BUDGET_S (180 s)
+# is a SUB-allocation of the same deadline for the serial facts phase, which also stops TAIL (20 s) before END to reserve the verdict/baseline reads: past either bound the remaining
+# runs or PRs are left unread THIS sweep (nothing persists between sweeps; truncated=1; a budget hit is NOT YET unless every criterion already holds on what was read, and is never
+# CANNOT ESTABLISH: a read killed by the probe's own deadline cap returns the budget sentinel and is reported as a cut, not as a failed read). Measured on 2026-10-31: listing 26 pages
+# 47 s, per-unit read ~3.2 s (jobs 2.1 + log 1.1), facts ~2.4 s/PR -- under the old two-epoch model (~480 s plus listing, calibrated to the sweeper's pre-#11215 15-minute shared
+# ceiling) the probe was CANNOT ESTABLISH every sweep; under the deadline it fits in ~220 s. GitHub's 1,000-result cap on a run listing means that beyond 1,000 runs the listing is the NEWEST 1,000 and the oldest-250 prefix MOVES forward as runs accumulate:
 # evidence does NOT latch across sweeps, and the one sweep that sees every criterion is what closes the tracker. The time arithmetic is in the runbook. A run whose
 # conclusion is `cancelled` is skipped before any jobs read. RESTART FLOOR: a drain PR (label `s4-drain`) merged inside the window changes the baseline, the live set and the oracle, so
 # only runs created after the LATER of the PR3a merge and the latest drain merge count (runbook, "The drain claim"; one issues read; the status line's `window opened=` is that floor, while
@@ -51,9 +55,9 @@
 # Exit codes (sweep-followthroughs.sh contract): 0 PASS; 2 NOT YET (an unmet criterion; the sweeper comments and leaves the tracker open); 3 CANNOT ESTABLISH
 # (a tool, GH_TOKEN or a read failed, or a job log carried no marker for a run that concluded success: the sweeper retries); 78 refused to run under xtrace
 # while GH_TOKEN is set (#7797). Test seams (inert under the sweeper's env -i): SOAK_NOW_EPOCH, SOAK_MAX_PAGES, SOAK_MAX_UNITS, SOAK_PARALLEL (1..8), SOAK_BUDGET_S
-# (1..600; reads), SOAK_FACTS_BUDGET_S (1..300; the serial per-PR facts phase has its own allowance), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
+# (1..300; the single wall deadline END=T0+BUDGET), SOAK_FACTS_BUDGET_S (1..300; a sub-allocation of the same deadline for the serial per-PR facts phase), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
 # rate_limit first and is CANNOT ESTABLISH (exit 3) when the planned reads (1.5 per run, half a lookup per run needing one, 3 per PR, 100 reserve; printed as `planned=`) do not fit,
-# and an HTTP 403 or 429 stops further reads. A read that fails with a timeout, a 5xx or a network-class error (EOF, connection reset, TLS handshake or i/o timeout, dial tcp) is retried ONCE after 2 s, and only while the read and facts budgets are not
+# and an HTTP 403 or 429 stops further reads. A read that fails with a timeout, a 5xx or a network-class error (EOF, connection reset, TLS handshake or i/o timeout, dial tcp) is retried ONCE after 2 s, and only while the wall deadline is not
 # spent; a 403, 429, 404 or 422 is never retried.
 # Progress is on stderr (three phase lines, counts only); stdout is the status line, the verdict and a `quota:` line. NO API payload may travel on a jq argv (one argv entry
 # is capped at 131072 bytes): pages go to jq on stdin. The rows live in
@@ -89,10 +93,13 @@ REVIEW_DAYS=30
 MAX_PAGES="${SOAK_MAX_PAGES:-40}"
 MAX_UNITS="${SOAK_MAX_UNITS:-250}"
 NEWEST_MG=10
-PAR="${SOAK_PARALLEL:-4}"          # concurrent run reads (cap 8)
-BUDGET="${SOAK_BUDGET_S:-300}"     # wall-clock seconds the reads may take before the remaining oldest-first runs are left unread this sweep (cap 600)
-FACTS_BUDGET="${SOAK_FACTS_BUDGET_S:-180}"   # the serial per-PR facts phase has its OWN allowance, measured from its start (cap 300): a PR's facts are a pull, up to 3 files pages and a timeline (up to 5 serial reads, about 2.4 s each measured 2026-10-28), checked against it before each PR, so reads plus facts do not fit one 300 s budget
+PAR="${SOAK_PARALLEL:-8}"          # concurrent run reads (cap 8)
+BUDGET="${SOAK_BUDGET_S:-270}"     # the ONE wall deadline END=T0+BUDGET covering listing, reads, facts and the verdict tail (default 30 s under the sweeper's 300 s kill; cap 300)
+FACTS_BUDGET="${SOAK_FACTS_BUDGET_S:-180}"   # a SUB-allocation of that deadline for the serial per-PR facts phase, measured from its start (cap 300): a PR's facts are a pull, up to 3 files pages and a timeline (up to 5 serial reads, about 2.4 s each measured 2026-10-28), checked against it before each PR -- and the facts phase also stops TAIL seconds before END. Under the single wall deadline this knob is near-vestigial; it is kept as the named seam through which the facts-cut rows drive the probe
 T0=$SECONDS
+END=$((T0 + BUDGET))               # the single wall deadline every phase gates against
+TAIL=20                            # seconds before END reserved for the verdict and the baseline reads
+LAUNCH_RSVD=12                     # a unit is launched only while at least this much wall remains (its own reads are then capped to fit)
 for need in gh jq date sort mktemp rm sed awk comm paste cat head tail cut tr grep mv timeout pgrep sleep; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
@@ -101,7 +108,7 @@ NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_NOW_EPOCH is not an epoch"; exit 3; }
 [[ "$MAX_PAGES" =~ ^[1-9][0-9]*$ && "$MAX_UNITS" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_MAX_PAGES / SOAK_MAX_UNITS are not positive integers"; exit 3; }
 [[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]] || { echo "CANNOT ESTABLISH: SOAK_PARALLEL is not an integer from 1 to 8"; exit 3; }
-[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 600 ]] || { echo "CANNOT ESTABLISH: SOAK_BUDGET_S is not an integer from 1 to 600"; exit 3; }
+[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: SOAK_BUDGET_S is not an integer from 1 to 300"; exit 3; }
 [[ "$FACTS_BUDGET" =~ ^[1-9][0-9]*$ && "$FACTS_BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: SOAK_FACTS_BUDGET_S is not an integer from 1 to 300"; exit 3; }
 HB=0; { [ "${SOAK_PROGRESS:-}" = 1 ] || [ -t 2 ]; } && HB=1   # the per-25 heartbeat is opt-in: the sweeper folds stderr into a public comment
 
@@ -121,14 +128,19 @@ transient_err() {   # <rc> <error file>
 # one read: the request path is the LAST argument; one stalled connection must not stall the drain, and an HTTP 403 or 429 stops further launches. ONE retry after a fixed 2 s, only for a
 # transient failure and only while no 403/429 has been seen. Returns 44 for HTTP 404 and 45 for HTTP 422 (never gh's own 1, 2, 4 or 8, nor timeout's 124-127 and 137), so a caller can
 # tell an answered "not there" from a failed read.
+# return 46 = the wall deadline is spent (no budget left for this read, or the probe's own deadline cap killed it): callers treat it as a
+# budget cut, never as a failed read, so a deadline can never become CANNOT ESTABLISH.
 gh_get() {
-  local out rc=0 errf="$WORK/err.$BASHPID" st tries=0
+  local out rc=0 errf="$WORK/err.$BASHPID" st tries=0 rem cap
   while :; do
-    rc=0; out="$(timeout 60 gh api "$@" 2>"$errf")" || rc=$?
+    rem=$((END - SECONDS - 5)); cap=60; (( rem < cap )) && cap=$rem   # recomputed per attempt: a retried read must not reuse a stale 60 s cap and run past END
+    if (( cap < 1 )); then rc=46; break; fi
+    rc=0; out="$(timeout "$cap" gh api "$@" 2>"$errf")" || rc=$?
+    if [ "$rc" -eq 124 ] && (( cap < 60 )); then rc=46; fi   # killed by OUR cap, not a stall: a budget event (keyed on the FRESH cap of the attempt that timed out)
     if [ "$rc" -ne 0 ]; then
       st="$(grep -oE 'HTTP (403|429)' "$errf" 2>/dev/null | head -n 1)"
       [ -z "$st" ] || printf '%s\n' "$st" > "$RL_FLAG"
-      if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi
+      if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi
       if grep -q 'HTTP 404' "$errf" 2>/dev/null; then rc=44; elif grep -q 'HTTP 422' "$errf" 2>/dev/null; then rc=45; fi
     fi
     break
@@ -172,7 +184,7 @@ fi
 # --- read one job: sets RJ_EX, RJ_REASON, RJ_WALL, RJ_RAN (RJ_EX is 2 with reason no-marker when the job concluded without an emitted marker) ---------
 # Called inside a read_unit worker subshell (fail_api's `exit` ends that worker; the main shell then reports its one fixed line and exits 3), never in a command substitution.
 read_job() {   # <jobs json> <run id>
-  local jobs="$1" run="$2" j jid conc started completed step log line t0 t1
+  local jobs="$1" run="$2" j jid conc started completed step log line t0 t1 rc=0
   RJ_EX=none; RJ_REASON=none; RJ_WALL=0; RJ_RAN=0
   j="$(jq -c --arg n "$JOB" '[.jobs[]? | select(.name == $n)] | .[0] // empty' <<<"$jobs" 2>/dev/null)" || fail_api "run $run jobs (parse)"
   [ -n "$j" ] || return 0
@@ -190,7 +202,7 @@ read_job() {   # <jobs json> <run id>
   fi
   if [ "$step" != success ] && [ "$step" != failure ]; then return 0; fi
   RJ_RAN=1; RJ_WALL=$((t1 - t0))
-  log="$(log_api "repos/$REPO/actions/jobs/$jid/logs")" || fail_api "run $run job log"
+  log="$(log_api "repos/$REPO/actions/jobs/$jid/logs")" || { rc=$?; [ "$rc" -eq 46 ] && exit 46; fail_api "run $run job log"; }
   line="$(printf '%s\n' "$log" | sed 's/^\xef\xbb\xbf//' | tr -d '\r' | grep -aE "$MARKER_RE" | tail -n 1)"
   if [ -z "$line" ]; then
     [ "$conc" != success ] || fail_api "run $run job log: a successful ratchet job printed no emitted marker line"
@@ -207,8 +219,9 @@ for ev in pull_request merge_group; do
   while :; do
     path="repos/$REPO/actions/workflows/ci.yml/runs?event=$ev&status=completed&per_page=100&created=%3E$merged_at"
     [ "$page" -eq 1 ] || path="$path&page=$page"
+    if (( SECONDS - T0 >= BUDGET )); then TRUNC=1; break; fi   # the wall deadline bounds the listing too
     LISTCALLS=$((LISTCALLS + 1))
-    runs="$(api "$path")" || fail_api "ci.yml $ev runs (page $page)"
+    runs="$(api "$path")" || { rc=$?; [ "$rc" -eq 46 ] && { TRUNC=1; break; }; fail_api "ci.yml $ev runs (page $page)"; }
     jq -r --arg m "$merged_at" --arg ev "$ev" '.workflow_runs[]? | select(.created_at > $m)
          | [.id, $ev, .head_sha, ((.head_branch // "") | if . == "" then "-" else . end), .created_at, (.run_attempt // 1), ((.pull_requests[0].number // 0) | tostring), (.conclusion // ""),
             (if ((.head_repository.full_name // "") != (.repository.full_name // "")) then 1 else 0 end)] | @tsv' <<<"$runs" >> "$RUNS" 2>/dev/null \
@@ -221,13 +234,20 @@ for ev in pull_request merge_group; do
 done
 awk -F'\t' '$1 !~ /^[0-9]+$/ || $6 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' "$RUNS" || fail_api "ci.yml runs (non-numeric run id, attempt or PR number)"
 runs_listed="$(grep -c . "$RUNS")"
-# a cancelled run spends no budget. The newest NEWEST_MG merge_group runs are dispatched FIRST (the pause check and the defects need the newest queue state, and a read
-# budget must never be what cuts it), then the oldest runs up to MAX_UNITS, oldest first.
+# a cancelled run spends no budget. The newest NEWEST_MG merge_group runs are dispatched FIRST (the pause check and the defects need the newest queue state), still
+# deadline-bound like every read — an unread one is an unmet criterion, not a silent cut — then the oldest runs up to MAX_UNITS, oldest first.
 awk -F'\t' '$8 != "cancelled"' "$RUNS" | sort -t$'\t' -k5,5 -s > "$WORK/readable.tsv"
 readable_n="$(grep -c . "$WORK/readable.tsv")"
 head -n "$MAX_UNITS" "$WORK/readable.tsv" > "$WORK/oldest.tsv"
 awk -F'\t' '$2 == "merge_group"' "$WORK/readable.tsv" | tail -n "$NEWEST_MG" > "$WORK/extras.tsv"
-awk -F'\t' 'NR == FNR { x[$1] = 1; next } !($1 in x)' "$WORK/extras.tsv" "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+e_n="$(grep -c . "$WORK/extras.tsv")"   # the newest-queue extras the pause check and the defects need; any left unread this sweep is an unmet criterion (A5)
+# the NR==FNR anti-join idiom reads every row of file 2 as file 1 when file 1 is EMPTY (a sweep with no merge_group run
+# would dispatch nothing at all), so the empty case takes the oldest list verbatim instead
+if [ -s "$WORK/extras.tsv" ]; then
+  awk -F'\t' 'NR == FNR { x[$1] = 1; next } !($1 in x)' "$WORK/extras.tsv" "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+else
+  cat "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+fi
 { sed 's/^/E\t/' "$WORK/extras.tsv"; sed 's/^/O\t/' "$WORK/oldest-rest.tsv"; } > "$WORK/dispatch.tsv"
 to_read="$(grep -c . "$WORK/dispatch.tsv")"
 note "phase=listed seen=$runs_listed readable=$readable_n to_read=$to_read parallel=$PAR budget_s=$BUDGET elapsed_s=$((SECONDS - T0))"
@@ -252,7 +272,7 @@ fi
 resolve_pr() {   # <run id> <head sha> <head branch>
   local id="$1" sha="$2" branch="$3" body rc=0 n
   RES_PRN=0
-  body="$(api "repos/$REPO/commits/$sha/pulls?per_page=2")" || rc=$?
+  body="$(api "repos/$REPO/commits/$sha/pulls?per_page=2")" || { rc=$?; [ "$rc" -eq 46 ] && exit 46; }
   case "$rc" in 0) ;; 44|45) return 0 ;; *) fail_api "run $id commit pulls" ;; esac
   n="$(jq -r --arg repo "$REPO" --arg branch "$branch" 'if type != "array" then error("not an array")
       elif length == 1 and (.[0].head.repo.full_name // "") == $repo and (.[0].base.repo.full_name // "") == $repo and (.[0].head.ref // "") == $branch
@@ -261,8 +281,8 @@ resolve_pr() {   # <run id> <head sha> <head branch>
   RES_PRN="$n"
 }
 read_unit() {   # <id> <event> <sha> <branch> <created> <attempt> <pr number> <fork>: runs in a worker subshell (fail_api's exit ends only the worker)
-  local id="$1" ev="$2" sha="$3" branch="$4" created="$5" attempt="$6" prn="$7" fork="$8" jobs jobs1 ex reason wall cls first_ex
-  jobs="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100&filter=latest")" || fail_api "run $id jobs"
+  local id="$1" ev="$2" sha="$3" branch="$4" created="$5" attempt="$6" prn="$7" fork="$8" jobs jobs1 ex reason wall cls first_ex rc=0
+  jobs="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100&filter=latest")" || { rc=$?; [ "$rc" -eq 46 ] && exit 46; fail_api "run $id jobs"; }
   if [ "$(jq -r '(.total_count // 0) > ((.jobs // []) | length)' <<<"$jobs" 2>/dev/null)" != false ]; then fail_api "run $id jobs (truncated or unparseable)"; fi
   read_job "$jobs" "$id"
   [ "$RJ_RAN" = 1 ] || return 0   # the job did not run on this run (skipped, absent, cancelled early): not a unit
@@ -270,7 +290,7 @@ read_unit() {   # <id> <event> <sha> <branch> <created> <attempt> <pr number> <f
   cls="plain"
   if [ "$attempt" -gt 1 ]; then
     # a rerun: attempt 1 is read too, and the pair decides (the latest attempt alone cannot tell a reproduced exit 2 from a first-seen one)
-    jobs1="$(api "repos/$REPO/actions/runs/$id/attempts/1/jobs?per_page=100")" || fail_api "run $id attempt 1 jobs"
+    jobs1="$(api "repos/$REPO/actions/runs/$id/attempts/1/jobs?per_page=100")" || { rc=$?; [ "$rc" -eq 46 ] && exit 46; fail_api "run $id attempt 1 jobs"; }
     read_job "$jobs1" "$id"
     first_ex="none"; [ "$RJ_RAN" = 1 ] && first_ex="$RJ_EX"
     if [ "$ex" = 2 ] && [ "$first_ex" = 2 ]; then cls="defect"
@@ -287,22 +307,21 @@ read_unit() {   # <id> <event> <sha> <branch> <created> <attempt> <pr number> <f
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$ev" "$sha" "$branch" "$created" "$prn" "$ex" "$reason" "$wall" "$cls" "$fork"
 }
 UD="$WORK/u"; mkdir -p "$UD"
-seq_n=0; inflight=0; done_n=0; launched=0; o_launched=0; BUDGET_CUT=0
+seq_n=0; inflight=0; done_n=0; launched=0; o_launched=0; e_launched=0; BUDGET_CUT=0
 beat() { done_n=$((done_n + 1)); if [ "$HB" = 1 ] && (( done_n % 25 == 0 )); then note "heartbeat read=$done_n/$to_read elapsed_s=$((SECONDS - T0))"; fi; }
 launch_unit() {   # <seq> <id> <event> <sha> <branch> <created> <attempt> <pr number> <fork>
   local sq="$1"; shift
   printf '%s\n' "$1" > "$UD/$sq.id"
-  { ( read_unit "$@" ) > "$UD/$sq.out" 2> /dev/null < /dev/null; wrc=$?; echo "$wrc" > "$UD/$sq.rc"; [ "$wrc" -eq 0 ] || : > "$FAILED_FLAG"; } &
+  { ( read_unit "$@" ) > "$UD/$sq.out" 2> /dev/null < /dev/null; wrc=$?; echo "$wrc" > "$UD/$sq.rc"; [ "$wrc" -eq 0 ] || [ "$wrc" -eq 46 ] || : > "$FAILED_FLAG"; } &
 }
 while IFS=$'\t' read -r kind id ev sha branch created attempt prn _ fork; do
   [ -n "$id" ] || continue
   while (( inflight >= PAR )); do wait -n || true; inflight=$((inflight - 1)); beat; done
   if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi   # a failed read or an HTTP 403/429 stops further launches (the reads in flight finish)
-  if [ "$kind" = O ]; then
-    # the first oldest-first read is unconditional; the newest-queue extras are exempt from the deadline altogether
-    if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then BUDGET_CUT=1; break; fi
-    o_launched=$((o_launched + 1))
-  fi
+  # every launch is deadline-bound: the newest-queue extras go FIRST (they are the pause check and the defects), the first oldest-first read is unconditional,
+  # and a unit is launched only while LAUNCH_RSVD seconds remain, so its own deadline-capped reads can still fit
+  if (( SECONDS - T0 >= BUDGET - LAUNCH_RSVD )) && ! { [ "$kind" = O ] && [ "$o_launched" -eq 0 ]; }; then BUDGET_CUT=1; break; fi
+  [ "$kind" = O ] && o_launched=$((o_launched + 1)); [ "$kind" = E ] && e_launched=$((e_launched + 1))
   seq_n=$((seq_n + 1)); printf -v sq '%06d' "$seq_n"
   launch_unit "$sq" "$id" "$ev" "$sha" "$branch" "$created" "$attempt" "$prn" "$fork"
   inflight=$((inflight + 1)); launched=$((launched + 1))
@@ -310,9 +329,17 @@ done < "$WORK/dispatch.tsv"
 while (( inflight > 0 )); do wait -n || true; inflight=$((inflight - 1)); beat; done
 note "phase=read-done done=$launched partial=$(( launched < to_read ? 1 : 0 )) elapsed_s=$((SECONDS - T0))"
 # the first failure IN DISPATCH ORDER is named, by its one fixed line only: worker stderr is discarded, so nothing from a payload reaches the public comment
+cut_n=0; e_worker_cut=0; o_first_cut=0; hole_sq=""
 for wrc_file in "$UD"/*.rc; do
   [ -e "$wrc_file" ] || break
-  if [ "$(cat "$wrc_file")" != 0 ]; then
+  sq="${wrc_file##*/}"; sq=$((10#${sq%.rc}))   # the %06d dispatch sequence (E seqs are 1..e_launched)
+  wrc_v="$(cat "$wrc_file")"
+  if [ "$wrc_v" = 46 ]; then   # a deadline-cut worker produced no row: unread, never a failed read
+    BUDGET_CUT=1; cut_n=$((cut_n + 1))
+    if (( sq <= e_launched )); then e_worker_cut=1; elif (( o_first_cut == 0 )); then o_first_cut=$sq; fi
+    continue
+  fi
+  if [ "$wrc_v" != 0 ]; then
     wline="$(head -n 1 "${wrc_file%.rc}.out")"
     case "$wline" in
       "CANNOT ESTABLISH: GitHub API read failed ("*) printf '%s\n' "$wline" ;;
@@ -320,10 +347,22 @@ for wrc_file in "$UD"/*.rc; do
     esac
     exit 3
   fi
+  (( o_first_cut > 0 && sq > e_launched )) && [ -z "$hole_sq" ] && hole_sq=$o_first_cut
 done
+# the newest-queue extras go first, so an unread one means the pause check and the newest-10 defect set lack data: an unmet
+# criterion (never a silent stale-queue certification), whether the cut hit the launch or the worker
+if (( e_worker_cut == 1 || e_launched < e_n )); then nots+=("the newest merge_group queue state was not read this sweep"); fi
+# the launch loop breaks permanently at the first O cut, so a completed O row after a cut O seq can only come from a worker
+# that hit the deadline on its FIRST read while later-dispatched workers still ran: an interior hole that could hide a defect
+# or an unclassified unit while the "earliest prefix" claim still prints — NOT YET naming the hole
+if [ -n "$hole_sq" ]; then
+  nots+=("the read deadline left an interior hole (run $(cat "$UD/$(printf '%06d' "$hole_sq").id") was cut while a later-dispatched run completed): the read set is not an ordered prefix this sweep")
+fi
 cat "$UD"/*.out > "$UNITS" 2>/dev/null
-units_read="$launched"
-[ "$units_read" -ge "$readable_n" ] || TRUNC=1
+units_read="$(grep -c . "$UNITS" 2>/dev/null)"
+# truncated is a DISPATCH claim, never a produced-row count (a read run whose job did not run emits no row, so units_read
+# undercounts the read set): the sweep is incomplete iff fewer rows were launched than readable, or a launched worker was cut
+if (( launched < readable_n || cut_n > 0 )); then TRUNC=1; fi
 sort -t$'\t' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"
 
 # --- the window: a defect restarts it, an incident excludes its unit, an unclassified exit 2 is unmet -----------------------------------------------
@@ -346,14 +385,14 @@ ORACLE_JSON="$(printf '%s\n' "${ORACLE[@]}" | jq -R . | jq -s -c .)"
 # An API payload NEVER travels on a jq argv: Linux caps ONE argv entry at 131072 bytes (MAX_ARG_STRLEN), and a files page with its patch bodies is 400 KB to 1.1 MB. Pages go to jq
 # on stdin (a here-string or a pipe from a builtin printf is not an execve), each is projected to the one field the probe uses, and only small scalars are operands.
 pr_facts() {   # <pr number>
-  local n="$1" p files page page_files cnt proj
+  local n="$1" p files page page_files cnt proj rc=0
   [ -z "${PR_DOCS[$n]+x}" ] || return 0
   facts_prs=$((facts_prs + 1))
-  p="$(api "repos/$REPO/pulls/$n")" || fail_api "pull $n"
+  p="$(api "repos/$REPO/pulls/$n")" || { rc=$?; [ "$rc" -eq 46 ] && return 46; fail_api "pull $n"; }
   files="[]"; page=1
   while :; do   # up to 3 pages of 100 files; a longer list is treated as oracle-touching and not docs-only
-    if [ "$page" -eq 1 ]; then page_files="$(api "repos/$REPO/pulls/$n/files?per_page=100")" || fail_api "pull $n files"
-    else page_files="$(api "repos/$REPO/pulls/$n/files?per_page=100&page=$page")" || fail_api "pull $n files (page $page)"; fi
+    if [ "$page" -eq 1 ]; then page_files="$(api "repos/$REPO/pulls/$n/files?per_page=100")" || { rc=$?; [ "$rc" -eq 46 ] && return 46; fail_api "pull $n files"; }
+    else page_files="$(api "repos/$REPO/pulls/$n/files?per_page=100&page=$page")" || { rc=$?; [ "$rc" -eq 46 ] && return 46; fail_api "pull $n files (page $page)"; }; fi
     proj="$(jq -c 'if type == "array" then [.[] | {filename}] else error("files page is not an array: " + (tojson | .[0:200])) end' 2>&1 <<<"$page_files")" \
       || fail_api "pull $n files (parse): $(jq_detail "$proj")"
     files="$(printf '%s\n%s\n' "$files" "$proj" | jq -s -c 'add' 2>/dev/null)" || fail_api "pull $n files (parse)"
@@ -374,8 +413,8 @@ pr_facts() {   # <pr number>
   PR_SCRIPTS[$n]="$(jq -r 'if any(.[]; .filename | test("^scripts/") or test("^plugins/soleur/test/") or test("\\.test\\.(sh|ts)$")) then 1 else 0 end' <<<"$files" 2>/dev/null)" || fail_api "pull $n files (parse)"
 }
 draft_at() {   # <pr number> <ISO time>: sets DRAFT to 1 when the PR was a draft at that time (timeline: convert_to_draft / ready_for_review toggles); the timeline is read once per PR
-  local n="$1" t="$2"
-  [ -n "${PR_TL[$n]+x}" ] || { PR_TL[$n]="$(api "repos/$REPO/issues/$n/timeline?per_page=100")" || fail_api "timeline $n"; }
+  local n="$1" t="$2" rc=0
+  [ -n "${PR_TL[$n]+x}" ] || { PR_TL[$n]="$(api "repos/$REPO/issues/$n/timeline?per_page=100")" || { rc=$?; [ "$rc" -eq 46 ] && return 46; fail_api "timeline $n"; }; }
   DRAFT="$(jq -r --arg t "$t" --argjson cur "${PR_CURDRAFT[$n]}" '
       [.[]? | select(.event == "convert_to_draft" or .event == "ready_for_review") | {e: .event, at: .created_at}] | sort_by(.at) as $ev
       | (if ($ev | length) == 0 then $cur else ($ev[0].e == "ready_for_review") end) as $start
@@ -390,13 +429,13 @@ while IFS=$'\t' read -r id ev sha branch created prn ex reason wall cls fork; do
   [ -n "$id" ] || continue
   [ "$prn" != 0 ] || continue        # a run whose PR could not be resolved (its own pull_requests is empty and its head commit named no single PR) cannot be read: not evidence
   [ "$fork" != 1 ] || continue       # a fork PR run
-  if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - TF0 >= FACTS_BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi   # the facts loop has its own allowance
-  pr_facts "$prn"
+  if [ -z "${PR_DOCS[$prn]+x}" ] && { (( SECONDS - TF0 >= FACTS_BUDGET )) || (( SECONDS - T0 >= BUDGET - TAIL )); }; then FACTS_CUT=1; TRUNC=1; break; fi   # the facts loop is bounded by its own allowance AND by the wall deadline minus the verdict reserve
+  pr_facts "$prn" || { rc=$?; [ "$rc" -eq 46 ] && { FACTS_CUT=1; TRUNC=1; break; }; fail_api "pull $prn facts"; }
   [ "${PR_EXCLUDED[$prn]}" != 1 ] || continue   # canary, fork or oracle-touching: excluded from every count
   [ "${PR_SCRIPTS[$prn]}" != 1 ] || any_scripts=1
   [ "${PR_DOCS[$prn]}" != 1 ] || docs_seen=1
   [ "${PR_BOT[$prn]}" != 1 ] || bot_seen=1
-  if [ "$draft_seen" != 1 ]; then draft_at "$prn" "$created"; [ "$DRAFT" != 1 ] || draft_seen=1; fi
+  if [ "$draft_seen" != 1 ]; then draft_at "$prn" "$created" || { rc=$?; [ "$rc" -eq 46 ] && { FACTS_CUT=1; TRUNC=1; break; }; fail_api "timeline $prn"; }; [ "$DRAFT" != 1 ] || draft_seen=1; fi
   [ -z "${SEEN_KEY[$prn]+x}" ] || continue
   SEEN_KEY[$prn]=1; distinct=$((distinct + 1))
 done <<<"$pr_units"
@@ -413,26 +452,40 @@ if [ "$n_w" -gt 0 ]; then
 fi
 
 # --- (h) the baseline has not grown since the PR3a merge (set comparison of the file at the merge commit and at the main tip) -------------------------------
-raw_baseline() {   # <ref> <out file>: 0 read, 4 absent (HTTP 404), exits 3 on any other failure (an HTTP 422 included)
+raw_baseline() {   # <ref> <out file>: 0 read, 4 absent (HTTP 404), 46 the wall deadline cut the read, exits 3 on any other failure (an HTTP 422 included)
   local rc=0
   gh_get -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 44 ] && return 4
+  [ "$rc" -eq 46 ] && return 46
   fail_api "baseline at $1"
 }
-grew=0
+# the reads are attempted whenever wall remains, truncated sweep or not — TRUNC is the steady state, so gating on it let a PASS
+# certify (h) unmeasured. Only a spent deadline skips them, and then the status line prints baseline_grown=unread rather than a
+# 0 that would assert a check that never ran
+grew=unread
+: > "$WORK/bl.merge"; : > "$WORK/bl.tip"
 if [ -z "$merge_sha" ]; then fail_api "pull $PR3A has no merge commit"; fi
-raw_baseline "$merge_sha" "$WORK/bl.merge"; rc=$?
-[ "$rc" -ne 4 ] || fail_api "the baseline is absent at the PR3a merge commit"
-raw_baseline main "$WORK/bl.tip"; rc=$?
-if [ "$rc" -eq 4 ]; then : > "$WORK/bl.tip"   # absent at the tip is the end state (PR5 deletes it)
+if (( SECONDS - T0 >= BUDGET )); then
+  nots+=("read budget ended before the baseline reads (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1
+else
+  raw_baseline "$merge_sha" "$WORK/bl.merge"; rc=$?
+  [ "$rc" -ne 4 ] || fail_api "the baseline is absent at the PR3a merge commit"
+  if [ "$rc" -eq 0 ]; then
+    raw_baseline main "$WORK/bl.tip"; rc=$?
+    if [ "$rc" -eq 4 ]; then : > "$WORK/bl.tip"; rc=0; fi   # absent at the tip is the end state (PR5 deletes it)
+    [ "$rc" -ne 0 ] || grew=0
+  fi
+  if [ "$rc" -eq 46 ]; then nots+=("read budget ended during the baseline reads (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1; : > "$WORK/bl.merge"; : > "$WORK/bl.tip"; fi
 fi
-sort -u "$WORK/bl.merge" > "$WORK/bl.merge.s"; sort -u "$WORK/bl.tip" > "$WORK/bl.tip.s"
-added="$(comm -13 "$WORK/bl.merge.s" "$WORK/bl.tip.s")"
-if [ -n "$added" ]; then
-  grew="$(printf '%s\n' "$added" | grep -c .)"
-  first3="$(printf '%s\n' "$added" | head -n 3 | cat -vT | sed 's/.*/"&"/' | paste -sd' ' -)"
-  nots+=("baseline grew by $grew line(s) since the PR3a merge ($first3)")
+if [ "$grew" != unread ]; then
+  sort -u "$WORK/bl.merge" > "$WORK/bl.merge.s"; sort -u "$WORK/bl.tip" > "$WORK/bl.tip.s"
+  added="$(comm -13 "$WORK/bl.merge.s" "$WORK/bl.tip.s")"
+  if [ -n "$added" ]; then
+    grew="$(printf '%s\n' "$added" | grep -c .)"
+    first3="$(printf '%s\n' "$added" | head -n 3 | cat -vT | sed 's/.*/"&"/' | paste -sd' ' -)"
+    nots+=("baseline grew by $grew line(s) since the PR3a merge ($first3)")
+  fi
 fi
 echo "window opened=$merged_at age_days=$age_days floor=$floor_src green_pr_units_distinct_prs=$distinct green_merge_group_shas=$mg_n scripts_pr=$any_scripts docs_only=$docs_seen draft=$draft_seen bot=$bot_seen wall_p95_s=$p95 wall_max_s=$max units=$n_w runs_listed=$runs_listed units_read=$units_read truncated=$TRUNC baseline_grown=$grew pr_unattributed_runs=$unattr"
 # the quota this sweep spent (rate_limit is free to read); a failed read here never decides the verdict
@@ -464,7 +517,7 @@ if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then
 fi
 # nothing persists between sweeps: a cut sweep leaves the rest unread THIS sweep, and a faster sweep reads further. A cut is NOT YET only while a criterion is unmet.
 if (( FACTS_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended in the PR-facts phase (SOAK_FACTS_BUDGET_S=$FACTS_BUDGET): PRs after that point were not read this sweep"); fi
-if (( BUDGET_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended after $units_read of $to_read runs (SOAK_BUDGET_S=$BUDGET): runs after that point were not read this sweep"); fi
+if (( BUDGET_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended after $((launched - cut_n)) of $to_read runs (SOAK_BUDGET_S=$BUDGET): runs after that point were not read this sweep"); fi
 if (( ${#nots[@]} > 0 )); then
   printf 'NOT YET: %s\n' "${nots[@]}"
   exit 2

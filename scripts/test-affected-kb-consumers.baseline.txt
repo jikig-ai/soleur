@@ -1,5 +1,26 @@
 .claude/hooks/brand-hex-commit-gate.test.sh	knowledge-base/marketing/brand-guide.md
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms/archive
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans/archive
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
 .claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/engineering/architecture/diagrams
@@ -28,6 +49,8 @@
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
 apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 apps/web-platform/scripts/home-census-trigger.test.sh	knowledge-base/legal/audits
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	knowledge-base/engineering/operations/post-mortems/2026-10-11-hosted-bash-ask-bypassed-by-sdk-auto-allow-postmortem.md
 apps/web-platform/test/parse-gitleaks-allowlists	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur	knowledge-base	dir-operand-tests	false-positive: c4-canonical.test.ts names the knowledge-base root as a path base; the file it reads (model.likec4.json) is covered by the diagrams/ edge
 plugins/soleur	knowledge-base/engineering/policies/content-vendoring.md	dir-operand-tests	false-positive: gdpr-gate.test.ts writes this path as the `registry:` line of a synthetic NOTICE it creates in a mkdtemp directory (a template literal, lines 391 and 752); it never reads the policy file
@@ -106,6 +129,8 @@ plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/pro
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/plans
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/specs
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	knowledge-base/project/specs/archive
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	knowledge-base/engineering/operations/post-mortems/2026-10-11-hosted-bash-ask-bypassed-by-sdk-auto-allow-postmortem.md
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/render-c4-model.test.sh	knowledge-base/engineering/architecture/diagrams
 plugins/soleur/test/resolve-target-decision.test.sh	knowledge-base
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -159,6 +184,7 @@ scripts/followthroughs/discord-blog-webhook-fallback	knowledge-base/marketing/di
 scripts/followthroughs/home-census-run-10455	knowledge-base/engineering/operations/runbooks/home-census.md
 scripts/followthroughs/inngest-bs-token-restage-7596	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/followthroughs/inngest-hostmetrics-trim-11602	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+scripts/followthroughs/pr-battery-gate-saving-9323	knowledge-base/engineering/architecture/diagrams
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
@@ -183,6 +209,7 @@ scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/run
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/promotion-config.yml
+scripts/lint-encryption-posture	knowledge-base/project/plans
 scripts/lint-orphan-test-suites	knowledge-base
 scripts/lint-orphan-test-suites	knowledge-base/engineering/architecture/diagrams
 scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
@@ -237,6 +264,10 @@ scripts/secret-scan-smoke-gate	knowledge-base/engineering/operations
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides
 scripts/test-all-enumerate-toolchain	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
 scripts/test-all-enumerate-toolchain	knowledge-base/legal
+scripts/test-all-group-affected	knowledge-base
+scripts/test-all-group-affected	knowledge-base/engineering/architecture/diagrams
+scripts/test-all-group-affected	knowledge-base/project
+scripts/test-all-group-affected	knowledge-base/support/community/2026-10-26-digest.md
 scripts/test-all-infra-coverage-notice	knowledge-base/engineering/architecture/diagrams
 scripts/test-all-infra-coverage-notice	knowledge-base/project/learnings
 scripts/test-all-pr-battery-gate	knowledge-base

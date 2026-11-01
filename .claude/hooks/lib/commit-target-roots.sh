@@ -1071,8 +1071,10 @@ ctr_collect() {
   if ! command -v perl >/dev/null 2>&1; then _ctr_unavail tooling "perl is not installed, and the command lexer needs it"; return 0; fi
   if [ ! -r "$CTR_LEXER" ]; then _ctr_unavail tooling "the command lexer is missing at $CTR_LEXER"; return 0; fi
   # The `|| true` is inside the process substitution so a lexer exit status (2 = unparseable,
-  # 3 = a bound tripped) is absorbed there; failure is read from the stream instead.
-  while IFS= read -r -d '' fld; do f+=("$fld"); done < <(printf '%s' "$cmd" | perl "$CTR_LEXER" 2>/dev/null || true)
+  # 3 = a bound tripped) is absorbed there; failure is read from the stream instead. The
+  # producer's `2>/dev/null` swallows `printf: write error: Broken pipe` when the lexer exits
+  # without reading stdin (#11379): the EPIPE is harmless — the partial stream decides the state.
+  while IFS= read -r -d '' fld; do f+=("$fld"); done < <(printf '%s' "$cmd" 2>/dev/null | perl "$CTR_LEXER" 2>/dev/null || true)
   n=${#f[@]}; i=0
   if [ "$n" -eq 0 ]; then _ctr_unavail tooling "the command lexer produced no output"; return 0; fi
   while :; do

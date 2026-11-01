@@ -1231,10 +1231,12 @@ class TestRegistration(unittest.TestCase):
         self.assertRegex(text, r'(?m)^\s*run_suite "scripts/lint-ratchet-ruff-live" python3 '
                                r"plugins/soleur/scripts/lint-ratchet\.py ruff --check$")
 
-    def test_both_labels_are_always_on(self):
+    def test_labels_are_registered_and_classified(self):
+        # #11648: tests/scripts/lint-ratchet was demoted off ALWAYS_ON_SUITES to a
+        # declared-edge array (median >10s cap); lint-ratchet-ruff-live stays always-on.
         text = (REPO_ROOT / "scripts" / "lib" / "test-affected-paths.sh").read_text()
-        for label in ("scripts/lint-ratchet-ruff-live", "tests/scripts/lint-ratchet"):
-            self.assertRegex(text, r'(?m)^\s*"%s"$' % re.escape(label))
+        self.assertRegex(text, r'(?m)^\s*"scripts/lint-ratchet-ruff-live"$')
+        self.assertRegex(text, r'(?m)^AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS=\($')
 
     def test_lefthook_entries_run_the_scopes_unconditionally(self):
         text = (REPO_ROOT / "lefthook.yml").read_text()

@@ -72,21 +72,26 @@
 #      not an engine defect — the `::error::` line names the check that fired.
 #   2  SOURCE unavailable — GHCR could not be read. Classified sub-cause in the message. Also: the
 #      `crane auth login` command for ghcr.io failed LOCALLY (the message says so; see exit 5).
-#   3  SINK unavailable — the target registry did not accept or serve the write. RETRYABLE:
+#   3  SINK unavailable — the target registry did not accept or serve a request. RETRYABLE:
 #      this is the code the chained restore job retries on, because a host replace can outrun
 #      the Cloudflare Tunnel's re-convergence onto the replaced origin.
 #   4  VERIFICATION failed — digest parity mismatch, missing blob, or missing signature. The
-#      copy "succeeded" and the result is not usable. NOT retryable.
+#      copy "succeeded" and the result is not usable. NOT retryable. At the read-back and
+#      signature read/copy sites exit 4 is a MEASURED absence; a read fault the classifier cannot
+#      name, or names as a non-absence class (corruption, layer format), exits 6, not 4.
 #   5  CREDENTIAL unusable — absent, empty, or REJECTED by the sink; or the `crane auth login` COMMAND
 #      failed locally (the message says so: crane login stores the credential and never contacts the
-#      registry, so a wrong credential surfaces later, at `digest`/`copy`). NOT retryable: retrying an
-#      authorisation failure only wastes the window. Deliberately distinct from 3, mirroring the
+#      registry, so a wrong credential surfaces later, at `digest`/`copy`). NOT retryable as-is: retrying an
+#      authorisation failure unchanged only wastes the window. Deliberately distinct from 3, mirroring the
 #      abort/degrade boundary the D10 gate's removed A5 predicate used: authorisation and
 #      availability failures are different classes with different verdicts. (A5 itself was
 #      deleted by architecture ruling — ADR-169 — but the boundary it drew was sound, and this
 #      engine is where it still lives, post-destroy, against the host that actually applies.)
-#   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
-#      failure must never read as either "absent" or "fine".
+#   6  COULD NOT CLASSIFY — the failure matched no known shape, or (at the read-back and signature
+#      read/copy sites) a class those sites do not treat as a measured absence; the message says
+#      `class: …`. Loudest arm. An unclassified
+#      failure must never read as either "absent" or "fine". A re-run is safe and resumable, but
+#      the restore job does not retry 6: read the crane stderr, then re-run the job by hand.
 #  78  TRACED INVOCATION ONLY — run under `bash -x` (or SHELLOPTS=xtrace) with a registry
 #      credential in the environment. Refused before any network call so the token never reaches
 #      THIS engine's trace (a parent shell's own trace is outside this guard). Remove the trace; nothing else is wrong.
@@ -251,8 +256,10 @@ classify() {
     # not gzip — an uncompressed `…tar` or `…tar+zstd` platform layer produces it on perfectly
     # intact bytes. Measured against a real registry: the identical string comes back for an intact
     # attestation layer. So this arm names TWO causes the engine cannot tell apart, and the message
-    # must say so rather than assert corruption. Exit 4 is still right (verification is unproven
-    # either way); exit 6 stays reserved for shapes the engine genuinely cannot name.
+    # must say so rather than assert corruption. Exit 4 is still right where verify_die reads a
+    # blob (verification is unproven either way); at the four manifest read/copy sites a result
+    # of this class exits 6, because the three digest reads never decompress or hash a blob, and the signature copy matches
+    # the image-copy site, which already exits 6 for these classes (#11667, CTO ruling).
     # Single pattern on purpose: a `*"unexpected EOF reading gzip"*` alternative would be DEAD —
     # the NETWORK arm's `*"unexpected EOF"*` above already matches it.
     *"gzip: invalid header"*)                                          echo LAYERFORMAT ;;
@@ -678,7 +685,7 @@ while (( i < n_entries )); do
     err="$(last_err "$WORK/cp.err")"
     cls="$(classify "$err")"
     case "$cls" in
-      DENIED)  die 5 "the sink REJECTED this credential while copying ${dst}. This is an authorisation failure, not an availability one — retrying will not clear it. crane: ${err}" ;;
+      DENIED)  die 5 "the sink REJECTED this credential while copying ${dst}. This is an authorisation failure, not an availability one — retrying unchanged will not clear it. crane: ${err}" ;;
       NETWORK) die 3 "the sink was unavailable while copying ${dst} (this is the retryable code; a replaced host can outrun the tunnel's re-convergence). crane: ${err}" ;;
       NOTFOUND|BLOBMISSING) die 4 "copying ${dst} reported a missing object. crane: ${err}" ;;
       *)       die 6 "copying ${dst} failed in a way this script cannot classify. crane: ${err}" ;;
@@ -696,7 +703,8 @@ while (( i < n_entries )); do
     case "$cls" in
       NETWORK) die 3 "could not read ${dst} back from the sink (unavailable). crane: ${err}" ;;
       DENIED)  die 5 "the sink rejected this credential reading ${dst} back. crane: ${err}" ;;
-      *)       die 4 "could not read ${dst} back after copying it, so the restore is UNVERIFIED. crane: ${err}" ;;
+      NOTFOUND|BLOBMISSING) die 4 "could not read ${dst} back after copying it, so the restore is UNVERIFIED. crane: ${err}" ;;
+      *)       die 6 "reading ${dst} back after copying it failed with a result this script does not treat as a measured absence (class: ${cls}), so the restore is UNVERIFIED. crane: ${err}" ;;
     esac
   fi
   if [[ "$src_digest" != "$dst_digest" ]]; then
@@ -850,19 +858,25 @@ while (( i < n_entries )); do
     # transient GHCR fault became "the signature is absent, do not deploy" and suppressed the
     # retry that would have cleared it. Source-side faults take 2, matching the source-resolution
     # block above; only a genuine absence stays 4.
+    # Repo visibility is proven by the earlier successful digest read of the same repo with the
+    # same credential, so a NOTFOUND here is the tag's absence, not the repo's.
     err="$(last_err "$WORK/sigsrc.err")"
-    case "$(classify "$err")" in
+    cls="$(classify "$err")"
+    case "$cls" in
       NETWORK) die 2 "GHCR was unreachable reading the signature ${sig_tag} for ${repo} (network/DNS). This does NOT mean the signature is absent. crane: ${err}" ;;
       DENIED)  die 2 "GHCR rejected this credential reading the signature ${sig_tag} for ${repo}. This does NOT mean the signature is absent — check the job's 'packages: read' permission. crane: ${err}" ;;
-      *)       die 4 "no cosign signature (${sig_tag}) found at GHCR for ${repo}@${src_digest}. There is no unsigned-restore arm: a restored image whose signature is absent fails verification on the host. crane: ${err}" ;;
+      NOTFOUND|BLOBMISSING) die 4 "no cosign signature (${sig_tag}) found at GHCR for ${repo}@${src_digest}. There is no unsigned-restore arm: a restored image whose signature is absent fails verification on the host. crane: ${err}" ;;
+      *)       die 6 "reading the signature ${sig_tag} at GHCR for ${repo} failed with a result this script does not treat as a measured absence (class: ${cls}), so its absence is unproven. crane: ${err}" ;;
     esac
   fi
   if ! crane_capture "$WORK/sigcp.out" "$WORK/sigcp.err" copy $SINK_TLS_FLAG "ghcr.io/${repo}:${sig_tag}" "${TARGET}/${repo}:${sig_tag}"; then
     err="$(last_err "$WORK/sigcp.err")"
-    case "$(classify "$err")" in
+    cls="$(classify "$err")"
+    case "$cls" in
       NETWORK) die 3 "the sink was unavailable while copying the signature ${sig_tag}. crane: ${err}" ;;
       DENIED)  die 5 "the sink rejected this credential copying the signature ${sig_tag}. crane: ${err}" ;;
-      *)       die 4 "the signature ${sig_tag} could not be copied for ${repo}. crane: ${err}" ;;
+      NOTFOUND|BLOBMISSING) die 4 "the signature ${sig_tag} could not be copied for ${repo}. crane: ${err}" ;;
+      *)       die 6 "copying the signature ${sig_tag} for ${repo} failed with a result this script does not treat as a measured absence (class: ${cls}). crane: ${err}" ;;
     esac
   fi
   crane_capture "$WORK/sigdst.out" "$WORK/sigdst.err" digest $SINK_TLS_FLAG "${TARGET}/${repo}:${sig_tag}"
@@ -873,10 +887,12 @@ while (( i < n_entries )); do
     # unavailable one call later reported "restored UNSIGNED" at a NON-retryable code —
     # post-destroy — for a fault the adjacent call would have called retryable.
     err="$(last_err "$WORK/sigdst.err")"
-    case "$(classify "$err")" in
+    cls="$(classify "$err")"
+    case "$cls" in
       NETWORK) die 3 "the sink became unavailable reading the signature ${sig_tag} back for ${repo}. This does NOT mean the image is unsigned; it is the retryable code. crane: ${err}" ;;
       DENIED)  die 5 "the sink rejected this credential reading the signature ${sig_tag} back for ${repo}. crane: ${err}" ;;
-      *)       die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: ${err}" ;;
+      NOTFOUND|BLOBMISSING) die 4 "the signature ${sig_tag} is not readable back from the sink, so ${repo}:${tag} is restored UNSIGNED. crane: ${err}" ;;
+      *)       die 6 "reading the signature ${sig_tag} back from the sink failed with a result this script does not treat as a measured absence (class: ${cls}), so ${repo}:${tag} is UNVERIFIED, not known to be unsigned. crane: ${err}" ;;
     esac
   fi
 
