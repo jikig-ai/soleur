@@ -3454,7 +3454,8 @@ row_ow_facts_wall() {   # the facts loop is bounded by its own allowance AND by 
   ow_case; ow_write
   local n; for n in 11 12 13 14 15; do : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/$n")"; done
   OW_ENV=(SOAK_BUDGET_S=30 SOAK_FACTS_BUDGET_S=300 SLOW_S=5); ow_probe
-  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT" || return 1
+  [[ "$(ow_req_count "repos/$R/pulls/13")" -eq 0 ]]   # the TAIL arm cuts the loop BEFORE a third pull; a mutant dropping it reaches pulls/13 and /14 on the gh_get deadline cap (rc 46 -> the same FACTS_CUT verdict, so only the fetch depth discriminates)
 }
 row_ow_budget_facts() {   # the reads finish inside their budget; the first pull read (PR 11, 3 s) overruns the 2 s facts allowance; the facts loop stops
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
