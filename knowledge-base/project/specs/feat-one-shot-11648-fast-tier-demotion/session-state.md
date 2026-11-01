@@ -32,3 +32,10 @@ cto_spawns=1
 - ci-pr-affected ratchet: 66 anchor-keyed accept rows added (mention-only pairs incl. pre-existing main churn on home-census-trigger + betterstack stale re-anchor); live==baseline=1510.
 - tg6 family pin in test-all-affected.test.sh updated 7->9 (two new ^glob:knowledge-base/**.sh carriers); mid-run edit crashed the first full run at line 3782 — blocks 36-38 re-run via --rows green (99/99); blocks 1-35 all green in run 1.
 - Guard battery: fast-tier-budget, always-on-ledger (14), lint-orphan, kb-consumers (31), weight-drift (52), corpus-weight-budget (14), group-affected (28), ratchet live==baseline — ALL GREEN.
+
+## Ship checkpoint (2026-11-01 ~16:00Z)
+- Pipeline stage: soleur:ship — Phase 4 gate in flight (background shell 898d11).
+- Gate is runner-changed → MODE=full (~182min serial); LOCK_QUEUED ticket 00000012 behind sibling feat-one-shot-8593-8080-witness full-gate (running 3h+).
+- Done: review trailer (968fbd110d, full 8/8), Review-Evidence PR comment, learning committed (65b67a8cbd), PR body+changelog+semver:patch set, ratchet live==baseline 1510, all targeted suites green, deferred .gitignore gap → issue #11810.
+- Next: wait gate → if green: gh pr ready 11779 → gh pr merge --auto → Phase 7 poll MERGED → postmerge (detached worktree) → release workflows → DONE. Then dispatch 2: issue #11647.
+- PANEL_SHA=fe2df9fb9a; HEAD=65b67a8cbd; PR #11779.
