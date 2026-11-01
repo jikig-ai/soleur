@@ -93,6 +93,7 @@ for id in $ids; do
   # continue-on-no-pointer posture. Recovery and the tripwire engage only for
   # a step that ran.
   [[ "$jstep" == "skipped" || "$jstep" == "absent" ]] && continue
+  [[ "$jid" =~ ^[0-9]+$ ]] || { echo "TRANSIENT: unexpected job id '$jid' in the jobs response of run $id" >&2; exit 3; }
   log=$(gh run view --repo "$REPO" --job "$jid" --log 2>/dev/null) || { echo "TRANSIENT: cannot read the log of job $jid (run $id)" >&2; exit 3; }
   # Normalize once for EVERY consumer of "$log" (8178's exact idiom): gh writes
   # a UTF-8 BOM at the start of EVERY step section after the first — landing

@@ -199,10 +199,20 @@ reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success
 { l 'an unrelated emitted line'; l 'another quiet line'; } > "$WORK/fx/log.9001"
 run 3 TRANSIENT "a named-attribution patternless trail on a success job reads TRANSIENT"
 
+# Replicated-literal parity: TRAIL_PATTERN is the recovery trigger AND the
+# region-acceptance regex in BOTH trail probes — a drift between the copies
+# would grade the same aged log differently on the two surfaces. The non-empty
+# guard keeps a broken extraction from passing on equal-empty.
+tp_10585=$(grep -o "TRAIL_PATTERN='[^']*'" "$DIR/web-first-deploy-10585.sh")
+tp_zot=$(grep -o "TRAIL_PATTERN='[^']*'" "$PROBE")
+[ -n "$tp_zot" ] && [ "$tp_zot" = "$tp_10585" ] \
+  && ok "TRAIL_PATTERN byte-identical to web-first-deploy-10585's copy" \
+  || no "TRAIL_PATTERN drifted from web-first-deploy-10585's copy"
+
 rc=0; GH_FX="$WORK/fx" PATH="$BIN:$PATH" bash -x "$PROBE" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 78 ] && ok "refuses to run under xtrace (exit 78)" || no "xtrace refusal: rc=$rc"
 
-MIN_CASES=29
+MIN_CASES=30
 if [ $((pass + fail)) -lt "$MIN_CASES" ]; then
   printf 'assertion floor: %d < %d — a case stopped running\n' $((pass + fail)) "$MIN_CASES"; exit 1
 fi

@@ -812,7 +812,7 @@ write_run 2203 "git-data refs_assert" "2026-10-20T09:35:00Z" '[{"name":"cutover"
   usec cutover 'Host-side refs assertion (store probes + one refs read)' "2026-10-20T09:35:00.0000000Z"
   ul 'log "REFS-CONFIRMED"' "2026-10-20T09:35:10.0000000Z" cutover               # run:-source decoy — never counted
   ul '[git-data-cutover] STORE probe=refs-assert verdict=ok' "2026-10-20T09:35:30.0000000Z" cutover
-  ul '[git-data-cutover] REFS-CONFIRMED' "2026-10-20T09:35:31.0000000Z" cutover
+  ul '[git-data-cutover] REFS-CONFIRMED'$'\r' "2026-10-20T09:35:31.0000000Z" cutover   # trailing CR pins fetch_run's `s/\r//g` — without the strip this $-anchored match fails
   ul "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1},${REFS_SHA2}" "2026-10-20T09:35:32.0000000Z" cutover
   usec cutover 'Post job cleanup' "2026-10-20T09:40:00.0000000Z"
   usec wipe 'Set up job' "2026-10-20T09:34:51.0000000Z"
