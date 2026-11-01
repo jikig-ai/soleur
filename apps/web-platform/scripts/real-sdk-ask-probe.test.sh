@@ -847,7 +847,7 @@ ISSUES_JSON="$(issues "20:$T_REG" "21:$T_BLIND")" run_filer pass pass 0.8
 check "row2: the blind issue is closed" grep -q '^issue close 21 ' "$GD/calls.log"
 check "row2: the regression issue is NEVER closed" bash -c "! grep -q '^issue close 20' '$GD/calls.log'"
 check "row2: the regression issue gets a 'subsequently passed' note" grep -q '^issue comment 20 ' "$GD/calls.log"
-check "row2: the note says subsequently passed" bash -c "cat '$GD'/body.* | grep -qi 'subsequently passed'"
+check "row2: the note says subsequently passed" grep -qi 'subsequently passed' "$GD"/body.*
 eq "row2: exactly one close" "1" "$(calls 'issue close')"
 eq "row2: nothing created on a pass" "0" "$(calls 'issue create')"
 
@@ -870,12 +870,12 @@ for jr in failure cancelled; do
   ISSUES_JSON="[]" run_filer "" "" "" "$jr"
   eq "row7: empty outcome + job $jr files one blind issue" "1" "$(calls 'issue create')"
   check "row7: ($jr) the issue is the blind class" grep -qF -- "--title $T_BLIND" "$GD/calls.log"
-  check "row7: ($jr) the body says no-outcome" bash -c "cat '$GD'/body.* | grep -qF 'no-outcome'"
+  check "row7: ($jr) the body says no-outcome" grep -qF 'no-outcome' "$GD"/body.*
 done
 
 # row 8: an injected reason never reaches the body
 ISSUES_JSON="[]" run_filer blind $'x\n## owned' $'1.0\n## owned2'
-check "row8: the injected heading is absent from the body" bash -c "! cat '$GD'/body.* | grep -q 'owned'"
+check "row8: the injected heading is absent from the body" bash -c "! grep -q 'owned' '$GD'/body.*"
 check "row8: an issue was still filed" test "$(calls 'issue create')" -eq 1
 
 # row 9: duplicate open blind issues

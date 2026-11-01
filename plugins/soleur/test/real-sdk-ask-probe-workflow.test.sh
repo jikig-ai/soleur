@@ -948,7 +948,8 @@ helper() {
 has_v() { # <code> [substring]
   local code="$1" sub="${2-}"
   if [[ -n "$sub" ]]; then
-    grep -E "^VIOLATION ${code}( |\$)" <<<"$OUT" | grep -qF -- "$sub"
+    local hits; hits="$(grep -E "^VIOLATION ${code}( |\$)" <<<"$OUT")"
+    grep -qF -- "$sub" <<<"$hits"
   else
     grep -qE "^VIOLATION ${code}( |\$)" <<<"$OUT"
   fi

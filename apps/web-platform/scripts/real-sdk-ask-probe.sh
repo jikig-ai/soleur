@@ -97,7 +97,7 @@ redact() {
         line = out line
       }
       print line }' |
-    sed -E 's/([Bb][Ee][Aa][Rr][Ee][Rr](:|%20|\\n|[[:space:]])+)[A-Za-z0-9._~+\/=-]{16,}/\1<redacted>/g; s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted>/g; s/sk-ant-[a-z]+[0-9]{2}-[A-Za-z0-9_-]+/<redacted>/g; s/(^|[^A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+/\1<redacted>/g; s/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/\1<redacted>/g; s/gh[pousr]_[A-Za-z0-9]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9_]{20,}/<redacted>/g'
+    sed -E 's/([Bb][Ee][Aa][Rr][Ee][Rr](:|%20|\\n|[[:space:]])+)[A-Za-z0-9._~+\/=-]{16,}/\1<redacted>/g; s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted>/g; s/sk-ant-[a-z]+[0-9]{2}-[A-Za-z0-9_-]+/<redacted>/g; s/(^|[^A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+/\1<redacted>/g; s/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/\1<redacted>/g; s/gh[pousr]_[A-Za-z0-9._~+\/=-]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9._~+\/=-]{20,}/<redacted>/g'
 }
 
 # =================================================================================================================================
