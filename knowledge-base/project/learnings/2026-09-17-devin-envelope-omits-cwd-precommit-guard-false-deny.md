@@ -45,6 +45,20 @@ Workaround used: copy the probe into the main checkout under `scripts/followthro
 
 This is the third recorded hook instance of the class (after `guardrails.sh` block-commit-on-main here and `context-reviewed-gate.sh` in `workflow-issues/2026-10-20-context-reviewed-gate-resolves-cwd-to-bare-root-on-worktree-commits.md`) — each new instance is a hook whose repo-context probe silently judges the main checkout.
 
+## Additional instance: `git-commit-secret-scan-undeterminable` (2026-11-01, PR #11786)
+
+The literal-path requirement is stricter than "attach `git -C`". `git-commit-secret-scan.sh`
+must resolve the commit's target repo out of the command TEXT to know which checkout's staged
+content to scan; on `git -C "$VAR" commit` the `-C` operand is a literal `$VAR` string — a
+variable, `$(...)`, `~`, or glob never expands to a real directory — so the hook denies
+fail-closed ("the staged content was NOT scanned"), with a repair line naming the two accepted
+forms: `git -C /abs/path commit` or `cd /abs/path && git commit` in the SAME command. The deny
+is loud and self-describing (not a silent mis-resolution like the three above), but the failure
+mode an agent hits is identical in shape: a form that LOOKS compliant (`-C` present, absolute
+value in the shell) is judged on the unexpanded text. Under Devin, `git -C` paths must be
+literal absolute strings — never expansions. See
+`2026-11-01-a-two-word-awk-v-mapped-the-helpers-crash-onto-its-designed-failure-code.md` (#11607).
+
 ## Session Errors
 
 - **`git commit` denied twice (false positive).** — Recovery: `git -C <worktree> commit` (the guard resolves `-C` correctly). — Prevention: tracked as defect #8254; interim rule — under Devin, always attach `git -C <dir>` to worktree commits.

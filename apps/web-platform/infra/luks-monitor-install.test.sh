@@ -337,27 +337,29 @@ check("G1: the runbook fragment host-timer-liveness-alert-8706 is a real heading
 
 apply_job = jobs.get("apply") or {}
 main_runs = [str(s.get("run", "")) for s in apply_job.get("steps") or [] if "-target=logtail_exploration" in str(s.get("run", ""))]
-# The heartbeat is created by the same MAIN plan, and the four retired addresses stay targeted (a bare
-# -target on an address with no configuration plans its DELETE; dropping one orphans it under management).
+# The heartbeat is created by the same MAIN plan. The retired destroy targets were REMOVED by #11672 once the
+# destroys had applied (run 41239555181): a bare -target on an address with no configuration plans a DELETE, so a
+# re-added line is stale at best. The absence check also requires the MAIN plan to have been extracted at all, and
+# matches the quoted and space-separated spellings terraform accepts, not only `-target=addr`.
 for t in ("betteruptime_heartbeat.luks_monitor_host_timer",):
     check("G1: the push-triggered apply job's MAIN plan targets %s" % t,
           any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
 for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"):
-    check("G1: the MAIN plan keeps the retained destroy target %s" % t,
-          any(re.search(r'(?m)^\s*-target=%s(\s*\\)?\s*$' % re.escape(t), r) for r in main_runs))
+    check("G1: the MAIN plan no longer targets the retired destroy target %s (removed by #11672)" % t,
+          bool(main_runs) and not any(re.search(r'-target[=\s]+["\']?%s' % re.escape(t), r) for r in main_runs))
 
-# One list, two readers (#11631 review): the retained destroy targets above are ALSO listed in the census's
-# INTENDED_DESTROYS (tests/scripts/test-infra-privileged-tier-census.sh) and betterstack-alert-structure.test.sh reads
-# its own copy from there. A target kept here but absent from the census (or the reverse) is a destroy one guard allows
-# and the other refuses; this row pins the luks pair to the census.
+# One list, two readers (#11631 review, #11672): the retired destroy rows are gone from the census's
+# INTENDED_DESTROYS (tests/scripts/test-infra-privileged-tier-census.sh) as well as from the workflow, and
+# betterstack-alert-structure.test.sh reads its own copy from there. A target kept in one and not the other is a
+# destroy one guard allows and the other refuses; this row pins the luks pair absent from the census, and requires
+# the dict to have been extracted (non-empty) so a failed read cannot pass as absent.
 _census_path = os.path.join(E["LMI_REPO"], "tests/scripts/test-infra-privileged-tier-census.sh")
 _census_src = open(_census_path).read() if os.path.isfile(_census_path) else ""
 _census_block = _census_src.split("INTENDED_DESTROYS = {", 1)[-1].split("\n}", 1)[0] if "INTENDED_DESTROYS = {" in _census_src else ""
 _census_active = "\n".join(l for l in _census_block.splitlines() if not l.lstrip().startswith("#"))
-check("G1: the retained luks destroy targets equal the census's INTENDED_DESTROYS logtail entries for luks (one list, not two)",
-      all(re.search(r'(?m)^\s*"%s"\s*:' % re.escape(t), _census_active)
-          for t in ("logtail_exploration.luks_monitor_host_timer_dark", "logtail_exploration_alert.luks_monitor_host_timer_dark"))
-      and len(re.findall(r'(?m)^\s*"logtail_exploration(?:_alert)?\.luks_monitor_host_timer_dark"\s*:', _census_active)) == 2)
+check("G1: the census's INTENDED_DESTROYS no longer carries the retired luks destroy rows (one list, not two)",
+      bool(_census_active.strip())
+      and re.search(r'(?m)^\s*"logtail_exploration(?:_alert)?\.luks_monitor_host_timer_dark"\s*:', _census_active) is None)
 
 # Row 10: nothing else starts the unit. Its rows would carry _SYSTEMD_UNIT=luks-monitor.service
 # and mask a dark timer exactly as the verify job's rows did.
@@ -1108,7 +1110,7 @@ PY
     [G1-12]="period = 3600" [G1-13]="lifecycle ignore_changes"
     [G1-14]="exactly one line anywhere starts" [G1-15]="exactly one line anywhere starts"
     [G1-16]="no logs exploration other than" [G1-17]="fragment host-timer-liveness-alert-8706"
-    [G1-18]="keeps the retained destroy target" [G1-19]="policy_id is gated"
+    [G1-18]="no longer targets the retired destroy target" [G1-19]="policy_id is gated"
     [G2-1]="file() trigger operands" [G2-2]="file() trigger operands" [G2-4]="the kick comes after"
     [G2-7]="arming string occurs exactly once" [G2-8]="install destinations equal"
     [G2-9]="exactly one start of luks-monitor.service" [G2-10]="luks_monitor_install exists"
@@ -1148,7 +1150,7 @@ PY
   mutate "G1-13 ignore_changes dropped (an unpause would be reverted)" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)ignore_changes = \[paused\]', r'\1ignore_changes = []', s, 1)"
   mutate "G1-19 the policy gate dropped" 1 LMI_UPTIME_TF "$U" "re.sub(r'($HBH(?:.|\n)*?)policy_id = var.betterstack_paid_tier \? betteruptime_policy.uptime\[0\].id : null', r'\1policy_id = null', s, 1)"
   mutate "G1-8 heartbeat target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=betteruptime_heartbeat\.luks_monitor_host_timer \\\\\n', '', s, 1)"
-  mutate "G1-18 a retained destroy target dropped from the MAIN plan" 1 LMI_WF "$W" "re.sub(r'(?m)^\s*-target=logtail_exploration_alert\.luks_monitor_host_timer_dark \\\\\n', '', s, 1)"
+  mutate "G1-18 a retired destroy target re-added to the MAIN plan (quoted spelling)" 1 LMI_WF "$W" "s.replace('              -target=logtail_exploration_alert.claude_cost_daily_burn \\\\\n', '              -target=logtail_exploration_alert.claude_cost_daily_burn \\\\\n              -target=\"logtail_exploration_alert.luks_monitor_host_timer_dark\" \\\\\n', 1)"
   mutate "G1-9 the retired exploration re-added" 1 LMI_ALERTS_TF "$A" "$(cat <<'X'
 s + '''
 resource "logtail_exploration" "luks_monitor_host_timer_dark" {
