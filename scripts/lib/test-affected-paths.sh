@@ -322,7 +322,6 @@ ALWAYS_ON_SUITES=(
   # now running suites as the invoking user, recorded this suite completely and its read set is the registration corpus
   # itself: no short declaration bounds it, and the knowledge-base tree (read through `git ls-files`, invisible to
   # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
-
   "scripts/test-all-fast-tier-budget"
   # #9814: the local weight-drift detector — its verdict asserts properties of
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
@@ -2005,8 +2004,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # .md (fenced-code read), and knowledge-base code files. The CTO-corrected shape is dir-anchored
 # `glob:<top-dir>/**.<ext>` per top-level dir (a root-anchored `glob:*.<ext>` matches only dir-less
 # diff lines, so it cannot carry a whole-tree read) plus `glob:*.<ext>`/`glob:*.md` rows for
-# root-level files. Top-level dirs enumerated via `git ls-files | awk -F/ 'NF>1{print $1}' | sort -u`;
-# a NEW top-level dir is uncovered until re-enumerated — the ci-pr-affected ratchet bounds that.
+# root-level files. Top-level dirs enumerated via `git -c core.quotePath=false ls-files | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u`;
+# a NEW top-level dir is uncovered until re-enumerated — the th6 exists-declared census in test-all-affected.test.sh bounds that.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"
@@ -2263,10 +2262,7 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   "glob:knowledge-base/**.yml"
   "glob:knowledge-base/**.yaml"
   "glob:knowledge-base/**.tf"
-  "glob:knowledge-base/**.tftpl"
   "glob:knowledge-base/**.template"
-  "glob:knowledge-base/**.service"
-  "glob:knowledge-base/**.tmpl"
   "glob:knowledge-base/**.bats"
   "glob:knowledge-base/**.js"
   "glob:knowledge-base/**.ts"
@@ -2654,7 +2650,6 @@ AFFECTED_SCRIPTS_DEVIN_DOCS_DRIFT_CHECK_PATHS=(
 # ADR-241): scans every workflow for environment: declarations and the terraform deployment-policy
 # objects that arm them.
 AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
-
   ".github/"
   "apps/"
   "infra/"
@@ -2741,12 +2736,10 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   "glob:knowledge-base/**.yaml"
   "glob:knowledge-base/**.tf"
   "glob:knowledge-base/**.tfvars"
-  "glob:knowledge-base/**.tmpl"
   "glob:knowledge-base/**.hcl"
   "glob:knowledge-base/**.toml"
   "glob:knowledge-base/**.json"
   "glob:knowledge-base/**.cfg"
-  "glob:knowledge-base/**.service"
   "glob:knowledge-base/**.timer"
   "knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
   "scripts/lib/test-affected-paths.sh"
@@ -2768,7 +2761,6 @@ AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
   "tests/scripts/fixtures/battery-tag-bare-fetch.sh"
   "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"
 )
-
 
 # scripts/test-all-fast-tier-budget (#9763) — the fast-tier budget ratchet. Its verdict reads the
 # always-on list and the committed duration manifest; a change to either must select it.
@@ -2842,7 +2834,6 @@ AFFECTED_SCRIPTS_LIB_TEST_SUITE_LANES_TEST_SH_PATHS=(
 # plugins/soleur/test/operator-ack-guard — finds every *.sh sourcing or calling the ack guard
 # (find . -name '*.sh' + grep -rl --include='*.sh' across the tree). Edge = the dirs that hold shell.
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
-
   "apps/"
   "bin/"
   ".claude/"
@@ -2860,7 +2851,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
 
 # plugins/soleur/test/operator-script — same whole-tree *.sh walk for the operator-script lib.
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
-
   "apps/"
   "bin/"
   ".claude/"
@@ -2877,7 +2867,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
 
 # scripts/lint-shell-capture-exit-live — live scanner over *.sh for capture-exit shape.
 AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
-
   "apps/"
   "bin/"
   ".claude/"
@@ -2936,7 +2925,6 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
-
   "apps/"
   ".claude/"
   ".github/"
@@ -2969,7 +2957,6 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 # convention change there must re-drive this suite (the live suite is
 # always-on and covers the map itself).
 AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
-
   "scripts/lint-feature-map-coverage.sh"
   "scripts/lint-feature-map-coverage.test.sh"
   "apps/web-platform/test/feature-map.md"
@@ -2981,7 +2968,6 @@ AFFECTED_SCRIPTS_LINT_FEATURE_MAP_COVERAGE_BATTERY_PATHS=(
 # env-gate sentinel + synthetic fixture repos; its verdict moves only with its
 # SUT, itself, or the canonical fixture-dir guard it copies.
 AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
-
   "scripts/lint-integration-env-gates.sh"
   "scripts/lint-integration-env-gates.test.sh"
   "plugins/soleur/test/test-helpers.sh"
@@ -2999,7 +2985,6 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 # live root set to catch NEW top-level dirs, and its th8 row (#10117) REDs the
 # battery on any dir-less corpus member no declared edge covers.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
-
   "apps/"
   ".claude/"
   ".github/"
@@ -3027,7 +3012,6 @@ AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
 # scripts/lint-trap-tempfile-ownership — *.sh-wide trap/tempfile ownership lint.
 AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
-
   "apps/"
   "bin/"
   ".claude/"
@@ -3069,7 +3053,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
 
 # plugins/soleur/test/fixture-env-adoption — census of fixture-env adoption across the test corpus.
 AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_ENV_ADOPTION_TEST_SH_PATHS=(
-
   "apps/web-platform/test/"
   "apps/web-platform/infra/"
   ".github/scripts/"
@@ -3082,7 +3065,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_ENV_ADOPTION_TEST_SH_PATHS=(
 
 # plugins/soleur/test/fixture-dir-operand-assert — same corpus walk for fixture-dir operand shape.
 AFFECTED_PLUGINS_SOLEUR_TEST_FIXTURE_DIR_OPERAND_ASSERT_TEST_SH_PATHS=(
-
   "apps/web-platform/test/"
   "apps/web-platform/infra/"
   ".github/scripts/"
@@ -3123,7 +3105,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
 # scripts/lint-shell-trace-credential-refusal (#9763 demotion) — tree-wide *.sh scan for
 # credential-trace refusal shape; scope = the dirs where shell lives.
 AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
-
   "apps/"
   "bin/"
   ".claude/"
@@ -3274,6 +3255,9 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/test-all.sh"
   "scripts/zot-disk-sample.sh"
   "scripts/zot-inventory-assert-marker.sh"
+  "scripts/followthroughs/git-data-replication-signal.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/betterstack-sources.sh"
 )
 
 # scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
@@ -3294,9 +3278,8 @@ AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
 # it READS the shipping workflow (parsed-YAML wiring rows + the verbatim run-block replay),
 # the watchdog dispatch table (the row pin), cron-monitors.tf (the monitor declaration row)
 # and the two suite-registry TSVs — reads no name-stem derivation reaches.
-AFFECTED_SCRIPTS_BETTERSTACK_INCIDENT_MIRROR_PATHS=(
+AFFECTED_SCRIPTS_BETTERSTACK_INCIDENT_MIRROR_PATHS=(  "apps/web-platform/infra/sentry/cron-monitors.tf"
   ".github/workflows/scheduled-betterstack-incident-mirror.yml"
-  "apps/web-platform/infra/sentry/cron-monitors.tf"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "scripts/betterstack-incident-mirror.sh"
   "scripts/betterstack-incident-mirror.test.sh"
@@ -3701,8 +3684,9 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 # scripts/git-data-replication-signal-11704 — sibling #11736's followthrough suite.
-# Its script sources the two betterstack lib readers and executes betterstack-query.sh
-# (BSQ="${ROOT}/scripts/betterstack-query.sh", `bash "$BSQ"`) — real reads.
+# Its script sources the two betterstack lib readers (real reads) and executes a
+# betterstack-query.sh it expects at scripts/betterstack-query.sh; the suite itself
+# stubs that file in a scratch tree — the edge stays as the SUT's runtime contract.
 AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/followthroughs/git-data-replication-signal.sh"
@@ -3847,6 +3831,8 @@ AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS=(
   "apps/web-platform/eslint.test-dirs.config.mjs"
   "apps/web-platform/test/repo-wide-suites.ts"
   "apps/web-platform/test/eslint-test-dirs-ratchet.test.ts"
+  "plugins/soleur/skills/work/SKILL.md"
+  "plugins/soleur/skills/review/SKILL.md"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -3855,7 +3841,8 @@ AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS=(
 # median 24,076 ms) — sources test-helpers.sh (which itself sources
 # lib/git-fixture-env.sh and ../../../scripts/lib/scratch-root.sh — real reads
 # through the helper) and drives the pencil-setup scripts (check_deps.sh + the
-# adapter/save-gate/repl-surface mjs files) through env-mutated subshells; the dir
+# adapter/save-gate/repl-surface mjs files, plus the pen-identity-tree.mjs
+# fake engine the suite executes as node "$TREE") through env-mutated subshells; the dir
 # edge covers all four subjects.
 AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS=(
   "plugins/soleur/skills/pencil-setup/scripts/"
@@ -3876,9 +3863,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS=(
   ".github/workflows/scheduled-terraform-drift.yml"
   "scripts/check-cloudflare-token-drift.sh"
-  "apps/web-platform/infra/doppler-config-inventory.txt"
-  "apps/web-platform/infra/token-drift-read-tokens.tf"
-  "apps/web-platform/infra/sentry/cron-monitors.tf"
+  "scripts/lib/bearer-curl.sh"
+  "apps/web-platform/infra/"
   "apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
   "knowledge-base/engineering/operations/runbooks/"
   "plugins/soleur/test/token-drift-workflow-causes.test.sh"
@@ -3903,6 +3889,8 @@ AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS=(
   "apps/web-platform/infra/"
   "apps/cla-evidence/infra/"
   "infra/"
+  "glob:apps/**.tf"
+  "glob:apps/*/infra/**"
   "plugins/soleur/skills/plan/references/plan-issue-templates.md"
   "docs/legal/privacy-policy.md"
   "package.json"
@@ -3950,7 +3938,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS=(
 # glob:<top-dir>/**.sh per top-level dir (root-only `glob:*.sh` covers only dir-less
 # diff lines and would under-select on every nested .sh) plus glob:*.sh for any
 # future root-level script. A NEW top-level dir carrying .sh is uncovered until
-# re-enumerated — the ci-pr-affected ratchet bounds that.
+# re-enumerated — the th6 exists-declared census in test-all-affected.test.sh bounds that.
 AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "glob:.agents/**.sh"
   "glob:.claude/**.sh"

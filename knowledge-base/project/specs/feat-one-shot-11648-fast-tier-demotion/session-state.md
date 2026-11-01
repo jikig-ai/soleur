@@ -29,6 +29,6 @@ cto_spawns=1
 ## Work Phase
 - Status: complete. Demotion set locked (all 8, no artifact keeps); floor 114-5=109 at both pin sites.
 - Edge additions beyond the plan table (ratchet-discovered real reads): scratch-root.sh + git-fixture-env.sh (test-helpers source hops) for check-deps/gitleaks; lefthook.yml, both committed lint-ratchet baselines, scripts/test-all.sh, repo-wide-suites.ts, eslint-test-dirs-ratchet.test.ts for lint-ratchet; tree-wide glob:<dir>/**package.json + docs/legal/privacy-policy.md (disclosed_as) for lint-encryption-posture.
-- ci-pr-affected ratchet: 68 anchor-keyed accept rows added (mention-only pairs incl. pre-existing main churn on home-census-trigger + betterstack stale re-anchor); live==baseline=1510.
+- ci-pr-affected ratchet: 66 anchor-keyed accept rows added (mention-only pairs incl. pre-existing main churn on home-census-trigger + betterstack stale re-anchor); live==baseline=1510.
 - tg6 family pin in test-all-affected.test.sh updated 7->9 (two new ^glob:knowledge-base/**.sh carriers); mid-run edit crashed the first full run at line 3782 — blocks 36-38 re-run via --rows green (99/99); blocks 1-35 all green in run 1.
 - Guard battery: fast-tier-budget, always-on-ledger (14), lint-orphan, kb-consumers (31), weight-drift (52), corpus-weight-budget (14), group-affected (28), ratchet live==baseline — ALL GREEN.

@@ -3749,6 +3749,10 @@ _th6_missing=$(
       || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" .sh \
       || echo "trio-baseline-census:${_r}$(_th6_declined AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" .sh \
+      || echo "grep-q-pipe-guard:${_r}$(_th6_declined AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" .sh \
+      || echo "lint-gh-argv-arg-live:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
