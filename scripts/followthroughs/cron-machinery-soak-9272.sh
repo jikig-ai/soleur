@@ -114,7 +114,7 @@ fi
 
 # --- (a2) ≥1 scheduled-community-monitor issue landed in the window ---
 DIGESTS=$(gh issue list --repo jikig-ai/soleur --label scheduled-community-monitor \
-  --state all --search "created:>=${CUTOFF_ISO}" --json number --limit 10 2>/dev/null \
+  --state all --search "created:>=${CUTOFF_ISO}" --json number --limit 100 2>/dev/null \
   | jq 'length' 2>/dev/null)
 if ! [[ "$DIGESTS" =~ ^[0-9]+$ ]]; then
   echo "TRANSIENT: gh issue list failed" >&2

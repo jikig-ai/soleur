@@ -2101,7 +2101,7 @@ dispatches, while `pull_request_target` jobs (CLA) run against the *base*, dispa
 green. `gh pr checks` then reports "all checks settled, zero failures" over zero relevant checks.
 **"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
 produces the first without the second. Assert the checks you *expect* are **present**, not merely
-non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
+non-failing: `gh api --paginate "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
 (That ref also used to red AC17 on `INDEX.md`'s count, #8137 / #8370; #8377 untracked the file and
 retired both the driver and AC17.)
 
