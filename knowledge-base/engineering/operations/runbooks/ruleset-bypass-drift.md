@@ -252,7 +252,7 @@ The function mints an installation token via `mintInstallationToken`
 2. Confirm the App installation still has admin scope:
 
    ```bash
-   gh api /orgs/jikig-ai/installations --jq \
+   gh api --paginate /orgs/jikig-ai/installations --jq \
      '.installations[] | select(.app_slug=="soleur-ai") | {id, repository_selection, permissions}'
    ```
 

@@ -42,7 +42,15 @@ name: "Scheduled: Inngest Health Watchdog"
 on:
   schedule:
     - cron: '*/15 * * * *'   # every 15 min — inngest-down is a brand-survival outage
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: >-
+          Permit a missing or corrupt gate-witness streak artifact for THIS run only
+          (reseed after a retention lapse, a deleted artifact or a poisoned one).
+          Scheduled runs can never set it. Dispatch with --ref main.
+        type: boolean
+        default: false
 
 concurrency:
   group: scheduled-inngest-health
@@ -1121,7 +1129,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "Dedicated inngest host is serving again (server_active=active, http_code=200). Auto-closed by ${RUN_URL}." || true
           done
@@ -1218,10 +1226,283 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "A live inngest scheduler is back (the web unit is no longer quiesced, or the dedicated host is serving). Auto-closed by ${RUN_URL}." || true
           done
+
+      # ── #8080 SATISFIABILITY WITNESS ─────────────────────────────────────────
+      # The cutover pre-flight gate `inngest_execute_registry_gate` can only be
+      # PROVEN satisfiable by calling it — #8017 and #8054 were both found
+      # unsatisfiable by an operator at a keyboard on cutover day. This arm calls
+      # the gate REPORT-ONLY every 15 min (its exit code never fails the step and
+      # never dispatches an op), counts consecutive `refusal` verdicts in a
+      # streak artifact (ADR-296 carrier, same as the rehearsal monitor), and
+      # files an action-required issue at N=8 (~2h — the gate's own 5400s
+      # row-age bound, so a single missed hourly emit cannot false-file).
+      # `dark` resets; an armed-class cutover flag or `flag_armed` verdict
+      # SUPPRESSES (held, not reset — a cutover in flight or done makes refusal
+      # expected; `done` self-retires the witness until a rollback re-arms).
+      - name: Fetch gate-witness streak state (#8080)
+        id: witness-fetch
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          STREAK_ARTIFACT_NAME: inngest-gate-witness-streak
+          STREAK_BRANCH: main
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh fetch
+
+      - name: Execute-gate satisfiability witness (#8080)
+        id: witness
+        if: always()
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          DEDICATED_HOST: soleur-inngest
+          DEDICATED_HOST_NAME: soleur-inngest-prd
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          PRIOR: ${{ steps.witness-fetch.outputs.prior }}
+        run: |
+          set -uo pipefail
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          # The gate lib self-loads the probe-row selector (INNGEST_PROBE_ROW_JQ);
+          # a lib that cannot be sourced is a broken READER — the crash arm files
+          # it, never a host verdict.
+          if ! source "$GITHUB_WORKSPACE/tests/scripts/lib/inngest-host-dark-gate.sh"; then
+            echo "crash_reason=gate_lib_unavailable" >> "$GITHUB_OUTPUT"
+            echo "::error::#8080 witness: tests/scripts/lib/inngest-host-dark-gate.sh not found on this ref — nothing was measured."
+            exit 1
+          fi
+
+          W_DIR="$(mktemp -d)"
+          W_PROBE_ERR="$W_DIR/probe.err"; W_HB_ERR="$W_DIR/hb.err"
+          W_PROBE_ROWS="$W_DIR/probe.rows"; W_HB_ROWS="$W_DIR/hb.rows"
+          W_EMIT="$W_DIR/emit.txt"; : > "$W_EMIT"
+          # rc is captured, never allowed to abort the step (the dedicated arm's
+          # discipline — lint-betterstack-emitter-read scans this file): a failed
+          # read is --query-rc/--hb-rc, which the gate grades unreadable →
+          # refusal, counted by the streak rather than crashing the arm.
+          W_PROBE_RC=0
+          bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
+            --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 500 \
+            > "$W_PROBE_ROWS" 2> "$W_PROBE_ERR" || W_PROBE_RC=$?
+          W_HB_RC=0
+          bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
+            --since 30m --grep 'inngest-cutover-flip' --limit 200 \
+            > "$W_HB_ROWS" 2> "$W_HB_ERR" || W_HB_RC=$?
+          if [[ "$W_PROBE_RC" -ne 0 || "$W_HB_RC" -ne 0 ]]; then
+            source "$GITHUB_WORKSPACE/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
+            grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$W_PROBE_ERR" "$W_HB_ERR" >&2 || true
+            if declare -F bs_read_classify >/dev/null 2>&1; then
+              [[ "$W_PROBE_RC" -ne 0 ]] && echo "::warning::#8080 witness: probe read failed (rc=${W_PROBE_RC}, class=$(bs_read_classify "$W_PROBE_RC" "$W_PROBE_ROWS"), first stderr line: $(bs_read_scrub_err1 "$W_PROBE_ERR"))"
+              [[ "$W_HB_RC" -ne 0 ]] && echo "::warning::#8080 witness: heartbeat read failed (rc=${W_HB_RC}, class=$(bs_read_classify "$W_HB_RC" "$W_HB_ROWS"), first stderr line: $(bs_read_scrub_err1 "$W_HB_ERR"))"
+            fi
+          fi
+
+          # REPORT-ONLY: `|| W_GATE_RC=$?` is load-bearing — the gate's exit code
+          # is data, never a step failure, and nothing downstream dispatches on it.
+          W_GATE_RC=0
+          TOKEN="$(inngest_execute_registry_gate \
+            --rows-file "$W_PROBE_ROWS" --query-rc "$W_PROBE_RC" \
+            --hb-file "$W_HB_ROWS" --hb-rc "$W_HB_RC" \
+            --emit-file "$W_EMIT" \
+            --host "$DEDICATED_HOST" --host-name "$DEDICATED_HOST_NAME")" || W_GATE_RC=$?
+          TOKEN="$(strip_log_injection "$TOKEN")"
+          [[ "$TOKEN" =~ ^[a-z_]{1,64}$ ]] || TOKEN="unreadable"
+
+          # The newest flag the gate validated (emit file), else the newest probe
+          # row's cutover_flag — suppression keys on it, so it must not come back
+          # empty just because the gate refused before E11.
+          WFLAG="$(grep -oE '^(flag|hb_flag)=[A-Za-z0-9_-]+' "$W_EMIT" | grep -vE '__UNREADABLE__' | tail -1 | cut -d= -f2 || true)"
+          # dt lives on the OUTER warehouse row ($o), journald fields on the
+          # inner raw payload ($d) — reading .dt off $d yields "" everywhere
+          # and the newest-selection degenerates (fix-round seat, PR #11782).
+          W_PROBE_MSGS="$(printf '%s\n' "$(cat "$W_PROBE_ROWS")" \
+            | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | . as $o
+                  | ($o.raw? | fromjson?) as $d
+                  | select($d | inngest_probe_row)
+                  | select($d.host == env.DEDICATED_HOST and $d.host_name == env.DEDICATED_HOST_NAME)
+                  | [($o.dt // ""), $d.message] | @tsv' 2>/dev/null || true)"
+          # hb fallback runs BEFORE the probe-row fallback: the FSM's own
+          # heartbeat attests the CURRENT flag at ~1-2/min, while the newest
+          # probe row's cutover_flag may sit on a row the gate refused before
+          # grading it (an `armed` on an ungraded row must not suppress).
+          if [[ -z "$WFLAG" ]]; then
+            WBID="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'boot_id=[0-9a-f-]+' | head -1 | cut -d= -f2 || true)"
+            # journald _BOOT_ID is UNHYPHENATED — strip the probe row's dashes
+            # before joining (the gate does the same at inngest-host-dark-gate.sh).
+            WBID="${WBID//-/}"
+            if [[ "$WBID" =~ ^[0-9a-f]{32}$ ]]; then
+              WFLAG="$(jq -Rrn --arg b "$WBID" '
+                  [ inputs
+                    | fromjson? | . as $o
+                    | ($o.raw? | fromjson?) as $d
+                    | select(($d._BOOT_ID | type) == "string" and $d._BOOT_ID == $b)
+                    | select(($d.message | type) == "object")
+                    | { dt: ($o.dt // ""), flag: (($d.message.flag // "") | tostring) }
+                  ] | (map(.dt) | max) as $newest
+                    | (map(select(.dt == $newest) | .flag) | unique) as $f
+                    | if ($f | length) == 1 then $f[0] else "" end' \
+                  < "$W_HB_ROWS" 2>/dev/null || true)"
+            fi
+          fi
+          # Probe-row fallback (dt-ordered, never positional tail -1): the
+          # newest probe row's cutover_flag.
+          if [[ -z "$WFLAG" ]]; then
+            WFLAG="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)"
+          fi
+          WFLAG="$(strip_log_injection "${WFLAG:-unknown}")"
+          [[ "$WFLAG" =~ ^[a-z0-9_-]{1,32}$ ]] || WFLAG="unknown"
+
+          ACTION="$(bash "$GITHUB_WORKSPACE/scripts/inngest-gate-witness-classify.sh" "$TOKEN" "$WFLAG")"
+          [[ "$ACTION" =~ ^(satisfy|refusal|suppressed)$ ]] || ACTION="refusal"
+
+          # Streak bookkeeping (monitor-streak contract): `refusal` writes
+          # RESTORED+1 so `seal` can prove the increment landed; `satisfy` resets
+          # via VERDICT=pass; `suppressed` leaves the restored file so the streak
+          # is HELD — `VERDICT=broken` is the only carrier verdict that round-trips
+          # the restored value unchanged (here it means "held", not "failed").
+          PRIOR_N="${PRIOR:-0}"; [[ "$PRIOR_N" =~ ^[0-9]+$ ]] || PRIOR_N=0
+          case "$ACTION" in
+            refusal)    NEW_STREAK=$((PRIOR_N + 1)); SEAL_VERDICT="transient" ;;
+            satisfy)    NEW_STREAK=0;                SEAL_VERDICT="pass" ;;
+            suppressed) NEW_STREAK=$PRIOR_N;         SEAL_VERDICT="broken" ;;
+          esac
+          mkdir -p "$(dirname "$STREAK_FILE")"
+          case "$ACTION" in
+            refusal) printf '%s' "$NEW_STREAK" > "$STREAK_FILE" 2>/dev/null || true ;;
+            satisfy) printf '%s' "0" > "$STREAK_FILE" 2>/dev/null || true ;;
+          esac
+          echo "#8080 gate-witness token=$TOKEN flag=$WFLAG streak=$NEW_STREAK action=$ACTION"
+          {
+            echo "token=$TOKEN"
+            echo "flag=$WFLAG"
+            echo "action=$ACTION"
+            echo "streak=$NEW_STREAK"
+            echo "seal_verdict=$SEAL_VERDICT"
+            echo "gate_rc=$W_GATE_RC"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Seal gate-witness streak state (#8080)
+        id: witness-seal
+        if: ${{ !cancelled() }}
+        env:
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          VERDICT: ${{ steps.witness.outputs.seal_verdict }}
+          RESTORED: ${{ steps.witness-fetch.outputs.prior }}
+        run: bash scripts/monitor-streak-state.sh seal
+
+      - name: Assert the gate-witness streak round-trips (#8080)
+        id: witness-assert
+        if: ${{ !cancelled() }}
+        env:
+          MATCHED: ${{ steps.witness-fetch.outputs.matched }}
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh assert
+
+      - name: Upload gate-witness streak state (#8080)
+        id: witness-upload
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.witness-fetch.outcome == 'success' && steps.witness-seal.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: inngest-gate-witness-streak
+          path: ${{ runner.temp }}/witness-state/streak
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+
+      - name: File or comment gate-witness issue (#8080, streak >= 8 or state failure)
+        if: always() && github.ref == 'refs/heads/main' && (steps.witness-fetch.outcome == 'failure' || steps.witness-seal.outcome == 'failure' || steps.witness-assert.outcome == 'failure' || steps.witness-upload.outcome == 'failure' || (steps.witness.outputs.action == 'refusal' && steps.witness.outputs.streak >= 8))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TOKEN: ${{ steps.witness.outputs.token }}
+          FLAG: ${{ steps.witness.outputs.flag }}
+          STREAK: ${{ steps.witness.outputs.streak }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh label create "ci/inngest-gate-witness" --repo "$GH_REPO" \
+            --color BFD4F2 --description "Execute-gate satisfiability witness: N consecutive cron refusals" 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          gh label create "priority/p2-medium" --repo "$GH_REPO" --color FBCA04 2>/dev/null || true
+          echo "::error::#8080 gate-witness: execute-gate refused by cron (token=${TOKEN}, streak=${STREAK}) or the streak store failed — Run: ${RUN_URL}"
+          TITLE="[ci/inngest-gate-witness] execute-gate unsatisfiable by cron"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r --arg t "unsatisfiable by cron" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          BODY="$(printf '%s\n' \
+            "gate token: \`${TOKEN:-<none>}\`" "cutover flag: \`${FLAG:-<none>}\`" "consecutive refusals: \`${STREAK:-<none>}\`" "" \
+            "The \`inngest_execute_registry_gate\` pre-flight predicate has refused ${STREAK:-N} consecutive 15-minute watchdog runs while no cutover was in flight. The next cutover dispatch will hit this refusal cold — diagnose it now, not on cutover day (#8017, #8054 were both found that way)." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || \
+              echo "::warning::#8080 could not comment on issue #${EXISTING}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-gate-witness --label action-required --label priority/p2-medium \
+              --body "$BODY" || echo "::warning::#8080 could not file the gate-witness issue"
+          fi
+
+      - name: Auto-close gate-witness issue (gate satisfies again, #8080)
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outputs.action == 'satisfy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r '.[] | select(.title | contains("unsatisfiable by cron")) | .number' 2>/dev/null || true); do
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "The execute-gate satisfied on a cron witness run (token=dark). Auto-closed by ${RUN_URL}." || true
+          done
+
+      # The witness's own death: every branch above keys on an OUTPUT of
+      # steps.witness; a crashed step writes no outputs and reads as a quiet
+      # window. This arm keys on the step's OUTCOME (mirrors
+      # "Dedicated-host consumer crashed").
+      - name: Gate-witness consumer crashed (#8080)
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outcome != 'success' && steps.witness.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WITNESS_OUTCOME: ${{ steps.witness.outcome }}
+          CRASH_REASON: ${{ steps.witness.outputs.crash_reason || 'unknown' }}
+        run: |
+          set -uo pipefail
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          CAUSE="$(strip_log_injection "${CRASH_REASON:-unknown}")"
+          [[ -n "$CAUSE" ]] || CAUSE="unknown"
+          echo "::error::#8080 the gate-witness consumer itself FAILED (outcome=${WITNESS_OUTCOME}, cause: ${CAUSE}) — the execute-gate was NOT measured this run."
+          gh label create "ci/inngest-gate-witness" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          TITLE="[ci/inngest-gate-witness] witness consumer is broken"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe."; EXISTING=""; }
+          BODY="$(printf '%s\n' \
+            "verdict: \`arm-crashed\`" "" \
+            "cause: \`${CAUSE}\`" "" \
+            "The gate-witness arm did not complete, so nothing measured whether the execute-gate is satisfiable. Absence of a verdict is NOT health." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || true
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-gate-witness --label action-required --label priority/p2-medium \
+              --body "$BODY" || true
+          fi
 
       - name: Sentry check-in (final)
         if: always()
