@@ -67,9 +67,10 @@ compliant (1 unfenced section, 5/5 asks mapped); §4.13 no autonomous task.
 **Key deepen findings:**
 
 1. **Near-miss population measured (verify-the-negative pass):**
-   `server/dsar-export.ts` throws `new Error("aborted")` at 35 sites
+   `server/dsar-export.ts` throws `new Error("aborted")` at 48 sites
    (abort-signal arms), plus 4 in `server/dsar-export-co-uploader.ts` —
-   CTO-verified 2026-11-01. These carry NO `.code`, so the exact-pair predicate
+   seat-verified 2026-11-01 (git-history seat; an earlier "35 sites + CTO-verified"
+   figure was undercounted, corrected at review). These carry NO `.code`, so the exact-pair predicate
    (`message` + `code: "ECONNRESET"`) still exits on them — the no-code test arm
    covers the population. A future contributor adding `.code = "ECONNRESET"` to a
    thrown Error is the only masking path; the Guard-2 matrix pins that mutation.
@@ -114,7 +115,7 @@ and is planned, gated, and ADR-amended accordingly.
 |---|---|---|
 | "`next` was bisected out after e2e failed deterministically 3x" | Confirmed. `apps/web-platform/package.json:55` is back at `~16.3.8`; lockfile resolves 16.3.8; squash commit `075b1889ad` (PR #11691) carries the bisect note. | Re-apply the same bump shape. |
 | "Suspects: next 16.4.x dev-server abort handling, or @sentry/nextjs 10.77 request wrapping" | Resolved `@sentry/nextjs` is 10.77.1, but upstream repro (next.js #49587, #84649) needs **no Sentry, no custom server** — `next start` logs `⨯ uncaughtException` and keeps running. The proximate killer in our tree is `installCrashHandlers` → `exit(1)`. | Fix `server/crash-handlers.ts`, not Sentry config. The issue's "reproduce with Sentry env set" lead is recorded as a hypothesis, not a requirement. |
-| "Preceded by `/api/team-names` → 500s on the authenticated path" | `e2e/mock-supabase.ts` has **no `/rest/v1/team_names` endpoint** — the catch-all 404 → `namesResult.error` → route returns 500 (`app/api/team-names/route.ts:33`). The 500s are pre-existing mock-coverage noise on 16.3.8 too, not a crash precursor. | Out of scope (noise reduction, not causal); recorded here so the implementer does not chase it as a reproduction signal. |
+| "Preceded by `/api/team-names` → 500s on the authenticated path" | `e2e/mock-supabase.ts` has **no `/rest/v1/team_names` endpoint** — the catch-all 404 → `namesResult.error` → route returns 500 (`app/api/team-names/route.ts` › `GET()` 500 return). The 500s are pre-existing mock-coverage noise on 16.3.8 too, not a crash precursor. | Out of scope (noise reduction, not causal); recorded here so the implementer does not chase it as a reproduction signal. |
 | "Re-apply `\"next\": \"~16.4.1\"`" | Latest published stable is **16.4.3**; `~16.4.1` resolves to it — the same resolved version that crashed. No fixed upstream release exists to prefer. | Bump as asked; mitigation is ours. |
 | Guard rows "MIN_ROWS/MIN_RESOLVED 35→36; test arm `next:16:16.4.1`; MIN_ASSERTIONS 33→34" | Verified: `scripts/assert-dependabot-drain.py` `MIN_ROWS = 35` (line 279), `MIN_RESOLVED = 35` (line 287), `WATCHED_PACKAGES` has no `next` (line 41), `FLOOR_ANCHORS` has no `next` (line 163), REQUIRED comment at line ~121 already says the next row "lands in its own PR with its own row re-added here". Test file has `MIN_ASSERTIONS=33` (line 452) and the spec-grep loop lacks a `next:16:16.4.1` arm (line 232). The fixture `web` list already synthesizes `node_modules/next@16.999.999` (test.sh:94) so the re-added row resolves. | Re-add exactly those edits. |
 | "Re-pin `test/egress-audit-ingest.test.ts` minor to `^16\.4` (headers already re-measured on 16.4.3)" | Verified: line 244 pins `/^16\.3\./`; the re-measurement comment ("Measured on Next 16.3.8, re-measured on 16.4.3 (identical four-header set, grepped from dist/compiled/next-server/server.runtime.prod.js)") survived the bisect at line ~262. | Restore `^16\.4` — the evidence is already in the file. |
@@ -172,7 +173,7 @@ it is **this pipeline's own draft** on `feat-one-shot-11772-next-dev-server-cras
 **Repo patterns and file paths:**
 
 - `apps/web-platform/server/crash-handlers.ts` — `installCrashHandlers()` (lines 62-68), `reportFatalAndExit` (36-60), `FATAL_FLUSH_MS` (27).
-- `apps/web-platform/server/observability.ts` — `warnSilentFallback` (line ~265): warn-level pino+Sentry mirror; the correct sink for a non-fatal class per `cq-silent-fallback-must-mirror-to-sentry`.
+- `apps/web-platform/server/observability.ts` — `warnSilentFallback` (`observability.ts` › `warnSilentFallback()`): warn-level pino+Sentry mirror; the correct sink for a non-fatal class per `cq-silent-fallback-must-mirror-to-sentry`.
 - `apps/web-platform/test/crash-handlers.test.ts` — existing RED/GREEN suite: mocks `@sentry/nextjs` (`captureException`, `close`) and `process.exit`; extend for the classifier arms.
 - `apps/web-platform/server/index.ts:83` — sole `installCrashHandlers()` call site; `server/index.ts:156` — `handle(req, res, parsedUrl)` inside `createServer`.
 - `apps/web-platform/middleware.ts` — returns `NextResponse.redirect` (proxy-returned responses = the upstream trigger shape) and `NextResponse.next({ request: { headers } })` (header modification → body-clone path).
@@ -587,7 +588,7 @@ the sole predicate and `crash-handlers.test.ts` the sole assertion home.
 ## Dependencies & Risks
 
 - **Risk — classifier signature too narrow**: if upstream emits a different benign shape (e.g. `unhandledRejection` with `code: "ECONNRESET"` but message `"socket hang up"`), the crash recurs. Mitigation: Phase 1 repro confirms the observed signature is exactly `aborted`+ECONNRESET; the unhandledRejection arm covers the upstream-documented second shape; if Phase 1 shows a different signature, the predicate widens *only* to the observed superset — never a blanket ECONNRESET exemption.
-- **Risk — masked fatal**: an unrelated real error coincidentally carrying the exact pair would be swallowed as a warning. Mitigation: measured at deepen time — app code DOES produce `Error("aborted")` (`server/dsar-export.ts`, 35 abort-signal arms, +4 in `server/dsar-export-co-uploader.ts`) but never assigns `.code`, so the exact-pair requirement still exits on that population; the only masking path is a future `.code = "ECONNRESET"` assignment, which the Guard-2 mutation matrix pins. Near-miss arms pin the boundary.
+- **Risk — masked fatal**: an unrelated real error coincidentally carrying the exact pair would be swallowed as a warning. Mitigation: measured at deepen time — app code DOES produce `Error("aborted")` (`server/dsar-export.ts`, 48 abort-signal arms, +4 in `server/dsar-export-co-uploader.ts`) but never assigns `.code`, so the exact-pair requirement still exits on that population; the only masking path is a future `.code = "ECONNRESET"` assignment, which the Guard-2 mutation matrix pins. Near-miss arms pin the boundary.
 - **Risk — Sentry volume**: prod abort storms create warn-event volume. Accepted: grouped issue, level warning, and a burst is itself a DoS-attempt signal worth having.
 - **Dependency — upstream release**: none required; mitigation is local. The upstream-watch issue tracks re-evaluation.
 - **Risk — e2e non-determinism on the bumped tree beyond the abort**: Phase 6 relies on the CI e2e run as oracle; a second, unrelated flake class would re-block the bump and is then a new issue, not a silent pass.

@@ -79,25 +79,25 @@ export function isBenignClientAbort(err: unknown): err is Error {
   );
 }
 
+// Sibling classifier: `server/abort-classifier.ts` classifies session-layer
+// aborts — a different producer; do not unify these predicates.
+function classifyAbortOrFatal(err: unknown, kind: FatalKind): void {
+  if (isBenignClientAbort(err)) {
+    warnSilentFallback(err, {
+      feature: "crash-handlers",
+      op: "client-abort",
+      tags: { kind },
+    });
+    return;
+  }
+  void reportFatalAndExit(err, kind);
+}
+
 export function installCrashHandlers(): void {
-  process.on("uncaughtException", (err) => {
-    if (isBenignClientAbort(err)) {
-      warnSilentFallback(err, {
-        feature: "crash-handlers",
-        op: "client-abort",
-      });
-      return;
-    }
-    void reportFatalAndExit(err, "uncaughtException");
-  });
-  process.on("unhandledRejection", (reason) => {
-    if (isBenignClientAbort(reason)) {
-      warnSilentFallback(reason, {
-        feature: "crash-handlers",
-        op: "client-abort",
-      });
-      return;
-    }
-    void reportFatalAndExit(reason, "unhandledRejection");
-  });
+  process.on("uncaughtException", (err) =>
+    classifyAbortOrFatal(err, "uncaughtException"),
+  );
+  process.on("unhandledRejection", (reason) =>
+    classifyAbortOrFatal(reason, "unhandledRejection"),
+  );
 }

@@ -102,8 +102,9 @@ w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
 # add one back and require a RED.
 # `next` ITSELF must be present though: ABSENT_PATH_ANCHOR asserts the parent the absent
 # paths hang off is installed, so that a typo in the literal cannot be permanently green.
-# It sits at 16.999.999; `next` is not in WATCHED_PACKAGES, so the completeness sweep
-# does not require a covering row.
+# It sits at 16.999.999; `next` IS in WATCHED_PACKAGES (added with the 16.4.1
+# floor row), so the covering REQUIRED row is load-bearing for MIN_RESOLVED —
+# remove this fixture entry and the row resolves `(absent)`.
 if extra:
     w.update(json.loads(extra))
 

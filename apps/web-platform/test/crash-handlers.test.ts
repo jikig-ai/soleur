@@ -125,8 +125,16 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     const { installCrashHandlers } = await import("@/server/crash-handlers");
     const onSpy = vi.spyOn(process, "on");
     installCrashHandlers();
-    const find = (name: string) =>
-      onSpy.mock.calls.find((c) => c[0] === name)![1] as Listener;
+    const find = (name: string): Listener => {
+      const call = onSpy.mock.calls.find((c) => c[0] === name);
+      if (!call) throw new Error(`no ${name} listener registered`);
+      const fn = call[1] as Listener;
+      // The spy called through: a REAL listener was registered. Remove it —
+      // otherwise pairs accumulate across arms and a stray later rejection
+      // would hit the real handler in this worker.
+      process.removeListener(name, fn);
+      return fn;
+    };
     const pair = {
       uncaught: find("uncaughtException"),
       rejection: find("unhandledRejection"),
@@ -141,40 +149,46 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     return err;
   }
 
-  it("uncaughtException: exact aborted+ECONNRESET pair warns and does NOT exit", () => {
-    return listeners().then(({ uncaught }) => {
-      const err = connResetException();
-      uncaught(err);
-      expect(warnSilentFallback).toHaveBeenCalledTimes(1);
-      expect(warnSilentFallback).toHaveBeenCalledWith(
-        err,
-        expect.objectContaining({
-          feature: "crash-handlers",
-          op: "client-abort",
-        }),
-      );
-      expect(captureException).not.toHaveBeenCalled();
-      expect(close).not.toHaveBeenCalled();
-      expect(exitSpy).not.toHaveBeenCalled();
-    });
+  // Let any queued reportFatalAndExit microtask land so a NOT-called
+  // assertion on the fatal path is a real check, not a race won by sync code.
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it("uncaughtException: exact aborted+ECONNRESET pair warns and does NOT exit", async () => {
+    const { uncaught } = await listeners();
+    const err = connResetException();
+    uncaught(err);
+    await settle();
+    expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallback).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({
+        feature: "crash-handlers",
+        op: "client-abort",
+        tags: expect.objectContaining({ kind: "uncaughtException" }),
+      }),
+    );
+    expect(captureException).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it("unhandledRejection: exact aborted+ECONNRESET pair warns and does NOT exit", () => {
-    return listeners().then(({ rejection }) => {
-      const err = connResetException();
-      rejection(err);
-      expect(warnSilentFallback).toHaveBeenCalledTimes(1);
-      expect(warnSilentFallback).toHaveBeenCalledWith(
-        err,
-        expect.objectContaining({
-          feature: "crash-handlers",
-          op: "client-abort",
-        }),
-      );
-      expect(captureException).not.toHaveBeenCalled();
-      expect(close).not.toHaveBeenCalled();
-      expect(exitSpy).not.toHaveBeenCalled();
-    });
+  it("unhandledRejection: exact aborted+ECONNRESET pair warns and does NOT exit", async () => {
+    const { rejection } = await listeners();
+    const err = connResetException();
+    rejection(err);
+    await settle();
+    expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallback).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({
+        feature: "crash-handlers",
+        op: "client-abort",
+        tags: expect.objectContaining({ kind: "unhandledRejection" }),
+      }),
+    );
+    expect(captureException).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
   });
 
   it("Error('aborted') without .code still exits (dsar-export near-miss)", async () => {
@@ -187,6 +201,7 @@ describe("installCrashHandlers — benign client-abort classification", () => {
         tags: expect.objectContaining({ fatal: "uncaughtException" }),
       }),
     );
+    expect(warnSilentFallback).not.toHaveBeenCalled();
   });
 
   it("ECONNRESET code with a different message still exits", async () => {
@@ -217,5 +232,28 @@ describe("installCrashHandlers — benign client-abort classification", () => {
       }),
     );
     expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("live socket abort mints the exact pair isBenignClientAbort accepts", async () => {
+    const { createServer } = await import("node:http");
+    const { connect } = await import("node:net");
+    const { isBenignClientAbort } = await import("@/server/crash-handlers");
+    const minted: unknown[] = [];
+    const server = createServer((req) => {
+      req.on("error", (e) => minted.push(e));
+      // Never respond — the client is destroyed mid-request below.
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const socket = connect(port, "127.0.0.1", () => {
+      socket.write(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\npartial",
+      );
+      setTimeout(() => socket.destroy(), 50);
+    });
+    await vi.waitFor(() => expect(minted.length).toBeGreaterThan(0));
+    server.close();
+    expect(minted[0]).toBeInstanceOf(Error);
+    expect(isBenignClientAbort(minted[0])).toBe(true);
   });
 });

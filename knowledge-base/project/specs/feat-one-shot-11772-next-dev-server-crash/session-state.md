@@ -14,7 +14,7 @@
 ### Decisions
 - Root cause is upstream (vercel/next.js #49587): `getCloneableBody().finalize()` → `replaceRequestBody` copies `_events` onto `IncomingMessage`, wiping 'error' listeners → client disconnect surfaces as `uncaughtException: Error: aborted` (ECONNRESET); stock Next logs and continues, `server/crash-handlers.ts` exits the process (ADR-062). Fix = exact-pair classifier (`Error` + `"aborted"` + `ECONNRESET`) → `warnSilentFallback`, no exit — for both `uncaughtException` and `unhandledRejection`, dev and prod.
 - Sentry excluded as the offender; `/api/team-names` 500s are pre-existing mock-coverage gaps — non-causal, out of scope.
-- `server/dsar-export.ts` throws `new Error("aborted")` ~10 sites without `.code` — exact-pair predicate still exits on them; mutation matrix pins the only masking path.
+- `server/dsar-export.ts` throws `new Error("aborted")` at 48 sites (+4 in `dsar-export-co-uploader.ts`, seat-verified) without `.code` — exact-pair predicate still exits on them; mutation matrix pins the only masking path.
 - All deepen halts §4.5–§4.13 pass; Scope Check 5/5.
 - 6 `pending - assumed:` rows in decision-challenges.md (no agent spawn inside subagent) — resolved by the pipeline session: one batched `soleur:engineering:cto` spawn ruled all 5 technical/taste rows (all confirmed the plan's defaults; dissents recorded per-row); the 6th row is `operator (brand)` CPO sign-off, correctly operator-routed. `cto_spawns=1`; technical-ruling-gate exit 0. Plan count corrected to CTO-verified 35+4 `Error("aborted")` sites; tasks.md 5.4 records the team_names deferral in-place.
 
