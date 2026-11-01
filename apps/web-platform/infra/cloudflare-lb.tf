@@ -104,7 +104,7 @@ resource "cloudflare_notification_policy" "web_lb_health" {
     # scope — flap-vs-sustained recovery paging was not verified against this
     # alert_type's new_health vocabulary before merge; record it as a follow-up
     # rather than guessing a value the provider may reject.
-    new_health   = ["Down"]
+    new_health = ["Down"]
   }
 
   email_integration {
