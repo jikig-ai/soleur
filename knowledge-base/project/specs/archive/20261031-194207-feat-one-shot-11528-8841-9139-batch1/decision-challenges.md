@@ -1,0 +1,23 @@
+# Decision Challenges — feat-one-shot-11528-8841-9139-batch1
+
+Headless one-shot planning run for issues #11528 + #8841 + #9139 (epic #10390
+batch-1 per the CTO batching ruling). The planning subagent could not nest
+spawns, so `soleur:plan-review` panel, domain leaders, research fan-outs and
+fresh rulings were deferred to the parent pipeline; the parent's batched
+`soleur:engineering:cto` consult landed 2026-10-31 and each Ruling cell below
+records its verdict verbatim.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Epic #10390 batching (three issues in one PR) | technical | Ruled by CTO agent, 2026-10-31: batch into 3 PRs — PR1 #11528+#8841+#9139, PR2 #8593+#8080-witness, PR3 #8595 gated on pr-merged 11653; carrier batch #8525+#8013+#8080-RestartSec+#10290 deferred to next vinngest bake/host-replace window; #8839 held for evidence pull, #9943 held for owner credential call |
+| #11528 gap-1 remedy: anchored line-regex vs `exit`-on-terminator + decoy detection vs comment/HCL-aware extraction vs canonical-equality compare | technical | Ruled by CTO agent, 2026-10-31: whitespace-stripped canonical-equality compare (`WRONGVOLUME_CANON`, sibling `FAIL_CANON` pattern) + named-property greps for failure-message clarity only - one equality subsumes decoy-heredoc concatenation, in-heredoc comments, inline-tautology and `$$` escapes; the other options each leave a comment-shaped lane |
+| #11528 gaps 2–4 row selection (which get presence+mutation rows) | technical | Ruled by CTO agent, 2026-10-31: pin all — `source_variable`/`values`/`sql_query` collapse, `alert_type`/`operator`/`value`/`check_period`/`query_period`/`recovery_period`/`on_missing_data`/`paused`/`confirmation_period`/`email`/escalation/runbook-metadata + `count`/`for_each`/`lifecycle`/`ignore_changes` negative pins; `FROM {{source}}`/`WHERE…BETWEEN` ride the canon. Dissent noted: `param()` must be `res_block`-scoped (the `source_variable`/`values` pair recurs in ~12 explorations), never file-wide |
+| #11528 family spread: same remedy across the guard family vs this file + filed remainder | technical | Ruled by CTO agent, 2026-10-31: scope to this file + file the family remainder (issue's own second option); 11 remaining MUT_SKIP-idiom suites. Dissent noted: the remainder filing must enumerate from a fresh `grep -l MUT_SKIP`, not the plan's stale list (`betterstack-send-failed` wrongly listed; `sandbox-alerts`, `web-nic-guard-unpinned-url-alert` omitted) |
+| #11528 `MUT_SKIP` CI pin: pin unset vs leave | technical | Ruled by CTO agent, 2026-10-31: pin `env -u MUT_SKIP -u LUKS_GUARD_*` on `infra-validation.yml:896` and `env -u MUT_SKIP -u KEYPROBE_GUARD_*` on `:902`; other MUT_SKIP-idiom suites ride the remainder issue - cheap insurance, no workflow sets these today |
+| #8841 fix shape: report after the last step vs inside a memoized `step.run` | technical | Ruled by CTO agent, 2026-10-31: move `reportSpawnDeadLetter` to after the `persist-failure` try/catch before `return`, matching the file's own settle convention at :1640-1641 - a step.run wrap adds a memoized step id for a pure Sentry mirror and invites the duplicate-step-id class. Dissent noted: wall-time ordering inverts (cost-breaker notify precedes the report); ordering comment rewrite owed per AC8 |
+| #9139 amendment shape: amend `connections[6]` vs a new dedicated third entry | technical | Ruled by CTO agent, 2026-10-31: amend `connections[6]` (`enforced_at` += route.ts serveOrigin/`SERVE_HOST`; two-hop tls/`does_not_defend` prose) - a third row double-models one physical link. Dissent noted: keep "not yet measured against the server build" phrasing for hop-1 cert verification |
+| Brand-survival threshold | taste | assumed: `aggregate pattern` — issue #11528 declares it verbatim; no single-user-facing artifact or data exposure |
+| `plan-review` reviewer panel + deepen fan-outs not spawned (no nested-spawn tool); self-review + in-process gate checks applied — does the plan need a panel re-run before `soleur:work`? | technical | Ruled by CTO agent, 2026-10-31: no blocking panel re-run — proceed to `soleur:work`; `soleur:review` multi-agent pass remains mandatory pre-merge. Dissent noted: WS-A row-count arithmetic (PRESENCE_ROWS/MUT_ROWS vs emitted rows) is caught by `mutate_floor_red` + review re-check |
+| Domain-leader fan-out skipped; self-assessed `engineering` only | technical | Ruled by CTO agent, 2026-10-31: engineering-only stands — no user-facing surface, no legal-doc wording change (connections[6] keeps `disclosed_as`/`exception` verbatim), no ops procedure change; AC14's file-set check is the tripwire if implementation drifts |

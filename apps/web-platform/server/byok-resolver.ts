@@ -29,6 +29,7 @@ import {
   runWithByokLease,
   type ByokLease,
 } from "./byok-lease";
+import type { AuthModeResolverFn } from "./auth-mode-error";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
@@ -142,7 +143,7 @@ type ResolveRow = {
  * resolver but then calls `getAgentCredential()` for an owner holding a subscription row fails closed.
  */
 export type LeaseModeOpts =
-  | { resolveAuthMode: () => Promise<string> }
+  | { resolveAuthMode: AuthModeResolverFn }
   | { restOnly: true };
 
 /**
@@ -159,8 +160,13 @@ export async function resolveKeyOwnerThenLease<T>(
   // One chokepoint for all five lease branches below: the mode resolver (or its explicit absence)
   // cannot be dropped by a single branch (#11591).
   const resolveAuthMode = "resolveAuthMode" in opts ? opts.resolveAuthMode : undefined;
-  const run = (keyOwnerUserId: string, delegationId?: string): Promise<T> =>
-    runWithByokLease({ workspaceContextUserId, keyOwnerUserId, delegationId, resolveAuthMode }, fn);
+  // `delegationWorkspaceId` rides with an active delegation only (#11594): the cross-owner api-key skip requires the
+  // conversation binding's workspace to equal the workspace the delegation was resolved in.
+  const run = (keyOwnerUserId: string, delegationId?: string, delegationWorkspaceId?: string): Promise<T> =>
+    runWithByokLease(
+      { workspaceContextUserId, keyOwnerUserId, delegationId, delegationWorkspaceId, resolveAuthMode },
+      fn,
+    );
 
   const supabase = createServiceClient();
 
@@ -211,7 +217,8 @@ export async function resolveKeyOwnerThenLease<T>(
     return run(callerUserId);
   }
 
-  return run(data.key_owner_user_id, data.delegation_id ?? undefined);
+  const delegationId = data.delegation_id ?? undefined;
+  return run(data.key_owner_user_id, delegationId, delegationId !== undefined ? workspaceId : undefined);
 }
 
 // ─── Effective-key gate (feat-skip-api-key-onboarding #4642) ──────────

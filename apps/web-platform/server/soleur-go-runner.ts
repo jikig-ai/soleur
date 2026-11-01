@@ -64,7 +64,7 @@ import {
   mirrorWithDebounce,
 } from "./observability";
 import { stripStopGateMarkup } from "./stop-gate-markup";
-import { isOauthUnusableLeaseError, rewriteAgentAuthFailure, type AuthFailureFrame } from "./agent-auth-user-message";
+import { isLeaseRefusalReported, rewriteAgentAuthFailure, type AuthFailureFrame } from "./agent-auth-user-message";
 import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
@@ -3291,12 +3291,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // reset-to-empty-solo) is also an expected, benign block — skip the
         // mirror here too (the dispatch catch emits the honest client message;
         // the divergence breadcrumb fires separately, deduped).
-        // #11086 — a lease refusal for an unusable stored credential already reported its own closed-class event; a second
-        // mirror here would double the Sentry count for one failed turn.
+        // #11086/#11599 — a lease refusal (unusable stored credential, unresolved authentication mode) already reported its own
+        // closed-class event; a second mirror here would double the Sentry count for one failed turn.
         if (
           !(err instanceof RepoNotReadyError) &&
           !(err instanceof WorkspaceNotReadyError) &&
-          !isOauthUnusableLeaseError(err)
+          !isLeaseRefusalReported(err)
         ) {
           reportSilentFallback(err, {
             feature: "soleur-go-runner",
