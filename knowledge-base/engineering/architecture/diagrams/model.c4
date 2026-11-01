@@ -3,7 +3,7 @@
 // C4 level (context / container / component) with clickable drill-down.
 // Migrated 1:1 from the former Mermaid C4 diagrams (system-context, container,
 // component-plugin) — union of all elements and relationships, nothing dropped.
-// last-verified: 2026-10-25
+// last-verified: 2026-11-01
 // 2026-10-18 audit: drift recorded as `//` comments next to the affected elements (api,
 // github -> tunnel, the L3 command components), NOT as description edits. Every
 // description/element change must ship with a regenerated model.likec4.json
@@ -13,6 +13,10 @@
 // mirrored by hand at all four of its occurrences in model.likec4.json (view hashes are blanked,
 // so no digest changes). New structural drift (OpenCode / Antigravity harnesses) is recorded
 // as a comment: search "DRIFT (2026-10-25".
+// 2026-11-01 audit: skills 104 -> 105 (plugins/soleur/skills/*/SKILL.md, matching README.md), the
+// same same-length swap at all five occurrences (here + four in model.likec4.json). Every earlier
+// DRIFT note was re-measured and still holds (OpenCode/Antigravity, the `version` command, the 28
+// SSH provisioners). One new stale citation is recorded as a comment: search "DRIFT (2026-11-01".
 model {
 
   codex = system "Codex" {
@@ -48,7 +52,7 @@ model {
   founder -> cursorCli "Runs Soleur from the local Cursor CLI"
   cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
 
-  // DRIFT (2026-10-25 audit): two more harnesses load the plugin and have no element here.
+  // DRIFT (2026-10-25 audit, re-confirmed 2026-11-01): two more harnesses load the plugin and have no element here.
   // (1) OpenCode V2 (ADR-291, accepted 2026-10-20, shipped v3.342.0 / PR #10571): `opencode` is a
   // member of the Harness union in plugins/soleur/lib/harness.ts; the adapter is
   // plugins/soleur/opencode/ (plugin.ts hook module binding the guards at permission.evaluate,
@@ -191,7 +195,7 @@ model {
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
-        description "104 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+        description "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
@@ -203,7 +207,7 @@ model {
       }
 
       // C4 L3 — components inside the Soleur Plugin
-      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
+      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25 and 2026-11-01): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
       // version); only three are drawn here. /soleur:version is the explicit, user-started
       // installed-vs-latest compare named on the `plugin -> github` edge (#10064). Add a
       // `version` component (and its views.c4 include) with a model.likec4.json regeneration.
@@ -737,7 +741,7 @@ model {
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
   tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE — whichever connector replica answers proxies to the correct zot host, but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416 (historical): web-2 was not a subnet member, so CI's registry bridge failed and the zot mirror silently skipped (masked green by continue-on-error). web-2 was retired 2026-07-17 (#6538); the surviving web-1 connector is a subnet member, so this failure mode is closed. 2026-07-29 CAUSE CLASS (#7071) — a DIFFERENT failure on this same edge, recorded so the closed #6416 mode above is not re-derived as the explanation: CI's bridge failed with websocket: bad handshake, and THAT TIME the cause was the EDGE refusing the upgrade (CF Access rejecting a rotated service token), NOT a missing origin route — a missing route would handshake and fail origin-side. Root cause: every doppler_secret carrying a token declares lifecycle{ignore_changes=[value]}, so Terraform REPLACED the registry_push Access service token and could never propagate the new value; the stale one was still being served. Detected by scripts/check-cloudflare-token-drift.sh, now wired into scheduled-terraform-drift.yml + a release preflight. 2026-08-03 THIRD CAUSE CLASS (#7242) — this record's dichotomy (edge-refusal vs missing-route) was NOT exhaustive, and reading it as exhaustive is what misdirected the next investigation. A bad handshake means only that the tunnel could not complete an ORIGIN DIAL. Third case, measured: the route was present AND Access ADMITTED the request, but the origin was RESTARTING — zot crash-looping at ~4/min, which a tens-of-seconds docker login + three-tag crane copy is near-certain to straddle. The Access policy was intact and the connector had never dropped. So bad handshake is a SYMPTOM, never a cause: since #7242 the failing step branches on a verdict the job measured (scripts/zot-mirror-diagnosis.sh, ADR-166) rather than naming one. NOTE also that a plain HTTPS GET here returns an empty 200 BY DESIGN (tcp:// ingress is not a WS upgrade) and is not a health probe." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
-  // DRIFT (2026-10-18 audit, re-measured 2026-10-22 and 2026-10-25 — still 28): the "25 terraform_data SSH provisioners" count below is stale. The
+  // DRIFT (2026-10-18 audit, re-measured 2026-10-22, 2026-10-25 and 2026-11-01 — still 28): the "25 terraform_data SSH provisioners" count below is stale. The
   // web-platform root now carries 28 terraform_data resources with an ssh connection{} block
   // (server.tf 24, workspaces-luks.tf 3, ci-ssh-key.tf 1; deploy_pipeline_fix is local-exec and
   // not counted; re-measure with a count of `resource "terraform_data"` blocks holding a
@@ -776,6 +780,11 @@ model {
   // CI -> Hetzner Cloud API. Absent until the G3 generation anchor (2026-09-24), although several
   // workflows already call the API. This edge is the CONTROL-PLANE API, not the hosts: nothing here
   // reaches the dedicated host, which has no inbound path (ADR-225).
+  // DRIFT (2026-11-01 audit): the description below names "the single-use workspaces-plaintext-forget.yml"
+  // in the present tense, but that workflow is gone from .github/workflows/: PR #9348 deleted it after its
+  // one run from main (run 37803274724, 2026-10-08). ADR-241 now cites it at 59abf6a76c and the
+  // destruction record is knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md.
+  // Rewording it to the past tense is a description edit, so it needs a model.likec4.json regeneration.
   github -> hetzner "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY alone, with no fall-back to the write token (ADR-241 D4, #9927 item 8b, #10664). During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Since #10540 inngest-key-rotate.yml (ADR-307) is a dispatch-only owner-authorised caller: its `guard` job resolves the ONE server named soleur-inngest at 10.0.1.40 and reads its action list with HCLOUD_TOKEN_READONLY alone, and its environment-gated `reboot` job WRITES through this edge exactly once per run, a soft-reboot request (POST /servers/{id}/actions/reboot) for that server only, with the Tier-B token from the infra-credentials loader reaching only that POST step (every later step runs under an exec env -i allow-list); the action status only means the ACPI request reached the guest, so the evidence of a restart is a new boot_id read from Better Stack, never this edge; no retry and never a hard reset (the earlier restart lever, restart-inngest-server.yml, terminates on web-1 and cannot reach this host). Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider." { technology "HTTPS (Hetzner Cloud API)" }
   // #9168 / ADR-260 — CI -> Supabase Management API (api.supabase.com), a CONTROL-PLANE edge
   // independent of the data plane it probes (ADR-169's independence criterion). Previously
