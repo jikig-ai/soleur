@@ -135,8 +135,7 @@ Live standing alarms over this source:
     markers per run `id` (the query under the 524 alert above), is the lead.
   - **`logtail_exploration_alert.claude_cost_capture_dark` — RETIRED (#11631).** Its successor is the Better
     Stack heartbeat `soleur-claude-cost-capture-prd` (`betteruptime_heartbeat.claude_cost_capture`, period
-    3600 s, grace 7200 s, born paused; **UNARMED until the owner unpauses it, and until then this condition is
-    unmonitored**). It shares the luks alert's class (a native alert with `query_period` 86400 s) but its marker
+    3600 s, grace 7200 s, born paused, armed 2026-10-31 (#11631)). It shares the luks alert's class (a native alert with `query_period` 86400 s) but its marker
     is not strictly once a day: it fires a few times a day (Phase 0 measured n=4 qualifying rows in 24 h), so
     the 33-nights `Current value: 0` finding below is luks-specific (#11048), not measured for cost (#11049).
     The sibling burn alert `claude_cost_daily_burn` (86400 s) may share the hot-window blind spot; that is
@@ -159,8 +158,7 @@ Live standing alarms over this source:
     known weak limit: a credit-probe RED row inside the window keeps the beat and can mask a dead marker path.
 - **`logtail_exploration_alert.luks_monitor_host_timer_dark` — RETIRED (#11631).** Its successor is the
   Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
-  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused; **UNARMED until
-  the owner unpauses it, and until then this condition is unmonitored**). The retired alert read `Current
+  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused, armed 2026-10-31 (#11631)). The retired alert read `Current
   value: 0` through 33 nights of passing once-a-day rows (incident 1023423999, #11048). The feeder
   `scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer` beats it hourly only if the archive holds, in
   the trailing 27 h (97200 s), a `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` with

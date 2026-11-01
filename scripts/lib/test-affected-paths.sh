@@ -709,6 +709,14 @@ AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# apps/web-platform/scripts/home-census-trigger.test.sh — the SUT names the committed
+# CLO record (home-census-trigger.sh:55) and opens it via `git show` at :246; the test's
+# fixture contract pins the same path, so an edit to the record must still select it.
+AFFECTED_APPS_WEB_PLATFORM_SCRIPTS_HOME_CENSUS_TRIGGER_TEST_SH_PATHS=(
+  "knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md"
+  "apps/web-platform/scripts/home-census-trigger.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                     # THIS FILE
+)
 AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   ".gitleaks.toml"
   "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"

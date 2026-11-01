@@ -15,6 +15,10 @@ before `## Changelog` in BOTH body templates, per these rules (in order):
   `Pipeline-Tally: seats=N; ci_cycles=N; fix_rounds=N; agent_rounds=N` — it is the
   cross-PR aggregation surface (squash merge drops commit trailers, so counts live in
   the body, never a git trailer).
+- **`show` prints a `note:default-branch-ledger` line** (the ledger is keyed to `main`/`master`, shared
+  across sessions): the counts are NOT this run's cost. Render them with the words
+  `shared default-branch ledger, not attributable to this run`, or render `SOLEUR_TALLY_ABSENT`
+  when a per-run figure is required. Never copy them into `Pipeline-Tally:` as one run's cost.
 - **Ledger present, all counters 0:** `tally: 0 — no counted operations`
   (instrumented-but-unused is a real state, not an absence).
 - **Ledger absent / `show` prints UNKNOWN:** the literal line `SOLEUR_TALLY_ABSENT` —
