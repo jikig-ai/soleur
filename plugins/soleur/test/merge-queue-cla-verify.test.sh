@@ -171,6 +171,12 @@ run_cases() {
   # ---- must PASS --------------------------------------------------------------------------
   newfix; run_sut "$FX"
   expect_green "P1 singleton entry: both real contexts green on the head (backward-compat)"
+
+  # R-QC: a rebuilt candidate — ref-embedded oid != HEAD_SHA (shallower member landed or the
+  # entry re-queued and the group was re-minted) — must still verify. The embedded oid is
+  # provenance; refusing the pairing ejected live entries (post-#11681 incident 2026-11-01).
+  newfix; run_sut "$FX" HEAD_REF="refs/heads/gh-readonly-queue/main/pr-${PR}-${S40_B}"
+  expect_green "P1c rebuilt candidate: ref-embedded oid != HEAD_SHA still verifies (embedded is provenance)"
   if grep -Eq -- ' (-X|--method|--input)( |$)| --method(POST|PATCH|PUT|DELETE)' "$CALLS"; then
     fail "P1b verifier sent a write-shaped gh call"
   else pass "P1b every gh call is a read (no -X/--method/--input; graphql -f/-F are read inputs)"; fi
