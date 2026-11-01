@@ -19,6 +19,9 @@ None. One environment limitation handled per the #11600 sibling precedent: no ag
 - Tools: `gh`, `python3 scripts/lint-guard-contract.py`, git (commits 8193de7350 + 3910bef7eb pushed)
 - Artifacts: plan file, tasks.md, decision-challenges.md — committed on branch (draft PR #11786)
 
+## Technical-Ruling Gate
+- Status: PASS (1 spawn) — cto_spawns=1; 3 technical rows ruled by `soleur:engineering:cto` (zot-dormant port-anyway, rehearsal UNREAD semantics, success-only tripwire); 2 bookkeeping rows reclassed `operator (scope)`
+
 ## Work Phase
 - Status: pending
 
