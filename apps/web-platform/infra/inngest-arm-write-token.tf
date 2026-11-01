@@ -153,7 +153,7 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 #
 # NOT THE SAME THING as doppler_service_token.inngest_flip (inngest-host.tf), whose name now sits
 # close to FLIP_READ in the eye: that one is the ON-HOST read/WRITE flip credential, written to
-# /etc/default/inngest-flip and read only by inngest-cutover-flip.service, and it is NEVER published
+# /etc/default/inngest-flip and consumed as an EnvironmentFile only by inngest-cutover-flip.service, and it is NEVER published
 # to a github_actions_secret. DOPPLER_TOKEN_INNGEST_FLIP_READ would be a CI-side READ token for
 # consumer 3 and does not exist.
 #

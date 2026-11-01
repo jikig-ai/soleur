@@ -254,8 +254,8 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # The write the cutover flip FSM needs (inngest-cutover-flip.sh:flag_set advances
 # INNGEST_CUTOVER_FLIP through the Doppler CLI's secret-write verb) now runs under
 # doppler_service_token.inngest_flip below, which only inngest-cutover-flip.service sees, through a
-# cloud-init drop-in. History: #6178 raised this token from "read" to "read/write" so that write
-# could work; the split follows the ADR addendum above, not a tracker.
+# cloud-init drop-in. History: PR #6889 (under #6178) raised this token from "read" to
+# "read/write" so that write could work; the split follows the ADR addendum above, not a tracker.
 #
 # APPLY BEHAVIOR — this is NOT an in-place change. Doppler service tokens are immutable, so
 # `access` is ForceNew: changing it destroys+recreates the token → new `.key`. That `.key`
@@ -286,13 +286,14 @@ resource "doppler_service_token" "inngest" {
 
 # The FLIP token (ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)"):
 # read/write on the SAME isolated soleur-inngest/prd root config, so the cutover flip FSM can write
-# INNGEST_CUTOVER_FLIP. It is written to a root-only 0600 file (/etc/default/inngest-flip) and read
-# ONLY by inngest-cutover-flip.service, through a cloud-init `write_files` drop-in whose later
-# EnvironmentFile= overrides DOPPLER_TOKEN (the project, config and config-dir variables still come
-# from the baked /etc/default/inngest-server). Same exposure class as doppler_service_token.
-# inngest_arm_write (read/write on the same config), and — like every token in `user_data` — it is
-# retrievable through the Hetzner metadata API by anyone with host access (residual, #11816 and
-# #11817).
+# INNGEST_CUTOVER_FLIP. It is written to a root-only 0600 file (/etc/default/inngest-flip) and
+# consumed as an EnvironmentFile ONLY by inngest-cutover-flip.service, through a cloud-init
+# `write_files` drop-in whose later EnvironmentFile= overrides DOPPLER_TOKEN (the project, config and
+# config-dir variables still come from the baked /etc/default/inngest-server); the log redactor also
+# reads the file by value, as root. Same exposure class as doppler_service_token.inngest_arm_write
+# (read/write on the same config), and — like every token in `user_data` — it is retrievable through
+# the Hetzner metadata API by ANY local process on the host, root or not, because no egress block
+# exists yet (residual, #11816 and #11817).
 #
 # Created as a DEPENDENCY of hcloud_server.inngest's `user_data` (it is not `-target`ed on the
 # inngest_host_replace dispatch, which keeps its three targets); it is `-target`ed on the
@@ -378,7 +379,7 @@ locals {
     # this scoped token (which is itself minimal-blast-radius by construction).
     doppler_token = doppler_service_token.inngest.key
     # The FLIP token (read/write on the same isolated config): written to /etc/default/inngest-flip
-    # (0600 root) and read ONLY by inngest-cutover-flip.service through the cloud-init drop-in; see
+    # (0600 root) and consumed as an EnvironmentFile ONLY by inngest-cutover-flip.service through the cloud-init drop-in; see
     # doppler_service_token.inngest_flip above and the ADR-282 addendum "2026-10-30 (#9927 item 4,
     # the flip-token design)". The charset guard in cloud-init covers it before any write.
     doppler_flip_token = doppler_service_token.inngest_flip.key

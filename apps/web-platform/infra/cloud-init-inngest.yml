@@ -626,10 +626,12 @@ write_files:
       sf=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_INNGEST_SENTRY_DSN_FILE" ] && sf="$SOLEUR_INNGEST_SENTRY_DSN_FILE"; sdsn="$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$sf" 2>/dev/null | head -n 1)"; vals+=("$sdsn")
       vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
-      # Flip-token split (CTO R4): the read/write flip token, by VALUE. READ with sed, never sourced
-      # (sourcing would overwrite DOPPLER_TOKEN, which the Doppler download just below uses; this line sits AFTER the boot-file source on purpose, so that hazard is real and the redactor suite can kill a sourcing mutant). The generic
-      # 40-char backstop cannot be relied on for a `dp.st.<config>.<body>` token (the dots break the run).
-      # An absent file yields an empty value, and the loop below skips values under 6 bytes.
+      # Flip-token split (CTO R4): the read/write flip token, redacted BY VALUE. Read with sed, never
+      # sourced: a source would overwrite DOPPLER_TOKEN, which the Doppler download below uses. The
+      # line sits AFTER the boot-file source on purpose, so that hazard is real and the redactor
+      # suite can kill a sourcing mutant. The generic 40-char backstop would mask at most the body
+      # run of a `dp.st.<config>.<body>` token, so the by-value line is the control. An absent file
+      # yields an empty value, which the loop below skips (values under 6 bytes).
       vals+=("$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/inngest-flip 2>/dev/null)")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config ${inngest_doppler_config} 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
@@ -2330,8 +2332,9 @@ runcmd:
   - mkdir -p /mnt/data
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the inngest secret set --------
-  # The scoped token is NEVER baked into user_data (retrievable via the hcloud metadata
-  # API) beyond the 0600 env file below. Arch (${doppler_arch}) + checksum (${doppler_sha256})
+  # Both Doppler tokens (the read-only boot token and the read/write flip token) ARE baked into
+  # user_data, then written to the 0600 root files below; user_data is retrievable through the
+  # hcloud metadata API by any local process (residual, #11816 and #11817). Arch (${doppler_arch}) + checksum (${doppler_sha256})
   # are derived from var.inngest_server_type (cax* → arm64, else amd64; same pin + values as
   # cloud-init-registry.yml). Egress (github release DL) is open.
   - |
@@ -2356,7 +2359,7 @@ runcmd:
   # is READ-ONLY on the ISOLATED `soleur-inngest` project's `prd` root config (flip-token split,
   # ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)": the flip FSM's
   # INNGEST_CUTOVER_FLIP write runs under a SEPARATE read/write flip token, written to
-  # /etc/default/inngest-flip below and read only by inngest-cutover-flip.service through the
+  # /etc/default/inngest-flip below and consumed as an EnvironmentFile only by inngest-cutover-flip.service through the
   # write_files drop-in at the top of this file) — a SEPARATE project with NO inheritance path
   # to soleur/prd, so a host compromise reaches ONLY this host's own isolated secret set,
   # never a foreign project.
@@ -2950,7 +2953,7 @@ runcmd:
   # provision-unit-armed row for the instance id. Placed before every item that arms
   # soleur-inngest-provision (which also runs the bootstrap that installs the flip unit). No chown:
   # the file stays root:root, and only inngest-cutover-flip.service lists it. Written by `( umask 0177 )`
-  # for the reason given at the zot-read write below.
+  # for the reason given at the zot-read write above.
   - ( umask 0177 && printf 'DOPPLER_TOKEN=%s\n' '${doppler_flip_token}' > /etc/default/inngest-flip ) || exit 1
 
   # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
