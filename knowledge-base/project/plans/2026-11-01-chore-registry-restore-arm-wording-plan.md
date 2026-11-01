@@ -8,6 +8,24 @@ type: chore
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01
+**Sections enhanced:** 3 (Research Insights, Acceptance Criteria, Files to Edit)
+**Passes used:** the plan-review panel (DHH, Kieran, code-simplicity), one catalogue-wide sharp-edges pass (read-only agent), and the deepen-plan halting gates run inline (4.6 user-brand impact, 4.7 observability, 4.8 PAT-shaped variables, 4.12 scope check; 4.9, 4.10, 4.11, 4.13 and 4.55 do not trigger). A broad all-agents fan-out was deliberately not run for a three-line wording change; the panel above already covered correctness and simplicity, and the gates are mechanical.
+
+### Key Improvements
+
+1. Every size, diff and scope acceptance criterion now diffs against `git merge-base origin/main HEAD` instead of the moving `origin/main` tip, and names its runtime variables (`WF`, `RB`, `BASE`), so a sibling merge cannot falsify it and every command is runnable as written.
+2. AC6 carries a positive control (the diff is not empty) and an allow-list that includes `knowledge-base/project/learnings/`, so an empty diff or a pipeline-written learning cannot make it vacuous or spuriously red; the post-merge checks select the push run by `headSha` and compute the size delta from the merge commit and its parent.
+3. The exit-3 wording was checked against the engine rather than assumed: five `die 3` sites (verify, copy, read-back, signature copy, signature read-back) all raise the same retryable code, which is why "accept or serve a request" is the accurate phrasing.
+
+### New Considerations Discovered
+
+- The brief's -4 byte figure is wrong by 8; the measured delta is -12 (489,204 to 489,192). Both are negative, so the ruling is unaffected.
+- The restore loop in the workflow retries on exit 3 only and `break`s on any other code on the first attempt, so "NOT retryable" for exit 4 matches what the job itself does; the old "re-run this job" advice was the only place contradicting it.
+- Runbook row 4's trailing clause ("a repeat means the copy is landing wrong") is not covered by the ruling and is left in place, recorded as a taste row and as a follow-up string for the #11667 comment.
+
 ## Overview
 
 The `registry_store_restore` job in `.github/workflows/apply-web-platform-infra.yml` prints one `::error::` line per engine exit code. Two of those lines contradict the engine's own exit-code table in `scripts/registry-restore-from-ghcr.sh` (the header block that labels exit 3 `RETRYABLE` and exit 4 `NOT retryable`):
@@ -49,6 +67,8 @@ Lane: the spec directory held no `spec.md` (this branch started from a one-shot 
 - A new test pinning the arm text -> property 1 and 2 -> the ACs' grep checks cover it for this PR; a new test edit touches `tests/` and the brief forbids it. Cut.
 - Extra rationale prose in the workflow or a rationale-runbook paragraph -> none -> the byte budget forbids new text. Cut.
 - Rewording the exit-78 arm, the line-3592 abort and the line-3475 summary -> out of scope by direction; recorded on #11667 instead.
+
+**Deepen-pass verification (2026-11-01).** The retry loop in the `registry_store_restore` step (`while (( attempt <= max ))` with `if (( rc != 3 )); then break; fi`, the step comment "Only exit 3 retries") confirms exit 3 is the sole retried code and exit 4 leaves the loop on its first occurrence. `scripts/registry-restore-from-ghcr.sh` raises `die 3` at five sites (while verifying, while copying, reading a copy back, copying a signature, reading a signature back), so exit 3 can fire after earlier entries were already written; that is the basis for "EMPTY or only partly refilled" and "accept or serve". The sibling exit-2 arm in the same `case` block already uses the phrase "only partly refilled", so the new exit-3 text matches an in-file precedent rather than inventing a form. Rule IDs cited in this plan (`cq-write-failing-tests-before`, `hr-always-read-a-file-before-editing-it`) exist as active rules in `AGENTS.md`; issue and PR numbers cited (#11667 open, #11787 open draft) were read live. Lint: `markdownlint-cli2` reports 0 issues on the plan, `tasks.md` and `decision-challenges.md`; `technical-ruling-gate.sh` passes on `decision-challenges.md`.
 
 **Institutional learnings applied.** `2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so.md` (the file's byte ceiling is a real run-start limit, so the net delta is asserted, not assumed); `2026-09-23-compressing-prose-to-fit-a-byte-ceiling-dropped-the-conditions-that-made-it-correct.md` (the new exit-3 text keeps the "Verify the registry host is serving, then re-run this job" condition, which is what makes the retry advice correct for a retryable code).
 
