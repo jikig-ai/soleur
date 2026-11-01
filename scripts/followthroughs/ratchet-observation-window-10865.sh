@@ -240,7 +240,13 @@ awk -F'\t' '$8 != "cancelled"' "$RUNS" | sort -t$'\t' -k5,5 -s > "$WORK/readable
 readable_n="$(grep -c . "$WORK/readable.tsv")"
 head -n "$MAX_UNITS" "$WORK/readable.tsv" > "$WORK/oldest.tsv"
 awk -F'\t' '$2 == "merge_group"' "$WORK/readable.tsv" | tail -n "$NEWEST_MG" > "$WORK/extras.tsv"
-awk -F'\t' 'NR == FNR { x[$1] = 1; next } !($1 in x)' "$WORK/extras.tsv" "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+# the NR==FNR anti-join idiom reads every row of file 2 as file 1 when file 1 is EMPTY (a sweep with no merge_group run
+# would dispatch nothing at all), so the empty case takes the oldest list verbatim instead
+if [ -s "$WORK/extras.tsv" ]; then
+  awk -F'\t' 'NR == FNR { x[$1] = 1; next } !($1 in x)' "$WORK/extras.tsv" "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+else
+  cat "$WORK/oldest.tsv" > "$WORK/oldest-rest.tsv"
+fi
 { sed 's/^/E\t/' "$WORK/extras.tsv"; sed 's/^/O\t/' "$WORK/oldest-rest.tsv"; } > "$WORK/dispatch.tsv"
 to_read="$(grep -c . "$WORK/dispatch.tsv")"
 note "phase=listed seen=$runs_listed readable=$readable_n to_read=$to_read parallel=$PAR budget_s=$BUDGET elapsed_s=$((SECONDS - T0))"

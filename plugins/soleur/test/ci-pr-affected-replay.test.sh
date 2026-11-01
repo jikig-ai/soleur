@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=578   # top-level `^mutate ` (470) + `^ow_mutate ` (108) call sites; ctl-* controls run ungated
+DECLARED_TOTAL=582   # top-level `^mutate ` (470) + `^ow_mutate ` (112) call sites; ctl-* controls run ungated
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared sites
 _seen_rows_flag=0
 while (( $# )); do
@@ -3340,7 +3340,7 @@ row_ow_progress() {
   p1="$(grep -n '^soak-progress: phase=listed ' "$OWERR" | head -n 1 | cut -d: -f1)"; p2="$(grep -n '^soak-progress: phase=read-done ' "$OWERR" | head -n 1 | cut -d: -f1)"; p3="$(grep -n '^soak-progress: phase=facts-done ' "$OWERR" | head -n 1 | cut -d: -f1)"
   [[ -n "$p1" && -n "$p2" && -n "$p3" && "$p1" -lt "$p2" && "$p2" -lt "$p3" ]] || return 1
   [[ "$(wc -c < "$OWERR")" -lt 500 ]] || return 1
-  grep -q 'parallel=4 budget_s=300' "$OWERR" || return 1
+  grep -q 'parallel=8 budget_s=270' "$OWERR" || return 1
   ! grep -qE 'runs_listed|units_read|units=|truncated' "$OWERR"
 }
 row_ow_heartbeat() {   # 49 readable runs (a beat at 25; the exact-count assertion holds below 50): a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
@@ -3402,12 +3402,27 @@ row_ow_empty_branch() {   # an empty head_branch must not collapse under the tab
   ow_probe
   [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT"
 }
-row_ow_budget() {   # SECONDS has one-second granularity: a 2 s read against a 1 s budget
+row_ow_budget() {   # the ONE wall deadline END=T0+SOAK_BUDGET_S bounds the read phase: the newest merge_group runs are dispatched FIRST, the first oldest-first read is unconditional, and every later launch needs LAUNCH_RSVD seconds of headroom — a cut is NOT YET (truncated=1), never CANNOT ESTABLISH
   ow_case; ow_write
-  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
-  OW_ENV=(SOAK_BUDGET_S=1 SOAK_PARALLEL=1 SLOW_S=2); ow_probe
+  local id; for id in 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_BUDGET_S=24 SOAK_PARALLEL=1 SLOW_S=4); ow_probe
   [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && grep -q 'units_read=4 truncated=1' <<<"$OWOUT" || return 1
+  grep -q 'read budget ended after 4 of 8 runs' <<<"$OWOUT" || return 1
   [[ "$(grep -m1 'actions_runs_[0-9]*_jobs' "$GHLOG")" == *actions_runs_6001_jobs* ]]   # the newest queue state is read first
+}
+ow_u_no_mg() { local u keep=(); for u in "${OW_UNITS[@]}"; do [[ "$u" != *" merge_group "* ]] && keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
+row_ow_deadline_cap() {   # a read killed by the probe's own deadline cap (the per-read timeout is min(60 s, END-SECONDS-5)) is a budget CUT, never a failed read: the worker's rc-46 sentinel leaves the unit unread, sets BUDGET_CUT, and the verdict stays NOT YET with truncated=1 — never CANNOT ESTABLISH and never an external kill
+  ow_case; ow_u_no_mg; ow_write
+  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=14 SLOW_S=10); ow_probe   # the first oldest-first read launches unconditionally with a ~9 s cap; the stub sleeps 10
+  [[ "$RC" -eq 2 ]] && grep -q 'units_read=0 truncated=1' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" || return 1
+  [[ "$(ow_req_count "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # asked once, killed by the cap, never retried
+}
+row_ow_facts_wall() {   # the facts loop is bounded by its own allowance AND by the wall deadline minus the TAIL verdict reserve: a 300 s facts allowance cannot overrun a 30 s deadline
+  ow_case; ow_write
+  local n; for n in 11 12 13 14 15; do : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/$n")"; done
+  OW_ENV=(SOAK_BUDGET_S=30 SOAK_FACTS_BUDGET_S=300 SLOW_S=5); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
 }
 row_ow_budget_facts() {   # the reads finish inside their budget; the first pull read (PR 11, 3 s) overruns the 2 s facts allowance; the facts loop stops
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
@@ -3441,14 +3456,14 @@ row_ow_quota() {   # need = ceil(1.5 * runs to read) + ceil(lookup candidates / 
 }
 row_ow_seam_caps() {
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=9); ow_probe; [[ "$RC" -eq 3 ]] || return 1
-  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=601); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
   ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
-  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=600 SOAK_FACTS_BUDGET_S=300); ow_probe; [[ "$RC" -eq 0 ]]
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=300); ow_probe; [[ "$RC" -eq 0 ]]
 }
 ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"@octocat </details> [x](http://e) #1 www.attacker.example `x` \\u001b$(printf 'A%.0s' $(seq 1 300))\"}"; }
 row_ow_jq_error_text() {
@@ -3566,16 +3581,13 @@ row_ow_retry() {
     ow_case; ow_write; printf '%s' "$m" > "$GHFIX/ERRONCEMSG_$(keyof "$jp3")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
     [[ "$RC" -eq 3 && "$(ow_req_count "$jp3")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
   done
-  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; fx_err "$jp2"   # past the read and facts budgets a failed read is NOT retried
-  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=1 SLOW_S=3); ow_probe
-  [[ "$RC" -eq 3 && "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
-  local bf   # the deadline is the SUM of the two budgets: each budget alone, spent, must still allow the retry
-  for bf in "SOAK_BUDGET_S=1 SOAK_FACTS_BUDGET_S=300" "SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=1"; do
-    ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest")"; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"
-    # shellcheck disable=SC2206
-    OW_ENV=(SOAK_PARALLEL=1 $bf SLOW_S=3); ow_probe
-    [[ "$(ow_req_count "$jp2")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
-  done
+  # the deadline is the ONE wall budget: a SOAK_BUDGET_S under the LAUNCH_RSVD launch floor leaves no dispatch window at all,
+  # so the failed path is never even asked and the facts allowance cannot buy a retry back; with the wall budget ample a 5xx IS
+  # retried though the facts allowance is spent — only the wall deadline bounds the read phase
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"; OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=10 SOAK_FACTS_BUDGET_S=300); ow_probe
+  [[ "$RC" -eq 2 && "$(ow_req_count "$jp2")" -eq 0 && "$(ow_sleeps)" -eq 0 ]] && grep -q 'truncated=1' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"; OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=1); ow_probe
+  [[ "$RC" -ne 3 && "$(ow_req_count "$jp2")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
   ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; fx_err "$jp2"; : > "$GHFIX/SLOW_$(keyof "$jp2")"   # a flagged run: the 403 lands while the 502 read sleeps
   OW_ENV=(SOAK_PARALLEL=2 SLOW_S=1); ow_probe
   [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # the retry is skipped while the rate flag is set
@@ -3677,10 +3689,12 @@ chk "window probe: progress is three ordered phase lines on stderr, under 500 by
 chk "window probe: the heartbeat prints a beat per 25 completions only when asked for" row_ow_heartbeat
 chk "window probe: SOAK_PARALLEL=1 and =4 give byte-identical stdout, and the newest red queue run still pauses the window" row_ow_parallel_same
 chk "window probe: a failed worker read exits 3 naming the first failure in dispatch order, with one line and no branch name" row_ow_worker_fail
-chk "window probe: the budget cuts the oldest-first reads (newest queue state first, extras exempt) and exits 2, never 3" row_ow_budget
+chk "window probe: the wall deadline cuts the read phase after the newest queue state and the unconditional first oldest-first read, and exits 2, never 3" row_ow_budget
+chk "window probe: a read killed by the probe's own deadline cap is a budget cut (NOT YET, truncated=1, asked once, never retried), never CANNOT ESTABLISH and never an external kill" row_ow_deadline_cap
+chk "window probe: the facts loop also stops TAIL seconds before the wall deadline — its own allowance cannot overrun it" row_ow_facts_wall
 chk "window probe: the budget also bounds the PR-facts loop, and never ends in a PASS" row_ow_budget_facts
 chk "window probe: a quota shortfall, a failed rate_limit read and a 403 exit 3 before further reads; the quota line is printed" row_ow_quota
-chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 600 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
+chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 300 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
 chk "window probe: jq's error text reaches the failure message, allow-listed and at most 160 bytes" row_ow_jq_error_text
 chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
 chk "window probe: the facts allowance starts at the facts phase, not at the probe start" row_ow_facts_clock
@@ -3738,10 +3752,14 @@ ow_mutate oracle-argv $'jq -s -r --argjson oracle "$ORACLE_JSON" \'.[0] as $p | 
 ow_mutate progress-to-stdout $'printf \'soak-progress: %s\\n\' "$*" >&2;' $'printf \'soak-progress: %s\\n\' "$*";' row_ow_progress
 ow_mutate heartbeat-always-on $'{ [ "${SOAK_PROGRESS:-}" = 1 ] || [ -t 2 ]; } && HB=1' $'HB=1' row_ow_heartbeat
 ow_mutate heartbeat-never $'if [ "$HB" = 1 ] && (( done_n % 25 == 0 )); then' $'if false; then' row_ow_heartbeat
-ow_mutate parallel-rc-ignored $'if [ "$(cat "$wrc_file")" != 0 ]; then' $'if false; then' row_ow_worker_fail
-ow_mutate budget-ignored $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then BUDGET_CUT=1; break; fi' $':' row_ow_budget
-ow_mutate deadline-gates-first-oldest-first $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then' $'if (( SECONDS - T0 >= BUDGET )); then' row_ow_budget
-ow_mutate deadline-gates-extras $'  if [ "$kind" = O ]; then' $'  if [ -n "$kind" ]; then' row_ow_budget
+ow_mutate parallel-rc-ignored $'if [ "$wrc_v" != 0 ]; then' $'if false; then' row_ow_worker_fail
+ow_mutate budget-ignored $'if (( SECONDS - T0 >= BUDGET - LAUNCH_RSVD )) && ! { [ "$kind" = O ] && [ "$o_launched" -eq 0 ]; }; then BUDGET_CUT=1; break; fi' $'  :' row_ow_budget
+ow_mutate deadline-gates-first-oldest-first $' )) && ! { [ "$kind" = O ] && [ "$o_launched" -eq 0 ]; }; then' $' )); then' row_ow_budget
+ow_mutate deadline-gates-extras $'[ "$kind" = O ] && o_launched=$((o_launched + 1))' $'o_launched=$((o_launched + 1))' row_ow_budget
+ow_mutate dispatch-horizon-unbounded $'SECONDS - T0 >= BUDGET - LAUNCH_RSVD' $'SECONDS - T0 >= BUDGET' row_ow_budget
+ow_mutate read-cap-unbounded $'rem=$((END - SECONDS - 5)); cap=60; (( rem < cap )) && cap=$rem' $'cap=60' row_ow_deadline_cap
+ow_mutate budget-sentinel-unread $'if [ "$wrc_v" = 46 ]; then' $'if [ "$wrc_v" = 99 ]; then' row_ow_deadline_cap
+ow_mutate empty-extras-anti-join $'if [ -s "$WORK/extras.tsv" ]; then' $'if true; then' row_ow_deadline_cap
 ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; }' $'{ sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; sed \'s/^/E\\t/\' "$WORK/extras.tsv"; }' row_ow_budget
 ow_mutate unit-sort-dropped $'sort -t$\'\\t\' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"' $':' row_ow_parallel_same
 ow_mutate draft-cache-dropped $'[ -n "${PR_TL[$n]+x}" ] || { PR_TL' $'{ PR_TL' row_ow_pr_facts_cached
@@ -3750,7 +3768,9 @@ ow_mutate jq-detail-unfiltered $'LC_ALL=C tr -c \'A-Za-z0-9 _:,()-\' \'?\' | ' $
 ow_mutate quota-guard-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if false; then' row_ow_quota
 ow_mutate rate-limit-403-continues $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if false; then break; fi' row_ow_quota
 ow_mutate trap-kill-dropped $'for p in $(jobs -p 2>/dev/null); do kill_tree "$p"; done; wait' $'wait' row_ow_trap
-ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - TF0 >= FACTS_BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi' $':' row_ow_budget_facts
+ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && { (( SECONDS - TF0 >= FACTS_BUDGET )) || (( SECONDS - T0 >= BUDGET - TAIL )); }; then FACTS_CUT=1; TRUNC=1; break; fi' $'  :' row_ow_budget_facts
+ow_mutate facts-wall-tail-dropped $' || (( SECONDS - T0 >= BUDGET - TAIL ))' $'' row_ow_facts_wall
+ow_mutate budget-cap-600 $'[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]]' $'[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 600 ]]' row_ow_seam_caps
 ow_mutate seam-cap-parallel-dropped $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[1-9][0-9]*$ ]]' row_ow_seam_caps
 ow_mutate par-serial $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 1 )); do wait -n' row_ow_parallelism
 ow_mutate par-uncapped $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 99 )); do wait -n' row_ow_parallelism
@@ -3805,7 +3825,6 @@ ow_mutate unattributed-note-needs-no-zero-distinct $'(( distinct == 0 && unattr 
 ow_mutate unattributed-note-needs-unattributed $'(( distinct == 0 && unattr > 0 ))' $'(( distinct == 0 ))' row_ow_zero_pr_units
 ow_mutate transient-network-class-dropped $'HTTP 5[0-9][0-9]|EOF|connection reset|TLS handshake timeout|i/o timeout|dial tcp|Client.Timeout' $'HTTP 5[0-9][0-9]' row_ow_retry
 ow_mutate transient-timeout-rc-dropped $'[ "$1" -eq 124 ] ||' $'false ||' row_ow_retry
-ow_mutate retry-deadline-dropped $' && (( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'' row_ow_retry
 ow_mutate baseline-422-is-absent $'[ "$rc" -eq 44 ] && return 4' $'{ [ "$rc" -eq 44 ] || [ "$rc" -eq 45 ]; } && return 4' row_ow_baseline_reads
 ow_mutate quota-lookup-candidates-count-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/\'' row_ow_quota_shape
 ow_mutate quota-lookup-candidates-count-canaries $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0\'' row_ow_quota_shape
@@ -3814,9 +3833,8 @@ ow_mutate drain-epoch-failure-ignored $'drain_epoch="$(date -u -d "$drain_at" +%
 ow_mutate drain-array-guard-dropped $'if type != "array" then error("not an array") elif' $'if false then error("not an array") elif' row_ow_drain_errors
 ow_mutate drain-full-page-guard-dropped $'elif length >= 100 then error("full page")' $'elif false then error("full page")' row_ow_drain_errors
 ow_mutate drain-timestamp-regex-broad $'=~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' $'=~ .* ]]' row_ow_drain_errors
-ow_mutate retry-deadline-budget-only $'(( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'(( SECONDS - T0 < BUDGET ))' row_ow_retry
-ow_mutate retry-deadline-facts-only $'(( SECONDS - T0 < BUDGET + FACTS_BUDGET ))' $'(( SECONDS - T0 < FACTS_BUDGET ))' row_ow_retry
-ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET + FACTS_BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
+ow_mutate retry-deadline-never $'(( SECONDS - T0 < BUDGET ))' $'(( SECONDS - T0 < 0 ))' row_ow_retry
+ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
 ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && (( SECONDS - T0' $'(( SECONDS - T0' row_ow_retry
 ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
@@ -5106,13 +5124,13 @@ ctl_duplicate_refused && pass "control: a mutant that repeats an earlier one (sa
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Ranged form
-# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (698 measured passes:
+# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (700 measured passes:
 # fixture builds, row_*/chk assertions, the ctl-* controls and the kill summaries above — all run on every arm);
-# the ranged share is exactly the EXECUTED in-range sites. A full run (no flag) reproduces the old 1276 floor.
+# the ranged share is exactly the EXECUTED in-range sites. A full run (no flag) reproduces the old 1282 floor.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1276   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds; kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1282   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
@@ -5134,8 +5152,8 @@ fi
 if (( SITES_MUTATE + OW_SITES != DECLARED_TOTAL )); then
   printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 1
 fi
-if (( OW_SITES < 108 || OW_MUT_KILLED != OW_MUT_RUN )); then
-  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=108 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 1
+if (( OW_SITES < 112 || OW_MUT_KILLED != OW_MUT_RUN )); then
+  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=112 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 1
 fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
