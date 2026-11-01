@@ -343,6 +343,15 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   region, and re-attributes each region line as `<job>\t<step>\t<ts>
   <content>` so the SAME anchored awk re-reads it (one parse grammar, no
   second copy).
+- **`awk -v` binds its operand by POSITION in `var=value` form — `-v name
+  "$val"` (two argv entries) is not `-v name="$val"`.** Split, the name trips
+  gawk's `var=value` validation while the value falls into the program-text
+  position and nothing is written; under `2>/dev/null` plus an output-emptiness
+  check the crash lands on the helper's DESIGNED "unrecoverable" code and is
+  indistinguishable from it (#11607 — `step_region` in
+  `git-data-rehearsal-evidence.sh`, caught only by a fixture whose expected
+  outcome was a SUCCESSFUL recovery). See
+  `knowledge-base/project/learnings/2026-11-01-a-two-word-awk-v-mapped-the-helpers-crash-onto-its-designed-failure-code.md`.
 
 ## What the sweeper does NOT cover
 

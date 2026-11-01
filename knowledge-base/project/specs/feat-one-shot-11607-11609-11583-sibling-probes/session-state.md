@@ -31,5 +31,8 @@ None. One environment limitation handled per the #11600 sibling precedent: no ag
 ## QA Phase
 - Status: skipped gracefully — all scenarios unit-layer Given/When/Then (no Browser:/API verify: steps); no dashboard/UI surface in diff (Step 2.6 n/a)
 
+## Compound Phase
+- Status: complete — 1 new learning (`2026-11-01-a-two-word-awk-v-mapped-the-helpers-crash-onto-its-designed-failure-code.md`); `2026-09-17-devin-envelope-omits-cwd…` updated with the `git-commit-secret-scan-undeterminable` literal-path instance; `followthrough-convention.md` sharp edge appended (awk `-v` positional operand). Spec/plan archival deferred to ship Phase 6.45 (in-flight spec; #7490 trap). Dedup: lookback re-evaluation folded into the new learning; TRAIL_PATTERN parity recorded as session error (class already covered); sequential-fallback already documented.
+
 ## Ship Phase
 - Status: pending
