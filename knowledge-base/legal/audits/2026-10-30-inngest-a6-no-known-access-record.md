@@ -40,19 +40,20 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 
 | Prerequisite | State as of 2026-10-31 | Owner fills in |
 |---|---|---|
-| A5 complete | no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest 48-hour point of the new-link soak (#11215, window opened 2026-10-30T15:15:48Z) is 2026-11-01T15:15:48Z | owner confirms yes / no, date |
+| A5 complete | no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest 48-hour point of the new-link soak (#11215, window opened 2026-10-30T15:15:48Z) is 2026-11-01T15:15:48Z | owner confirms yes / no, date; re-check A5 at signing, since this cell is dated 2026-10-31 |
 | Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; no comment on #9927 or #10136 records a read of the deployed ruleset | owner links one or marks "n/a" |
 | Hetzner support answer on delete protection versus project delete and account closure | question reported sent on #9927 at 2026-10-29 17:28 UTC; no answer on #9927 as of 2026-10-31: pending | answer or "pending" |
 
 ## Statement (to be adopted by the owner)
 
-> As of the console read of 2026-10-29 17:28 UTC, to my knowledge the only human member of the Hetzner
+> As of the console figures I posted on #9927 at 2026-10-29 17:28 UTC, to my knowledge the only human member of the Hetzner
 > project that holds the Inngest sole-copy volume was a single Owner (1 member, 0 Admins, 0 other roles);
 > two-factor sign-in was active on the account; and the project's two API tokens (machine access paths: one
 > Read and one Read & Write) are the ones I know and expect.
-> I know of no other access. This statement is limited to what the console showed on the date of the
-> check and does not cover Hetzner's own staff access or what Hetzner retains after a project or account
-> closure (not established; see ADR-282, addenda of 2026-10-23 and 2026-10-28).
+> I know of no other access. The console figures above are limited to the date of that check. "I know of no
+> other access" is my own knowledge at signing. Neither covers Hetzner's own staff access or what Hetzner
+> retains after a project or account closure (not established; see ADR-282, addenda of 2026-10-23 and
+> 2026-10-28).
 
 ## Signature block
 
@@ -60,6 +61,8 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 - Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the statement and claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
 
 ## CLO review, 2026-10-31
+
+This heading records a refusal to attest. It is not an attestation and does not fill the attestation line above.
 
 DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the owner's
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
