@@ -20,7 +20,7 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 - [x] 1.5 `inngest-boot-emitter.test.sh`: add `doppler_flip_token` to `RENDER_EXPR`; redactor fixture row (rewrite both hard-coded paths once each, stub `doppler` and `jq`)
 - [x] 1.6 `cloud-init-user-data-size.test.ts`: one consistent 58-char (48-char body) `SECRET_LENGTHS` for both tokens (review round R7: the shared `doppler_token` stays 48; the inngest arm uses `INNGEST_SECRET_LENGTHS` with 58); floor-exit rows for the budget script
 - [x] 1.7 `preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` 90 to 91 with the required comment
-- [x] 1.8 Tripwire test: no non-comment `DOPPLER_TOKEN`/`printenv`/`env`/`declare -p`/`export -p` in `inngest-cutover-flip.sh`
+- [x] 1.8 Tripwire test: no non-comment `DOPPLER_TOKEN`/`printenv`/`env`/`declare -p`/`export -p` in `inngest-cutover-flip.sh` (superseded by R14: the text tripwire `T-flipsh` is deleted; a runtime canary scan in `inngest-cutover-flip.test.sh` replaces it)
 - [x] 1.9 `inngest.test.sh` comment row (Condition-less drop-in is deliberate); rehearsal-test assertion (read token only); phone-home dp-mask synthetic-token row
 - [x] 1.10 Confirm every new or changed assertion is RED for the right reason
 
@@ -57,14 +57,21 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 - [x] 6.1 ADR-282 build-record addendum (append-only, via `soleur:architecture`)
 - [x] 6.2 C4: `doppler -> inngest` edge description in `model.c4`; run `plugins/soleur/test/c4-count-parity.test.sh` and the two C4 tests
-- [x] 6.3 Runbook subsection (plus go-condition: green budget job on the dispatch SHA; drift-workflow note; flip-rotation caveat) in `inngest-server.md` (plan shape, replace-window impact, abort and rollback rule, three owner-only routes, rehearsal option, inngest-host abort-until-replace)
+- [x] 6.3 Runbook subsection (plus go-condition: green budget job on the dispatch SHA; drift-workflow note; flip-rotation caveat) in `inngest-server.md` (plan shape, replace-window impact, abort and rollback rule, three owner-only routes, rehearsal option, inngest-host abort-until-replace) (review rounds R9, R11, R13: the go-condition is now a PR-visible `inngest-userdata-budget` check the owner reads on the head commit, not a merge gate; "abort-until-replace" is qualified to a live host, with the state-to-dispatch matrix for absent-host states)
 - [x] 6.4 PR body: lead with the merge-changes-nothing sentence; link the addendum; `Ref #9927`; cite #11816, #11817 and #11820
 
 ## Phase 7: Verification
 
 - [x] 7.1 New suite, `inngest-host.test.sh`, provision-unit, boot-emitter, the two gate suites, parity and size tests
 - [x] 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` and `bash scripts/lint-orphan-test-suites.sh`
-  - Recorded outcome (review round): no per-command exit code was recorded for these two commands. The evidence is commit `7fb0c7de32`: the repo ratchets were found by `scripts/test-all.sh --affected` and fixed there (workflow size gate, suite weight row, fixture operands).- [x] 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
+  - Recorded outcome (review round): no per-command exit code was recorded for these two commands. The evidence is commit `7fb0c7de32`: the repo ratchets were found by `scripts/test-all.sh --affected` and fixed there (workflow size gate, suite weight row, fixture operands).
+- [x] 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
 - [x] 7.4 `git diff --stat origin/main...HEAD -- <Files NOT to Edit>` prints nothing
 - [x] 7.5 `terraform fmt -check` and `terraform validate` if providers are cached (else report not run)
   - Recorded outcome: `terraform fmt -check` rc 0; `terraform validate` success on the main root and on the rehearsal root; `validate-infra-templates.sh` not run (needs cloud-init on PATH).
+
+## Phase 8: Review rounds (rulings R7-R14 in `decision-challenges.md`)
+
+- [x] 8.1 Fix round 1 (R7-R11): floor 384 B with all five stubs hash-derived, `--cap-only` on the replace job, replace-gate `doppler_token_touched` counter (R10), runbook first-replace steps and state-to-dispatch matrix, ADR limits, plan correction note
+- [x] 8.2 Fix round 2 docs (R12-R14, Y2): the ADR residual sentence for the write guard (R12), the floor reworded as a PR-visible check and not a merge gate (R13), the text tripwire replaced by a runtime canary scan in the records (R14), runbook steps 1 to 7 (owner-run Tier-B commands, `--since` format, phone-home witness, abort deadline, cost rule, `aborted` outcome), decision-challenges pointers and R12-R14 rows
+- [ ] 8.3 Fix round 2 code and tests (X2): `--cap-only` purpose rows, floor-seam hardening, canary scan, S-glob narrowing, R-g sibling check, replace-gate source pin; then the lead re-runs the combined suites, commits, runs a final verification pass, qa, compound and ship
