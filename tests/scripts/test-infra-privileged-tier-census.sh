@@ -1235,12 +1235,6 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
         "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
-        # #11631: the once-a-day dead-man logs alerts become archive-fed heartbeats. Bare -target lines
-        # stay in apply-web-platform-infra.yml until the first verified apply (follow-up removes both).
-        "logtail_exploration.claude_cost_capture_dark": "#11631",
-        "logtail_exploration_alert.claude_cost_capture_dark": "#11631",
-        "logtail_exploration.luks_monitor_host_timer_dark": "#11631",
-        "logtail_exploration_alert.luks_monitor_host_timer_dark": "#11631",
     },
 }
 # RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway
