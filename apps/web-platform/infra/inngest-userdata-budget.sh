@@ -33,8 +33,16 @@
 #     interpolated twice in the template (the first-boot resolver and the boot-reopen script).
 #   * `doppler_arch` / `inngest_cli_arch` — "amd64" and "arm64" are both 5 B, so this render is
 #     ARCH-NEUTRAL in length and the measurement holds for either `var.inngest_server_type`.
-#   * `doppler_token` — a `dp.st.<config>.<body>` service token on project `soleur-inngest`,
-#     config `prd`; stubbed with a 48 B body, over the ~43 B Doppler emits.
+#   * `doppler_token` and `doppler_flip_token` — `dp.st.<config>.<body>` service tokens on project
+#     `soleur-inngest`, config `prd` (the read-only BOOT token and the read/write FLIP token of the
+#     ADR-282 addendum 2026-10-30, #9927 item 4). Each is stubbed with a 48-character body, over the
+#     ~43 B Doppler is believed to emit (no repo fixture records a real body width: this is a
+#     belief, the stub is the bound), 58 characters in all. These stubs bound LENGTH AND ENTROPY, and
+#     the second matters as much as the first: a repeated `STUB` run gzips to almost nothing, a real
+#     token does not, so the earlier low-entropy stub under-measured the stored size by about 44 B
+#     PER DISTINCT TOKEN. Each body is therefore a hash-derived, random-shaped string
+#     (base64sha512 of a label, `+` and `/` mapped to letters, cut to 48), deterministic across runs
+#     and carrying no contiguous token-shaped literal in this source.
 #   * `betterstack_logs_token` — 64 B. The real Better Stack token length is NOT derivable from
 #     anything in this repo (every in-tree sample is synthetic or redacted), so the bound is made
 #     true by construction rather than by belief. Same reasoning, same width, as the registry
@@ -164,7 +172,8 @@ cat > "$TFDIR/main.tf" <<EOF
 locals {
   vars = {
     inngest_luks_volume_id = "100000005"
-    doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
+    doppler_token          = join(".", ["dp", "st", "prd", substr(replace(replace(base64sha512("boot"), "+", "a"), "/", "b"), 0, 48)])
+    doppler_flip_token     = join(".", ["dp", "st", "prd", substr(replace(replace(base64sha512("flip"), "+", "a"), "/", "b"), 0, 48)])
     inngest_doppler_config = "prd"
     sdk_url                = "http://10.0.1.10:3000/api/inngest"
     inngest_cli_arch       = "amd64"
@@ -286,5 +295,24 @@ if [ "$stored_bytes" -ge "$cap" ]; then
   else
     echo "  CAUSE: the strip is working (raw ${raw_bytes} B -> stripped ${stripped_bytes} B), so this is real payload growth. Bake new host logic into the image instead of inlining it (the ADR-080/#5921 pattern)." >&2
   fi
+  exit 1
+fi
+
+# THE CAP-HEADROOM FLOOR (flip-token split, ADR-282 addendum 2026-10-30, CTO N3). Under the cap is not
+# enough: every addition to this template spends the same few hundred bytes, the 2026-09-08 outage was a
+# payload that crossed the line unnoticed, and a replace that lands within a few bytes of the cap has no
+# room for the next token or comment-free line. The floor is 512 B of cap headroom (stored <= cap - 512),
+# measured here, the only place that runs the real templatefile/base64gzip, and run by the
+# `infra-validation.yml` job `inngest-userdata-budget` and by the inngest_host_replace job BEFORE its plan
+# step (on the first replace after the split both token keys are unknown at plan time, so the in-plan
+# length precondition is deferred to apply, after the destroy). If it is breached, shrink code: never
+# raise INNGEST_GZIP_BUDGET (plugins/soleur/test/cloud-init-user-data-size.test.ts) and never add bytes.
+# INNGEST_BUDGET_FLOOR_BYTES is a TEST SEAM (an empty or non-numeric value falls back to 512): it lets
+# cloud-init-user-data-size.test.ts raise the floor above the real headroom and assert exit EXACTLY 1, so
+# the new exit is proven live instead of vacuous. Exit 1 here, 2 stays "unmeasurable".
+floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-512}"
+case "$floor_bytes" in ''|*[!0-9]*) floor_bytes=512 ;; esac
+if [ "$headroom" -lt "$floor_bytes" ]; then
+  echo "inngest-userdata-budget: HEADROOM FLOOR BREACHED — ${headroom} B of cap headroom is below the ${floor_bytes} B floor (stored ${stored_bytes} B of ${cap} B). Shed payload (prose is stripped for free, so what remains is code); do NOT raise INNGEST_GZIP_BUDGET and do NOT add bytes." >&2
   exit 1
 fi

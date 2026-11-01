@@ -45,6 +45,25 @@ users:
     lock_passwd: true
 
 write_files:
+  # FLIP-TOKEN DROP-IN (ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)"). The baked
+  # inngest-cutover-flip.service reads EnvironmentFile=/etc/default/inngest-server; this drop-in appends a
+  # SECOND EnvironmentFile, so only DOPPLER_TOKEN is overridden (the flip file holds that one variable) and
+  # the project, config and config-dir variables still come from the baked file. The flip file is the
+  # read/write token, root-only 0600, written by the runcmd item after the inngest-server write; every OTHER
+  # unit resolves the read-only boot token. inngest-flip-token.test.sh section R proves the resolution.
+  # UNPREFIXED and with NO ConditionPathExists, on purpose (CTO N1): the flip service and timer are
+  # installed by the bootstrap only after that runcmd write, and a failed write aborts runcmd, so no normal
+  # boot reaches a missing file; a Condition would turn a loud failure (the unit fails on every 30 s start,
+  # stderr shipped) into a silent skip with no detector that does not share the gate. The base unit's own
+  # ConditionPathExists on the server file still gates it. Not in the config bundle: any defect found after
+  # the replace needs a second replace of the sole scheduler.
+  - path: /etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf
+    content: |
+      [Service]
+      EnvironmentFile=/etc/default/inngest-flip
+    owner: root:root
+    permissions: '0644'
+
   # SSH hardening parity with registry / git-data / the web host's minimal set.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
@@ -553,7 +572,7 @@ write_files:
       # survives it) and restoring lowercase last. ONLY `sha256=` + exactly 64 hex
       # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
       # unchanged, so no credential class loses redaction.
-      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
+      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_.-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
       # Optional 3rd arg: marker override (#10382 — the cutover-flip noop dual-emit rides
       # SOLEUR_INNGEST_NOOP so ~288 daily liveness rows never crowd the BOOT_STAGE
       # consumers' fixed newest-first limits). TRUSTED-LITERAL ONLY: the jq-failure
@@ -607,6 +626,11 @@ write_files:
       sf=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_INNGEST_SENTRY_DSN_FILE" ] && sf="$SOLEUR_INNGEST_SENTRY_DSN_FILE"; sdsn="$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$sf" 2>/dev/null | head -n 1)"; vals+=("$sdsn")
       vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
+      # Flip-token split (CTO R4): the read/write flip token, by VALUE. READ with sed, never sourced
+      # (sourcing would overwrite DOPPLER_TOKEN, which the Doppler download just below uses; this line sits AFTER the boot-file source on purpose, so that hazard is real and the redactor suite can kill a sourcing mutant). The generic
+      # 40-char backstop cannot be relied on for a `dp.st.<config>.<body>` token (the dots break the run).
+      # An absent file yields an empty value, and the loop below skips values under 6 bytes.
+      vals+=("$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/inngest-flip 2>/dev/null)")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config ${inngest_doppler_config} 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
       fi
@@ -1487,7 +1511,8 @@ write_files:
       timeout 300 dpkg --configure -a >/dev/null 2>&1 || true
       # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
       # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
-      # soleur-inngest (read/write, #6178). It is a LITERAL, never inherited: inngest-bootstrap.sh
+      # soleur-inngest (read-only since the flip-token split, ADR-282 addendum 2026-10-30; the
+      # flip write uses the drop-in token). It is a LITERAL, never inherited: inngest-bootstrap.sh
       # defaults an unset DOPPLER_PROJECT to `soleur` (its SOLEUR-DEBT note), and a retried run on
       # the same host must pin it exactly as the first did. VECTOR_CLI_ARCH (=${inngest_cli_arch})
       # selects the matching triple in the bootstrap map.
@@ -2326,10 +2351,13 @@ runcmd:
     command -v doppler >/dev/null 2>&1 \
       && /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-installed "$(doppler --version 2>/dev/null | head -1)" \
       || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
-  # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
+  # Restricted (0600 root) env file with the scoped Doppler BOOT service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
-  # is read/write on the ISOLATED `soleur-inngest` project's `prd` root config (the flip FSM
-  # writes INNGEST_CUTOVER_FLIP under it, #6178) — a SEPARATE project with NO inheritance path
+  # is READ-ONLY on the ISOLATED `soleur-inngest` project's `prd` root config (flip-token split,
+  # ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)": the flip FSM's
+  # INNGEST_CUTOVER_FLIP write runs under a SEPARATE read/write flip token, written to
+  # /etc/default/inngest-flip below and read only by inngest-cutover-flip.service through the
+  # write_files drop-in at the top of this file) — a SEPARATE project with NO inheritance path
   # to soleur/prd, so a host compromise reaches ONLY this host's own isolated secret set,
   # never a foreign project.
   # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
@@ -2346,15 +2374,20 @@ runcmd:
   # `.`-sourced by other items and helpers (inngest-redact.sh, the LUKS stage), so a value
   # carrying shell syntax would EXECUTE as root on every read. Refuse, before the write, any value
   # outside [A-Za-z0-9._:/-]. The value is read through a QUOTED heredoc, so a quote inside it
-  # cannot break this check the way it would break a quoted literal. Refusal phones home and
+  # cannot break this check the way it would break a quoted literal. ONE guard covers BOTH Doppler
+  # tokens (boot and flip, one heredoc line each, checked line by line). It is per-line by design
+  # (CTO N10): an individually-clean extra line is a bare word and never an assignment, and the
+  # flip file is read by systemd and sed, never sourced. Refusal phones home and
   # `exit`s the runcmd shell: a host whose credential cannot be written safely must not arm.
   - |
-    IFS= read -r _wv <<'SOLEUR_WRITE_GUARD_EOV'
+    while IFS= read -r _wv; do
+      case "$_wv" in
+        ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "a Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
+      esac
+    done <<'SOLEUR_WRITE_GUARD_EOV'
     ${doppler_token}
+    ${doppler_flip_token}
     SOLEUR_WRITE_GUARD_EOV
-    case "$_wv" in
-      ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "the Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
-    esac
     unset _wv
   - |
     IFS= read -r _wv <<'SOLEUR_DCFG_GUARD_EOV'
@@ -2893,6 +2926,10 @@ runcmd:
   # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
   # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
   # this env file carries DOPPLER_CONFIG_DIR (not HOME).
+  # The DOPPLER_TOKEN written here is the READ-ONLY boot token (same as /etc/default/inngest-doppler):
+  # this file is group-readable by deploy and read by app-user units, so it must not carry write
+  # access. The cutover flip unit overrides DOPPLER_TOKEN from /etc/default/inngest-flip (below) through
+  # the write_files drop-in; see the ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)".
   # #6555: DOPPLER_PROJECT=soleur-inngest lands in the env-file so the inngest units (which
   # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
   # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
@@ -2907,6 +2944,14 @@ runcmd:
     unset _wv
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
+  # Flip-token split: the read/write flip token, root-only 0600, ONE variable. FAIL CLOSED (CTO N2):
+  # the runcmd script has no errexit, so the bare `exit 1` is what keeps the host from arming on a
+  # failed write (the same mechanism as the charset guards above); the existing detector is the missing
+  # provision-unit-armed row for the instance id. Placed before every item that arms
+  # soleur-inngest-provision (which also runs the bootstrap that installs the flip unit). No chown:
+  # the file stays root:root, and only inngest-cutover-flip.service lists it. Written by `( umask 0177 )`
+  # for the reason given at the zot-read write below.
+  - ( umask 0177 && printf 'DOPPLER_TOKEN=%s\n' '${doppler_flip_token}' > /etc/default/inngest-flip ) || exit 1
 
   # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
   # ONE VARIABLE, ON PURPOSE. inngest-server-probe.service reads this via a tolerant

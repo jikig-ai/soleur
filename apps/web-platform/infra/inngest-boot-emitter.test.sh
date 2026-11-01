@@ -743,7 +743,11 @@ EPH
   }
   run_redact_flip() { # $1 rewritten redactor, stdin = tail
     rm -f "$FLIP_FX/doppler-saw-token"
-    env -i PATH="$FLIP_FX/bin:$PATH" HOME="$WORK" SOLEUR_INNGEST_SENTRY_DSN_FILE="$RENDERED_DSN" bash "$1"
+    # DOPPLER_TOKEN is EXPORTED in the inherited environment, as it is for the callers that run the
+    # redactor under `set -a`: a variable already in the environment is updated by an assignment in a
+    # sourced file and the update reaches the child, so this is the shape in which sourcing the flip file
+    # would hand the Doppler download the flip token.
+    env -i PATH="$FLIP_FX/bin:$PATH" HOME="$WORK" DOPPLER_TOKEN="dp.st.prd.$BOOT_BODY" SOLEUR_INNGEST_SENTRY_DSN_FILE="$RENDERED_DSN" bash "$1"
   }
   case_redact_flip() { # behaviour: both tokens masked by value; the Doppler call keeps the BOOT token
     local rw="$WORK/redact-flip-rw.$RANDOM" out saw
