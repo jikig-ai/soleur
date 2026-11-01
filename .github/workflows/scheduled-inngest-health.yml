@@ -1321,11 +1321,15 @@ jobs:
           # row's cutover_flag — suppression keys on it, so it must not come back
           # empty just because the gate refused before E11.
           WFLAG="$(grep -oE '^(flag|hb_flag)=[A-Za-z0-9_-]+' "$W_EMIT" | grep -vE '__UNREADABLE__' | tail -1 | cut -d= -f2 || true)"
+          # dt lives on the OUTER warehouse row ($o), journald fields on the
+          # inner raw payload ($d) — reading .dt off $d yields "" everywhere
+          # and the newest-selection degenerates (fix-round seat, PR #11782).
           W_PROBE_MSGS="$(printf '%s\n' "$(cat "$W_PROBE_ROWS")" \
-            | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | .raw? | fromjson?
-                  | select(inngest_probe_row)
-                  | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
-                  | [(.dt // ""), .message] | @tsv' 2>/dev/null || true)"
+            | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | . as $o
+                  | ($o.raw? | fromjson?) as $d
+                  | select($d | inngest_probe_row)
+                  | select($d.host == env.DEDICATED_HOST and $d.host_name == env.DEDICATED_HOST_NAME)
+                  | [($o.dt // ""), $d.message] | @tsv' 2>/dev/null || true)"
           # hb fallback runs BEFORE the probe-row fallback: the FSM's own
           # heartbeat attests the CURRENT flag at ~1-2/min, while the newest
           # probe row's cutover_flag may sit on a row the gate refused before
@@ -1333,13 +1337,17 @@ jobs:
           if [[ -z "$WFLAG" ]]; then
             WBID="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
               | grep -oE 'boot_id=[0-9a-f-]+' | head -1 | cut -d= -f2 || true)"
-            if [[ "$WBID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            # journald _BOOT_ID is UNHYPHENATED — strip the probe row's dashes
+            # before joining (the gate does the same at inngest-host-dark-gate.sh).
+            WBID="${WBID//-/}"
+            if [[ "$WBID" =~ ^[0-9a-f]{32}$ ]]; then
               WFLAG="$(jq -Rrn --arg b "$WBID" '
                   [ inputs
-                    | fromjson? | .raw? | fromjson?
-                    | select((._BOOT_ID | type) == "string" and ._BOOT_ID == $b)
-                    | select((.message | type) == "object")
-                    | { dt: (.dt // ""), flag: ((.message.flag // "") | tostring) }
+                    | fromjson? | . as $o
+                    | ($o.raw? | fromjson?) as $d
+                    | select(($d._BOOT_ID | type) == "string" and $d._BOOT_ID == $b)
+                    | select(($d.message | type) == "object")
+                    | { dt: ($o.dt // ""), flag: (($d.message.flag // "") | tostring) }
                   ] | (map(.dt) | max) as $newest
                     | (map(select(.dt == $newest) | .flag) | unique) as $f
                     | if ($f | length) == 1 then $f[0] else "" end' \

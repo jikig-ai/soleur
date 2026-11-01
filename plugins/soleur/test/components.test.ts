@@ -1102,7 +1102,7 @@ export function findContradictingStateProbes(
 const HAS_LIMIT = /(?:^|\s)(?:-L|--limit)(?:[=\s]|$)/;
 // A pure existence drill: reduce the result to "does ≥1 row exist?". Safe at the
 // 30-row cap — if >30 rows match, ≥1 certainly does.
-const EXISTENCE_DRILL = /\.\[0\](?![,\d])|\/\/\s*empty|first\s*\(/;
+const EXISTENCE_DRILL = /\.\[0\](?![\s\S]*,)|\/\/\s*empty|first\s*\(/;
 // A result-set operation that runs AFTER the search, so it operates on the
 // already-truncated 30 rows and its result depends on the FULL match set: an
 // exact-match select, a count, or a REORDER (sort/min/max/group). When present,
@@ -1126,11 +1126,18 @@ const BOUNDED_LINKED_ISSUE = /linked:issue\s+#\S/;
  *   (a) a pure existence drill with NO post-search narrowing, or
  *   (b) the bounded `linked:issue #N` query shape.
  */
+// Quoted spans carry data, not flags: `-L`/`--limit`/`--paginate`/`-X` inside
+// `--search`/`--jq`/`--field` strings must not launder a bound or a verb. Test
+// bound/verb/exemption patterns on the dequoted command; patterns whose legit
+// match lives inside a flag value (`linked:issue`, `.[0]`) keep the raw text.
+const dequote = (cmd: string): string =>
+  cmd.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+
 export function findUnlimitedProbes(
   files: { file: string; raw: string; surface?: Surface }[],
 ): Probe[] {
   return extractSearchProbes(files).filter(({ cmd }) => {
-    if (HAS_LIMIT.test(cmd)) return false;
+    if (HAS_LIMIT.test(dequote(cmd))) return false;
     if (BOUNDED_LINKED_ISSUE.test(cmd)) return false;
     if (EXISTENCE_DRILL.test(cmd) && !POST_SEARCH_NARROWING.test(cmd)) return false;
     return true;
@@ -1348,7 +1355,9 @@ function apiEndpointIsList(cmd: string): boolean {
     // strip the scope pair when a second segment exists; the bare root must
     // fall through to apiPathIsList (which returns true on length-1).
     segs.splice(0, 2);
-  } else if (segs[0] === "user" && segs.length >= 2) {
+  } else if (segs[0] === "user") {
+    // `user` alone is a singleton (GET /user) — splice unconditionally so the
+    // bare endpoint reduces to [] (item read); only `user/<child>` recurses.
     segs.splice(0, 1);
   }
   return apiPathIsList(segs);
@@ -1405,19 +1414,16 @@ export function findUnboundedEnumerations(
   files: { file: string; raw: string; surface?: Surface }[],
 ): EnumProbe[] {
   return extractEnumerations(files).filter((p) => {
+    // Write/verb/bound/head patterns are tested on the dequoted command — a
+    // `-f 'q=-X POST'`, `--limit 100`, `--paginate` or `--head` inside a quoted
+    // `--search`/`--jq`/`--field` string is data, not a flag (fix-round seat).
+    const bareCmd = dequote(p.cmd);
     if (p.kind === "api") {
-      if (GH_API_WRITE.test(p.cmd) && !GH_API_GET.test(p.cmd)) return false;
+      if (GH_API_WRITE.test(bareCmd) && !GH_API_GET.test(bareCmd)) return false;
       if (!apiEndpointIsList(p.cmd)) return false;
     }
     if (!p.forConsumed && !ENUMERATION_CONSUMER.test(p.cmd)) return false;
     if (BOUNDED_LINKED_ISSUE.test(p.cmd)) return false;
-    // BOUNDED_HEAD and sufficientBound are tested on the dequoted command —
-    // `--head`/`--limit 100`/`--paginate` inside a `--search`/`--jq` string is
-    // data, not a bound (structural-enumeration seat, PR #11782).
-    const bareCmd = p.cmd.replace(
-      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
-      '""',
-    );
     if (BOUNDED_HEAD.test(bareCmd)) return false;
     if (EXISTENCE_DRILL.test(p.cmd) && !POST_SEARCH_NARROWING.test(p.cmd)) return false;
     if (sufficientBound(bareCmd)) return false;
@@ -2071,6 +2077,30 @@ describe("unbounded gh enumerations carry an explicit sufficient bound (#8593)",
         { file: "f.sh", surface: "sh", raw: 'X=$(gh pr list --search "linked:issue # OR is:open" --json number --jq \'.[].number\')' },
       ]),
     ).toHaveLength(1);
+  });
+
+  test("flags a `.[0]` drill that ALSO reads a later row (`,`-separated jq)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --json number | jq \'.[0].number, .[1].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a write arm inside a --field value does not exempt (`-f 'q=-X POST'` is data)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api -X GET "repos/o/r/issues?state=open" -f \'q=-X POST\' --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("passes a bare `gh api user` item read", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api user --jq \'.login\'' },
+      ]),
+    ).toHaveLength(0);
   });
 
   // The #8593 widening pins, same idiom as the #6793 surface pins above: the
