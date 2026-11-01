@@ -55,9 +55,9 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 ## Phase 6: Records
 
-- 6.1 ADR-282 build-record addendum (append-only, via `soleur:architecture`)
-- 6.2 C4: `doppler -> inngest` edge description in `model.c4`; run `plugins/soleur/test/c4-count-parity.test.sh` and the two C4 tests
-- 6.3 Runbook subsection (plus go-condition: green budget job on the dispatch SHA; drift-workflow note; flip-rotation caveat) in `inngest-server.md` (plan shape, replace-window impact, abort and rollback rule, three owner-only routes, rehearsal option, inngest-host abort-until-replace)
+- [x] 6.1 ADR-282 build-record addendum (append-only, via `soleur:architecture`)
+- [x] 6.2 C4: `doppler -> inngest` edge description in `model.c4`; run `plugins/soleur/test/c4-count-parity.test.sh` and the two C4 tests
+- [x] 6.3 Runbook subsection (plus go-condition: green budget job on the dispatch SHA; drift-workflow note; flip-rotation caveat) in `inngest-server.md` (plan shape, replace-window impact, abort and rollback rule, three owner-only routes, rehearsal option, inngest-host abort-until-replace)
 - 6.4 PR body: lead with the merge-changes-nothing sentence; link the addendum; `Ref #9927`; cite #11816, #11817 and #11820
 
 ## Phase 7: Verification
