@@ -29,3 +29,12 @@
 - Route: `/soleur:go #9167` → `one-shot` (issue OPEN, no linked/open PRs; merged body-probe hits #9587/#9554/#9523 are citations of unrelated CI fixes).
 - Draft PR: #11738 on branch `feat-one-shot-9167-e2e-otp-signups`.
 - `cto_spawns=0`
+
+## Work Phase (in progress)
+- Implemented: `apps/web-platform/e2e/web-server.sh` (spawn+wait+rc marker, `128+N` signal encoding, `--selftest` arm), `name:` per webServer entry (`e2e-public`/`e2e-auth`), `[e2e-mock]` tag on otp-login mock payload.
+- Test: `test/playwright-web-server-exit-marker.test.ts` — 14/14 green with distdir sibling.
+- Committed `2f03c2d758`; pushed through `b2c4fe5d97` + plan/rulings commit.
+- #9167 comment posted with CORRECTED measurement (issuecomment-6550163443): 0 OTP/font recurrences in ~300+ merge-group e2e jobs; 6 `ERR_CONNECTION_REFUSED :3100` reds named by run id = #11299 residual. Falsified "60/60" figure never posted.
+- Affected gate (`test-all.sh --affected`, 163 suites) running detached — log `/var/tmp/soleur-test-all-logs/wt9167-affected.log`, rc `/var/tmp/soleur-test-all-logs/wt9167-affected.rc`.
+- Remaining: gate green → `## Work Phase Complete` → soleur:review → fix findings → soleur:qa → soleur:compound → soleur:ship (PR #11738, `Closes #9167` + `Ref #11299`) → postmerge → DONE.
+- tasks.md: 1.x–4.1 ticked; 4.2 (PR body via ship) and 4.3 (e2e CI green + name prefixes) pending.
