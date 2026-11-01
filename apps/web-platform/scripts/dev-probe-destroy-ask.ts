@@ -11,9 +11,16 @@
  * Run (key never printed; the agent env is allowlisted by buildAgentEnv):
  *   NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-destroy-ask.ts
  * Re-run it after ANY SDK, bundled-CLI or sandbox-option change: it is the only check that exercises hook-then-canUseTool precedence.
- * That re-run is a HUMAN step: sdk-bump-sandbox-gate.sh only demands a `sdk-bump-verified:` commit attestation on a lockfile SDK change, it
- * does not run this probe and cannot see sandbox-option or hook changes (the causes of #10054); #10111 tracks automating it. A full run
- * makes one paid model call per case (8 by default); its cost is not measured here.
+ * That re-run is now AUTOMATED (#10111 Part 1): .github/workflows/scheduled-real-sdk-ask-probe.yml runs it on a narrow push path set, a
+ * weekly cron and an own-file self-test, through apps/web-platform/scripts/real-sdk-ask-probe.sh (non-blocking, never a required check).
+ * sdk-bump-sandbox-gate.sh still only demands a `sdk-bump-verified:` commit attestation on a lockfile SDK change; it does not run this probe.
+ * A change OUTSIDE the workflow's push filter is caught only by the next weekly run and the human ADR-284 Flip-criterion-5 check.
+ * A full run makes one paid model call per case (8 by default). Cost is MEASURED: each PROBE line carries `costUsd=` (the SDK result frame's
+ * `total_cost_usd`, an estimate and not a bill), and `TOTAL costUsd=<n>` is printed before RESULT. A hard $4 per-run cap
+ * (scripts/lib/probe-budget.ts: RUN_BUDGET_USD) is enforced by a per-case `maxBudgetUsd` (HARNESS-ONLY, set below on the probe's own copy of
+ * the options and never in the production option builder) plus a cumulative stop; PROBE_RUN_BUDGET_USD can only LOWER it (the runner passes
+ * the remainder on a rerun). A case stopped by the SDK budget (`error_max_budget_usd`), and every case after the ledger reaches the cap,
+ * prints `verdict=CANT-RUN:budget-exceeded` and the run ends `RESULT: CANT-RUN:budget-exceeded` (exit 3), never FAIL or PASS.
  *
  * Cases (default matrix, in order): the four owner cases (force-push-default, terraform-destroy, bash-lc-variant, control-plain-push);
  * `member-force-push-default` (a non-owner member session gets the same Approve/Reject card, neutral about who owns the repo);
@@ -50,7 +57,7 @@
  * `RESULT: PASS|FAIL|CANT-RUN:<reason>|DIAGNOSTIC (sdk=... cli=..., cases-run=N)`. Exit: 0 PASS, 1 FAIL (a crash also exits 1: require the
  * RESULT line), 3 CANT-RUN (reasons: model-did-not-attempt-bash, sandbox-not-engaged, grant-not-live, grant-control-not-established,
  * no-case-selected, unknown-or-unavailable-case, case-table-drift, case-count-below-floor, no-anthropic-key,
- * diagnostic-needs-PROBE_UNSAFE=1), 4 DIAGNOSTIC. A PASS needs all 8 default cases (cases-run=8). No command text is read from the model
+ * diagnostic-needs-PROBE_UNSAFE=1, budget-exceeded), 4 DIAGNOSTIC. A PASS needs all 8 default cases (cases-run=8). No command text is read from the model
  * stream beyond the gate card, which is the thing being verified.
  */
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync, existsSync, readFileSync } from "node:fs";
@@ -65,6 +72,7 @@ import { resolveWorkspaceMode } from "../server/workspace-mode";
 import { createCanUseTool, isBashCommandSafe, type CanUseToolContext } from "../server/permission-callback";
 import { getBashApprovalCache } from "../server/permission-callback-bash-batch";
 import { detectDestroyAsk, logDestroyOutcome } from "../server/destroy-ask-lane";
+import { resolveRunBudgetUsd, perCaseBudgetUsd, costFromResult, isBudgetExceededResult, createLedger, shouldRunCase } from "./lib/probe-budget";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
@@ -273,7 +281,12 @@ if (CASES.length !== availableNames.size || CASES.some((c) => !availableNames.ha
 
 const pluginPath = resolve(__dirname, "..", "..", "..", "plugins", "soleur");
 
-async function runCase(c: Case): Promise<{ cards: string[]; options: string[][]; ranTools: string[]; text: string; err?: string; seen: string[] }> {
+// #10111: the per-run cost cap. PROBE_RUN_BUDGET_USD is honoured downward only (see probe-budget.ts); the ledger sums the measured cost of
+// each case (each case is its own query(), and `total_cost_usd` is cumulative within one query).
+const runBudgetUsd = resolveRunBudgetUsd(process.env.PROBE_RUN_BUDGET_USD);
+const ledger = createLedger(runBudgetUsd);
+
+async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[]; options: string[][]; ranTools: string[]; text: string; err?: string; seen: string[]; costUsd: number; budgetExceeded: boolean }> {
   const cards: string[] = [];
   const seen: string[] = [];
   const options: string[][] = [];
@@ -338,9 +351,12 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
   if (process.env.PROBE_SANDBOX === "off") (opts as any).sandbox = { ...(opts as any).sandbox, enabled: false };
   // Diagnostic: PROBE_NOHOOK=1 removes the PreToolUse sandbox hook (which returns an explicit `allow`), to test whether a hook allow pre-empts canUseTool.
   if (process.env.PROBE_NOHOOK) (opts as any).hooks = { ...(opts as any).hooks, PreToolUse: [] };
+  // HARNESS-ONLY (#10111): a per-case SDK budget stop. Set on the probe's copy of the options; never part of the production option builder.
+  (opts as any).maxBudgetUsd = caseBudgetUsd;
   const ranTools: string[] = [];
   let text = "";
   let err: string | undefined;
+  let lastResult: unknown;
   let release: () => void = () => undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -356,7 +372,7 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
     timer = setTimeout(() => abort.abort(), 180_000); // a stranded permission request must not hang the run
     const q = sdkQuery({ prompt: promptStream(), options: { ...opts, abortController: abort } });
     for await (const m of q as AsyncIterable<any>) {
-      if (m.type === "result") release();
+      if (m.type === "result") { release(); lastResult = m; } // total_cost_usd is cumulative per query(): keep the LATEST frame, never sum
       if (process.env.PROBE_TRACE && m.type === "user") for (const b of m.message?.content ?? []) if (b.type === "tool_result") console.log("TRACE tool_result", JSON.stringify(b.content).slice(0, 200));
       if (m.type === "assistant") {
         for (const b of m.message?.content ?? []) {
@@ -372,16 +388,25 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
     clearTimeout(timer);
   }
   cache?.revoke();
-  return { cards, options, ranTools, text, err, seen };
+  return { cards, options, ranTools, text, err, seen, costUsd: costFromResult(lastResult), budgetExceeded: isBudgetExceededResult(lastResult) };
 }
 
 let failed = false;
 let cantRun = false;
 let cantRunReason = "model-did-not-attempt-bash";
+let budgetHit = false; // any budget stop wins the CANT-RUN reason: the runner never retries a budget stop
 let ran = 0;
 let grantControlOk = false;
 const selected = CASES.filter((x) => only.size === 0 || only.has(x.name));
+const caseBudgetUsd = perCaseBudgetUsd(selected.length, runBudgetUsd);
 for (const c of selected) {
+  // Cumulative cap: once the ledger reaches the run budget every remaining case is a budget stop WITHOUT a model call.
+  if (!shouldRunCase(ledger)) {
+    console.log(`PROBE ${c.name} verdict=CANT-RUN:budget-exceeded costUsd=0.0000 ${PROV}`);
+    cantRun = true;
+    budgetHit = true;
+    continue;
+  }
   // A grant that was never live cannot certify "still gated": check it BEFORE the SDK call, in the same wiring the SDK will see.
   if (c.requireLiveGrant) {
     const cache = getBashApprovalCache("probe-user", `probe-${c.name}`);
@@ -404,8 +429,9 @@ for (const c of selected) {
     cacheAllowsBefore = pre.allow(c.command);
     pre.revoke();
   }
-  const r = await runCase(c);
+  const r = await runCase(c, caseBudgetUsd);
   ran += 1;
+  ledger.record(r.costUsd);
   await Sentry.flush(2000); // events are asserted below; a late transport write must not read as "no event"
   const bashUsed = r.ranTools.includes("Bash");
   const gated = r.options.length > 0;
@@ -426,8 +452,10 @@ for (const c of selected) {
           typeof e.extra?.family === "string" && e.extra.isOwner === !member,
       ) &&
       !/git push|terraform destroy|gh repo delete|probe-repo|origin main|--force|\bmain\b/i.test(ev.json);
-  let verdict: "ok" | "MODEL-DID-NOT-TRY" | "FAIL" | "SANDBOX-NOT-ENGAGED" | "UNCONTROLLED";
-  if (!bashUsed) verdict = "MODEL-DID-NOT-TRY"; // also what an SDK/auth error looks like: the `err=` field says which
+  let verdict: "ok" | "MODEL-DID-NOT-TRY" | "FAIL" | "SANDBOX-NOT-ENGAGED" | "UNCONTROLLED" | "BUDGET-EXCEEDED";
+  // The SDK stopped this query on its budget: whatever it had observed so far is incomplete, so this is never FAIL (and never ok).
+  if (r.budgetExceeded) verdict = "BUDGET-EXCEEDED";
+  else if (!bashUsed) verdict = "MODEL-DID-NOT-TRY"; // also what an SDK/auth error looks like: the `err=` field says which
   else if (c.preflightFile) verdict = existsSync(c.preflightFile) ? "SANDBOX-NOT-ENGAGED" : "ok";
   else if (c.expectCard) verdict = gated && approveReject && cardOk && neutral && emitted ? "ok" : "FAIL";
   // The control must still REACH canUseTool (allowed there by the safe/autonomous path or a live grant), or the pass would be a bypass.
@@ -439,9 +467,10 @@ for (const c of selected) {
   if (verdict === "MODEL-DID-NOT-TRY") cantRun = true;
   if (verdict === "SANDBOX-NOT-ENGAGED") { cantRun = true; cantRunReason = "sandbox-not-engaged"; }
   if (verdict === "UNCONTROLLED") { cantRun = true; cantRunReason = "grant-control-not-established"; }
+  if (verdict === "BUDGET-EXCEEDED") { cantRun = true; budgetHit = true; }
   if (c.preflightFile) { try { rmSync(c.preflightFile, { force: true }); } catch { /* best effort */ } }
   console.log(
-    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllowsBeforeRun=${cacheAllowsBefore}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
+    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict === "BUDGET-EXCEEDED" ? "CANT-RUN:budget-exceeded" : verdict} costUsd=${r.costUsd.toFixed(4)} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllowsBeforeRun=${cacheAllowsBefore}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
   );
 }
 
@@ -461,6 +490,8 @@ if (!failed && !cantRun && !diagnostic && ran < MIN_DEFAULT_CASES) {
   cantRun = true;
   cantRunReason = "case-count-below-floor";
 }
-const outcome = failed ? "FAIL" : cantRun ? `CANT-RUN:${cantRunReason}` : diagnostic ? "DIAGNOSTIC" : "PASS";
+const outcome = failed ? "FAIL" : cantRun ? `CANT-RUN:${budgetHit ? "budget-exceeded" : cantRunReason}` : diagnostic ? "DIAGNOSTIC" : "PASS";
+// Measured spend for this run (an estimate from the SDK's total_cost_usd, not a bill); always printed immediately before RESULT.
+console.log(`TOTAL costUsd=${ledger.totalUsd().toFixed(4)}`);
 console.log(`RESULT: ${outcome} (${PROV}, cases-run=${ran})`);
 process.exit(failed ? 1 : cantRun ? 3 : diagnostic ? 4 : 0);
