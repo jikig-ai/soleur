@@ -450,6 +450,55 @@ observability machinery.
   `specs/<branch>/session-state.md` are pipeline-written artifacts covered by
   AC5's knowledge-base carve-out.
 
+## Deepen Pass
+
+Ran 2026-11-01 in-process (this harness has no Agent/Task spawn — the
+per-section research and review fan-outs degrade to in-process equivalents;
+the residual is recorded in `decision-challenges.md`).
+
+Gate verdicts:
+
+- **4.4 Precedent-diff** — `expect(actual, message)` second-arg form has an
+  in-repo precedent: `expect(entry, "#8495: …")` /
+  `expect(entry!.intervalMinutes, "#8495: …")` in
+  `sentry-monitor-iac-parity.test.ts`; the prescribed message shape matches
+  that convention verbatim. Not novel.
+- **4.45 Verify-the-negative** — every negative claim was measured at HEAD,
+  not asserted: zero stale set entries (set-difference over all 16
+  `NON_INNGEST_MONITORS` members vs `name =` attributes in
+  `cron-monitors.tf`), zero `type = "interval"` monitors
+  (`grep -c 'type = "interval"'` → 0), (c3) presence, both parity
+  describe-blocks present.
+- **4.5 Network-outage** — no trigger (the only `SSH` hit is a quoted brief
+  constraint, not a connectivity symptom).
+- **4.55 Downtime & Cutover** — no downtime-inducing operation (test-file
+  message change).
+- **4.6 User-Brand Impact halt** — PASS: section present, threshold `none`,
+  diff path `apps/web-platform/test/…` does not match `SENSITIVE_PATH_RE`.
+- **4.7 Observability halt** — PASS: 5-field block present;
+  `discoverability_test.command` is `grep`-verbed (allowlisted), contains no
+  shell-active characters, finishes in <1 s; `expected_output` is the literal
+  `"1"`; no `credentials_required` (so `BASELINE_DECLARED_PROBES` does not
+  move).
+- **4.8 PAT-shaped variable halt** — PASS: regex sweep clean.
+- **4.9 UI-wireframe halt** — no UI-surface file in scope.
+- **4.10 Encryption Posture halt** — no `.tf`/migration/store/connection in
+  scope.
+- **4.11 Guard Contract halt** — PASS: `lint-guard-contract.py` green (1 guard
+  entry, 5-row matrix); assembly names the two chokepoints (the set literal
+  and `extractTfMonitorNames()`'s parse), not today's member list.
+- **4.12 Scope Check halt** — PASS: single unfenced `## Scope Check` (count =
+  1), all three subsections, zero `unmapped` rows, one `descoped` row with a
+  non-empty justification, `Recommendation:` line present.
+- **4.13 Task-Design halt** — no new autonomous-task surface.
+- **Suite re-verification** — `vitest run
+  test/server/inngest/function-registry-count.test.ts` 13/13 green and
+  `vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts` 27/27
+  green at HEAD 2026-11-01.
+
+Findings applied: none — the deepen pass produced no new plan items (the
+residual was already minimal and every anchor was measured in Phase 0.6/1.7).
+
 ## References & Research
 
 - Issue: #8595 (review scope-out of PR #8588; `Re-eval by: 2026-10-06`)
