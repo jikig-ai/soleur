@@ -1148,7 +1148,11 @@ if [ -z "$(_tf_block "$HOST_TF" doppler_secret inngest_no_such_secret)" ]; then 
 # locally with the conditional nft row.
 # 184 -> 191 (#10540, +7): the dedicated pair carries no lifecycle (4 rows), the app copies derive from the dedicated hex (1)
 # and keep ignore_changes (1), plus the extractor harness row (1). The pre-existing slack is unchanged.
-INNGEST_HOST_MIN_ASSERTIONS=191
+# 191 -> 213 (flip-token split review round, K8): the floor had drifted 23 BELOW the suite (214 passing measured; the
+# old 191 let 23 assertions vanish unnoticed). It is now the UNCONDITIONAL count: 214 passing includes the one `nft -c`
+# row that only runs where nft and unprivileged user namespaces exist, so 213 holds on a runner without them. Still a
+# floor (never `-eq`): raise it in the same edit that adds an assertion.
+INNGEST_HOST_MIN_ASSERTIONS=213
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

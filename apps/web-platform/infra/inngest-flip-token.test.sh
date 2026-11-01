@@ -32,9 +32,27 @@
 # missed `$${` escape is a render error here, not a surprise on the host. The render is made ONCE; every
 # mutation row mutates a COPY, asserts the mutation landed, and requires a FAIL line naming its assertion.
 #
-# ROWS. A pristine control runs first; nothing is scored if it is not clean. Rows are pinned by
-# EXPECTED_ROWS / EXPECTED_RED / EXPECTED_MUSTPASS; only EXECUTED rows are counted. The guard is PER-LINE by
-# design (CTO N10): a row DOCUMENTS that limit rather than asserting a refusal.
+# ROWS. A pristine control runs first; nothing is scored if it is not clean, and its PASS-line count is pinned
+# (C0_EXPECTED, raised with every assertion added). Rows are pinned by EXPECTED_ROWS / EXPECTED_RED /
+# EXPECTED_MUSTPASS; only EXECUTED rows are counted. The guard is PER-LINE by design (CTO N10): a row DOCUMENTS
+# that limit rather than asserting a refusal.
+#
+# ADDED IN THE REVIEW ROUND (CTO R7-R11 and the K7 findings): R-g pins the drop-in as ONLY [Service] plus the one
+# EnvironmentFile= line, root:root 0644; W-otherkeys extends the by-value token census to EVERY other cloud-config key
+# (final_message, bootcmd, power_state, ...); S-glob refuses a glob EnvironmentFile= or a glob path under /etc/default
+# in the render, the bootstrap, every infra script and every parsed unit; T-flipsh covers more environment-dump forms;
+# the previously un-rowed headline checks (R-c, R-d, O-content, O-nochown, S-scripts, W-flip-empty, W-punct) each have
+# a killing row.
+#
+# ACCEPTED LIMITS (do not chase; recorded in the PR ledger):
+#   * Everything here is TEXT over the REPO copies. The signed config-bundle copy of inngest-cutover-flip.sh and the
+#     runtime `*.service.d` drop-ins reachable through infra-config-install (DEST_SPEC admits four on this host, and
+#     the content gate permits any EnvironmentFile=<path>) are not seen: they are residuals under #11816.
+#   * T-flipsh is a TRIPWIRE for the common environment-dump forms, not a closure of "never exposes the token".
+#   * A `chmod 0644 /etc/default/inngest-*` runcmd item is seen only in its glob or literal-path form (S-glob, S-render,
+#     O-nochown); a chmod through a variable, `find -exec` or `install` with a computed path is an accepted gap.
+#   * A subshell source of the flip file inside the redactor (`( . /etc/default/inngest-flip )` in place of its
+#     `sed -n` read) is an accepted gap: S-render classifies by line shape.
 #
 # Usage: bash apps/web-platform/infra/inngest-flip-token.test.sh
 set -uo pipefail
@@ -45,9 +63,13 @@ BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
 BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
 FLIPSH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
-EXPECTED_ROWS=24
-EXPECTED_RED=21
+EXPECTED_ROWS=43
+EXPECTED_RED=40
 EXPECTED_MUSTPASS=3
+# The pristine control's assertion inventory is EXACT (like C0_EXPECTED in cloud-init-inngest-provision-unit.test.sh):
+# a check deleted or turned into a no-op emit leaves every mutation row green, so the PASS-line count is pinned.
+# RAISE it in the same edit that adds an assertion.
+C0_EXPECTED=30
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
 
@@ -81,7 +103,7 @@ sed 's/^/  /' "$BUDGET_LOG"
 # =================================================================================================
 PY="$W/ft.py"
 cat > "$PY" <<'PYEOF'
-import os, re, shutil, stat, subprocess, sys, tempfile, yaml
+import json, os, re, shutil, stat, subprocess, sys, tempfile, yaml
 
 FLIP = "/etc/default/inngest-flip"
 READ_FILES = {"/etc/default/inngest-server", "/etc/default/inngest-doppler"}
@@ -95,12 +117,15 @@ KNOWN_UNITS = ["inngest-cutover-flip.service", "inngest-redis.service", "inngest
                "inngest-config-refresh.service"]
 HARNESS_IGNORE_DROPINS = os.environ.get("FLIPTEST_HARNESS_IGNORE_DROPINS") == "1"
 DASH = shutil.which("dash") or "/bin/sh"
+# The C loader/dumper when libyaml is present (a wall-time lever only: same parse, same output).
+LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 # ----------------------------------------------------------------------------------------------
 # loading
 # ----------------------------------------------------------------------------------------------
 def load(p):
-    d = yaml.safe_load(open(p, encoding="utf-8").read()) or {}
+    d = yaml.load(open(p, encoding="utf-8").read(), Loader=LOADER) or {}
     if not isinstance(d, dict):
         raise SystemExit("INSTRUMENT FAULT: %s is not a cloud-config mapping" % p)
     return d
@@ -391,6 +416,21 @@ def check(render, bootstrap, flipsh, infra):
     o.chk("R-e", "the drop-in carries an unprefixed EnvironmentFile=/etc/default/inngest-flip under [Service] and NO ConditionPathExists names the flip file anywhere (a missing file must fail loud, CTO N1)",
           shape_ok and not cond, "dropins=%d cond=%s" % (len(flip_dropins), cond))
 
+    # R-g: the drop-in is EXACTLY `[Service]` + the single EnvironmentFile= line, root:root, mode 0644. R-a..R-e
+    # only prove the line is present and unprefixed; an added ExecStart= (a replacement command running under the
+    # read/write token), UnsetEnvironment=, Environment= or an unrelated Condition, or a mode 0666, leaves them green.
+    g_ok = bool(flip_dropins)
+    g_detail = []
+    for (d, f, t) in flip_dropins:
+        ds = directives(t)
+        ent = [w for w in wf_list(doc) if str(w["path"]) == SYSD + d + "/" + f]
+        this_ok = (ds == [("Service", "EnvironmentFile", FLIP)] and len(ent) == 1
+                   and str(ent[0].get("permissions")) == "0644" and str(ent[0].get("owner")) == "root:root")
+        g_ok = g_ok and this_ok
+        g_detail.append("%s/%s directives=%s perm=%s owner=%s" % (d, f, ds, [str(e.get("permissions")) for e in ent], [str(e.get("owner")) for e in ent]))
+    o.chk("R-g", "the flip drop-in is ONLY [Service] plus the single EnvironmentFile=/etc/default/inngest-flip line (no ExecStart=, UnsetEnvironment=, Environment= or Condition), owner root:root, mode 0644",
+          g_ok, "; ".join(g_detail))
+
     # ---- locate the runcmd items ----------------------------------------------------------------
     gi, dw, sw, fw, arm = sel_guard(its), sel_doppler_write(its), sel_server_write(its), sel_flip_write(its), sel_arm(its)
     sites_ok = len(gi) == 1 and len(dw) == 1 and len(sw) == 1 and len(fw) == 1 and len(arm) >= 1
@@ -459,9 +499,19 @@ def check(render, bootstrap, flipsh, infra):
               not stray and tb == 3 and tf == 2, "stray_items=%s boot_sites=%d flip_sites=%d" % (stray, tb, tf))
         o.chk("W-order", "the guard item precedes all three token writes",
               gi[0] < min(dw[0], sw[0], fw[0]), "guard=%s writes=%s" % (gi[0], [dw[0], sw[0], fw[0]]))
+        # EVERY other key of the rendered cloud-config (final_message, bootcmd, power_state.message, phone_home,
+        # packages ...) plus the non-content fields of each write_files entry: cloud-init prints some of these to
+        # the console and /var/log/cloud-init-output.log. The census above reads only runcmd + write_files content.
+        rest = {k: v for k, v in doc.items() if k not in ("runcmd", "write_files")}
+        meta = [{k: v for k, v in w.items() if k != "content"} for w in wf_list(doc)]
+        blob = json.dumps({"rest": rest, "wf_meta": meta}, sort_keys=True)
+        o.chk("W-otherkeys", "neither token value appears under ANY other cloud-config key (final_message, bootcmd, power_state, ...) or in a write_files path/owner/permissions field",
+              blob.count(boot_val) == 0 and blob.count(flip_val) == 0 and len(rest) >= 4,
+              "boot=%d flip=%d other_keys=%d" % (blob.count(boot_val), blob.count(flip_val), len(rest)))
     else:
         o.chk("W-census", "token value census", False, "skipped: items/values not found")
         o.chk("W-order", "guard precedes writes", False, "skipped: items/values not found")
+        o.chk("W-otherkeys", "token values under other cloud-config keys", False, "skipped: items/values not found")
 
     # ---- O: order and mode ----------------------------------------------------------------------
     if len(fw) == 1 and vals_ok:
@@ -489,8 +539,8 @@ def check(render, bootstrap, flipsh, infra):
             o.chk(cid, "flip write item located", False, "skipped: item/values not found")
     o.chk("O-order", "the flip write precedes every item that arms soleur-inngest-provision (the item that also runs the bootstrap)",
           len(fw) == 1 and bool(arm) and fw[0] < min(arm), "flip=%s arm=%s" % (fw, arm))
-    chown = [n for n, x in enumerate(its) if any("chown" in l and "inngest-flip" in l for l in code_lines(x))]
-    o.chk("O-nochown", "no chown names the flip file, so it stays root:root (a non-root runner cannot observe ownership; this is the text census)",
+    chown = [n for n, x in enumerate(its) if any(re.search(r"\b(chown|chgrp|chmod|install)\b", l) and "inngest-flip" in l for l in code_lines(x))]
+    o.chk("O-nochown", "no chown, chgrp, chmod or install names the flip file, so it stays root:root mode 0600 (a non-root runner cannot observe ownership; this is the text census)",
           not chown, str(chown))
 
     # ---- S: path-occurrence census --------------------------------------------------------------
@@ -522,14 +572,49 @@ def check(render, bootstrap, flipsh, infra):
     o.chk("S-scripts", "no infra script, unit or timer outside the template references the flip path in code (any other reader or sourcer reds)",
           not stray_files, ",".join(stray_files))
 
+    # S-glob: the literal-path censuses above cannot see a glob. systemd expands wildcards in EnvironmentFile=, and a
+    # shell `for f in /etc/default/inngest-*; do . "$f"; done` or `cat /etc/default/inngest-*` reaches the flip file
+    # without naming it. Refused anywhere in the render, the bootstrap, every infra script and every parsed unit.
+    GLOB = re.compile(r"/etc/default/[A-Za-z0-9._-]*[*?\[]")
+    glob_hits = []
+    # a `[[ $x == /etc/default/* ]]` / `case` pattern COMPARISON names the glob without reading it, so it is not a hit
+    CMP = re.compile(r"(==|!=|=~)\s*\S*/etc/default/")
+    for label, blob in (("render", text), ("bootstrap", btext)):
+        for l in code_lines(blob):
+            if GLOB.search(l) and not CMP.search(l):
+                glob_hits.append("%s: %s" % (label, l.strip()[:60]))
+    for fn in sorted(os.listdir(infra)):
+        p = os.path.join(infra, fn)
+        if not os.path.isfile(p) or fn == "cloud-init-inngest.yml" or fn.endswith((".test.sh", ".md", ".tf", ".json", ".txt")):
+            continue
+        try:
+            for l in code_lines(open(p, encoding="utf-8", errors="replace").read()):
+                if GLOB.search(l) and not CMP.search(l):
+                    glob_hits.append("%s: %s" % (fn, l.strip()[:60]))
+                    break
+        except OSError:
+            pass
+    for (n, _o2, body) in units + [(d + "/" + f, "dropin", t) for (d, f, t) in dropins]:
+        for (_s, k, v) in directives(body):
+            if k == "EnvironmentFile" and re.search(r"[*?\[]", v):
+                glob_hits.append("unit %s: EnvironmentFile=%s" % (n, v))
+    o.chk("S-glob", "no glob EnvironmentFile= and no glob path under /etc/default anywhere in the render, the bootstrap, the infra scripts or any parsed unit",
+          not glob_hits, "; ".join(glob_hits[:3]))
+
     # ---- T: tripwire on the flip script ---------------------------------------------------------
     body = open(flipsh, encoding="utf-8").read()
     bad = []
+    TRIP = re.compile("|".join([
+        r"\$\{?DOPPLER_TOKEN\b", r"\"\$DOPPLER_TOKEN", r"\bprintenv\b", r"(^|[;&|(]\s*|\s)env(\s|$)",
+        r"\bdeclare\s+-[a-zA-Z]*[px]", r"\btypeset\s+-[a-zA-Z]*[px]", r"\bexport\s+-[a-zA-Z]*p\b",
+        r"(^|[;&|(]\s*)export\s*($|[;&|)])", r"(^|[;&|(]\s*)set\s*($|[;&|)])", r"\bcompgen\s+-[a-zA-Z]*[ve]\b",
+        r"/proc/[^\s'\"]*environ", r"\$\{![A-Za-z_][A-Za-z0-9_]*[}@*\[]", r"\bENVIRON\b", r"\bos\.environ\b", r"\bgetenv\b",
+    ]))
     for l in code_lines(body):
         s = re.sub(r"\s#.*$", "", l)
-        if re.search(r"\$\{?DOPPLER_TOKEN\b|\"\$DOPPLER_TOKEN|\bprintenv\b|(^|[;&|(]\s*|\s)env(\s|$)|\bdeclare\s+-[a-zA-Z]*p|\bexport\s+-[a-zA-Z]*p\b", s):
+        if TRIP.search(s):
             bad.append(s.strip()[:80])
-    o.chk("T-flipsh", "inngest-cutover-flip.sh has no non-comment DOPPLER_TOKEN expansion, printenv, env, declare -p or export -p (doppler run hands the READ/WRITE flip token to every child of the script)",
+    o.chk("T-flipsh", "inngest-cutover-flip.sh has no non-comment DOPPLER_TOKEN expansion and no environment dump (printenv, env, bare export or set, declare/typeset -p/-x, export -p, compgen -v/-e, /proc/*/environ, ${!name}, awk ENVIRON, os.environ, getenv). A TRIPWIRE for the common forms, not a closure: doppler run hands the READ/WRITE flip token to every child of the script",
           not bad and len(code_lines(body)) > 100, "hits=%s" % bad[:3])
     return o.fails
 
@@ -538,7 +623,7 @@ def check(render, bootstrap, flipsh, infra):
 # ----------------------------------------------------------------------------------------------
 def mutate(src, dst, ops):
     doc = load(src)
-    before = yaml.safe_dump(doc, width=10**9, allow_unicode=True, default_flow_style=False)
+    before = yaml.dump(doc, Dumper=DUMPER, width=10**9, allow_unicode=True, default_flow_style=False)
     its = doc.get("runcmd") or []
     def sel(name):
         s = {"guard": sel_guard, "doppler": sel_doppler_write, "server": sel_server_write, "flip": sel_flip_write, "arm": sel_arm}[name](items(doc))
@@ -588,9 +673,18 @@ def mutate(src, dst, ops):
             n = sel(ops[i + 1]); its.append(its.pop(n)); i += 2
         elif op == "append_item":
             its.append(u(ops[i + 1])); i += 2
+        elif op == "item_sub_raw":
+            n = sel(ops[i + 1]); its[n] = str(its[n]).replace(ops[i + 2], ops[i + 3]); i += 4
+        elif op == "dropin_perm":
+            w = dropin_entry(); w["permissions"] = ops[i + 1]; i += 2
+        elif op == "add_wf":
+            doc.setdefault("write_files", []).append({"path": ops[i + 1], "content": u(ops[i + 2]), "owner": "root:root", "permissions": "0644"}); i += 3
+        elif op == "doc_key":
+            fv = printf_value(items(doc)[sel("flip")], FLIP)
+            doc[ops[i + 1]] = ops[i + 2].replace("@FLIP@", fv); i += 3
         else:
             raise SystemExit("INSTRUMENT FAULT: unknown mutation op " + op)
-    after = yaml.safe_dump(doc, width=10**9, allow_unicode=True, default_flow_style=False)
+    after = yaml.dump(doc, Dumper=DUMPER, width=10**9, allow_unicode=True, default_flow_style=False)
     open(dst, "w", encoding="utf-8").write("#cloud-config\n" + after)
     if ops == ["identity"]:
         return 0
@@ -633,6 +727,12 @@ if [ "$CHK_RC" -ne 0 ] || grep -q '^INSTRUMENT FAULT' "$W/c0.out"; then
   echo "  FAIL: the check driver faulted on the pristine render (rc=$CHK_RC): $(head -c 300 "$W/check.err")"
   exit 1
 fi
+C0_PASS="$(grep -c '^PASS ' "$W/c0.out" || true)"
+if [ "$C0_PASS" -ne "$C0_EXPECTED" ]; then
+  echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions passed, the inventory is exactly $C0_EXPECTED (an assertion was deleted, silenced or added without re-pinning)"
+  ROW_FAIL=1
+  PRISTINE_DIRTY=1
+fi
 C0_FAILS="$(grep -c '^FAIL ' "$W/c0.out" || true)"
 if [ "$C0_FAILS" -ne 0 ]; then
   echo "  FAIL: C0 pristine control is not clean ($C0_FAILS failing assertion(s)) — the mutation battery is not scored"
@@ -645,7 +745,7 @@ fi
 MUTDIR="$W/mut"; mkdir -p "$MUTDIR"
 row() {
   local id="$1" kind="$2" needle="$3" label="$4" mk="$5"; shift 5
-  local render="$PRISTINE" boot="$BOOTSTRAP" flip="$FLIPSH" envv="" out="$MUTDIR/$id.out" mrc=0
+  local render="$PRISTINE" boot="$BOOTSTRAP" flip="$FLIPSH" idir="$SCRIPT_DIR" envv="" out="$MUTDIR/$id.out" mrc=0
   ROWS=$((ROWS + 1)); [ "$kind" = RED ] && RED_ROWS=$((RED_ROWS + 1)) || PASS_ROWS=$((PASS_ROWS + 1))
   case "$mk" in
     env) envv="$1"; shift; mk="$1"; shift ;;
@@ -654,13 +754,17 @@ row() {
     yml)  render="$MUTDIR/$id.yml"; python3 -I "$PY" mut "$PRISTINE" "$render" "$@" || mrc=$? ;;
     boot) boot="${MUTDIR:?}/$id.boot.sh"; sed -e "$1" "$BOOTSTRAP" > "${boot:?}"; cmp -s "$BOOTSTRAP" "$boot" && mrc=3 ;;
     flip) flip="${MUTDIR:?}/$id.flip.sh"; sed -e "$1" "$FLIPSH" > "${flip:?}"; cmp -s "$FLIPSH" "$flip" && mrc=3 ;;
+    infra) # <file> <sed-script>: a symlinked copy of the infra dir with ONE file replaced by its sed-edited copy
+      idir="${MUTDIR:?}/$id.infra"; mkdir -p "$idir"
+      for _f in "$SCRIPT_DIR"/*; do [ -f "$_f" ] && ln -s "$_f" "$idir/"; done
+      rm -f "${idir:?}/$1"; sed -e "$2" "$SCRIPT_DIR/$1" > "${idir:?}/$1"; cmp -s "$SCRIPT_DIR/$1" "$idir/$1" && mrc=3 ;;
     none) ;;
   esac
   if [ "$mrc" -ne 0 ]; then
     echo "  FAIL: $id — $label — HARNESS ABORT: the mutation did not land (rc=$mrc)"; ROW_FAIL=1; return
   fi
-  if [ -n "$envv" ]; then env "$envv" FT_TMP="$W" python3 -I "$PY" check "$render" "$boot" "$flip" "$SCRIPT_DIR" > "$out" 2>"$W/check.err"; else
-    FT_TMP="$W" python3 -I "$PY" check "$render" "$boot" "$flip" "$SCRIPT_DIR" > "$out" 2>"$W/check.err"; fi
+  if [ -n "$envv" ]; then env "$envv" FT_TMP="$W" python3 -I "$PY" check "$render" "$boot" "$flip" "$idir" > "$out" 2>"$W/check.err"; else
+    FT_TMP="$W" python3 -I "$PY" check "$render" "$boot" "$flip" "$idir" > "$out" 2>"$W/check.err"; fi
   local rc=$?
   if [ "$rc" -ne 0 ] || grep -q '^INSTRUMENT FAULT' "$out"; then
     echo "  FAIL: $id — $label — INSTRUMENT FAULT (rc=$rc): $(head -c 200 "$W/check.err") $(grep '^INSTRUMENT FAULT' "$out" | head -1)"; FAULT=1; ROW_FAIL=1; return
@@ -695,6 +799,22 @@ row G1-rH1 RED  "R-a" "harness: the resolver ignores drop-in directories (also p
 row G1-rH2 PASS -       "non-canonical: drop-in renamed 20-whatever.conf, 4-space-indented directives and a trailing comment" yml dropin_set "    [Service]\n    EnvironmentFile=/etc/default/inngest-flip\n    # trailing comment\n" dropin_path "/etc/systemd/system/inngest-cutover-flip.service.d/20-whatever.conf"
 row G1-rH3 PASS -       "non-canonical: the same drop-in delivered through a <prefix>-.service.d directory" yml dropin_path "/etc/systemd/system/inngest-cutover-.service.d/10-flip-token.conf"
 row G1-rT  RED  "T-flipsh" "tripwire: append a bare 'printenv' to a copy of inngest-cutover-flip.sh" flip '$a printenv'
+row G1-rT2 RED  "T-flipsh" "tripwire: append a bare 'export' (dumps every exported variable)" flip '$a export'
+row G1-rT3 RED  "T-flipsh" "tripwire: append an awk ENVIRON loop" flip '$a awk "BEGIN{for(k in ENVIRON)print k}"'
+row G1-rT4 RED  "T-flipsh" "tripwire: append a read of /proc/self/environ" flip '$a cat /proc/self/environ'
+row G1-rT5 RED  "T-flipsh" "tripwire: append 'compgen -e'" flip '$a compgen -e'
+row G1-rC  RED  "R-c" "a third unit resolves DOPPLER_TOKEN from a new, non-boot env file (write_files unit + file)" yml add_wf /etc/systemd/system/inngest-third.service "[Service]\nEnvironmentFile=/etc/default/inngest-third\n" add_wf /etc/default/inngest-third "DOPPLER_TOKEN=thirdvalue\n"
+row G1-rD  RED  "R-d" "the flip printf gains a second variable (EXTRA=1)" yml item_sub_raw flip 'DOPPLER_TOKEN=%s\n' 'DOPPLER_TOKEN=%s\nEXTRA=1\n'
+row G1-rO  RED  "O-content" "the flip printf loses its trailing newline" yml item_sub_raw flip 'DOPPLER_TOKEN=%s\n' 'DOPPLER_TOKEN=%s'
+row G1-rN  RED  "O-nochown" "append a runcmd item that chowns the flip file to deploy" yml append_item "chown root:deploy /etc/default/inngest-flip"
+row G1-rS  RED  "S-scripts" "a COPY of an infra script gains a reader of the flip file (. /etc/default/inngest-flip)" infra inngest-consumer-probe.sh '$a . /etc/default/inngest-flip'
+row G1-rG1 RED  "S-glob" "append a shell glob source: for f in /etc/default/inngest-*; do . \"\$f\"; done" yml append_item 'for f in /etc/default/inngest-*; do . "$f"; done'
+row G1-rG2 RED  "S-glob" "add a write_files unit with a glob EnvironmentFile=-/etc/default/inngest-f*" yml add_wf /etc/systemd/system/inngest-glob.service "[Service]\nEnvironmentFile=-/etc/default/inngest-f*\n"
+row G1-rE1 RED  "R-g" "drop-in gains ExecStart=/bin/true (a replacement command under the read/write token)" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nExecStart=/bin/true\n"
+row G1-rE2 RED  "R-g" "drop-in gains UnsetEnvironment=DOPPLER_TOKEN" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nUnsetEnvironment=DOPPLER_TOKEN\n"
+row G1-rE3 RED  "R-g" "drop-in gains a literal Environment=" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nEnvironment=X=1\n"
+row G1-rE4 RED  "R-g" "drop-in gains an unrelated [Unit] Condition (R-e only names the flip file)" yml dropin_set "[Unit]\nConditionPathExists=/run/x\n[Service]\nEnvironmentFile=/etc/default/inngest-flip\n"
+row G1-rE5 RED  "R-g" "drop-in write_files permissions 0644 -> 0666" yml dropin_perm 0666
 
 echo "--- Guard 2: the write-time charset guard covers both Doppler tokens ---"
 row G2-r1  RED  "W-heredoc" "remove the flip token from the guard heredoc" yml guard_drop 1
@@ -702,6 +822,9 @@ row G2-r4  RED  "W-census" "add a fourth printf write of the flip token with no 
 row G2-r5  RED  "W-order" "move the guard after the inngest-server write" yml item_move_after guard server
 row G2-r6  RED  "W-flip-unsafe" "drop 'exit 1' from the guard case arm" yml item_sub guard "exit 1 ;;" ";;"
 row G2-r8  RED  "W-flip-unsafe" "replace the while-read loop with a single read (checks only the first heredoc line)" yml guard_single_read
+row G2-r9  RED  "W-flip-empty" "delete the empty-string arm (''|) from the guard case" yml item_sub_raw guard "''|" ""
+row G2-r10 RED  "W-punct" "drop ':' from the guard's allowed class" yml item_sub_raw guard "._:/-" "._/-"
+row G2-r11 RED  "W-otherkeys" "put the flip token in a top-level final_message key (printed to the console log)" yml doc_key final_message "@FLIP@"
 row G2-rH1 RED  "W-flip-unsafe" "suite edit: the guard's phone-home call replaced by 'true' (the REFUSED call must be recorded)" yml item_sub guard "/usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED" "true inngest-doppler-write-REFUSED"
 fi
 

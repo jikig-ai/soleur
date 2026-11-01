@@ -5816,24 +5816,83 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
     expect(targets).not.toContain(FLIP);
   });
 
-  test("the replace job runs inngest-userdata-budget.sh after setup-terraform and BEFORE the plan step (CTO N9)", () => {
-    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
-    const RUN = /^\s*(?:run:\s*)?bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh\s*$/gm;
-    expect([...job.matchAll(RUN)].length).toBe(1);
-    const budgetAt = job.search(RUN);
+  // CTO N9 + R9: the replace job runs the budget script in its `--cap-only` form (over-cap exit 1 and
+  // unmeasurable exit 2 block; the 384 B floor does NOT, it is enforced by the required infra-validation
+  // job). The pins below are STEP-SCOPED on comment-stripped text: a bare-token grep over the job is
+  // satisfied by a nearby comment and by a step that cannot fail (`continue-on-error`, `if: false`).
+  const BUDGET_STEP_TITLE = "- name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)";
+  const BUDGET_RUN_LINE = /^\s*run:\s*bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only\s*$/;
+  /** The budget step out of a (raw or mutated) workflow text: comment-stripped, from its `- name:` line
+   *  to the next sibling step. Throws unless exactly one such step exists. */
+  function budgetStepOf(workflowText: string): { job: string; step: string } {
+    const job = stripComments(extractJobBlock(workflowText, "inngest_host_replace"));
+    const lines = job.split("\n");
+    const starts = lines.map((l, i) => (l.trim() === BUDGET_STEP_TITLE ? i : -1)).filter((i) => i >= 0);
+    if (starts.length !== 1) throw new Error(`budgetStepOf: ${starts.length} budget steps, expected 1`);
+    let end = lines.length;
+    for (let i = starts[0] + 1; i < lines.length; i++) {
+      if (/^\s{6}- /.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return { job, step: lines.slice(starts[0], end).join("\n") };
+  }
+
+  test("the replace job runs inngest-userdata-budget.sh --cap-only after setup-terraform and BEFORE the plan step", () => {
+    const { job, step } = budgetStepOf(wf);
+    const runLines = step.split("\n").filter((l) => /^\s*run:/.test(l));
+    expect(runLines.length).toBe(1);
+    expect(BUDGET_RUN_LINE.test(runLines[0])).toBe(true);
+    // exactly one invocation of the script in the whole job
+    expect([...job.matchAll(/inngest-userdata-budget\.sh(?!\))/g)].length).toBe(1);
+    const stepAt = job.indexOf(BUDGET_STEP_TITLE);
     const setupAt = job.indexOf("hashicorp/setup-terraform");
     const planAt = job.indexOf("name: Terraform plan (scoped inngest-host -replace) + destroy-guard");
     expect(setupAt).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(-1);
-    expect(budgetAt).toBeGreaterThan(setupAt);
-    expect(budgetAt).toBeLessThan(planAt);
+    expect(stepAt).toBeGreaterThan(setupAt);
+    expect(stepAt).toBeLessThan(planAt);
   });
 
-  test("non-vacuity: the presence/order check tells a gated job from an ungated one", () => {
-    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
-    const ungated = job.replace(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh/, "true");
+  test("the budget step is BLOCKING: no continue-on-error, no `if:`, no `|| true`, and the job has none either", () => {
+    const { job, step } = budgetStepOf(wf);
+    expect(step).not.toMatch(/continue-on-error/);
+    expect(step).not.toMatch(/^\s*if:/m);
+    expect(step).not.toMatch(/\|\|\s*(true|:)/);
+    // job-level keys sit at 4-space indent; a job-level continue-on-error would neuter every step
+    expect(job).not.toMatch(/^ {4}continue-on-error:/m);
+  });
+
+  test("mutation: each way of neutering or reshaping the budget step reds a pin", () => {
+    const RUN_FULL = "        run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only\n";
+    expect(wf).toContain(RUN_FULL);
+    const mutations: Array<[string, string]> = [
+      ["drop --cap-only", RUN_FULL.replace(" --cap-only", "")],
+      ["add continue-on-error", RUN_FULL + "        continue-on-error: true\n"],
+      ["add if: false", "        if: false\n" + RUN_FULL],
+      ["add || true", RUN_FULL.replace(" --cap-only", " --cap-only || true")],
+      ["add --floor-skip flag", RUN_FULL.replace(" --cap-only", " --cap-only --x")],
+    ];
+    for (const [label, replacement] of mutations) {
+      const mutated = wf.replace(RUN_FULL, replacement);
+      expect(mutated, label).not.toBe(wf); // the mutation landed
+      const { step } = budgetStepOf(mutated);
+      const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+      const blocking = !/continue-on-error/.test(step) && !/^\s*if:/m.test(step) && !/\|\|\s*(true|:)/.test(step);
+      expect(BUDGET_RUN_LINE.test(runLine) && blocking, label).toBe(false);
+    }
+    // pristine control: the same predicate is TRUE on the unmutated tree
+    const { step } = budgetStepOf(wf);
+    const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+    expect(BUDGET_RUN_LINE.test(runLine)).toBe(true);
+  });
+
+  test("non-vacuity: the order check tells a gated job from an ungated one", () => {
+    const { job } = budgetStepOf(wf);
+    const ungated = job.replace(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only/, "true");
     expect(ungated).not.toBe(job);
-    expect(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh/.test(ungated)).toBe(false);
+    expect(/inngest-userdata-budget\.sh --cap-only/.test(ungated)).toBe(false);
   });
 });
 

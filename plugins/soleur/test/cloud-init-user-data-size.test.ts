@@ -332,12 +332,10 @@ const SECRET_LENGTHS: Record<string, number> = {
   image_name: IMAGE_NAME.length,
   tunnel_token: 220,
   webhook_deploy_secret: 64,
-  // ONE consistent length for BOTH Doppler tokens of the dedicated Inngest host: `dp.st.prd.` (10) +
-  // the 48-char body that inngest-userdata-budget.sh stubs = 58. This table is a LENGTH model
-  // ("x".repeat(n) gzips to almost nothing), so it cannot resolve entropy; the byte-and-entropy gate
-  // is `inngest-userdata-budget.sh` (both stubs hash-derived there). A test below pins this value
-  // to the script's stub total so the two cannot drift.
-  doppler_token: 58,
+  // `doppler_token` is the SHARED web / registry / git-data length model (48): do not move it for one host.
+  // The dedicated Inngest host's longer `dp.st.prd.` + 48-char-body stubs (58 B each) live in
+  // INNGEST_SECRET_LENGTHS below, which only that host's render call uses.
+  doppler_token: 48,
   doppler_flip_token: 58,
   resend_api_key: 40,
   ci_ssh_public_key_openssh: 120,
@@ -347,6 +345,11 @@ const SECRET_LENGTHS: Record<string, number> = {
   git_data_volume_id: 24,
   git_data_luks_volume_id: 24,
 };
+// The dedicated Inngest host's override of the shared table: BOTH of its Doppler tokens are stubbed at
+// `dp.st.prd.` (10) + a 48-char body = 58 B in inngest-userdata-budget.sh. This table is a LENGTH model
+// ("x".repeat(n) gzips to almost nothing), so it cannot resolve entropy; the byte-and-entropy gate is
+// that script. A test below pins this to the script's stub total so the two cannot drift.
+const INNGEST_SECRET_LENGTHS: Record<string, number> = { ...SECRET_LENGTHS, doppler_token: 58 };
 // The .tf sources modeledLen resolves a bare `local.<x>` against, to decide whether that local is
 // blob-backed (large) or a short scalar. Read lazily at first use so module init order cannot bite.
 const BLOB_SCAN_TF: string[] = ["server.tf", "zot-registry.tf", "inngest-host.tf", "git-data.tf"]
@@ -459,7 +462,12 @@ function renderDopplerTokenEnv(githubAppToken: string = GITHUB_APP_TOKEN_FIXTURE
   });
 }
 
-function modeledLen(name: string, expr: string, tfSrc: string): number {
+function modeledLen(
+  name: string,
+  expr: string,
+  tfSrc: string,
+  lengths: Record<string, number> = SECRET_LENGTHS,
+): number {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return b64len(readFileSync(join(INFRA, fileMatch[1])).byteLength);
   // Guard: any other base64encode(file(...)) shape must be recognized, else the model would
@@ -492,7 +500,7 @@ function modeledLen(name: string, expr: string, tfSrc: string): number {
     throw new Error(`unmodeled base64encode(local....) for ${name}: ${expr} — add an explicit branch; DEFAULT_REF_LEN would under-count it`);
   }
   if (/^sha256\(/.test(expr)) return 64;
-  if (name in SECRET_LENGTHS) return SECRET_LENGTHS[name];
+  if (name in lengths) return lengths[name];
 
   // #7695 — WIDEN THE CLASS GUARD FROM `base64encode(...)` TO ANY FILE- OR LOCAL-BACKED BLOB.
   // The two guards above are shaped around `base64encode(`, so a BARE `file("...")` or a bare
@@ -588,7 +596,12 @@ function resolveFileBackedValue(
 // ~1000:1 and would make the gzip budget non-discriminating). Small variable-length secrets/ids
 // stay as fixed-length "x".repeat placeholders: at ~600 B total they don't move the budget, and
 // their exact byte content is unknown at test time anyway.
-function modeledValue(name: string, expr: string, tfSrc: string): string {
+function modeledValue(
+  name: string,
+  expr: string,
+  tfSrc: string,
+  lengths: Record<string, number> = SECRET_LENGTHS,
+): string {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
   if (/base64encode\(file\(/.test(expr)) {
@@ -606,7 +619,7 @@ function modeledValue(name: string, expr: string, tfSrc: string): string {
   if (/^base64encode\(local\.webhook_doppler_token_env\)$/.test(expr)) {
     return Buffer.from(renderDopplerTokenEnv(), "utf8").toString("base64");
   }
-  return "x".repeat(modeledLen(name, expr, tfSrc));
+  return "x".repeat(modeledLen(name, expr, tfSrc, lengths));
 }
 
 // Model the base64gzip() OUTPUT length — what Hetzner stores against the 32,768 cap for git-data
@@ -972,6 +985,7 @@ function renderedGzipB64LenStripped(
   cloudInitFile: string,
   tfSrc: string,
   strip: RegExp | null,
+  lengths: Record<string, number> = SECRET_LENGTHS,
 ): number {
   const map = parseVarMap(extractTemplatefileMap(tfSrc, cloudInitFile));
   const src = readFileSync(join(INFRA, cloudInitFile), "utf8");
@@ -981,7 +995,7 @@ function renderedGzipB64LenStripped(
     if (!(name in map)) {
       throw new Error(`${cloudInitFile} references un-provided template var \${${name}}`);
     }
-    return modeledValue(name, map[name], tfSrc);
+    return modeledValue(name, map[name], tfSrc, lengths);
   });
   s = s.split(ESC).join("${");
   // EXPLICIT null check. `s.replace(null, "")` coerces the argument to the STRING "null" and
@@ -1179,6 +1193,7 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
       "cloud-init-inngest.yml",
       inngestTf,
       applied ? inngestStripRegex(inngestTf) : null,
+      INNGEST_SECRET_LENGTHS,
     );
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(INNGEST_GZIP_BUDGET);
@@ -2191,16 +2206,24 @@ locals {
 });
 
 // -----------------------------------------------------------------------------------------------
-// Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4). The dedicated Inngest host now bakes
-// TWO Doppler tokens into user_data (the read-only boot token and the read/write flip token). The
-// budget script's stubs were length upper bounds but NOT entropy upper bounds (a repeated STUB run
-// gzips to almost nothing, a real token does not), so both stubs became hash-derived and the script
-// gained a hard cap-headroom floor. These arms keep that change from being vacuous.
+// Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4; CTO R7/R9 of the review round). The
+// dedicated Inngest host now bakes TWO Doppler tokens into user_data (the read-only boot token and the
+// read/write flip token). The budget script's stubs were length upper bounds but NOT entropy upper
+// bounds (a repeated filler run gzips to almost nothing, a real token does not), so ALL FIVE secret
+// stubs are hash-derived and the script gained a hard cap-headroom floor of 384 B. These arms keep
+// that change from being vacuous. `--cap-only` is the replace job's form: it skips the floor only.
 // -----------------------------------------------------------------------------------------------
 describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (flip-token split)", () => {
   const BUDGET_SH = join(INFRA, "inngest-userdata-budget.sh");
   const budgetSrc = readFileSync(BUDGET_SH, "utf8");
   const hasTerraform = spawnSync("terraform", ["version"], { encoding: "utf8" }).status === 0;
+  const FLOOR = 384;
+  const runBudget = (args: string[], floorSeam: string | undefined) =>
+    spawnSync("bash", [BUDGET_SH, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, ...(floorSeam === undefined ? {} : { INNGEST_BUDGET_FLOOR_BYTES: floorSeam }) },
+    });
+  const lastJson = (stdout: string) => JSON.parse(stdout.trim().split("\n").pop() as string);
 
   // The stub declaration, as the script writes it: join(".", ["dp", "st", "prd", substr(..., 0, N)])
   const stubTotal = (varName: string): number => {
@@ -2211,32 +2234,57 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
     return "dp.st.prd.".length + Number(m[1]);
   };
 
-  test("both tokens are stubbed with hash-derived (high-entropy) values, not repeated filler", () => {
+  test("all five secret stubs are hash-derived (high-entropy), not repeated filler", () => {
     expect(stubTotal("doppler_token")).toBeGreaterThan(0);
     expect(stubTotal("doppler_flip_token")).toBeGreaterThan(0);
-    // The old low-entropy stub must be gone from the token lines.
+    // The three formerly-repeated stubs: each assignment line must derive from base64sha512 and no
+    // repeated-filler run may survive anywhere in the script.
+    for (const v of ["zot_pull_token", "betterstack_logs_token", "sentry_dsn"]) {
+      const line = budgetSrc.split("\n").find((l) => new RegExp("^\\s*" + v + "\\s*=").test(l));
+      expect(line).toBeDefined();
+      expect(line).toContain("base64sha512(");
+    }
     const tokenLines = budgetSrc.split("\n").filter((l) => /^\s*doppler(_flip)?_token\s*=/.test(l));
     expect(tokenLines.length).toBe(2);
-    for (const l of tokenLines) expect(l).not.toContain("STUBSTUB");
+    expect(budgetSrc).not.toContain("STUBSTUB");
   });
 
-  test("SECRET_LENGTHS for both tokens equals the script's stub total (the model cannot drift)", () => {
-    expect(SECRET_LENGTHS.doppler_token).toBe(stubTotal("doppler_token"));
-    expect(SECRET_LENGTHS.doppler_flip_token).toBe(stubTotal("doppler_flip_token"));
-    expect(SECRET_LENGTHS.doppler_flip_token).toBe(SECRET_LENGTHS.doppler_token);
+  test("the stub lines keep their exact widths (zot 40, Better Stack 64, DSN key 32)", () => {
+    const w = (v: string) => {
+      const line = budgetSrc.split("\n").find((l) => new RegExp("^\\s*" + v + "\\s*=").test(l)) ?? "";
+      return /,\s*0,\s*(\d+)\)/.exec(line)?.[1];
+    };
+    expect(w("zot_pull_token")).toBe("40");
+    expect(w("betterstack_logs_token")).toBe("64");
+    expect(w("sentry_dsn")).toBe("32");
   });
 
-  test("INNGEST_GZIP_BUDGET is unchanged: the flip-token split fits without raising the constant", () => {
+  test("INNGEST_SECRET_LENGTHS equals the script's stub total; the SHARED table stays 48 (the model cannot drift)", () => {
+    expect(INNGEST_SECRET_LENGTHS.doppler_token).toBe(stubTotal("doppler_token"));
+    expect(INNGEST_SECRET_LENGTHS.doppler_flip_token).toBe(stubTotal("doppler_flip_token"));
+    expect(INNGEST_SECRET_LENGTHS.doppler_flip_token).toBe(INNGEST_SECRET_LENGTHS.doppler_token);
+    // web / registry / git-data models keep the original shared value.
+    expect(SECRET_LENGTHS.doppler_token).toBe(48);
+  });
+
+  test("INNGEST_GZIP_BUDGET is the TypeScript length model's budget, unchanged and NOT the script's number", () => {
     expect(INNGEST_GZIP_BUDGET).toBe(32_300);
+  });
+
+  test("the floor is ONE literal: FLOOR_MIN=384 defaults it, clamps the seam up, and the comparison is -lt", () => {
+    expect(budgetSrc).toMatch(/^FLOOR_MIN=384$/m);
+    expect(budgetSrc).toContain('floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-$FLOOR_MIN}"');
+    expect(budgetSrc).toContain('[ "$floor_bytes" -lt "$FLOOR_MIN" ] && floor_bytes="$FLOOR_MIN"');
+    expect(budgetSrc).toContain('if [ "$CAP_ONLY" -eq 0 ] && [ "$headroom" -lt "$floor_bytes" ]; then');
+    // No second numeric floor literal anywhere in code (comments excluded).
+    const code = budgetSrc.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(code.match(/\b(384|512)\b/g)?.length ?? 0).toBe(1);
   });
 
   test.skipIf(!hasTerraform)(
     "the floor is live: a floor above the real headroom exits EXACTLY 1 with the floor message",
     () => {
-      const r = spawnSync("bash", [BUDGET_SH], {
-        encoding: "utf8",
-        env: { ...process.env, INNGEST_BUDGET_FLOOR_BYTES: "40000" },
-      });
+      const r = runBudget([], "40000");
       // rc 2 (unmeasurable) is also non-zero and would let this row pass for the wrong reason.
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("HEADROOM FLOOR");
@@ -2246,19 +2294,44 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
   );
 
   test.skipIf(!hasTerraform)(
-    "must-PASS: at the default floor the real render exits 0 with at least 512 B of cap headroom",
+    "must-PASS: at the default floor the real render exits 0 with at least 384 B of cap headroom",
     () => {
-      const r = spawnSync("bash", [BUDGET_SH, "--json"], {
-        encoding: "utf8",
-        env: { ...process.env, INNGEST_BUDGET_FLOOR_BYTES: "" },
-      });
+      const r = runBudget(["--json"], "");
       expect(r.status).toBe(0);
-      const j = JSON.parse(r.stdout.trim().split("\n").pop() as string);
-      expect(j.headroom).toBeGreaterThanOrEqual(512);
+      const j = lastJson(r.stdout);
+      expect(j.floor).toBe(FLOOR);
+      expect(j.headroom).toBeGreaterThanOrEqual(FLOOR);
       // Bounded, not pinned (it drifts): a payload that collapsed to near nothing is the fail-open
       // direction a ceiling-only gate cannot see.
       expect(j.headroom).toBeLessThan(4_000);
-      expect(j.stored_bytes).toBeLessThanOrEqual(HETZNER_CAP - 512);
+      expect(j.stored_bytes).toBeLessThanOrEqual(HETZNER_CAP - FLOOR);
+    },
+    120_000,
+  );
+
+  test.skipIf(!hasTerraform)(
+    "the seam can only RAISE the floor: 0, a lower number, and garbage all leave the effective floor at 384",
+    () => {
+      for (const seam of ["0", "100", "abc", "-5"]) {
+        const r = runBudget(["--json"], seam);
+        expect(r.status).toBe(0);
+        expect(lastJson(r.stdout).floor).toBe(FLOOR);
+      }
+      const raised = runBudget(["--json"], "400");
+      expect(lastJson(raised.stdout).floor).toBe(400);
+    },
+    240_000,
+  );
+
+  test.skipIf(!hasTerraform)(
+    "--cap-only skips ONLY the floor: exit 0 under a floor that would otherwise exit 1, floor still reported",
+    () => {
+      const r = runBudget(["--cap-only", "--json"], "40000");
+      expect(r.status).toBe(0);
+      expect(r.stderr).not.toContain("HEADROOM FLOOR");
+      const j = lastJson(r.stdout);
+      expect(j.headroom).toBeGreaterThan(0);
+      expect(j.cap_only).toBe(1);
     },
     120_000,
   );

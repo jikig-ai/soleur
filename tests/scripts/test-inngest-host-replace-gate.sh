@@ -137,6 +137,48 @@ else
   fi
 fi
 
+# --- Tests 1i-1p (CTO R10, review round): PER-ADDRESS ACTIONS for BOTH Doppler tokens. Allow-set
+#     membership only says an address may appear; `doppler_token_touched` says what it may do
+#     (no-op | create | replace). Each ABORT fixture is the compliant T1d plan with ONE token action
+#     swapped, so a gate that ignored the class would pass it. The reason token is asserted too: an
+#     ABORT for the wrong counter would hide a counter that does not fire. ---
+BASE_PLAN="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE}"
+expect_token_abort() { # <label> <token resource_change objects>
+  write_plan "${BASE_PLAN},$2"
+  local out; out=$(inngest_host_replace_gate "$TMP/plan.json" 2>&1); local rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"reason=doppler_token_touched"* ]]; then pass
+  else fail "$1: must ABORT with reason=doppler_token_touched (rc=${rc}): ${out}"; fi
+}
+expect_token_pass() { # <label> <token resource_change objects>
+  write_plan "${BASE_PLAN},$2"
+  if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then pass
+  else fail "$1: must PASS (rc=0)"; fi
+}
+expect_token_abort "T1i: flip token update"  "$(rc_obj 'doppler_service_token.inngest_flip' '"update"')"
+expect_token_abort "T1j: flip token delete"  "$(rc_obj 'doppler_service_token.inngest_flip' '"delete"')"
+expect_token_abort "T1k: flip token forget"  "$(rc_obj 'doppler_service_token.inngest_flip' '"forget"')"
+expect_token_abort "T1l: boot token forget"  "$(rc_obj 'doppler_service_token.inngest' '"forget"')"
+expect_token_abort "T1m: boot token update"  "$(rc_obj 'doppler_service_token.inngest' '"update"')"
+expect_token_pass  "T1n: flip token create"        "$(rc_obj 'doppler_service_token.inngest_flip' '"create"')"
+expect_token_pass  "T1o: flip token delete+create" "$(rc_obj 'doppler_service_token.inngest_flip' '"delete","create"')"
+expect_token_pass  "T1p: boot token no-op"         "$(rc_obj 'doppler_service_token.inngest' '"no-op"')"
+
+# --- Test 1q: MUTATION — drop the doppler_token_touched PASS conjunct in a COPY: the T1k plan (flip
+#     forget, which the allow-set alone admits) must then PASS, proving the counter is what aborts it. ---
+MUT2="$TMP/mut2"; mkdir -p "$MUT2"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT2:?}/"
+sed -i 's/ \&\& "\$dtt" -eq 0//' "$MUT2/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT2/inngest-host-replace-gate.sh"; then
+  fail "T1q: HARNESS ABORT — the mutation did not land (the gate has no '\$dtt -eq 0' conjunct)"
+else
+  write_plan "${BASE_PLAN},$(rc_obj 'doppler_service_token.inngest_flip' '"forget"')"
+  if ( source "$MUT2/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+    pass
+  else
+    fail "T1q: with the dtt conjunct removed the flip-forget plan should PASS (proves the counter is the only thing aborting it)"
+  fi
+fi
+
 # --- Test 2: FAIL — Redis AOF volume destroyed (the preservation invariant) ---
 VOL_DELETE="$(rc_obj 'hcloud_volume.inngest_redis' '"delete","create"')"
 write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VOL_DELETE}"
@@ -415,11 +457,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 49 ]]; then
+if [[ "$_ran" -lt 63 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 54. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 63. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 54)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 63)\n' "$_ran"
 fi
 
 echo ""

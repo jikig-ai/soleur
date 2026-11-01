@@ -354,8 +354,8 @@ locals {
   #   removed, ZERO non-comment lines touched. (That was the figure at #7695. It is STALE by about
   #   21 KB: the template grew with later work. The current figure is the one the flip-token split
   #   measured with BOTH token stubs high-entropy: see the ADR-282 build record and run
-  #   `bash apps/web-platform/infra/inngest-userdata-budget.sh` — the script enforces a 512 B cap
-  #   headroom floor.)
+  #   `bash apps/web-platform/infra/inngest-userdata-budget.sh` — the script enforces a 384 B cap
+  #   headroom floor; the replace dispatch runs it with --cap-only, so only the cap blocks there.)
   # Those are BYTES (`wc -c`). An earlier revision of this comment said "61,102 B", which was
   # terraform `length()`'s GRAPHEME count mislabelled as bytes — 183 B below the provable byte
   # floor, and optimistic in the one direction a cap gate must never be. registry-userdata-budget.sh
