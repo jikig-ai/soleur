@@ -108,9 +108,10 @@ import {
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import {
   authFailureFrameFromLeaseError,
-  isOauthUnusableLeaseError,
+  isLeaseRefusalReported,
   logSessionFailure,
   rewriteAgentAuthFailure,
   type AuthFailureFrame,
@@ -148,7 +149,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
  */
 function resolveSessionErrorCode(
   err: unknown,
-): "key_invalid" | "byok_key_missing" | "subscription_limit" | undefined {
+): ReturnType<typeof mapByokLeaseCauseToErrorCode> | "byok_key_missing" {
   if (err instanceof KeyInvalidError) return "key_invalid";
   if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
   // Phase 3.2 AC-D: MissingByokKeyError carries its own client-facing
@@ -1142,8 +1143,9 @@ async function startAgentSessionInner(
       userId,
       async (lease) => {
     // Agent-SDK consumer — resolve the credential ({ value, scheme }) so the
-    // subprocess env carries exactly one auth var. Prefers the operator
-    // subscription oauth_token when enabled+permitted; otherwise api_key.
+    // subprocess env carries exactly one auth var. The conversation binding's
+    // auth mode (#11591) decides: the operator subscription oauth_token only
+    // for `managed` (and when enabled+permitted); `api-key` always uses api_key.
     const [credential, serviceTokens] = await Promise.all([
       lease.getAgentCredential(),
       getUserServiceTokens(userId),
@@ -2741,7 +2743,9 @@ are the requirements to implement.`;
         }
       }
     }
-    });  // end runWithByokLease
+    },
+    { resolveAuthMode: makeConversationAuthModeResolver(userId, conversationId) },
+  );  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
       // feat-abort-conversation-web PR1 (plan §1.3): the abort branch
@@ -2964,9 +2968,10 @@ are the requirements to implement.`;
         // workspace context.
         reportMissingByokKey(err);
         Sentry.captureException(err);
-      } else if (!isOauthUnusableLeaseError(err)) {
-        // #11086: an unusable stored credential was already reported by the lease (feature byok-lease, closed class only);
-        // a second raw capture would double the Sentry count for one failed turn (the cc path skips its mirror the same way).
+      } else if (!isLeaseRefusalReported(err)) {
+        // #11086/#11599: an unusable stored credential or an unresolved authentication mode was already reported by the lease
+        // (feature byok-lease, closed class only); a second raw capture would double the Sentry count for one failed turn
+        // (the cc path skips its mirror the same way).
         Sentry.captureException(err);
       }
       logSessionFailure(log, err, { userId, conversationId }, {
@@ -3249,8 +3254,8 @@ async function sendUserMessageInner(
     // BEFORE the generic captureException so the workspace context lands
     // on the trail. Returns; we still surface the WS error event below.
     if (err instanceof MissingByokKeyError) reportMissingByokKey(err);
-    // #11086: the lease already reported an unusable stored credential; skip the duplicate raw capture and error log.
-    if (!isOauthUnusableLeaseError(err)) Sentry.captureException(err);
+    // #11086/#11599: the lease already reported this refusal; skip the duplicate raw capture and error log.
+    if (!isLeaseRefusalReported(err)) Sentry.captureException(err);
     logSessionFailure(log, err, { userId, conversationId }, {
       refused: "sendUserMessage refused: stored subscription credential is not usable",
       failed: "sendUserMessage session error",
@@ -3347,7 +3352,9 @@ async function sendUserMessageInner(
         // lease can close before the per-leader lease bodies run.
         dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
           .catch(handleSessionError);
-      });
+      },
+    { restOnly: true },
+  );
     } catch (err) {
       await handleSessionError(err);
     }

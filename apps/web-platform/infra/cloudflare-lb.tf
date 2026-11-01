@@ -12,7 +12,8 @@
 #   B3 relay-is-safety: LB weight must not be flipped to web-2 before owner-side relay active.
 #
 # Zone plan is Free Website; Load Balancing is a separately-billed add-on (~$5/mo, approved).
-# Applied via apply-web-platform-infra.yml (R2 backend serializer) — never laptop-local apply.
+# Applied via cf-lb-overlay.yml `ga-overlay` arm (R2 backend serializer; the parent
+# apply's -target allow-list deliberately excludes this trio) — never laptop-local apply.
 
 # Health monitor for the LB origin pool.
 resource "cloudflare_load_balancer_monitor" "web" {

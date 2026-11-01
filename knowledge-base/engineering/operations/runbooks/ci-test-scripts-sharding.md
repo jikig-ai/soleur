@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.6 min predicted per leg (566.1-578.2 s of suite time) from the manifest regenerated on five green main runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745); the worst leg stays under 600 s by ~22 s before setup. A table prediction, not a CI measurement and not job wall-clock; derivation in Measured history 2026-10-03 (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=578 → 1-193/194-386/387-578) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -157,6 +157,31 @@ deliberately NOT in `resolve-regenerable-conflicts.sh`'s RESOLVABLE-SET:
 regeneration needs `gh` plus a chosen green run id, which the pure-local
 resolver cannot supply — this path stays manual.
 
+## The drift watch (`shard-balance-watch`, #11564)
+
+A weekly advisory probe (`Tue 09:41 UTC` + `workflow_dispatch`) samples the
+last 5 green `merge_group` `ci.yml` runs' `suite-timings-scripts-*` artifacts
+and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
+--timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
+`src=floor` durations row that finally measured), `LEG_PREDICTED`,
+`LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
+`BOUND_PERFECT`, and `FLOOR_UNMEASURED` rows against the committed tables.
+`scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
+leg ratio > 1.30) and manages ONE watch-owned tracker issue
+(`ci-shard-balance-watch: manifest drift findings`, sentinel
+`<!-- shard-balance-watch:v1 drift=<set-sha1> -->`): comment only when the
+flagged-set hash changes, resolution comment + close on all-clear.
+
+Why `merge_group` and `--timings-dir`, not `--runs`: `push-dedupe` elides the
+shards job on main `push` runs, so they routinely carry no timings artifacts;
+merge_group runs are the canonical as-merged full-matrix run and artifacts
+live 14 days. To re-price by hand: `gh run download <id> -R jikig-ai/soleur
+-p 'suite-timings-scripts-*' -D <dir>` per run, then the same
+`--timings-dir` invocation — the probe's measurement path and the regen path
+are one generator. `bash scripts/watch-shard-balance-11564.sh --dry-run`
+prints findings and posts nothing; `--print-report` prints the raw rows.
+Retirement checklist: the workflow header.
+
 ## Why the OLD positional method is retained
 
 `SCRIPTS_SHARD=k/K` keeps suites whose registration ordinal ≡ k−1 (mod K)
@@ -177,8 +202,9 @@ Per-suite durations come from the run's own `suite-timings-scripts-*` /
 retention 14 days), each a TSV written in execution order. To reconstruct
 the registration order that produced them:
 
-1. Download all legs' TSVs for one run (`gh run download <run-id> -n
-   'suite-timings-*'` or via the artifacts API).
+1. Download all legs' TSVs for one run (`gh run download <run-id> -p
+   'suite-timings-scripts-*' -D <dir>` or via the artifacts API — `-p` is the
+   glob flag; `-n/--name` is exact-name and matches nothing here).
 2. Interleave the legs back into ordinal order: leg k holds ordinals
    k−1, k−1+K, k−1+2K, … under the runner's C-collation sort — recover the
    sequence by round-robin merge, NOT by concatenating legs.
@@ -252,6 +278,69 @@ span to the NEXT registered mark.
   `gh run view <run> --json jobs,createdAt` (start delay = a job's
   `startedAt` minus the run's `createdAt`) and compare against the cohort
   shape in the section below; if the 8th leg's start delay dominates, revisit.
+- **2026-10-30 pre-split baseline (#11562):** jobs-API read over three green
+  PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
+  `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
+  spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
+  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
+  green runs, both on legs already holding ~10 min of other work. Suite
+  sums ≈ wall clock (queue time was not the driver). Split to
+  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
+  inside the same relevance gates; arm prices seeded at CI-median × local
+  arm-share — the first green run carrying real arm timings is the
+  re-price input (interim-pin pattern from 2026-09-26). Post-split
+  manifest: incumbent rows kept their committed prices (a full
+  `--timings-dir` re-price showed the always-on fast-tier budget breaks
+  on pre-existing main drift — 8 always-on labels at 11-378 s CI real —
+  tracked separately), arms placed on least-loaded legs by seeded weight
+  on distinct legs per the `-<letter>` rule. The ~28-min bound is
+  delivered only after real arm timings re-price; until then
+  `--incremental` regens only, since a `--runs` pass would floor-price
+  the estimated arm rows. **Ownership checkpoint:** re-check leg spread
+  and worst leg on the first green PR run after merge — that run's
+  `suite-timings-*` artifacts carry the real arm prices and are the
+  `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
+  artifact runs — main `push` runs elide the shards job).
+- **2026-10-31 post-merge re-price (#11562 ownership checkpoint, CLOSED):**
+  8 green post-merge ci.yml runs carried the arm timings — merge_group
+  41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
+  41180934660 and pull_request 41133279254, 41135223254 (each dir held all 8
+  light legs; `-p` also fetched the 3 heavy-leg artifacts, which
+  `LIGHT_ARTIFACT` excludes). **Observed on the seeded topology:** worst-leg
+  suite-times per run (in the run-id order above) 35.9 / 35.0 / 36.2 /
+  33.7 / 34.9 / 35.2 / 36.8 / 35.2 min, leg spreads 16.1 / 11.5 / 13.5 /
+  10.5 / 12.0 / 12.9 / 17.2 / 8.9 min; jobs-API wall clocks worst 37 / 36 /
+  37 / 35 / 36 / 36 / 38 / 36 min, wall spreads 16 / 11 / 14 / 11 / 12 /
+  13 / 17 / 9 min — improved vs the 43–51 min pre-split baseline but
+  **above the ~28-min bound on every run** (seeded
+  prices were off: replay-a seeded 635 s vs measured 1033 s; affected-b
+  913 s vs 502 s). **Measured arm medians (ms, seeded → measured):**
+  replay-a 635037→1033094, replay-b 336324→399378, replay-c 351151→326172,
+  affected-a 153713→53969, affected-b 912865→502348, affected-c
+  297241→517988, affected-d 382585→610788. **Committed re-price:**
+  incumbent-preserving `--durations` seed (the merge commit's own
+  mechanism) — a full `--timings-dir --write` would have re-priced the 8
+  always-on drifters #11648 tracks and red `test-all-fast-tier-budget`;
+  21 manifest rows re-seated plus 3 new labels seated; 94 incumbent floor
+  rows re-derived at the 1222 ms floor (2 stale rows moved 1200→1222);
+  budget suite stays green. Post-reprice
+  predicted packing ~1230–1277 s/leg (~21.3 min worst) on committed
+  prices — nominally under the bound but inherits incumbent staleness; the
+  honest all-measured table predicts ~1824.7 s/leg (~30.4 min, spread
+  10 ms). **Verdict:** the split delivers ~35 min worst legs — below the
+  old 43–51 min but short of ~28; the residual is incumbent-price
+  staleness (see next) plus 9–17 min of per-run variance, not arm packing.
+  **#11648 corroborated:** the 8 always-on drifters' fresh 8-run medians
+  (ms): test-all-group-affected 356,915; lint-ratchet 26,575;
+  check-deps-adapter-drift 24,513; token-drift-workflow-causes 19,777;
+  grep-q-pipe-guard 15,618; lint-encryption-posture 11,375;
+  gitleaks-merge-commit 11,791; lint-gh-argv-arg-live 13,212 — consistent
+  with the issue's 5-run table (sustained cost, not a measurement
+  artifact); evidence posted as an issue comment. 1 floor row in the
+  measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
+  staged runs — no CI timing yet).
 
 ## Runner-availability data (why extra legs are not free)
 

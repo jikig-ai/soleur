@@ -274,7 +274,7 @@ else _report "W7 scripts/derive-app-domain-base.sh is executable" fail "not +x";
 # checked, and an empty result is only trusted when python said it looked at something.
 _dop_out=$(python3 - "$WORKFLOW" <<'PYX'
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
+d = yaml.load(open(sys.argv[1]), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
 bad, seen = [], 0
 for jn, j in (d.get("jobs") or {}).items():
     if not isinstance(j, dict):
@@ -336,8 +336,8 @@ fi
 # called once (the step's own `max=` times for exit 3). Three more runs: a recovery (engine exits
 # 3, 3, 0: the step ends 0 after 3 calls), a Doppler read failure (the step aborts 1 before any
 # engine call) and the first engine call itself (its `--target` / `--tags-from` arguments, and that
-# it was not started traced). A text parse of the `case` was bypassed in two consecutive review
-# rounds; running it cannot be, so none is kept. The engine's own behaviour belongs to its suite.
+# it was not started traced). A text parse of the workflow's `case` was bypassed in two consecutive review
+# rounds; running it cannot be, so none is kept for the workflow. The engine's own behaviour belongs to its suite.
 #
 # Also pinned: the step's env is EXACTLY DOPPLER_TOKEN (secrets.DOPPLER_TOKEN_PRD) and
 # GH_TOKEN_FOR_ENGINE (secrets.GITHUB_TOKEN), the job's `if` is exactly the normalized expression
@@ -345,22 +345,33 @@ fi
 # `defaults`, `strategy`, `continue-on-error`, `concurrency` or `outputs` can appear unnoticed).
 # The VALUES of environment / runs-on / permissions / timeout-minutes are not pinned here: they are
 # the workflow's own to change, and a value pin would only mirror the workflow into this file.
-# Exit 1 is added to the tested population (the header does not list it) and must not fall to the
-# `*)` arm; its annotation must name the manifest.
+# Exit 1 is always in the tested population (the header's non-zero codes UNION {1}): it is exercised and
+# barred from the `*)` arm even if the header row for 1 were dropped, and its annotation must name the manifest.
+# It is also compared like any other code: the header table must list 1 exactly when a die/exit site emits it.
 #
-# NOT covered here: the Restore summary step and a `die "$x"` whose code is computed (the derived
-# population reads literal `die N` / `exit N` only).
+# Also covered here (#10932 residuals 2 and 3): the Restore summary step (`w9_summary_check` runs its body for
+# success, cancelled, failure and an empty outcome and pins its `if` and env); every `die` / `exit` word in the
+# engine that is not a literal-code site, so a `die "$x"` is no longer invisible to the comparison below
+# (`w9_computed_sites`, which also pins the die() body to its reviewed shape, W9_DIE_BODY); and the verdict
+# swap (a nested run of this suite on a drop1 workflow must print the FAIL line carrying the drop1 control's observed
+# detail, and `w9_expect` / `w9_verdict` have canaries). NOT covered: a die whose code arrives through `eval`, an
+# indirect call (a command held in a variable) or a name split by quoting; `kill`, `exec` and errexit exits;
+# implicit exits (`return N`, an unbound variable, a failed `${x:?}`); a `die N` / `exit N` that is text rather than
+# a live call (a trailing comment, a heredoc line, a dead branch); code 0; the engine's own prose; and, for the summary step, anything outside that one step (another step or a workflow-level
+# `env` / `defaults` writing or changing the summary, an earlier step failing before the restore step runs).
 #
 # The population is DERIVED (tests/scripts/lib/restore-engine-header.sh): the engine's header
 # table must equal the codes its own `die N` / `exit N` sites emit. Exit 1 follows the rule in
-# that lib: always exercised, never compared. The controls apply one mutation to the workflow text
-# (or one stray `die` to the engine) and require the same check to refuse it.
+# that lib: always exercised, and compared like any other code. The controls apply one mutation to the workflow
+# text (or to the engine) and require the same check to refuse it.
 # shellcheck source=tests/scripts/lib/restore-engine-header.sh
 source "${ROOT}/tests/scripts/lib/restore-engine-header.sh"
 RESTORE_ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
 RESTORE_ENGINE_TEXT="$(cat "$RESTORE_ENGINE" 2>/dev/null)"
 RESTORE_WF_TEXT="$(cat "$WORKFLOW")"
 RESTORE_STEP="Restore production's pinned image set from GHCR"
+SUMMARY_STEP="Restore summary"
+W9_ROW="W9 the restore step maps every engine exit code to its step status and a named annotation"
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -377,17 +388,30 @@ trap 'rm -rf "$W9_TMP"' EXIT
 trap 'exit 143' TERM HUP INT
 W9_PY="$(cat <<'PYX'
 import re, sys, yaml
+_Y = lambda t: yaml.load(t, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
 mode, name, text = sys.argv[1], sys.argv[2], sys.stdin.read()
+other = sys.argv[3] if len(sys.argv) > 3 else ""
 FORBID = ("if", "continue-on-error", "shell", "working-directory", "timeout-minutes")
+if mode in ("sumextract", "sumkeys"):
+    jobs = _Y(text).get("jobs") or {}
+    hits = [(jn, i, s) for jn, j in jobs.items() for i, s in enumerate(j.get("steps") or []) if s.get("name") == name]
+    if not hits: raise SystemExit(3)
+    if len(hits) != 1 or hits[0][0] != "registry_store_restore": raise SystemExit(4)
+    if mode == "sumkeys":
+        print("if=" + " ".join(str(hits[0][2].get("if", "")).split())); print("keys=" + " ".join(k for k in FORBID if k != "if" and k in hits[0][2]))
+        raise SystemExit(0)
+    names = [s.get("name") for s in jobs["registry_store_restore"]["steps"]]
+    if other not in names or names.index(other) >= hits[0][1]: raise SystemExit(6)
+    sys.stdout.write(hits[0][2].get("run") or ""); raise SystemExit(0)
 if mode in ("extract", "keys"):
-    hits = [(jn, s) for jn, j in (yaml.safe_load(text).get("jobs") or {}).items() for s in (j.get("steps") or []) if s.get("name") == name]
+    hits = [(jn, s) for jn, j in (_Y(text).get("jobs") or {}).items() for s in (j.get("steps") or []) if s.get("name") == name]
     if not hits: raise SystemExit(3)
     if len(hits) != 1 or hits[0][0] != "registry_store_restore": raise SystemExit(4)
     if mode == "keys": sys.stdout.write("\n".join(k for k in FORBID if k in hits[0][1]))
     else: sys.stdout.write(hits[0][1].get("run") or "")
     raise SystemExit(0)
 if mode in ("env", "job"):
-    jobs = yaml.safe_load(text).get("jobs") or {}
+    jobs = _Y(text).get("jobs") or {}
     j = jobs.get("registry_store_restore")
     if j is None: raise SystemExit(5)
     if mode == "job":
@@ -425,6 +449,44 @@ def once(old, new):
     global seg
     if seg.count(old) != 1: raise SystemExit("anchor %r found %d times" % (old, seg.count(old)))
     seg = seg.replace(old, new)
+if mode.startswith("mutate:sum"):
+    # The summary step is the last step of its job, so the generic "next step header" bound would run into the next job.
+    m = re.search(r"\n(?:      - name: |  [A-Za-z_][A-Za-z0-9_-]*:)", text[a + 1:])
+    b = a + 1 + m.start() if m else len(text)
+    seg, rest = text[a:b], text[b:]
+    k = mode.split(":", 1)[1]
+    if k == "sumifdrop": once("\n        if: always()", "")
+    elif k == "sumenvlit": once("RESTORE_RESULT: ${{ job.status }}", "RESTORE_RESULT: success")
+    elif k == "sumredirect": once('} >> "$GITHUB_STEP_SUMMARY"', "}")
+    elif k in ("sumswap", "sumreword", "sumsuccfail", "sumsuccnoclosed", "sumfailclosed", "sumfailarm", "sumcancel", "sumcancel0"):
+        e1 = re.search(r"\n *success\)\n( *echo [^\n]*)", seg).group(1)
+        e2 = re.search(r"\n *cancelled\)\n( *echo [^\n]*)", seg).group(1)
+        e3 = re.search(r"\n *\*\)\n( *echo [^\n]*)", seg).group(1)
+        say = lambda t: '                echo "' + t + '"'
+        if k == "sumswap": once(e1, "@@SWAP@@"); once(e3, e1); once("@@SWAP@@", e3)
+        elif k == "sumreword": once(e1, say("Done: the store is closed again.")); once(e2, say("Restore cancelled; re-run the job."))
+        elif k == "sumsuccfail": once(e1, say("The window is closed and the restore failed."))
+        elif k == "sumsuccnoclosed": once(e1, say("Done."))
+        elif k == "sumfailclosed": once(e3, say("The restore failed and the window is closed."))
+        elif k == "sumfailarm": once(e3, "                :")
+        elif k == "sumcancel": once(e2, say("The restore was cancelled and the window is closed."))
+        else: once(e2, say("Stopped."))
+    elif k == "sumheading": once('echo "## registry store restore"', 'echo "## restore"')
+    elif k == "sumexit": once('} >> "$GITHUB_STEP_SUMMARY"', '} >> "$GITHUB_STEP_SUMMARY"\n          exit 1')
+    elif k.startswith("sumkey_"):
+        key = {"shell": "shell: bash", "wd": "working-directory: .", "timeout": "timeout-minutes: 1", "coe": "continue-on-error: true"}[k[7:]]
+        once("\n        if: always()", "\n        if: always()\n        " + key)
+    elif k == "sumenvx": once("RESTORE_RESULT: ${{ job.status }}", "RESTORE_RESULT: ${{ job.status }}\n          BASH_ENV: /x")
+    elif k == "sumstderr": once('echo "## registry store restore"', 'echo "## registry store restore"; echo oops >&2')
+    elif k == "sumnostar": once("\n              *)\n", "\n              failure)\n")
+    elif k == "sumenvy": once("RESTORE_RESULT: ${{ job.status }}", "RESTORE_RESULT: ${{ job.status }}\n          SHELLOPTS: xtrace")
+    elif k == "sumorder":
+        t2 = text[:a] + text[b:]
+        ri = "      - name: " + other
+        if t2.count(ri) != 1: raise SystemExit("restore step header found %d times" % t2.count(ri))
+        sys.stdout.write(t2[:t2.index(ri)] + seg.rstrip("\n") + "\n\n" + t2[t2.index(ri):]); raise SystemExit(0)
+    else: raise SystemExit("unknown mutation " + k)
+    sys.stdout.write(text[:a] + seg + rest); raise SystemExit(0)
 arm = re.search(r'\n( *78\) echo [^\n]*)', seg).group(1)
 k = mode.split(":", 1)[1]
 if k == "drop78": once("\n" + arm, "")
@@ -485,14 +547,89 @@ w9_parse() { # <w9_run result>: sets w9_rc w9_calls w9_first w9_out
   w9_out="${rest#*$'\n'}"
 }
 w9_add() { w9_p="${w9_p}${w9_p:+$'\n'}$1"; }
+# Verdicts are returned as DATA (`ok` / `fail`), never as an exit: the callers sit inside `$( )`, where an exit would only end the subshell.
+w9_expect() { if [[ -n "$1" ]] && grep -qF -- "$1" <<<"$2"; then echo ok; else echo fail; fi; } # <needle> <text>: an empty needle is a fail, never a match-all
+w9_verdict() { if [[ -z "$1" ]]; then echo ok; else echo fail; fi; }           # <problems>: no problem is ok
+# The reviewed body of the engine's die(), between its definition line and its `exit "$code"`, comments and blank lines dropped.
+IFS= read -r -d '' W9_DIE_BODY <<'EOF'
+  local code="$1"; shift
+  local msg="$*"
+  msg="${msg//[$'\r\n']/ }"
+  echo "::error::registry-restore-from-ghcr: ${msg}" >&2
+EOF
+W9_DIE_BODY="${W9_DIE_BODY%$'\n'}"
+w9_computed_sites() { # <engine text on stdin>: prints one offender per line (<line>:<token>, or a site-count problem); no output means every die/exit word is a literal-code site or one of the two allowed die() lines
+  local txt dl=() cl=() close="" ln tok acc=0 re='^(die|exit) [0-9]+([[:space:];&|)]|$)' body
+  txt="$(sed -E 's/^[[:space:]]*#.*$//')" # whole-line comments are blanked, never deleted, so the reported line numbers are the engine file's
+  mapfile -t dl < <(grep -nE '^die\(\) \{( #.*)?$' <<<"$txt" | cut -d: -f1)
+  mapfile -t cl < <(grep -nE '^[[:space:]]*exit "\$code"$' <<<"$txt" | cut -d: -f1)
+  [[ "${#dl[@]}" == 1 ]] || echo "allowed site count: the die() definition occurs ${#dl[@]} times, want exactly 1"
+  [[ "${#cl[@]}" == 1 ]] || echo "allowed site count: the exit \"\$code\" line occurs ${#cl[@]} times, want exactly 1"
+  if [[ "${#dl[@]}" == 1 && "${#cl[@]}" == 1 ]]; then
+    close="$(awk -v s="${dl[0]}" 'NR > s && /^}/ { print NR; exit }' <<<"$txt")"
+    if [[ -n "$close" && "${cl[0]}" -gt "${dl[0]}" && "${cl[0]}" -lt "$close" ]]; then
+      # The two blanked lines hide the definition and its exit; the lines between them decide WHICH code is exited, so any change
+      # there (a rewrite, a return, a deleted or repeated `local code`, a literal exit) changes every die site's real status with no
+      # computed die/exit word anywhere. The body is therefore pinned to its reviewed shape (W9_DIE_BODY), as a closed sequence.
+      body="$(awk -v a="${dl[0]}" -v b="$close" -v c="${cl[0]}" 'NR > a && NR < b && NR != c && $0 !~ /^[[:space:]]*$/' <<<"$txt")"
+      [[ "$body" == "$W9_DIE_BODY" ]] || echo "${dl[0]}:die-body-changed"
+      txt="$(awk -v a="${dl[0]}" -v b="${cl[0]}" 'NR == a || NR == b { print ""; next } { print }' <<<"$txt")"
+    else echo "allowed site count: the exit \"\$code\" line is not inside the die() body"; fi
+  fi
+  # Every remaining die/exit WORD is a token; only `die N` / `exit N` (one space, digits, a clean terminator) is accepted, because
+  # that is the shape restore_emit_codes reads. A word census has no call-position anchor set to under-enumerate.
+  while IFS=: read -r ln tok; do
+    [[ -n "$ln" ]] || continue
+    if [[ "$tok" =~ $re ]]; then acc=$((acc + 1)); else echo "${ln}:${tok%"${tok##*[![:space:]]}"}"; fi
+  done < <(grep -noE '\b(die|exit)\b( [0-9]+\b)?.?' <<<"$txt")
+  (( acc >= 1 )) || echo "census inspected zero sites — vacuous"
+}
+w9_summary_check() { # <workflow text>: prints one problem per line; no output means the Restore summary step holds its contract
+  local wf="$1" body keys sif envm xrc v rc out f sd="$W9_TMP/sum" bashbin
+  w9_p=""; bashbin="$(command -v bash)"
+  body="$(timeout 30 python3 -I -c "$W9_PY" sumextract "$SUMMARY_STEP" "$RESTORE_STEP" <<<"$wf")"; xrc=$?
+  case "$xrc" in
+    0) ;;
+    6) w9_add "summary step position: the ${SUMMARY_STEP} step must come after the restore step in registry_store_restore (or the restore step is missing)"; printf '%s' "$w9_p"; return ;;
+    *) w9_add "summary step missing, duplicated or outside job registry_store_restore (extract rc ${xrc})"; printf '%s' "$w9_p"; return ;;
+  esac
+  [[ -n "$body" ]] || { w9_add "summary step has no run: body"; printf '%s' "$w9_p"; return; }
+  keys="$(timeout 30 python3 -I -c "$W9_PY" sumkeys "$SUMMARY_STEP" "$RESTORE_STEP" <<<"$wf")" || keys=""
+  sif="$(sed -n 's/^if=//p' <<<"$keys")"
+  [[ "$sif" == "always()" ]] || w9_add "summary step if drifted: want exactly always() so it runs after a failure or a cancel (got: ${sif:-nothing})"
+  [[ -z "$(sed -n 's/^keys=//p' <<<"$keys")" ]] || w9_add "summary step keys ($(sed -n 's/^keys=//p' <<<"$keys")) change how it runs and that this harness does not model"
+  envm="$(timeout 30 python3 -I -c "$W9_PY" env "$SUMMARY_STEP" <<<"$wf")" || envm=""
+  [[ "$envm" == 'RESTORE_RESULT=${{ job.status }}' ]] \
+    || w9_add "summary step env drifted: want exactly RESTORE_RESULT from job.status and no other key (got: ${envm//$'\n'/ ; })"
+  assert_fixture_dir "$W9_TMP"
+  # env -i scrubs secrets from the body's environment; it does not contain code (absolute paths and redirects still work).
+  for v in success cancelled failure ""; do
+    rm -rf "$sd"; mkdir -p "$sd"; : > "$sd/summary.md"
+    out="$(cd "$sd" && timeout 30 env -i PATH=/nonexistent RESTORE_RESULT="$v" GITHUB_STEP_SUMMARY="$sd/summary.md" \
+      "$bashbin" --noprofile --norc -eo pipefail -c "$body" 2>&1 </dev/null)"; rc=$?
+    [[ "$rc" == 0 ]] || w9_add "summary run: the body exited ${rc} for RESTORE_RESULT='${v}'"
+    [[ -z "$out" ]] || w9_add "summary output (stdout and stderr) is not empty for RESTORE_RESULT='${v}' (got: ${out:0:80})"
+    f="$(cat "$sd/summary.md")"
+    [[ -n "$f" ]] || { w9_add "summary file is empty for RESTORE_RESULT='${v}'"; continue; }
+    [[ "$(head -1 <<<"$f")" == "## registry store restore" ]] || w9_add "summary heading is not '## registry store restore' for RESTORE_RESULT='${v}'"
+    case "$v" in
+      success)   { grep -qF 'closed' <<<"$f" && ! grep -qiw 'failed' <<<"$f"; } || w9_add "summary outcome success must say closed and not failed" ;;
+      cancelled) { grep -qF 'cancelled' <<<"$f" && ! grep -qF 'closed' <<<"$f"; } || w9_add "summary outcome cancelled must say cancelled and not closed" ;;
+      *)         { grep -qiw 'failed' <<<"$f" && ! grep -qF 'closed' <<<"$f"; } || w9_add "summary outcome failed must say failed and not closed (RESTORE_RESULT='${v}')" ;;
+    esac
+  done
+  printf '%s' "$w9_p"
+}
 w9_check() { # <workflow text> <engine text>: prints one problem per line; no output means the contract holds
-  local wf="$1" eng="$2" envm jobm jif body hdr emit maxv code line want tested keys xrc
+  local wf="$1" eng="$2" envm jobm jif body hdr emit maxv code line want tested keys xrc sites
   w9_p=""
   [[ -n "$eng" ]] || { echo "the restore engine is missing or empty at ${RESTORE_ENGINE}"; return; }
-  hdr="$(restore_header_codes <<<"$eng" | grep -vx 1)"; emit="$(restore_emit_codes <<<"$eng" | grep -vx 1)"
-  [[ "$hdr" == "$emit" ]] || w9_add "the engine header table (${hdr//$'\n'/ }) differs from the codes its die/exit sites emit (${emit//$'\n'/ }), both without 1"
+  hdr="$(restore_header_codes <<<"$eng")"; emit="$(restore_emit_codes <<<"$eng")"
+  [[ "$hdr" == "$emit" ]] || w9_add "the engine header table (${hdr//$'\n'/ }) differs from the codes its die/exit sites emit (${emit//$'\n'/ })"
+  sites="$(w9_computed_sites <<<"$eng")"
+  [[ -z "$sites" ]] || w9_add "computed die/exit site or census problem (restore_emit_codes reads literal codes only, so the comparison above cannot see it): ${sites//$'\n'/ ; }. A hit on prose or a message: reword it to avoid the words die and exit. A real code: write a literal die N / exit N. die-body-changed: the die() body no longer matches W9_DIE_BODY; review the change, then update that pin in this suite."
   tested="$({ echo 1; restore_header_codes <<<"$eng"; } | sort -un)"
-  [[ "$(grep -c . <<<"$tested")" -ge 7 ]] || w9_add "the engine header yielded fewer than 6 failure codes (header reshaped?)"
+  [[ "$(grep -c . <<<"$tested")" -ge 7 ]] || w9_add "the engine header yielded fewer than 7 failure codes (header reshaped?)"
   body="$(timeout 30 python3 -I -c "$W9_PY" extract "$RESTORE_STEP" <<<"$wf")"; xrc=$?
   [[ "$xrc" == 0 ]] || { w9_add "the restore step is missing, duplicated or outside job registry_store_restore (extract rc ${xrc})"; printf '%s' "$w9_p"; return; }
   [[ -n "$body" ]] || { w9_add "the restore step has no run: body"; printf '%s' "$w9_p"; return; }
@@ -541,12 +678,15 @@ w9_check() { # <workflow text> <engine text>: prints one problem per line; no ou
   printf '%s' "$w9_p"
 }
 w9_problems="$(w9_check "$RESTORE_WF_TEXT" "$RESTORE_ENGINE_TEXT")"
-if [[ -z "$w9_problems" ]]; then
-  _report "W9 the restore step maps every engine exit code to its step status and a named annotation" ok
-else
-  _report "W9 the restore step maps every engine exit code to its step status and a named annotation" fail "${w9_problems//$'\n'/; }"
+_report "$W9_ROW" "$(w9_verdict "$w9_problems")" "${w9_problems//$'\n'/; }"
+# Nested proof run (the meta-control below runs this suite on a drop1-mutated tree): stop right after the W9 row, with a code that is
+# never 0, so an exported W9_NESTED can neither recurse into the meta-control nor make a run go green.
+if [[ "${W9_NESTED:-}" == 1 ]]; then
+  printf '\n=== nested W9 proof (W9_NESTED=1 is set; unset it for a real run): %d passed, %d failed ===\n' "$passes" "$fails"
+  exit 64
 fi
 
+w9_drop1_mut=""; w9_drop1_out=""
 # W9 controls: each mutates the REAL workflow text (or adds one `die` to the engine), checks the
 # mutation landed, and requires the same check to refuse it with a message naming the right thing.
 for w9_c in "drop78|exit 78 fell" "dead|exit 78 fell" "nested|exit 78 fell" "subject|fell to the *) arm" \
@@ -559,21 +699,135 @@ for w9_c in "drop78|exit 78 fell" "dead|exit 78 fell" "nested|exit 78 fell" "sub
     _report "W9 control ${w9_c%%|*}: the mutation landed" fail "the mutation did not change the workflow"; continue
   fi
   w9_out="$(w9_check "$w9_mut" "$RESTORE_ENGINE_TEXT")"
-  if grep -qF -- "${w9_c#*|}" <<<"$w9_out"; then _report "W9 control ${w9_c%%|*}: refused" ok
-  else _report "W9 control ${w9_c%%|*}: refused" fail "expected a refusal naming '${w9_c#*|}', got: ${w9_out:-<nothing>}"; fi
+  [[ "${w9_c%%|*}" == drop1 ]] && w9_drop1_mut="$w9_mut" && w9_drop1_out="$w9_out"
+  _report "W9 control ${w9_c%%|*}: refused" "$(w9_expect "${w9_c#*|}" "$w9_out")" "expected a refusal naming '${w9_c#*|}', got: ${w9_out:-<nothing>}"
 done
 # One more code than the engine's header or its die/exit sites carry, so the control cannot go stale
 # when the engine legitimately gains a code of its own.
 w9_hi=$(( $({ restore_header_codes <<<"$RESTORE_ENGINE_TEXT"; restore_emit_codes <<<"$RESTORE_ENGINE_TEXT"; } | sort -n | tail -1) + 1 ))
 w9_out="$(w9_check "$RESTORE_WF_TEXT" "${RESTORE_ENGINE_TEXT}"$'\n'"die ${w9_hi} \"a code the header does not list\"")"
-if grep -qF 'differs' <<<"$w9_out"; then _report "W9 control engine-extra-code: refused" ok
-else _report "W9 control engine-extra-code: refused" fail "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"; fi
+_report "W9 control engine-extra-code: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+# Exit 1 is compared like any other code (#11667): dropping its header row, or every one of its emit sites,
+# must be refused. Each control mutates the real engine text; a mutation that did not land is a failure row
+# of its own, and a landed one adds exactly one passing row.
+w9_mut="$(sed -E '/^#[[:space:]]+1[[:space:]][[:space:]]+[A-Za-z]/d' <<<"$RESTORE_ENGINE_TEXT")"
+if [[ "$w9_mut" == "$RESTORE_ENGINE_TEXT" ]]; then
+  _report "W9 control eng-hdr-row1-removed: the mutation landed" fail "removing the header row for code 1 did not change the engine text"
+else
+  w9_out="$(w9_check "$RESTORE_WF_TEXT" "$w9_mut")"
+  _report "W9 control eng-hdr-row1-removed: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+fi
+w9_mut="$(sed -E '/^[[:space:]]*#/! s/\b(die|exit) 1\b/\1 2/g' <<<"$RESTORE_ENGINE_TEXT")"
+if [[ "$w9_mut" == "$RESTORE_ENGINE_TEXT" ]]; then
+  _report "W9 control eng-emit-sites1-removed: the mutation landed" fail "rewriting the die/exit 1 sites did not change the engine text"
+else
+  w9_out="$(w9_check "$RESTORE_WF_TEXT" "$w9_mut")"
+  _report "W9 control eng-emit-sites1-removed: refused" "$(w9_expect differs "$w9_out")" "expected a refusal naming 'differs', got: ${w9_out:-<nothing>}"
+fi
+
+# W9c controls (residual 3b): each appends ONE line to the real engine text and requires the census to name exactly it.
+# The census on the unmutated text must be empty first, so the appended line is the only thing that can have produced the offender.
+w9_cn=$(( $(wc -l <<<"$RESTORE_ENGINE_TEXT") + 1 ))
+w9_cbase="$(w9_computed_sites <<<"$RESTORE_ENGINE_TEXT")"
+for w9_cc in 'computed|die "$c" "x"|die' 'bare|exit|exit' 'twospace|die  7 "x"|die' 'partial|die 3$x "x"|die 3$'; do
+  IFS='|' read -r w9_cname w9_cline w9_ctok <<<"$w9_cc"
+  w9_cout="$(w9_computed_sites <<<"${RESTORE_ENGINE_TEXT}"$'\n'"${w9_cline}")"
+  if [[ -z "$w9_cbase" && "$w9_cout" == "${w9_cn}:${w9_ctok}" ]]; then _report "W9c control ${w9_cname}: the census names the appended line" ok
+  else _report "W9c control ${w9_cname}: the census names the appended line" fail "want exactly '${w9_cn}:${w9_ctok}' over an empty baseline; baseline: ${w9_cbase:-<empty>}; got: ${w9_cout:-<nothing>}"; fi
+done
+w9_cout="$(w9_computed_sites <<<"")"
+if grep -qF 'inspected zero sites' <<<"$w9_cout"; then _report "W9c control zero-sites: an empty text is vacuous, not clean" ok
+else _report "W9c control zero-sites: an empty text is vacuous, not clean" fail "got: ${w9_cout:-<nothing>}"; fi
+w9_out="$(w9_check "$RESTORE_WF_TEXT" "${RESTORE_ENGINE_TEXT}"$'\n''die "$c" "x"')"
+if grep -qF 'computed die/exit site' <<<"$w9_out"; then _report "W9c control wire-in: w9_check refuses a computed die" ok
+else _report "W9c control wire-in: w9_check refuses a computed die" fail "got: ${w9_out:-<nothing>}"; fi
+w9_cout="$(w9_computed_sites <<<"${RESTORE_ENGINE_TEXT}"$'\n''die 7 "x"'$'\n''# exit $x')"
+if [[ -z "$w9_cbase" && -z "$w9_cout" ]]; then _report "W9c control must-pass: a literal die and a whole-line comment are accepted" ok
+else _report "W9c control must-pass: a literal die and a whole-line comment are accepted" fail "baseline: ${w9_cbase:-<empty>}; got: ${w9_cout:-<nothing>}"; fi
+# die() body controls: a change INSIDE or AROUND the die() body is as invisible to the comparison as a computed die.
+w9_dln="$(grep -n '^die() {' <<<"$RESTORE_ENGINE_TEXT" | head -1 | cut -d: -f1)"
+w9_mln="$(grep -n '^  local msg="\$\*"$' <<<"$RESTORE_ENGINE_TEXT" | head -1 | cut -d: -f1)"
+w9_xln="$(grep -n '^[[:space:]]*exit "\$code"$' <<<"$RESTORE_ENGINE_TEXT" | head -1 | cut -d: -f1)"
+w9_eng_variant() { # <name>: the engine text with one change inside or around die()
+  case "$1" in
+    rewrite)   awk -v n="$((w9_dln + 1))" 'NR == n { print "  local code=\"$(( $1 % 4 ))\"; shift"; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    return)    awk -v n="$((w9_dln + 1))" 'NR == n { print; print "  [[ $code == 6 ]] && return 0"; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    delcode)   awk -v n="$((w9_dln + 1))" 'NR == n { next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    dupcode)   awk -v n="$((w9_dln + 1))" 'NR == n { print; print; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    literalexit) awk -v n="$((w9_dln + 1))" 'NR == n { print; print "  exit 3"; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    tailcode)  awk '/^  echo "::error::registry-restore-from-ghcr: / { print; print "  code=3"; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    injectexit) awk -v n="$w9_mln" 'NR == n { print $0 "; exit $((code + 1))"; next } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    relocate)  awk -v x="$w9_xln" 'NR == x { next } { print } END { print "exit \"$code\"" }' <<<"$RESTORE_ENGINE_TEXT" ;;
+    predef)    awk -v x="$w9_xln" -v d="$w9_dln" 'NR == x { next } NR == d { print "exit \"$code\"" } { print }' <<<"$RESTORE_ENGINE_TEXT" ;;
+  esac
+}
+for w9_cc in "rewrite|${w9_dln}:die-body-changed" "return|${w9_dln}:die-body-changed" "delcode|${w9_dln}:die-body-changed" "dupcode|${w9_dln}:die-body-changed" "literalexit|${w9_dln}:die-body-changed" "tailcode|${w9_dln}:die-body-changed" "injectexit|${w9_mln}:exit" "relocate|not inside the die() body" "predef|not inside the die() body"; do
+  w9_cout="$(w9_computed_sites <<<"$(w9_eng_variant "${w9_cc%%|*}")")"
+  if [[ -n "$w9_dln" && -n "$w9_mln" && -n "$w9_xln" && -z "$w9_cbase" && "$w9_cout" == *"${w9_cc#*|}"* ]]; then _report "W9c control die-body ${w9_cc%%|*}: the census refuses it" ok
+  else _report "W9c control die-body ${w9_cc%%|*}: the census refuses it" fail "want '${w9_cc#*|}' (die at ${w9_dln:-?}, msg at ${w9_mln:-?}, exit at ${w9_xln:-?}); got: ${w9_cout:-<nothing>}"; fi
+done
+
+# W9s: the Restore summary step (residual 3a). The controls mutate the REAL workflow text, check the mutation landed,
+# and each requires a fragment only its own pin produces.
+w9s_problems="$(w9_summary_check "$RESTORE_WF_TEXT")"
+if [[ -z "$w9s_problems" ]]; then _report "W9s the Restore summary step runs always and prints the matching outcome block" ok
+else _report "W9s the Restore summary step runs always and prints the matching outcome block" fail "${w9s_problems//$'\n'/; }"; fi
+for w9_sc in "sumifdrop|summary step if" "sumenvlit|summary step env" "sumswap|summary outcome success" "sumredirect|summary output" "sumorder|summary step position" \
+  "sumsuccfail|summary outcome success" "sumsuccnoclosed|summary outcome success" "sumfailclosed|summary outcome failed" "sumfailarm|summary outcome failed" \
+  "sumcancel|summary outcome cancelled" "sumcancel0|summary outcome cancelled" "sumheading|summary heading" "sumexit|summary run: the body exited" "sumkey_shell|summary step keys" "sumkey_wd|summary step keys" "sumkey_timeout|summary step keys" "sumkey_coe|summary step keys" "sumenvx|summary step env" "sumenvy|summary step env" "sumstderr|summary output" "sumnostar|summary outcome failed"; do
+  w9_mut="$(timeout 30 python3 -I -c "$W9_PY" "mutate:${w9_sc%%|*}" "$SUMMARY_STEP" "$RESTORE_STEP" <<<"$RESTORE_WF_TEXT")"
+  if [[ -z "$w9_mut" || "$w9_mut" == "$RESTORE_WF_TEXT" ]]; then
+    _report "W9s control ${w9_sc%%|*}: the mutation landed" fail "the mutation did not change the workflow"; continue
+  fi
+  w9_out="$(w9_summary_check "$w9_mut")"
+  if grep -qF -- "${w9_sc#*|}" <<<"$w9_out"; then _report "W9s control ${w9_sc%%|*}: refused" ok
+  else _report "W9s control ${w9_sc%%|*}: refused" fail "expected a refusal naming '${w9_sc#*|}', got: ${w9_out:-<nothing>}"; fi
+done
+w9_mut="$(timeout 30 python3 -I -c "$W9_PY" "mutate:sumreword" "$SUMMARY_STEP" "$RESTORE_STEP" <<<"$RESTORE_WF_TEXT")"
+if [[ -z "$w9_mut" || "$w9_mut" == "$RESTORE_WF_TEXT" ]]; then
+  _report "W9s control sumreword: the mutation landed" fail "the mutation did not change the workflow"
+else
+  w9_out="$(w9_summary_check "$w9_mut")"
+  if [[ -z "$w9_out" ]]; then _report "W9s control sumreword: a reworded, still-correct step is accepted" ok
+  else _report "W9s control sumreword: a reworded, still-correct step is accepted" fail "${w9_out//$'\n'/; }"; fi
+fi
+
+# W9v canary (residual 3c): the verdict function must map a missing needle to fail and a present one to ok.
+if [[ "$(w9_expect needle 'a haystack without it')" == fail && "$(w9_expect needle 'a haystack with a needle in it')" == ok ]]; then
+  _report "W9v canary: w9_expect maps a missing needle to fail and a present one to ok" ok
+else _report "W9v canary: w9_expect maps a missing needle to fail and a present one to ok" fail "the verdict function does not discriminate"; fi
+if [[ "$(w9_expect '' 'a haystack')" == fail && "$(w9_verdict '')" == ok && "$(w9_verdict 'exit 1 fell')" == fail && "$(w9_verdict $'a\nb')" == fail ]]; then
+  _report "W9v canary: w9_verdict maps no problem to ok and any problem text to fail; an empty needle never matches" ok
+else _report "W9v canary: w9_verdict maps no problem to ok and any problem text to fail; an empty needle never matches" fail "the verdict function does not discriminate"; fi
+
+# W9v meta-control (residual 3c): run THIS suite, nested, on a tree whose workflow has the drop1 mutation. The real W9 row must
+# print exactly the FAIL line the drop1 control above expects. A row swapped to `if true`, flipped, or hardcoded to ok prints no FAIL
+# line there; a copy missing a file prints a different FAIL line (a fragment match would pass that, so the whole detail is compared).
+w9_meta="$W9_TMP/meta"; w9_mp=""
+assert_fixture_dir "$w9_meta"
+rm -rf "$w9_meta"; mkdir -p "$w9_meta/tests/scripts/lib" "$w9_meta/scripts" "$w9_meta/.github/workflows"
+for w9_f in "tests/scripts/lib/restore-engine-header.sh" "scripts/registry-restore-from-ghcr.sh" "scripts/derive-app-domain-base.sh"; do
+  if [[ -f "${ROOT}/${w9_f}" ]]; then cp -p "${ROOT}/${w9_f}" "$w9_meta/${w9_f}"; else w9_mp+="the copy list names ${w9_f}, which does not exist; "; fi
+done
+cp "${BASH_SOURCE[0]}" "$w9_meta/tests/scripts/test-registry-d10-workflow-wiring.sh" || w9_mp+="the suite itself could not be copied; "
+cp -R "${ROOT}/.github/actions" "$w9_meta/.github/actions" || w9_mp+=".github/actions could not be copied; "
+printf '%s\n' "$w9_drop1_mut" > "$w9_meta/.github/workflows/apply-web-platform-infra.yml"
+[[ -n "$w9_drop1_mut" && -n "$w9_drop1_out" && "$(cat "$w9_meta/.github/workflows/apply-web-platform-infra.yml")" != "$RESTORE_WF_TEXT" ]] || w9_mp+="the drop1 control did not run, did not land, or produced no refusal; "
+w9_nout="$(cd "$w9_meta" && W9_NESTED=1 timeout 120 bash "$w9_meta/tests/scripts/test-registry-d10-workflow-wiring.sh" 2>&1 </dev/null)"; w9_nrc=$?
+[[ "$w9_nrc" == 64 ]] || w9_mp+="the nested run exited ${w9_nrc}, want 64; "
+w9_nfails="$(grep -c '^  FAIL ' <<<"$w9_nout")"
+[[ "$w9_nfails" == 1 ]] || w9_mp+="the nested run printed ${w9_nfails} FAIL lines, want exactly 1; "
+[[ "$(grep '^  FAIL ' <<<"$w9_nout")" == "  FAIL ${W9_ROW} — ${w9_drop1_out//$'\n'/; }" ]] \
+  || w9_mp+="the nested FAIL line is not the W9 row carrying the drop1 control's detail (got: $(grep '^  FAIL ' <<<"$w9_nout" | head -1 | cut -c1-200)); "
+# Inline on purpose: reporting through w9_verdict would share the very function this control exists to catch (a verdict that is always ok).
+if [[ -z "$w9_mp" ]]; then _report "W9v meta-control: a drop1 workflow makes the real W9 row print its FAIL line" ok
+else _report "W9v meta-control: a drop1 workflow makes the real W9 row print its FAIL line" fail "${w9_mp}nested output tail: $(tail -n 4 <<<"$w9_nout" | cut -c1-200 | tr '\n' '|')"; fi
 
 # ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=47
+EXPECTED_ASSERTIONS=91
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"

@@ -100,7 +100,7 @@ while (( $# )); do
       ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
       ;;
     *)
-      echo "ERROR: unknown argument '$1'" >&2
+      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
       exit 2
       ;;
   esac
@@ -250,6 +250,22 @@ build_pristine() {
              scripts/test-all-affected.test.sh; do
     cp "$REPO_ROOT/$_bf" "$PRISTINE/$_bf" || return 1
   done
+
+  # (4b) Every path-shaped operand of a SUITE_COMMAND record that exists in the
+  #     real tree. Surface 7's dead-target arm resolves each registration's file
+  #     operand and requires it to exist, so a sandbox missing the non-*.test.sh
+  #     targets (lint-*.sh, *.py, .mjs) reds every row for a reason unrelated to
+  #     any mutation — the C0/row-REJECTED class this battery measured red on
+  #     #11665. A token that is not a real repo path fails `-e` and is skipped,
+  #     so no argv0 resolver is duplicated here; a live-dead registration stays
+  #     dead in the sandbox (the live suite reports it).
+  while IFS= read -r _t; do
+    if [[ -n "$_t" && "$_t" != /* && "$_t" != ../* && "$_t" != */../* && -e "$REPO_ROOT/$_t" ]]; then
+      printf '%s\n' "$_t"
+    fi
+  done < <(bash "$REPO_ROOT/scripts/test-all.sh" --enumerate-commands 2>/dev/null \
+           | awk -F'\t' '$1=="SUITE_COMMAND"{for(i=3;i<=NF;i++) print $i}' \
+           | LC_ALL=C sort -u) | materialise || return 1
 
   git -C "$PRISTINE" init -q -b main >/dev/null 2>&1 || return 1
   git -C "$PRISTINE" add -A >/dev/null 2>&1 || return 1
@@ -1129,7 +1145,7 @@ mkdir -p "$TMP/rows" || harness_die "row-dispatch mkdir"
 # EXEC_IDS is the dispatched set, recorded PARENT-SIDE (worker subshells cannot tick parent
 # state) at the moment each worker spawns. Replay and aggregation iterate it — never
 # re-derived, because `in_range` is stateful (a second pass doubles _site_seq) and a substring
-# membership test is wrong (M1 is a prefix of M10..M16). C0 dispatches ahead of the range
+# membership test is wrong (M1 is a prefix of M10..M35). C0 dispatches ahead of the range
 # gate: it is the unconditional control, not a gated site. `in_range` stays a standalone
 # statement — as the left operand of `&&` before `&`, bash binds the AND-list into the
 # backgrounded subshell and the parent's counters would read zero.
@@ -1294,7 +1310,7 @@ else
 fi
 
 # FLOORS — equality, not thresholds, so a deleted site can never read as a smaller green.
-# _site_seq counts every gated call site (M1..M16): a removed row FATALs here even when the
+# _site_seq counts every gated call site (M1..M35): a removed row FATALs here even when the
 # range it fell in still produces a green half. (The old MIN_ROWS=18 was a floor over 19 sites
 # — deleting R1 or R1b stayed green. Equality removes that slack; conservation below pins the
 # unconditional sites.)

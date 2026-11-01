@@ -402,7 +402,7 @@
 4	plugins/soleur/test/proc.test.sh
 2	plugins/soleur/test/pr-overlap-preflight.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-51	plugins/soleur/test/regenerate-shard-manifest.test.sh
+54	plugins/soleur/test/regenerate-shard-manifest.test.sh
 1	plugins/soleur/test/required-checks-canonical-parity.test.sh
 1	plugins/soleur/test/resolve-debt.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
@@ -452,6 +452,7 @@
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
+1	scripts/followthroughs/inngest-bs-token-restage-7596.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh
 2	scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
@@ -470,6 +471,7 @@
 1	scripts/kb-staleness-metric.sh
 9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
+6	scripts/lib/mutation-harness-controls.sh
 2	scripts/lib/scratch-root.sh
 3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh
@@ -534,6 +536,8 @@
 1	scripts/tmpfs-guard.test.sh
 1	scripts/update-ci-required-ruleset.sh
 1	scripts/upstream-report-scrub.sh
+5	scripts/watch-shard-balance-11564.sh
+22	scripts/watch-shard-balance-11564.test.sh
 1	scripts/weakness-miner.sh
 3	scripts/weekly-analytics.sh
 2	tests/commands/test-sync-producer-reachability.sh

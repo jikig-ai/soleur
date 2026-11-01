@@ -4,7 +4,7 @@
 # the Better Stack dead-man alert (arms at 26 h) stays a blocking prerequisite of the bundle promotion (#11266); this
 # probe's blind window is about 28 times wider.
 #
-# WHY IT EXISTS. ADR-282's paging alert fires on `token=fail_*` rows only; a probe that stops emitting pages nobody.
+# WHY IT EXISTS. ADR-282's paging alert fires on `verdict=fail_*` rows only; a probe that stops emitting pages nobody.
 # The in-Better-Stack dead-man could not be created at the windows tried: four (check, query) tuples were refused 422,
 # all at a query_period of 5400 s or more: 300/10800, 900/10800, 3600/10800 and 300/5400. Live alerts created in
 # September carry 5400, 86400 and 97200 s. 604800 s and 2592000 s were never tried, so whether a 30-day dead-man can
@@ -12,14 +12,19 @@
 # 2026-10-29 (#11265), which defines the "count-variable form" ladder rung and what to do if the API refuses it.
 # THIS PROBE DEPENDS ON THE SWEEPER WORKFLOW (scheduled-followthrough-sweeper.yml): if the sweeper stops, so does it.
 #
-# WHAT IT COUNTS. MEASURED rows only: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=ok` or `token=fail_*`. An `indeterminate`
+# WHAT IT COUNTS. MEASURED rows only: `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=ok` or `verdict=fail_*`. An `indeterminate`
 # row (the probe could not measure) never counts as health and never resets the 30-day window. The marker is anchored
 # at message position 1, the same anchor the paging SQL uses (position(JSONExtractString(raw, 'message'), marker) = 1 in
 # betterstack-logs-alerts.tf): a webhook or PR body that QUOTES the marker is a row too, but not a producer row.
 # The read is scripts/betterstack-query.sh over the hot window AND the archive arm (its default mode; `--raw-only` is
 # never passed because it excludes the journald rows, one of the two shipping paths), 60 days back, newest 5000 rows.
 # The reader's own `--max-time` bounds each request (the suite pins it); this probe makes no request itself.
-#
+# READ-TIME BUDGET (#11572 item 3, measured 2026-10-30 against the live reader, one sample each, not a distribution): the
+# 60-day read took about 4 s (`--since 60d`; 30d 5 s, 7d 2 s; 41 rows, hot + archive, default read) against the reader's
+# `--max-time 60`, so no timeout change is needed. The probe maps ANY non-zero reader rc to its own exit 3 (CANNOT
+# ESTABLISH); a curl timeout (error 28) shows only in the reader's stderr, which the probe discards, so a slow read is the
+# honest exit 3, never a false 2 or 5. Re-evaluate on a timeout-class exit 3 reported in a sweeper comment, or when the
+# archive arm grows past about 10x today's row count.
 # TRUST IN THE READ. (i) Every non-blank reader line must decode to a JSON object carrying a string `dt` and a string
 # `raw` (the reader's row shape); one that does not (an HTML 502 page, a ClickHouse `Code: ... DB::Exception` line, or
 # the same exception as a JSON object such as {"exception":"Code: 395 ..."}, after a mid-stream failure, which truncates
@@ -53,10 +58,10 @@
 # and degrades silently afterwards to exit 2 (a keeper dark for longer than the look-back reads 'no keeper rows' while
 # the canary passes on other rows). (2) `--limit 5000` keeps the newest 5000 rows that merely CONTAIN the marker, so
 # rows that quote it (webhook or PR bodies) could evict the newest measured row; the printed counts are of the rows
-# kept only. (3) Inert until the owner's bundle delivery produces the first `token=ok` row (#11266). (4) A verdict from
+# kept only. (3) Inert until the owner's bundle delivery produces the first `verdict=ok` row (#11266). (4) A verdict from
 # anchored rows (exit 2 or 5) does not consult the canary (it runs only when zero anchored rows were found): the rows
 # themselves show the reader answered, and a truncated tail is caught by the per-line object check (i), not by the canary.
-# A NOT YET (2) whose newest measured row is a `fail` says so: a resolved page is not recovery, only `token=ok` is.
+# A NOT YET (2) whose newest measured row is a `fail` says so: a resolved page is not recovery, only `verdict=ok` is.
 #
 # THE SWEEPER POSTS THIS OUTPUT AS A PUBLIC COMMENT (the last 4 KB, run with 2>&1): counts, an age in whole days, the
 # newest measured token CLASS (`ok` or `fail`, nothing else) and fixed reason strings only. The reader's own output
@@ -119,7 +124,7 @@ JQ_HEAD='select(test("\\S"))
       | if (($d | type) != "object") or (($d.message | type) != "string") then "U\t\($e)\t-"
         elif '
 ANCHOR='($d.message | startswith($m))'  # [mut:anchor]
-JQ_TAIL=' then "A\t\($e)\t\(([$d.message | capture("token=(?<t>[a-z_]+)") | .t][0]) // "-")"
+JQ_TAIL=' then "A\t\($e)\t\(([$d.message | capture("verdict=(?<t>[a-z_]+)") | .t][0]) // "-")"
         else "Q\t\($e)\t-" end
     ) end)'
 ROWS="$(printf '%s\n' "$OUT" | jq -R -r --arg m "$MARKER" "${JQ_HEAD}${ANCHOR}${JQ_TAIL}" 2>/dev/null)" || cannot "the rows could not be decoded"
@@ -138,13 +143,13 @@ case "$NEWCLS" in ok|fail|-) ;; *) cannot "the rows could not be counted" ;; esa
 
 if (( MEAS > 0 )); then
   age=$(( NOW_EPOCH - NEWEST ))  # a negative age (skew within the 1 h tolerance) truncates to 0 whole days
-  echo "inngest-luks keeper dark probe (#11265): rows=${ANCH} measured=${MEAS} indeterminate=${INDET} newest_measured_age_days=$(( age / 86400 )) newest_measured_token=${NEWCLS}"  # [mut:tokclass]
+  echo "inngest-luks keeper dark probe (#11265): rows=${ANCH} measured=${MEAS} indeterminate=${INDET} newest_measured_age_days=$(( age / 86400 )) newest_measured_verdict=${NEWCLS}"  # [mut:tokclass]
   if (( age >= DARK_SECS )); then  # [mut:threshold]
     echo "ACTION REQUIRED: the newest measured key-continuity row is 30 days old or older (the on-host probe, or the future keeper, has gone dark). Owner decision: see the ADR-282 addendum of 2026-10-29 (#11265). The tracker is NOT closed by the probe: close it and remove its follow-through label by hand."
     exit 5  # [mut:action]
   fi
   echo "NOT YET: the newest measured row is under 30 days old."
-  if [[ "$NEWCLS" == "fail" ]]; then echo "The newest measured row is a FAILED verdict: a resolved page is not recovery, only a token=ok row is."; fi
+  if [[ "$NEWCLS" == "fail" ]]; then echo "The newest measured row is a FAILED verdict: a resolved page is not recovery, only a verdict=ok row is."; fi
   exit 2
 fi
 
@@ -173,5 +178,5 @@ read_canary() {
 read_canary  # [mut:canary]
 
 echo "inngest-luks keeper dark probe (#11265): rows=0 measured=0 indeterminate=0"
-echo "NOT YET: no keeper rows in the last 60 days. The probe is inert until the owner's bundle delivery produces the first token=ok row; zero rows after the look-back looks the same as never started."
+echo "NOT YET: no keeper rows in the last 60 days. The probe is inert until the owner's bundle delivery produces the first verdict=ok row; zero rows after the look-back looks the same as never started."
 exit 2

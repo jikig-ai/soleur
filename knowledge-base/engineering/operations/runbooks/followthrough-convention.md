@@ -19,6 +19,7 @@ verification passes — no human revisit required.
    - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
    - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - **Per-probe wall-clock cap (#11215).** The sweeper runs every probe under `timeout -k 10 $FT_PROBE_TIMEOUT` (default **300 s**). A probe that outlives it is killed with its whole process group, logged as `<script> TIMED OUT after <N>s (rc 124 -> 3, CANNOT ESTABLISH)`, and rendered as CANNOT ESTABLISH (exit 3) on the tracker. A probe that routinely needs more than a few minutes is a defect in the probe (bound its own reads), not a reason to raise the cap; the job ceiling (`timeout-minutes` in `scheduled-followthrough-sweeper.yml`) must stay above the cap times the number of slow probes.
    - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - **A registered sub-vocabulary inside the TRANSIENT bucket, for NOTIFY-ONLY probes.** Some
@@ -56,7 +57,7 @@ verification passes — no human revisit required.
    - **Never name the retired Sentry credential.** The sweeper's Sentry read is `SENTRY_ACTIONS_RO_TOKEN` (the org-level read-only `actions-read-prd` integration, ADR-031, repo secret only). The canonical vendor env-var name it replaced is banned anywhere under `scripts/followthroughs/` — any file at any depth, executable line or comment (one recursive literal grep; a superstring counts) — because a workstation `doppler run -c prd_terraform` binds a *personal*, human-account-scoped token under it (#7797, #7946). Enforced as **rule 2** of `scripts/lint-followthrough-varq-ban.sh` (the executable form of this census); rotation: `sentry-actions-ro-token-rotation.md`.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
    - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.
-   - **Pin an ordering on every Sentry `/events/` coverage argument.** `sort` is an optional request param — `get_orderby` returns `None` when it is absent, so there is no ORDER BY guarantee and "newest-first" is observed behavior, not contract. A `statsPeriod=…&per_page=N` read that argues "the newest N rows provably cover the window" is unsound unless it pins `&sort=-timestamp` or bounds the window with `start=`/`end=`. Re-assert the pin in the probe's test suite so a dropped param reddens the harness. **Why:** CTO ruling on PR #11543; see `knowledge-base/project/learnings/2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md` (includes a census of unpinned sibling probes).
+   - **Pin an ordering on every Sentry `/events/` coverage argument.** `sort` is an optional request param — `get_orderby` returns `None` when it is absent, so there is no ORDER BY guarantee and "newest-first" is observed behavior, not contract. A `statsPeriod=…&per_page=N` read that argues "the newest N rows provably cover the window" is unsound unless it pins `&sort=-timestamp` or bounds the window with `start=`/`end=` — and the bound must sit on the same logical line as the `/events/` literal (a bound on a separate statement is invisible to the lint). A `field=<name>()` aggregate select is exempt. Enforced as **rule 6** of `scripts/lint-followthrough-varq-ban.sh` — an unbound `/events/` call fails CI, so a dropped param reddens the harness. **Why:** CTO ruling on PR #11543; see `knowledge-base/project/learnings/2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md` (its census of unpinned sibling probes was closed by #11553).
 3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
 4. **Add the directive** to the issue body:
 
@@ -314,6 +315,23 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   closed is a defect class (#10321 — `zot-log-channel-7440.sh` claimed "enrolled as a REGRESSION
   detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
   same or a linked PR and correct the probe header's enrollment claim.
+
+## Sharp edges for `gh run view --log` probes
+
+- **GitHub drops step-name attribution ~2-3 weeks after a job completes**: every
+  log line returns under field 2 `UNKNOWN STEP` while the content survives.
+  A probe anchoring on the step-name column (`index($2, step)`) reads a proven
+  trail as zero-line and takes its own tripwire on every aged job in its
+  window (#11600). The countermeasure — proven in
+  `git-data-boot-poll-8178.sh` (#8262) and adapted in
+  `web-first-deploy-10585.sh` (#11603): strip CR + the UTF-8 BOM globally
+  (`${log//.../}` — one mark per
+  section), then slice the step's output region on the runner's `##[group]Run`
+  headers, first header stamped at or after the step's `started_at` from the
+  jobs API, next header or EOF closing the region. Feed the region through the
+  same emitted-vs-echoed filter as the named path, and evaluate any
+  zero-parseable tripwire AFTER recovery — an empty region, no `started_at`,
+  or a region with no trail-pattern lines is the same CANNOT ESTABLISH.
 
 ## What the sweeper does NOT cover
 

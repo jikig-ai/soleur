@@ -255,6 +255,7 @@
 /plugins/soleur/test/fixtures/codeql-main-alert-gate/   @deruelle
 /plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/ @deruelle
 /scripts/merge-queue-cla-verify.sh                      @deruelle
+/scripts/merge-queue-jump.sh                          @deruelle
 /scripts/probe-merge-group-coverage.sh                  @deruelle
 /plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
 /.claude/hooks/pre-merge-rebase.sh                      @deruelle

@@ -1,0 +1,127 @@
+# always-on-justifications.tsv — why-always-on ledger (#11662).
+# label<TAB>reason — keys-parity with ALWAYS_ON_SUITES in
+# scripts/lib/test-affected-paths.sh, checked both directions by
+# scripts/always-on-ledger.test.sh. Backfilled from the array's
+# section headers and per-entry provenance comments.
+apps/web-platform/scripts/seed-live-verify-user.test.sh	always-on class: repo-global scanners: -live convention
+plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	always-on class: repo-global scanners: -live convention
+scripts/assert-dependabot-drain-live	always-on class: repo-global scanners: -live convention
+scripts/betterstack-emitter-read-live	#8875: the emitter-selection census walks the whole tracked tree — repo-global by construction (git ls-files + per-file comment-stripped invocation discovery).
+scripts/followthrough-varq-ban-live	always-on class: repo-global scanners: -live convention
+scripts/inngest-liveness-classify	always-on class: repo-global scanners: -live convention
+scripts/lint-agents-compound-sync-live	always-on class: repo-global scanners: -live convention
+scripts/lint-agents-enforcement-tags-live	always-on class: repo-global scanners: -live convention
+scripts/lint-anthropic-content-position-live	always-on class: repo-global scanners: -live convention
+scripts/lint-doppler-description-length-live	always-on class: repo-global scanners: -live convention
+scripts/lint-dual-lockfile-live	always-on class: repo-global scanners: -live convention
+scripts/lint-gh-argv-arg-live	always-on class: repo-global scanners: -live convention
+scripts/lint-guard-contract-live	always-on class: repo-global scanners: -live convention
+scripts/lint-feature-map-coverage-live	always-on class: repo-global scanners: -live convention
+scripts/lint-integration-env-gates-live	always-on class: repo-global scanners: -live convention
+scripts/lint-legal-mirror-drift-baseline-live	always-on class: repo-global scanners: -live convention
+scripts/lint-legal-registers-live	always-on class: repo-global scanners: -live convention
+scripts/lint-legal-scope-block-placement-live	always-on class: repo-global scanners: -live convention
+scripts/lint-migrated-rule-ids-live	always-on class: repo-global scanners: -live convention
+scripts/lint-rule-bodies-live	always-on class: repo-global scanners: -live convention
+scripts/lint-window-closure-assertion-live	always-on class: repo-global scanners: -live convention
+scripts/lint-workflow-errexit-capture-live	always-on class: repo-global scanners: -live convention
+scripts/lint-workflow-install-sites-live	always-on class: repo-global scanners: -live convention
+scripts/lint-workflow-issue-write-scope-live	always-on class: repo-global scanners: -live convention
+scripts/lint-workflow-step-env-refs-live	always-on class: repo-global scanners: -live convention
+scripts/lint-ratchet-ruff-live	always-on class: repo-global scanners: -live convention
+tests/scripts/lint-ratchet	always-on class: repo-global scanners: -live convention
+scripts/review-reminder-liveness	always-on class: repo-global scanners: -live convention
+scripts/watch-live-verify-pass	always-on class: repo-global scanners: -live convention
+scripts/cosign-verify-live-8037	live-scanner batteries named for the gates they probe (#8384 landed these)
+scripts/generate-kb-index-live	always-on class: repo-global scanners: -live convention
+scripts/test-all-capacity-signal	Verdicts assert properties of the runner itself or of the whole registration set — both invisible to any file-based selection.
+scripts/test-all-webplat-gate	#8993/#8940's run-path watchdog + durable-log battery — a runner-SUT property suite like its killed-classification sibling.
+scripts/test-all-group-affected	scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its verdict is computed on sandbox copies of named files, not on the live tree. #8591's TEST_GROUP=affected mutation suite — a runner-SUT property…
+scripts/suite-exit-class-parity	always-on class: runner-SUT and registry-property suites
+plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864). Each is a mutation battery over a…
+scripts/lint-agents-enforcement-tags-unit	A ratchet counts a property across the whole tree and references nothing — no file-based query can ever return it (the #8023/#8092/#8177 class).
+scripts/lint-credential-path-literals	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-diagnosis-claims	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-dual-lockfile	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-encryption-posture	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-infra-no-human-steps	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-legal-mirror-drift-baseline-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-legal-registers-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-legal-scope-block-placement-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-art30-reverification-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-migrated-rule-ids-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-shell-capture-exit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-shell-trace-credential-refusal-repo	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-supabase-deprecated-endpoints-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-workflow-errexit-capture	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-workflow-issue-write-scope	always-on class: corpus linters: verdict spans a file class scanned wholesale
+scripts/lint-workflow-step-env-refs	always-on class: corpus linters: verdict spans a file class scanned wholesale
+plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
+plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
+plugins/soleur/test/lint-distribution-content.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
+plugins/soleur/test/debug-probe-residue.test.sh	debug-probe-residue scans the whole tracked tree for DEBUG-hex4 residue — a diff adding a probe anywhere must re-run it (same discovered-corpus shape as operator-script.test.sh below).
+apps/web-platform/scripts/lib/no-cross-context-import.test.sh	operator-script's property is discovered, not enumerated: it greps the whole tree for `lib/operator-script.sh` sourcers and asserts the no-secret-leak property over each. #9763 demoted all three operator suites below to edge-selection with…
+scripts/ensure-kb-index	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/kb-caches-untracked.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/marketplace-drift-check	(#8846) census of every tracked inngest probe-row reader over git ls-files.
+scripts/digest-oracle-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/follow-through-closure-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/followthrough-exec-bit	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/alarm-issue-filing-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/battery-ref-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/betterstack-assert-absence	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/betterstack-ingest-parity	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/rule-metrics-aggregate	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/skill-freshness-aggregate	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/cron-artifact-age	#8563's Tier-B credential census — a repo-global property census over every workflow + Terraform tier declaration; no diff-scoped edge can reach it.
+scripts/rename-guard	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/assert-dependabot-drain-unit	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/expenses-verify-by-check	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/ship-incident-pir-gate-mutations	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/auto-close-scanner.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/vendor-drift-classify.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/vendor-drift-workflow.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/token-drift-workflow-causes.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/check-deps-adapter-drift.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/terraform-drift-sentry-leg.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/c4-count-parity.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/workflow-run-deploy-invariants.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/reusable-release-caller-permissions.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/gitleaks-merge-commit.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+apps/web-platform/scripts/assert-byok-rules-exist.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+.claude/hooks/hookeventname-coverage.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+.claude/hooks/settings-hook-exec-bit.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+.claude/hooks/kb-domain-allowlist-guard.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+.claude/hooks/incident-sandbox-coverage.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+plugins/soleur/test/fixture-cd-containment.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
+tests/scripts/no-tofu-ssh	tests/scripts/no-tofu-ssh — Guard 1 (#7226/ADR-237) walks `git ls-files` over the whole tracked tree; any file anywhere can introduce a TOFU violation, so no path edge can express its selection.
+tests/scripts/hcloud-token-readonly-no-fallback-scan	tests/scripts/hcloud-token-readonly-no-fallback-scan — the Hetzner read-only-token no-fallback scan (scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4) walks `git ls-files` over the whole tracked tree (everything except…
+blog-link-validation	always-on class: whole-corpus guards, drift checks, parity and census gates
+scripts/domain-model-drift	(#9307) Audited as demotable and put back. The first reason was derive cost (~82 s of first-touch attribution; 0.2 s once the runner became a closure leaf, always-on-audit.md Round 3), and that reason is gone. It stays on the recorder's…
+scripts/lint-agents-rule-budget-live	Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`: a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`: reads outside the cover) no longer supports the…
+scripts/lint-agents-rule-budget-unit	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/lint-workflow-run-body-syntax	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/verify-lockfile-guards	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/marketplace-manifest-validate	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/verify-marketplace-ruleset	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/check-tom4-rls-posture-live	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/lint-guard-contract	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/lint-window-closure-assertion	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/tenant-dpa-register-guard-unit	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/tenant-dpa-register-guard-live	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/probe-legal-corpus-truth-live	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/check-pa-22-unit	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/check-pa-22-live	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/frontmatter-strip-parity	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+plugins/soleur/test/terraform-drift-step-order.test.sh	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	always-on class: re-promoted by the Round 2 audit (#9307 PR-B, scripts/audit-suite-reads.sh)
+scripts/lint-rule-ids-live	runs reported the first window of every run as `contaminated` (tracked-but-gitignored files made the private checkout look dirty), so the "unreliable" rows were an artifact. Re-run: these two are `uncovered` (reads outside their cover) and…
+scripts/check-tom4-rls-posture	always-on class: Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
+plugins/soleur/test/worktree-manager-atomic-config.test.sh	always-on class: Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
+plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	always-on class: Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
+scripts/test-all-fast-tier-budget	always-on class: Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
+scripts/test-all-weight-drift	#9814: the local weight-drift detector — its verdict asserts properties of the runner's own wiring (default arm, epilogue emit), a runner-SUT property suite like its sibling above.
+.claude/hooks/grep-q-pipe-guard.test.sh	S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms,…
+scripts/test-all-corpus-weight-budget	#11662: corpus-wide committed-weight cap — verdict is a property of the committed tables, not any diff edge.
+scripts/always-on-ledger	#11662: always-on justifications parity + non-live membership ceiling — a corpus property, invisible to file-based selection.

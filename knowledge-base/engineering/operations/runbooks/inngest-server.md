@@ -340,10 +340,83 @@ stale `host_name` possible on a web-1 row (#6616).
   state when a whole channel is dark — that, not a host fault, was the
   2026-08-14→16 darkness, #7569). Widen `--since` past the replace, confirm the
   host ships *something* (`--grep inngest- --limit 20`), then re-read.
-- The same read exists as a sweeper probe:
-  `scripts/followthroughs/inngest-bs-token-restage-7596.sh` asserts the
-  positive row and reports TRANSIENT until it arrives — enrolled on #7596 via
-  a `soleur:followthrough` directive (operator step; see the issue).
+- The same read exists as an automated sweeper probe:
+  `scripts/followthroughs/inngest-bs-token-restage-7596.sh`. The probe runs
+  three reads per pass — the journald leg above, an `inngest-server-probe`
+  boot-id read that pins the current host generation, and a
+  `SOLEUR_INNGEST_BOOT_STAGE` read for the host's own boot-stage markers on
+  the direct-curl ingest leg (which ship independently of the journald→Vector
+  leg). The two restage stages are NOT interchangeable:
+  `bs-token-restage-enabled` fires only in the replace-bound first-boot
+  runcmd (the `systemctl enable` arm — delivery proof), while
+  `bs-token-restaged` fires on EVERY boot (per-boot phone-home — boot
+  evidence only), so arm-2 requires the enabled marker and a plain post-floor
+  reboot can never satisfy the close on undelivered evidence. Enrollment on
+  #7596 via a `soleur:followthrough` directive is a **pending post-merge
+  step** — the probe is inert until the directive lands in the issue body;
+  once enrolled, **the sweeper closes the issue on measured evidence** — no
+  manual re-check after the replace.
+
+  Verdict taxonomy (the sweeper posts these as comments):
+
+  - `PASS ... pass_arm=journald journald_rows=present` — a post-floor
+    (generation floor: filing date 2026-10-30) `RESTAGED ok=1` row whose
+    `_BOOT_ID` matches the newest server-probe row's boot id. The close.
+  - `PASS ... pass_arm=boot_stage journald_rows=absent` — no journald restage
+    row, but a current-generation BOOT_STAGE `bs-token-restage-enabled`
+    marker arrived on the curl ingest leg (the replace-bound first-boot
+    enable — `bs-token-restaged` alone is per-boot evidence and never
+    qualifies): the unit was delivered and the emit path reached the sink,
+    so the issue's own "or the host's own boot-stage markers" wording is met.
+    `journald_rows=absent` is the `leg_journald` verdict delivered at close
+    time — the journald→Vector leg stayed dark even though the unit ran;
+    file a diagnostic issue naming that leg if you see this close shape.
+  - `TRANSIENT reason=pre_replace` — no post-floor evidence of any kind: the
+    replace has not landed yet (the channel_dark-family state).
+  - `TRANSIENT reason=leg_unit` — post-floor activity proves the host lives
+    but zero restage-unit evidence on either leg in the current generation:
+    the unit likely never ran/enabled. If this persists post-replace, the
+    emit leg is the suspect — the 2026-10-30 census showed the allowlist
+    already baked in v1.1.61 with zero restage rows in 14d, so this outcome
+    is a real possibility; file a diagnostic issue, do not re-bake blind.
+  - `TRANSIENT reason=restage_not_ok` — current-generation restage rows exist
+    but none carries `ok=1` / the enabled stage: the unit ran and failed.
+    The real failure tokens to grep: the journald emit
+    `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=<n>` (the doppler-read rc
+    names the failure class) and the BOOT_STAGE marker
+    `bs-token-restage-enable-FAILED` (the runcmd `systemctl enable` arm
+    failed — the boot-trace channel dies on the next reboot).
+  - `TRANSIENT reason=delivery_unproven` — a current-generation
+    `bs-token-restaged` marker fired (the per-boot restage ran) but no
+    same-generation `bs-token-restage-enabled` marker arrived. A plain
+    post-floor reboot is EXPECTED to land here: the enabled marker is
+    first-boot/runcmd-bound, so after a reboot the delivery proof lives in
+    the previous generation. Confirm the previous generation's enabled
+    marker (widen `--since` past the replace) and let the journald arm
+    carry the close; file a diagnostic issue if no enabled marker exists in
+    ANY generation.
+  - `TRANSIENT reason=boot_id_unresolvable` — post-floor restage evidence
+    exists but the generation anchor could not be resolved; the probe refuses
+    a stale-generation close rather than degrading to a MIN_DT-only PASS.
+    Remediation: check the anchor leg's health — re-run the read with
+    `--grep inngest-server-probe` over the same window; zero rows means the
+    server probe (not the restage unit) is the dark leg, and rows carrying
+    no `_BOOT_ID` mean the probe emits but its boot-id field is not
+    shipping.
+
+- **Counterpart probe (#11602):** the same replace delivers the host_metrics
+  trim. `scripts/followthroughs/inngest-hostmetrics-trim-11602.sh` runs the
+  issue's own acceptance read — `GROUP BY tags.collector` over the trailing
+  24h on `tags.host='soleur-inngest'` (metric rows carry no `host_name` —
+  `tags.host` is the sole discriminator) — and PASSES only when the observed
+  set is exactly `{memory, filesystem}` with ≥1 row of each. It reports
+  `TRANSIENT reason=untrimmed` while the full collector set still ships, and
+  `reason=no_host_metrics` on an empty window; ≤24h post-replace residual
+  old-generation rows keep it `untrimmed`, which self-clears. Its trim is
+  additionally pinned pre-bake by Guard A4 in
+  `cloud-init-inngest-bootstrap.test.sh` (the pinned tag's
+  `[sources.host_metrics]` block must carry `scrape_interval_secs = 900` and
+  exactly `{memory, filesystem}`).
 
 ## Provision unit (#8562)
 
@@ -1077,13 +1150,17 @@ here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remed
 
 `scheduled-inngest-health.yml` (every 15 min), `scheduled-zot-restart-loop.yml` (hourly) and
 `scheduled-inngest-probe-heartbeat.yml` (every 15 min, #9703; see
-[§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703)) are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
+[§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703)) and `scheduled-deadman-heartbeat-feeder.yml`
+(hourly, #11631; feeds the `soleur-luks-monitor-host-timer-prd` and `soleur-claude-cost-capture-prd` dead-man
+heartbeats, see [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706))
+are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
 server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deployed web host. Their
 `schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
 not an Inngest function because it watches Inngest. The run is created within seconds of the
 dispatch, but its job then waits in the org runner queue (median ~30 s, p90 ~20 min), so the
 Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60,
-`scheduled-inngest-probe-heartbeat` margin 60) are sized for that queue. A real outage still pages as soon as a run executes.
+`scheduled-inngest-probe-heartbeat` margin 60, `scheduled-deadman-heartbeat-feeder` per
+`cron-monitors.tf`) are sized for that queue. A real outage still pages as soon as a run executes.
 
 1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
    hour. Vector adds the host name (`soleur-web-platform` = web-1, `soleur-web-2`) outside the
@@ -1134,7 +1211,11 @@ Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-lo
    (`QUEUE_ALLOWANCE_MINUTES`) + max runtime, at most `MAX_MARGIN_MINUTES` — the constants and
    the check live in `sentry-monitor-iac-parity.test.ts`. Update the expected slug set there
    and the `api -> github` watchdog edge and the `github -> sentry` workflow list in
-   `model.c4`. After the deploy, each host logs a new `armed` row and a tick row for the new
+   `model.c4`. The hourly `scheduled-deadman-heartbeat-feeder.yml` row (#11631) adds 24 runs a day (up to 48
+   ticks: both hosts tick each slot and the second is skipped as a duplicate) and puts all five rows due in the
+   `:00` slot on both hosts at once (up to 10 simultaneous ticks, each minting a token); budget that when adding
+   a sixth row. The feeder survives a total web-1 loss only while two web hosts exist (the `var.web_hosts`
+   reversal trigger in ADR-248). After the deploy, each host logs a new `armed` row and a tick row for the new
    workflow within one interval.
 5. **Which host sent a run?** Match the run's `created_at` to a `dispatched` row's `slot` and
    `host_name` (query in step 1); a skipped tick names the run that already covered the slot
@@ -2342,6 +2423,12 @@ the same freshest row's `server_active`/`http_code`/`cutover_flag` through the s
 `classify_dedicated_host` def and beats `<url>/fail` on `not-serving` (verdict `fail_beat` — an intended
 immediate incident), beats normally on `healthy` and `stopped-by-brake`, and withholds
 (`verdict=serving_unavailable`, exit 3) when the fields do not grade to a verdict.
+
+**After a host replace plus `op=resume`, this heartbeat stays down for up to about 1 h.** The probe timer
+fires at boot + 90 s and then hourly (`OnUnitActiveSec=1h`), so the feeder sees no fresh dedicated probe row
+until the next hourly fire, and the heartbeat reads `down` for that stretch although the server is fine. That
+is not a serving outage: the 60 s `soleur-inngest-server-prd` heartbeat is the real serving signal, so read
+that one before treating a down probe heartbeat as an incident in the first hour after a replace.
 
 **Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line. Once
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines

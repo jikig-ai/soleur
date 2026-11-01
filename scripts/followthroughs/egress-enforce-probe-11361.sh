@@ -41,7 +41,7 @@ SENTRY_PROJECT="web-platform"
 # pins a start=; absent that, 14d covers the deploy window).
 FT_TMP="$(mktemp "${TMPDIR:-/tmp}/ft11361.XXXXXX")"; trap 'rm -f "$FT_TMP"' EXIT
 HTTP=$(curl --disable --noproxy '*' -s -o "$FT_TMP" -w '%{http_code}' -m 20 --config - \
-  "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20stage%3Aegress_enforce_probe&statsPeriod=14d&per_page=50&field=timestamp&field=stage&field=host_name" \
+  "https://de.sentry.io/api/0/organizations/${SENTRY_ORG}/events/?query=project%3A${SENTRY_PROJECT}%20stage%3Aegress_enforce_probe&statsPeriod=14d&per_page=50&field=timestamp&field=stage&field=host_name&sort=-timestamp" \
   < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") 2>/dev/null || echo 000)
 if [ "$HTTP" != "200" ]; then
   echo "TRANSIENT: Sentry events query returned http=$HTTP" >&2

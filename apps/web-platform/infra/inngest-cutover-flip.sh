@@ -50,9 +50,9 @@
 #     the no-SSH state channel the operator reads; and writes a host-path state slot for
 #     cat-inngest-cutover-state.sh (on-host debug aid ONLY, never the operator gate).
 #     SECOND EXCEPTION (#9927): the LUKS key-continuity probe emits ONE plain-text row per attempt,
-#     `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<literal>` (never JSON, never an FSM row),
+#     `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<v> rc=<n> at=<literal>` (never JSON, never an FSM row),
 #     from luks_key_probe_tick, which the four terminal noop arms call at their tail (at most once
-#     per 24h after an ok, hourly after any other token). It can never change this script's exit
+#     per 24h after an ok, hourly after any other verdict). It can never change this script's exit
 #     status, the flag, or an FSM row: subshell, disarmed ERR trap, every external under timeout.
 #     ONE EXCEPTION (#7696): the terminal noop-* arms fire on every 30s timer tick for
 #     the host's whole life — unthrottled that was ~2,040 rows/day of "nothing happened".
@@ -947,7 +947,7 @@ luks_probe_finish() {
   local tok="$1"
   local rc="$2"
   local at="$3"
-  local row="token=${tok} rc=${rc} at=${at}"
+  local row="verdict=${tok} rc=${rc} at=${at}"
   luks_probe_stamp_write "$tok" || true
   timeout -k 5 2 "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "SOLEUR_INNGEST_LUKS_KEY_PROBE ${row}" >/dev/null 2>&1 || true
   timeout -k 5 10 "${CUTOVER_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}" "luks-key-probe" "$row" SOLEUR_INNGEST_LUKS_KEY_PROBE >/dev/null 2>&1 || true

@@ -11,8 +11,10 @@
  *     properties for downstream cost-writers.
  *   - Two-row-by-provider model (feat-operator-cc-oauth): `getRestApiKey()`
  *     reads ONLY `provider='anthropic'` (raw-REST consumers, cannot return
- *     an oauth token by construction); `getAgentCredential()` prefers
- *     `provider='anthropic_oauth'` (gated) and returns `{ value, scheme }`.
+ *     an oauth token by construction); `getAgentCredential()` returns
+ *     `{ value, scheme }`: `provider='anthropic_oauth'` (gated) only when the
+ *     conversation binding's auth mode is `managed`, else `provider='anthropic'`
+ *     (#11591; pass `resolveAuthMode` in the lease args, see below).
  *   - The accessors are functions (NOT property accessors) per type-design
  *     F3. A captured-and-leaked lease reference outside the ALS scope
  *     throws `ByokLeaseError {cause: "escape"}` — the load-bearing test
@@ -53,11 +55,19 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 
 import { decryptKey, decryptKeyLegacy, zeroize } from "./byok";
+import { isCcOauthEnabled } from "./cc-oauth-flag";
 import type { AgentAuthScheme, AgentCredential } from "./agent-env";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { createChildLogger } from "@/server/logger";
-import { reportSilentFallback } from "@/server/observability";
+import { mirrorWithDebounce, reportSilentFallback } from "@/server/observability";
 import { classifyCliDroppedValue } from "@/server/oauth-token-shape";
+import {
+  ConversationAuthModeError,
+  classifyAuthModeReason,
+  type AuthModeResolverFn,
+  type AuthModeUnresolvedCause,
+  type AuthModeUnresolvedReason,
+} from "./auth-mode-error";
 
 const log = createChildLogger("byok-lease");
 
@@ -78,18 +88,6 @@ export type UserId = string;
  * boundaries from it).
  */
 export const CC_OAUTH_EFFECTIVE_DATE = Date.parse("2026-06-15T00:00:00Z");
-
-/**
- * Kill-switch (plan §Phase 6.2). When unset/falsey the oauth read is never
- * attempted — the lease behaves exactly as the api_key-only path did, so
- * the whole feature is inert (AC8). Instant disable without a Flagsmith
- * round-trip. Read at call time so a deploy-time env flip takes effect on
- * the next lease without a process restart contract.
- */
-function isCcOauthEnabled(): boolean {
-  const v = process.env.CC_OAUTH_ENABLED;
-  return v === "1" || v === "true";
-}
 
 /**
  * Raised when an `anthropic_oauth` credential is selected before
@@ -120,6 +118,10 @@ export class OauthNotYetPermittedError extends Error {
  * workspace context). Enforces Anthropic's per-user / no-pooling / no-share
  * constraint — the real risk axis the "tolerated, owner-only" basis rests on.
  * The subscription token may fund ONLY its owner's own runs. Fail-closed.
+ *
+ * Today's refusal for EVERY cross-owner outcome except one (#11594): a cross-owner lease whose conversation mode
+ * resolves to exactly `api-key` in the delegation's workspace never selects the subscription row at all (see
+ * `crossOwnerChoseApiKey`), so this error is not reached for it.
  */
 export class OauthDelegationForbiddenError extends Error {
   constructor() {
@@ -156,7 +158,34 @@ export interface ByokLeaseArgs {
    * undefined, solo behavior is preserved bit-for-bit.
    */
   delegationId?: string;
+  /**
+   * #11594 — the workspace the delegation was resolved in. Set only together with `delegationId`
+   * (by `resolveKeyOwnerThenLease`). A cross-owner lease may skip the grantor-subscription refusal on an
+   * `api-key` conversation only when the conversation binding's workspace equals this one; a cross-owner lease
+   * without it (a delegation id with no workspace, or an owner mismatch with no delegation) never skips.
+   */
+  delegationWorkspaceId?: string;
+  /**
+   * #11591 — resolves the auth mode (`managed` | `api-key`) of the conversation this
+   * lease serves. Lazy: called at most once per cold agent credential fetch, for an owner who
+   * holds a subscription row with the kill-switch on (after the date and owner gates), and for a
+   * cross-owner lease with the kill-switch on, BEFORE the subscription row is selected (#11594: only
+   * an exact `api-key` skips the refusal; the cross-owner call passes `expectedWorkspaceId`).
+   * Optional at this level because REST-only callers have no conversation; with a subscription
+   * row present and no resolver an owner lease fails closed (`auth_mode_unresolved`), so a
+   * forgotten caller can never serve the subscription.
+   */
+  resolveAuthMode?: AuthModeResolverFn;
 }
+
+/** Why a lease failed; the doc on `ByokLeaseError` names each cause. */
+export type ByokLeaseCause =
+  | "fetch_failed"
+  | "decrypt_failed"
+  | "escape"
+  | "subscription_limit"
+  | "oauth_unusable"
+  | AuthModeUnresolvedCause;
 
 /**
  * BYOK-domain error class. Distinct from `RuntimeAuthError` (auth) and
@@ -172,27 +201,23 @@ export interface ByokLeaseArgs {
  *   - "oauth_unusable": the stored subscription credential is of a class the
  *     bundled CLI silently drops (#11086). Fail closed; never falls back to
  *     the api_key row.
+ *   - "auth_mode_unresolved" / "auth_mode_unavailable" (#11599): the conversation's
+ *     authentication mode could not be resolved. `unavailable` is the transient
+ *     class (`read_failed`, `resolver_failed`: send again); `unresolved` is every
+ *     other reason (start a new conversation). Fail closed; the closed `reason`
+ *     rides on the error.
  */
 export class ByokLeaseError extends Error {
-  public readonly cause:
-    | "fetch_failed"
-    | "decrypt_failed"
-    | "escape"
-    | "subscription_limit"
-    | "oauth_unusable";
+  public readonly cause: ByokLeaseCause;
 
-  constructor(
-    cause:
-      | "fetch_failed"
-      | "decrypt_failed"
-      | "escape"
-      | "subscription_limit"
-      | "oauth_unusable",
-    message: string,
-  ) {
+  /** Closed reason for an `auth_mode_*` refusal (#11591, #11599); never a row or value. */
+  public readonly reason?: AuthModeUnresolvedReason;
+
+  constructor(cause: ByokLeaseCause, message: string, reason?: AuthModeUnresolvedReason) {
     super(message);
     this.name = "ByokLeaseError";
     this.cause = cause;
+    this.reason = reason;
   }
 }
 
@@ -271,6 +296,8 @@ export function reportMissingByokKey(err: MissingByokKeyError): void {
  * causes that legitimately mean "the founder's key on file is unusable"
  * (`fetch_failed` / `decrypt_failed`); returns `undefined` for `"escape"`
  * because that is a server-side capture-leak bug, not a key-invalid signal.
+ * The two `auth_mode_*` causes (#11599) map to their same-named WS codes: the
+ * key is not the problem, the conversation's authentication mode is.
  *
  * Per `cq-union-widening-grep-three-patterns`: the exhaustive `switch` +
  * `: never` rail makes a future `cause` widening (e.g., `"expired"` for
@@ -279,7 +306,7 @@ export function reportMissingByokKey(err: MissingByokKeyError): void {
  */
 export function mapByokLeaseCauseToErrorCode(
   cause: ByokLeaseError["cause"],
-): "key_invalid" | "subscription_limit" | undefined {
+): "key_invalid" | "subscription_limit" | "auth_mode_unresolved" | "auth_mode_unavailable" | undefined {
   switch (cause) {
     case "fetch_failed":
     case "decrypt_failed":
@@ -295,6 +322,9 @@ export function mapByokLeaseCauseToErrorCode(
       // cause→code→WS→UI render path is pre-wired so that hit needs no
       // type/render change.
       return "subscription_limit";
+    case "auth_mode_unresolved":
+    case "auth_mode_unavailable":
+      return cause;
     case "escape":
       return undefined;
     default: {
@@ -334,17 +364,28 @@ export interface ByokLease {
    */
   getRestApiKey(): string | Promise<string>;
   /**
-   * Agent-SDK credential. Prefers `provider='anthropic_oauth'` (the
-   * subscription token) when the kill-switch is on; falls back to
-   * `provider='anthropic'`. Returns `{ value, scheme }` so `buildAgentEnv`
-   * injects exactly one auth var. The date (CLO G1), owner (CLO G2), and
-   * kill-switch (AC8) gates fire ONLY on the oauth read.
+   * Agent-SDK credential. Selects `provider='anthropic_oauth'` (the
+   * subscription token) only when the kill-switch is on, a row exists, the
+   * gates pass AND the conversation binding's auth mode (read lazily through
+   * `resolveAuthMode`, #11591) is `managed`; otherwise `provider='anthropic'`.
+   * `api-key` never decrypts the subscription row and never falls back to it.
+   * Returns `{ value, scheme }` so `buildAgentEnv` injects exactly one auth
+   * var. The date (CLO G1), owner (CLO G2), and kill-switch (AC8) gates fire
+   * ONLY on the oauth read, before the mode is read.
+   *
+   * A cross-owner (delegated / owner-mismatched) lease NEVER receives the subscription
+   * row: unless the conversation's mode is exactly `api-key` in the delegation's workspace
+   * (#11594, then the row is not even selected), it keeps the owner-gate refusal.
    *
    * @throws {OauthNotYetPermittedError} if an oauth row is selected before
    *   `CC_OAUTH_EFFECTIVE_DATE` (fail-closed; no silent api_key fallback).
    * @throws {OauthDelegationForbiddenError} if an oauth row would fund a
-   *   delegated / non-owner run (fail-closed).
+   *   delegated / non-owner run (fail-closed), unless the conversation's mode is
+   *   exactly `api-key` in the delegation's workspace.
    * @throws {ByokLeaseError} / {MissingByokKeyError} as `getRestApiKey`.
+   * @throws {ByokLeaseError} cause="auth_mode_unresolved" | "auth_mode_unavailable" when
+   *   an OWNER's oauth row exists and the mode cannot be resolved (no resolver, unreadable,
+   *   unbound, invalid value).
    */
   getAgentCredential(): AgentCredential | Promise<AgentCredential>;
 }
@@ -362,6 +403,10 @@ interface LeaseSlot {
   alive: boolean;
   /** BYOK Delegations PR-A (#4232). Threaded through to ByokLease. */
   delegationId?: string;
+  /** #11594 — see `ByokLeaseArgs.delegationWorkspaceId`. */
+  delegationWorkspaceId?: string;
+  /** #11591 — see `ByokLeaseArgs.resolveAuthMode`. */
+  resolveAuthMode?: AuthModeResolverFn;
 }
 
 interface EncryptedRow {
@@ -500,14 +545,133 @@ async function fetchRestApiKeyIntoSlot(slot: LeaseSlot): Promise<string> {
   return buf.toString("utf8");
 }
 
+type LeaseAuthMode = "managed" | "api-key";
+
+function failAuthModeClosed(slot: LeaseSlot, reason: AuthModeUnresolvedReason): never {
+  const cause = classifyAuthModeReason(reason);
+  // Null error and no raw value: the event carries only the closed reason and cause (mirrors `oauth-credential-unusable`).
+  // `extra.userId` is hashed at the emit boundary and sets the error-tracker user, so the event can be tied to a tenant.
+  // Debounced per (user, reason): the card keeps the composer enabled, so a resend in a dead conversation must not
+  // multiply the event (the call-site WARN log still carries every turn's conversationId).
+  mirrorWithDebounce(
+    null,
+    {
+      feature: "byok-lease",
+      op: "auth-mode-unresolved",
+      message: "byok-lease: conversation auth mode could not be resolved; failing closed",
+      tags: { reason, cause },
+      extra: { reason, userId: slot.workspaceContextUserId },
+    },
+    slot.workspaceContextUserId,
+    `byok-lease:auth-mode-unresolved:${reason}`,
+  );
+  // The closed reason rides on the error. The cause tells the user-facing layer which recovery is true:
+  // a transient read failure (send again) versus every deterministic reason (start a new conversation), and
+  // lets auto-sync retry only the former. The internal message is never shown to a user.
+  throw new ByokLeaseError(cause, "Authentication unavailable; retry shortly", reason);
+}
+
+/**
+ * #11591 — the conversation binding's auth mode. Fail closed on every unreadable or
+ * unexpected outcome: an owner who declined the subscription must never be served it
+ * because the read failed. The liveness check right after the await keeps "nothing is
+ * read after scope end" true (and testable).
+ */
+async function resolveLeaseAuthMode(slot: LeaseSlot): Promise<LeaseAuthMode> {
+  if (!slot.resolveAuthMode) return failAuthModeClosed(slot, "no_resolver");
+  let mode: unknown;
+  try {
+    mode = await slot.resolveAuthMode();
+  } catch (err) {
+    return failAuthModeClosed(slot, err instanceof ConversationAuthModeError ? err.reason : "resolver_failed");
+  }
+  assertLeaseAlive(slot);
+  if (mode !== "managed" && mode !== "api-key") return failAuthModeClosed(slot, "invalid_value");
+  return mode;
+}
+
+type SkipDeniedOutcome = "non_api_key" | "unresolved" | "workspace_mismatch";
+
+/**
+ * Closed enum only: no id, mode string or value (CLO condition 1). Not an error-tracker event: a denied skip is today's
+ * refusal. `non_api_key` is the ordinary managed delegated turn, so it logs at debug; `unresolved` / `workspace_mismatch`
+ * mean the skip could not be evaluated and log at warn, because info never leaves the host (the log shipper forwards warn
+ * and above), so a systematic failure of the pre-check would otherwise be invisible.
+ */
+function noteSkipDenied(outcome: SkipDeniedOutcome): void {
+  const msg = "byok-lease: cross-owner api-key skip not granted";
+  if (outcome === "non_api_key") log.debug({ outcome }, msg);
+  else log.warn({ outcome }, msg);
+}
+
+/**
+ * #11594 — may a cross-owner (delegated / owner-mismatched) lease skip the grantor-subscription refusal?
+ * Yes ONLY when the conversation's mode resolves to exactly the string `api-key` AND the binding's workspace equals
+ * the delegation's workspace (the resolver enforces the latter through `expectedWorkspaceId`). QUIET by design: no
+ * error-tracker event and never `failAuthModeClosed`, so a cross-owner lease gains no failure mode; every other
+ * outcome (managed, null, undefined, junk, throw, absent resolver, workspace mismatch) returns false and the caller
+ * runs today's path unchanged. A dead scope is not "false": it propagates.
+ */
+async function crossOwnerChoseApiKey(slot: LeaseSlot): Promise<boolean> {
+  if (!slot.resolveAuthMode) {
+    noteSkipDenied("unresolved");
+    return false;
+  }
+  // A cross-owner lease without the workspace it was resolved in can never be matched against a binding (a delegation id
+  // with no workspace, or an owner mismatch with no delegation at all): no skip. Callers reach this only when `crossOwner`.
+  if (slot.delegationWorkspaceId == null) {
+    noteSkipDenied("workspace_mismatch");
+    return false;
+  }
+  let mode: unknown;
+  let outcome: SkipDeniedOutcome = "non_api_key";
+  try {
+    mode = await slot.resolveAuthMode({ expectedWorkspaceId: slot.delegationWorkspaceId });
+  } catch (err) {
+    // review: swallowed on purpose (CLO condition 1): a failed read never grants the skip and never adds a failure mode to a
+    // cross-owner lease; the caller runs today's refusal. The closed outcome is logged at warn by `noteSkipDenied`.
+    mode = undefined;
+    outcome = err instanceof ConversationAuthModeError && err.reason === "workspace_mismatch" ? "workspace_mismatch" : "unresolved";
+  }
+  assertLeaseAlive(slot);
+  if (mode === "api-key") return true;
+  noteSkipDenied(outcome);
+  return false;
+}
+
+function noteCredentialSelected(scheme: AgentAuthScheme, crossOwner: boolean): void {
+  try {
+    if (typeof Sentry.addBreadcrumb === "function") {
+      // Closed enum only: no mode string, id or value. The owner breadcrumb stays exactly `{ scheme }`.
+      Sentry.addBreadcrumb({
+        category: "byok",
+        level: "info",
+        message: "agent-credential-selected",
+        data: crossOwner ? { scheme, delegated: true } : { scheme },
+      });
+    }
+  } catch {
+    // Telemetry must never break a lease.
+  }
+}
+
 async function fetchAgentCredentialIntoSlot(
   slot: LeaseSlot,
 ): Promise<AgentCredential> {
-  // Prefer the subscription oauth token — but ONLY attempt the read when the
+  // CLO G2 — a delegated lease or a keyOwner that differs from the workspace context is a cross-owner run.
+  // Computed ONCE: the skip, the owner gate and the pre-decrypt tripwire below all read this value.
+  const crossOwner =
+    slot.delegationId != null || slot.keyOwnerUserId !== slot.workspaceContextUserId;
+  // The subscription oauth token is eligible — but ONLY attempt the read when the
   // kill-switch is on, so a disabled feature behaves bit-for-bit like the
   // api_key-only path (AC8).
   if (isCcOauthEnabled()) {
-    const oauthRow = await fetchProviderRow(slot, "anthropic_oauth");
+    // #11594 — a cross-owner lease whose conversation mode is exactly `api-key` (in the delegation's workspace)
+    // never selects the grantor's subscription row: the row is not read, so it is neither decrypted nor served,
+    // and the owner gate below is not reached. Owners never call the helper (their path is unchanged). The date gate
+    // stays attached to the subscription-row path: the skip never reaches it (ADR-048 addendum).
+    const skipSubscription = crossOwner && (await crossOwnerChoseApiKey(slot));
+    const oauthRow = skipSubscription ? null : await fetchProviderRow(slot, "anthropic_oauth");
     if (oauthRow) {
       // ---- Gates fire ONLY on the oauth read (plan §Phase 2.3) ----
       // CLO G1 — spent date gate. Fail-closed; NEVER silently fall back to the
@@ -515,41 +679,49 @@ async function fetchAgentCredentialIntoSlot(
       if (Date.now() < CC_OAUTH_EFFECTIVE_DATE) {
         throw new OauthNotYetPermittedError();
       }
-      // CLO G2 — owner-only routing. A delegated lease or a keyOwner that
-      // differs from the workspace context is a cross-owner run.
-      if (
-        slot.delegationId != null ||
-        slot.keyOwnerUserId !== slot.workspaceContextUserId
-      ) {
+      // CLO G2 — owner-only routing. A cross-owner run is refused.
+      if (crossOwner) {
         throw new OauthDelegationForbiddenError();
       }
-      const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
-      assertAliveAfterDecrypt(slot, buf);
-      // #11086 — refuse a stored value the bundled CLI is known to drop,
-      // BEFORE it is cached in the slot or handed out. Fail closed: no
-      // fallback to the api_key row. Only the closed class is reported.
-      const droppedClass = classifyCliDroppedValue(buf.toString("utf8"));
-      if (droppedClass) {
-        zeroize(buf);
-        reportSilentFallback(null, {
-          feature: "byok-lease",
-          op: "oauth-credential-unusable",
-          message: "byok-lease: stored subscription credential is not usable by the CLI",
-          tags: { shape_class: droppedClass },
-          extra: { shape_class: droppedClass },
-        });
-        throw new ByokLeaseError(
-          "oauth_unusable",
-          "Stored subscription credential is not usable",
-        );
+      // #11591 — the mode can only NARROW what the gates above allowed. `api-key`
+      // skips the subscription row entirely (never decrypted, no shape check) and
+      // falls through to the api_key branch; it never falls back the other way.
+      const mode = await resolveLeaseAuthMode(slot);
+      if (mode === "managed") {
+        // Tripwire (CTO R2), defence in depth: the subscription row is decrypted for its owner only. The gate above already
+        // refuses a cross-owner run, so this line is unreachable today and not independently testable; it keeps the invariant
+        // local to the decrypt if the gate is ever refactored.
+        if (crossOwner) throw new OauthDelegationForbiddenError();
+        const buf = decryptRow(oauthRow, slot.keyOwnerUserId);
+        assertAliveAfterDecrypt(slot, buf);
+        // #11086 — refuse a stored value the bundled CLI is known to drop,
+        // BEFORE it is cached in the slot or handed out. Fail closed: no
+        // fallback to the api_key row. Only the closed class is reported.
+        const droppedClass = classifyCliDroppedValue(buf.toString("utf8"));
+        if (droppedClass) {
+          zeroize(buf);
+          reportSilentFallback(null, {
+            feature: "byok-lease",
+            op: "oauth-credential-unusable",
+            message: "byok-lease: stored subscription credential is not usable by the CLI",
+            tags: { shape_class: droppedClass },
+            extra: { shape_class: droppedClass },
+          });
+          throw new ByokLeaseError(
+            "oauth_unusable",
+            "Stored subscription credential is not usable",
+          );
+        }
+        slot.agentCredentialBuffer = buf;
+        slot.agentCredentialScheme = "oauth_token";
+        noteCredentialSelected("oauth_token", crossOwner);
+        return { value: buf.toString("utf8"), scheme: "oauth_token" };
       }
-      slot.agentCredentialBuffer = buf;
-      slot.agentCredentialScheme = "oauth_token";
-      return { value: buf.toString("utf8"), scheme: "oauth_token" };
     }
   }
 
-  // Fall back to the raw-REST api_key (scheme=api_key).
+  // The raw-REST api_key (scheme=api_key): the default when no subscription row is eligible, and
+  // the explicit choice under `api-key` (#11591).
   const apiRow = await fetchProviderRow(slot, "anthropic");
   if (!apiRow) {
     throw new MissingByokKeyError(
@@ -561,6 +733,7 @@ async function fetchAgentCredentialIntoSlot(
   assertAliveAfterDecrypt(slot, buf);
   slot.agentCredentialBuffer = buf;
   slot.agentCredentialScheme = "api_key";
+  noteCredentialSelected("api_key", crossOwner);
   return { value: buf.toString("utf8"), scheme: "api_key" };
 }
 
@@ -585,6 +758,8 @@ export async function runWithByokLease<T>(
     workspaceContextUserId: args.workspaceContextUserId,
     keyOwnerUserId: args.keyOwnerUserId,
     delegationId: args.delegationId,
+    delegationWorkspaceId: args.delegationWorkspaceId,
+    resolveAuthMode: args.resolveAuthMode,
     restApiKeyBuffer: null,
     agentCredentialBuffer: null,
     agentCredentialScheme: null,

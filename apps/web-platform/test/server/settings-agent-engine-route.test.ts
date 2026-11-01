@@ -80,10 +80,28 @@ describe("agent engine settings route", () => {
     expect(setDefault).not.toHaveBeenCalled();
   });
 
-  it("writes a validated owner default", async () => {
+  it("writes a validated owner default and preserves the stored auth mode when none is sent (#11591)", async () => {
+    // The RPC would otherwise reset the stored mode to 'managed', re-exposing a declined subscription.
+    getAuthMode.mockResolvedValue("api-key");
     const response = await PUT(request({ engineId: "claude-code" }));
     expect(response!.status).toBe(200);
-    expect(setDefault).toHaveBeenCalledWith("ws-1", "claude-code");
+    expect(setDefault).toHaveBeenCalledWith("ws-1", "claude-code", "api-key");
+  });
+
+  it("an engine-only PUT with no stored mode, or one the engine does not support, sends no mode", async () => {
+    getAuthMode.mockResolvedValue(null);
+    await PUT(request({ engineId: "claude-code" }));
+    expect(setDefault).toHaveBeenLastCalledWith("ws-1", "claude-code");
+    getAuthMode.mockResolvedValue("device-code");
+    await PUT(request({ engineId: "claude-code" }));
+    expect(setDefault).toHaveBeenLastCalledWith("ws-1", "claude-code");
+  });
+
+  it("an explicit authMode wins over the stored one and does not read it", async () => {
+    getAuthMode.mockResolvedValue("api-key");
+    await PUT(request({ engineId: "claude-code", authMode: "managed" }));
+    expect(setDefault).toHaveBeenCalledWith("ws-1", "claude-code", "managed");
+    expect(getAuthMode).not.toHaveBeenCalled();
   });
 
   it("rejects unknown engines before the RPC", async () => {

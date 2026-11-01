@@ -58,6 +58,9 @@
 # ── EXIT CODES — fully enumerated, each with a distinct operator action ──────────────────────
 # A bare `1` for "something went wrong" is not actionable on the path that follows an
 # irreversible destroy. The runbook carries one operator action per code.
+# For codes 2-6, a failure partway through (after any copy) can leave the sink holding a partial set.
+# crane skips blobs the sink already holds, so a re-run never redoes them and is safe; whether a
+# re-run can succeed is what the RETRYABLE / NOT retryable wording on each row below says.
 #
 #   0  every required reference restored AND verified (blobs + signature)
 #   1  INPUT or MANIFEST fault — the engine refused its arguments or the pin manifest: an unknown
@@ -661,7 +664,7 @@ while (( i < n_entries )); do
       DENIED)
         die 2 "GHCR rejected this credential for ${src}. crane: ${err}" ;;
       NETWORK)
-        die 2 "GHCR was unreachable while resolving ${src} (network/DNS). Nothing was copied. crane: ${err}" ;;
+        die 2 "GHCR was unreachable while resolving ${src} (network/DNS). Nothing was copied for this entry; entries restored earlier in this run stay in the sink and a re-run resumes. crane: ${err}" ;;
       *)
         die 6 "resolving ${src} failed in a way this script cannot classify, so it is neither 'absent' nor 'fine'. crane: ${err}" ;;
     esac

@@ -115,6 +115,13 @@ vi.mock("@/server/logger", () => ({
     error: vi.fn(),
   }),
 }));
+// #11591: startAgentSession now leases with a binding-backed auth-mode resolver. This suite pins tool
+// registration and the system prompt, not credential selection (driven through the real lease in
+// byok-lease-auth-mode-binding.test.ts), so the resolver is pinned to the managed path.
+vi.mock("@/server/engine-binding-auth-mode", () => ({
+  makeConversationAuthModeResolver: vi.fn(() => async () => "managed"),
+  readConversationBindingAuthMode: async () => null,
+}));
 vi.mock("@/server/byok", () => ({
   decryptKey: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
   decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key", "utf8")),

@@ -152,6 +152,13 @@ if (( globs_rc == 0 )); then
 fi
 sort -u "$WORK/ref_glob" -o "$WORK/ref_glob"
 
+# Glob members the loop special-cases (`[[ "$f" == "…" ]]` inside the loop) register
+# as literal arm labels instead of `run_suite "$f"` — their coverage already lands
+# in ref_static, so keeping the file path here would double-count it as unassigned
+# (#11562's ci-pr-affected-replay split). Subtract them.
+grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | sort -u > "$WORK/glob_special"
+comm -23 "$WORK/ref_glob" "$WORK/glob_special" > "$WORK/ref_glob.f" && mv "$WORK/ref_glob.f" "$WORK/ref_glob"
+
 cat "$WORK/ref_static" "$WORK/ref_glob" | sort -u > "$WORK/reference"
 REF_N=$(wc -l < "$WORK/reference" | tr -d ' ')
 
@@ -859,6 +866,21 @@ awk -v "tokre=--rows[[:space:]]+[^[:space:]\"']+" '
   }
 ' "$RUNNER" > "$WORK/run_suite_rows"
 
+# A glob special-cased file must still EMIT coverage — subtracting it from
+# ref_glob above trusts exactly that; a dropped-registration special case leaves
+# the file absent from BOTH the reference and the union, silently uncovered.
+# Two covering shapes exist: a literal label in ref_static (run_suite/skip_suite —
+# c4-from-components' gated decline) or a run_suite command token carrying the
+# file path (the arm registrations, whose labels are `<stem>-<letter>` instead).
+_missing_special="$(comm -23 "$WORK/glob_special" \
+  <(cat "$WORK/ref_static" \
+        <(awk -F'\t' '$2 != "<unresolved>" { print $2 }' "$WORK/run_suite_rows") \
+      | sort -u) \
+  | head -5 | tr '\n' ' ')"
+if [[ -n "$_missing_special" ]]; then
+  fail "glob special-cased file(s) emit no registration: ${_missing_special% } — subtracted from the reference but covering nothing"
+fi
+
 # Tokens of interest, in two passes (one each), not a per-token rescan:
 #  a) every token with at least one --rows registration
 #  b) every resolvable token whose battery file declares DECLARED_TOTAL — the non-vacuity arm:
@@ -907,6 +929,17 @@ while IFS= read -r _tok; do
     continue
   fi
 
+  # The -<letter> arm convention is stated where it is load-bearing:
+  # regenerate-shard-manifest.py groups same-stem `-<letter>` siblings and pins
+  # them to DISTINCT legs. A non-conforming --rows label bypasses that grouping —
+  # LPT co-location would then emit a manifest this very check refuses, with no
+  # in-generator remedy. Reject the label shape here, naming the contract.
+  _bad_lbl="$(cut -f1 "$WORK/rs_flagged" | grep -vE -- '-[a-z]$' | head -1)"
+  if [[ -n "$_bad_lbl" ]]; then
+    fail "${_tok}: --rows label '${_bad_lbl}' does not end in -<letter> — the arm convention the generator's distinct-legs grouping keys on; rename to <stem>-a/-b/… or the next regen can co-locate the arms"
+    continue
+  fi
+
   # Whole-token capture emits the VERBATIM flag argument, so a garbage suffix or
   # triseg spec (`9-16x`, `9-16-24`) reaches here instead of normalizing to a
   # clean range inside the extractor. Fail it by name BEFORE sorting — the
@@ -943,7 +976,7 @@ while IFS= read -r _tok; do
     while IFS=$'\t' read -r _lbl _rr; do
       _leg="$(awk -F'\t' -v l="$_lbl" '$1 == l { print $2; exit }' "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" 2>/dev/null | head -1)"
       if [[ -z "$_leg" ]]; then
-        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves)"
+        fail "${_tok}: --rows registration '${_lbl}' is not pinned in either shard manifest — its leg is unverifiable (hash-fallback could co-locate the halves). Regenerate: python3 scripts/regenerate-shard-manifest.py --incremental --write"
         _legs_ok=0; break
       fi
       echo "$_leg" >> "$WORK/rs_legs"
@@ -955,7 +988,7 @@ while IFS= read -r _tok; do
     if (( _legs_ok == 1 )); then
       _uniq=$(sort -u "$WORK/rs_legs" | wc -l | tr -d ' ')
       if (( _uniq != _ranges_n )); then
-        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total"
+        fail "${_tok}: --rows halves pin to legs $(tr '\n' ' ' < "$WORK/rs_legs" | sed 's/ /,/g;s/,$//') — two halves on the same leg defeats the split while coverage stays total. Regenerate: python3 scripts/regenerate-shard-manifest.py --incremental --write"
       else
         pass "${_tok}: ${_ranges_n} --rows registrations pin to distinct legs ($(tr '\n' ' ' < "$WORK/rs_legs"))"
       fi

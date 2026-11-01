@@ -28,6 +28,12 @@
 # ACTION REQUIRED (exit 5) fires on STALE > 0 alone, or on ENQ > 0 together with a stranded draft. The two Sentry
 # queries carry no `environment:` filter, so a STALE (or ENQ) event from ANY environment (preview, staging, a
 # developer's machine) counts, and since the window start is fixed, one such event keeps STALE > 0 (exit 5) every day.
+# WHY THE QUERIES STAY UNFILTERED (#11572 item 5, measured 2026-10-30 against the Sentry org, 30 d window): events carrying
+# an `op` tag number about 1.6k with environment production against about 18k with a null environment; every
+# web-platform@x.y.z release event is production, the null-environment events are host emitters carrying other `feature`
+# tags, and the org holds no non-production environment. `feature:spawn-agent` and `feature:dashboard-send` have 0 events,
+# so an `environment:` filter has no positive control today. Leave the queries unfiltered. Re-evaluate when a preview or
+# staging environment appears, or when the first real `feature:dashboard-send` event confirms `environment:production`.
 # RESIDUAL: the two `op` tags are read from Sentry with no runtime positive control (none exists); the suite pins the
 # tags against apps/web-platform/app/api/dashboard/today/[id]/send/route.ts, so a mistyped tag fails CI, but an op
 # renamed in the route LATER would silently read 0 here.
@@ -91,10 +97,10 @@ TMP="$(mktemp "${TMPDIR:-/tmp}/ft11211.XXXXXX")" || cannot "mktemp failed"
 
 # Criterion 1, two plain Sentry reads (never one `op:[a,b]`), URL-encoded: ENQ = `feature:spawn-agent op:inngest-enqueue`,
 # STALE = `feature:spawn-agent op:inngest-replay-stale`, both since PR 11208 merged.
-SENTRY_BASE="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query="
-SENTRY_TAIL="&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"
-ENQ_URL="${SENTRY_BASE}feature%3Aspawn-agent%20op%3Ainngest-enqueue${SENTRY_TAIL}"  # [mut:enq-url]
-STALE_URL="${SENTRY_BASE}feature%3Aspawn-agent%20op%3Ainngest-replay-stale${SENTRY_TAIL}"  # [mut:stale-url]
+# Bound literals ride the /events/ logical line itself (lint rule 6): the bound on a
+# separate statement is the lint's declared blind spot, so BASE/TAIL assembly is inlined.
+ENQ_URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=feature%3Aspawn-agent%20op%3Ainngest-enqueue&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"  # [mut:enq-url]
+STALE_URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=feature%3Aspawn-agent%20op%3Ainngest-replay-stale&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"  # [mut:stale-url]
 
 # Criterion 2: ONE literal string. No interpolation, no `;`, `now() - interval` in SQL, never a shell-built timestamp.
 readonly QUERY="SELECT count(*) FILTER (WHERE s.clicked_at >= now() - interval '23 hours') AS recoverable, count(*) FILTER (WHERE s.clicked_at < now() - interval '23 hours') AS aged_out FROM public.action_sends s JOIN public.messages m ON m.id = s.message_id WHERE s.acknowledged_at IS NULL AND s.failure_reason IS NULL AND s.undone_at IS NULL AND s.cancellation_requested_at IS NULL AND m.status = 'draft' AND s.clicked_at < now() - interval '1 hour'"  # [mut:query]

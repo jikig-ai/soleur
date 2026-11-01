@@ -69,14 +69,22 @@ Live standing alarms over this source:
   carries an EMPTY `.detail` is the fail-loud schema-drop arm — decode it as a degraded emitter
   (or, on the web host which has no LUKS volume, a degraded emit) rather than a mount regression.
 - **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
-  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `token=fail_*` row of
-  `SOLEUR_INNGEST_LUKS_KEY_PROBE`: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
-  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `token=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `verdict=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE` from the probe's pinned emitters: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `verdict=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
   bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
   [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
-  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`).
+  Since #11527 the predicate is pinned to the probe's two real emitters (ADR-218 dual-channel convention):
+  leg A the journald row `SYSLOG_IDENTIFIER='inngest-cutover-flip'` with `verdict=fail_` on `message`; leg B the
+  phone-home envelope `shipper='cloud-init-phone-home'` + `stage='luks-key-probe'` with `verdict=fail_` on
+  `detail` (or an empty `detail`, the fail-loud schema-drop arm). The position-1 marker anchor is shared —
+  the phone-home message begins with the marker — so marker-quoting rows under a foreign emitter never count.
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`),
+  then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
+  an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
+  check, so the `detail=''` disjunct is what carries it), not a healthy skip.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -125,25 +133,49 @@ Live standing alarms over this source:
     [Querying Anthropic cost markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily).
     A single source far above its `--max-budget-usd` cap (`server/inngest/cron-budgets.ts`), or two
     markers per run `id` (the query under the 524 alert above), is the lead.
-  - **`logtail_exploration_alert.claude_cost_capture_dark`** (hourly, trailing 24 h) —
-    `soleur-claude-cost-capture-dark-prd`. Pages when 24 h holds no cron cost marker with a
-    non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
-    `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
-    again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
-    `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
-    routed since #8630 but muted, #8704).
-- **`logtail_exploration_alert.luks_monitor_host_timer_dark`** (#8706, hourly over a trailing 27 h
-  window, `lower_than 1`, missing data counts as zero) — `soleur-luks-monitor-host-timer-dark-prd`.
-  Pages (team email) when no `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` carries
-  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own
-  nightly LUKS probe has not reported a PASSING run. It is host-scoped to web-1: web-2
-  (`soleur-web-2`) ships to the same source. The daily `workspaces-luks-verify.yml` rows never carry
-  that unit, so they cannot mask it. A host run that fails an assert, or a Vector or Logs-source
-  outage, also trips it. Defined in
-  `apps/web-platform/infra/betterstack-logs-alerts.tf`; the unit it watches is delivered by
-  `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
-  of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
+  - **`logtail_exploration_alert.claude_cost_capture_dark` — RETIRED (#11631).** Its successor is the Better
+    Stack heartbeat `soleur-claude-cost-capture-prd` (`betteruptime_heartbeat.claude_cost_capture`, period
+    3600 s, grace 7200 s, born paused; **UNARMED until the owner unpauses it, and until then this condition is
+    unmonitored**). It shares the luks alert's class (a native alert with `query_period` 86400 s) but its marker
+    is not strictly once a day: it fires a few times a day (Phase 0 measured n=4 qualifying rows in 24 h), so
+    the 33-nights `Current value: 0` finding below is luks-specific (#11048), not measured for cost (#11049).
+    The sibling burn alert `claude_cost_daily_burn` (86400 s) may share the hot-window blind spot; that is
+    UNMEASURED. The native alert could not be trusted to see its row, so
+    `scripts/deadman-heartbeat-feeder.sh claude-cost-capture` (hourly, via
+    `scheduled-deadman-heartbeat-feeder.yml`) reads the archive (`remote()` UNION `s3Cluster`) and beats the
+    heartbeat only if the trailing 24 h holds a cron cost marker with a non-null `cost_usd` OR a credit-probe
+    RED row (`op=anthropic-credit-exhausted` / `anthropic-key-invalid`). No qualifying row means no beat and the
+    heartbeat pages: the marker path is broken (the emitter, Vector, or the field moved again), so the burn
+    alert above is blind. An out-of-credit day stays quiet: that page is the `anthropic-credit-exhausted`
+    Sentry issue alert. **Step 0 on a page:** check the Sentry monitor `scheduled-deadman-heartbeat-feeder`
+    and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml` before suspecting the emitter (a
+    dark watchdog clock false-pages this heartbeat), then
+    `gh run view <id> --log | grep 'deadman-feeder: target=claude-cost-capture'` (verdict dictionary:
+    [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706)).
+    On `no_qualifying_row` the next action is the [Querying Anthropic cost
+    markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily) section below: query the raw markers
+    to see whether the emitter, Vector or the field moved. This target has no `any_rows` positive control, and
+    its predicate keeps the beat if EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, a
+    known weak limit: a credit-probe RED row inside the window keeps the beat and can mask a dead marker path.
+- **`logtail_exploration_alert.luks_monitor_host_timer_dark` — RETIRED (#11631).** Its successor is the
+  Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
+  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused; **UNARMED until
+  the owner unpauses it, and until then this condition is unmonitored**). The retired alert read `Current
+  value: 0` through 33 nights of passing once-a-day rows (incident 1023423999, #11048). The feeder
+  `scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer` beats it hourly only if the archive holds, in
+  the trailing 27 h (97200 s), a `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` with
+  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own nightly LUKS
+  probe passed. It is host-scoped to web-1: web-2 (`soleur-web-2`) ships to the same source. The daily
+  `workspaces-luks-verify.yml` rows never carry that unit, so they cannot mask it. A host run that fails an
+  assert, or a Vector or Logs-source outage, also withholds the beat. **Step 0 on a page:** check the Sentry
+  monitor `scheduled-deadman-heartbeat-feeder` and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`
+  first. The unit it watches is delivered by `terraform_data.luks_monitor_install` (`workspaces-luks.tf`).
+  Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+  No NEW native logs alert may use a `query_period` above 900 s (sentinel
+  `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`; the live legacy alerts
+  `claude_cost_daily_burn` and `inngest_luks_wrong_volume` predate it and are allowlisted).
+  Arming runbook: [Arming the dead-man heartbeats](./workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631).
 - **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
   data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
   `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with

@@ -109,9 +109,31 @@ on:
       # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
       # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
       - ".github/workflows/apply-git-data-root-key.yml"
+      # (#11181) Same defect class for the cf-lb-overlay route: a PR editing ONLY the
+      # workflow, its plan grader, or its suite would skip the guards that watch them.
+      - ".github/workflows/cf-lb-overlay.yml"
+      - "tests/scripts/lib/cf-lb-overlay-gate.sh"
+      - "tests/scripts/test-cf-lb-overlay-gate.sh"
       - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#11631) deadman-heartbeat-feeder.test.sh drives the feeder (scripts/deadman-heartbeat-feeder.sh) against a
+      # fake tree and replays the shipping workflow's run block; neither file is under apps/*/infra/**, so a PR editing
+      # only one of them would skip the suite whose job is to turn that edit red - the same defect class as the #6178
+      # and #8079 entries below. (apply-web-platform-infra.yml, which the suite also reads, is already listed.)
+      - ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"
+      - "scripts/deadman-heartbeat-feeder.sh"
+      # (#11631 review) The heartbeat parity/reconcile suites and the privileged-tier census read these sources
+      # (the watchdog dispatch table and the heartbeat manifest rows, the cost-marker emitter and its two Inngest
+      # emitters, and the census itself). None is under apps/*/infra/**, so a PR editing ONLY one of them would skip
+      # the guard that pins the dead-man heartbeats to those emitters. PR list only: the push list is deliberately
+      # narrower (see the comment above `push:`).
+      - "apps/web-platform/server/watchdog-dispatch-table.ts"
+      - "plugins/soleur/lib/heartbeat-manifest.ts"
+      - "apps/web-platform/server/claude-cost-marker.ts"
+      - "apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts"
+      - "apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts"
+      - "tests/scripts/test-infra-privileged-tier-census.sh"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
       # `wrangler pages deploy --branch` must equal cf-pages.tf's `production_branch`, and
       # its `--project-name` must equal cloudflare_pages_project.docs's `name`. Those are two
@@ -886,11 +908,11 @@ jobs:
         run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 
       # (#6894) The wrong-volume Logs alert: its predicate, its arming variable, its -target lines,
-      # and six mutation rows that each require this guard to red.
+      # and the mutation rows that each require this guard to red.
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
-      # (#9927) The LUKS key-continuity probe paging alert: its SQL (token=fail_ present, indeterminate
+      # (#9927) The LUKS key-continuity probe paging alert: its SQL (verdict=fail_ present, indeterminate
       # absent), parameters, both -target lines, a negative row that no dead-man resource ships here
       # (ruling D12), and the mutation rows that each require this guard to red.
       - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
@@ -968,6 +990,18 @@ jobs:
       # its mutation rows.
       - name: Run Anthropic-spend alerts drift guard (#8611)
         run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh
+
+      # (#11631) The archive-fed dead-man heartbeat feeder (luks-monitor host timer + cost capture) that replaced two
+      # native logs alerts (the luks one waited for a once-a-day row; the cost one fires a few times a day): the SQL
+      # it sends (both arms, the archive filter), the exit contract, the single beat site with no /fail, the
+      # predicates pinned to their emitters, the workflow/Terraform/manifest/watchdog wiring, and its mutation rows.
+      - name: Run dead-man heartbeat feeder guard (#11631)
+        run: bash apps/web-platform/test/infra/deadman-heartbeat-feeder.test.sh
+
+      # (#11631) Guard 3: no native logs alert above query_period 900 (the live legacy ones allowlisted by name), and the
+      # two retired dead-man alerts stay gone with their destroy targets and census entries intact.
+      - name: Run logs-alert query_period ceiling sentinel (#11631)
+        run: bash apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh
 
       # sandbox-canary-regression (below) is the fixed job's docker consumer — it needs a
       # real daemon and would fail obscurely without one. This assert reds the job HERE
@@ -1139,6 +1173,18 @@ jobs:
         working-directory: apps/web-platform/infra/inngest-provision-rehearsal
         env:
           TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
+      # (#11181) Same gap a fourth time: lb-staging nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces
+      # only at dispatch, after the environment approval. -backend=false, TF_DATA_DIR
+      # out of tree.
+      - name: Terraform validate the lb-staging root
+        working-directory: apps/web-platform/infra/lb-staging
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/lb-staging-tf
         run: |
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
@@ -1674,6 +1720,11 @@ jobs:
             "${VAR_ARGS[@]}" 2>&1)
           PLAN_EXIT=$?
           set -e
+
+          # A replaced random_id diffs its old value into this PUBLIC PR comment (#11294).
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          PLAN_OUTPUT=$(printf '%s' "$PLAN_OUTPUT" | tf_redact_random_ids)
 
           if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
             PLAN_OUTPUT="${PLAN_OUTPUT:0:60000}

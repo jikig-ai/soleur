@@ -179,8 +179,9 @@ ALWAYS_ON_SUITES=(
   # like its sibling above; renamed out of the add/add collision with #8322's.
   "scripts/test-all-group-affected"
   "scripts/suite-exit-class-parity"
-  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected,
-  # battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864).
+  # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's
+  # --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the
+  # lint-orphan battery (#8864).
   # Each is a mutation battery over a NAMED set of files, run on sandbox copies, so its edge set is
   # a declared array (AFFECTED_CONSUMED_EDGES) and not "the whole tree". Their SUBJECTS stay here.
   "plugins/soleur/test/scripts-shard-runtime-coverage.test.sh"
@@ -333,6 +334,11 @@ ALWAYS_ON_SUITES=(
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
   # suite like its sibling above.
   "scripts/test-all-weight-drift"
+  # #11662: the corpus-wide committed-weight cap + exemptions ledger and the
+  # always-on justifications parity + non-live membership ceiling — both are
+  # corpus properties, invisible to any file-based edge.
+  "scripts/test-all-corpus-weight-budget"
+  "scripts/always-on-ledger"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
@@ -365,11 +371,15 @@ AFFECTED_CONSUMED_EDGES=(
   # the array). Its edges are the same two predicates _infra_in_diff checks.
   "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
   # ADR-262: four self-test mutation batteries, withdrawn from ALWAYS_ON_SUITES. The two lint-orphan
-  # halves share one array because they are two --rows ranges of one battery.
+  # halves share one array because they are two --rows ranges of one battery; the four
+  # test-all-affected arms share one array for the same reason (#11562).
   "scripts/lint-orphan-test-suites-mutations-a|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/lint-orphan-test-suites-mutations-b|LINT_ORPHAN_BATTERY_PATHS"
   "scripts/battery-tag-authorship-mutations|TAG_AUTHORSHIP_BATTERY_PATHS"
-  "scripts/test-all-affected|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-a|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-b|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-c|TEST_ALL_AFFECTED_BATTERY_PATHS"
+  "scripts/test-all-affected-d|TEST_ALL_AFFECTED_BATTERY_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
@@ -661,6 +671,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_DISPATCH_RECOVERY_SWEEPER_11211_PATHS=(
   "apps/web-platform/app/api/dashboard/today/[id]/send/route.ts"
   "apps/web-platform/server/action-sends/decide-replay.ts"
   "scripts/lib/mutation-harness.sh"
+  "scripts/lib/mutation-harness-controls.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # #11265: the LUKS keeper dark-period probe suite pins the key-probe alert block and the flip script's
@@ -673,6 +684,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_INNGEST_LUKS_KEEPER_DARK_11265_PATHS=(
   "scripts/betterstack-query.sh"
   "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
   "scripts/lib/mutation-harness.sh"
+  "scripts/lib/mutation-harness-controls.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
@@ -884,6 +896,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/prompt-injection-wrap.ts"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
+  "apps/web-platform/test/broker-mechanism-spike.test.ts"
   "knowledge-base/engineering/architecture/decisions/"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
@@ -905,6 +918,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
+  "tests/scripts/lib/tf-redact-random-ids.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
 )
@@ -2514,7 +2528,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # the th6 row in scripts/test-all-affected.test.sh re-derives the live root
 # set to catch NEW top-level dirs, and its th8 row (#10117) REDs the battery
 # on any dir-less corpus member no declared edge covers.
+# Declared edge (#11631): luks-monitor-install.test.sh is a PROMOTED_FILES member, so this suite builds and runs mutants of
+# it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
 
   "apps/"
   ".claude/"
@@ -3330,6 +3347,10 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
   "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
+  ".github/workflows/npm-publish.yml"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
   "apps/web-platform/infra/zot-config-deadlines.test.sh"

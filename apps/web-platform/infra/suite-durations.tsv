@@ -56,6 +56,7 @@ apps/web-platform/infra/git-data-nftables-syntax.test.sh	0	measured
 apps/web-platform/infra/git-data-ownership.test.sh	31500	measured
 apps/web-platform/infra/git-data-pre-receive.test.sh	500	measured
 apps/web-platform/infra/git-data-provision.test.sh	1000	measured
+apps/web-platform/infra/git-data-refs-assert.test.sh	81000	measured
 apps/web-platform/infra/git-data-remove.test.sh	1000	measured
 apps/web-platform/infra/git-data-render-strip-parity.test.sh	2000	measured
 apps/web-platform/infra/git-data-root-key.test.sh	63000	measured

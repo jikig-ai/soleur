@@ -4160,7 +4160,8 @@ _aff_runner_banner() {
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
 # #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+# #11662: +2 always-on (the anti-regrow guard pair: corpus-weight-budget + always-on-ledger); re-pinned at 122-5.
+_MIN_ALWAYS_ON_DECLARED=117
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5715,6 +5716,15 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #11662: the corpus-wide committed-weight budget — every committed weight
+  # <=600s or exempted in scripts/suite-weight-exemptions.tsv; unmeasured
+  # registrations red. Registered explicitly: scripts/*.test.sh is NOT
+  # auto-globbed (the #5417 orphan class).
+  run_suite "scripts/test-all-corpus-weight-budget" bash scripts/test-all-corpus-weight-budget.test.sh
+  # #11662: the always-on ledger — two-directional keys-parity against
+  # scripts/always-on-justifications.tsv plus the non-live membership ceiling
+  # (NON_LIVE_CAP), distinct from f1's pin-vs-list band.
+  run_suite "scripts/always-on-ledger" bash scripts/always-on-ledger.test.sh
   # #9814: the local weight-drift detector — warns when a suite's local actual
   # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
   run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
@@ -6015,6 +6025,18 @@ if want_scripts; then
   # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
   # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
   run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
+  # #11602: exit-code harness for the host_metrics-trim measured-close probe (the issue's own GROUP BY
+  # tags.collector acceptance read). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes #11602, so a vacuous PASS — a
+  # superset, a partial set, a zero-count collector, or a truncated read counted as the trim — must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-hostmetrics-trim-11602" bash scripts/followthroughs/inngest-hostmetrics-trim-11602.test.sh
+  # #7596: exit-code harness for the boot-trace-allowlist measured-close probe (generation floor +
+  # _BOOT_ID anchor + the BOOT_STAGE second PASS arm + leg-attributed TRANSIENT reasons). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether
+  # the sweeper closes #7596, so a pre-floor or stale-generation row counted as delivered must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-bs-token-restage-7596" bash scripts/followthroughs/inngest-bs-token-restage-7596.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -6424,6 +6446,10 @@ if want_scripts; then
   # the rung2 entries above: nothing auto-discovers tests/scripts/ or scripts/followthroughs/.
   run_suite "tests/scripts/inngest-provision-plan-shape" bash tests/scripts/test-inngest-provision-plan-shape.sh
   run_suite "scripts/followthroughs/inngest-provision-rehearsal-capture" bash scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
+  # (#11181) The cf-lb-overlay dispatch's plan graders (record/overlay/teardown/GA
+  # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
+  # inngest-provision entries above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
@@ -6640,6 +6666,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
+  # #11294: the random_* id redaction filter that keeps a random_id's key bytes out of every public terraform log, issue and comment.
+  run_suite "tests/scripts/tf-redact-random-ids" bash tests/scripts/test-tf-redact-random-ids.sh
   # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
   # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
@@ -6870,6 +6898,7 @@ if want_scripts; then
   run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
+  run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -7033,6 +7062,8 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #10455: the notify-only home-census reminder probe. EXPLICIT because scripts/followthroughs/ matches no SUITE_GLOBS entry.
+  run_suite "scripts/followthroughs/home-census-run-10455" bash scripts/followthroughs/home-census-run-10455.test.sh
   # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
@@ -7042,6 +7073,10 @@ if want_webplat; then
   # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
   run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  # #10455: the home-census Guard 1/4 mutation battery (23 anchor-asserted mutants on a COPY of the app tree; the full
+  # run is reviewer-only behind HOME_CENSUS_MUTATIONS=1, the always-on part is the baseline, vacuity, landing and
+  # instrument control). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
+  run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
 
   # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
   # in THIS arm for the same reason as destroy-ask-mutation — it drives the
@@ -7155,12 +7190,30 @@ if want_scripts; then
   # auto-globbed.
   #
   # PR-GATED (ADR-262). Declared by dependency, not by its whole-scripts/ hardlink copy set.
+  # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~29-min atomic suite this battery
+  # was a test-scripts shard worst leg, so it registers FOUR times — the -a/-b/-c/-d arms
+  # below carrying complementary --rows ranges over its DECLARED_TOTAL gated row blocks.
+  # ONE `if` over all four arms — they share TEST_ALL_AFFECTED_BATTERY_PATHS, so declines
+  # stay identical per arm and the derived-gate-count floor holds. The boundary lives in
+  # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is asserted by
+  # plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges must pin to
+  # distinct legs in the committed manifests. A DECLARED_TOTAL bump in the battery must
+  # land in the same commit as a re-split of these ranges.
   if _diff_touches --pr-gated "${TEST_ALL_AFFECTED_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
+    run_suite "scripts/test-all-affected-a" bash scripts/test-all-affected.test.sh --rows 1-13
+    run_suite "scripts/test-all-affected-b" bash scripts/test-all-affected.test.sh --rows 14-32
+    run_suite "scripts/test-all-affected-c" bash scripts/test-all-affected.test.sh --rows 33-36
+    run_suite "scripts/test-all-affected-d" bash scripts/test-all-affected.test.sh --rows 37-38
   else
-    _relevance_declined=$((_relevance_declined + 1))
-    skip_suite "scripts/test-all-affected" "relevance" \
-      "bash scripts/test-all-affected.test.sh"
+    _relevance_declined=$((_relevance_declined + 4))
+    skip_suite "scripts/test-all-affected-a" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 1-13"
+    skip_suite "scripts/test-all-affected-b" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 14-32"
+    skip_suite "scripts/test-all-affected-c" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 33-36"
+    skip_suite "scripts/test-all-affected-d" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 37-38"
   fi
   # TEST_GROUP=affected (#8621) — the compat alias of the --affected axis
   # (the #8591 heuristic it replaced was folded in). Registered explicitly beside
@@ -7217,6 +7270,23 @@ if want_scripts; then
           "bash plugins/soleur/test/c4-from-components.test.sh"
         continue
       fi
+    fi
+    # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
+    # battery was the test-scripts shard's worst leg, so it registers THREE times —
+    # the -a/-b/-c arms below carrying complementary --rows ranges over its
+    # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
+    # so no skip_suite pairing — the suite is never declined). The boundary lives in
+    # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
+    # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
+    # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
+    # the battery must land in the same commit as a re-split of these ranges.
+    if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
+      # Literal path in argv, never "$f": the totality checker resolves each
+      # arm's battery from the run_suite command token and dies on <unresolved>.
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-578
+      continue
     fi
     run_suite "$f" bash "$f"
   done

@@ -21,6 +21,7 @@ import { LeaderLoopStatus } from "@/components/dashboard/leader-loop-status";
 import { Button } from "@/components/ui/button";
 import { TypedConfirmModal } from "@/components/ui/typed-confirm-modal";
 import { useActionSend } from "@/hooks/use-action-send";
+import { useRefreshToday } from "@/hooks/use-refresh-today";
 import { usePendingAction, PENDING_WATCHDOG_MS } from "@/hooks/use-pending-action";
 import { humanTitle } from "@/lib/messages/action-class-copy";
 import { redactGithubSourcedText, type RedactionSource } from "@/lib/safety/redaction-allowlist";
@@ -110,12 +111,52 @@ const DENY_REASON_COPY: Record<DenyReason, string> = {
   template_unauthorized:
     "Send couldn't verify your template authorization. Try again in a moment.",
   template_revoked:
-    "This template was revoked. Click Send again to re-authorize.",
+    "This template was revoked, so this draft can't be sent.",
   template_expired:
-    "This template authorization expired (90-day limit). Click Send again to re-authorize.",
+    "This template's 90-day authorization expired, so this draft can't be sent.",
   template_quota_exhausted:
-    "You've sent 100 messages with this template. Click Send again to re-authorize for another 100.",
+    "You've sent 100 messages with this template, so this draft can't be sent.",
 };
+
+// Discard / Edit / Dismiss 403: the messages UPDATE policy matches zero rows
+// for a draft that is already handled (second tab, double click) or not the
+// caller's. Names no button, same register as the `not_a_draft` line.
+const ALREADY_HANDLED_COPY =
+  "This draft was already handled, or it isn't yours to change. Refresh to update this card.";
+
+// Edit / Discard / Dismiss on a draft that already has an approval row: the routes answer 409 draft_already_approved.
+const ALREADY_APPROVED_EDIT_COPY =
+  "You already approved this draft, so it can't be edited. Send it to go ahead.";
+const ALREADY_APPROVED_DISCARD_COPY =
+  "You already approved this draft, so it can't be discarded. Send it to go ahead.";
+// The kb-drift digest card has a Dismiss and no Send button, so it must not tell the user to Send.
+const ALREADY_APPROVED_DISMISS_COPY =
+  "You already approved this item, so it can't be dismissed.";
+
+// The copy for a failed Edit / Discard / Dismiss. Keyed on the response BODY, not the bare status: a CSRF origin
+// rejection is also a 403 (`{error:"Forbidden"}`), and only the routes' zero-row answer (`{error:"forbidden"}`) means
+// "already handled or not yours".
+async function failureCopy(
+  res: Response,
+  verb: "Edit" | "Discard" | "Dismiss",
+): Promise<{ copy: string; handled: boolean }> {
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (res.status === 403 && body?.error === "forbidden") {
+    return { copy: ALREADY_HANDLED_COPY, handled: true };
+  }
+  if (res.status === 409 && body?.error === "draft_already_approved") {
+    return {
+      copy:
+        verb === "Edit"
+          ? ALREADY_APPROVED_EDIT_COPY
+          : verb === "Dismiss"
+            ? ALREADY_APPROVED_DISMISS_COPY
+            : ALREADY_APPROVED_DISCARD_COPY,
+      handled: false,
+    };
+  }
+  return { copy: `${verb} failed (${res.status})`, handled: false };
+}
 
 export function TodayCard(props: TodayCardProps) {
   if (props.source === "kb-drift") return <KbDriftCard {...props} />;
@@ -146,6 +187,7 @@ function KbDriftCard({
 
   const [archived, setArchived] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const refreshToday = useRefreshToday();
 
   // Keep AbortSignal.timeout: the hook releases the flag on watchdog but does
   // not abort the zombie fetch — the signal bound is what kills the flight.
@@ -161,9 +203,13 @@ function KbDriftCard({
           // hold pending until the 30s watchdog; the abort bound kills it.
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
-        if (res.status !== 200) {
+        if (res.status === 200) {
+          refreshToday(id);
+        } else {
           setArchived(false);
-          setDismissError(`Dismiss failed (${res.status})`);
+          const { copy, handled } = await failureCopy(res, "Dismiss");
+          setDismissError(copy);
+          if (handled) refreshToday();
         }
       } catch {
         setArchived(false);
@@ -370,6 +416,7 @@ function StripeCard({
   urgency,
 }: TodayCardProps) {
   const [archived, setArchived] = useState(false);
+  const refreshToday = useRefreshToday();
   const [draft, setDraft] = useState(draftPreview);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -384,7 +431,12 @@ function StripeCard({
   } = useActionSend({
     messageId: id,
     denyReasonCopy: DENY_REASON_COPY,
-    onAcknowledgedArchive: () => setArchived(true),
+    // Only this card unmounts itself after Send; the GitHub and kb-drift cards stay mounted to show the run
+    // (AcknowledgedPill / LeaderLoopStatus), so they must NOT be dropped from the list here.
+    onAcknowledgedArchive: () => {
+      setArchived(true);
+      refreshToday(id);
+    },
   });
 
   // Keep AbortSignal.timeout on both fetches: the hook releases the flag on
@@ -404,21 +456,11 @@ function StripeCard({
             setDraft(next!);
             return;
           }
-          if (res.status === 409) {
-            // /edit refuses once an approval row exists (draft_already_approved): say what to do
-            // next. Any other 409 body, or an unparseable one, keeps the bare status below.
-            const body = (await res.json().catch(() => ({}))) as {
-              error?: string;
-            } | null;
-            if (body?.error === "draft_already_approved") {
-              // Names Send only: Discard is not offered here until the messages UPDATE policy exists (#11569).
-              setEditError(
-                "You already approved this draft, so it can't be edited. Send it to go ahead.",
-              );
-              return;
-            }
-          }
-          setEditError(`Edit failed (${res.status})`);
+          // /edit refuses once an approval row exists (409 draft_already_approved) and answers 403 `forbidden` for a
+          // draft that is already handled or not the caller's; any other body keeps the bare status.
+          const { copy, handled } = await failureCopy(res, "Edit");
+          setEditError(copy);
+          if (handled) refreshToday();
         } catch {
           setEditError("Edit failed — network error");
         }
@@ -433,9 +475,13 @@ function StripeCard({
           // hold pending until the 30s watchdog; the abort bound kills it.
           signal: AbortSignal.timeout(PENDING_WATCHDOG_MS),
         });
-        if (res.status !== 200) {
+        if (res.status === 200) {
+          refreshToday(id);
+        } else {
           setArchived(false);
-          setEditError(`Discard failed (${res.status})`);
+          const { copy, handled } = await failureCopy(res, "Discard");
+          setEditError(copy);
+          if (handled) refreshToday();
         }
       } catch {
         setArchived(false);

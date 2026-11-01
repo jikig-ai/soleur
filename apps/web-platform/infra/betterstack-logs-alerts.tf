@@ -407,10 +407,10 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
 # Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
 # runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
 # that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
-# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
-# token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
+# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<v> rc=<n> at=<where>`,
+# verdict in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
 # journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
-# Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# Rulings: the archived #9927 spec's decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
 # ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
 # query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
 # bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
@@ -424,12 +424,64 @@ locals {
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
   # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows). When and why it
   # resolves is recorded once, in the AUTO-RESOLVE WINDOW comment above logtail_exploration_alert.inngest_luks_key_probe_fail.
+  # EMITTER PIN (#11527, ADR-218 dual-channel convention): the marker alone admitted ANY emitter, so the
+  # row set is pinned to the probe's two real emitters — leg A the journald tag
+  # SYSLOG_IDENTIFIER='inngest-cutover-flip' (readonly LOG_TAG= at inngest-cutover-flip.sh), leg B the
+  # phone-home envelope identity shipper='cloud-init-phone-home' + stage='luks-key-probe' (payload
+  # builder at cloud-init-inngest.yml's jq payload line; arg-3 marker override at the
+  # inngest-boot-phone-home.sh "luks-key-probe" call in inngest-cutover-flip.sh). The
+  # position-1 marker anchor is shared: the phone-home message begins with the marker, so it reads
+  # BOTH channels with no marker OR-leg. `verdict=fail_` is leg-scoped (message on leg A, detail on leg
+  # B — equivalent on every real leg-B row since its message is `marker + stage=luks-key-probe +
+  # detail`). The `{`-prefix exclusion of quoting webhook rows is incidental (#8846), not the
+  # mechanism — the emitter pin is.
+  # Residual edges, recorded not silently uncounted: (a) the jq-failure fallback payload carries
+  # stage but NO shipper, so it matches neither leg and is silently uncounted (sibling T1 dissent,
+  # accepted); (b) the detail='' disjunct counts an identity-pinned row whose detail is absent —
+  # the schema-drop/degraded-emit class — so a benign malformed empty-detail emit under that
+  # identity also pages (accepted trade, sibling T4); (c) self-attested `dt` is unmeasured (the
+  # emitter stamps its own row time); (d) `value` can reach 2 for one failure (journald + phone-home
+  # carry no per-run dedup) — harmless under higher_than 0; (e) the shared marker anchor makes leg-B
+  # admission contingent on the phone-home `message` retaining its marker prefix — a
+  # message-composition regression in the payload builder silently uncounts leg-B rows, an edge the
+  # sibling leg B (envelope-only) does not have; the pin is noise-exclusion, not emitter
+  # authentication — self-attested SYSLOG_IDENTIFIER/shipper/stage fields can be forged by a local
+  # caller with journald or the bearer token (forgeability adds false pages, never masks a real one).
+  # LIVE-PROBED 2026-10-30 (window ending ~10:00 UTC), 48h over the hot remote() UNION s3Cluster
+  # archive (216296 rows total):
+  #   A marker-anchored emitter census                          -> 0 rows (probe inert pre-#11266;
+  #     the emitter breakdown is vacuously clean — the pinned pair is the only set that can emit)
+  #   B shipper=cloud-init-phone-home stage census              -> 20 stages x 1 row each
+  #     (bootstrap journey); stage='luks-key-probe' absent — the channel is live, the stage unused
+  #   C full-predicate count                                    -> 0 rows (quiet control)
+  #   D marker-only vs emitter-pinned                           -> 0 vs 0 (delta 0 — nothing
+  #     under a foreign emitter currently quotes the marker; the exclusion is latent, synthetic E7
+  #     is its proof)
+  #   E synthetic raw evals (journald fail/ok, phone-home fail/ok, identity-pinned detail-absent,
+  #     jq-failure shape, doppler-shaped forgery)               -> 1/0/1/0/1/0/0
+  #   E re-run 2026-10-30 ~12:00 UTC under the verdict= needle (review found token= dead on
+  #     journald — vector.toml pii_scrub_string rewrites token=<v>; D5 ruling renamed the emit
+  #     key on both channels)                                         -> 1/0/1/0/1/0/0 (identical)
+  #   NOTE: synthetic evals inject raw rows pre-scrub — they prove the predicate, not that a real
+  #     journald row survives ingest; the guard's scrub-immunity check (vector.toml alternation)
+  #     is the standing control for that transform.
   inngest_luks_key_probe_fail_sql = <<-SQL
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
-      AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip'
+        AND position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'luks-key-probe'
+          AND (
+            JSONExtractString(raw, 'detail') = ''
+            OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0
+          )
+        )
+      )
   SQL
 
   # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
@@ -465,7 +517,7 @@ resource "logtail_exploration" "inngest_luks_key_probe_fail" {
 # than recovery_period, and the incident stays open.
 # The incident resolves on time alone, about 4500 to 4800 s (1.25 to 1.33 h; the 300 s check cadence adds up to 300 s)
 # after the last failing row; no later row is needed, so a silent probe also resolves it. At most one hourly row (at about
-# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `token=ok` row is.
+# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `verdict=ok` row is.
 # After an `indeterminate` the next row is hourly too, so fail, indeterminate, fail leaves ~6300 s of zeros, longer than
 # recovery_period: the incident resolves and re-pages once. After an `ok` the next row is 24 h later (limit 86400).
 resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
@@ -479,7 +531,8 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
   # AUTO-RESOLVE WINDOW comment above this resource.
   #
-  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts), not inferred: this
+  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts; as of 2026-10-28, two of them -
+  # luks_monitor_host_timer_dark and claude_cost_capture_dark - since retired by #11631), not inferred: this
   # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
   # (300, 10800) #11260, (900, 10800) #11384, (3600, 10800) #11404 and (300, 5400) #11374. Live
   # alerts with query_period above 900 are all September-created: luks_monitor_host_timer_dark
@@ -514,7 +567,7 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (token=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
+  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (verdict=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=luks-key-probe) — decode its .detail, not the message. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_key_probe_runbook_url
   }
@@ -812,11 +865,12 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
-# top-up lasted ~39 h. Three standing alarms, one per question:
+# top-up lasted ~39 h. Three standing checks, one per question (two native alerts and, since #11631, one heartbeat):
 #   (1) inngest_step_524         — is a step being cut at the proxy again? (per 15 min)
 #   (2) claude_cost_daily_burn   — is the cron fleet spending more than $25 in 24 h?
-#   (3) claude_cost_capture_dark — has the cost telemetry itself gone dark for 24 h?
-# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists.
+#   (3) (retired, #11631) the cost-capture dark-man is now the archive-fed heartbeat
+#       soleur-claude-cost-capture-prd (uptime-alerts.tf), not a native logs alert
+# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists (as a heartbeat now).
 # (2) is a FLOOR on spend, not the total: a marker with a null cost_usd (a timeout, a no-result or
 # parse-error exit, the HTTP-transport crons compound-promote / weekly-release-digest / the credit
 # probe) sums as $0, and a run killed mid-flight emits no marker at all.
@@ -889,20 +943,6 @@ locals {
       AND raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
       AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
       AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
-  SQL
-
-  claude_cost_capture_dark_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
-    FROM {{source}}
-    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND (
-        (raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
-          AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
-          AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
-          AND JSONExtract(raw, 'message', 'cost_usd', 'Nullable(Float64)') IS NOT NULL)
-        OR (JSONExtractString(raw, 'message', 'feature') = 'cron-anthropic-credit-probe'
-          AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid'))
-      )
   SQL
 
   # The burn threshold, in dollars per trailing 24 h. $25 clears a healthy Monday (the per-site
@@ -1006,7 +1046,7 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   query_period        = 86400
   confirmation_period = 0
   recovery_period     = 3600
-  # An empty window is $0 spent — healthy. Silence is claude_cost_capture_dark's job.
+  # An empty window is $0 spent — healthy. Silence is the soleur-claude-cost-capture-prd heartbeat's job (#11631).
   on_missing_data = "treat_as_zero"
 
   paused = false
@@ -1020,153 +1060,6 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   incident_cause = "The claude-eval cron fleet spent more than USD ${local.claude_cost_daily_burn_usd} of operator Anthropic credit in the last 24 h (SOLEUR_CLAUDE_COST cost_usd, cron sources; a floor: null-cost markers sum as $0). Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-resource "logtail_exploration" "claude_cost_capture_dark" {
-  name      = "soleur-claude-cost-capture-dark-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
-    sql_query = replace(trimspace(local.claude_cost_capture_dark_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "claude_cost_capture_dark" {
-  exploration_id = logtail_exploration.claude_cost_capture_dark.id
-  name           = "soleur-claude-cost-capture-dark-prd"
-
-  # Pages when a trailing 24 h holds neither a cron cost marker with a non-null cost_usd nor a
-  # credit-probe RED row. The cron fleet runs many times a day, so a whole day of neither means the
-  # marker path (emitter, Vector, or the nested field) is broken — and the burn alert above is blind.
-  alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = 1
-  check_period        = 3600
-  query_period        = 86400
-  confirmation_period = 0
-  recovery_period     = 3600
-  # The inverse of every sibling's reason: a missing value must read as 0 so silence FIRES.
-  on_missing_data = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "No claude-eval cron cost marker with a cost_usd (and no credit-probe RED row) reached Better Stack in 24 h: the spend telemetry is dark, so the daily burn alert cannot fire. Runbook: ${local.claude_spend_runbook_url}"
-  metadata = {
-    runbook = local.claude_spend_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-# ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
-# luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
-# betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
-# that kept it green. This alert singles out the HOST unit on web-1. Under luks-monitor.service
-# every log() line is journaled twice; the stdout copy carries _SYSTEMD_UNIT (measured 100% on the
-# stdout rows of sibling web-1 units such as web-private-nic-guard.service, whose SyslogIdentifier
-# also differs from its unit name; luks-monitor.service itself has never run). logger rows drop it
-# about half the time. The verify job's rows carry session-N.scope or no unit, so they can never
-# keep this quiet. host_name scopes it to web-1: web-2 (soleur-web-2) ships to the same source.
-#
-# Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
-# so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
-# with margin. Pages about 27 h after the last good host run; a Vector or Logs-source outage trips
-# it too (the runbook's decode says to check the pipeline before the host).
-#
-# Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
-# control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
-# conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
-# The host_name conjunct was added at review (2026-09-27): stdout rows from web-1 units read
-# host_name='soleur-web-platform', web-2's read 'soleur-web-2' (measured over 2 days).
-locals {
-  luks_monitor_host_timer_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
-    FROM {{source}}
-    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
-      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
-      AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
-      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
-  SQL
-
-  luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
-}
-
-resource "logtail_exploration" "luks_monitor_host_timer_dark" {
-  name      = "soleur-luks-monitor-host-timer-dark-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
-    sql_query = replace(trimspace(local.luks_monitor_host_timer_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
-  exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id
-  name           = "soleur-luks-monitor-host-timer-dark-prd"
-
-  alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = 1
-  check_period        = 3600
-  query_period        = 97200
-  confirmation_period = 0
-  recovery_period     = 3600
-  # A missing value must read as 0 so silence FIRES (the claude_cost_capture_dark precedent).
-  on_missing_data = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
-  metadata = {
-    runbook = local.luks_monitor_runbook_url
   }
 
   escalation_target {

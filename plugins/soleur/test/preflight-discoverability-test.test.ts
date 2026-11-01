@@ -3089,7 +3089,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_APPROVAL_SWEEP`) reads the production marker stream from
   // the Better Stack read connection (read token, Doppler prd_terraform). NO SUBSTITUTE: the sweep marker is emitted by the production cron
   // and exists only in the stored stream; no unauthenticated probe proves the markers reach the aggregator. Genuine.
-  const BASELINE_DECLARED_PROBES = 88;
+  // #11569 (2026-10-30): +1 (88 -> 89) for `2026-10-30-fix-messages-update-policy-and-harness-hygiene-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command runs the committed `verify/181` catalog queries (pg_policies, column privileges, ACLs of public.messages) against
+  // the production database over the pooler. NO SUBSTITUTE: policy and grant state exist only in the live catalog, so no unauthenticated
+  // probe verifies the same property; the plan's `credentials_required` line names the Doppler prd connection. Genuine.
+  const BASELINE_DECLARED_PROBES = 89;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

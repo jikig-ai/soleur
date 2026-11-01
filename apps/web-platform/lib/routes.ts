@@ -51,6 +51,12 @@ export const PUBLIC_PATHS = [
   // timingSafeEqual gate runs. Same class as schedule-reminder / trigger-cron.
   // NARROW exact path — do NOT broaden to /api/internal.
   "/api/internal/cohort",
+  // /api/internal/home-census: Bearer-shared-secret-gated POST (the same
+  // INNGEST_MANUAL_TRIGGER_SECRET), counts-only census of the shared HOME. Cookieless
+  // operator caller; without PUBLIC_PATHS membership Supabase middleware 307s it to
+  // /login before the route's own timingSafeEqual gate runs. NARROW exact path — do NOT
+  // broaden to /api/internal. Removed with the route after its sunset (#11714).
+  "/api/internal/home-census",
   // /api/internal/egress-audit-ingest: bearer-gated POST (EGRESS_AUDIT_INGEST_TOKEN, current
   // plus previous for rotation) from Vector on the same host (#9545, ADR-288). Carries no
   // session cookie — without PUBLIC_PATHS membership Supabase middleware 307s Vector to
