@@ -18,6 +18,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
+import { warnSilentFallback } from "./observability";
 
 const log = createChildLogger("crash-handler");
 
@@ -59,11 +60,44 @@ export async function reportFatalAndExit(
   process.exit(1);
 }
 
+// #11772 — benign inbound client abort. Node mints `Error: aborted` +
+// `code: "ECONNRESET"` (connResetException) on `_http_server` when an inbound
+// client resets mid-request. vercel/next.js #49587: the proxy/middleware
+// body-clone path (`getCloneableBody().finalize()` → `replaceRequestBody`)
+// copies `_events` onto the IncomingMessage and wipes its 'error' listeners,
+// so that otherwise-absorbed abort reaches our process handlers. Stock Next
+// logs `⨯` and keeps serving; exiting here hands an unauthenticated client a
+// one-request restart-DoS in prod and kills the e2e dev server. The pair is
+// exact-match ONLY: outbound ECONNRESET ("socket hang up") and code-less
+// Error("aborted") producers (e.g. `dsar-export.ts` › abort-signal arms) stay
+// fatal — widening the predicate is how a real fatal becomes warn-level noise.
+export function isBenignClientAbort(err: unknown): err is Error {
+  return (
+    err instanceof Error &&
+    err.message === "aborted" &&
+    (err as Error & { code?: unknown }).code === "ECONNRESET"
+  );
+}
+
 export function installCrashHandlers(): void {
   process.on("uncaughtException", (err) => {
+    if (isBenignClientAbort(err)) {
+      warnSilentFallback(err, {
+        feature: "crash-handlers",
+        op: "client-abort",
+      });
+      return;
+    }
     void reportFatalAndExit(err, "uncaughtException");
   });
   process.on("unhandledRejection", (reason) => {
+    if (isBenignClientAbort(reason)) {
+      warnSilentFallback(reason, {
+        feature: "crash-handlers",
+        op: "client-abort",
+      });
+      return;
+    }
     void reportFatalAndExit(reason, "unhandledRejection");
   });
 }

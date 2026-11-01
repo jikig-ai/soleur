@@ -34,12 +34,18 @@ vi.mock("@/server/logger", () => ({
   }),
 }));
 
+const warnSilentFallback = vi.fn();
+vi.mock("@/server/observability", () => ({
+  warnSilentFallback: (...args: unknown[]) => warnSilentFallback(...args),
+}));
+
 let exitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.resetModules(); // reset the module-level re-entrancy guard between tests
   captureException.mockClear();
   close.mockClear();
+  warnSilentFallback.mockClear();
   // no-op exit so the handler's process.exit(1) does not kill the test runner
   exitSpy = vi
     .spyOn(process, "exit")
@@ -103,5 +109,113 @@ describe("installCrashHandlers", () => {
     expect(events).toContain("uncaughtException");
     expect(events).toContain("unhandledRejection");
     onSpy.mockRestore();
+  });
+});
+
+// #11772 — benign inbound client abort (vercel/next.js #49587): Node mints
+// `Error: aborted` + `code: "ECONNRESET"` on `_http_server` when an inbound
+// client resets mid-request. Upstream's body-clone path wipes the request's
+// 'error' listeners so that abort reaches our process handlers — stock Next
+// logs and continues, our ADR-062 contract must classify it non-fatal (warn
+// mirror, no capture-close-exit) or the unauthenticated restart-DoS stays live.
+describe("installCrashHandlers — benign client-abort classification", () => {
+  type Listener = (e: unknown) => void;
+
+  async function listeners() {
+    const { installCrashHandlers } = await import("@/server/crash-handlers");
+    const onSpy = vi.spyOn(process, "on");
+    installCrashHandlers();
+    const find = (name: string) =>
+      onSpy.mock.calls.find((c) => c[0] === name)![1] as Listener;
+    const pair = {
+      uncaught: find("uncaughtException"),
+      rejection: find("unhandledRejection"),
+    };
+    onSpy.mockRestore();
+    return pair;
+  }
+
+  function connResetException() {
+    const err = new Error("aborted");
+    (err as Error & { code?: string }).code = "ECONNRESET";
+    return err;
+  }
+
+  it("uncaughtException: exact aborted+ECONNRESET pair warns and does NOT exit", () => {
+    return listeners().then(({ uncaught }) => {
+      const err = connResetException();
+      uncaught(err);
+      expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+      expect(warnSilentFallback).toHaveBeenCalledWith(
+        err,
+        expect.objectContaining({
+          feature: "crash-handlers",
+          op: "client-abort",
+        }),
+      );
+      expect(captureException).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("unhandledRejection: exact aborted+ECONNRESET pair warns and does NOT exit", () => {
+    return listeners().then(({ rejection }) => {
+      const err = connResetException();
+      rejection(err);
+      expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+      expect(warnSilentFallback).toHaveBeenCalledWith(
+        err,
+        expect.objectContaining({
+          feature: "crash-handlers",
+          op: "client-abort",
+        }),
+      );
+      expect(captureException).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("Error('aborted') without .code still exits (dsar-export near-miss)", async () => {
+    const { uncaught } = await listeners();
+    uncaught(new Error("aborted"));
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ fatal: "uncaughtException" }),
+      }),
+    );
+  });
+
+  it("ECONNRESET code with a different message still exits", async () => {
+    const { uncaught } = await listeners();
+    const err = new Error("socket hang up");
+    (err as Error & { code?: string }).code = "ECONNRESET";
+    uncaught(err);
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("non-Error rejection reason still exits", async () => {
+    const { rejection } = await listeners();
+    rejection("rejected");
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(warnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("genuine error through the listener still takes the fatal path", async () => {
+    const { uncaught } = await listeners();
+    const err = new Error("boom");
+    uncaught(err);
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(captureException).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({
+        tags: expect.objectContaining({ fatal: "uncaughtException" }),
+      }),
+    );
+    expect(warnSilentFallback).not.toHaveBeenCalled();
   });
 });
