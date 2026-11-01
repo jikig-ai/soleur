@@ -18,7 +18,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
-import { warnSilentFallback } from "./observability";
+import { mirrorWarnWithDebounce } from "./observability";
 
 const log = createChildLogger("crash-handler");
 
@@ -81,13 +81,26 @@ export function isBenignClientAbort(err: unknown): err is Error {
 
 // Sibling classifier: `server/abort-classifier.ts` classifies session-layer
 // aborts — a different producer; do not unify these predicates.
+//
+// Hybrid bound (CTO ruling, #11772): the trigger is unauthenticated, so the
+// Sentry arm rides `mirrorWarnWithDebounce` — ≤1 warn envelope per 5min per
+// process under the constant "crash-handlers" key — while every abort still
+// emits a pino warn carrying the tags, so the burst count (the detection
+// signal) stays full-fidelity in container stdout. An undebounced Sentry
+// emitter here would hand a client a quota dial that spike-protects away
+// every OTHER error signal during an attack.
 function classifyAbortOrFatal(err: unknown, kind: FatalKind): void {
   if (isBenignClientAbort(err)) {
-    warnSilentFallback(err, {
-      feature: "crash-handlers",
-      op: "client-abort",
-      tags: { kind },
-    });
+    log.warn(
+      { feature: "crash-handlers", op: "client-abort", kind },
+      "benign inbound client abort — non-fatal, Sentry debounced",
+    );
+    mirrorWarnWithDebounce(
+      err,
+      { feature: "crash-handlers", op: "client-abort", tags: { kind } },
+      "crash-handlers",
+      "client-abort",
+    );
     return;
   }
   void reportFatalAndExit(err, kind);

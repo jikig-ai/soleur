@@ -43,8 +43,11 @@ a downstream patch by the reporter only).
 
 The fix: teach the crash handler to classify the benign inbound client-abort
 signature (`Error`, `message === "aborted"`, `code === "ECONNRESET"` — Node's
-`connResetException` shape) as **non-fatal**: emit `warnSilentFallback` (the
-existing warn-level Sentry mirror, `server/observability.ts`) and keep running,
+`connResetException` shape) as **non-fatal**: emit a per-abort pino warn plus a
+`mirrorWarnWithDebounce`-bounded `warnSilentFallback` Sentry arm (the existing
+warn-level mirror, `server/observability.ts`; the trigger is unauthenticated so
+the Sentry arm is debounced under a constant key while the pino line preserves
+the per-abort burst count) and keep running,
 restoring the stock-Next behavior stock servers already exhibit. Then re-apply
 the bump, guard rows, and the re-measured egress header pin exactly as the
 reverted change had them.
@@ -391,7 +394,7 @@ liveness_signal:
   configured_in: .github/workflows/ci.yml e2e job; apps/web-platform/e2e/web-server.sh
 
 error_reporting:
-  destination: Sentry web-platform via SENTRY_DSN — benign aborts emit warnSilentFallback (level warning, tags feature=crash-handlers, op=client-abort); real fatals keep fatal-level capture → close → exit
+  destination: Sentry web-platform via SENTRY_DSN — benign aborts emit warnSilentFallback via mirrorWarnWithDebounce (level warning, tags feature=crash-handlers, op=client-abort, ≤1 envelope/5min/process; per-abort pino warn carries the burst count); real fatals keep fatal-level capture → close → exit
   fail_loud: mid-run `e2e-webserver: exited rc=` line in the e2e job log; in prod, a genuine fatal still exits 1 and attributes via the existing fatal event
 
 failure_modes:

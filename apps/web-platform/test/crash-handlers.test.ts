@@ -24,19 +24,23 @@ vi.mock("@sentry/nextjs", () => ({
 const captureException = vi.mocked(Sentry.captureException);
 const close = vi.mocked(Sentry.close);
 
+const childLogger = {
+  fatal: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+};
 vi.mock("@/server/logger", () => ({
-  createChildLogger: () => ({
-    fatal: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-  }),
+  createChildLogger: () => childLogger,
 }));
 
 const warnSilentFallback = vi.fn();
+const mirrorWarnWithDebounce = vi.fn();
 vi.mock("@/server/observability", () => ({
   warnSilentFallback: (...args: unknown[]) => warnSilentFallback(...args),
+  mirrorWarnWithDebounce: (...args: unknown[]) =>
+    mirrorWarnWithDebounce(...args),
 }));
 
 let exitSpy: ReturnType<typeof vi.spyOn>;
@@ -46,6 +50,8 @@ beforeEach(() => {
   captureException.mockClear();
   close.mockClear();
   warnSilentFallback.mockClear();
+  mirrorWarnWithDebounce.mockClear();
+  childLogger.warn.mockClear();
   // no-op exit so the handler's process.exit(1) does not kill the test runner
   exitSpy = vi
     .spyOn(process, "exit")
@@ -158,14 +164,26 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     const err = connResetException();
     uncaught(err);
     await settle();
-    expect(warnSilentFallback).toHaveBeenCalledTimes(1);
-    expect(warnSilentFallback).toHaveBeenCalledWith(
+    // Per-abort pino warn (full-fidelity burst count) + debounced Sentry arm.
+    expect(childLogger.warn).toHaveBeenCalledTimes(1);
+    expect(childLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        feature: "crash-handlers",
+        op: "client-abort",
+        kind: "uncaughtException",
+      }),
+      expect.any(String),
+    );
+    expect(mirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounce).toHaveBeenCalledWith(
       err,
       expect.objectContaining({
         feature: "crash-handlers",
         op: "client-abort",
         tags: expect.objectContaining({ kind: "uncaughtException" }),
       }),
+      "crash-handlers",
+      "client-abort",
     );
     expect(captureException).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
@@ -177,14 +195,17 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     const err = connResetException();
     rejection(err);
     await settle();
-    expect(warnSilentFallback).toHaveBeenCalledTimes(1);
-    expect(warnSilentFallback).toHaveBeenCalledWith(
+    expect(childLogger.warn).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+    expect(mirrorWarnWithDebounce).toHaveBeenCalledWith(
       err,
       expect.objectContaining({
         feature: "crash-handlers",
         op: "client-abort",
         tags: expect.objectContaining({ kind: "unhandledRejection" }),
       }),
+      "crash-handlers",
+      "client-abort",
     );
     expect(captureException).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
@@ -201,7 +222,7 @@ describe("installCrashHandlers — benign client-abort classification", () => {
         tags: expect.objectContaining({ fatal: "uncaughtException" }),
       }),
     );
-    expect(warnSilentFallback).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("ECONNRESET code with a different message still exits", async () => {
@@ -210,14 +231,14 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     (err as Error & { code?: string }).code = "ECONNRESET";
     uncaught(err);
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
-    expect(warnSilentFallback).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("non-Error rejection reason still exits", async () => {
     const { rejection } = await listeners();
     rejection("rejected");
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
-    expect(warnSilentFallback).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("genuine error through the listener still takes the fatal path", async () => {
@@ -231,7 +252,7 @@ describe("installCrashHandlers — benign client-abort classification", () => {
         tags: expect.objectContaining({ fatal: "uncaughtException" }),
       }),
     );
-    expect(warnSilentFallback).not.toHaveBeenCalled();
+    expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("live socket abort mints the exact pair isBenignClientAbort accepts", async () => {
