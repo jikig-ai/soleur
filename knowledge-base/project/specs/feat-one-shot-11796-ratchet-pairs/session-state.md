@@ -12,9 +12,10 @@
 - None. Planning ran in-process (no Task/Workflow/Agent tool on this harness) —
   sequential-fallback disclosure: the research fan-out, advisor consult, spec-flow
   and plan-review panel were executed as inline probes and a self-review pass;
-  no independent review agent ran. Technical rulings are recorded as
-  `pending - assumed:` rows in decision-challenges.md (no Agent tool to spawn
-  soleur:engineering:cto).
+  no independent review agent ran.
+- Post-plan: one batched `soleur:engineering:cto` spawn (cto_spawns=1) ruled all
+  five `pending - assumed:` rows + the #8800 row; every Decision confirmed the
+  assumed disposition verbatim. technical-ruling-gate.sh --branch → PASS (7 rows).
 
 ### Decisions
 
