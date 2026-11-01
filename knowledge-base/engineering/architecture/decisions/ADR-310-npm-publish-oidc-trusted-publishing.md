@@ -1,6 +1,6 @@
 ---
 title: npm Publish authenticates to registry.npmjs.org via OIDC trusted publishing, never a long-lived token
-status: adopting
+status: accepted
 date: 2026-10-30
 issue: 11585
 supersedes: null
