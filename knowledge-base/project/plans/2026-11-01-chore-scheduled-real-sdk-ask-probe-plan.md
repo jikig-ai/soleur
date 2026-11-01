@@ -15,6 +15,24 @@ requires_cpo_signoff: true
 
 # chore(security): automate the real-SDK ask probe (Part 1 of #10111); the synthetic canary (Part 2) is scoped out
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01
+**Sections enhanced:** Premise Validation, Research Insights, GDPR gate, Phase 4 (pins), verification record below
+**Agents / gates used:** CTO (3 spawns), CLO, CPO, learnings-researcher, functional-discovery (no overlap), code-simplicity-reviewer, architecture-strategist, a sharp-edges verification agent over the catalogue, `soleur:gdpr-gate`; mechanical halts 4.4, 4.6, 4.7, 4.8, 4.11, 4.12, 4.13 run and passed (4.9 and 4.10 not triggered).
+
+### Key Improvements
+
+1. The CTO's closure-coverage test was falsified by measurement (189-file closure) and replaced by a depth-1 coverage test with a classification table (Guard 1).
+2. Review found and the plan now fixes: the rerun silently doubling the $4 cap (shared remaining budget), an evicted-run hole in the lockfile early-exit (baseline = last completed non-cancelled run), a silent-red path when setup fails (empty outcome files the blind issue), a `pr-fanout-ledger.txt` row owed by any `on: pull_request`, unscoped forbidden-token ACs that would match the plan itself, and a merge-base form for the "does not touch X" ACs.
+3. The CPO condition (`Ref`, not `Closes`) superseded the first F6 ruling; #10111 is the single tracked deferral (no new issue, nothing for net-issue-flow to override).
+
+### New Considerations Discovered
+
+- The Article 30 register was already stale before this change (`scheduled-machinery-drain.yml` missing from PA-33); the compliance edit fixes it in the same pass.
+- Re-evaluation criterion 1 had already fired before this PR, so ADR-284 Flip criterion 5 is currently unmet on `origin/main`; the first self-test run is also the overdue re-run.
+- A scheduled PASS runs repo head on a CI host and so can never discharge Flip criterion 1 or 5 without a `build_sha` match.
+
 ## Overview
 
 Issue #10111 (child of epic #9601) asks for two automations around the hosted must-ask lane (ADR-284, status `adopting`):
@@ -95,11 +113,32 @@ Authority grepped for "does something already run the probe": `git grep -ln 'dev
 
 The cost justification is a *bound*, not a saving. Commands that produced the numbers (all measured 2026-11-01 on `origin/main`):
 
-- Probe import closure size: a 20-line resolver over relative imports starting at the probe (script kept in the session scratchpad) printed 189 files, 186 under `server/`.
+- Probe import closure size (the Phase 0 extractor re-derives this and the Guard 1 floors): a 20-line resolver over relative imports starting at the probe (script kept in the session scratchpad) printed 189 files, 186 under `server/`.
 - Main push volume over the last 30 days: `git rev-list --first-parent --since=2026-10-02 origin/main | wc -l` = 87.
 - Push runs under each filter: the exact Phase 4 allowlist (`git rev-list --first-parent --since=2026-10-02 origin/main -- <the 11 existing allowlist paths incl. plugins/soleur/hooks> | wc -l`) = **10** commits (the two new scripts and the workflow do not exist at origin/main, so add none); exact closure + package files = **15**; `server/**`+`lib/**`+`scripts/**`+package files = **25** (`git rev-list --first-parent --since=2026-10-02 origin/main -- <paths> | wc -l`).
 - Plugin hook directory churn: 1 commit in 30 days (`plugins/soleur/hooks`, `plugins/soleur/.claude-plugin`).
 - Per-run cost: **unmeasured**; the first self-test run measures it (`costUsd`). Run-count basis for the ceiling: 10 push + ~4 cron (weekly) + ~2 self-test = ~16 runs/month. The $1.5 figure used for the ceiling is an UNVERIFIED planning estimate.
+
+### Deepen-pass verification record (2026-11-01)
+
+- **SDK semantics (docstring verbatim, `apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`):** `maxBudgetUsd?: number;` — "Maximum budget in USD for the query. The query will stop if this budget is exceeded, returning an `error_max_budget_usd` result." (lines 1921-1925); result `subtype: 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | ...` (line 5609); `total_cost_usd: number` — "Cumulative estimated cost in USD for this query() call ... each result carries the running total so far, so read the latest result rather than summing across results ... An estimate, not a billing statement." (lines 5612-5618). Consequences kept in the plan: per-case cost is the latest `total_cost_usd`, the ledger sums across CASES (each case is its own `query()`), and cost is an estimate to be compared with the workspace spend view, not an invoice.
+- **Action pins (40-char SHAs already in use, counts from `git grep -hE 'uses: <action>@[0-9a-f]+' .github/workflows`):** `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5` (193 uses, v4.3.1), `oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3` (19, v2.1.2), `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020` (18, v4.4.0), `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02` (27, v4.6.2). The workflow reuses exactly these (no new pin is introduced); the workflow suite asserts every `uses:` is a 40-hex SHA.
+- **Cited issues/PRs read live:** #10054, #9776, #9976, #9601, #10455, #7098, #7942, #8800, #8881, #7797, #7125, #11237, #9543 OPEN; #11303 (the gated-tier `allowedTools` fix) CLOSED; #8505 (CI key partition) CLOSED; #11442 MERGED; #11669 CLOSED.
+- **Rule ids cited** all resolve to active rules (`grep -qE "\[id: <id>\]" AGENTS.md AGENTS.rules.md` for every id in this plan: none missing).
+- **Scheduled-work pattern (4.4):** Inngest cron functions exist (ADR-033 canonical); the GHA exception holds because the work is repo-scoped test execution with the CI key and no prd credentials, needs no app context and gains nothing from `step.run` replay; the PreToolUse override marker plus justification is the sanctioned form (precedent `scheduled-integration-suites.yml`).
+- **Precedent diff (4.4, pattern-bound behaviours):** the bubblewrap + socat + userns-sysctl step is copied from `ci.yml` (lines ~1374-1380, also `main-health-monitor.yml`); the file-or-comment / auto-close issue filer follows `scheduled-realtime-probe.yml` with the two deliberate differences (exact-title `jq` equality instead of fuzzy `--search`; the regression issue is never auto-closed). No precedent exists for the `actions: read` baseline lookup or for a two-class issue filer; both are novel and are covered by Guards 3 and 4.
+- **Verify-the-negative sweep (4.45):** negative claims in the plan checked against the repo — "no workflow runs the probe" (re-grepped, confirmed above); "the probe reads nothing beyond `ANTHROPIC_API_KEY`/`NODE_ENV`/`PATH`/`HOME`" (grep of `process.env` in the probe shows `PROBE_*` diagnostics only; the production option builder `buildAgentEnv` is allowlisted and the self-test is the final arbiter); "no `ci.yml` edit" (none planned).
+- **Post-edit self-audit (4.45):** after the review-round edits no symbol was dropped; the removed items (Phase 0.2 grep, 600 s rerun gate, `cost=unknown` flag, Guard 1 H3, xtrace scenario in the runner suite) were grepped out of the plan, tasks.md and decision-challenges.md.
+
+### GDPR gate output (soleur:gdpr-gate, plan scope)
+
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
+
+gdpr-gate: path scan complete — 0 examined, 0 matched (the plan edits no schema migration, `lib/auth`, `server/*auth*`, `app/api` or `.sql` path; `permission-callback.ts` is read by the new test, not edited).
+
+- `GDPR-Chapter-V` — **Suggestion.** The probe sends fixed synthetic prompts and public plugin descriptions to Anthropic under the existing Jikigai key; no new non-EEA vendor, no new env var class. Disposition: PA-33 member (9) plus the `compliance-posture.md` dated row (already tasks 6.3).
+- `GDPR-Art-6`, `GDPR-Art-5e`, `GDPR-Art-17`, `GDPR-Art-9`: no schema column or personal-data store introduced; the 90-day artifact holds probe stdout only. No `Critical` finding, so no escalation block and no `compliance/critical` issue.
+- Cross-controller trigger (a) (new processing using an external LLM API on operator-session-derived data): the data is not operator-session-derived; the CLO ruling above stands.
 
 ### Institutional learnings applied
 
@@ -509,7 +548,7 @@ None. No server, unit, secret, account, DNS or vendor change; the secret already
 - **The self-test run executes the PR-head TREE with the key in the probe step's environment.** The path filter only decides *when* it triggers, not what runs: a same-repo PR that edits one of the four filtered files runs that PR's whole `server/**` import closure and its `package-lock.json` install (`npm ci --ignore-scripts`) under bun with `ANTHROPIC_API_KEY` set. Same posture as the `ci.yml` real-turn gates; fork PRs and the Dependabot actor are excluded by the job `if:` (Guard 2 asserts the `head.repo.full_name == github.repository` comparison); blast radius is the `soleur-ci-eval` workspace ($100/month cap). CLO classed it as secrets hygiene, not Art. 30. Stated in the ADR residuals.
 - **Setup failures** (npm/apt, preflight exit 1, timeouts) are surfaced as the blind issue with `reason=no-outcome`, not silently red.
 - **Runner image drift** (`ubuntu-latest` bwrap/AppArmor): surfaces as CANT-RUN, never as a false pass.
-- **Operator holds respected:** no flag created/flipped; #11237 untouched; #9543 not re-opened; legal sign-off at flag-on not engaged. Pre-existing open Better Stack incidents `soleur-egress-gw-probe-silent-prd` (Oct 12), `soleur-luks-monitor-host-timer-dark-prd` (Sep 27) and `soleur-claude-cost-capture-dark-prd` (Sep 23) are unrelated and not ours; `ci/main-broken` #11669 (`cron-egress-nftables.test.sh` timeout in deploy-script-tests 2/4) is not ours.
+- **Operator holds respected:** no flag created/flipped; #11237 untouched; #9543 not re-opened; legal sign-off at flag-on not engaged. Pre-existing open Better Stack incidents `soleur-egress-gw-probe-silent-prd` (Oct 12), `soleur-luks-monitor-host-timer-dark-prd` (Sep 27) and `soleur-claude-cost-capture-dark-prd` (Sep 23) are unrelated and not ours; `ci/main-broken` #11669 (`cron-egress-nftables.test.sh` timeout in deploy-script-tests 2/4; it reads CLOSED at deepen time, 2026-11-01) is not ours.
 
 ## References & Research
 
