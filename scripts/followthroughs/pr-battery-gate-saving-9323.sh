@@ -91,6 +91,35 @@ MACHINERY=("${PR_GATE_MACHINERY_PATHS[@]}" "scripts/lib/test-relevance-paths.sh"
 api() { gh api "$@" 2>/dev/null; }
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 
+# Arm (a) verdict input is the lever's own realized saving, drift-immune (the 2026-10-28 investigation on the tracker:
+# whole-run billable means measure suite growth, not the gate — same-shape pre-gate control ~113 vs post-gate ~266,
+# against an all-events pinned baseline of 76). For every qualifying run the probe enumerates its suite-timings-*
+# artifacts, sums the committed suite-durations{,-heavy}.tsv prices of the `label\t0\tskip=relevance` rows, and the
+# mean over qualifying runs is compared to REQUIRED_SAVING_MIN: under it the probe FAILs, honestly. A qualifying run
+# whose timing evidence is missing or unreadable is NOT YET (evidence absence is not a zero, never a FAIL input).
+# The gated suite set is derived from the runner's own `skip_suite "<label>" "relevance"` call sites (each guarded by a
+# `_diff_touches --pr-gated` arm), as ci-battery-gate-replay.sh derives its battery list — a new gated battery is
+# priced without any edit here. ART_READ_CAP bounds artifact reads inside the sweeper's hourly token budget, preflighted
+# by a rate_limit read. The whole-run mean and the queue-wait mean are printed, informational only.
+ART_READ_CAP=60
+GATED_SUITES="$({ sed 's/[[:space:]]*#.*$//' "$HERE/../test-all.sh" | grep -oE 'skip_suite "[^"]+" "relevance"' | sed 's/skip_suite "//;s/" "relevance"//'; } | LC_ALL=C sort -u)" \
+  || { echo "CANNOT ESTABLISH: no skip_suite relevance call sites in test-all.sh"; exit 3; }
+[ -n "$GATED_SUITES" ] || { echo "CANNOT ESTABLISH: no skip_suite relevance call sites in test-all.sh"; exit 3; }
+PRICE="$(awk -F'\t' '$2 ~ /^[0-9]+$/ { p[$1] = $2 / 60000 } END { for (s in p) printf "%s\t%.4f\n", s, p[s] }' \
+  "$HERE/../suite-durations.tsv" "$HERE/../suite-durations-heavy.tsv" 2>/dev/null)" \
+  || { echo "CANNOT ESTABLISH: cannot read suite-durations TSVs"; exit 3; }
+[ -n "$PRICE" ] || { echo "CANNOT ESTABLISH: suite-durations TSVs hold no priced rows"; exit 3; }
+
+rl="$(api "rate_limit")" || fail_api "rate_limit preflight"
+rl_rem="$(jq -r '.resources.core.remaining // 0' <<<"$rl" 2>/dev/null)"
+[[ "$rl_rem" =~ ^[0-9]+$ ]] || fail_api "rate_limit preflight (malformed body)"
+# a quota cut is NOT YET — the sweep is retried when the hourly window rolls; never a failed read, never a verdict
+need_min=$(( 3 * MAX_RUNS + PAGE_CAP + ART_READ_CAP + 20 ))
+if (( rl_rem < need_min )); then
+  echo "NOT YET: API quota remaining=$rl_rem under the $need_min-request floor for a full sweep; the sweeper retries"; exit 2
+fi
+WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/pbg9323.XXXXXX")"; trap 'rm -rf "$WORK"' EXIT
+
 merged_at="$(api "repos/$REPO/pulls/$GATE_PR" --jq '.merged_at // empty')" || fail_api "pull $GATE_PR"
 [ -n "$merged_at" ] || { echo "NOT YET: PR $GATE_PR is not merged"; exit 2; }
 
@@ -114,7 +143,7 @@ while (( pages < PAGE_CAP )); do
   (( raw_n < 100 )) && break
 done
 
-n=0; sum_min=0; green_prs=""; qwait_sum=0; qwait_n=0; examined=0
+n=0; sum_min=0; green_prs=""; green_ids=""; qwait_sum=0; qwait_n=0; examined=0
 while read -r id _ pr branch hrepo; do
   [ -n "$id" ] || continue
   (( n < MAX_RUNS && examined < EXAMINE_CAP )) || break
@@ -149,16 +178,47 @@ while read -r id _ pr branch hrepo; do
   done < <(jq -r '.jobs[] | select(.name | startswith("test-scripts")) | select(.started_at and .created_at)
                   | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601)) / 60' <<<"$jobs_json")
   n=$((n + 1))
-  green_prs="$green_prs $pr"
+  green_prs="$green_prs $pr"; green_ids="$green_ids $id"
 done < <(jq -r '.[] | "\(.id) \(.conclusion) \(.pr) \(.branch) \(.hrepo)"' <<<"$runs")
 
 if (( n < MIN_RUNS )); then
   echo "NOT YET: $n qualifying run(s) in $examined candidate(s) across $pages page(s) since $merged_at (need >= $MIN_RUNS)"; exit 2
 fi
 
+# --- realized saving per qualifying run: price the `label\t0\tskip=relevance` rows of the gated battery set in the
+# run's suite-timings-* artifacts. Artifact evidence that cannot be read is NOT YET (evidence_absent), never a zero.
+real_sum=0; evidence_absent=0; art_reads=0
+for rid in $green_ids; do
+  (( art_reads < ART_READ_CAP )) || { evidence_absent=$((evidence_absent + 1)); continue; }
+  arts="$(api "repos/$REPO/actions/runs/$rid/artifacts?per_page=100")" || { evidence_absent=$((evidence_absent + 1)); continue; }
+  art_reads=$((art_reads + 1))
+  aids="$(jq -r '.artifacts[]? | select(.name | startswith("suite-timings")) | .id' <<<"$arts" 2>/dev/null)"
+  [ -n "$aids" ] || { evidence_absent=$((evidence_absent + 1)); continue; }
+  run_saved=0; have_any=0
+  while IFS= read -r aid; do
+    (( art_reads < ART_READ_CAP )) || break
+    art_reads=$((art_reads + 1))
+    gh api "repos/$REPO/actions/artifacts/$aid/zip" > "$WORK/art-$aid.zip" 2>/dev/null || continue
+    tsv="$(unzip -p "$WORK/art-$aid.zip" suite-timings.tsv 2>/dev/null || unzip -p "$WORK/art-$aid.zip" 2>/dev/null)" || continue
+    saved="$(printf '%s\n' "$tsv" | awk -F'\t' -v gs="$GATED_SUITES" -v P="$PRICE" '
+      BEGIN { ng = split(gs, g, "\n"); for (i = 1; i <= ng; i++) gate[g[i]] = 1
+              np = split(P, pl, "\n"); for (i = 1; i <= np; i++) { split(pl[i], kv, "\t"); price[kv[1]] = kv[2] } }
+      $2 == 0 && $3 == "skip=relevance" && ($1 in gate) { s += price[$1]; seen[$1] = 1 }
+      END { printf "%.4f", s + 0 }')"
+    [[ "$saved" =~ ^[0-9.]+$ ]] && { run_saved="$(awk -v a="$run_saved" -v b="$saved" 'BEGIN{print a+b}')"; have_any=1; }
+  done <<<"$aids"
+  (( have_any == 1 )) || { evidence_absent=$((evidence_absent + 1)); continue; }
+  real_sum="$(awk -v a="$real_sum" -v b="$run_saved" 'BEGIN{print a+b}')"
+done
+evidenced=$((n - evidence_absent))
+if (( evidenced < MIN_RUNS )); then
+  echo "NOT YET: $evidence_absent of $n qualifying runs lack readable suite-timings-* artifact evidence ($evidenced evidenced, need >= $MIN_RUNS)"; exit 2
+fi
+real_mean="$(awk -v s="$real_sum" -v n="$evidenced" 'BEGIN { printf "%.1f", s / n }')"
+
 mean="$(awk -v s="$sum_min" -v n="$n" 'BEGIN { printf "%.1f", s / n }')"
 qmean="n/a"; (( qwait_n > 0 )) && qmean="$(awk -v s="$qwait_sum" -v n="$qwait_n" 'BEGIN { printf "%.1f", s / n }')"
-echo "qualifying_runs=$n mean_runner_min=$mean baseline=$BASELINE_RUNNER_MIN required_saving=$REQUIRED_SAVING_MIN test_scripts_mean_queue_wait_min=$qmean (queue wait is informational only) candidates_examined=$examined pages=$pages"
+echo "qualifying_runs=$n evidenced_runs=$evidenced mean_runner_min=$mean required_saving=$REQUIRED_SAVING_MIN test_scripts_mean_queue_wait_min=$qmean (queue wait is informational only) candidates_examined=$examined pages=$pages"
 
 # A qualifying PR in one of three states: merged (state closed + merged_at set — the escape arm checks
 # its push run), open (a merge commit may exist as a test merge, but no main-side push run can —
@@ -184,7 +244,8 @@ done
 if (( dropped > 0 )); then echo "note: $dropped qualifying PR(s) closed unmerged — no merge commit exists; excluded from the escape check"; fi
 if (( escapes > 0 )); then echo "FAIL: $escapes escape(s); widen the declaring array (ADR-262 R1) or revert the PR arm"; exit 1; fi
 if (( pending > 0 )); then echo "NOT YET: $pending qualifying PR(s) have no completed push run on their merge commit"; exit 2; fi
-if awk -v m="$mean" -v b="$BASELINE_RUNNER_MIN" -v r="$REQUIRED_SAVING_MIN" 'BEGIN { exit !(m <= b - r) }'; then
-  echo "PASS: mean $mean runner-min per run is at least $REQUIRED_SAVING_MIN below the $BASELINE_RUNNER_MIN baseline, no escapes in $n runs"; exit 0
+echo "realized_saving_min=$real_mean over $evidenced evidenced runs (mean_runner_min=$mean is informational: whole-run billing drifts with suite growth, the verdict prices only the gate's own skips)"
+if awk -v m="$real_mean" -v r="$REQUIRED_SAVING_MIN" 'BEGIN { exit !(m >= r) }'; then
+  echo "PASS: mean realized saving $real_mean suite-min/run meets the $REQUIRED_SAVING_MIN bar over $evidenced runs, no escapes in $n runs"; exit 0
 fi
-echo "FAIL: mean $mean runner-min per run is not $REQUIRED_SAVING_MIN below the $BASELINE_RUNNER_MIN baseline; widen nothing, but check the gate is declining (grep -F '[skip]' in a docs-only PR's test-scripts log) and the replay rates (scripts/ci-battery-gate-replay.sh)"; exit 1
+echo "FAIL: mean realized saving $real_mean suite-min/run is under the $REQUIRED_SAVING_MIN bar; widen nothing, but check the gate is declining (grep -F '[skip]' in a docs-only PR's test-scripts log) and the replay rates (scripts/ci-battery-gate-replay.sh)"; exit 1
