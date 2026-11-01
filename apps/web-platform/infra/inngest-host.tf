@@ -253,7 +253,7 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 #
 # The write the cutover flip FSM needs (inngest-cutover-flip.sh:flag_set advances
 # INNGEST_CUTOVER_FLIP through the Doppler CLI's secret-write verb) now runs under
-# doppler_service_token.inngest_flip below, which only inngest-cutover-flip.service sees, through a
+# doppler_service_token.inngest_flip below, which only inngest-cutover-flip.service takes as an EnvironmentFile, through a
 # cloud-init drop-in. History: PR #6889 (under #6178) raised this token from "read" to
 # "read/write" so that write could work; the split follows the ADR addendum above, not a tracker.
 #
@@ -353,7 +353,7 @@ locals {
   #   raw 91,997 B → stripped 30,614 B → stored 10,892 B, headroom 21,876 B, 61,383 B of prose
   #   removed, ZERO non-comment lines touched. (That was the figure at #7695. It is STALE by about
   #   21 KB: the template grew with later work. The current figure is the one the flip-token split
-  #   measured with BOTH token stubs high-entropy: see the ADR-282 build record and run
+  #   measured with ALL FIVE secret stubs high-entropy: see the ADR-282 build record and run
   #   `bash apps/web-platform/infra/inngest-userdata-budget.sh` — the script enforces a 384 B cap
   #   headroom floor; the replace dispatch runs it with --cap-only, so only the cap blocks there.)
   # Those are BYTES (`wc -c`). An earlier revision of this comment said "61,102 B", which was

@@ -2333,7 +2333,9 @@ runcmd:
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the inngest secret set --------
   # Both Doppler tokens (the read-only boot token and the read/write flip token) ARE baked into
-  # user_data, then written to the 0600 root files below; user_data is retrievable through the
+  # user_data, then written to the files below (the boot token to /etc/default/inngest-doppler 0600 root
+  # and /etc/default/inngest-server 0640 root:deploy, the flip token to /etc/default/inngest-flip 0600
+  # root); user_data is retrievable through the
   # hcloud metadata API by any local process (residual, #11816 and #11817). Arch (${doppler_arch}) + checksum (${doppler_sha256})
   # are derived from var.inngest_server_type (cax* → arm64, else amd64; same pin + values as
   # cloud-init-registry.yml). Egress (github release DL) is open.
@@ -2379,8 +2381,11 @@ runcmd:
   # outside [A-Za-z0-9._:/-]. The value is read through a QUOTED heredoc, so a quote inside it
   # cannot break this check the way it would break a quoted literal. ONE guard covers BOTH Doppler
   # tokens (boot and flip, one heredoc line each, checked line by line). It is per-line by design
-  # (CTO N10): an individually-clean extra line is a bare word and never an assignment, and the
-  # flip file is read by systemd and sed, never sourced. Refusal phones home and
+  # (CTO N10, rationale corrected by R8 on 2026-11-02): an individually-clean extra line is a bare
+  # word and never an assignment. The flip file is read by systemd and sed and never sourced, so an
+  # extra line there is inert, but /etc/default/inngest-doppler IS `.`-sourced as root, so an extra
+  # bare-word line in that file would execute; accepted (it needs a hostile Doppler API response, and
+  # the pre-change guard read only the first line), see the ADR build record for the trigger. Refusal phones home and
   # `exit`s the runcmd shell: a host whose credential cannot be written safely must not arm.
   - |
     while IFS= read -r _wv; do
