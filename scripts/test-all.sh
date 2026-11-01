@@ -5998,6 +5998,10 @@ if want_scripts; then
   # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would
   # close the standing tracker), or a reachable 1 must redden CI.
   run_suite "scripts/web-first-deploy-10585" bash scripts/followthroughs/web-first-deploy-10585.test.sh
+  # #11704: exit-code harness for the git-data replication-signal read (zero markers while sessions are live).
+  # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the only
+  # signal on the soak's replication evidence, so a vacuous MARKERS_PRESENT must redden CI.
+  run_suite "scripts/git-data-replication-signal-11704" bash scripts/followthroughs/git-data-replication-signal.test.sh
   # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
   # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
