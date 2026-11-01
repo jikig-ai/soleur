@@ -857,6 +857,268 @@ else
   check fail "fixture Y: refused but stderr does not explain: $(tail -1 "$FY/err.txt")"
 fi
 
+# === Fixture Z1: --drift-report read-only drift probe (#11564) ==========# A second read-only reporting mode: given per-run --timings-dir dirs it compares
+# fresh cross-run medians against the COMMITTED durations/manifest pricing and
+# emits machine rows — DRIFT_ROW (a src=floor row that finally measured),
+# LEG_PREDICTED / LEG_OBSERVED / BOUND_PERFECT (leg-balance, light only), and
+# FLOOR_UNMEASURED (floor rows absent from every sample). It writes nothing and
+# exits 0 on findings; 2 on bad input. The --durations/--manifest overrides are
+# the comparison-base seam these fixtures feed.
+FZ="$WORK/Z1"; mkdir -p "$FZ"; assert_fixture_dir "$FZ"
+# Committed-base fixture: two floors, one measured, one never-timed floor.
+printf 'z-floor-a\t1222\tfloor\nz-floor-b\t1222\tfloor\nz-meas-c\t5000\tmeasured\nz-unmeas-d\t1222\tfloor\n' \
+  > "$FZ/durations.tsv"
+{ printf '# fixture incumbent\n# n=2\n'
+  printf 'z-floor-a\t1\nz-floor-b\t2\nz-meas-c\t1\nz-unmeas-d\t2\n'; } > "$FZ/manifest.tsv"
+# Three sampled run dirs in ci-artifact layout. z-floor-a times 1500000/500000/
+# 1000000 -> median 1000000 over 3/3; z-floor-b times once -> 1/3; z-unmeas-d's
+# only row is skip-excluded -> never timed; a FAIL row on z-meas-c is excluded;
+# a HEAVY-named artifact dir must not enter the light group.
+mkdir -p "$FZ/run1/suite-timings-scripts-0" "$FZ/run2/suite-timings-scripts-1" \
+         "$FZ/run3/suite-timings-scripts-0" "$FZ/run3/suite-timings-scripts-heavy-0"
+assert_fixture_dir "$FZ/run1"; assert_fixture_dir "$FZ/run2"; assert_fixture_dir "$FZ/run3"
+printf 'z-floor-a\t1500000\nz-meas-c\t5000\n' > "$FZ/run1/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z-floor-a\t500000\nz-floor-b\t90000\nz-meas-c\t9000000\tFAIL\n' \
+  > "$FZ/run2/suite-timings-scripts-1/suite-timings.tsv"
+printf 'z-floor-a\t1000000\nz-meas-c\t4000\nz-unmeas-d\t1234\tskip=not relevant\n' \
+  > "$FZ/run3/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z-floor-a\t800000\n' > "$FZ/run3/suite-timings-scripts-heavy-0/suite-timings.tsv"
+SUM_Z_MAN="$(cksum "$FZ/manifest.tsv")"; SUM_Z_DUR="$(cksum "$FZ/durations.tsv")"
+
+if python3 "$GEN" --drift-report --group light --manifest "$FZ/manifest.tsv" \
+     --durations "$FZ/durations.tsv" \
+     --timings-dir "$FZ/run1" --timings-dir "$FZ/run2" --timings-dir "$FZ/run3" \
+     > "$FZ/out.txt" 2> "$FZ/err.txt"; then
+  check pass "Z: --drift-report exits 0 (findings are data, not a failure)"
+else
+  check fail "Z: --drift-report refused valid input: $(tail -2 "$FZ/err.txt")"
+fi
+if grep -qxF 'DRIFT_ROW light z-floor-a 1222 1000000 3/3' "$FZ/out.txt"; then
+  check pass "Z: DRIFT_ROW carries group/label/committed_ms/fresh_median/timed/sampled"
+else
+  check fail "Z: DRIFT_ROW for z-floor-a missing or wrong: $(grep z-floor-a "$FZ/out.txt")"
+fi
+if grep -qxF 'DRIFT_ROW light z-floor-b 1222 90000 1/3' "$FZ/out.txt"; then
+  check pass "Z: a floor row timed in one of three runs reports 1/3"
+else
+  check fail "Z: z-floor-b DRIFT_ROW missing or wrong: $(grep z-floor-b "$FZ/out.txt")"
+fi
+if ! grep -q 'DRIFT_ROW.*z-meas-c' "$FZ/out.txt" \
+   && ! grep -q 'DRIFT_ROW.*z-unmeas-d' "$FZ/out.txt"; then
+  check pass "Z: measured rows and never-timed floor rows emit no DRIFT_ROW"
+else
+  check fail "Z: floor-vs-measured discrimination failed: $(grep DRIFT_ROW "$FZ/out.txt")"
+fi
+if grep -qxF 'FLOOR_UNMEASURED light 1' "$FZ/out.txt"; then
+  check pass "Z: the skip-excluded floor row counts as unmeasured (count=1)"
+else
+  check fail "Z: FLOOR_UNMEASURED wrong: $(grep FLOOR_UNMEASURED "$FZ/out.txt")"
+fi
+if grep -qxF 'LEG_PREDICTED light 1 6222' "$FZ/out.txt" \
+   && grep -qxF 'LEG_PREDICTED light 2 2444' "$FZ/out.txt"; then
+  check pass "Z: LEG_PREDICTED sums committed durations through the incumbent manifest"
+else
+  check fail "Z: LEG_PREDICTED wrong: $(grep LEG_PREDICTED "$FZ/out.txt")"
+fi
+if grep -qxF 'LEG_OBSERVED light 1 1004500' "$FZ/out.txt" \
+   && grep -qxF 'LEG_OBSERVED light 2 90000' "$FZ/out.txt"; then
+  check pass "Z: LEG_OBSERVED sums fresh medians through incumbent legs"
+else
+  check fail "Z: LEG_OBSERVED wrong: $(grep LEG_OBSERVED "$FZ/out.txt")"
+fi
+if grep -qxF 'BOUND_PERFECT light 547250' "$FZ/out.txt"; then
+  check pass "Z: BOUND_PERFECT = observed total / legs"
+else
+  check fail "Z: BOUND_PERFECT wrong: $(grep BOUND_PERFECT "$FZ/out.txt")"
+fi
+if [[ "$(cksum "$FZ/manifest.tsv")" == "$SUM_Z_MAN" \
+   && "$(cksum "$FZ/durations.tsv")" == "$SUM_Z_DUR" \
+   && ! -f "$FZ/manifest.tsv.durations.tsv" ]]; then
+  check pass "Z: report mode writes nothing — committed-base fixtures byte-identical"
+else
+  check fail "Z: report mode left a write — read-only contract broken"
+fi
+
+# === Fixture Z2: heavy-group drift rows; leg-balance is light-only (T7) =======
+FZ2="$WORK/Z2"; mkdir -p "$FZ2/run1/suite-timings-scripts-heavy-0"; assert_fixture_dir "$FZ2"
+printf 'h-floor-x\t379182\tfloor\nh-meas-y\t10000\tmeasured\n' > "$FZ2/durations.tsv"
+{ printf '# fixture incumbent\n# n=2\n'
+  printf 'h-floor-x\t1\nh-meas-y\t2\n'; } > "$FZ2/manifest.tsv"
+printf 'h-floor-x\t800000\nh-meas-y\t9000\n' \
+  > "$FZ2/run1/suite-timings-scripts-heavy-0/suite-timings.tsv"
+if python3 "$GEN" --drift-report --group heavy --manifest "$FZ2/manifest.tsv" \
+     --durations "$FZ2/durations.tsv" --timings-dir "$FZ2/run1" \
+     > "$FZ2/out.txt" 2> "$FZ2/err.txt"; then
+  check pass "Z2: --drift-report --group heavy exits 0"
+else
+  check fail "Z2: heavy drift-report refused: $(tail -2 "$FZ2/err.txt")"
+fi
+if grep -qxF 'DRIFT_ROW heavy h-floor-x 379182 800000 1/1' "$FZ2/out.txt" \
+   && grep -qxF 'FLOOR_UNMEASURED heavy 0' "$FZ2/out.txt" \
+   && grep -qxF 'LEG_PREDICTED heavy 1 379182' "$FZ2/out.txt" \
+   && grep -qxF 'LEG_PREDICTED heavy 2 10000' "$FZ2/out.txt"; then
+  check pass "Z2: heavy group emits DRIFT_ROW/FLOOR_UNMEASURED/LEG_PREDICTED"
+else
+  check fail "Z2: heavy rows wrong: $(cat "$FZ2/out.txt")"
+fi
+if ! grep -qE 'LEG_OBSERVED|BOUND_PERFECT' "$FZ2/out.txt"; then
+  check pass "Z2: leg-balance rows are light-only (T7 — atomic heavy floors have no packing lever)"
+else
+  check fail "Z2: heavy emitted leg-balance rows: $(grep -E 'LEG_OBSERVED|BOUND_PERFECT' "$FZ2/out.txt")"
+fi
+
+# === Fixture Z3: default (no --group/--durations/--manifest) loops light+heavy ==
+# against the COMMITTED tables — heavy comes free from the same artifact dirs.
+FZ3="$WORK/Z3"; mkdir -p "$FZ3/run1/suite-timings-scripts-0"; assert_fixture_dir "$FZ3"
+# Time one REAL committed floor label so a DRIFT_ROW lands on the default path.
+Z3_LABEL="$(awk -F'\t' '$3=="floor" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
+[[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no floor row to fixture" >&2; exit 2; }
+Z3_FLOORS="$(awk -F'\t' '$3=="floor"' "$REPO_ROOT/scripts/suite-durations.tsv" | wc -l)"
+printf '%s\t700000\n' "$Z3_LABEL" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
+if python3 "$GEN" --drift-report --timings-dir "$FZ3/run1" \
+     > "$FZ3/out.txt" 2> "$FZ3/err.txt"; then
+  check pass "Z3: default drift-report exits 0 on the committed tables"
+else
+  check fail "Z3: default drift-report refused: $(tail -2 "$FZ3/err.txt")"
+fi
+if grep -qxF "DRIFT_ROW light $Z3_LABEL 1222 700000 1/1" "$FZ3/out.txt"; then
+  check pass "Z3: default loop reports committed floor rows that measured"
+else
+  check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
+fi
+if grep -qxF "FLOOR_UNMEASURED light $(( Z3_FLOORS - 1 ))" "$FZ3/out.txt" \
+   && grep -qxF 'FLOOR_UNMEASURED heavy 0' "$FZ3/out.txt" \
+   && ! grep -q 'DRIFT_ROW heavy' "$FZ3/out.txt"; then
+  check pass "Z3: group loop covers light + heavy (heavy floor set is empty by construction)"
+else
+  check fail "Z3: group coverage wrong: $(grep -E 'FLOOR_UNMEASURED|DRIFT_ROW' "$FZ3/out.txt")"
+fi
+if grep -qE '^LEG_PREDICTED heavy [0-9]+ [0-9]+$' "$FZ3/out.txt"; then
+  check pass "Z3: LEG_PREDICTED emitted for the heavy group from committed tables"
+else
+  check fail "Z3: no heavy LEG_PREDICTED on the default path"
+fi
+
+# === Fixture Z4: --drift-report refusal arms ==================================
+# Report mode never writes, fetches nothing, and requires --timings-dir.
+if python3 "$GEN" --drift-report --group light --manifest "$FZ/manifest.tsv" \
+     --durations "$FZ/durations.tsv" > /dev/null 2> "$FZ/e1.txt"; then
+  check fail "Z4a: --drift-report without --timings-dir accepted"
+elif grep -qi 'timings-dir' "$FZ/e1.txt"; then
+  check pass "Z4a: missing --timings-dir refuses and names it"
+else
+  check fail "Z4a: refused but stderr does not explain: $(tail -1 "$FZ/e1.txt")"
+fi
+for targs in "--write" "--incremental" "--legs 3" "--run 4242" "--runs 2" \
+             "--durations-out $WORK/z4-do.tsv" "--registered-file $WORK/z4-rf.txt"; do
+  if python3 "$GEN" --drift-report --group light --manifest "$FZ/manifest.tsv" \
+       --durations "$FZ/durations.tsv" --timings-dir "$FZ/run1" $targs \
+       > /dev/null 2> "$FZ/e2.txt"; then
+    check fail "Z4b: --drift-report $targs accepted — report mode must refuse it"
+  elif grep -qi 'drift-report' "$FZ/e2.txt"; then
+    check pass "Z4b: --drift-report $targs refuses and names the mode"
+  else
+    check fail "Z4b: --drift-report $targs refused but stderr does not explain: $(tail -1 "$FZ/e2.txt")"
+  fi
+done
+if python3 "$GEN" --drift-report --timings-dir "$FZ/no-such-dir" \
+     > /dev/null 2> "$FZ/e3.txt"; then
+  check fail "Z4c: a missing timings dir accepted"
+else
+  check pass "Z4c: a timings dir with no suite-timings.tsv refuses (exit 2)"
+fi
+
+# === Fixture Z5: a foreign-group-only artifact dir is a zero-row sample =======
+# The arbitrary-name fallback in fetch_timings_from_dir exists for local dirs
+# (leg1/, leg2/) — a run dir that IS a CI-artifact layout but carries only
+# OTHER groups' artifacts must NOT launder those rows into this group's sample
+# (timed_n counts only matching dirs).
+FZ5="$WORK/Z5"; mkdir -p "$FZ5/run1/suite-timings-scripts-heavy-0" \
+  "$FZ5/run2/suite-timings-scripts-0" "$FZ5/run2/suite-timings-infra-0"
+assert_fixture_dir "$FZ5"
+printf 'z5-floor\t1222\tfloor\nz5-meas\t5000\tmeasured\n' > "$FZ5/durations.tsv"
+{ printf '# fixture incumbent\n# n=1\n'
+  printf 'z5-floor\t1\nz5-meas\t1\n'; } > "$FZ5/manifest.tsv"
+# run1: heavy artifact only — its z5-floor row must not reach the light sample.
+# run2: a matching light dir + a same-run infra dir — light counts run2 only.
+printf 'z5-floor\t900000\nz5-meas\t6000\n' \
+  > "$FZ5/run1/suite-timings-scripts-heavy-0/suite-timings.tsv"
+printf 'z5-floor\t700000\nz5-meas\t4000\n' \
+  > "$FZ5/run2/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z5-floor\t999999\n' \
+  > "$FZ5/run2/suite-timings-infra-0/suite-timings.tsv"
+if python3 "$GEN" --drift-report --group light --manifest "$FZ5/manifest.tsv" \
+     --durations "$FZ5/durations.tsv" \
+     --timings-dir "$FZ5/run1" --timings-dir "$FZ5/run2" \
+     > "$FZ5/out.txt" 2> "$FZ5/err.txt"; then
+  check pass "Z5: a foreign-group-only run dir still exits 0 (a legit zero-row sample)"
+else
+  check fail "Z5: drift-report refused a foreign-only artifact dir: $(tail -2 "$FZ5/err.txt")"
+fi
+if grep -qxF 'DRIFT_ROW light z5-floor 1222 700000 1/2' "$FZ5/out.txt"; then
+  check pass "Z5: heavy/infra rows cannot inflate the light sample (timed 1/2, median 700000)"
+else
+  check fail "Z5: foreign-group rows leaked into the light sample: $(grep -E 'DRIFT_ROW|FLOOR_UNMEASURED' "$FZ5/out.txt")"
+fi
+
+# === Fixture Z6: a loose flat *timings*.tsv inside an artifact-layout dir =====
+# is skipped WITH A WARN — never silently merged, never silently dropped. A
+# mixed dir (nested CI-artifact layout + a stray flat file) merges only the
+# artifacts; the flat file's rows must not reach the sample and the skip must
+# be audible on stderr — a dropped input is indistinguishable from a
+# measurement that never ran.
+FZ6="$WORK/Z6"; mkdir -p "$FZ6/run1/suite-timings-scripts-0"; assert_fixture_dir "$FZ6"
+printf 'z6-floor\t1222\tfloor\nz6-ghost\t1222\tfloor\n' > "$FZ6/durations.tsv"
+{ printf '# fixture incumbent\n# n=1\n'
+  printf 'z6-floor\t1\nz6-ghost\t1\n'; } > "$FZ6/manifest.tsv"
+printf 'z6-floor\t700000\n' > "$FZ6/run1/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z6-ghost\t900000\n' > "$FZ6/run1/loose-suite-timings.tsv"
+if python3 "$GEN" --drift-report --group light --manifest "$FZ6/manifest.tsv" \
+     --durations "$FZ6/durations.tsv" --timings-dir "$FZ6/run1" \
+     > "$FZ6/out.txt" 2> "$FZ6/err.txt"; then
+  check pass "Z6: mixed artifact-layout + loose flat timings file exits 0"
+else
+  check fail "Z6: drift-report refused a mixed layout: $(tail -2 "$FZ6/err.txt")"
+fi
+if grep -qE 'WARN.*(loose|skipp)' "$FZ6/err.txt"; then
+  check pass "Z6: the loose flat file inside an artifact-layout dir is skipped WITH a WARN"
+else
+  check fail "Z6: flat file inside an artifact-layout dir dropped SILENTLY: $(cat "$FZ6/err.txt")"
+fi
+if grep -q 'DRIFT_ROW light z6-ghost' "$FZ6/out.txt"; then
+  check fail "Z6: the skipped flat file leaked z6-ghost into the sample"
+elif grep -qxF 'DRIFT_ROW light z6-floor 1222 700000 1/1' "$FZ6/out.txt" \
+     && grep -qxF 'FLOOR_UNMEASURED light 1' "$FZ6/out.txt"; then
+  check pass "Z6: only the artifact dir's rows merge — the flat file contributes nothing"
+else
+  check fail "Z6: unexpected sample: $(grep -E 'DRIFT_ROW|FLOOR_UNMEASURED' "$FZ6/out.txt")"
+fi
+
+# === Fixture Z7: a foreign-only --timings-dir warns on the non-drift path ======
+# The same dropped-input invisibility on the regen path: a dir carrying only
+# OTHER groups' artifacts contributes an empty sample. The all-floor degrade
+# is legitimate, but the zero contribution itself must be warned, not silent.
+FZ7="$WORK/Z7"; mkdir -p "$FZ7/run/suite-timings-scripts-heavy-0"; assert_fixture_dir "$FZ7"
+printf 'z7-a\n' > "$FZ7/registered.txt"
+printf 'z7-a\t800\n' > "$FZ7/run/suite-timings-scripts-heavy-0/suite-timings.tsv"
+if gen "$FZ7/run" "$FZ7/registered.txt" "$WORK/Z7-manifest.tsv" \
+     --durations-out "$WORK/Z7-durations.tsv" --write \
+     > "$WORK/Z7-out.txt" 2> "$WORK/Z7-err.txt"; then
+  check pass "Z7: foreign-only --timings-dir exits 0 (all-floor degrade)"
+else
+  check fail "Z7: refused: $(tail -2 "$WORK/Z7-err.txt")"
+fi
+if grep -qF 'contributed no timings' "$WORK/Z7-err.txt"; then
+  check pass "Z7: the foreign-only dir's zero contribution is warned, not silent"
+else
+  check fail "Z7: foreign-only dir contributed nothing SILENTLY: $(cat "$WORK/Z7-err.txt")"
+fi
+if grep -qF $'z7-a\t60000\tfloor' "$WORK/Z7-durations.tsv" 2>/dev/null \
+   && ! grep -q 'measured' "$WORK/Z7-durations.tsv"; then
+  check pass "Z7: foreign rows never merged — z7-a floored at DEFAULT_SUITE_MS, not 800"
+else
+  check fail "Z7: foreign rows leaked into the sample: $(cat "$WORK/Z7-durations.tsv" 2>/dev/null)"
+fi
 # === Fixture Z: committed-weight drift gate (#11662, G1) =====================
 # The --write path refuses measured-weight drift vs a baseline durations table
 # (--baseline-durations is the fixture seam for what the merge-base blob is in

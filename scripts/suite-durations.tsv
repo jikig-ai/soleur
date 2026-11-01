@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1222
-# generated-at=2026-10-31T22:11:33Z
+# generated-at=2026-10-31T20:36:09Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -591,6 +591,7 @@ scripts/watch-code-quality-reeval-9730	1222	floor
 scripts/watch-lint-ratchet-reeval-10515	1222	floor
 scripts/watch-live-verify-pass	172	measured
 scripts/watch-registration-narrowing-9564	10976	measured
+scripts/watch-shard-balance-11564	1222	floor
 scripts/watchdog-arm-soak-9237	2199	measured
 scripts/watchdog-debounce-soak-9686	563	measured
 scripts/web-first-deploy-10585	1222	floor

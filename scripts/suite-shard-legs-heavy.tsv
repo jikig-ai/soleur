@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=379182
-# generated-at=2026-11-01T04:57:31Z
+# generated-at=2026-11-01T08:11:47Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write   # suite added/removed; --group heavy --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
