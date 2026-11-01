@@ -18,3 +18,9 @@
 ### Components Invoked
 - soleur:plan, soleur:deepen-plan (in-process in subagent); collision-precheck.sh, lint-guard-contract.py, lint-infra-no-human-steps.py, technical-ruling-gate.sh, markdownlint-cli2
 - Commits: b923879cff (plan+tasks+decision-challenges), 7db9b0593d (deepen-pass verdicts) — authored Jean Deruelle (CLA-signed identity)
+
+## Review Phase
+- Panel: 9 seats (class=code, tier=none) — all CLEAN or P3-only; PANEL_SHA 9dadef783e.
+- Findings: P3 line-wrap (fixed inline, + concatenation), P3 (d) fold-in (exercised — commit ef768927cb), structural-enumeration map → scope-out issue #11825.
+- Fix-round (ADR-267, PANEL_SHA..ef768927cb): performance-oracle, test-design-reviewer, semgrep-sast — all CLEAN.
+- Verification pass: vitest 13/13 green, tsc clean at ef768927cb.
