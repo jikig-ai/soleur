@@ -583,10 +583,11 @@ _se=(); while IFS= read -r _s; do [ -z "$_s" ] || _se+=("$_s"); done < <(struct_
 _enum="$(for _k in "${!BLK[@]}"; do printf '%s.%s\n' "${_k%%|*}" "${_k#*|}"; done | sort -u)"
 _tgt="$(logtail_targets_of "$APPLY_WF")"
 _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt" | sed '/^$/d') | tr '\n' ' ')"
-# #11631: the two once-a-day dead-man alerts were retired (replaced by archive-fed heartbeats). The apply
-# workflow KEEPS their four bare -target= lines until the first verified apply, because a bare -target on
-# an address with no configuration plans its DELETE (the census lists them in INTENDED_DESTROYS). They are
-# the ONLY targets allowed to name no declared resource; a follow-up removes both the lines and this list.
+# #11631: the two once-a-day dead-man alerts were retired (replaced by archive-fed heartbeats). Their four bare
+# -target= lines were kept in the apply workflow until the first verified apply (a bare -target on an address with no
+# configuration plans its DELETE) and were removed with their census rows after it (#11672). The list below is
+# read from the census's INTENDED_DESTROYS, which is now empty of logtail_* addresses: any bare -target=logtail_*
+# line naming no declared resource is a stray and fails the check, so a re-added retired line goes red here too.
 # ONE source of truth (#11631 review): the list is READ from the census's INTENDED_DESTROYS, never retyped here, so the
 # two cannot drift. Only the logtail_* addresses count (the other entries are not this suite's business). A missing or
 # unreadable census is fatal; an empty result is a legitimate end state (the follow-up removed the entries) and then the
