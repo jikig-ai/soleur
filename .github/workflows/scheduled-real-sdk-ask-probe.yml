@@ -76,10 +76,10 @@ jobs:
     # workflow_dispatch are not pull_request events and pass the first clause.
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    # PROVISIONAL, re-derive from the first self-test run's measured elapsed: the probe step ceiling covers two
-    # worst-case passes (a first pass plus the single whole-probe rerun, 8 cases x 180 s each); the job ceiling adds
-    # setup and the artifact upload and dominates the sum of the step ceilings.
-    timeout-minutes: 65
+    # Derived from the first self-test run (2026-11-01): the 8-case probe step took 36 s and the whole job 1 min 40 s.
+    # The step ceiling covers one worst-case pass (8 cases x 180 s = 24 min) with margin; a run past it is a hang, and
+    # the filer files it as blind/no-outcome. The job ceiling adds setup (about 1 min) and the artifact upload.
+    timeout-minutes: 40
     permissions:
       contents: read
       actions: read
@@ -174,7 +174,7 @@ jobs:
       - name: Run the real-SDK ask probe
         id: probe
         if: steps.should-run.outputs.run == 'true' && steps.preflight.outputs.ok == 'true'
-        timeout-minutes: 50
+        timeout-minutes: 30
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
