@@ -157,6 +157,31 @@ deliberately NOT in `resolve-regenerable-conflicts.sh`'s RESOLVABLE-SET:
 regeneration needs `gh` plus a chosen green run id, which the pure-local
 resolver cannot supply — this path stays manual.
 
+## The drift watch (`shard-balance-watch`, #11564)
+
+A weekly advisory probe (`Tue 09:41 UTC` + `workflow_dispatch`) samples the
+last 5 green `merge_group` `ci.yml` runs' `suite-timings-scripts-*` artifacts
+and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
+--timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
+`src=floor` durations row that finally measured), `LEG_PREDICTED`,
+`LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
+`BOUND_PERFECT`, and `FLOOR_UNMEASURED` rows against the committed tables.
+`scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
+leg ratio > 1.30) and manages ONE watch-owned tracker issue
+(`ci-shard-balance-watch: manifest drift findings`, sentinel
+`<!-- shard-balance-watch:v1 drift=<set-sha1> -->`): comment only when the
+flagged-set hash changes, resolution comment + close on all-clear.
+
+Why `merge_group` and `--timings-dir`, not `--runs`: `push-dedupe` elides the
+shards job on main `push` runs, so they routinely carry no timings artifacts;
+merge_group runs are the canonical as-merged full-matrix run and artifacts
+live 14 days. To re-price by hand: `gh run download <id> -R jikig-ai/soleur
+-p 'suite-timings-scripts-*' -D <dir>` per run, then the same
+`--timings-dir` invocation — the probe's measurement path and the regen path
+are one generator. `bash scripts/watch-shard-balance-11564.sh --dry-run`
+prints findings and posts nothing; `--print-report` prints the raw rows.
+Retirement checklist: the workflow header.
+
 ## Why the OLD positional method is retained
 
 `SCRIPTS_SHARD=k/K` keeps suites whose registration ordinal ≡ k−1 (mod K)
