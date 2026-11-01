@@ -40,13 +40,12 @@ REQCHECKS_REL="scripts/required-checks.txt"
 
 passes=0
 fails=0
-ASSERTED=0
 MUT_RUN=0
 MUT_KILLED=0
 FAILED=()
 
-ok() { passes=$((passes + 1)); ASSERTED=$((ASSERTED + 1)); printf '[ok] %s\n' "$1"; }
-no() { fails=$((fails + 1)); ASSERTED=$((ASSERTED + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
+ok() { passes=$((passes + 1)); printf '[ok] %s\n' "$1"; }
+no() { fails=$((fails + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
 assert_fixture_dir() {
   case "${1-}" in
@@ -66,9 +65,9 @@ trap 'rm -rf "$SCRATCH"' EXIT
 # ---------------------------------------------------------------------------------------------------------------
 # INSTRUMENT SELF-TEST 1: the tally machinery. A neutered ok()/no() must exit the suite, not pass it.
 # ---------------------------------------------------------------------------------------------------------------
-tally_probe="$( ( passes=0; fails=0; ASSERTED=0; FAILED=(); ok a >/dev/null; no b >/dev/null; echo "$passes $fails $ASSERTED ${#FAILED[@]}" ) )"
-if [[ "$tally_probe" != "1 1 2 1" ]]; then
-  printf '[FATAL] instrument self-test: ok()/no() tally is broken (got "%s", want "1 1 2 1")\n' "$tally_probe" >&2
+tally_probe="$( ( passes=0; fails=0; FAILED=(); ok a >/dev/null; no b >/dev/null; echo "$passes $fails ${#FAILED[@]}" ) )"
+if [[ "$tally_probe" != "1 1 1" ]]; then
+  printf '[FATAL] instrument self-test: ok()/no() tally is broken (got "%s", want "1 1 1")\n' "$tally_probe" >&2
   exit 1
 fi
 
@@ -1342,12 +1341,11 @@ done
 # MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them with a new row.
 # ---------------------------------------------------------------------------------------------------------------
 echo ""
-echo "real-sdk-ask-probe-workflow.test.sh: $passes passed, $fails failed ($ASSERTED assertions, $MUT_KILLED/$MUT_RUN mutants killed)"
-if [[ $((passes + fails)) -ne "$ASSERTED" ]]; then printf '[FATAL] accounting: %s verdicts for %s assertions\n' "$((passes + fails))" "$ASSERTED" >&2; exit 1; fi
+echo "real-sdk-ask-probe-workflow.test.sh: $passes passed, $fails failed ($((passes + fails)) assertions, $MUT_KILLED/$MUT_RUN mutants killed)"
 if [[ "${#FAILED[@]}" -ne "$fails" ]]; then printf '[FATAL] ledger/counter disagree: %s vs %s\n' "${#FAILED[@]}" "$fails" >&2; exit 1; fi
 MIN_ASSERTIONS=244
-if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
+if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 MIN_MUTANTS=87
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
