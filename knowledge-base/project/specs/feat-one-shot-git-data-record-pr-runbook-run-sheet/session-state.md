@@ -64,3 +64,8 @@ Findings: 3 P1 (state rule keyed on the flag alone, re-pause reversal forbidden 
 ### Fix round 2 (2026-11-01, commit bedf57cfb6 reviewed by four seats)
 
 No P1 from user-impact, architecture or quality; one P1 from history (a routine deliberate deploy had no counted-loss gate) and about 12 P2 (state model gaps: the stamp, the sentinel read channel, unknown-N persistence, neighbouring Quiet-window sentences, a false #10914 claim). All applied in the third fix commit; rulings R20 to R22. Next: one verification pass and the affected gate.
+
+### Verification pass (2026-11-01, HEAD 7fb1b04a19)
+
+One fresh-eyes architecture seat: all six named P1s CLOSED, no new P1; 4 P2 and 7 P3 (scoping and contradiction gaps, none able to lose a tree by itself). Applied in the fourth fix commit without a further seat round (the targeted-round cap was reached): typed-N and unknown-N scoped to after RF6, the third Quiet-window blockquote extended to the abort-before-flag-write clause, RF2 retry wording, the deliberate-deploy end condition marked not a replication proof, the RF8 hold list extended to the apply paths, the pause-off channels listed, the flag-read channel named, the End-state rule for the pause after a rollback. Those edits are mechanically checked (linter, markdown lint, anchors, doc-pin suites 822/0 and the others green) and not seat-reviewed.
+
