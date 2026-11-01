@@ -33,25 +33,25 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 ## Phase 3: Cloud-init (`cloud-init-inngest.yml`)
 
-- 3.1 `write_files` drop-in `inngest-cutover-flip.service.d/10-flip-token.conf` (`[Service]` + unprefixed `EnvironmentFile=`; no Condition)
-- 3.2 Widen the first charset guard into a loop over both tokens
-- 3.3 Flip-file write item after the `/etc/default/inngest-server` chown: `( umask 0177 && printf ... ) || exit 1`
-- 3.4 Redactor by-value `vals+=` line (sed, never sourced)
-- 3.5 Phone-home dp-mask: add `.` to the body class (one byte)
-- 3.5b Comment refresh (`git grep -n 'read/write'`); no `${` or `%{` in new comments
-- 3.6 Re-measure after each edit (Phase 5 command)
+- [x] 3.1 `write_files` drop-in `inngest-cutover-flip.service.d/10-flip-token.conf` (`[Service]` + unprefixed `EnvironmentFile=`; no Condition)
+- [x] 3.2 Widen the first charset guard into a loop over both tokens
+- [x] 3.3 Flip-file write item after the `/etc/default/inngest-server` chown: `( umask 0177 && printf ... ) || exit 1`
+- [x] 3.4 Redactor by-value `vals+=` line (sed, never sourced)
+- [x] 3.5 Phone-home dp-mask: add `.` to the body class (one byte)
+- [x] 3.5b Comment refresh (`git grep -n 'read/write'`); no `${` or `%{` in new comments
+- [x] 3.6 Re-measure after each edit (Phase 5 command)
 
 ## Phase 4: Gates and workflow
 
-- 4.1 `inngest-host-replace-gate.sh`: add the address to `def allow` (+ header sentence)
-- 4.2 `inngest-host-shape-gate.sh`: add to `def allow` and the `doppler_touched` class (+ header)
-- 4.3 `apply-web-platform-infra.yml` `inngest_host` job: insert the new `-target` before the last line; keep `2>&1 | tf_redact_random_ids` on the final line only; comment that the line is graph-redundant
-- 4.4 `inngest_host_replace` job: add the `inngest-userdata-budget.sh` step before the plan step; parity-test row for presence and order; correct the `inngest-host.tf` precondition comment
+- [x] 4.1 `inngest-host-replace-gate.sh`: add the address to `def allow` (+ header sentence)
+- [x] 4.2 `inngest-host-shape-gate.sh`: add to `def allow` and the `doppler_touched` class (+ header)
+- [x] 4.3 `apply-web-platform-infra.yml` `inngest_host` job: insert the new `-target` before the last line; keep `2>&1 | tf_redact_random_ids` on the final line only; comment that the line is graph-redundant
+- [x] 4.4 `inngest_host_replace` job: add the `inngest-userdata-budget.sh` step before the plan step; parity-test row for presence and order; correct the `inngest-host.tf` precondition comment
 
 ## Phase 5: Budget
 
-- 5.1 `inngest-userdata-budget.sh`: both stubs high-entropy (48-char bodies, 58 total), flip var added, `stored <= cap - 512` floor with an env seam (test asserts rc == 1 exactly)
-- 5.2 Record stored bytes, cap headroom and margin under 32,300; `INNGEST_GZIP_BUDGET` stays 32,300
+- [x] 5.1 `inngest-userdata-budget.sh`: both stubs high-entropy (48-char bodies, 58 total), flip var added, `stored <= cap - 512` floor with an env seam (test asserts rc == 1 exactly)
+- [x] 5.2 Record stored bytes, cap headroom and margin under 32,300; `INNGEST_GZIP_BUDGET` stays 32,300
 
 ## Phase 6: Records
 

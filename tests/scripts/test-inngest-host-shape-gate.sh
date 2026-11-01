@@ -342,7 +342,7 @@ if [[ "$_pass_arms" =~ ^[0-9]+$ ]] && [[ "$_pass_arms" -ge 6 ]]; then pass; else
 
 # ── H1: anti-vacuity floor ────────────────────────────────────────────────────────
 # Self-contained; reported via printf + exit, never through pass()/fail(). A floor, not equality.
-_floor=74
+_floor=83
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_floor" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_floor" >&2

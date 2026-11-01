@@ -32,9 +32,14 @@
 #   random_id.inngest_{signing,event}_key_dedicated, random_password.inngest_redis_password_dedicated
 #                                               no-op | create            → generated_secret_touched
 #   doppler_project.inngest, doppler_environment.inngest_prd, doppler_secret.*_dedicated,
-#   doppler_secret.inngest_betterstack_logs_token, doppler_service_token.inngest
+#   doppler_secret.inngest_betterstack_logs_token, doppler_service_token.inngest,
+#   doppler_service_token.inngest_flip
 #                                               no-op | create | update   → doppler_touched
-#       (rotations reach Doppler by design — inngest-host.tf's "TF owns these three values")
+#       (rotations reach Doppler by design — inngest-host.tf's "TF owns these three values". The flip
+#        token (flip-token split, ADR-282 addendum 2026-10-30) joins the same class: no new class,
+#        because `allow_unpartitioned` forces exactly one class per allow address. Its delete+create
+#        is refused like the boot token's: a rotation is an owner-run apply plus the gated
+#        inngest-host-replace dispatch, never this one.)
 #
 # RETIRED (#8285): hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis (the plaintext
 # backstop pair) are no longer declared, `-target`ed or in the allow-set. The volume was destroyed
@@ -103,6 +108,7 @@ inngest_host_shape_gate() {
         "doppler_secret.inngest_event_key_dedicated",
         "doppler_secret.inngest_redis_password_dedicated",
         "doppler_secret.inngest_betterstack_logs_token",
+        "doppler_service_token.inngest_flip",
         "doppler_service_token.inngest"
       ];
       def classes: [
@@ -117,7 +123,7 @@ inngest_host_shape_gate() {
         {r: "doppler_touched",          a: ["doppler_project.inngest", "doppler_environment.inngest_prd",
                                             "doppler_secret.inngest_signing_key_dedicated", "doppler_secret.inngest_event_key_dedicated",
                                             "doppler_secret.inngest_redis_password_dedicated", "doppler_secret.inngest_betterstack_logs_token",
-                                            "doppler_service_token.inngest"],
+                                            "doppler_service_token.inngest", "doppler_service_token.inngest_flip"],
                                                                                             ok: [["no-op"], ["create"], ["update"]], with_server_create: false}
       ];
       def passphrase: ["random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key"];

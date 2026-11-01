@@ -24,6 +24,16 @@
 #     nature: the plan is STILL required to replace hcloud_server.inngest AND preserve the
 #     Redis volume, so admitting the token cannot let a destructive plan through — a token
 #     rotation that did NOT cascade to a host replace would fail inngest_server_replaced==1.)
+#   - doppler_service_token.inngest_flip  (the flip-token split, ADR-282 addendum "2026-10-30
+#     (#9927 item 4, the flip-token design)": the read/write token the cutover flip unit reads
+#     through a cloud-init drop-in. It is upstream of hcloud_server.inngest's `user_data` exactly as
+#     the boot token is: a first apply after the split creates it (["create"]), a flip-only rotation
+#     replaces it (["delete","create"]), and either way the host replaces. It is admitted by EXACT
+#     equality like the boot token — a lookalike such as `..._flip_x` still aborts out_of_scope — and
+#     the plan is STILL required to replace hcloud_server.inngest AND preserve the Redis volume, so
+#     admitting it cannot let a destructive plan through. It carries no per-address action rule, like
+#     doppler_service_token.inngest. It is NOT a `-target` of the inngest_host_replace job (the job
+#     keeps its three targets; terraform pulls the token in as a dependency of the server).)
 # This allow-set was DERIVED (2026-06, #6178) from the then-current web-2-recreate golden
 # fixture, which showed that a scoped `-replace` of an hcloud server touches EXACTLY
 # server + server_network + volume_attachment. Its claim that the firewall attachment "does NOT
@@ -104,6 +114,7 @@ inngest_host_replace_gate() {
         "hcloud_server.inngest",
         "hcloud_server_network.inngest",
         "doppler_service_token.inngest",
+        "doppler_service_token.inngest_flip",
         # #6894 / ADR-142. The ADDITIVE target volume ATTACHMENT. It interpolates the
         # server id exactly as its plaintext sibling does, so a replace FORCES it into the
         # plan; without admitting it this gate aborts `inngest_out_of_scope_changes=1` and

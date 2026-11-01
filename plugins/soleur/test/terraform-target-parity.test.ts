@@ -5787,7 +5787,7 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
     const job = extractJobBlock(wf, "inngest_host");
     const at = job.indexOf(`-target='${FLIP}'`);
     expect(at).toBeGreaterThan(-1);
-    expect(job.slice(Math.max(0, at - 3500), at)).toMatch(/graph-redundant/);
+    expect(job.slice(Math.max(0, at - 3500), at)).toMatch(/graph-redundant/i);
   });
 
   test("mutation: removing the new -target from inngest_host ALONE breaks the allow === -target equality", () => {
