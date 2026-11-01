@@ -93,12 +93,12 @@ sub-agents were applied inline by the planner instead, same resolution as
 
 ### New Considerations Discovered
 
-- #11688 `mergeStateStatus` drifted `UNKNOWN` → `DIRTY` between the parent
-  session's measurement and this pass; Phase 0 of the plan re-reads live state
-  at write time so the addendum never cites a stale verdict.
-- The members=3 group produced **one push event per member landing** (three
-  `codeql-main-alert-gate.yml` runs) — measured during planning and written
-  into the addendum content spec.
+- Live state drifts between measurement and write time: #11688
+  `mergeStateStatus` went `UNKNOWN` → `DIRTY`, and two further synthetics
+  runs landed post-planning (`41277321658`, `41277558939` — the addendum's
+  nine-run list vs this plan's seven is Phase-0 working as designed). The
+  members=3 group also produced **one push event per member landing** —
+  details in Premise Validation below.
 
 ## Research Insights
 

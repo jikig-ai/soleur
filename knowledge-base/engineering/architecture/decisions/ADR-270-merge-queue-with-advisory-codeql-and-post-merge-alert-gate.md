@@ -1046,13 +1046,17 @@ sanctioned set.
 
 ### Addendum 2026-11-01 (#11678, #11768): grouped-landing canary — ejection stopped, `members=3` observed
 
-**What was observed.** The first live grouped landings ran on 2026-11-01 after
-the #11753 hotfix (01:55Z). Nine consecutive `merge-queue-cla-synthetics.yml`
-runs succeeded post-hotfix — every `tampered pairing is refused` rejection
-ends at 01:45Z, pre-hotfix. One run logged `members=3` (`41269037117`,
-03:24Z), six logged `members=2` (`41264507975`, `41268398857`, `41270354718`,
-`41271524552`, `41273043596`, `41277558939`), and two logged `members=1`
-(`41263787987`, `41277321658`).
+**What was observed.** The first live grouped candidate builds ran on
+2026-11-01 after the #11753 hotfix (01:55Z). Nine consecutive
+`merge-queue-cla-synthetics.yml` runs succeeded post-hotfix — every
+`tampered pairing is refused` rejection ends at 01:45Z, pre-hotfix. One run
+logged `members=3` (`41269037117`, 03:24Z), six logged `members=2`
+(`41264507975`, `41268398857`, `41270354718`, `41271524552`, `41273043596`,
+`41277558939`), and two logged `members=1` (`41263787987`, `41277321658`).
+Grouping applied to the candidate build, not the landing: the members=3
+group dissolved before landing and its members merged individually
+(03:44Z / 04:02Z / 05:03Z, composition drifting between reads —
+`min_entries_to_merge` unraised, so no member waits for its group).
 
 **Grouped `merge_group.head_ref` shape and which member `pr-<N>` names.**
 Every grouped candidate's head_ref is
@@ -1063,10 +1067,12 @@ embedded=0e8a6ebb0242538b67953fd44f72a89fab715012 pr11734@b073c17123
 pr11728@263f0dd5b2 pr11756@3fd3d716d4` —
 `gh-readonly-queue/main/pr-11756-0e8a6ebb0242538b67953fd44f72a89fab715012`),
 `pr-11763` for the `pr11691@… pr11763@…` pair (run `41277558939`). The
-embedded oid records the
-group's integrated head at mint time (`0e8a6ebb02…` equals #11734's landing
-squash) and is provenance, exactly the #11753 semantics — the binding stayed
-`anchor=headCommit` on every observed run.
+embedded oid is the
+queue-minted precomputed squash of the group's shallowest member
+(`0e8a6ebb02…` equals #11734's landing squash, minted before that landing
+ran) — on every observed run it names the base the deeper candidates build
+on, not the group's tip — and it is provenance, exactly the #11753
+semantics: the binding stayed `anchor=headCommit` on every observed run.
 
 **In-flight member listing.** `mergeQueue.entries` listed every in-flight
 member while the group built: the members=3 run enumerated

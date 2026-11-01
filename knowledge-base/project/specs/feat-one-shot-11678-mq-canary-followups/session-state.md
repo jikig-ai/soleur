@@ -9,7 +9,7 @@
 ### Errors
 
 - None blocking. One stray exec ran outside the worktree (read-only `git branch --show-current`); no files touched.
-- Harness limitation: subagent had no Task/Workflow tool — plan-review panel and deepen-plan research fan-out ran in-process instead; disclosed in plan Enhancement Summary and `pending - assumed:` decision-challenges rows.
+- Harness limitation: subagent had no Task/Workflow tool — plan-review panel and deepen-plan research fan-out ran in-process instead; disclosed in plan Enhancement Summary and the batched `soleur:engineering:cto` consult (all four rows now `Ruled by CTO agent`).
 
 ### Decisions
 
@@ -28,11 +28,11 @@
 
 ## Work Phase
 
-- Status: pending
+- Status: complete — ADR-270 addendum, #11682 comment (issuecomment-6554023526), issue #11771 filed, learning file, PR retitled `docs(arch):`
 
 ## Review Phase
 
-- Status: pending
+- Status: complete — 5 seats (git-history-analyzer CONCUR; security-sentinel, pattern-recognition, code-quality, code-simplicity findings), 0 P1/P2, P3 bookkeeping + prose-precision items fixed inline
 
 ## Ship Phase
 

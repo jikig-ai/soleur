@@ -29,10 +29,10 @@ Draft PR: #11768 (docs-titled: `docs(arch): record merge-queue grouped-landing c
 
 ## Phase 5 — PR metadata + commit
 
-- [ ] 5.1 Retitle PR #11768 to the `docs(arch):` form (`gh pr edit 11768 --title ...`); `Ref #11678` in the body (never `Closes` — issue already closed).
-- [ ] 5.2 Commit all artifacts via `git -c user.name="Jean Deruelle" -c user.email="jean.deruelle@jikigai.com" commit ...`; verify `git log --format='%ae %ce' origin/main..HEAD | sort -u` prints one line.
-- [ ] 5.3 `npx markdownlint-cli2` clean on every new/edited doc; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` clean.
-- [ ] 5.4 Push. Never `git stash`.
+- [x] 5.1 Retitle PR #11768 to the `docs(arch):` form (`gh pr edit 11768 --title ...`); `Ref #11678` in the body (never `Closes` — issue already closed).
+- [x] 5.2 Commit all artifacts via `git -c user.name="Jean Deruelle" -c user.email="jean.deruelle@jikigai.com" commit ...`; verify `git log --format='%ae %ce' origin/main..HEAD | sort -u` prints one line.
+- [x] 5.3 `npx markdownlint-cli2` clean on every new/edited doc; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` clean.
+- [x] 5.4 Push. Never `git stash`.
 
 ## Phase 6 — Ready + merge arm
 

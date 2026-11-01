@@ -20,8 +20,9 @@ tags: [merge-queue, graphql, adr-270, clarify-binding-vs-provenance, hotfix-1175
 (the `<sha>` in `gh-readonly-queue/main/pr-<N>-<sha>`) to the candidate's
 `head_sha` and refused the pair as tampered when they differed. That equality
 is only true at mint time: GitHub mints the ref at group creation, and on
-rebuilt or multi-member candidates the embedded oid records the group's
-integrated head at that mint — which legitimately diverges from the candidate
+rebuilt or multi-member candidates the embedded oid is the queue-minted
+precomputed squash of the group's shallowest member (the base deeper
+candidates build on) — which legitimately diverges from the candidate
 build's `head_sha` being verified now. The strict check ejected real PRs
 (#11688, #11739, #11734 in a single window; hotfix #11753 demoted the check
 to provenance-only and pinned the regression row).
@@ -40,3 +41,15 @@ tamper-fixture row but no divergence fixture, so the false-positive arm was
 the only one ever exercised. Measured after the hotfix: nine consecutive
 synthetics runs green, `anchor=headCommit` on every grouped landing
 (ADR-270 addendum 2026-11-01).
+
+## Key Insight
+
+Bind on the per-entry record read live (`headCommit.oid == HEAD_SHA`); treat
+the minted identifier as audit context, and exercise legitimate divergence
+(rebuild, multi-member) in a regression fixture before trusting the check.
+
+## Tags
+
+category: merge-queue, provenance-vs-binding
+module: System
+symptoms: false-positive tamper rejections on rebuilt/multi-member candidates
