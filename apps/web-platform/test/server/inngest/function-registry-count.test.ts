@@ -322,14 +322,19 @@ describe("Inngest function registry — drift guards", () => {
     const stale = [...NON_INNGEST_MONITORS].filter((name) => !tfMonitors.has(name));
     expect(
       stale,
-      `stale NON_INNGEST_MONITORS entries name no sentry_cron_monitor in cron-monitors.tf — remove them from the set: ${stale.join(", ")}`,
+      `stale NON_INNGEST_MONITORS entries name no sentry_cron_monitor in ` +
+        `cron-monitors.tf — remove them from the set: ${stale.join(", ")}`,
     ).toEqual([]);
   });
 
   it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {
     const actualSlugs = new Set(slugMap.values());
     const stale = [...KNOWN_UNMONITORED_SLUGS].filter((s) => !actualSlugs.has(s));
-    expect(stale).toEqual([]);
+    expect(
+      stale,
+      `stale KNOWN_UNMONITORED_SLUGS entries name no SENTRY_MONITOR_SLUG in the ` +
+        `cron-*.ts registry — remove them from the set: ${stale.join(", ")}`,
+    ).toEqual([]);
   });
 
   // The watchdog (cron-inngest-cron-watchdog) classifies a fixed EXPECTED_CRON_
