@@ -89,7 +89,7 @@
 #      engine is where it still lives, post-destroy, against the host that actually applies.)
 #   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
 #      failure must never read as either "absent" or "fine". A re-run is safe and resumable, but
-#      the restore job does not retry 6: read the crane stderr, then re-dispatch by hand.
+#      the restore job does not retry 6: read the crane stderr, then re-run the job by hand.
 #  78  TRACED INVOCATION ONLY — run under `bash -x` (or SHELLOPTS=xtrace) with a registry
 #      credential in the environment. Refused before any network call so the token never reaches
 #      THIS engine's trace (a parent shell's own trace is outside this guard). Remove the trace; nothing else is wrong.
