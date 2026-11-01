@@ -376,7 +376,7 @@ export const MANIFEST: ManifestEntry[] = [
     // (a once-a-day absence alarm that read `Current value: 0` through 33 healthy nights). The feeder
     // reads the Logs archive itself (remote() UNION s3Cluster) over the old 97200 s window and beats only
     // when web-1's luks-monitor.service recorded a passing row; with none it withholds and the heartbeat
-    // times out (period 3600 + grace 7200). FED but PAUSED: born paused, armed by the owner after two
+    // times out (period 3600 + grace 7200). Fed by the repo-side feeder, born paused, armed by the owner after two
     // consecutive `qualifying_row_heartbeat_paused` runs (runbook workspaces-luks-cutover-6604.md, section
     // "Arming the dead-man heartbeats (#11631)"). ARMED 2026-10-31 (live `paused:false status:up`, two
     // consecutive `verdict=beat` runs read back), so `arming_pending` is gone and a later pause is a real
@@ -397,10 +397,10 @@ export const MANIFEST: ManifestEntry[] = [
     name: "claude_cost_capture",
     // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.claude_cost_capture_dark.
     // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker
-    // predicate (a cron cost marker with a non-null cost_usd, or a credit-probe RED row). FED but PAUSED,
+    // predicate (a cron cost marker with a non-null cost_usd, or a credit-probe RED row). Fed by the repo-side feeder, born paused,
     // armed by the owner after two consecutive `qualifying_row_heartbeat_paused` runs (runbook
     // workspaces-luks-cutover-6604.md, section "Arming the dead-man heartbeats (#11631)"). ARMED 2026-10-31
-    // (live `paused:false status:up`); `arming_pending` dropped. `paused: true` is SOURCE state only.
+    // (live `paused:false status:up`, two consecutive `verdict=beat` runs read back); `arming_pending` dropped. `paused: true` is SOURCE state only.
     arming: "external-probe",
     paused: true,
     feeder: {

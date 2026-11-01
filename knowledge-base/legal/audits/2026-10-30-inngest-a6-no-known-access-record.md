@@ -25,7 +25,7 @@ The member list below is an evidence section of this file, not a second record.
 ## Evidence: Hetzner console, read-only check
 
 Source: Hetzner Console, the project's Members, Security and API tokens views. Read-only; nothing changed.
-Read on 2026-10-29 at 17:28 UTC by the owner, who posted the figures on #9927 (the CTO agent copied them into the #9927 hold ledger). The console has not been re-read since.
+Read on 2026-10-29 through the owner's own signed-in browser session; the figures were posted on #9927 at 17:28 UTC (the CTO agent copied them into the #9927 hold ledger). No console re-read is recorded since.
 
 | Item | Count / state |
 |---|---|
@@ -38,18 +38,18 @@ Read on 2026-10-29 at 17:28 UTC by the owner, who posted the figures on #9927 (t
 
 ## Related measured items (the A6 row's prerequisites)
 
-| Prerequisite | State at drafting | Owner fills in |
+| Prerequisite | State as of 2026-10-31 | Owner fills in |
 |---|---|---|
-| A5 complete | no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest T+48h point is 2026-11-01T15:15:48Z | owner confirms yes / no, date |
+| A5 complete | no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest 48-hour point of the new-link soak (#11215, window opened 2026-10-30T15:15:48Z) is 2026-11-01T15:15:48Z | owner confirms yes / no, date |
 | Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; no comment on #9927 or #10136 records a read of the deployed ruleset | owner links one or marks "n/a" |
-| Hetzner support answer on delete protection versus project delete and account closure | question sent 2026-10-29 17:28 UTC; no answer on #9927 as of 2026-10-31: pending | answer or "pending" |
+| Hetzner support answer on delete protection versus project delete and account closure | question reported sent on #9927 at 2026-10-29 17:28 UTC; no answer on #9927 as of 2026-10-31: pending | answer or "pending" |
 
 ## Statement (to be adopted by the owner)
 
-> As of the console read of 2026-10-29 17:28 UTC (I have not re-read the console since), to my knowledge the
-> only human member of the Hetzner project that holds the Inngest sole-copy volume is the single Owner shown
-> above; no Admin or other member exists; two-factor sign-in is active on the account; and the two project API
-> tokens listed (machine access paths, one Read and one Read & Write) are the ones I know and expect.
+> As of the console read of 2026-10-29 17:28 UTC, to my knowledge the only human member of the Hetzner
+> project that holds the Inngest sole-copy volume was a single Owner (1 member, 0 Admins, 0 other roles);
+> two-factor sign-in was active on the account; and the project's two API tokens (machine access paths: one
+> Read and one Read & Write) are the ones I know and expect.
 > I know of no other access. This statement is limited to what the console showed on the date of the
 > check and does not cover Hetzner's own staff access or what Hetzner retains after a project or account
 > closure (not established; see ADR-282, addenda of 2026-10-23 and 2026-10-28).
@@ -59,7 +59,9 @@ Read on 2026-10-29 at 17:28 UTC by the owner, who posted the figures on #9927 (t
 - Signed by the owner (human, not an agent), by their own GitHub comment on #10136 that posts the statement above verbatim: ____________________ (comment URL)   UTC date and time: ____________Z
 - Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the statement and claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
 
-CLO review on 2026-10-31: DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the owner's
+## CLO review, 2026-10-31
+
+DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the owner's
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
 resubmission once the owner's own comment exists and A5 is done.
 
@@ -71,8 +73,9 @@ resubmission once the owner's own comment exists and A5 is done.
 
 ## Claim limits
 
-This statement does not establish A5, the TLS posture or the Hetzner support answer. No console re-read was made
-between the 2026-10-29 read and any signing, and two-factor on the account says nothing about account recovery.
+This statement does not establish A5, the TLS posture or the Hetzner support answer. No console re-read is recorded
+between the 2026-10-29 read and the drafting of this record (a re-read before signing needs its own dated
+evidence section), and two-factor on the account says nothing about account recovery.
 
 Counts and roles as the console labels them on the read date. Not evidence of past access, of Hetzner-side
 access, or of what the two tokens can do beyond the per-token level the owner adds. A later change of

@@ -260,7 +260,10 @@ describe("reconcileHeartbeats — arming_pending.expires (#11631: an unarmed dea
     }
     for (const n of ["luks_monitor_host_timer", "claude_cost_capture"]) {
       // Armed 2026-10-31 (live status up, two feeder beats read back): the exemption is gone, so a later pause is a finding.
-      expect(MANIFEST.find((r) => r.name === n)?.arming_pending).toBeUndefined();
+      // Exactly one row, so an absent row or a later duplicate carrying the exemption cannot mask the check.
+      const rows = MANIFEST.filter((r) => r.name === n);
+      expect(rows.length).toBe(1);
+      expect(rows[0].arming_pending).toBeUndefined();
     }
   });
 });
