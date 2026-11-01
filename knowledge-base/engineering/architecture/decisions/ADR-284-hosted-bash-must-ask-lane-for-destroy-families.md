@@ -401,7 +401,7 @@ secret (the `soleur-ci-eval` workspace, ADR-244; never the production key). It i
 same-repo `pull_request` limited to edits of the workflow, the probe, the runner script and `probe-budget.ts` (the self-test run;
 fork pull requests and the Dependabot actor are excluded). A push that changes only the two package files early-exits when neither
 `@anthropic-ai/claude-agent-sdk` nor `@anthropic-ai/claude-code` moved since the newest run of the workflow on `main` whose probe step
-actually executed and ended in success or failure (a billing-skipped run or a not-run push is never a baseline; an API error, no qualifying
+actually reached a verdict (a final "Record that the probe measured" step succeeds only after an explicit pass or fail; a billing-skipped run, a not-run push or a blind run (CANT-RUN, crash, step timeout, budget stop) is never a baseline; an API error, no qualifying
 run or an unreadable baseline means the probe runs).
 The push filter (`on.push.paths`) is:
 
@@ -426,14 +426,14 @@ a narrow allowlist guarded by a depth-1 coverage test (a classification table of
 the integrity layer.
 
 **Cost caps (CTO F3, within the existing CI key and the $100/month workspace cap, ADR-244).** The model is the production default (no
-override). The probe prints a measured `costUsd` per case and a `TOTAL costUsd=` line. Hard cap $4 per run (a per-case
+override). The probe prints a measured `costUsd` per case and a `TOTAL costUsd=` line. Spend cap $4 per run (a per-case
 `maxBudgetUsd` of the run budget divided by the case count, plus a cumulative stop; a rerun spends only the remaining share of the same
 $4, never a second $4; the harness-only `maxBudgetUsd` never enters the production option builder). The cap is soft by at most one
 in-flight turn: the SDK checks `maxBudgetUsd` between turns, so a case can overshoot by the cost of the turn that was running when the
 budget was crossed; a case that ends in an error or abort, or without a result frame, is recorded against the cap at its full per-case
 share rather than at zero. Monthly ceiling $25. Measured on the first self-test run (run 41295302456 at head 075832071a): 8 cases PASS,
-`TOTAL costUsd=0.5762`, probe step 36 s, job 1 min 40 s. That supersedes the planning estimate of $1.5 per run and puts the $25 ceiling
-at about 43 runs a month. The review panel counted 50 commits to `main` touching the allowlist in 30 days (about 39 probe runs), which
+`TOTAL costUsd=0.5762`, probe step 36 s, job about 1 min 44 s by the API timestamps. That supersedes the planning estimate of $1.5 per run and puts the $25 ceiling
+at about 43 runs a month. The review panel counted 50 commits to `main` touching the allowlist in 30 days (about 39 probe runs; the panel's count, not reproduced here), which
 puts steady state near the ceiling in a busy month, so the $2.50-per-run trigger stays and a monthly-spend check against the workspace
 spend view is the named review point. Review trigger $2.50: a first measured cost above $2.50 per run, or a projected or
 trailing 30-day spend above $25, switches to the reduced shape: the push filter narrows to a move of the two SDK package versions plus
@@ -455,11 +455,12 @@ observed".
 - **No heartbeat (CTO F4).** A schedule that never fires, or a disabled workflow, is not detected. The criterion-5 human check at flip time is the backstop.
 - **Nondeterminism.** The call is a live model call; a run where the model does not use Bash is CANT-RUN (blind), not a result about the lane.
 - **Path-set miss.** A change outside the filter that re-inerts the lane is caught only by the next weekly run (up to 7 days) and by the human check of Flip criterion 5.
+- **Concurrency edges.** Each same-repo pull request self-test has its own concurrency group, so N open pull requests that edit the workflow, the probe, the runner or `probe-budget.ts` can each draw up to the $4 cap in parallel on the shared CI key (bounded by the path filter, same-repo only, and the workspace cap, ADR-244). A pending main-push or cron run is replaced by a newer one in the shared group (GitHub keeps one pending run), so a Monday cron run queued behind a main push can be evicted by the next push; the replaced run concludes cancelled and is never a baseline, and the next run diffs against the last run that measured. A pending `workflow_dispatch` run is replaced the same way.
 - **Self-test posture.** The `pull_request` self-test runs the same-repo pull-request-head tree, including its `server/**` import closure and its `npm ci --ignore-scripts` install, with the CI key in the probe step's environment (the same posture as the `ci.yml` real-turn gates). Fork pull requests and the Dependabot actor are excluded; the blast radius is the `soleur-ci-eval` workspace.
 - **Host-only.** The probe runs with host bwrap on a GitHub-hosted runner, not in the hosted container.
 - **A scheduled pass does not discharge a Flip criterion.** A scheduled run executes repo head on a CI host, so a pass never discharges Flip criterion 1 or 5 without a `build_sha` match against the deployed build. The workflow reads the repo secret where the documented command above uses Doppler `ci`.
 - **First measurement is a PR self-test.** The only run observed is the PR self-test run 41295302456 at head 075832071a (cost above); no push or scheduled run had been observed when this amendment was written.
-- **Skipped-run streak.** A billing, spend-cap or 5xx skip stays green with only a `::warning::` annotation (accepted, CTO F4). The weekly run bounds how long a streak can hide a lane re-inert, and a skipped run never becomes the push baseline.
+- **Skipped-run streak.** A billing, spend-cap or 5xx skip stays green with only a `::warning::` annotation (accepted, CTO F4). The weekly run does NOT bound the streak: it uses the same preflight, so while the API reports unavailable every trigger skips, and a streak is visible only to a human reading the warnings or job summaries. A skipped run never becomes the push baseline, so the first trigger after the API recovers measures.
 - **A single flaky FAIL opens the p1 immediately.** A run that prints a failing verdict files the regression issue without a confirming rerun. This is the conservative choice and is recorded as a tradeoff: a false p1 costs a human triage, a swallowed real FAIL costs the guard.
 - **Inactivity auto-disable.** GitHub disables scheduled workflows after 60 days without repository activity. Acknowledged and moot for this repository, which sees `main` activity far more often than every 60 days; the no-heartbeat residual above still applies.
 - **Production call-site wiring is unobserved.** The probe injects its own `canUseTool` and option wiring; the production call sites (`cc-dispatcher`, `agent-runner`, `soleur-go-runner`) are not exercised, so a regression in how they build or pass options is invisible to it.

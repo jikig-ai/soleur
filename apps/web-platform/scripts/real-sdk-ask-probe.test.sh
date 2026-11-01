@@ -243,6 +243,17 @@ run_runner
 eq "row9c: remainder of exactly \$1.00 is still rerun" "1.00|test" "$(sed -n 2p "$SD/env.log")"
 eq "row9c: ... and the probe ran twice" "2" "$(invocations)"
 
+new_scn r9g; put 1 "$(gen_out 8 true 1.00 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+put 2 "$(gen_out 8 true - "$PASS_RESULT")" 0
+run_runner
+eq "row9g: the rerun passed" "pass" "$(gho outcome)"
+eq "row9g: pass 2 printed no TOTAL, so the total is unknown and never a partial sum" "unknown" "$(gho cost)"
+check "row9g: the summary records attempts: 2" grep -qF -- '- attempts: 2' "$T/summary"
+new_scn r9h; put last "$(gen_out 8 true '0.8000 capBookedCases=2' "$PASS_RESULT")" 0
+run_runner
+eq "row9h: a TOTAL line that also carries capBookedCases still parses to its cost" "0.8000" "$(gho cost)"
+check "row9h: a single attempt records attempts: 1" grep -qF -- '- attempts: 1' "$T/summary"
+
 new_scn r9d; put last "$(gen_out 8 true 3.01 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
 run_runner
 eq "row9d: a remainder of \$0.99 (just under the \$1.00 floor) is not rerun" "1" "$(invocations)"
@@ -331,7 +342,13 @@ new_scn redkeep; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"
   echo "path: $KEEP_PATH"; echo "digest: $KEEP_DIGEST"; echo "endpoint: $KEEP_HOSTPORT"; echo "lib: $KEEP_DOTFILE"
   echo "prose: $KEEP_WORD"; echo "prose2: $KEEP_WORD2"
   echo "hdr: Authorization: Bearer opaquebearertoken123"; echo "jwt: $JWT_FIX"
-  echo "bare: sk-""$(printf 'y%.0s' {1..30})"; echo "kv: key=sk-""$(printf 'z%.0s' {1..30})"; echo "ant: sk-ant-""api03-ZZZZZZZZZZZZZZZZZZ")" 0
+  echo "bare: sk-""$(printf 'y%.0s' {1..30})"; echo "kv: key=sk-""$(printf 'z%.0s' {1..30})"; echo "ant: sk-ant-""api03-ZZZZZZZZZZZZZZZZZZ"
+  echo "glued: tokenX""sk-ant-""api03-GGGGGGGGGGGGGGGGGG"; printf '%s\n' 'literal-nl: before\nsk-ant-''api03-NNNNNNNNNNNNNNNNNN'; echo "paren: (sk-ant-""oat01-PPPPPPPPPPPPPPPPPP)"
+  echo "twice: sk-ant-""api03-AAAAAAAAAAAAAAAAAA and sk-ant-""api03-BBBBBBBBBBBBBBBBBB"
+  echo "json: {\"authorization\":\"Bearer jsonbearertoken123456789\"}"; echo "lower: bearer lowerbearertoken123456789"; echo "upper: BEARER upperbearertoken123456789"
+  echo "bear2: Bearer one111111111111111111 then Bearer two222222222222222222"
+  echo "ghp: ghp_""$(printf 'h%.0s' {1..30})"; echo "gho: gho_""$(printf 'o%.0s' {1..30})"; echo "pat: github_pat_""$(printf 'p%.0s' {1..30})"
+  echo "jwt2: $JWT_FIX and $JWT_FIX")" 0
 run_runner
 for keep in "$KEEP_PATH" "$KEEP_DIGEST" "$KEEP_HOSTPORT" "$KEEP_DOTFILE" "$KEEP_WORD" "$KEEP_WORD2"; do
   check "redaction keeps benign text: $keep" grep -qF -- "$keep" "$T/probe.out"
@@ -342,6 +359,10 @@ check "redaction masks a JWT" bash -c "! grep -qF 'eyJ' '$T/probe.out'"
 check "redaction masks a bare sk- token at the start of a value" bash -c "! grep -qE 'sk-y{20}' '$T/probe.out'"
 check "redaction masks an sk- token after a non-alphanumeric boundary" bash -c "! grep -qE 'sk-z{20}' '$T/probe.out'"
 check "redaction masks an sk-ant- token" bash -c "! grep -qF 'ZZZZZZZZ' '$T/probe.out'"
+for tok in GGGGGGGGGG NNNNNNNNNN PPPPPPPPPP AAAAAAAAAA BBBBBBBBBB jsonbearertoken lowerbearertoken upperbearertoken one111111111 two222222222 hhhhhhhhhh oooooooooo pppppppppp; do
+  check "redaction masks every occurrence shape: $tok" bash -c "! grep -qF -- '$tok' '$T/probe.out'"
+done
+eq "redaction masks both JWTs on one line (the /g flag)" "0" "$(grep -c 'eyJ' "$T/probe.out")"
 eq "retention: every other probe line is untouched (case lines still 8)" "8" "$(grep -c '^PROBE case-' "$T/probe.out")"
 
 OPAQUE_KEY='opq/key.with+meta*chars[1]\&x|y'
@@ -406,7 +427,7 @@ n=$(wc -l <"$d/calls.log")
 refuse() { printf '%s\n' "$*" >>"$refused"; echo "stub gh: refused argv: $*" >&2; exit 64; }
 REPO_FIXTURE="acme/widgets"
 LBL="ci/real-sdk-ask-probe"
-VIEW_JQ='[.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length'
+VIEW_JQ='(.comments | last | .body // "") | startswith("<!-- real-sdk-ask-probe:passed -->")'
 T_REG_S="[ci/real-sdk-ask-probe] real-SDK ask probe regression"
 T_BLIND_S="[ci/real-sdk-ask-probe] real-SDK ask probe blind"
 for a in "$@"; do
@@ -516,8 +537,9 @@ runs_json() {
   done
   printf ']}\n'
 }
-# jobs_json <probe-step-conclusion|none> [job-name] : the jobs payload of one run. `none` omits the probe step (a skipped/billing-skip run).
-PSN="Run the real-SDK ask probe"
+# jobs_json <measured-step-conclusion|none> [job-name] : the jobs payload of one run. The step is the workflow's "Record that the probe measured"
+# (it succeeds only when the probe reached pass or fail). `none` omits it (a skipped, billing-skip or blind run).
+PSN="Record that the probe measured"
 jobs_json() {
   local c="$1" jn="${2:-probe}"
   if [[ "$c" == none ]]; then
@@ -644,7 +666,7 @@ run_should push "$B" "$C"
 eq "control: B's probe step succeeded -> B is the baseline -> lock-only non-SDK -> run=false" "false" "$SR"
 jobs_json failure >"$GD/jobs.1001.json"
 run_should push "$B" "$C"
-eq "a probe that ran and FAILED was still a measurement -> baseline B -> run=false" "false" "$SR"
+eq "a measured step that did not succeed is not a measurement (a blind run: CANT-RUN, crash, timeout, budget stop) -> run=true" "true" "$SR"
 jobs_json cancelled >"$GD/jobs.1001.json"
 run_should push "$B" "$C"
 eq "a probe step that was cancelled is not a measurement -> run=true" "true" "$SR"
@@ -930,15 +952,18 @@ check "regression passed note keeps 'stays OPEN'" bash -c "grep -qF 'stays OPEN'
 check "regression passed note does not say it is being closed" bash -c "! grep -qF 'is being closed' <<<\"\$1\"" _ "$(body_for 20)"
 eq "regression passed note starts with the marker (first line)" "$MARKER_LITERAL" "$(body_for 20 | head -n 1)"
 eq "blind passed note carries no marker" "0" "$(body_for 21 | grep -cF "$MARKER_LITERAL")"
-check "the filer listed the comments of #20 with the exact expression" grep -qF 'issue view 20 --repo acme/widgets --json comments --jq [.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length' "$GD/calls.log"
+check "the filer listed the comments of #20 with the exact expression" grep -qF 'issue view 20 --repo acme/widgets --json comments --jq (.comments | last | .body // "") | startswith("<!-- real-sdk-ask-probe:passed -->")' "$GD/calls.log"
 check "the filer never listed the comments of the blind issue (only regression notes are deduped)" bash -c "! grep -q '^issue view 21 ' '$GD/calls.log'"
 
-echo "== Guard 4: at most one 'subsequently passed' note per open regression issue (D3g) =="
+echo "== Guard 4: no second 'subsequently passed' note while the newest comment is one (D3g) =="
 COMMENTS_FIXTURE='{"comments":[{"body":"first note"},{"body":"<!-- real-sdk-ask-probe:passed -->\n\nA later run ... subsequently passed."}]}' \
   ISSUES_JSON="$(issues "20:$T_REG")" run_filer pass pass 0.8
-eq "a marker comment already present -> no second note" "0" "$(calls 'issue comment')"
+eq "the newest comment is the passed note -> no second note" "0" "$(calls 'issue comment')"
 eq "... and the filer still exits 0" "0" "$FRC"
-check "... and says why" grep -q 'already carries a passed note' "$T/f.out"
+check "... and says why" grep -q 'already the passed note' "$T/f.out"
+COMMENTS_FIXTURE='{"comments":[{"body":"<!-- real-sdk-ask-probe:passed -->\n\nsubsequently passed."},{"body":"Another occurrence of this probe outcome."}]}' \
+  ISSUES_JSON="$(issues "20:$T_REG")" run_filer pass pass 0.8
+eq "a newer regression comment after the passed note re-arms it -> the note is posted again" "1" "$(calls 'issue comment')"
 COMMENTS_FIXTURE='{"comments":[{"body":"a human quoted <!-- real-sdk-ask-probe:passed --> in the middle of a sentence"},{"body":" <!-- real-sdk-ask-probe:passed --> leading space"}]}' \
   ISSUES_JSON="$(issues "20:$T_REG")" run_filer pass pass 0.8
 eq "control: the marker NOT at the start of a comment does not count -> the note is posted" "1" "$(calls 'issue comment')"
@@ -996,7 +1021,7 @@ st_run issue comment 5 --repo acme/widgets --body hi
 eq "stub: an inline --body is refused" "64" "$ST_RC"
 st_run issue view 5 --repo acme/widgets --json comments --jq '.comments | length'
 eq "stub: issue view with another jq expression is refused" "64" "$ST_RC"
-st_run issue view 5 --repo acme/widgets --json body --jq '[.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length'
+st_run issue view 5 --repo acme/widgets --json body --jq '(.comments | last | .body // "") | startswith("<!-- real-sdk-ask-probe:passed -->")'
 eq "stub: issue view of another json field is refused" "64" "$ST_RC"
 st_run issue create --repo acme/widgets --title "[ci/real-sdk-ask-probe] something else" --body-file /dev/null --label type/security --label domain/engineering --label priority/p1-high --label ci/real-sdk-ask-probe
 eq "stub: issue create with an unmodelled title is refused" "64" "$ST_RC"
@@ -1009,7 +1034,7 @@ echo
 echo "real-sdk-ask-probe.test.sh: $PASS passed, $FAIL failed"
 # Anti-vacuity floor: a LOWER BOUND on the assertions that ran (the measured count at the last edit). Reported with printf + exit, not through
 # eq/check, so it does not route through the helpers it backstops. Raise it with a new row.
-MIN_ASSERTIONS=331
+MIN_ASSERTIONS=351
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

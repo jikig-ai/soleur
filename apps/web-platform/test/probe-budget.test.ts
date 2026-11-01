@@ -13,6 +13,7 @@ import {
   isBudgetExceededResult,
   createLedger,
   shouldRunCase,
+  applyCaseBudget,
 } from "../scripts/lib/probe-budget";
 
 describe("probe-budget: the cap constant (Guard 5 row 2)", () => {
@@ -107,6 +108,14 @@ describe("probe-budget: the cumulative ledger (Guard 5 rows 1, 3)", () => {
     expect(shouldRunCase(l)).toBe(false);
   });
 
+  it("tolerates float accumulation: forty 0.1 costs exhaust a $4 ledger (the epsilon is load-bearing)", () => {
+    const l = createLedger(4);
+    for (let i = 0; i < 40; i++) l.record(0.1);
+    expect(l.totalUsd()).toBeLessThan(4.0000001);
+    expect(l.exhausted()).toBe(true);
+    expect(shouldRunCase(l)).toBe(false);
+  });
+
   it("stops every remaining case once exhausted: no case runs after the first stop", () => {
     const l = createLedger();
     const costs = [1, 1, 1, 1, 1, 1, 1, 1];
@@ -177,6 +186,24 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[ \t])\/\/.*$/gm, "$1");
 }
 
+describe("probe-budget: applyCaseBudget is the single writer of maxBudgetUsd (behavioural)", () => {
+  it("sets the per-case cap on the options object it is given and returns it", () => {
+    const opts: Record<string, unknown> = { model: "m" };
+    const out = applyCaseBudget(opts, 0.5);
+    expect(out).toBe(opts);
+    expect(out.maxBudgetUsd).toBe(0.5);
+    expect(out.model).toBe("m");
+  });
+  it("overwrites a stale cap instead of keeping it", () => {
+    expect(applyCaseBudget({ maxBudgetUsd: 99 }, 0.5).maxBudgetUsd).toBe(0.5);
+  });
+  it("throws on a missing, zero, negative or non-finite cap, so a case can never run unbudgeted", () => {
+    for (const bad of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+      expect(() => applyCaseBudget({}, bad as unknown as number)).toThrow(/refusing/);
+    }
+  });
+});
+
 describe("probe-budget: the probe source is wired to the helpers (anchored call forms, comments stripped)", () => {
   const raw = readFileSync(resolve(__dirname, "..", "scripts", "dev-probe-destroy-ask.ts"), "utf8");
   const src = stripComments(raw);
@@ -192,7 +219,7 @@ describe("probe-budget: the probe source is wired to the helpers (anchored call 
     const m = /import \{([^}]*)\} from "\.\/lib\/probe-budget";/.exec(src);
     expect(m).not.toBeNull();
     const names = (m?.[1] ?? "").split(",").map((x) => x.trim());
-    for (const sym of ["resolveRunBudgetUsd", "perCaseBudgetUsd", "caseCostUsd", "isBudgetExceededResult", "createLedger", "shouldRunCase"]) {
+    for (const sym of ["resolveRunBudgetUsd", "perCaseBudgetUsd", "caseCostUsd", "isBudgetExceededResult", "createLedger", "shouldRunCase", "applyCaseBudget"]) {
       expect(names).toContain(sym);
     }
   });
@@ -204,9 +231,13 @@ describe("probe-budget: the probe source is wired to the helpers (anchored call 
   });
 
   it("sets maxBudgetUsd to the per-case cap on the probe's own copy of the options, never through the production builder's arguments", () => {
-    expect(src).toMatch(/\(opts as any\)\.maxBudgetUsd = caseBudgetUsd;/);
+    expect(src).toMatch(/applyCaseBudget\(opts as any, caseBudgetUsd\);/);
     expect(src).not.toMatch(/buildAgentQueryOptions\(\{[^}]*maxBudgetUsd/s);
-    expect(src.indexOf("buildAgentQueryOptions({")).toBeLessThan(src.indexOf("(opts as any).maxBudgetUsd = caseBudgetUsd;"));
+    expect(src.indexOf("buildAgentQueryOptions({")).toBeLessThan(src.indexOf("applyCaseBudget(opts as any, caseBudgetUsd);"));
+    // Denylist over the whole probe source: the helper owns the field, so no other write, delete or undefined-spread of it can exist.
+    expect(src.match(/\bmaxBudgetUsd\b/g) ?? []).toHaveLength(0);
+    // Exactly the two `continue;` statements of the case loop (the budget stop and the grant check): a third could skip a case silently.
+    expect(src.match(/\bcontinue;/g) ?? []).toHaveLength(2);
   });
 
   it("guards the case loop with shouldRunCase(ledger) and stops with a budget CANT-RUN before any model call", () => {
@@ -236,6 +267,6 @@ describe("probe-budget: the probe source is wired to the helpers (anchored call 
   });
 
   it("prints TOTAL costUsd=<ledger total> immediately before the RESULT line", () => {
-    expect(src).toMatch(/console\.log\(`TOTAL costUsd=\$\{ledger\.totalUsd\(\)\.toFixed\(4\)\}`\);\s*console\.log\(`RESULT: \$\{outcome\} /);
+    expect(src).toMatch(/console\.log\(`TOTAL costUsd=\$\{ledger\.totalUsd\(\)\.toFixed\(4\)\} capBookedCases=\$\{capBooked\}`\);\s*console\.log\(`RESULT: \$\{outcome\} /);
   });
 });

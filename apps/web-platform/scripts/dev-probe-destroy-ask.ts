@@ -16,7 +16,7 @@
  * sdk-bump-sandbox-gate.sh still only demands a `sdk-bump-verified:` commit attestation on a lockfile SDK change; it does not run this probe.
  * A change OUTSIDE the workflow's push filter is caught only by the next weekly run and the human ADR-284 Flip-criterion-5 check.
  * A full run makes one paid model call per case (8 by default). Cost is MEASURED: each PROBE line carries `costUsd=` (the SDK result frame's
- * `total_cost_usd`, an estimate and not a bill; a case that ends with NO result frame is charged its per-case cap and says `costBasis=cap`), and `TOTAL costUsd=<n>` is printed before RESULT. A hard $4 per-run cap
+ * `total_cost_usd`, an estimate and not a bill; a case that ends with NO result frame is charged its per-case cap and says `costBasis=cap`), and `TOTAL costUsd=<n> capBookedCases=<k>` is printed before RESULT (the total includes the cap-booked estimates; k says how many). A $4 per-run cap (soft by at most one in-flight turn per case)
  * (scripts/lib/probe-budget.ts: RUN_BUDGET_USD) is enforced by a per-case `maxBudgetUsd` (HARNESS-ONLY, set below on the probe's own copy of
  * the options and never in the production option builder) plus a cumulative stop; PROBE_RUN_BUDGET_USD can only LOWER it (the runner passes
  * the remainder on a rerun). A case stopped by the SDK budget (`error_max_budget_usd`), and every case after the ledger reaches the cap,
@@ -72,7 +72,7 @@ import { resolveWorkspaceMode } from "../server/workspace-mode";
 import { createCanUseTool, isBashCommandSafe, type CanUseToolContext } from "../server/permission-callback";
 import { getBashApprovalCache } from "../server/permission-callback-bash-batch";
 import { detectDestroyAsk, logDestroyOutcome } from "../server/destroy-ask-lane";
-import { resolveRunBudgetUsd, perCaseBudgetUsd, caseCostUsd, isBudgetExceededResult, createLedger, shouldRunCase } from "./lib/probe-budget";
+import { resolveRunBudgetUsd, perCaseBudgetUsd, caseCostUsd, isBudgetExceededResult, createLedger, shouldRunCase, applyCaseBudget } from "./lib/probe-budget";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
@@ -352,7 +352,7 @@ async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[
   // Diagnostic: PROBE_NOHOOK=1 removes the PreToolUse sandbox hook (which returns an explicit `allow`), to test whether a hook allow pre-empts canUseTool.
   if (process.env.PROBE_NOHOOK) (opts as any).hooks = { ...(opts as any).hooks, PreToolUse: [] };
   // HARNESS-ONLY (#10111): a per-case SDK budget stop. Set on the probe's copy of the options; never part of the production option builder.
-  (opts as any).maxBudgetUsd = caseBudgetUsd;
+  applyCaseBudget(opts as any, caseBudgetUsd);
   const ranTools: string[] = [];
   let text = "";
   let err: string | undefined;
@@ -396,6 +396,7 @@ async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[
 let failed = false;
 let cantRun = false;
 let cantRunReason = "model-did-not-attempt-bash";
+let capBooked = 0; // cases charged their per-case cap because they ended with no result frame (an estimate, not a measurement)
 let budgetHit = false; // any budget stop wins the CANT-RUN reason: the runner never retries a budget stop
 let ran = 0;
 let grantControlOk = false;
@@ -434,6 +435,7 @@ for (const c of selected) {
   const r = await runCase(c, caseBudgetUsd);
   ran += 1;
   ledger.record(r.costUsd);
+  if (r.costBasis === "cap") capBooked += 1;
   await Sentry.flush(2000); // events are asserted below; a late transport write must not read as "no event"
   const bashUsed = r.ranTools.includes("Bash");
   const gated = r.options.length > 0;
@@ -494,6 +496,6 @@ if (!failed && !cantRun && !diagnostic && ran < MIN_DEFAULT_CASES) {
 }
 const outcome = failed ? "FAIL" : cantRun ? `CANT-RUN:${budgetHit ? "budget-exceeded" : cantRunReason}` : diagnostic ? "DIAGNOSTIC" : "PASS";
 // Measured spend for this run (an estimate from the SDK's total_cost_usd, not a bill); always printed immediately before RESULT.
-console.log(`TOTAL costUsd=${ledger.totalUsd().toFixed(4)}`);
+console.log(`TOTAL costUsd=${ledger.totalUsd().toFixed(4)} capBookedCases=${capBooked}`);
 console.log(`RESULT: ${outcome} (${PROV}, cases-run=${ran})`);
 process.exit(failed ? 1 : cantRun ? 3 : diagnostic ? 4 : 0);

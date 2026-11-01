@@ -7,8 +7,9 @@
 #
 # Subcommands (run from the repository root):
 #   should-run   Push events only; every other event prints run=true. Compares the push with the newest MEASURING run of this workflow on
-#                main: completed, not cancelled, not a pull_request event, AND its `probe` job ran PROBE_STEP_NAME to success or failure
-#                (a billing-skipped or run=false run measured nothing and is never a baseline; a probe that ran and FAILED still measured).
+#                main: completed, not cancelled, not a pull_request event, AND its `probe` job's PROBE_STEP_NAME step SUCCEEDED
+#                (that step runs only when the probe reached an explicit pass or fail; a billing-skipped, run=false or blind run (CANT-RUN, crash,
+#                timeout, budget stop) measured nothing and is never a baseline).
 #                Up to 10 candidates are checked newest first through the jobs API; any API error or no qualifying candidate => run=true.
 #                Any changed file in the push allowlist other than the two package files -> run=true; only the package files changed ->
 #                run=true unless the resolved @anthropic-ai/claude-agent-sdk and @anthropic-ai/claude-code versions are equal in both
@@ -49,11 +50,12 @@ TITLE_BLIND="[ci/real-sdk-ask-probe] real-SDK ask probe blind"
 ADR_PATH="knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
 POSTMORTEM_PATH="knowledge-base/engineering/operations/post-mortems/2026-10-11-hosted-bash-ask-bypassed-by-sdk-auto-allow-postmortem.md"
 SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")   # parity with apps/web-platform/scripts/sdk-bump-sandbox-gate.sh (the offline suite asserts equality)
-# The probe step's `name:` in the workflow. should-run only trusts a baseline run whose `probe` job ran this step; the workflow suite
+# The `name:` of the workflow step "Record that the probe measured" (id: measured), which runs only when the probe step produced an explicit
+# pass or fail. should-run trusts a baseline run only when this step SUCCEEDED, so a blind run is never a baseline; the workflow suite
 # pins the two strings equal.
-PROBE_STEP_NAME="Run the real-SDK ask probe"
+PROBE_STEP_NAME="Record that the probe measured"
 LOCKFILE="apps/web-platform/package-lock.json"
-# The first line of a regression issue's "subsequently passed" note; the filer posts at most one per open regression issue.
+# The first line of a regression issue's "subsequently passed" note; the filer posts one whenever the newest comment is not already such a note.
 PASSED_MARKER="<!-- real-sdk-ask-probe:passed -->"
 # Every issue body ends with this: how to re-run, how to stop, what it tracks, where the reason values are defined, and the one way to cause a duplicate.
 ISSUE_FOOTER="Re-run: gh workflow run scheduled-real-sdk-ask-probe.yml (after merge) | Stop: soleur:cron-delete or disable the workflow | Tracking: #10111 | reason values: see norm_reason in apps/web-platform/scripts/real-sdk-ask-probe.sh | If you remove the ci/real-sdk-ask-probe label from an open issue the filer will open a duplicate"
@@ -83,8 +85,8 @@ norm_prov() {
 
 # redact: stdin -> stdout. Three layers: (1) the live credentials by exact value (a fixed-string scan in awk: the value is read from
 # ENVIRON, never interpolated into a pattern, so regex metacharacters or sed delimiters in it cannot break or bypass the mask; values
-# under 8 characters are skipped because they would mangle ordinary text); (2) credential-shaped headers and JWTs; (3) token-shaped
-# prefixes, where the `sk-` rules need a left boundary so a hyphenated word such as ask-the-user-... survives.
+# under 8 characters are skipped because they would mangle ordinary text); (2) Bearer tokens (any case, header or JSON-quoted) and JWTs; (3) token-shaped
+# prefixes: a live-shaped `sk-ant-<kind><nn>-...` key is masked wherever it appears (even glued to a preceding word or a literal backslash-n), while the other `sk-` rules need a left boundary so hyphenated prose such as risk-ant-colony or ask-the-user-... survives.
 redact() {
   RDX_A="${ANTHROPIC_API_KEY-}" RDX_B="${GH_TOKEN-}" awk '
     BEGIN { n = 0; if (length(ENVIRON["RDX_A"]) >= 8) lit[++n] = ENVIRON["RDX_A"]; if (length(ENVIRON["RDX_B"]) >= 8) lit[++n] = ENVIRON["RDX_B"] }
@@ -95,7 +97,7 @@ redact() {
         line = out line
       }
       print line }' |
-    sed -E 's/([Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+)[^[:space:]]+/\1<redacted>/g; s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted>/g; s/(^|[^A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+/\1<redacted>/g; s/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/\1<redacted>/g; s/gh[pousr]_[A-Za-z0-9]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9_]{20,}/<redacted>/g'
+    sed -E 's/([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[A-Za-z0-9._~+\/=-]{16,}/\1<redacted>/g; s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted>/g; s/sk-ant-[a-z]+[0-9]{2}-[A-Za-z0-9_-]+/<redacted>/g; s/(^|[^A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+/\1<redacted>/g; s/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/\1<redacted>/g; s/gh[pousr]_[A-Za-z0-9]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9_]{20,}/<redacted>/g'
 }
 
 # =================================================================================================================================
@@ -146,7 +148,7 @@ cmd_should_run() {
     [ -z "${rid:-}" ] && continue
     [[ "$rid" =~ ^[0-9]+$ ]] || continue
     if ! jobs="$(gh api "repos/${repo}/actions/runs/${rid}/jobs?per_page=100" 2>/dev/null)" \
-       || ! measured="$(jq -r --arg step "$PROBE_STEP_NAME" '[.jobs[]? | select(.name == "probe") | .steps[]? | select(.name == $step and (.conclusion == "success" or .conclusion == "failure"))] | length' <<<"$jobs" 2>/dev/null)" \
+       || ! measured="$(jq -r --arg step "$PROBE_STEP_NAME" '[.jobs[]? | select(.name == "probe") | .steps[]? | select(.name == $step and .conclusion == "success")] | length' <<<"$jobs" 2>/dev/null)" \
        || ! [[ "$measured" =~ ^[0-9]+$ ]]; then
       emit run true
       echo "::notice::real-sdk-ask-probe: could not read the jobs of run ${rid}, running"
@@ -156,7 +158,7 @@ cmd_should_run() {
       baseline="$rsha"
       break
     fi
-    echo "::notice::real-sdk-ask-probe: run ${rid} did not execute '${PROBE_STEP_NAME}' (skipped or not run), not a baseline"
+    echo "::notice::real-sdk-ask-probe: run ${rid} did not record '${PROBE_STEP_NAME}' as success (skipped, blind or not run), not a baseline"
   done <<<"$cands"
   if ! [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]; then
     emit run true
@@ -218,7 +220,7 @@ cmd_should_run() {
 classify() {
   local rc="$1" f="$2" result_line rest token cases_run case_lines bad_verdicts refs_ok r
   C_OUTCOME=blind; C_REASON=crash; C_RETRY=no
-  C_COST="$(norm_cost "$(sed -n 's/^TOTAL costUsd=\(.*\)$/\1/p' "$f" | tail -1)")"
+  C_COST="$(norm_cost "$(sed -n 's/^TOTAL costUsd=\([0-9.]*\)\( capBookedCases=[0-9]*\)\{0,1\}$/\1/p' "$f" | tail -1)")"
   C_PROV="$(norm_prov "$(sed -n 's/^PROVENANCE \(sdk=[^ ]* cli=[^ ]*\)\( .*\)\{0,1\}$/\1/p' "$f" | head -1)")"
   result_line="$(awk '/^RESULT: /{l=$0} END{print l}' "$f")"
   rest="${result_line#RESULT: }"
@@ -292,7 +294,7 @@ write_summary() { # outcome reason cost provenance attempts
     printf -- '- attempts: %s\n' "$5"
     printf -- '- scope: %s\n' "$HOST_ONLY_RESIDUAL"
     case "$1" in
-      pass) printf -- '- meaning: the real-SDK probe passed against the repo-head SDK, CLI and option builder on a CI host; it does not discharge ADR-284 Flip criteria 1 or 5 without a build_sha match.\n' ;;
+      pass) printf -- '- meaning: the real-SDK probe passed against the repo-head SDK and the CLI version it declares, on a CI host; it does not discharge ADR-284 Flip criteria 1 or 5 without a build_sha match.\n' ;;
       fail) printf -- '- meaning: REGRESSION — the hook-then-canUseTool precedence is not holding on this build. A p1 issue is filed by the filer job.\n' ;;
       *) printf -- '- meaning: the probe could not measure (never a pass). A p2 issue is filed by the filer job.\n' ;;
     esac
@@ -397,7 +399,7 @@ build_body() { # outfile class(regression|blind) mode(new|again|passed) outcome 
       again)  printf '%s\n\n' "Another occurrence of this probe outcome." ;;
       *)
         if [ "$class" = "regression" ]; then
-          printf '%s\n\n' "The scheduled real-SDK ask probe reported FAIL: with the repo-head SDK, bundled CLI and option builder, a destroy-family Bash command did not get the Approve/Reject card on the hook-then-canUseTool path (the #10054 class). Treat as a regression of the hosted must-ask lane until proven otherwise."
+          printf '%s\n\n' "The scheduled real-SDK ask probe reported FAIL: with the repo-head SDK and the CLI version it declares, a destroy-family Bash command did not get the Approve/Reject card on the hook-then-canUseTool path (the #10054 class). Treat as a regression of the hosted must-ask lane until proven otherwise."
         else
           printf '%s\n\n' "The scheduled real-SDK ask probe could NOT measure the lane (CANT-RUN, a diagnostic result, a crash with no RESULT line, a budget stop, or a setup failure). A blind probe is never a pass; this issue closes itself on the next PASS."
         fi
@@ -462,14 +464,15 @@ cmd_file_issue() {
         gh issue close "$num" --repo "$repo" --reason completed >/dev/null || rc=1
       done
       for num in $reg_nums; do
-        # At most one "subsequently passed" note per open regression issue until it is closed: a daily green run must not bury the issue.
-        if ! prior="$(gh issue view "$num" --repo "$repo" --json comments --jq "[.comments[].body | select(startswith(\"${PASSED_MARKER}\"))] | length" 2>/dev/null)" || ! [[ "$prior" =~ ^[0-9]+$ ]]; then
+        # No "subsequently passed" note while the NEWEST comment on the issue is already one: a daily green run must not bury the issue, but
+        # a regression comment posted after the note (a new FAIL) re-arms it, so a later pass is reported again.
+        if ! prior="$(gh issue view "$num" --repo "$repo" --json comments --jq "(.comments | last | .body // \"\") | startswith(\"${PASSED_MARKER}\")" 2>/dev/null)" || ! [[ "$prior" =~ ^(true|false)$ ]]; then
           echo "::error::real-sdk-ask-probe: could not read the comments of #${num}; not posting a passed note" >&2
           rc=1
           continue
         fi
-        if [ "$prior" -ge 1 ]; then
-          echo "real-sdk-ask-probe: #${num} already carries a passed note, not posting another"
+        if [ "$prior" = true ]; then
+          echo "real-sdk-ask-probe: the newest comment on #${num} is already the passed note, not posting another"
           continue
         fi
         build_body "$body" regression passed "$outcome" "$reason" "$cost" "$prov" "$url"

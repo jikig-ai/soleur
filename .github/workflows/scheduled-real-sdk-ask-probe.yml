@@ -81,7 +81,7 @@ jobs:
     # workflow_dispatch are not pull_request events and pass the first clause.
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    # Measured 2026-11-01 (self-test run 41295302456 at head 075832071a): probe step 36 s, job 1 min 40 s. These ceilings
+    # Measured 2026-11-01 (self-test run 41295302456 at head 075832071a): probe step 36 s, job about 1 min 44 s by the API timestamps. These ceilings
     # are hang backstops, not expectations: the whole-probe rerun runs inside the same step, so the step ceiling covers
     # two worst-case passes (2 x 8 cases x 180 s = 48 min -> 50). A run past it is a hang and the filer files it as
     # blind/no-outcome. The job ceiling adds setup (about 1 min), the preflight and the artifact upload.
@@ -176,8 +176,7 @@ jobs:
             echo "outcome=skipped"
           } >> "$GITHUB_OUTPUT"
 
-      # The ONLY step that holds the key. The name is a contract: the runner's PROBE_STEP_NAME constant selects the baseline
-      # run by this step name (the workflow suite pins the two equal). Ceiling: see the job note.
+      # The ONLY step that holds the key. Ceiling: see the job note. (The baseline marker is the "Record that the probe measured" step below.)
       - name: Run the real-SDK ask probe
         id: probe
         if: steps.should-run.outputs.run == 'true' && steps.preflight.outputs.ok == 'true'
@@ -190,6 +189,19 @@ jobs:
         run: |
           set -euo pipefail
           bash apps/web-platform/scripts/real-sdk-ask-probe.sh run
+
+      # The baseline marker. It succeeds only when the probe step reached an explicit verdict (pass or fail); a CANT-RUN, a crash, a step
+      # timeout or a budget stop leaves it skipped, so should-run never takes a run that could not measure as the baseline for a package-only
+      # push. The step name is a contract with the runner's PROBE_STEP_NAME (the workflow suite pins the two equal).
+      - name: Record that the probe measured
+        id: measured
+        if: always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail')
+        shell: bash
+        env:
+          MEASURED_OUTCOME: ${{ steps.probe.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          echo "real-sdk-ask-probe: the probe measured (outcome=${MEASURED_OUTCOME})"
 
       - name: Upload the redacted probe output
         if: always() && steps.should-run.outputs.run == 'true'

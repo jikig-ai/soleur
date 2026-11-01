@@ -10,7 +10,7 @@
  * summed within a case. Each probe case is its own `query()`, so the ledger sums ACROSS cases. The figure is an estimate, not a bill.
  */
 
-/** Hard per-run cap in USD. The scheduled workflow, the runner and the ADR-284 amendment quote this figure. */
+/** Per-run spend cap in USD (soft by at most one in-flight turn per case: the SDK checks maxBudgetUsd between turns). The scheduled workflow, the runner and the ADR-284 amendment quote this figure. */
 export const RUN_BUDGET_USD = 4;
 
 /**
@@ -79,4 +79,15 @@ export function createLedger(runBudgetUsd: number = RUN_BUDGET_USD): Ledger {
 /** Gate before each case: once the ledger is exhausted every remaining case is CANT-RUN:budget-exceeded without a model call. */
 export function shouldRunCase(ledger: Ledger): boolean {
   return !ledger.exhausted();
+}
+
+/**
+ * Set the harness-only per-case SDK budget on the probe's own copy of the query options and return it. The single writer of
+ * `maxBudgetUsd`: a missing, zero, negative or non-finite cap is a programming error and throws, so a case can never run unbudgeted.
+ */
+export function applyCaseBudget<T extends object>(opts: T, caseBudgetUsd: number): T & { maxBudgetUsd: number } {
+  if (typeof caseBudgetUsd !== "number" || !Number.isFinite(caseBudgetUsd) || caseBudgetUsd <= 0) {
+    throw new Error(`applyCaseBudget: refusing a non-positive or non-finite case budget (${String(caseBudgetUsd)})`);
+  }
+  return Object.assign(opts, { maxBudgetUsd: caseBudgetUsd });
 }

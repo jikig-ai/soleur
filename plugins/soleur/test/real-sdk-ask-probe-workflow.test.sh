@@ -36,6 +36,7 @@ cd "$REPO_ROOT" || { echo "FATAL: cannot cd to repo root" >&2; exit 2; }
 
 WF_REL=".github/workflows/scheduled-real-sdk-ask-probe.yml"
 PROBE_REL="apps/web-platform/scripts/dev-probe-destroy-ask.ts"
+export RSAP_PROBE_TS="$REPO_ROOT/$PROBE_REL"
 PERM_REL="apps/web-platform/server/permission-callback.ts"
 RUNNER_REL="apps/web-platform/scripts/real-sdk-ask-probe.sh"
 BUDGET_REL="apps/web-platform/scripts/lib/probe-budget.ts"
@@ -174,8 +175,17 @@ CRON = '17 9 * * 1'
 # Shared group for push/schedule/dispatch; a pull_request self-test gets its own per-PR group so it never evicts the
 # single pending main/cron run (D5).
 GROUP_EXPR = "real-sdk-ask-probe${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}"
-# Two worst-case passes: the whole-probe rerun runs inside the same step (8 cases x 180 s per pass = 24 min).
-TWO_PASS_MIN = 2 * 8 * 180 // 60
+# Two worst-case passes: the whole-probe rerun runs inside the same step. The case count and the per-case timer are READ from the probe
+# source (RSAP_PROBE_TS), never restated, so raising either without raising the step ceiling goes red.
+def two_pass_min():
+    p = os.environ.get('RSAP_PROBE_TS', '')
+    t = open(p, encoding='utf-8').read() if p and os.path.exists(p) else ''
+    mc = re.search(r'MIN_DEFAULT_CASES\s*=\s*([0-9]+)', t)
+    mt = re.search(r'setTimeout\(\(\)\s*=>\s*abort\.abort\(\)\s*,\s*([0-9_]+)\)', t)
+    if not (mc and mt):
+        return None
+    return -(-2 * int(mc.group(1)) * int(mt.group(1).replace('_', '')) // 60000)
+TWO_PASS_MIN = two_pass_min()
 SET_LINE = re.compile(r'^set(\s+(-[A-Za-z]+|pipefail|-o\s+pipefail))+\s*$')
 XTRACE = [
     re.compile(r'(^|[\s;&|(])set\s+(-[A-Za-z]*x|[-+]o\s+xtrace)', re.M),
@@ -453,6 +463,8 @@ def cmd_posture(wf):
         bad('FILER-NEEDS', str(nd))
     if probe.get('runs-on') != 'ubuntu-latest':
         bad('PROBE-RUNNER', str(probe.get('runs-on')))
+    if probe.get('name') != 'probe':
+        bad('PROBE-NAME', 'the probe job name must stay probe: the runner baseline lookup selects .jobs[] by name == probe (got %r)' % (probe.get('name'),))
     jt, sidx = probe.get('timeout-minutes'), {}
     for i, s in enumerate(probe.get('steps') or []):
         if isinstance(s, dict) and s.get('id'):
@@ -467,6 +479,8 @@ def cmd_posture(wf):
         pst = ps.get('timeout-minutes')
         if not (isinstance(jt, int) and isinstance(pst, int) and 0 < pst < jt):
             bad('TIMEOUTS', 'job=%s probe-step=%s' % (jt, pst))
+        elif TWO_PASS_MIN is None:
+            bad('TIMEOUT-DERIVE', 'could not read MIN_DEFAULT_CASES and the per-case abort timer from the probe source')
         elif pst < TWO_PASS_MIN:
             bad('TIMEOUT-TWO-PASS', 'probe-step=%s is below two worst-case passes (%d min)' % (pst, TWO_PASS_MIN))
         elif jt - pst < 5:
@@ -623,12 +637,22 @@ def cmd_stepname(wf, runner):
         v.append('VIOLATION STEPNAME-RUNNER-UNREADABLE the runner has no PROBE_STEP_NAME="..." constant')
     doc = load_wf(wf) if os.path.exists(wf) and os.path.getsize(wf) > 0 else {}
     jobs = doc.get('jobs') if isinstance(doc.get('jobs'), dict) else {}
-    steps = [s for s in ((jobs.get('probe') or {}).get('steps') or []) if isinstance(s, dict) and s.get('id') == 'probe']
+    allsteps = [s for s in ((jobs.get('probe') or {}).get('steps') or []) if isinstance(s, dict)]
+    steps = [s for s in allsteps if s.get('id') == 'measured']
     wname = str(steps[0].get('name', '')) if len(steps) == 1 else ''
     if not wname:
-        v.append('VIOLATION STEPNAME-WF-UNREADABLE the workflow has no single probe step (id: probe) with a name:')
+        v.append('VIOLATION STEPNAME-WF-UNREADABLE the workflow has no single baseline-marker step (id: measured) with a name:')
     if rname and wname and rname != wname:
-        v.append('VIOLATION STEPNAME-PARITY runner PROBE_STEP_NAME=%r but the workflow probe step name: is %r' % (rname, wname))
+        v.append('VIOLATION STEPNAME-PARITY runner PROBE_STEP_NAME=%r but the workflow baseline-marker step name: is %r' % (rname, wname))
+    if len(steps) == 1:
+        cond = re.sub(r'\s+', ' ', str(steps[0].get('if', '')))
+        # The marker may run only on an explicit verdict: always() (so it runs after a failing probe step) AND outcome pass or fail, nothing else.
+        want = "always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail')"
+        if cond != want:
+            v.append('VIOLATION STEPNAME-MEASURED-IF the baseline-marker step if: must be always() && (outcome == pass || outcome == fail) and nothing else, got %r' % cond)
+        ids = [s.get('id') for s in allsteps]
+        if 'probe' not in ids or ids.index('probe') > ids.index('measured'):
+            v.append('VIOLATION STEPNAME-MEASURED-ORDER the baseline-marker step must come after the probe step')
     out('FACT stepname=%s' % wname)
     for line in v:
         out(line)
@@ -831,8 +855,8 @@ def cmd_parity(wf, adr, budget):
     else:
         cap = mb.group(1)
         # anchored on the phrase that states the figure: a bare "$4" elsewhere in the section must not satisfy it
-        if not re.search(r'Hard\s+cap\s+(?:\*\*)?\$' + re.escape(cap) + r'(?![0-9]|\.[0-9])(?:\*\*)?\s+per\s+run', sect):
-            bad('PARITY-CAP', 'the amendment does not state "Hard cap $%s per run" (RUN_BUDGET_USD=%s)' % (cap, cap))
+        if not re.search(r'Spend\s+cap\s+(?:\*\*)?\$' + re.escape(cap) + r'(?![0-9]|\.[0-9])(?:\*\*)?\s+per\s+run', sect):
+            bad('PARITY-CAP', 'the amendment does not state "Spend cap $%s per run" (RUN_BUDGET_USD=%s)' % (cap, cap))
     for label, fig in (('Monthly ceiling $25', r'Monthly\s+ceiling\s+(?:\*\*)?\$25(?![0-9])'), ('Review trigger $2.50', r'Review\s+trigger\s+(?:\*\*)?\$2\.50(?![0-9])')):
         if not re.search(fig, sect):
             bad('PARITY-FIGURE', 'the amendment lacks "%s"' % label)
@@ -1157,7 +1181,7 @@ if [[ -f "$WF" && -f "$RUNNER" ]]; then
   if any_v; then no "PROBE_STEP_NAME parity: $(grep '^VIOLATION' <<<"$OUT" | head -3 | tr '\n' '|')"; else ok "PROBE_STEP_NAME parity: the runner constant equals the workflow probe step name"; fi
   if [[ -n "$(fact stepname)" ]]; then ok "PROBE_STEP_NAME dispatch: a probe step name was read ($(fact stepname))"; else no "PROBE_STEP_NAME dispatch: no probe step name read"; fi
   # (d) the runner emits outcome=not-run from should-run, and its file-issue treats not-run as a no-op (driven for real)
-  if grep -qE -- 'emit[[:space:]]+outcome[[:space:]]+not-run|outcome=not-run' "$RUNNER"; then ok "runner should-run emits outcome not-run"; else no "runner never emits outcome not-run"; fi
+  if sed -E 's/^[[:space:]]*#.*$//' "$RUNNER" | grep -qE -- '^[[:space:]]*emit[[:space:]]+outcome[[:space:]]+not-run[[:space:]]*$'; then ok "runner should-run emits outcome not-run"; else no "runner never emits outcome not-run"; fi
   FSTUB="$SCRATCH/filer-stub"
   mkdir -p "$FSTUB/bin"
   assert_fixture_dir "$FSTUB"
@@ -1288,6 +1312,7 @@ if [[ -f "$PRISTINE_WF" ]] && ! grep -q '^VIOLATION' <<<"$POSTURE_REAL"; then
   posture_mut filer-needs-dropped FILER-NEEDS "d['jobs']['file-issue'].pop('needs')"
   posture_mut preflight-after-probe PROBE-STEP-ORDER "s=d['jobs']['probe']['steps']; i=[k for k,x in enumerate(s) if x.get('id')=='preflight'][0]; p=s.pop(i); s.append(p)"
   posture_mut probe-timeout-inverted TIMEOUTS "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['timeout-minutes']=999"
+  posture_mut probe-job-renamed PROBE-NAME "d['jobs']['probe']['name']='run-probe'"
   posture_mut probe-timeout-below-two-passes TIMEOUT-TWO-PASS "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['timeout-minutes']=30"
   posture_mut job-timeout-no-headroom TIMEOUT-HEADROOM "d['jobs']['probe']['timeout-minutes']=52"
   posture_mut outcome-should-run-term-dropped OUTCOME-COMPOSE "d['jobs']['probe']['outputs']['outcome']=d['jobs']['probe']['outputs']['outcome'].replace(' || steps.should-run.outputs.outcome','')" "not-run"
@@ -1449,7 +1474,7 @@ if [[ -f "$PRISTINE_WF" ]] && ! grep -q '^VIOLATION' <<<"$PARITY_REAL"; then
   if mut_t "G1 row 7 drop the agent-env entry from the amendment" "$ADR_P" "$MUTD/adr-row7.md" $'- `apps/web-platform/server/agent-env.ts`\n' ''; then
     helper parity "$WF" "$MUTD/adr-row7.md" "$BUDGET"; expect_red "G1 row 7 a push entry missing from the ADR amendment" PARITY-ENTRY "agent-env.ts"
   fi
-  if mut_r "G5 row 6 the amendment states \$40 per run" "$ADR_P" "$MUTD/adr-g5r6.md" 'Hard cap(\s+)(\*\*)?\$4' 'Hard cap\g<1>\g<2>$40'; then
+  if mut_r "G5 row 6 the amendment states \$40 per run" "$ADR_P" "$MUTD/adr-g5r6.md" 'Spend cap(\s+)(\*\*)?\$4' 'Spend cap\g<1>\g<2>$40'; then
     helper parity "$WF" "$MUTD/adr-g5r6.md" "$BUDGET"; expect_red "G5 row 6 cap figure differs from RUN_BUDGET_USD" PARITY-CAP
   fi
   if mut_t "G5 row 6b RUN_BUDGET_USD raised to 40" "$PRISTINE/$(basename "$BUDGET_REL")" "$MUTD/budget-40.ts" 'RUN_BUDGET_USD = 4;' 'RUN_BUDGET_USD = 40;'; then
@@ -1486,16 +1511,32 @@ if [[ -f "$PRISTINE_WF" && -f "$PRISTINE_RUNNER" ]] && ! grep -q '^VIOLATION' <<
   allow_mut allowlist-package-json-added ALLOWLIST-EXTRA '|apps/web-platform/server/agent-env.ts)' '|apps/web-platform/server/agent-env.ts|apps/web-platform/package.json)' "apps/web-platform/package.json"
 
   # PROBE_STEP_NAME parity
-  if mut_r "PROBE_STEP_NAME constant renamed in the runner copy" "$PRISTINE_RUNNER" "$MUTD/runner-stepname.sh" '^(PROBE_STEP_NAME=["'"'"']?)Run the' '\g<1>Skip the'; then
+  if mut_r "PROBE_STEP_NAME constant renamed in the runner copy" "$PRISTINE_RUNNER" "$MUTD/runner-stepname.sh" '^(PROBE_STEP_NAME=["'"'"']?)Record that' '\g<1>Skip that'; then
     helper stepname "$WF" "$MUTD/runner-stepname.sh"; expect_red "stepname the runner constant drifts from the workflow" STEPNAME-PARITY
   else MUT_RUN=$((MUT_RUN + 1)); fi
-  if mut_y "probe step renamed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-stepname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['name']='Run the probe'"; then
+  if mut_y "baseline-marker step renamed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-stepname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0]['name']='Run the probe'"; then
     helper stepname "$MUTD/wf-stepname.yml" "$RUNNER"; expect_red "stepname the workflow step drifts from the runner constant" STEPNAME-PARITY
   else MUT_RUN=$((MUT_RUN + 1)); fi
-  if mut_y "probe step name removed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-noname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0].pop('name')"; then
-    helper stepname "$MUTD/wf-noname.yml" "$RUNNER"; expect_red "stepname a nameless probe step" STEPNAME-WF-UNREADABLE
+  if mut_y "baseline-marker step name removed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-noname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0].pop('name')"; then
+    helper stepname "$MUTD/wf-noname.yml" "$RUNNER"; expect_red "stepname a nameless baseline-marker step" STEPNAME-WF-UNREADABLE
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "baseline-marker step widened to every outcome" "$PRISTINE_WF" "$MUTD/wf-measured-any.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0].__setitem__('if','always()')"; then
+    helper stepname "$MUTD/wf-measured-any.yml" "$RUNNER"; expect_red "stepname a marker that runs after a blind outcome" STEPNAME-MEASURED-IF
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "baseline-marker step also accepts blind" "$PRISTINE_WF" "$MUTD/wf-measured-blind.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0].__setitem__('if',\"always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail' || steps.probe.outputs.outcome == 'blind')\")"; then
+    helper stepname "$MUTD/wf-measured-blind.yml" "$RUNNER"; expect_red "stepname a marker that also accepts blind" STEPNAME-MEASURED-IF
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "baseline-marker step moved before the probe step" "$PRISTINE_WF" "$MUTD/wf-measured-early.yml" "(lambda L: (L.insert(0, L.pop([i for i,s in enumerate(L) if s.get('id')=='measured'][0]))))(d['jobs']['probe']['steps'])"; then
+    helper stepname "$MUTD/wf-measured-early.yml" "$RUNNER"; expect_red "stepname a marker ordered before the probe" STEPNAME-MEASURED-ORDER
   else MUT_RUN=$((MUT_RUN + 1)); fi
   helper stepname "$WF" "$MUTD/runner-empty.sh"; expect_red "stepname a runner without the constant" STEPNAME-RUNNER-UNREADABLE
+  # TWO_PASS_MIN is derived from the probe source: a slower per-case timer must red the pristine 50-minute step ceiling.
+  if mut_t "probe per-case abort timer raised to 300 s in the probe copy" "$REPO_ROOT/$PROBE_REL" "$MUTD/probe-slow.ts" 'abort.abort(), 180_000' 'abort.abort(), 300_000'; then
+    RSAP_PROBE_TS="$MUTD/probe-slow.ts" helper posture "$WF"; expect_red "timeouts a slower per-case timer is not covered by the step ceiling" TIMEOUT-TWO-PASS
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_t "probe timer unreadable in the probe copy" "$REPO_ROOT/$PROBE_REL" "$MUTD/probe-notimer.ts" 'abort.abort(), 180_000' 'abort.abort(), LIMIT_MS'; then
+    RSAP_PROBE_TS="$MUTD/probe-notimer.ts" helper posture "$WF"; expect_red "timeouts an unreadable per-case timer is refused, not defaulted" TIMEOUT-DERIVE
+  else MUT_RUN=$((MUT_RUN + 1)); fi
 else
   no "parity mutants cannot run: the pristine workflow/runner is absent or a parity check is red ($(grep -h '^VIOLATION' <<<"${ALLOW_REAL-}${STEPNAME_REAL-}" | head -3 | tr '\n' '|'))"
 fi
@@ -1516,11 +1557,11 @@ done
 echo ""
 echo "real-sdk-ask-probe-workflow.test.sh: $passes passed, $fails failed ($((passes + fails)) assertions, $MUT_KILLED/$MUT_RUN mutants killed)"
 if [[ "${#FAILED[@]}" -ne "$fails" ]]; then printf '[FATAL] ledger/counter disagree: %s vs %s\n' "${#FAILED[@]}" "$fails" >&2; exit 1; fi
-MIN_ASSERTIONS=292
+MIN_ASSERTIONS=305
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi
-MIN_MUTANTS=108
+MIN_MUTANTS=114
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi
