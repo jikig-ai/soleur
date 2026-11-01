@@ -3304,9 +3304,9 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
-# scripts/followthroughs/git-data-replication-signal-11704 — the suite copies
-# the REAL libs into its scratch tree (the `for _lib` loop) and the SUT
-# `source`s them at runtime; both are genuine byte reads.
+# scripts/git-data-replication-signal-11704 — the suite copies the REAL libs
+# into its scratch tree (the `for _lib` loop) and the SUT `source`s them at
+# runtime; both are genuine byte reads.
 AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/betterstack-sources.sh"

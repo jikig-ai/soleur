@@ -125,11 +125,18 @@ the prune-only `--print-baseline` verification.
   — no "never reads" claims.
 
 **Edge cost check** (drain rubric "one suite run per ~20 PRs" bound): `git log --since=90.days
-origin/main -- <path>` = 1 commit for each of `scripts/lib/betterstack-sources.sh`,
-`scripts/lib/betterstack-read-classify.sh`, `scripts/followthroughs/git-data-replication-signal.sh`,
-`scripts/betterstack-query.sh`, `packages/opencode-plugin/package.json`,
-`npm-publish-trusted-publisher.md`; 2 for the ADR. All ~zero — no hold-back trigger (none is
-a >8-commits/90d hot file either).
+origin/main -- <path>` measured 2026-11-01 (corrected at review — the table here originally
+claimed ~1 commit per path and "no hot file", which was wrong). Declared-edge paths all cold:
+betterstack-read-classify.sh=2, betterstack-sources.sh=1, packages/opencode-plugin/package.json=1,
+npm-publish-trusted-publisher.md=1. Accepted-path commits: betterstack-query.sh=8, ADR-068=17,
+git-data-replication-signal.sh=1. Anchor-host commits: npm-publish-oidc.test.sh=2,
+git-data-replication-signal.{sh,test.sh}=1 each — except lint-betterstack-emitter-read.sh=13,
+over the 8-commits/90d line for the two emitter-read rows. **Ruled by CTO agent, 2026-11-01
+(post-review):** keep all seven accept rows — the rubric's hot-file test is evaluated on the
+file holding the mention line (the anchor host), not the accepted path, and its remedy
+(withhold a not-yet-declared edge) has no analogue for a pre-existing read; declaring the ADR
+row is mechanism-false and would itself breach the edge-cost bound. Same-day precedent:
+#11734 accepted an emitter-read row anchored on this same file at the same 13/90d.
 
 **Precedent and learnings:**
 
