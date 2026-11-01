@@ -50,7 +50,6 @@ WATCHED_PACKAGES = {
     "js-yaml",
     "liquidjs",
     "nanoid",
-    "next",
     "undici",
     "zod",
 }
@@ -119,10 +118,10 @@ REQUIRED = [
     ("pen-cli", "fast-uri", 3, "3.1.9"),
     ("pen-cli", "brace-expansion", 5, "5.0.12"),
     ("pen-cli", "undici", 8, "8.12.2"),
-    # 2026-10-31 critical/high batch (#11646 shape). next 16.4.1 is the strictest
-    # first_patched of three advisories: GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr
-    # (CRITICAL, unauth RCE) and GHSA-p3m5-59mp-jv5r (HIGH, Server Actions DoS).
-    ("web-platform", "next", 16, "16.4.1"),
+    # 2026-10-31 critical/high batch (#11646 shape). The next 16.4.1 bump
+    # (GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr CRITICAL + GHSA-p3m5-59mp-jv5r
+    # HIGH) was SPLIT OUT after e2e showed a deterministic dev-server crash on
+    # the bumped tree; it lands in its own PR with its own row re-added here.
     # GHSA-mchm-gjx6-7h55 (CRITICAL): middleware bypass via tunnel route.
     ("web-platform", "@sentry/nextjs", 10, "10.75.2"),
     # GHSA-27r3-jxmh-p828 (HIGH): DoS via trailing bytes after compressed body.
@@ -177,7 +176,6 @@ FLOOR_ANCHORS = {
     ("@hono/node-server", 2): "2.0.10",
     ("undici", 8): "8.12.2",   # GHSA-xjj6-f33q-929c (HIGH); pen-cli override, see the pen-cli rows
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
-    ("next", 16): "16.4.1",           # GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr (CRITICAL), GHSA-p3m5-59mp-jv5r (HIGH)
     ("@sentry/nextjs", 10): "10.75.2",  # GHSA-mchm-gjx6-7h55 (CRITICAL)
     ("body-parser", 2): "2.4.0",      # GHSA-27r3-jxmh-p828 (HIGH)
     ("zod", 4): "4.6.6",              # GHSA-mrhx-c7xc-m3w5 (HIGH; CVE-2023-54404)
@@ -278,7 +276,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 36  # prior 27 + the nine rows of the 2026-10-31 critical/high batch
+    MIN_ROWS = 35  # prior 27 + the eight rows of the 2026-10-31 critical/high batch
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -286,7 +284,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 36  # prior 27 + the nine rows of the 2026-10-31 batch, which all resolve
+    MIN_RESOLVED = 35  # prior 27 + the eight rows of the 2026-10-31 batch, which all resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "

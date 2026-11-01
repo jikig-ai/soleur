@@ -241,7 +241,7 @@ describe("network surface", () => {
     // On failure: start a Next dev server, POST once with curl -H 'Host: 127.0.0.1:3000' and log
     // request.headers in the route; confirm which x-forwarded-* headers Next adds, then update
     // PROXY_MARKER_HEADERS in server/egress-audit-ingest.ts and this pin together.
-    expect(pkg.version, "Next minor changed: re-measure the headers Next injects (see comment)").toMatch(/^16\.4\./);
+    expect(pkg.version, "Next minor changed: re-measure the headers Next injects (see comment)").toMatch(/^16\.3\./);
   });
 
   it.each(["forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"])(
