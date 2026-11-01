@@ -527,6 +527,29 @@ under a parent nobody overrode.
 tree — weakening a floor requires editing `REQUIRED`, `FLOOR_ANCHORS`, and
 `assert-dependabot-drain.test.sh` together, a three-file consistency check.
 
+## Enhancement Summary
+
+Deepen-plan pass executed inline (no agent-spawn capability in this harness —
+documented in `decision-challenges.md`): halt gates 4.6–4.13 verified
+mechanically (User-Brand Impact present and non-placeholder with the
+`threshold: none` scope-out; Observability fields valid — `python3` probe
+verb allowlisted, <15s, literal `expected_output`, no ssh; no PAT-shaped
+vars; no UI surface; dep-bump so Encryption/Task-Design conditional gates do
+not fire; `lint-guard-contract.py` green on the Guard Contract — 1 guard
+entry, structural assembly, 7-row mutation matrix incl. own-dispatch,
+second-member, suite-side, must-PASS, and anchor-without-row arms; single
+unfenced Scope Check with every ask mapped and the two `inferred` items
+justified; no `status: BLOCKED`). Verify-the-negative sweep: the plan's
+negative claims (`imports NOTHING from eslint-config-next`, no FlatCompat,
+callable-v3 callers installed-but-unloaded, no patched release on installed
+minimatch/glob majors, spike lockfile clean of all seven packages, no
+`export default` in minimatch@11 ESM) were each grepped against the tree or
+the packed tarball — all confirmed with citations in Research Insights.
+Key finding already folded in: the brief's Pillow alert #302 is already
+`state: fixed` on main (verification-only), and the hono serveStatic alert
+does NOT require the 2.x compat migration — 4.13.11 patches the 4.x line.
+PR/issue citations verified live via `gh` during premise validation.
+
 ## Open Code-Review Overlap
 
 None. Queried 96 open `code-review`-label issues on 2026-11-01; no issue
