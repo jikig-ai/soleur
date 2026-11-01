@@ -650,6 +650,9 @@ def cmd_stepname(wf, runner):
         want = "always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail')"
         if cond != want:
             v.append('VIOLATION STEPNAME-MEASURED-IF the baseline-marker step if: must be always() && (outcome == pass || outcome == fail) and nothing else, got %r' % cond)
+        # The marker must be a plain step that cannot fail or be waved through: no continue-on-error, and a run body without `exit`.
+        if steps[0].get('continue-on-error') not in (None, False) or re.search(r'\bexit\b', str(steps[0].get('run', ''))):
+            v.append('VIOLATION STEPNAME-MEASURED-BODY the baseline-marker step must not set continue-on-error or call exit')
         ids = [s.get('id') for s in allsteps]
         if 'probe' not in ids or ids.index('probe') > ids.index('measured'):
             v.append('VIOLATION STEPNAME-MEASURED-ORDER the baseline-marker step must come after the probe step')
@@ -1181,7 +1184,9 @@ if [[ -f "$WF" && -f "$RUNNER" ]]; then
   if any_v; then no "PROBE_STEP_NAME parity: $(grep '^VIOLATION' <<<"$OUT" | head -3 | tr '\n' '|')"; else ok "PROBE_STEP_NAME parity: the runner constant equals the workflow probe step name"; fi
   if [[ -n "$(fact stepname)" ]]; then ok "PROBE_STEP_NAME dispatch: a probe step name was read ($(fact stepname))"; else no "PROBE_STEP_NAME dispatch: no probe step name read"; fi
   # (d) the runner emits outcome=not-run from should-run, and its file-issue treats not-run as a no-op (driven for real)
-  if sed -E 's/^[[:space:]]*#.*$//' "$RUNNER" | grep -qE -- '^[[:space:]]*emit[[:space:]]+outcome[[:space:]]+not-run[[:space:]]*$'; then ok "runner should-run emits outcome not-run"; else no "runner never emits outcome not-run"; fi
+  # Captured first, then matched: `sed | grep -q` under pipefail returns 141 when grep exits early and sed takes SIGPIPE (an intermittent false negative).
+  RUNNER_CODE="$(sed -E 's/^[[:space:]]*#.*$//' "$RUNNER")"
+  if grep -qE -- '^[[:space:]]*emit[[:space:]]+outcome[[:space:]]+not-run[[:space:]]*$' <<<"$RUNNER_CODE"; then ok "runner should-run emits outcome not-run"; else no "runner never emits outcome not-run"; fi
   FSTUB="$SCRATCH/filer-stub"
   mkdir -p "$FSTUB/bin"
   assert_fixture_dir "$FSTUB"
@@ -1526,6 +1531,9 @@ if [[ -f "$PRISTINE_WF" && -f "$PRISTINE_RUNNER" ]] && ! grep -q '^VIOLATION' <<
   if mut_y "baseline-marker step also accepts blind" "$PRISTINE_WF" "$MUTD/wf-measured-blind.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0].__setitem__('if',\"always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail' || steps.probe.outputs.outcome == 'blind')\")"; then
     helper stepname "$MUTD/wf-measured-blind.yml" "$RUNNER"; expect_red "stepname a marker that also accepts blind" STEPNAME-MEASURED-IF
   else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "baseline-marker step made unfailable" "$PRISTINE_WF" "$MUTD/wf-measured-coe.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='measured'][0].update({'continue-on-error': True, 'run': 'exit 1'})"; then
+    helper stepname "$MUTD/wf-measured-coe.yml" "$RUNNER"; expect_red "stepname a marker with continue-on-error and exit" STEPNAME-MEASURED-BODY
+  else MUT_RUN=$((MUT_RUN + 1)); fi
   if mut_y "baseline-marker step moved before the probe step" "$PRISTINE_WF" "$MUTD/wf-measured-early.yml" "(lambda L: (L.insert(0, L.pop([i for i,s in enumerate(L) if s.get('id')=='measured'][0]))))(d['jobs']['probe']['steps'])"; then
     helper stepname "$MUTD/wf-measured-early.yml" "$RUNNER"; expect_red "stepname a marker ordered before the probe" STEPNAME-MEASURED-ORDER
   else MUT_RUN=$((MUT_RUN + 1)); fi
@@ -1557,11 +1565,11 @@ done
 echo ""
 echo "real-sdk-ask-probe-workflow.test.sh: $passes passed, $fails failed ($((passes + fails)) assertions, $MUT_KILLED/$MUT_RUN mutants killed)"
 if [[ "${#FAILED[@]}" -ne "$fails" ]]; then printf '[FATAL] ledger/counter disagree: %s vs %s\n' "${#FAILED[@]}" "$fails" >&2; exit 1; fi
-MIN_ASSERTIONS=305
+MIN_ASSERTIONS=307
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi
-MIN_MUTANTS=114
+MIN_MUTANTS=115
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

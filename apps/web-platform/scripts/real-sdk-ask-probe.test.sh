@@ -347,6 +347,8 @@ new_scn redkeep; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"
   echo "twice: sk-ant-""api03-AAAAAAAAAAAAAAAAAA and sk-ant-""api03-BBBBBBBBBBBBBBBBBB"
   echo "json: {\"authorization\":\"Bearer jsonbearertoken123456789\"}"; echo "lower: bearer lowerbearertoken123456789"; echo "upper: BEARER upperbearertoken123456789"
   echo "bear2: Bearer one111111111111111111 then Bearer two222222222222222222"
+  echo "colon: Bearer: colon1111111111111111"; echo "pct: bearer%20pct2222222222222222"; printf '%s\n' 'lit: bearer\nlit3333333333333333'
+  echo "verdict-ish: PROBE case-1 verdict=ok bearer-style=none"
   echo "ghp: ghp_""$(printf 'h%.0s' {1..30})"; echo "gho: gho_""$(printf 'o%.0s' {1..30})"; echo "pat: github_pat_""$(printf 'p%.0s' {1..30})"
   echo "jwt2: $JWT_FIX and $JWT_FIX")" 0
 run_runner
@@ -359,9 +361,10 @@ check "redaction masks a JWT" bash -c "! grep -qF 'eyJ' '$T/probe.out'"
 check "redaction masks a bare sk- token at the start of a value" bash -c "! grep -qE 'sk-y{20}' '$T/probe.out'"
 check "redaction masks an sk- token after a non-alphanumeric boundary" bash -c "! grep -qE 'sk-z{20}' '$T/probe.out'"
 check "redaction masks an sk-ant- token" bash -c "! grep -qF 'ZZZZZZZZ' '$T/probe.out'"
-for tok in GGGGGGGGGG NNNNNNNNNN PPPPPPPPPP AAAAAAAAAA BBBBBBBBBB jsonbearertoken lowerbearertoken upperbearertoken one111111111 two222222222 hhhhhhhhhh oooooooooo pppppppppp; do
+for tok in colon1111111 pct2222222 lit3333333 GGGGGGGGGG NNNNNNNNNN PPPPPPPPPP AAAAAAAAAA BBBBBBBBBB jsonbearertoken lowerbearertoken upperbearertoken one111111111 two222222222 hhhhhhhhhh oooooooooo pppppppppp; do
   check "redaction masks every occurrence shape: $tok" bash -c "! grep -qF -- '$tok' '$T/probe.out'"
 done
+check "redaction keeps a verdict line that merely contains the word bearer" grep -qF 'PROBE case-1 verdict=ok bearer-style=none' "$T/probe.out"
 eq "redaction masks both JWTs on one line (the /g flag)" "0" "$(grep -c 'eyJ' "$T/probe.out")"
 eq "retention: every other probe line is untouched (case lines still 8)" "8" "$(grep -c '^PROBE case-' "$T/probe.out")"
 
@@ -1034,7 +1037,7 @@ echo
 echo "real-sdk-ask-probe.test.sh: $PASS passed, $FAIL failed"
 # Anti-vacuity floor: a LOWER BOUND on the assertions that ran (the measured count at the last edit). Reported with printf + exit, not through
 # eq/check, so it does not route through the helpers it backstops. Raise it with a new row.
-MIN_ASSERTIONS=351
+MIN_ASSERTIONS=355
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
