@@ -3100,7 +3100,11 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `git_data_replication_success` marker rows from Better Stack through the read connection (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // those rows exist only in the stored log stream and Better Stack has no unauthenticated reader, so no probe verifies the same
   // property without the credentials; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
-  const BASELINE_DECLARED_PROBES = 90;
+  // #6027 (2026-11-01): +1 (90 -> 91) for `2026-11-01-feat-web2-pool-spread-ga-lb-plan.md` — the ga-lb-pool-soak follow-through probe.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the live CF pool-health API + the Better Stack incidents stream; neither
+  // has an unauthenticated substitute. Genuine.
+  const BASELINE_DECLARED_PROBES = 91;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

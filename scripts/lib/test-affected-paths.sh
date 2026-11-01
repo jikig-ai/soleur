@@ -873,6 +873,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  # #11766: terraform-target-parity.test.ts readFileSync-parses the cf-lb-overlay workflow (arm↔gate -target/ordering pins).
+  ".github/workflows/cf-lb-overlay.yml"
   # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
   ".github/workflows/inngest-key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
@@ -3304,6 +3306,18 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# scripts/git-data-replication-signal-11704 — the probe really `source`s both
+# betterstack libs (git-data-replication-signal.sh:75,77); derived edges missed
+# them (#11704's merge left the pair undeclared; ratchet red inherited by PRs).
+AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
+  "scripts/betterstack-query.sh"
+  "scripts/ensure-doppler.sh"
+  "scripts/followthroughs/git-data-replication-signal.sh"
+  "scripts/followthroughs/git-data-replication-signal.test.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/betterstack-sources.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "apps/web-platform/infra/git-data.tf"
   "plugins/soleur/test/lib/git-fixture-env.sh"
@@ -3358,6 +3372,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
   ".github/workflows/npm-publish.yml"
+  "package.json"
+  "packages/opencode-plugin/package.json"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
