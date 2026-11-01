@@ -23,3 +23,17 @@ None. (Planning subagent reported: no Task/agent-spawn capability inside its own
 ### Collision Gate Log
 - Refs probed: #11772 CLOSED (contextual, predecessor), #11780 MERGED PR (contextual), #11783/#11696/#11468 OPEN — all deferred citations, linked-PR hits are citation-class only.
 - Anchor probe over planned files: only hit is Dependabot PR #11468 (superseded-by-design, above). Overlap preflight exit=0, prs=none.
+
+## Work Phase (partial — context-boundary handoff)
+- Last-pushed SHA: 182ffcb2d3 (all branch commits CLA-signed: Jean Deruelle)
+- Done: tasks 0-4 complete. 15 npm alerts cleared (census clean, 5 lockfiles);
+  fast-copy 4.3.1 absorbed (npm-audit-only, no Dependabot alert);
+  drain-guard ratchet green (41 rows/38 resolved/40 assertions);
+  root blanket brace-expansion ^1.1.16 override REMOVED (consumerless, broke
+  minimatch@11's ^5.0.12 edge); eslint-config.test.ts tree-shape re-pinned.
+- Gates green: drain .py 41/38, test.sh 40/40, npm ci web-platform, lint 0err,
+  tsc 0, lint-dual-lockfile, verify-lockfile-guards, lint-workflow-install-sites,
+  vitest eslint-config 15/15 + cla-evidence slice 111/113 (2 stale asserts fixed).
+- Pending at handoff: doppler engine-contract-probe (background), npm run build,
+  fuller vitest, then one-shot Steps 4-8 (review -> resolve -> QA -> compound
+  -> ship -> DONE).
