@@ -23,3 +23,6 @@
 - scripts/collision-precheck.sh, scripts/lint-guard-contract.py, markdownlint-cli2
 - gh (issue/pr views, #11783 create), npm view next, web research on vercel/next.js #49587
 - Commits ce28ceb86c (plan), a6b11aa604 (deepen) — pushed
+## Pre-existing CI drift (not this diff — flag for operator)
+
+`test/cla-evidence/roster-entry-gate.test.ts` (5 arms) fails on fixture-vs-epoch drift: fixture sign dates 2026-10-01 predate the coverage-map notice epoch 2026-10-29T06:39:56Z derived from `docs/legal/individual-cla.md` git history — identical on branch and main, zero legal files in the diff. `operator-agent-runnable.test.sh` failed on a shallow-clone merge-base refusal (environment). Both confirmed non-diff during the contended affected-gate run.
