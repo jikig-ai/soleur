@@ -28,7 +28,6 @@
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
 apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 apps/web-platform/scripts/home-census-trigger.test.sh	knowledge-base/legal/audits
-apps/web-platform/scripts/home-census-trigger.test.sh	knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md
 apps/web-platform/test/parse-gitleaks-allowlists	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur	knowledge-base	dir-operand-tests	false-positive: c4-canonical.test.ts names the knowledge-base root as a path base; the file it reads (model.likec4.json) is covered by the diagrams/ edge
 plugins/soleur	knowledge-base/engineering/policies/content-vendoring.md	dir-operand-tests	false-positive: gdpr-gate.test.ts writes this path as the `registry:` line of a synthetic NOTICE it creates in a mkdtemp directory (a template literal, lines 391 and 752); it never reads the policy file
