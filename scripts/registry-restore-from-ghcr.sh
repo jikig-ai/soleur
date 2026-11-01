@@ -87,7 +87,9 @@
 #      availability failures are different classes with different verdicts. (A5 itself was
 #      deleted by architecture ruling — ADR-169 — but the boundary it drew was sound, and this
 #      engine is where it still lives, post-destroy, against the host that actually applies.)
-#   6  COULD NOT CLASSIFY — the failure matched no known shape. Loudest arm. An unclassified
+#   6  COULD NOT CLASSIFY — the failure matched no known shape, or (at the read-back and signature
+#      read/copy sites) a class those sites do not treat as a measured absence; the message says
+#      `class: …`. Loudest arm. An unclassified
 #      failure must never read as either "absent" or "fine". A re-run is safe and resumable, but
 #      the restore job does not retry 6: read the crane stderr, then re-run the job by hand.
 #  78  TRACED INVOCATION ONLY — run under `bash -x` (or SHELLOPTS=xtrace) with a registry
@@ -256,7 +258,8 @@ classify() {
     # attestation layer. So this arm names TWO causes the engine cannot tell apart, and the message
     # must say so rather than assert corruption. Exit 4 is still right where verify_die reads a
     # blob (verification is unproven either way); at the four manifest read/copy sites a result
-    # of this class exits 6, because those calls never decompress or hash a blob (#11667).
+    # of this class exits 6, because the three digest reads never decompress or hash a blob, and the signature copy matches
+    # the image-copy site, which already exits 6 for these classes (#11667, CTO ruling).
     # Single pattern on purpose: a `*"unexpected EOF reading gzip"*` alternative would be DEAD —
     # the NETWORK arm's `*"unexpected EOF"*` above already matches it.
     *"gzip: invalid header"*)                                          echo LAYERFORMAT ;;

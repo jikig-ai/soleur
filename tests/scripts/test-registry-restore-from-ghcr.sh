@@ -832,6 +832,12 @@ CM_ERR="Error: error verifying sha256 checksum for sha256:aa"
 LF_ERR="Error: gzip: invalid header"
 site_case rc6-image-readback-contentmismatch 6 'class: CONTENTMISMATCH' \
   "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$CM_ERR"
+site_case rc6-image-readback-layerformat 6 'class: LAYERFORMAT' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$LF_ERR"
+site_case rc6-ghcr-signature-read-contentmismatch 6 'class: CONTENTMISMATCH' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$CM_ERR"
+site_case rc6-sink-signature-readback-layerformat 6 'class: LAYERFORMAT' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$LF_ERR"
 site_case rc6-ghcr-signature-read-layerformat 6 'class: LAYERFORMAT' \
   "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$LF_ERR"
 site_case rc6-signature-copy-contentmismatch 6 'class: CONTENTMISMATCH' \
@@ -1655,7 +1661,7 @@ fi
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=120
+MIN_ASSERTIONS=123
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"
