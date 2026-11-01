@@ -786,8 +786,8 @@ site_case() { # <name> <want-rc> <phrase-regex> <last-call-suffix> <fixture-key>
   fixture "$fx" "$key" 1 "" "$err"
   out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
   last="$(tail -n 1 "$calls")"
-  if [[ "$rc" -eq "$want" ]] && printf '%s' "$out" | grep -qE -- "$phrase" \
-     && ! printf '%s' "$out" | grep -qE 'NO FIXTURE|^stub:' && [[ "$last" == *"$suffix" ]]; then
+  if [[ "$rc" -eq "$want" ]] && grep -qE -- "$phrase" <<<"$out" \
+     && ! grep -qE 'NO FIXTURE|^stub:' <<<"$out" && [[ "$last" == *"$suffix" ]]; then
     pass "$name => exit $want at its own site"
   else
     fail "$name must exit $want naming its site (last call: $last)" "$rc" "$out"
