@@ -61,3 +61,6 @@ structural-cause roll-up: L1, L8, L13, L18 are one gap, the sheet states abort/r
 
 Findings: 3 P1 (state rule keyed on the flag alone, re-pause reversal forbidden by the amendment, post-RF6 loss rule too narrow), about 12 P2, about 15 P3, all introduced by or left by the first fix commit. dedup: about 60 raw -> 20 unique. Structural cause: each new rule was written against the state the author was thinking about, not against every state the flag, pause, exemption and sentinel can be in. Resolved by CTO rulings R13 to R19 (decision-challenges.md) and one fix commit. Round 2 (targeted) and a verification pass follow.
 
+### Fix round 2 (2026-11-01, commit bedf57cfb6 reviewed by four seats)
+
+No P1 from user-impact, architecture or quality; one P1 from history (a routine deliberate deploy had no counted-loss gate) and about 12 P2 (state model gaps: the stamp, the sentinel read channel, unknown-N persistence, neighbouring Quiet-window sentences, a false #10914 claim). All applied in the third fix commit; rulings R20 to R22. Next: one verification pass and the affected gate.
