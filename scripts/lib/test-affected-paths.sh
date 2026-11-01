@@ -3304,6 +3304,14 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# scripts/followthroughs/git-data-replication-signal-11704 — the suite copies
+# the REAL libs into its scratch tree (the `for _lib` loop) and the SUT
+# `source`s them at runtime; both are genuine byte reads.
+AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/betterstack-sources.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "apps/web-platform/infra/git-data.tf"
   "plugins/soleur/test/lib/git-fixture-env.sh"
@@ -3358,6 +3366,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
   ".github/workflows/npm-publish.yml"
+  "knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md"
+  "packages/opencode-plugin/package.json"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(

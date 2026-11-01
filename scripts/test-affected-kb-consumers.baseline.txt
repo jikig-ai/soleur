@@ -97,7 +97,6 @@ plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/q
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
 plugins/soleur/test/merge-effect-class-parity.test.sh	knowledge-base
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
-plugins/soleur/test/npm-publish-oidc.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/brainstorms
 plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/plans
 plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/specs
