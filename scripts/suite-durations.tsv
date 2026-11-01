@@ -88,6 +88,7 @@ apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	84	measured
 apps/web-platform/scripts/lint-migration-immutability.test.sh	1315	measured
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	558	measured
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	76	measured
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	2868	measured
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	4698	measured
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	98	measured
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	535	measured
@@ -272,6 +273,7 @@ plugins/soleur/test/pr-overlap-preflight.test.sh	94900	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
 plugins/soleur/test/ralph-loop.test.sh	5125	measured
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	257000	measured
 plugins/soleur/test/redact-class-parity.test.sh	107	measured
 plugins/soleur/test/regenerate-shard-manifest.test.sh	1344	measured
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	554	measured
