@@ -3,6 +3,7 @@
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-11-01-fix-epic-11556-ci-time-batch-plan.md
 - Status: complete
+- cto_spawns=1 (sequential inline — Devin has no plugin-agent roster; Reviewed-Coverage: sequential-fallback)
 
 ### Errors
 - Subagent `git commit` of plan artifacts blocked by exec-tool "commit to main" heuristic false-positive (known Devin worktree-commit issue — envelope omits .cwd). Parent committed via `git -C <worktree>`.
