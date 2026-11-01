@@ -1960,7 +1960,7 @@ ssh_run = ssh_runs[0] if len(ssh_runs) == 1 else ""
 for res in want_res.values():
     need(re.search(r'^\s*-target=betteruptime_heartbeat\.' + res + r'\b', plan_run, re.M) is not None, "apply-target-missing-" + res)
     need(re.search(r'-target=betteruptime_heartbeat\.' + res + r'\b', ssh_run) is None, "apply-target-in-ssh-step-" + res)
-need(len(re.findall(r'^\s*-target=logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', plan_run, re.M)) == 4, "apply-retained-destroy-targets-not-4")
+need(len(re.findall(r'-target[=\s]+["\']?logtail_exploration(_alert)?\.(claude_cost_capture_dark|luks_monitor_host_timer_dark)\b', "\n".join(l for l in plan_run.split("\n") if not l.lstrip().startswith("#")))) == 0, "apply-retired-destroy-targets-present")
 need(re.search(r'-target=logtail_exploration', ssh_run) is None, "apply-destroy-target-in-ssh-step")
 need(re.search(r'^\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",', table, re.M) is not None, "watchdog-row-workflowFile-line")
 row = re.search(r'\{\s*workflowFile: "scheduled-deadman-heartbeat-feeder\.yml",(.*?)\n  \},', table, re.S)
@@ -1994,16 +1994,18 @@ for res in ("luks_monitor_host_timer", "claude_cost_capture"):
     m = re.search(r'\{\s*name: "' + res + r'",(.*?)\n  \},\n', src, re.S)
     if not m:
         bad.append("manifest-row-missing-" + res); continue
-    b = m.group(1)
+    # Comment-stripped: the row's comments quote `paused: true` and may quote the old declaration, and prose must satisfy no pin.
+    b = re.sub(r"//[^\n]*", "", m.group(1))
     if 'arming: "external-probe"' not in b: bad.append("manifest-arming-" + res)
     if "paused: true" not in b: bad.append("manifest-paused-" + res)
     if 'file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"' not in b: bad.append("manifest-evidence-file-" + res)
     if 'pattern: "bash scripts/deadman-heartbeat-feeder.sh"' not in b: bad.append("manifest-evidence-pattern-" + res)
-    if 'arming_pending: { tracking_issue: 11631, expires: "2026-11-13" }' not in b: bad.append("manifest-arming_pending-" + res)
+    # The key itself, in any spacing or quoting, may not return.
+    if re.search(r'\barming_pending\b["\']?\s*:', b): bad.append("manifest-arming_pending-still-declared-" + res)
 print("\n".join(bad))
 PYM
 )"
-if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, paused, arming_pending, evidenced by the workflow and the feeder invocation"
+if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, source-paused, armed (no arming_pending), evidenced by the workflow and the feeder invocation"
 else fail "manifest violations: $(paste -sd, - <<<"$_man")"; fi
 # Counted either way (a skip is one pass), so the exact floors do not depend on whether the host has bun: the
 # deploy-script-tests CI job does not install it, and the manifest rows are also pinned statically just above.

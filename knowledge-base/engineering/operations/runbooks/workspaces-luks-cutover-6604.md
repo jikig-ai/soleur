@@ -1114,7 +1114,7 @@ boolean: the feeder refuses to guess and sends nothing, so the arm script times 
 drops the `arming_pending: { tracking_issue: 11631 }` declaration from the target's row in
 `plugins/soleur/lib/heartbeat-manifest.ts`; from its merge the nightly live reconcile's `fed-but-paused` class is
 the safety net if anything re-pauses the heartbeat (a paused heartbeat makes the feeder exit 0, so the feeder
-itself would not alert).
+itself would not alert). For #11631 both heartbeats were armed on 2026-10-31 and the declaration was dropped by record PR 11736.
 
 ### 5. Resolve the stuck Better Stack incident (production write: authorize the exact command)
 
