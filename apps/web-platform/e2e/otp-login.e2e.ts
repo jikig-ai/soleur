@@ -131,8 +131,10 @@ test.describe("Login no-account redirect", () => {
     // per `errors.ts:47` AuthApiError constructor convention.
     // The [e2e-mock] tag makes the fabricated error self-labeling in CI logs —
     // the unlabeled string was triaged as a real environment failure (#9167).
-    // The app maps on error.code, never msg, so the tag changes nothing the
-    // test asserts; do not read this log line as a dev-Supabase failure.
+    // The app returns true on `error.code === "otp_disabled"` before the
+    // NO_ACCOUNT_PATTERN message fallback (unanchored, so the tagged string
+    // still matches) — the tag changes nothing the test asserts; do not read
+    // this log line as a dev-Supabase failure.
     await page.route("**/auth/v1/otp*", (route) =>
       route.fulfill({
         status: 400,

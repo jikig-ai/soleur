@@ -11,7 +11,7 @@ Issue: #9167 (closes)
 ## Phase 2 — Marker test coverage
 
 - [x] 2.1 Create `apps/web-platform/test/playwright-web-server-exit-marker.test.ts` (vitest + `spawnSync`): rc pass-through (`true`→0, `bash -c 'exit 42'`→42, `bash -c 'kill -9 $$'`→137), usage guard →2, `--selftest` → stdout marker + rc 0, marker carries `port=`/`distdir=`/`uptime=` fields (assert `port=3101` with `env: { PORT: "3101" }`), and comment-stripped config-text assertions (each webServer `command:` references `e2e/web-server.sh`; each entry declares a unique `name:`).
-- [ ] 2.2 `cd apps/web-platform && npx vitest run test/playwright-web-server-exit-marker.test.ts test/playwright-dev-server-distdir.test.ts` — both green.
+- [x] 2.2 `cd apps/web-platform && npx vitest run test/playwright-web-server-exit-marker.test.ts test/playwright-dev-server-distdir.test.ts` — both green.
 
 ## Phase 3 — Mock log self-labeling
 

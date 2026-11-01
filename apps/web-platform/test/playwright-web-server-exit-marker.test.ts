@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { stripComments } from "./helpers/strip-comments";
+import {
+  parseWebServerEntries,
+  playwrightConfigPath,
+} from "./helpers/web-server-entries";
 
 /**
  * Playwright's `webServer` entries report a mid-run dev-server death as bare
@@ -22,7 +24,7 @@ import { stripComments } from "./helpers/strip-comments";
 
 const SCRIPT = join(__dirname, "..", "e2e", "web-server.sh");
 
-const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+const run = (args: string[], env: Record<string, string> = {}) =>
   spawnSync("bash", [SCRIPT, ...args], { env: { ...process.env, ...env }, encoding: "utf-8" });
 
 describe("e2e/web-server.sh exit marker", () => {
@@ -62,20 +64,33 @@ describe("e2e/web-server.sh exit marker", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("e2e-webserver: exited rc=0");
   });
+
+  it("--selftest rejects trailing args rather than silently discarding them", () => {
+    const r = run(["--selftest", "npm", "run", "dev"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("usage:");
+  });
 });
 
 describe("playwright.config.ts webServer wiring", () => {
-  const playwright = stripComments(
-    readFileSync(join(__dirname, "..", "playwright.config.ts"), "utf-8"),
-  );
-  const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
-  const entries = webServerBlock.split(/\bcommand:\s/).slice(1);
+  const {
+    text,
+    block: webServerBlock,
+    entries,
+  } = parseWebServerEntries(playwrightConfigPath(__dirname));
 
   it("routes every webServer entry's command through e2e/web-server.sh", () => {
-    expect(entries.length).toBeGreaterThanOrEqual(2);
+    // Two syntax anchors, not a bare token (cq-assert-anchor-not-bare-token):
+    // every entry's `command:` value is the shared const, AND that const is
+    // defined as the wrapper invocation — a mention in an argument or a
+    // comment satisfies neither.
     for (const entry of entries) {
-      expect(entry.slice(0, entry.indexOf("\n"))).toContain("e2e/web-server.sh");
+      expect(entry).toMatch(/^\s*DEV_SERVER_COMMAND\b/);
     }
+    expect(text).toMatch(
+      /\bconst\s+DEV_SERVER_COMMAND\s*=\s*`bash\s+e2e\/web-server\.sh\b/,
+    );
+    expect(entries.length).toBeGreaterThanOrEqual(2);
   });
 
   it("gives every webServer entry a distinct name: so each piped line is attributable", () => {

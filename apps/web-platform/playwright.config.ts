@@ -8,6 +8,10 @@ const PUBLIC_PORT = 3099;
 const AUTH_PORT = 3100;
 const MOCK_SUPABASE_PORT = 54399;
 const MOCK_SUPABASE_URL = `http://localhost:${MOCK_SUPABASE_PORT}`;
+// Every webServer entry runs through e2e/web-server.sh: on child exit it
+// prints `e2e-webserver: exited rc=<n> …` to stderr, so a mid-run death is
+// attributable in the job log instead of bare ERR_CONNECTION_REFUSED (#9167).
+const DEV_SERVER_COMMAND = `bash e2e/web-server.sh npm run dev`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -65,10 +69,7 @@ export default defineConfig({
     // Server for public page tests (original config — fake unreachable Supabase URL)
     {
       name: "e2e-public",
-      // `command:` runs through e2e/web-server.sh: on child exit it prints
-      // `e2e-webserver: exited rc=<n> …` to stderr, so a mid-run death is
-      // attributable in this log instead of bare ERR_CONNECTION_REFUSED (#9167).
-      command: `bash e2e/web-server.sh npm run dev`,
+      command: DEV_SERVER_COMMAND,
       // `url:` readiness, not `port:`. A TCP check calls a server "ready" the
       // moment it listens, so a first compile of app/layout.tsx that 5xx's let
       // the suite start and fail one test at a time (64 reds, ~14 min). The
@@ -96,7 +97,7 @@ export default defineConfig({
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
       name: "e2e-auth",
-      command: `bash e2e/web-server.sh npm run dev`,
+      command: DEV_SERVER_COMMAND,
       // Same readiness contract as the public server above (url, 180s).
       url: `http://localhost:${AUTH_PORT}/login`,
       timeout: 180_000,

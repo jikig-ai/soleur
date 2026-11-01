@@ -17,8 +17,8 @@
 - Issue close-out: CTO ruling corrected the plan-time "60/60" claim — measured: 0 OTP/font-mechanism recurrences in ~300+ merge-group e2e jobs, but 6 `ERR_CONNECTION_REFUSED :3100` reds (the #11299 signature). PR posts the corrected measurement comment + `Closes #9167` + `Ref #11299`.
 - `cto_spawns=1` (technical-ruling gate: 5 rows ruled, batched spawn).
 - Parent-session amendment: PR body also carries `Ref #11299` (same ERR_CONNECTION_REFUSED signature; marker diagnoses, does not fix).
-- `[e2e-mock]` tag on fabricated `msg`/`message` — safe (`isNoAccountError` maps on `error.code`, never `msg`).
-- Technical rulings recorded as `pending - assumed:` rows in decision-challenges.md (plugin subagents unavailable on this harness — sequential-fallback).
+- `[e2e-mock]` tag on fabricated `msg`/`message` — safe (`isNoAccountError` returns true on `error.code === "otp_disabled"` before the unanchored `NO_ACCOUNT_PATTERN` message fallback, which still matches the tagged string).
+- Technical rulings initially landed as `pending - assumed:` rows (sequential-fallback); superseded — all 5 rows now carry `Ruled by CTO agent, 2026-10-31`, gate rc=0.
 
 ### Components Invoked
 - `soleur:plan`, `soleur:deepen-plan` (sequential-fallback inline)
@@ -28,7 +28,7 @@
 ## Parent-session notes
 - Route: `/soleur:go #9167` → `one-shot` (issue OPEN, no linked/open PRs; merged body-probe hits #9587/#9554/#9523 are citations of unrelated CI fixes).
 - Draft PR: #11738 on branch `feat-one-shot-9167-e2e-otp-signups`.
-- `cto_spawns=0`
+- `cto_spawns=0` — SUPERSEDED: the batched CTO ruling landed later; see Decisions (`cto_spawns=1`).
 
 ## Work Phase (in progress)
 - Implemented: `apps/web-platform/e2e/web-server.sh` (spawn+wait+rc marker, `128+N` signal encoding, `--selftest` arm), `name:` per webServer entry (`e2e-public`/`e2e-auth`), `[e2e-mock]` tag on otp-login mock payload.
@@ -38,3 +38,9 @@
 - Affected gate (`test-all.sh --affected`, 163 suites) running detached — log `/var/tmp/soleur-test-all-logs/wt9167-affected.log`, rc `/var/tmp/soleur-test-all-logs/wt9167-affected.rc`.
 - Remaining: gate green → `## Work Phase Complete` → soleur:review → fix findings → soleur:qa → soleur:compound → soleur:ship (PR #11738, `Closes #9167` + `Ref #11299`) → postmerge → DONE.
 - tasks.md: 1.x–4.1 ticked; 4.2 (PR body via ship) and 4.3 (e2e CI green + name prefixes) pending.
+
+## Review Phase (in progress)
+- Class: `code` | Tier: `none` (no sensitive paths; plan declares User-Brand none) → 6-seat floor panel + test-design (conditional: new test file).
+- Seats (background run_subagent, report-only): 6ac7c5b8 git-history, 37a15cad pattern-recognition, 24f6a62f architecture, 96089a8e security-sentinel, 398c37b9 code-quality, 127ea95d test-design. PANEL_SHA=300b566d56.
+- Pre-spawn: merge-tree rc=0 clean; collision precheck = own PR #11738 only; pushed 300b566d56.
+- Pre-existing failures tracked: #11754 (roster-entry-gate fixture drift + shallow-clone operator-agent-runnable).
