@@ -144,7 +144,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
-  "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
@@ -159,7 +158,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-issue-write-scope-live"
   "scripts/lint-workflow-step-env-refs-live"
   "scripts/lint-ratchet-ruff-live"
-  "tests/scripts/lint-ratchet"
   "scripts/review-reminder-liveness"
   "scripts/watch-live-verify-pass"
   # live-scanner batteries named for the gates they probe (#8384 landed these)
@@ -177,7 +175,7 @@ ALWAYS_ON_SUITES=(
   # verdict is computed on sandbox copies of named files, not on the live tree.
   # #8591's TEST_GROUP=affected mutation suite — a runner-SUT property battery
   # like its sibling above; renamed out of the add/add collision with #8322's.
-  "scripts/test-all-group-affected"
+  # (#11648) demoted to edge-selection — see the withdrawn-to-edge-selection index below.
   "scripts/suite-exit-class-parity"
   # ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's
   # --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the
@@ -193,7 +191,6 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-credential-path-literals"
   "scripts/lint-diagnosis-claims"
   "scripts/lint-dual-lockfile"
-  "scripts/lint-encryption-posture"
   "scripts/lint-infra-no-human-steps"
   "scripts/lint-legal-mirror-drift-baseline-unit"
   "scripts/lint-legal-registers-unit"
@@ -254,13 +251,10 @@ ALWAYS_ON_SUITES=(
   "plugins/soleur/test/auto-close-scanner.test.sh"
   "plugins/soleur/test/vendor-drift-classify.test.sh"
   "plugins/soleur/test/vendor-drift-workflow.test.sh"
-  "plugins/soleur/test/token-drift-workflow-causes.test.sh"
-  "plugins/soleur/test/check-deps-adapter-drift.test.sh"
   "plugins/soleur/test/terraform-drift-sentry-leg.test.sh"
   "plugins/soleur/test/c4-count-parity.test.sh"
   "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   "plugins/soleur/test/reusable-release-caller-permissions.test.sh"
-  "plugins/soleur/test/gitleaks-merge-commit.test.sh"
   "plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh"
   "apps/web-platform/scripts/assert-byok-rules-exist.test.sh"
   ".claude/hooks/hookeventname-coverage.test.sh"
@@ -343,10 +337,29 @@ ALWAYS_ON_SUITES=(
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
   # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
-
-  # S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in
-  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: the pr5-glob-measurements spec directory (receipts/glob-rate/, under knowledge-base/project/specs/archive/ once the PR is shipped).
-  ".claude/hooks/grep-q-pipe-guard.test.sh"
+  #
+  # The resulting demoted set, each classified edge:declared by the AFFECTED_*
+  # array named beside it:
+  #   scripts/test-all-group-affected                        -> AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS
+  #   tests/scripts/lint-ratchet                             -> AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS
+  #   plugins/soleur/test/check-deps-adapter-drift.test.sh   -> AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS
+  #   plugins/soleur/test/token-drift-workflow-causes.test.sh -> AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS
+  #   .claude/hooks/grep-q-pipe-guard.test.sh                -> AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS
+  #   scripts/lint-encryption-posture                        -> AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS
+  #   plugins/soleur/test/gitleaks-merge-commit.test.sh      -> AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS
+  #   scripts/lint-gh-argv-arg-live                          -> AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS
+  #
+  # #11648 withdrew all eight: fresh 5-run merge_group medians (receipts/medians-11648.txt
+  # under knowledge-base/project/specs/feat-one-shot-11648-fast-tier-demotion/) put each
+  # over the LOCAL_FAST_CAP_MS=10000 cap while the committed durations under-price them —
+  # sustained drift, not noise (thinnest margin: lint-encryption-posture at 11,413 ms).
+  # grep-q-pipe-guard's earlier S4 PR5 (#10861) re-promotion was a cost verdict
+  # (whole-tree reader selected on >25% of merged PRs at 6,081 ms committed); the
+  # re-priced median is 15,753 ms, so the cost predicate no longer holds and the
+  # suite returns to edge-selection — its whole-tree read set is now honestly
+  # declared as dir-anchored glob:<dir>/**.<ext> rows, so it still selects on
+  # most code-bearing diffs; that high selection rate is the truthful
+  # classification, not a leak-back.
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -1983,11 +1996,17 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 
 # .claude/hooks/grep-q-pipe-guard.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
-# S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
-# service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
-# SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
-# whole-tree read was the selection-policy call of S4 PR5 (#10861): the suite is now in ALWAYS_ON_SUITES (measured verdict `always_on`), so these exact edges are
-# inert for selection and the audit skips the suite.
+# S4 PR4 (#10860): the exact-file members below name the files its PRODUCER_JOIN,
+# SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv).
+# #11648 demotion (re-priced median 15,753 ms > LOCAL_FAST_CAP_MS=10000 — the S4 PR5 always_on
+# verdict was cost-based and the cost predicate no longer holds): the exact rows are now extended
+# with the suite's whole-tree read set — `git grep` over every tracked file of PJ_EXTS ∪ SWEEP_EXTS
+# (sh bash yml yaml tf tftpl template service tmpl bats js ts tsx mjs cjs py), every non-knowledge-base
+# .md (fenced-code read), and knowledge-base code files. The CTO-corrected shape is dir-anchored
+# `glob:<top-dir>/**.<ext>` per top-level dir (a root-anchored `glob:*.<ext>` matches only dir-less
+# diff lines, so it cannot carry a whole-tree read) plus `glob:*.<ext>`/`glob:*.md` rows for
+# root-level files. Top-level dirs enumerated via `git ls-files | awk -F/ 'NF>1{print $1}' | sort -u`;
+# a NEW top-level dir is uncovered until re-enumerated — the ci-pr-affected ratchet bounds that.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"
@@ -2016,6 +2035,383 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   "scripts/rotate-supabase-db-credential.test.sh"
   "scripts/sweep-followthroughs.test.sh"
   "tests/scripts/test-sentry-full-root-apply.sh"
+  # --- #11648 whole-tree read set: dir-anchored globs, one per top-level dir per
+  # swept extension (PJ_EXTS ∪ SWEEP_EXTS), plus **.md for non-knowledge-base dirs.
+  "glob:.agents/**.sh"
+  "glob:.agents/**.bash"
+  "glob:.agents/**.yml"
+  "glob:.agents/**.yaml"
+  "glob:.agents/**.tf"
+  "glob:.agents/**.tftpl"
+  "glob:.agents/**.template"
+  "glob:.agents/**.service"
+  "glob:.agents/**.tmpl"
+  "glob:.agents/**.bats"
+  "glob:.agents/**.js"
+  "glob:.agents/**.ts"
+  "glob:.agents/**.tsx"
+  "glob:.agents/**.mjs"
+  "glob:.agents/**.cjs"
+  "glob:.agents/**.py"
+  "glob:.agents/**.md"
+  "glob:.claude/**.sh"
+  "glob:.claude/**.bash"
+  "glob:.claude/**.yml"
+  "glob:.claude/**.yaml"
+  "glob:.claude/**.tf"
+  "glob:.claude/**.tftpl"
+  "glob:.claude/**.template"
+  "glob:.claude/**.service"
+  "glob:.claude/**.tmpl"
+  "glob:.claude/**.bats"
+  "glob:.claude/**.js"
+  "glob:.claude/**.ts"
+  "glob:.claude/**.tsx"
+  "glob:.claude/**.mjs"
+  "glob:.claude/**.cjs"
+  "glob:.claude/**.py"
+  "glob:.claude/**.md"
+  "glob:.claude-plugin/**.sh"
+  "glob:.claude-plugin/**.bash"
+  "glob:.claude-plugin/**.yml"
+  "glob:.claude-plugin/**.yaml"
+  "glob:.claude-plugin/**.tf"
+  "glob:.claude-plugin/**.tftpl"
+  "glob:.claude-plugin/**.template"
+  "glob:.claude-plugin/**.service"
+  "glob:.claude-plugin/**.tmpl"
+  "glob:.claude-plugin/**.bats"
+  "glob:.claude-plugin/**.js"
+  "glob:.claude-plugin/**.ts"
+  "glob:.claude-plugin/**.tsx"
+  "glob:.claude-plugin/**.mjs"
+  "glob:.claude-plugin/**.cjs"
+  "glob:.claude-plugin/**.py"
+  "glob:.claude-plugin/**.md"
+  "glob:.codex/**.sh"
+  "glob:.codex/**.bash"
+  "glob:.codex/**.yml"
+  "glob:.codex/**.yaml"
+  "glob:.codex/**.tf"
+  "glob:.codex/**.tftpl"
+  "glob:.codex/**.template"
+  "glob:.codex/**.service"
+  "glob:.codex/**.tmpl"
+  "glob:.codex/**.bats"
+  "glob:.codex/**.js"
+  "glob:.codex/**.ts"
+  "glob:.codex/**.tsx"
+  "glob:.codex/**.mjs"
+  "glob:.codex/**.cjs"
+  "glob:.codex/**.py"
+  "glob:.codex/**.md"
+  "glob:.cursor-plugin/**.sh"
+  "glob:.cursor-plugin/**.bash"
+  "glob:.cursor-plugin/**.yml"
+  "glob:.cursor-plugin/**.yaml"
+  "glob:.cursor-plugin/**.tf"
+  "glob:.cursor-plugin/**.tftpl"
+  "glob:.cursor-plugin/**.template"
+  "glob:.cursor-plugin/**.service"
+  "glob:.cursor-plugin/**.tmpl"
+  "glob:.cursor-plugin/**.bats"
+  "glob:.cursor-plugin/**.js"
+  "glob:.cursor-plugin/**.ts"
+  "glob:.cursor-plugin/**.tsx"
+  "glob:.cursor-plugin/**.mjs"
+  "glob:.cursor-plugin/**.cjs"
+  "glob:.cursor-plugin/**.py"
+  "glob:.cursor-plugin/**.md"
+  "glob:.devin/**.sh"
+  "glob:.devin/**.bash"
+  "glob:.devin/**.yml"
+  "glob:.devin/**.yaml"
+  "glob:.devin/**.tf"
+  "glob:.devin/**.tftpl"
+  "glob:.devin/**.template"
+  "glob:.devin/**.service"
+  "glob:.devin/**.tmpl"
+  "glob:.devin/**.bats"
+  "glob:.devin/**.js"
+  "glob:.devin/**.ts"
+  "glob:.devin/**.tsx"
+  "glob:.devin/**.mjs"
+  "glob:.devin/**.cjs"
+  "glob:.devin/**.py"
+  "glob:.devin/**.md"
+  "glob:.github/**.sh"
+  "glob:.github/**.bash"
+  "glob:.github/**.yml"
+  "glob:.github/**.yaml"
+  "glob:.github/**.tf"
+  "glob:.github/**.tftpl"
+  "glob:.github/**.template"
+  "glob:.github/**.service"
+  "glob:.github/**.tmpl"
+  "glob:.github/**.bats"
+  "glob:.github/**.js"
+  "glob:.github/**.ts"
+  "glob:.github/**.tsx"
+  "glob:.github/**.mjs"
+  "glob:.github/**.cjs"
+  "glob:.github/**.py"
+  "glob:.github/**.md"
+  "glob:.grok/**.sh"
+  "glob:.grok/**.bash"
+  "glob:.grok/**.yml"
+  "glob:.grok/**.yaml"
+  "glob:.grok/**.tf"
+  "glob:.grok/**.tftpl"
+  "glob:.grok/**.template"
+  "glob:.grok/**.service"
+  "glob:.grok/**.tmpl"
+  "glob:.grok/**.bats"
+  "glob:.grok/**.js"
+  "glob:.grok/**.ts"
+  "glob:.grok/**.tsx"
+  "glob:.grok/**.mjs"
+  "glob:.grok/**.cjs"
+  "glob:.grok/**.py"
+  "glob:.grok/**.md"
+  "glob:LICENSES/**.sh"
+  "glob:LICENSES/**.bash"
+  "glob:LICENSES/**.yml"
+  "glob:LICENSES/**.yaml"
+  "glob:LICENSES/**.tf"
+  "glob:LICENSES/**.tftpl"
+  "glob:LICENSES/**.template"
+  "glob:LICENSES/**.service"
+  "glob:LICENSES/**.tmpl"
+  "glob:LICENSES/**.bats"
+  "glob:LICENSES/**.js"
+  "glob:LICENSES/**.ts"
+  "glob:LICENSES/**.tsx"
+  "glob:LICENSES/**.mjs"
+  "glob:LICENSES/**.cjs"
+  "glob:LICENSES/**.py"
+  "glob:LICENSES/**.md"
+  "glob:apps/**.sh"
+  "glob:apps/**.bash"
+  "glob:apps/**.yml"
+  "glob:apps/**.yaml"
+  "glob:apps/**.tf"
+  "glob:apps/**.tftpl"
+  "glob:apps/**.template"
+  "glob:apps/**.service"
+  "glob:apps/**.tmpl"
+  "glob:apps/**.bats"
+  "glob:apps/**.js"
+  "glob:apps/**.ts"
+  "glob:apps/**.tsx"
+  "glob:apps/**.mjs"
+  "glob:apps/**.cjs"
+  "glob:apps/**.py"
+  "glob:apps/**.md"
+  "glob:bin/**.sh"
+  "glob:bin/**.bash"
+  "glob:bin/**.yml"
+  "glob:bin/**.yaml"
+  "glob:bin/**.tf"
+  "glob:bin/**.tftpl"
+  "glob:bin/**.template"
+  "glob:bin/**.service"
+  "glob:bin/**.tmpl"
+  "glob:bin/**.bats"
+  "glob:bin/**.js"
+  "glob:bin/**.ts"
+  "glob:bin/**.tsx"
+  "glob:bin/**.mjs"
+  "glob:bin/**.cjs"
+  "glob:bin/**.py"
+  "glob:bin/**.md"
+  "glob:docs/**.sh"
+  "glob:docs/**.bash"
+  "glob:docs/**.yml"
+  "glob:docs/**.yaml"
+  "glob:docs/**.tf"
+  "glob:docs/**.tftpl"
+  "glob:docs/**.template"
+  "glob:docs/**.service"
+  "glob:docs/**.tmpl"
+  "glob:docs/**.bats"
+  "glob:docs/**.js"
+  "glob:docs/**.ts"
+  "glob:docs/**.tsx"
+  "glob:docs/**.mjs"
+  "glob:docs/**.cjs"
+  "glob:docs/**.py"
+  "glob:docs/**.md"
+  "glob:infra/**.sh"
+  "glob:infra/**.bash"
+  "glob:infra/**.yml"
+  "glob:infra/**.yaml"
+  "glob:infra/**.tf"
+  "glob:infra/**.tftpl"
+  "glob:infra/**.template"
+  "glob:infra/**.service"
+  "glob:infra/**.tmpl"
+  "glob:infra/**.bats"
+  "glob:infra/**.js"
+  "glob:infra/**.ts"
+  "glob:infra/**.tsx"
+  "glob:infra/**.mjs"
+  "glob:infra/**.cjs"
+  "glob:infra/**.py"
+  "glob:infra/**.md"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.yml"
+  "glob:knowledge-base/**.yaml"
+  "glob:knowledge-base/**.tf"
+  "glob:knowledge-base/**.tftpl"
+  "glob:knowledge-base/**.template"
+  "glob:knowledge-base/**.service"
+  "glob:knowledge-base/**.tmpl"
+  "glob:knowledge-base/**.bats"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.tsx"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.cjs"
+  "glob:knowledge-base/**.py"
+  "glob:packages/**.sh"
+  "glob:packages/**.bash"
+  "glob:packages/**.yml"
+  "glob:packages/**.yaml"
+  "glob:packages/**.tf"
+  "glob:packages/**.tftpl"
+  "glob:packages/**.template"
+  "glob:packages/**.service"
+  "glob:packages/**.tmpl"
+  "glob:packages/**.bats"
+  "glob:packages/**.js"
+  "glob:packages/**.ts"
+  "glob:packages/**.tsx"
+  "glob:packages/**.mjs"
+  "glob:packages/**.cjs"
+  "glob:packages/**.py"
+  "glob:packages/**.md"
+  "glob:plugins/**.sh"
+  "glob:plugins/**.bash"
+  "glob:plugins/**.yml"
+  "glob:plugins/**.yaml"
+  "glob:plugins/**.tf"
+  "glob:plugins/**.tftpl"
+  "glob:plugins/**.template"
+  "glob:plugins/**.service"
+  "glob:plugins/**.tmpl"
+  "glob:plugins/**.bats"
+  "glob:plugins/**.js"
+  "glob:plugins/**.ts"
+  "glob:plugins/**.tsx"
+  "glob:plugins/**.mjs"
+  "glob:plugins/**.cjs"
+  "glob:plugins/**.py"
+  "glob:plugins/**.md"
+  "glob:scripts/**.sh"
+  "glob:scripts/**.bash"
+  "glob:scripts/**.yml"
+  "glob:scripts/**.yaml"
+  "glob:scripts/**.tf"
+  "glob:scripts/**.tftpl"
+  "glob:scripts/**.template"
+  "glob:scripts/**.service"
+  "glob:scripts/**.tmpl"
+  "glob:scripts/**.bats"
+  "glob:scripts/**.js"
+  "glob:scripts/**.ts"
+  "glob:scripts/**.tsx"
+  "glob:scripts/**.mjs"
+  "glob:scripts/**.cjs"
+  "glob:scripts/**.py"
+  "glob:scripts/**.md"
+  "glob:spike/**.sh"
+  "glob:spike/**.bash"
+  "glob:spike/**.yml"
+  "glob:spike/**.yaml"
+  "glob:spike/**.tf"
+  "glob:spike/**.tftpl"
+  "glob:spike/**.template"
+  "glob:spike/**.service"
+  "glob:spike/**.tmpl"
+  "glob:spike/**.bats"
+  "glob:spike/**.js"
+  "glob:spike/**.ts"
+  "glob:spike/**.tsx"
+  "glob:spike/**.mjs"
+  "glob:spike/**.cjs"
+  "glob:spike/**.py"
+  "glob:spike/**.md"
+  "glob:test/**.sh"
+  "glob:test/**.bash"
+  "glob:test/**.yml"
+  "glob:test/**.yaml"
+  "glob:test/**.tf"
+  "glob:test/**.tftpl"
+  "glob:test/**.template"
+  "glob:test/**.service"
+  "glob:test/**.tmpl"
+  "glob:test/**.bats"
+  "glob:test/**.js"
+  "glob:test/**.ts"
+  "glob:test/**.tsx"
+  "glob:test/**.mjs"
+  "glob:test/**.cjs"
+  "glob:test/**.py"
+  "glob:test/**.md"
+  "glob:tests/**.sh"
+  "glob:tests/**.bash"
+  "glob:tests/**.yml"
+  "glob:tests/**.yaml"
+  "glob:tests/**.tf"
+  "glob:tests/**.tftpl"
+  "glob:tests/**.template"
+  "glob:tests/**.service"
+  "glob:tests/**.tmpl"
+  "glob:tests/**.bats"
+  "glob:tests/**.js"
+  "glob:tests/**.ts"
+  "glob:tests/**.tsx"
+  "glob:tests/**.mjs"
+  "glob:tests/**.cjs"
+  "glob:tests/**.py"
+  "glob:tests/**.md"
+  "glob:todos/**.sh"
+  "glob:todos/**.bash"
+  "glob:todos/**.yml"
+  "glob:todos/**.yaml"
+  "glob:todos/**.tf"
+  "glob:todos/**.tftpl"
+  "glob:todos/**.template"
+  "glob:todos/**.service"
+  "glob:todos/**.tmpl"
+  "glob:todos/**.bats"
+  "glob:todos/**.js"
+  "glob:todos/**.ts"
+  "glob:todos/**.tsx"
+  "glob:todos/**.mjs"
+  "glob:todos/**.cjs"
+  "glob:todos/**.py"
+  "glob:todos/**.md"
+  # Root-anchored rows — dir-less diff lines only (README.md, lefthook.yml,
+  # eleventy.config.js and any future root file of a swept extension).
+  "glob:*.sh"
+  "glob:*.bash"
+  "glob:*.yml"
+  "glob:*.yaml"
+  "glob:*.tf"
+  "glob:*.tftpl"
+  "glob:*.template"
+  "glob:*.service"
+  "glob:*.tmpl"
+  "glob:*.bats"
+  "glob:*.js"
+  "glob:*.ts"
+  "glob:*.tsx"
+  "glob:*.mjs"
+  "glob:*.cjs"
+  "glob:*.py"
+  "glob:*.md"
 )
 
 # .claude/hooks/stub-argv-fidelity.test.sh — derived edges could not reach its subject; declared from the
@@ -3392,4 +3788,183 @@ AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
   "knowledge-base/marketing/distribution-content/2026-11-19-first-we-made-green-mean-something.md"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# --- #11648 fast-tier demotions: declared scopes for the eight suites withdrawn from
+# ALWAYS_ON_SUITES on the fresh 5-run merge_group medians (each > LOCAL_FAST_CAP_MS=10000;
+# receipts/medians-11648.txt). Every array binds the suite to what it actually reads —
+# self-only derivation would degrade to `unclassified`, which SELECTS fail-safe and would
+# leak the heavy suite back into every local --affected run.
+
+# scripts/test-all-group-affected (#11648 demotion, re-priced median 378,173 ms) — the
+# TEST_GROUP=affected mutation suite: copies the runner and its affected-selection libs
+# into a sandbox and splices fixture registrations between the lock and the epilogue.
+# Real reads: the runner (TARGET + sandbox copy), the five libs below, and self.
+# (knowledge-base/support/community/2026-10-26-digest.md is a synthetic --paths member,
+# never read — argv-code citation recorded in the kb-consumers baseline if flagged.)
+AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS=(
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-affected-derive-cache.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "scripts/test-all-group-affected.test.sh"
+)
+
+# tests/scripts/lint-ratchet (#11648 demotion, re-priced median 24,431 ms) — unittest
+# battery over the lint-ratchet tool: loads lint-ratchet.py by importlib, reads the
+# pinned requirements, the captured ruff/eslint fixtures, the ruff.toml pin and the
+# eslint test-dirs config it sha-pins. Its registration pins also read the real
+# lefthook.yml (the ratchet blocks it asserts), both committed lint-ratchet baselines
+# (test_the_committed_soleur_baselines_equal_the_rendered_empty_form reads them via
+# REPO_ROOT / lr.SCOPES[name]["baseline"]), the runner (registration grep), and the
+# repo-wide/eslint-test-dirs vitest arm files (all REPO_ROOT read_text() calls written
+# as fragmented `REPO_ROOT / "a" / "b"` literals — real reads the audit's
+# contiguous-path oracle cannot see, declared here for honesty). knowledge-base/
+# strings in the fixture classes are temp-repo writes, never repo reads (kb-consumers
+# baseline rows if flagged).
+AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS=(
+  "plugins/soleur/scripts/lint-ratchet.py"
+  "plugins/soleur/scripts/ruff-requirements.txt"
+  "tests/scripts/fixtures/lint-ratchet/"
+  "tests/scripts/_git_fixture_env.py"
+  "tests/scripts/test_lint_ratchet.py"
+  "ruff.toml"
+  "lefthook.yml"
+  "scripts/lint-ratchet-ruff.baseline.txt"
+  "scripts/lint-ratchet-eslint-test-dirs.baseline.txt"
+  "apps/web-platform/eslint.test-dirs.config.mjs"
+  "apps/web-platform/test/repo-wide-suites.ts"
+  "apps/web-platform/test/eslint-test-dirs-ratchet.test.ts"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/check-deps-adapter-drift.test.sh (#11648 demotion, re-priced
+# median 24,076 ms) — sources test-helpers.sh (which itself sources
+# lib/git-fixture-env.sh and ../../../scripts/lib/scratch-root.sh — real reads
+# through the helper) and drives the pencil-setup scripts (check_deps.sh + the
+# adapter/save-gate/repl-surface mjs files) through env-mutated subshells; the dir
+# edge covers all four subjects.
+AFFECTED_PLUGINS_SOLEUR_TEST_CHECK_DEPS_ADAPTER_DRIFT_TEST_SH_PATHS=(
+  "plugins/soleur/skills/pencil-setup/scripts/"
+  "plugins/soleur/test/test-helpers.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "plugins/soleur/test/check-deps-adapter-drift.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/token-drift-workflow-causes.test.sh (#11648 demotion, re-priced
+# median 19,967 ms) — parses the scheduled-terraform-drift workflow, the token-drift
+# detector, the doppler inventory and the read-tokens/sentry TF files, and greps a
+# real heading in the inngest-provision-rehearsal runbook (REAL kb read — the runbooks
+# dir edge covers it). The `./.github/actions/*` strings in its mutation tables are
+# `uses:` payloads written into a YAML model, never file reads (accept rows if the
+# ratchet flags them).
+AFFECTED_PLUGINS_SOLEUR_TEST_TOKEN_DRIFT_WORKFLOW_CAUSES_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "scripts/check-cloudflare-token-drift.sh"
+  "apps/web-platform/infra/doppler-config-inventory.txt"
+  "apps/web-platform/infra/token-drift-read-tokens.tf"
+  "apps/web-platform/infra/sentry/cron-monitors.tf"
+  "apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
+  "knowledge-base/engineering/operations/runbooks/"
+  "plugins/soleur/test/token-drift-workflow-causes.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-encryption-posture (#11648 demotion, re-priced median 11,413 ms) — the
+# suite's live arm runs the SUT with --repo-sweep over the real tree: rglob of every
+# file under apps/*/infra/ and top-level infra/, apps/**/*.tf, the committed ledger
+# (+ its schema) and the plan-issue-templates reference — plus an os.walk that reads
+# EVERY package.json in the tree (find_package_json_files, the Redis-dependency arm;
+# it skips node_modules/.git/.next/.worktrees/.claude/.terraform/dist/build by name,
+# so every top-level dir except .claude gets a dir-anchored glob:<dir>/**package.json
+# row and the root file an exact entry). The ledger's disclosed_as citations are
+# resolved against the real tree too — currently docs/legal/privacy-policy.md
+# (resolve_disclosed_as). Fixture trees are writes.
+AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS=(
+  "scripts/lint-encryption-posture.py"
+  "scripts/lint-encryption-posture.test.sh"
+  "scripts/encryption-posture-ledger.json"
+  "scripts/encryption-posture-ledger.schema.json"
+  "apps/web-platform/infra/"
+  "apps/cla-evidence/infra/"
+  "infra/"
+  "plugins/soleur/skills/plan/references/plan-issue-templates.md"
+  "docs/legal/privacy-policy.md"
+  "package.json"
+  "glob:.agents/**package.json"
+  "glob:.claude-plugin/**package.json"
+  "glob:.codex/**package.json"
+  "glob:.cursor-plugin/**package.json"
+  "glob:.devin/**package.json"
+  "glob:.github/**package.json"
+  "glob:.grok/**package.json"
+  "glob:LICENSES/**package.json"
+  "glob:apps/**package.json"
+  "glob:bin/**package.json"
+  "glob:docs/**package.json"
+  "glob:infra/**package.json"
+  "glob:knowledge-base/**package.json"
+  "glob:packages/**package.json"
+  "glob:plugins/**package.json"
+  "glob:scripts/**package.json"
+  "glob:spike/**package.json"
+  "glob:test/**package.json"
+  "glob:tests/**package.json"
+  "glob:todos/**package.json"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/gitleaks-merge-commit.test.sh (#11648 demotion, re-priced
+# median 11,824 ms) — sources test-helpers.sh and lib/gitleaks-probe.sh, extracts
+# --log-opts out of secret-scan.yml and scans fixture repos with .gitleaks.toml.
+AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".gitleaks.toml"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "plugins/soleur/test/gitleaks-merge-commit.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-gh-argv-arg-live (#11648 demotion, re-priced median 13,435 ms) — the
+# live-scanner census REQUIRES a declared edge for a -live registration. Its SUT
+# (scripts/lint-gh-argv-arg.py) os.walks every **/*.sh in the tree plus
+# .github/workflows/*.{yml,yaml} — the CTO-corrected shape is a dir-anchored
+# glob:<top-dir>/**.sh per top-level dir (root-only `glob:*.sh` covers only dir-less
+# diff lines and would under-select on every nested .sh) plus glob:*.sh for any
+# future root-level script. A NEW top-level dir carrying .sh is uncovered until
+# re-enumerated — the ci-pr-affected ratchet bounds that.
+AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
+  "glob:.agents/**.sh"
+  "glob:.claude/**.sh"
+  "glob:.claude-plugin/**.sh"
+  "glob:.codex/**.sh"
+  "glob:.cursor-plugin/**.sh"
+  "glob:.devin/**.sh"
+  "glob:.github/**.sh"
+  "glob:.grok/**.sh"
+  "glob:LICENSES/**.sh"
+  "glob:apps/**.sh"
+  "glob:bin/**.sh"
+  "glob:docs/**.sh"
+  "glob:infra/**.sh"
+  "glob:knowledge-base/**.sh"
+  "glob:packages/**.sh"
+  "glob:plugins/**.sh"
+  "glob:scripts/**.sh"
+  "glob:spike/**.sh"
+  "glob:test/**.sh"
+  "glob:tests/**.sh"
+  "glob:todos/**.sh"
+  "glob:*.sh"
+  ".github/workflows/"
+  "scripts/lint-gh-argv-arg.py"
+  "scripts/lib/test-affected-paths.sh"
 )
