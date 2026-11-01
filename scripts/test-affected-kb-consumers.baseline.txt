@@ -160,6 +160,7 @@ scripts/followthroughs/discord-blog-webhook-fallback	knowledge-base/marketing/di
 scripts/followthroughs/home-census-run-10455	knowledge-base/engineering/operations/runbooks/home-census.md
 scripts/followthroughs/inngest-bs-token-restage-7596	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/followthroughs/inngest-hostmetrics-trim-11602	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+scripts/followthroughs/pr-battery-gate-saving-9323	knowledge-base/engineering/architecture/diagrams
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
