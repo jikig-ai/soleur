@@ -984,8 +984,8 @@ rows_gate_floor   # shared: _site_seq == declared total, EXECUTED == in-range co
 TOTAL=$(( PASS + FAIL ))
 # Each executed row emits exactly one verdict, plus the unconditional CONTROL.
 if (( TOTAL != EXECUTED + 1 )); then
-  printf 'FAIL: verdict accounting — %d verdict(s) for %d executed row(s) + control. A row site emitted no verdict, or emitted two.\n' "$TOTAL" "$EXECUTED" >&2
-  exit 1
+  printf 'FATAL: verdict accounting — %d verdict(s) for %d executed row(s) + control. A row site emitted no verdict, or emitted two.\n' "$TOTAL" "$EXECUTED" >&2
+  exit 2
 fi
 
 echo ""

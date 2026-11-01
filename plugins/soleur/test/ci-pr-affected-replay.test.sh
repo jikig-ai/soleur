@@ -50,13 +50,13 @@ fail() { fails=$((fails + 1)); FAILED+=("$1"); echo "  FAIL: $1" >&2; }
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
 { pass "self-test"; fail "self-test"; } >/dev/null 2>&1
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
-  printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
+  printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 2
 fi
 passes=0; fails=0; FAILED=()
 
-[[ -f "$REAL_SUT" ]] || { echo "[FATAL] SUT not found at $REAL_SUT" >&2; exit 1; }
+[[ -f "$REAL_SUT" ]] || { echo "[FATAL] SUT not found at $REAL_SUT" >&2; exit 2; }
 for tool in python3 git jq; do
-  command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 1; }
+  command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 2; }
 done
 
 # --- Row-range selection (--rows A-B) ------------------------------------------------------
@@ -101,12 +101,12 @@ assert_fixture_dir() {
   esac
 }
 
-SANDBOX="$(mktemp -d "$TMPDIR/ci-pr-affected-replay.XXXXXXXX")" || { echo "[FATAL] mktemp failed" >&2; exit 1; }
-case "$SANDBOX" in /*) : ;; *) echo "[FATAL] sandbox is not absolute" >&2; exit 1 ;; esac
+SANDBOX="$(mktemp -d "$TMPDIR/ci-pr-affected-replay.XXXXXXXX")" || { echo "[FATAL] mktemp failed" >&2; exit 2; }
+case "$SANDBOX" in /*) : ;; *) echo "[FATAL] sandbox is not absolute" >&2; exit 2 ;; esac
 trap 'rm -rf "$SANDBOX"' EXIT
 export TMPDIR="$SANDBOX"
 
-git_fixture_env "$SANDBOX/repo" || { echo "[FATAL] git_fixture_env refused the sandbox" >&2; exit 1; }   # ceiling, identity, hermetic config: ONE builder
+git_fixture_env "$SANDBOX/repo" || { echo "[FATAL] git_fixture_env refused the sandbox" >&2; exit 2; }   # ceiling, identity, hermetic config: ONE builder
 gitq() { git -c commit.gpgsign=false -c maintenance.auto=false -c gc.auto=0 -c init.defaultBranch=main "$@"; }
 
 REPO="$SANDBOX/repo"
@@ -137,10 +137,10 @@ build_repo() {
     gitq update-ref refs/remotes/origin/main HEAD
   ) || return 1
 }
-build_repo || { echo "[FATAL] could not build the fixture repo" >&2; exit 1; }
+build_repo || { echo "[FATAL] could not build the fixture repo" >&2; exit 2; }
 C=()   # C[1]..C[7], oldest first
 while read -r sha; do C+=("$sha"); done < <(gitq -C "$REPO" rev-list --first-parent --reverse -n 7 origin/main)
-[[ "${#C[@]}" -eq 7 ]] || { echo "[FATAL] expected 7 commits, got ${#C[@]}" >&2; exit 1; }
+[[ "${#C[@]}" -eq 7 ]] || { echo "[FATAL] expected 7 commits, got ${#C[@]}" >&2; exit 2; }
 
 
 # ---- the selector stub ----------------------------------------------------------------------------------------------
@@ -672,7 +672,7 @@ PY
 [[ -n "$gate_git" && "$gate_git" = "$lib_git" && "$py_git" = "$lib_git" ]] && pass "the replay tool's GIT_LOCATION_VARS, the gate's git_ro and the fixture lib's list are the same nine names" || fail "git location list parity: gate='${gate_git//$'\n'/ }' lib='${lib_git//$'\n'/ }' py='${py_git//$'\n'/ }'"
 echo "== git: a non-ASCII path is read raw, not as a quoted ASCII string"
 NREPO="$SANDBOX/nrepo"; assert_fixture_dir "$NREPO"; mkdir -p "$NREPO"
-( cd "$NREPO" && gitq init -q -b main . && printf 'x\n' > seed && gitq add -A && gitq commit -qm seed && printf 'y\n' > "caf$(printf '\303\251').txt" && gitq add -A && gitq commit -qm accent ) || { echo "[FATAL] nrepo" >&2; exit 1; }
+( cd "$NREPO" && gitq init -q -b main . && printf 'x\n' > seed && gitq add -A && gitq commit -qm seed && printf 'y\n' > "caf$(printf '\303\251').txt" && gitq add -A && gitq commit -qm accent ) || { echo "[FATAL] nrepo" >&2; exit 2; }
 NSHA="$(gitq -C "$NREPO" rev-parse HEAD)"
 row_nonascii() { [[ "$(python3 -c "
 import importlib.util as u, sys
@@ -701,7 +701,7 @@ printf '#!/usr/bin/env bash\ncat "apps/(auth)/page.tsx"\n' > "$AREPO/scripts/par
 printf '#!/usr/bin/env bash\ncat scripts/x.sh.bak\n' > "$AREPO/scripts/exact.test.sh"
 printf '#!/usr/bin/env bash\ncat data/f1.txt data/f2.txt data/f3.txt data/f4.txt data/f5.txt data/f6.txt data/f7.txt data/f8.txt\n' > "$AREPO/scripts/many.test.sh"
 printf '#!/usr/bin/env bash\n' > "$AREPO/scripts/test-all.sh"
-(cd "$AREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] audit fixture" >&2; exit 1; }
+(cd "$AREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] audit fixture" >&2; exit 2; }
 printf 'AFFECTED_SELECTED\tscripts/lint-orphan-mutations\t0\tedge:declared\t^scripts/lint-orphan-mutations.test.sh\n' > "$SANDBOX/audit-bad.rows"
 printf 'AFFECTED_SELECTED\tscripts/declared-complete\t0\tedge:declared\t^scripts/declared-complete.test.sh|^.github/workflows/ci.yml\n' > "$SANDBOX/audit-good.rows"
 printf 'AFFECTED_SELECTED\tscripts/comment-only\t0\tedge:derived\t^scripts/comment-only.test.sh\n' > "$SANDBOX/audit-comment.rows"
@@ -914,7 +914,7 @@ ln -s ../../srepo-evil/secret.txt "$SREPO/dsym/sib.test.ts"; ln -s loop.test.ts 
 ln -s ok.test.ts "$SREPO/dsym/inner.test.ts"; ln -s /dev/zero "$SREPO/dsym/zero.test.ts"; ln -s "$SANDBOX/outside.txt" "$SREPO/dsym/out.test.ts"
 PC_LINES=("pc/k01.txt"); PC_PATHS=("pc/k01.txt"); n=1
 for pre in "${PC_KEEP_PRE[@]}"; do n=$((n + 1)); PC_LINES+=("cat ${pre}pc/k$(printf '%02d' "$n").txt"); PC_PATHS+=("pc/k$(printf '%02d' "$n").txt"); done
-(cd "$SREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] scan fixture" >&2; exit 1; }
+(cd "$SREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] scan fixture" >&2; exit 2; }
 rm -f "$SREPO/lib3/gone.sh" "$SREPO/scripts/stdel.test.sh"   # tracked, deleted from the work tree
 printf 'cat data/untr.txt\n' > "$SREPO/lib1/untracked.sh"   # present, NOT tracked
 mkfifo "$SREPO/dsym/fifo.pipe"   # a FIFO inside the tree, reached through a tracked symlink (untracked itself)
@@ -1696,7 +1696,7 @@ rmk cm/x.test.ts $'// data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/x.ts.snap
 ln -s c.sh "$RREPO/cm/link.txt"
 rmk cm/tab.py $'\t# data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/crlf.ts $'// data/cm_own.txt\r\ncat data/cm_live.txt\r\n'
 rmk cm/nbsp.sh $'\xc2\xa0# data/cm_nbsp.txt\n'; rmk cm/q.sh $'echo "# data/cm_quote.txt"\necho ${#x} $# data/cm_dollar.txt\n'; rmk cm/ln.sh $'# one\n# two\ncat data/cm_live.txt\n'
-( cd "$RREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed ) || { echo "[FATAL] reach fixture" >&2; exit 1; }
+( cd "$RREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed ) || { echo "[FATAL] reach fixture" >&2; exit 2; }
 printf 'cat data/untr.txt\n' > "$RREPO/libN/untracked.sh"   # present, NOT tracked
 printf 'cat data/untrk.txt\n' > "$RREPO/walk/untracked.sh"   # present, NOT tracked
 rfix_ok=1
@@ -1715,7 +1715,7 @@ chk() { local name="$1"; shift; if "$@"; then pass "$name"; else fail "$name"; f
 _c_p=$passes; _c_f=$fails; _c_n=${#FAILED[@]}
 { chk "instrument: a true predicate" true; chk "instrument: a false predicate" false; } >/dev/null 2>&1
 if [[ "$passes" -ne $((_c_p + 1)) || "$fails" -ne $((_c_f + 1)) || "${#FAILED[@]}" -ne $((_c_n + 1)) ]]; then
-  printf '[FATAL] instrument self-test: chk did not record both a pass and a failure\n' >&2; exit 1
+  printf '[FATAL] instrument self-test: chk did not record both a pass and a failure\n' >&2; exit 2
 fi
 passes=$_c_p; fails=$_c_f; if (( _c_n == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:_c_n}"); fi
 
@@ -2214,7 +2214,7 @@ echo "== ratchet (PR3a): the baseline compare, the floors, the growth rule, the 
 RT="$SANDBOX/rt"; mkdir -p "$RT"
 GT='>'   # a redirect character spelled in the quoted program text of the workflow and probe rows (the fixture-relative scanner reads a bare one inside a string as a redirect)
 RT_LINT="$SCRIPT_DIR/../scripts/lint-ratchet.py"
-[[ -s "$RT_LINT" ]] || { echo "[FATAL] $RT_LINT missing" >&2; exit 1; }
+[[ -s "$RT_LINT" ]] || { echo "[FATAL] $RT_LINT missing" >&2; exit 2; }
 cat > "$BIN/sel-rt.sh" <<'SEL'
 #!/usr/bin/env bash
 # the STRICT selector stub of the ratchet rows: any argv but the exact pair exits 64, so a mutant that changes the argument is killed
@@ -2255,7 +2255,7 @@ rt_mk() {   # rt_mk <name> <base_fn> [pr_fn]: a base commit on main (the tree pl
   local d="$RT/$1"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"
   ( cd "$d" && gitq init -q -b main . && rt_tree && "$2" && gitq add -A && gitq commit -qm base \
     && { [[ -z "${3:-}" ]] || { gitq checkout -q -b pr && "$3" && gitq add -A && gitq commit -qm pr --allow-empty && gitq checkout -q main && gitq merge -q --no-ff pr -m merge; }; } ) \
-    || { echo "[FATAL] ratchet fixture $1" >&2; exit 1; }
+    || { echo "[FATAL] ratchet fixture $1" >&2; exit 2; }
 }
 rt_none() { :; }
 rt_touch() { printf 'v-%s\n' "$RANDOM" >> README.md; }
@@ -2308,12 +2308,12 @@ rt_mk weak rt_b_weak rt_p_weak; rt_mk nolint rt_b_nolint rt_p_nolint; rt_mk badl
 rt_mk notestall rt_b_notestall rt_touch; rt_mk untrk rt_b_untrk rt_touch; rt_mk lnkall rt_b_lnkall rt_touch; rt_mk um rt_b_um rt_touch; rt_mk tsx rt_b_tsx rt_touch; rt_mk cs4 rt_b_cs1 rt_p_cs4; rt_mk cs5 rt_b_cs1 rt_p_cs5; rt_mk cs6 rt_b_cs6 rt_p_cs6; rt_mk accln rt_b_accln rt_touch
 for ot in "${RT_OTOUCH[@]}"; do rt_mk "ot_${ot%%:*}" rt_variants "rt_p_ot_${ot%%:*}"; done
 printf 'scripts/not\tdata/in-the-baseline\n' > "$RT/outside.tsv"
-( cd "$RT/single" && rt_touch && gitq add -A && gitq commit -qm head ) || { echo "[FATAL] ratchet fixture single" >&2; exit 1; }   # a linear history: HEAD has ONE parent (the squash-shaped merge_group commit)
+( cd "$RT/single" && rt_touch && gitq add -A && gitq commit -qm head ) || { echo "[FATAL] ratchet fixture single" >&2; exit 2; }   # a linear history: HEAD has ONE parent (the squash-shaped merge_group commit)
 ( d="$RT/stack"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"; cd "$d" && gitq init -q -b main . && rt_tree && bl scripts/bl-st.tsv "$B_BAD$B_SWP" && gitq add -A && gitq commit -qm c0 \
   && gitq update-ref refs/remotes/origin/main HEAD && bl scripts/bl-st.tsv "$B_BAD" && gitq add -A && gitq commit -qm c1 \
   && gitq checkout -q -b pr && bl scripts/bl-st.tsv "$B_SWP" && gitq add -A && gitq commit -qm pr && gitq checkout -q main && gitq merge -q --no-ff pr -m merge ) \
-  || { echo "[FATAL] ratchet fixture stack" >&2; exit 1; }   # entry 1 drained (c1), entry 2 swaps a pair: HEAD^1 = c1, while origin/main is the OLDER c0
-gitq clone -q --depth 1 "file://$RT/ok" "$RT/shallow" 2>/dev/null || { echo "[FATAL] ratchet shallow clone" >&2; exit 1; }
+  || { echo "[FATAL] ratchet fixture stack" >&2; exit 2; }   # entry 1 drained (c1), entry 2 swaps a pair: HEAD^1 = c1, while origin/main is the OLDER c0
+gitq clone -q --depth 1 "file://$RT/ok" "$RT/shallow" 2>/dev/null || { echo "[FATAL] ratchet shallow clone" >&2; exit 2; }
 RT_FIX_OK=1; for d in acc ok adopt del none grow cs1 cs2 cs3 cs4 cs5 cs6 oracle renamed raises single noparent stack shallow weak nolint badlint noclass noalways notestall accln untrk lnkall um tsx ot_ci ot_replay ot_lint ot_tpaths ot_tall; do [[ -d "$RT/$d/.git" ]] || RT_FIX_OK=0; done
 [[ "$RT_FIX_OK" -eq 1 && "$(gitq -C "$RT/ok" rev-list --parents -n1 HEAD | wc -w)" -eq 3 && "$(gitq -C "$RT/single" rev-list --parents -n1 HEAD | wc -w)" -eq 2 \
   && "$(gitq -C "$RT/noparent" rev-list --parents -n1 HEAD | wc -w)" -eq 1 && "$(gitq -C "$RT/stack" rev-parse origin/main)" != "$(gitq -C "$RT/stack" rev-parse HEAD^1)" ]] \
@@ -2331,7 +2331,7 @@ rt_list "$RT/L-odd" "$GOODX" odd; rt_list "$RT/L-mix" "$GOODX" mix; rt_list "$RT
 rt_list "$RT/L-dup" "$GOODX" bad bad; rt_list "$RT/L-glob" "$GOODX" 'bad=^glob:data/*.txt'
 rt_list "$RT/L-refs4" "$GOODX" refs4; rt_list "$RT/L-ghostbad" "$GOODX" ghost bad; rt_list "$RT/L-um" "$GOODX" um; rt_list "$RT/L-tsx" "$GOODX" tsx
 printf 'AFFECTED_SELECTED\tscripts/e\033x\t0\tedge:derived\t^scripts/e\033x.test.sh\nAFFECTED_SELECTED\tscripts/good\t0\tedge:declared\t^scripts/good.test.sh|^data/ok.txt\nAFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\n' > "$RT/L-esclabel"
-( cd "$RT/tsx" && rm scripts/tsx.test.sh ) || { echo "[FATAL] ratchet fixture tsx" >&2; exit 1; }   # a tracked suite deleted from the work tree
+( cd "$RT/tsx" && rm scripts/tsx.test.sh ) || { echo "[FATAL] ratchet fixture tsx" >&2; exit 2; }   # a tracked suite deleted from the work tree
 printf 'AFFECTED_SELECTED\t::lbl\t0\tedge:derived\t^::lbl.test.sh\nAFFECTED_SELECTED\tscripts/good\t0\tedge:declared\t^scripts/good.test.sh|^data/ok.txt\nAFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\n' > "$RT/L-lbl"
 { srow good '^data/ok.txt'; printf 'AFFECTED_SELECTED\tscripts/bad\t1\talways_on\t^scripts/bad.test.sh\n'; printf 'AFFECTED_SUMMARY selected=1 of=2 always_on=1 edge=1 fallback=none\n'; } > "$RT/L-always"
 { srow good '^data/ok.txt' | sed 's/$/\r/'; srow bad | sed 's/$/\r/'; printf 'AFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\r\n\n\n'; } > "$RT/L-crlf"
@@ -3877,14 +3877,14 @@ build_gr_repo() {
     gitq update-ref refs/remotes/origin/main HEAD
   ) || return 1
 }
-build_gr_repo || { echo "[FATAL] could not build the glob-rate fixture repo" >&2; exit 1; }
+build_gr_repo || { echo "[FATAL] could not build the glob-rate fixture repo" >&2; exit 2; }
 GR_BASE="$(gitq -C "$GR" rev-parse HEAD)"
 GR_N=43
-[[ "$(gitq -C "$GR" rev-list --first-parent --count HEAD)" -eq $((GR_N + 1)) ]] || { echo "[FATAL] glob-rate fixture: expected $((GR_N + 1)) commits" >&2; exit 1; }
+[[ "$(gitq -C "$GR" rev-list --first-parent --count HEAD)" -eq $((GR_N + 1)) ]] || { echo "[FATAL] glob-rate fixture: expected $((GR_N + 1)) commits" >&2; exit 2; }
 # one commit AFTER the base: the measurement is taken at a recorded SHA that is not HEAD (the production shape)
-printf 'post\n' > "$GR/gr-fx/m/post.txt" && gitq -C "$GR" add -A && gitq -C "$GR" commit -qm "post-base" || { echo "[FATAL] glob-rate fixture: post-base commit failed" >&2; exit 1; }
+printf 'post\n' > "$GR/gr-fx/m/post.txt" && gitq -C "$GR" add -A && gitq -C "$GR" commit -qm "post-base" || { echo "[FATAL] glob-rate fixture: post-base commit failed" >&2; exit 2; }
 GR_HEAD="$(gitq -C "$GR" rev-parse HEAD)"
-[[ "$GR_HEAD" != "$GR_BASE" ]] || { echo "[FATAL] glob-rate fixture: HEAD must differ from the base" >&2; exit 1; }
+[[ "$GR_HEAD" != "$GR_BASE" ]] || { echo "[FATAL] glob-rate fixture: HEAD must differ from the base" >&2; exit 2; }
 cat > "$BIN/selgr.sh" <<'SEL'
 #!/usr/bin/env bash
 # the real selector, stood in for: the bit of each row is decided from the path list by plain case patterns, NOT by the model under test.
@@ -5138,20 +5138,20 @@ EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
 if [[ "$total" -lt "$_expected_total" ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected at least %s for --rows %s-%s (unconditional %s + dispatched %s)\n' "$total" "$_expected_total" "$ROWS_LO" "$ROWS_HI" "$((FLOOR_ASSERTIONS - DECLARED_TOTAL))" "$EXPECTED_EXECUTED" >&2; exit 1
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected at least %s for --rows %s-%s (unconditional %s + dispatched %s)\n' "$total" "$_expected_total" "$ROWS_LO" "$ROWS_HI" "$((FLOOR_ASSERTIONS - DECLARED_TOTAL))" "$EXPECTED_EXECUTED" >&2; exit 2
 fi
 # Ranged-sum reconciliation (replaces FLOOR_MUTANTS/MUT_RUN>=SITES_MUTATE/OW_MUT_RUN>=OW_SITES):
 # every declared site reached the gate, the gate dispatched exactly the range, and every dispatched
 # site was a mutant run — a skipped or doubly-counted site cannot hide behind the kill floors.
 rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == EXPECTED_EXECUTED, >= 1
 if (( MUT_RUN + OW_MUT_RUN != EXECUTED )); then
-  printf '[FATAL] range gate: %s mutants ran but %s sites dispatched — a gated site bypassed the mutant drivers\n' "$((MUT_RUN + OW_MUT_RUN))" "$EXECUTED" >&2; exit 1
+  printf '[FATAL] range gate: %s mutants ran but %s sites dispatched — a gated site bypassed the mutant drivers\n' "$((MUT_RUN + OW_MUT_RUN))" "$EXECUTED" >&2; exit 2
 fi
 if (( SITES_MUTATE + OW_SITES != DECLARED_TOTAL )); then
-  printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 1
+  printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 2
 fi
 if (( OW_SITES < 112 || OW_MUT_KILLED != OW_MUT_RUN )); then
-  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=112 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 1
+  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=112 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 2
 fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0

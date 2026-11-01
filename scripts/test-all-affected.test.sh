@@ -89,7 +89,7 @@ pass() { PASS=$((PASS + 1)); echo "  [ok] $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2; printf '%s\n' "$1" >> "$FAILLOG"; }
 
 for _required in "$RUNNER" "$AFF_LIB" "$REL_LIB" "$RWB_LIB"; do
-  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 1; }
+  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 2; }
 done
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ FAILLOG="$_real_faillog"
 if (( PASS != _self_pass + 1 )) || (( FAIL != _self_fail + 1 )) || (( _self_logged != 1 )); then
   printf '\n[FATAL] instrument self-test failed: pass moved %d, fail moved %d, log lines %d\n' \
     "$((PASS - _self_pass))" "$((FAIL - _self_fail))" "$_self_logged" >&2
-  exit 1
+  exit 2
 fi
 PASS=$_self_pass; FAIL=$_self_fail; cases=0
 

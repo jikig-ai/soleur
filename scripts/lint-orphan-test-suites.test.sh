@@ -1161,15 +1161,15 @@ for _id in "${EXEC_IDS[@]}"; do
   fi
   if [[ ! "${_d:-}" =~ ^[0123456789]+$ ]]; then
     echo "FATAL: row $_id wrote no declared assertion count (3rd .rc field) — a row without an expectation is a floor this battery refuses to estimate" >&2
-    exit 1
+    exit 2
   fi
   if (( _d < 1 )); then
     echo "FATAL: row $_id declared a ZERO assertion floor — under-declaring is the silent direction; every mutation row must assert something" >&2
-    exit 1
+    exit 2
   fi
   if (( _p + _f < _d )); then
     echo "FATAL: row $_id ran $((_p + _f)) assertions, expected >= ${_d} — the row was hollowed out; an over-delivering sibling cannot subsidize it" >&2
-    exit 1
+    exit 2
   fi
   echo "    row $_id: $((_p + _f))/${_d} assertions, ${_t:-?}s"
   PASS=$((PASS + _p)); FAIL=$((FAIL + _f)); ROWS=$((ROWS + 1))
@@ -1279,7 +1279,7 @@ rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == in-rang
 _UNCONDITIONAL_SITES=4
 if (( ROWS != EXECUTED + _UNCONDITIONAL_SITES )); then
   echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b, R2) was deleted or double-counted." >&2
-  exit 1
+  exit 2
 fi
 # Parent-side assertion floor: assertions that live OUTSIDE workers — the enumeration pass,
 # the normalisation pass, R1, R1b, and the positive control's net +1 — so a hollowed
@@ -1288,7 +1288,7 @@ fi
 MIN_PARENT_ASSERTIONS=5
 if (( PASS + FAIL - WORKER_ASSERTS < MIN_PARENT_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL - WORKER_ASSERTS)) unconditional assertions ran, expected >= ${MIN_PARENT_ASSERTIONS} — an unconditional site (harness enumeration/normalise, R1, R1b, positive control) was hollowed or deleted." >&2
-  exit 1
+  exit 2
 fi
 
 echo "lint-orphan-test-suites.test.sh: ${ROWS} rows (${EXECUTED} gated of ${DECLARED_TOTAL}), $PASS passed, $FAIL failed"
