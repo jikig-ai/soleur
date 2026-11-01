@@ -138,7 +138,7 @@ PRICE="$(awk -F'\t' '$2 ~ /^[0-9]+$/ { p[$1] = $2 / 60000 } END { for (s in p) p
 # a gated label with no committed price contributes 0 silently — the under-count direction is honest, but the
 # hole is printed on the status line (unpriced=). e.g. `apps/web-platform [unit]` is gated yet emits no timing
 # artifact and has no durations row.
-UNPRICED="$(comm -23 <(printf '%s\n' "$GATED_SUITES") <(printf '%s\n' "$PRICE" | cut -f1 | LC_ALL=C sort -u) | paste -sd, -)"
+UNPRICED="$(LC_ALL=C comm -23 <(printf '%s\n' "$GATED_SUITES") <(printf '%s\n' "$PRICE" | cut -f1 | LC_ALL=C sort -u) | paste -sd, -)"
 
 rl="$(api "rate_limit")" || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the quota preflight"; fail_api "rate_limit preflight"; }
 rl_rem="$(jq -r '.resources.core.remaining // 0' <<<"$rl" 2>/dev/null)"
