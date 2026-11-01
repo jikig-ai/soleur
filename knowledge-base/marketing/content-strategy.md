@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-26
+last_updated: 2026-11-01
 last_reviewed: 2026-06-08
 review_cadence: weekly
 owner: CMO
@@ -29,6 +29,56 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 
 > **[2026-06-08 Cascade from full six-tier CI scan]** Two net-new content gaps and one reframing surfaced (detail in Gaps 13–14 below; Gap 5 reframed from single-rival to autonomous-CaaS-pack). Summary of the competitive shifts driving them: (1) **Tier 0 repriced to metered/credit billing in one window** — Copilot "AI Credits" (June 1) drew 10–50x agentic-bill backlash; Codex promo expiry; Notion credits. Opens a "predictable pricing + you own your memory" content angle. (2) **The skills-library rival `alirezarezvani/claude-skills` grew to 337 skills / 5,200+ stars / 12+ tools** — Soleur's "more agents/skills" proof point is no longer defensible; content must pivot to **workflow depth** (per brand-guide.md: emphasize what happens *between* the agents). (3) **Notion paywalled Custom Agents to Business/Enterprise (May 4)** — evicts the free/Plus solo-founder long tail, Soleur's exact ICP: a targeted acquisition-content opportunity.
 
+> **[2026-11-01 Downstream-sync cascade (no new web facts)]** The 2026-11-01 scheduled CI scan could not do web research (web tools blocked), so this cascade only syncs content strategy with the entries the CI index gained after the 2026-06-08 cascade. **Every competitor fact cited below is dated to its own intake and was NOT re-verified on 2026-11-01.** Intake dates: Cofounder 2026-06-14, claims source-verified 2026-07-22; Multica 2026-07-04; sota-scan 2026-07-04; Omnigent 2026-09-11; mattpocock/skills 2026-09-18, reconciled 2026-09-23; Sutra 2026-10-06; HumanLayer 2026-10-24. Any public piece that names a competitor must re-verify every claim against the competitor's own primary pages at draft time (via `soleur:marketing:fact-checker`). It must never cite the CI shards: they are all `publishable: internal`. Outcome of the gap analysis:
+>
+> | Competitor (tier, intake) | Content verdict | Where |
+> |---|---|---|
+> | **Cofounder** (T3, 2026-06-14 / 07-22): closest product match | **Critical. New Gap 16.** Its HITL approval gates, broad department coverage and ownership graduation cancel out three contrasts Soleur's content currently leans on. The durable contrast narrows to: **verbatim, git-tracked KB + named-artifact lifecycle (explicit review + compound stages) + founder-owned repos / local-first.** | Gap 16; adjusts Gaps 1, 5, 14 |
+> | **Multica** (T3, 2026-07-04), **HumanLayer** (T3, 2026-10-24) | **Low. New Gap 17: no dedicated content.** Both serve the opposite ICP (engineering-team agent operations, zero business-domain agents). No comparison pages and no keyword targeting. Their only content implication is already served by the Pillar 2 agent-operator lane. | Gap 17 |
+> | **Omnigent** (T4, 2026-09-11) | **None.** Watch-only. Do **not** publish any "runs on / compatible with / supports Omnigent" claim (CI row prohibition). | n/a |
+> | **Sutra** (T3, 2026-10-06), **internal-only** | **None. No public content.** No comparison page (CLO verifiability risk; little SEO value). Any UX-donor ideas go through its brainstorm. They are never content that cites Sutra. | n/a |
+> | **mattpocock/skills**, **MerlijnW70/sota-scan** (T1) | **None competitively.** Both are methodology donors with a different ICP or a single-purpose skill. Keep crediting adapted mechanics inline, as the published "Parked or Forgotten?" post already does for mattpocock/skills wayfinder. No comparison or listicle targeting. | n/a |
+
+### Gap 16: The Narrowed Contrast vs. Cofounder: Verbatim Memory You Own, Decisions You Can Read (Critical) [NEW 2026-11-01]
+
+**What is missing:** No content addresses the closest product match in the landscape. Per the CI index, which carries facts as of 2026-06-14 with the claims source-verified 2026-07-22, **Cofounder (cofounder.co, The General Intelligence Company of New York, USV-led $8.7M seed, Dec 2025)** matches Soleur on four points. (1) It has HITL approval gates ("nothing ships without your approval"). (2) It covers many company departments. (3) Pro and Team users can "graduate" and claim ownership of the GitHub/Supabase/Vercel projects it manages. (4) It has a three-tier memory with "sleep-time compute". Soleur's existing content leans on "founder-in-the-loop", "8 departments" and "no lock-in" as contrasts. Those still hold against Polsia and NanoCorp, but **they do not hold against Cofounder.** Nothing published explains what *is* different.
+
+**The durable contrast (the only three claims content may lead with vs. Cofounder):**
+
+1. **Verbatim, founder-readable memory in the founder's own repository.** Every decision is a plain file the founder can read word for word and diff, and it lives in a repo they own. The vendor describes Cofounder's memory as background inference that "reorganize[s] stored information between interactions" and calls its Core Memory "compact knowledge representations" (CI-recorded vendor wording). Public copy must **quote the vendor's own words** and must not characterize them: write "compact representations, reorganized between sessions", not "lossy". This follows Pillar 3's no-FUD rule.
+2. **A named-artifact lifecycle with explicit review and compound stages.** Each stage (brainstorm → plan → work → review → compound) leaves a named document the founder can open. The contrast is with Cofounder's "Flows" (reusable one-time setups and ongoing operations along a milestone roadmap). Describe Flows neutrally. Do not claim that Flows lack review.
+3. **Owned from day one, not graduated later.** Soleur creates repos in the founder's own GitHub organization from the start, so no ownership handover is ever needed (CI: "structurally *ahead*"). The local-first / runs-in-your-own-environment angle carries a caveat from business-validation.md: founders want a visual UI, so "local" is a liability as much as a moat. **Frame it as ownership ("your files, your repository"), not as "runs on your laptop".**
+
+**Claims content must NOT make (carry these qualifiers):**
+
+- Do not present "founder-in-the-loop", "covers every department" or "no lock-in" as Soleur-only differentiators in any piece that names or implies Cofounder.
+- **Do not state "Cofounder has no revenue share" as vendor policy.** The CI grading marks it **INFERRED** (the pricing page shows usage-based pricing and no revenue share, but that is not verbatim vendor copy). Polsia/NanoCorp's ~20% revenue cut is a two-player pattern, not a field-wide one. So "You Keep 100%" (Gap 5) is a contrast against those two, not against the whole field.
+- **Do not cite a department count for Cofounder.** The CI record has two groupings of the same product: 11 functional areas on the landing page versus "8 departments including legal" elsewhere. The CI marks this unreconciled.
+- **Pricing is as of 2026-07-22 and not re-verified:** 7-day trial ($10 included usage) / Pro $20/mo / Team $50/mo "coming soon". The CI lists Team's launch status as an open item for the next unblocked scan, so re-check it before citing.
+- **Do not imply Soleur consolidates memory automatically between sessions.** Background KB consolidation is a filed gap (#5292), not a shipped feature.
+- **Sequencing:** the Tier-3 positioning rewrite (#6827, deferred) must start from the CI's Cofounder source-verified split. Comparison copy follows that rewrite and must not run ahead of it.
+
+**Content needed:**
+
+| Piece | Type | Priority | Founder sentence / angle | Target query (intent) | Notes |
+|---|---|---|---|---|---|
+| "Can You Read What Your AI Team Remembers?" | Founder-problem blog (General register, no competitor named) | **P1** | A solo founder whose AI tools "remember" their business cannot see or check what was kept, or what changed. After reading, they can ask any AI product three questions: can I read it word for word, does it live somewhere I own, can I see what changed and why? | "AI that remembers my business", "where does my AI store my company data" (informational). Volumes unverified: no web research this run. | Searchable. Ships independently of #6827 because it names no competitor. Cross-link the P1 sovereignty post ("What Happens to Your Business When Your AI Provider Changes the Rules?") and the Gap 1 compounding pillar. Proof only from checkable sources. No engineering metrics (Blog note). |
+| "Soleur vs Cofounder (cofounder.co)" | Comparison page | **P1, gated** | Two founder-approved AI companies: what differs once both ask for your approval. | "Soleur vs Cofounder", "cofounder.co alternative" (commercial) | **Gates:** (a) the #6827 rewrite has landed; (b) a fact-checker pass against cofounder.co, cofounder.co/pricing and the GIC memory post on the draft date. **SEO risk:** "Cofounder" is a generic word, so a bare "Cofounder alternative" collides with human co-founder search intent. Always disambiguate with "cofounder.co" in the title, meta and H1. Acknowledge Cofounder's strengths first (approval gates, breadth, ownership graduation, funding). Lead with the three durable contrasts. FAQ JSON-LD. |
+| Refresh the "It's Not the Number of Agents" piece (Gap 14) | Position piece (existing gap) | P1 (existing) | Add the "decisions you can open" framing: each lifecycle stage leaves a readable document. | — | Folds the lifecycle contrast into the existing Gap 14 piece. Do not create a duplicate piece. |
+| Shareable: "The Three Questions to Ask Before an AI Runs Any Part of Your Company" | Checklist / social thread | P2 | Novelty and utility play built from the P1 post's three questions. | — (shareable, not searchable) | X thread, Bluesky, LinkedIn Personal. Names no competitor. |
+
+**Scoring (1-5; customer impact / content-market fit / search potential / resource cost, higher = cheaper):** founder-problem post 5/5/3/4 = **17**; Cofounder comparison 4/4/3/3 = **14**, held behind its gates; shareable checklist 4/5/1/5 = **15**. Search-potential scores are judgment calls because no keyword volumes could be fetched this run.
+
+### Gap 17: Engineering-Team Agent-Ops (Multica, HumanLayer): Assessed, Low Priority, No Dedicated Content [NEW 2026-11-01]
+
+**Assessment:** Both are opposite-ICP per the CI index. **Multica** (2026-07-04 intake, ~39k stars) is an open-source "managed agents platform" with a Linear-style board where agents are teammates. It targets engineering teams and ships **zero business-domain agents**. **HumanLayer / "Riptide"** (2026-10-24 intake, 12,344 stars) is a multiplayer control plane for coding-agent sessions, sold to engineering leaders, and it is deliberately human-gated. The CI reads it as about 20-30% overlap: "control plane vs. factory floor". Neither competes for the non-technical solo founder, so comparison pages would target the wrong buyer. Under the brand guide's Blog note, their developer queries ("managed agents platform", "agent control plane", "coding agent sessions") are off-limits for new blog posts anyway.
+
+**Content implications (low, P3 at most):**
+
+- **No comparison pages, no keyword targeting, and no named mentions in founder-facing posts.** Revisit only if either one ships business-domain agents or names solo founders as its ICP.
+- The CI's HumanLayer audit says the gap there is **narrative + packaging, not capability**: HumanLayer out-publishes Soleur for the engineering audience (~5M content views, marketing figure per the CI index, unverified). This is already served by the Pillar 2 agent-operator / methodology lane (the post-mortem and verification-arc pieces). Specifically: autonomy that runs from issue to merged PR to verified deploy, plus the enforcement corpus. **No new pieces.** Keep that lane's cadence, and keep its HN slot for technical write-ups.
+- Multica's primitives (Autopilot, severity Inbox, visible agent teammates) are product-design inputs, not content. If Soleur ships them, announce them as Soleur features through the normal ship → CMO gate path, without referencing Multica.
+
 ### Gap 13: "Predictable Pricing in a Metered-Billing World" (High) [NEW 2026-06-08]
 
 **What is missing:** No content positions Soleur's flat, predictable, git-native cost model against the Tier 0 metered-billing shift. GitHub Copilot's move to usage-based "AI Credits" (June 1) removed model fallback and drove 10–50x agentic-bill increases with public backlash; Codex, Cursor, and Notion are all on credits/token billing.
@@ -52,6 +102,8 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - "Built with Soleur" case study framed around lifecycle stages, not agent headcount.
 - Refresh proof points across existing pages from "60+ agents" toward "the stage-gated company lifecycle" (coordinate with brand-guide.md numbers-as-soft-floors rule).
 
+**[2026-11-01 adjustment]** This gap now also carries the lifecycle half of the Cofounder contrast (Gap 16). The contrast is named, readable artifacts per stage, with explicit review and compound stages, set against Cofounder's "Flows" (describe Flows neutrally). Breadth is no longer a contrast at Tier 3. Tier 1 is unchanged: mattpocock/skills and sota-scan are methodology donors, not count rivals, so alirezarezvani remains the only count-race reference.
+
 ### Gap 15: Token-Economics / Cost-Architecture Lane (High) [NEW 2026-06-10]
 
 Zero existing content on model-tier economics despite BYOK cost being a live buyer objection. PR #5096 (model-tier optimization, closes #3791) supplies the story: judgment on the best model, busywork on the cheapest, never-downgrade enforced by CI; ~65-80% token savings per fan-out run for BYOK users.
@@ -62,6 +114,8 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 ### Gap 1: Cross-Domain Compounding Narrative (Critical) [UPDATED 2026-03-20]
 
 **What is missing:** The "Why Most Agentic Engineering Tools Plateau" blog post (SAP 4.8/5.0) partially addresses this gap by explaining compound knowledge. However, no dedicated article exists that explains the compounding knowledge base as Soleur's core differentiator in depth. The homepage mentions "knowledge compounds" as a tagline but never elaborates.
+
+**[2026-11-01 adjustment]** Memory alone is no longer the differentiator. Cofounder's three-tier memory with "sleep-time compute" (CI intake 2026-06-14, verified 2026-07-22, not re-verified) and Tanka's open-sourced EverMemOS both make "AI that remembers" table stakes. The pillar article must lead with **what kind** of memory: verbatim, founder-readable, diffable, and in the founder's own repository, connected across departments by the lifecycle. Gap 16's founder-problem post is the entry point, and this pillar is its hub.
 
 **Why it matters:** Tanka explicitly claims "memory compounding" as their moat. Anthropic will eventually add persistence to Cowork. The first platform to own this narrative in public content establishes the standard. That platform should be Soleur, which built the architecture.
 
@@ -125,6 +179,8 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 - Comparison page: **"Soleur vs. NanoCorp"** (new) — founder-in-the-loop + 8 domains vs. narrow autonomous GTM engine; flag ads as "Coming Soon" and ARR as unverified.
 - Blog post: "Why Human Judgment Compounds Better Than Full Autonomy"
 - Blog/positioning angle: **"You Keep 100%"** — the ~20% revenue-cut shared by Polsia and NanoCorp vs. Soleur's flat pricing and git-owned memory.
+
+**[2026-11-01 scope note]** The autopilot-vs-decision-maker frame works against the autonomous pack (Polsia, NanoCorp). It does **not** work against Cofounder, which also gates binding actions behind founder approval. Pieces under this gap must name their comparison set, and must not imply that founder-in-the-loop or "you keep 100%" is unique across Tier 3; see Gap 16 for the narrowed contrast. Polsia and NanoCorp figures remain as of the 2026-06-08 scan: unverified, contradictory, and not re-verified 2026-11-01.
 
 ### Gap 6: Cursor Agent Platform Positioning (Critical) [COMPLETED 2026-03-19]
 
@@ -305,6 +361,8 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Best Claude Code Plugins for Solo Founders (2026) | Listicle | 2,000-2,500 | P2 | Month 3. Audit P3-2. |
 | Agent Platform vs. AI Organization | Position paper | 1,500-2,000 | P2 | Month 2-3. Remaining Gap 3 work. |
 | Orchestration vs. Intelligence: Paperclip and Soleur | Blog post | 1,200-1,500 | P3 | Month 3+. Gap 8. |
+| Soleur vs Cofounder (cofounder.co) | Comparison page | 1,500-2,000 | P1 (gated) | [2026-11-01] Gap 16. Held until the #6827 Tier-3 positioning rewrite lands and a fact-checker pass re-verifies cofounder.co claims on the draft date (CI facts are dated 2026-06-14/07-22). Disambiguate "cofounder.co" in the title, meta and H1. Do not state "no revenue share" as policy and do not cite a department count. |
+| Can You Read What Your AI Team Remembers? | Founder-problem blog | 1,200-1,600 | P1 | [2026-11-01] Gap 16 entry point; names no competitor, so it is not gated on #6827. Hub: Gap 1 compounding pillar. Cross-links the P1 sovereignty post. |
 
 ### Pillar 4: Proof and Tutorials
 
@@ -511,7 +569,9 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-*Updated: 2026-06-08 (cascade from full six-tier CI scan: Gap 5 reframed to autonomous-CaaS pack incl. Polsia $30M/$250M + NanoCorp; added Gap 13 metered-pricing angle and Gap 14 workflow-depth proof pivot). Previously: 2026-05-03 (Issue #3108). Sources: competitive-intelligence.md (2026-06-08), brand-guide.md (2026-06-01), business-validation.md (2026-03-22).*
+*Updated: 2026-11-01 (downstream-sync cascade from the blocked 2026-11-01 CI scan, with no new web facts: added Gap 16 for the Cofounder-narrowed contrast and Gap 17 for Multica/HumanLayer, assessed low with no dedicated content; adjusted Gaps 1, 5 and 14; recorded no-content verdicts for Omnigent, Sutra [internal-only], mattpocock/skills and sota-scan. Competitor facts are dated to their CI intakes and were not re-verified on 2026-11-01. Sources: competitive-intelligence.md index rows plus internal shards, used as context only and never cited publicly.)*
+
+*Previously updated: 2026-06-08 (cascade from full six-tier CI scan: Gap 5 reframed to autonomous-CaaS pack incl. Polsia $30M/$250M + NanoCorp; added Gap 13 metered-pricing angle and Gap 14 workflow-depth proof pivot). Previously: 2026-05-03 (Issue #3108). Sources: competitive-intelligence.md (2026-06-08), brand-guide.md (2026-06-01), business-validation.md (2026-03-22).*
 
 - **verification-scaffold** (#10404, 2026-10-21): new skill installs the audited generic guardrail set (secret-scan, commit-on-main, block-stash, orphan-test) into a user repo's hooks + CI, advisory-first — the "taste compounds" story: Soleur's own guardrail depth, now portable.
 - **google-antigravity-support** (PR #10362, 2026-10-26): new harness support for Google Antigravity CLI (`agy`) — the "own your AI team without vendor lock-in" story: run an 8-department AI company on Gemini models while keeping your company's memory in your own repository.

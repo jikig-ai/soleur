@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-08
+last_updated: 2026-11-01
 last_reviewed: 2026-06-08
 review_cadence: monthly
 owner: CRO
@@ -11,6 +11,12 @@ convergence_risk: High
 ---
 
 # Battlecard: Polsia
+
+> **[2026-11-01 Cascade sync, index alignment only, no new web facts]** Funding, pricing, contradictory-ARR and convergence facts still match the current CI index (Polsia data as of the 2026-06-08 scan). **They were not re-verified on 2026-11-01** (scan web tools blocked). The index's open item for the next scan is "Polsia's contradictory ARR claims." Rep cautions added this sync:
+> 1. **Domain count:** the index and [Polsia shard](../../product/competitive-intelligence/tier-3-polsia.md) list Polsia's agents as engineering, marketing, support and CEO-strategy ("4-agent coverage", "~5-domain"). That differs from the 5-domain list below, which comes from earlier intake. Do not cite an exact count. The durable point is that Polsia has **no legal, finance or product-strategy agents**. The shard also records the founder's name as "Ben Cera/Broca."
+> 2. **Cofounder changes the comparison set.** Founder-in-the-loop and "no revenue share" are no longer unique to Soleur in Tier 3. Cofounder (rated Critical) has verified approval gates, and its published pricing shows no revenue share (INFERRED). If a prospect has both Polsia and Cofounder in view, use the [Cofounder battlecard](tier-3-cofounder.md).
+> 3. **"You keep 100%" applies to Soleur's self-serve Solo/Startup/Scale tiers only.** Enterprise pricing includes a negotiated sliding revenue share (10% falling to 5%) per `pricing-strategy.md`.
+> 4. **License:** the repo `LICENSE` is **Business Source License 1.1** (Soleur v3.1.0 and later; each version converts to Apache-2.0 four years after publication). The "Apache-2.0" and "open source" lines below are out of date. Say "source-available."
 
 > **[2026-06-08 Cascade update]** **Trajectory reversed.** The 2026-05-30 read ("ARR fell to $450K, ambiguous trajectory") is superseded: per the 2026-06-08 full-tier scan, Polsia **raised $30M at a $250M valuation (Sound Ventures lead, True Ventures participating, May 2026)**, and newer third-party reports cite ~$10M ARR / 7,600 customers / 85% month-two retention. Figures across sources remain contradictory (a Feb 2026 Mixergy interview implied ~$689K run-rate), so **treat all revenue/customer counts as marketing/unverified — the funding round is the verifiable signal.** The "growing slower / churning out" framing from the prior note no longer holds; reps must NOT claim Polsia is shrinking. Pricing unchanged: $49/mo base + 20% revenue share.
 
@@ -94,4 +100,4 @@ Review monthly. Polsia is the most direct CaaS competitor.
 
 ---
 
-_Updated: 2026-06-08 (cascade from full six-tier scan). Source: competitive-intelligence.md (2026-06-08)._
+_Updated: 2026-11-01 (downstream-sync cascade: dated note only; no new web facts). Previously 2026-06-08 (cascade from full six-tier scan). Source: competitive-intelligence.md (2026-11-01 index; Polsia data as of 2026-06-08)._

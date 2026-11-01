@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-15
+last_updated: 2026-11-01
 last_reviewed: 2026-09-15
 review_cadence: monthly
 owner: CMO
@@ -253,3 +253,65 @@ Topics discovered via `/soleur:growth plan` when the queue was exhausted.
 | Topic | Keywords | Source | Generated Date |
 |-------|----------|--------|----------------|
 | How to Run Every Business Department with AI Agents: A Solo Founder's Playbook | how to run company with AI agents, AI agents for every department, solo founder AI agents, delegate to AI agents, AI organization platform, context engineering solo founder | growth plan (auto-discovered) | 2026-05-14 |
+
+---
+
+## Stale Comparison Pages Flagged for Regeneration (2026-11-01)
+
+Downstream sync from the 2026-11-01 scheduled CI scan (Tiers 0 and 3). **That scan could not do web research** (the cron containment hook denied `WebSearch`/`WebFetch`), so the CI index has **no new web facts this run**. Every flag below compares live page source under `plugins/soleur/docs/` with facts the index already held. Nothing here was re-verified on 2026-11-01.
+
+> **Regeneration gate.** Tier 0 facts date from the **2026-06-08** scan. Tier 3 facts date from each competitor's own intake (2026-06-08 full scan; Cofounder 2026-06-14 / 2026-07-22; Multica 2026-07-04; Paperclip stars 2026-07-20; Sutra 2026-10-06; HumanLayer 2026-10-24). **For any row tagged `time-sensitive`, hold regeneration until the next unblocked scan, or run it together with that scan.** Those rows cover prices, credits, promos, star counts, funding and release names. Rows tagged `structural` fix framing or taxonomy errors that do not depend on fresh numbers, so they can go ahead now. Every CI shard is `publishable: internal`. Public copy must cite primary sources directly, never the shard.
+
+### A. Existing pages: stale-check inventory
+
+| # | Page (source) | Last date in source | Competitor claim on page | Current index position (fact date) | Verdict | Class | Priority |
+|---|---|---|---|---|---|---|---|
+| A1 | Soleur vs. Notion Custom Agents (`blog/2026-03-17-soleur-vs-notion-custom-agents.md`) | date 2026-03-17, no `updated` | "currently in free beta through May 3, 2026"; comparison table says "Current availability: Free beta (Business and Enterprise plans)"; the FAQ and JSON-LD still use future tense ("From May 4…") | Free exploration ended May 3. Since May 4 agents run on credits at $10/1,000 and are **Business/Enterprise-only; Free and Plus excluded** (2026-06-08) | **STALE, contradicted.** The page presents a lapsed beta as current, in body copy, the table and FAQ JSON-LD. The 2026-06-08 "paywall + ICP eviction" item is still unactioned. The page's "$20/seat Business plan" figure is not in the index, so re-verify it before republishing | Structural (tense and availability fix); the price figures are time-sensitive | **P1** |
+| A2 | Soleur vs. Cursor (`blog/2026-03-19-soleur-vs-cursor.md`) | date 2026-03-19, no `updated` | Framed around March Automations; pricing list Hobby / Pro $20 / Pro+ $60 / Ultra $200 / Teams $40; "$2B+ ARR" (Feb 2026, TechCrunch); no Composer model mentioned | Composer 2.5 (May 18) at about 1/10 the cost per token; six tiers including Enterprise and a Teams Premium seat at $120 (2026-06-08). **The index itself flags "Composer 2.5 as latest" as unconfirmed since June** | **STALE.** The 2026-06-08 P3 item is still open. The engineering-only versus 8-domain framing still holds | Time-sensitive (model names, pricing) | P3; wait for the unblocked scan |
+| A3 | Compare: Soleur vs. Cursor (`pages/compare-soleur-vs-cursor.njk`) | `last_updated: 2026-10-22` | Qualitative only ("scoped to software engineering"); no prices or model names found | Consistent | **OK.** No action. Add a link to and from A2 when A2 is regenerated (see C) | — | — |
+| A4 | Soleur vs. Anthropic Cowork (`blog/2026-03-16-soleur-vs-anthropic-cowork.md`) | `updated: 2026-05-21` | "10 plugin categories" (HR, Design, Engineering, Ops, Finance [IB/ER/PE/WM], Brand Voice); "15+" enterprise connectors; Copilot Cowork add-on $30/user, M365 E7 $99/user | The Feb 24 expansion shipped **13 MCP connectors** plus industry plugins for HR, IB, ER, design, engineering, ops, PE and WM. Convergence risk is **Critical, with 7+ of 8 Soleur domains facing first-party competition**; engineering-lifecycle orchestration is the last gap (2026-06-08) | **STALE, partly contradicted.** The connector count (15+ vs. 13) and the category taxonomy disagree with the index. The page also understates convergence ("covers the same territory… on paper"). The Microsoft pricing is not in the index, so re-verify it | Structural (convergence framing); the connector counts and M365 pricing are time-sensitive | P2 |
+| A5 | Soleur vs. Polsia (`blog/2026-03-26-soleur-vs-polsia.md`) | `updated: 2026-07-20` | Leads with the $30M at $250M raise (May 2026); ARR attributed and marked contradictory; $49/mo plus 20% rev-share | Matches the index (Polsia shard, 2026-06-08 / 2026-07-20) | **OK as of 2026-07-20, not re-verified.** The "ARR claims contradictory" point is an open item for the next scan. Regenerate only if that scan changes the funding, pricing or rev-share figures | Time-sensitive | Monitor |
+| A6 | Soleur vs. Paperclip (`blog/2026-03-31-soleur-vs-paperclip.md`) | `updated: 2026-07-20` | "74,000+ GitHub stars", canonical `paperclipai/paperclip`; v0.3.0 adapters; "Clipmart upcoming"; the FAQ and JSON-LD call Paperclip and Soleur "the two most prominent self-hosted platforms" | 74,282 stars at 2026-07-20 (GitHub API); canonical repo resolved (Recommendations P3). **Index inconsistency:** the Tier 3 overlap-matrix Paperclip row still reads "53k+" and "Org/repo ambiguity to track". That row is out of date, so the page is right and the row is wrong | **OK as of 2026-07-20, not re-verified.** The star count is about 3.5 months old and the index says it is "climbing". Clipmart status was never re-checked | Time-sensitive (stars, Clipmart) | P3; refresh at the next scan. **Do not regenerate from the Tier 3 matrix row** (53k / ambiguity); use the 2026-07-20 GitHub API figure or a fresh pull |
+| A7 | Soleur vs. Tanka (`blog/2026-05-05-soleur-vs-tanka.md`) | date 2026-05-05, no `updated` | EverMemOS described as Tanka technology with no open-source status; pricing Free (<50) / Plus $29 / Pro $199 / "$299/month for teams of 50+"; Agent Store "planned" | **EverMemOS is now fully open source**; pricing listed as Free (<50 members) / Plus $29 / Pro $199, with no $299 tier (2026-06-08) | **STALE.** The 2026-06-08 item is still open. The $299 team tier does not appear in the index, so verify it or remove it | Structural (open-source framing); pricing is time-sensitive | P3 |
+| A8 | Soleur vs. CrewAI (`blog/2026-05-07-soleur-vs-crewai.md`) | date 2026-05-07, no `updated` | "over 45,000 GitHub stars"; no funding or scale context | 47.8k stars (Apr 2026), 27M+ PyPI, about 2B executions, $18M Series A (2026-06-08) | **STALE, understated.** The 2026-06-08 item is still open | Time-sensitive (stars) | P3 |
+| A9 | Best Claude Code Plugins 2026 (`blog/2026-04-30-best-claude-code-plugins-2026.md`) | date 2026-04-30, no `updated` | Official marketplace "100+" in body and FAQ JSON-LD; "4,200+ skills / 770+ MCP servers" (Apr 2026); `alirezarezvani/claude-skills` not mentioned | Official marketplace at **186** (Jun 7, 2026); ecosystem at 20,300+ skills, 2,500+ marketplaces, 9,900+ MCP servers; alirezarezvani at 337 skills and 5,200+ stars (2026-06-08). **The index flags the 186 count as unconfirmed since June** | **STALE, understated by about 2x to 10x.** The 2026-06-08 item is still open | Time-sensitive | P2; pair with the next scan |
+| A10 | Skill Libraries vs. Workflow Plugins (`blog/2026-05-15-skill-libraries-vs-workflow-plugins.md`) | date 2026-05-15, no `updated` | Describes alirezarezvani/claude-skills as covering "common developer needs (research workflows, data wrangling, documentation generation, project scaffolding)" | 9 domains (engineering, marketing, product, compliance, C-level, research, biz-ops, finance, productivity), an explicit Solo Founder persona, cross-domain orchestration, 12+ tools; **Critical, closest structural match** (2026-06-08) | **STALE, contradicted.** The page casts the closest structural competitor as a developer-only catalog, which understates it on the exact axes Soleur claims as moats | Structural (scope framing); the counts are time-sensitive | **P2** |
+| A11 | What Is Company-as-a-Service? pillar (`pages/company-as-a-service.njk`) | — | Lovable "reached $200 million in ARR" (TechCrunch, Nov 2025); $330M raise at $6.6B | $400M annualized revenue (Feb 2026); $330M Series B at $6.6B (2026-06-08) | **STALE, understated.** The ARR figure is two data points old | Time-sensitive | P3 |
+| A12 | Compare: Soleur vs. Devin (`pages/compare-soleur-vs-devin.njk`) and blog (`blog/2026-04-21-soleur-vs-devin.md`) | `last_updated: 2026-10-22` (compare) | Devin 2 at $20/mo entry | Devin has no row in the index. The only coverage is that Windsurf 2.0 embedded Devin (April 2026) | **Cannot assess; no index coverage.** Add Devin/Cognition to the next scan's Tier 0 or 5 scope if this page is kept | — | Monitor |
+
+### B. Missing high-value pages
+
+| # | Proposed page | URL patterns | Index basis | Gate before creation | Priority |
+|---|---|---|---|---|---|
+| B1 | **Soleur vs. Cofounder** (+ "Cofounder alternatives") | `/blog/soleur-vs-cofounder/`, `/blog/cofounder-alternatives/` | Tier 3, **Critical, closest product match**: $8.7M USV seed; HITL gates; multi-department breadth; no rev-share plus ownership graduation; Pro $20/mo, Team $50/mo "coming soon" (source-verified 2026-07-22) | **Needs primary-source re-verification before publishing.** The Cofounder shard is `publishable: internal`, and it states that a **bare department count must not be cited as verified** (11 functional areas on the landing page vs. "8" in the index row, with legal absent). "No revenue share" is also graded, not flat fact. The open scan item (has Team $50 launched?) must be resolved first. Write against the 3 moats the shard says hold: a git-tracked verbatim KB in the founder's repo, the named-artifact lifecycle, and founder-owned repos from day one. **Do not** lead with founder-in-the-loop or breadth, which Cofounder neutralizes. The positioning rewrite (#6827, NG2) should land first or alongside | **P1** (highest-overlap competitor with no page) |
+| B2 | **Soleur vs. NanoCorp** (+ "NanoCorp alternative") | `/blog/soleur-vs-nanocorp/` | Tier 3 High: Phospho Inc./YC; 20% withdrawal fee; ads "Coming Soon"; contradictory ARR (2026-06-08) | Still open from 2026-06-08. **Time-sensitive:** the ads status and ARR are open scan items. Re-verify against nanocorp.so; cite no ARR figure as fact | P2; pair with the next scan |
+| B3 | **Soleur vs. OpenAI Codex** | `/blog/soleur-vs-openai-codex/` | Tier 0 **Critical**: Sites, multi-agent, memory, 90+ plugins, scheduled tasks, Pro promo expired May 31 (2026-06-08) | Still open from 2026-06-08. **Time-sensitive:** the index flags Codex Sites "preview" status as unconfirmed since June | P2; wait for the unblocked scan |
+| B4 | **Soleur vs. GitHub Copilot** (metered-billing angle) | `/blog/soleur-vs-github-copilot/` | Tier 0 High: AI Credits since June 1, 10–50x agentic-bill backlash (2026-06-08) | **Do not draft from current index data.** The "promo credits ($30/user Business, $70/user Enterprise) through Aug 2026" line has **lapsed on its stated terms**, and all billing figures are 5 months old. Use only after a fresh scan. Brand note: the message is "predictable + you own your memory", not "free" (CI Rec P1 #3) | P3; blocked on the scan |
+| B5 | Soleur vs. Multica / Soleur vs. HumanLayer | — | Tier 3 Medium–High and Medium; both are opposite-ICP design donors (shards `publishable: internal`) | **Not recommended.** Different ICP (engineering teams), so search intent from Soleur's ICP is low. Revisit only on demand signals | Not queued |
+| — | Sutra | — | Internal-only watch entry | **Excluded: no public comparison page** (index New Entrants #12) | Never |
+| — | Omnigent | — | Tier 4 watch-only | **Excluded.** Do not claim "runs on", "compatible with" or "supports" Omnigent on any page | Never |
+
+### C. Internal linking requirements for regenerated and new pages
+
+| Page | Must link to (≥2 in-set + product) |
+|---|---|
+| A1 Notion | A4 Cowork, B1 Cofounder (once published), `/pricing/` |
+| A2 Cursor (blog) | A3 compare-cursor, A12 Devin, `/pricing/` |
+| A4 Cowork | A9 Best Plugins, A1 Notion, `/company-as-a-service/` |
+| A7 Tanka | B1 Cofounder (memory contrast), A5 Polsia, `/pricing/` |
+| A8 CrewAI | A6 Paperclip, A10 Skill Libraries, `/company-as-a-service/` |
+| A9 Best Plugins | A10 Skill Libraries, A4 Cowork, `/getting-started/` |
+| A10 Skill Libraries | A9 Best Plugins, A8 CrewAI, `/getting-started/` |
+| B1 Cofounder | A5 Polsia, B2 NanoCorp, A6 Paperclip, `/pricing/` |
+| B2 NanoCorp | A5 Polsia, B1 Cofounder, `/pricing/` |
+| B3 Codex / B4 Copilot | A2 Cursor, A3 compare-cursor, `/pricing/` |
+
+### D. Section 3.1 monitoring rows: carry-forward and corrections (apply at the next full edit)
+
+- **Paperclip:** the 74,282 / `paperclipai/paperclip` row (2026-07-20) stands. Flag back to CI that the Tier 3 overlap-matrix Paperclip row still carries the superseded "53k+ / ambiguity" text.
+- **Cursor:** the "STALE: Requires immediate update" text in 3.1 is about the March Automations framing. The blog page now needs the Composer 2.5 and pricing refresh (A2), which is time-sensitive.
+- **GitHub Copilot** (added 2026-06-08 under "New monitoring rows"): the promo-credit window "through Aug 2026" has **expired on its stated terms**. Do not cite it as live.
+- **Add:** a **Cofounder** row. Trigger for action: Team $50/mo tier launches, a legal department is added, or rev-share changes.
+- **Add:** a **Devin/Cognition** scope request to CI, since two live pages (A12) have no index coverage.
+
+_Flagged: 2026-11-01. Source: competitive-intelligence.md (2026-11-01 index, blocked scan; no new web facts) plus the per-competitor shards. Facts are dated to their intakes and were not re-verified on 2026-11-01. Comparison pages were not edited._
