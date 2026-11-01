@@ -53,7 +53,7 @@ done
 # now `terraform apply` (infra/github/ruleset-cla-required.tf). (Unlike the CI DR
 # script, there is no `context=test` bot-workflow preflight — that check is
 # CI-semantic; CLA's required checks are cla-check / cla-evidence.)
-existing=$(gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
+existing=$(gh api --paginate "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
 if [[ -n "$existing" ]]; then
   echo "Ruleset '${RULESET_NAME}' already exists (ID: ${existing}). Skipping creation."
   echo "To modify it, edit infra/github/ruleset-cla-required.tf and let apply-github-infra.yml apply on merge."

@@ -57,7 +57,7 @@ Both are needed; they are distinct values.
 
 ```bash
 # When authenticated as a user with org-admin scope:
-gh api /orgs/jikig-ai/installations \
+gh api --paginate /orgs/jikig-ai/installations \
   --jq '.installations[] | {id: .app_id, slug: .app_slug, app_db_id: .app_id}'
 
 # Or, when already authenticated AS the App (chicken-and-egg avoided

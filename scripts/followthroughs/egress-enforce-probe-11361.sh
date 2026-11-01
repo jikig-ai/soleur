@@ -68,7 +68,7 @@ if [ "$FATALS" -gt 0 ]; then
 fi
 
 # Zero fatals alone is not proof — require a post-merge birth (dispatch success).
-BIRTH=$(gh api "repos/{owner}/{repo}/actions/workflows/apply-web-platform-infra.yml/runs?per_page=30" \
+BIRTH=$(gh api --paginate "repos/{owner}/{repo}/actions/workflows/apply-web-platform-infra.yml/runs?per_page=30" \
   --jq '[.workflow_runs[] | select(.conclusion=="success" and .event=="workflow_dispatch")] | length' 2>/dev/null || echo -1)
 if [ "$BIRTH" = "-1" ]; then
   echo "TRANSIENT: gh api workflow-runs query failed" >&2
