@@ -1352,24 +1352,10 @@ async function persistFailure(
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
-  // Message path with a `reason` tag, so sentry_alert.spawn_agent_dead_letter
-  // can match it (#8719); never throws (server/spawn-dead-letter.ts).
-  reportSpawnDeadLetter({
-    reason,
-    actionClass: args.actionClass,
-    err,
-    extra: {
-      ...args.extra,
-      founderId: args.founderId,
-      messageId: args.messageId,
-      sourceRef: args.sourceRef,
-      actionSendId,
-    },
-  });
 
-  // Single notification site (AC3), BEFORE the action_sends UPDATE — mirroring
-  // the Sentry-mirror-first ordering above. Wrapped in its OWN memoized
-  // step.run so Inngest fires it EXACTLY ONCE across function replays/retries
+  // Single notification site (AC3), BEFORE the action_sends UPDATE. Wrapped in
+  // its OWN memoized step.run so Inngest fires it EXACTLY ONCE across function
+  // replays/retries
   // (a raw side-effect here re-executes on every replay → duplicate founder
   // pages) AND awaits completion so the push/email isn't torn down at a later
   // step boundary. `notifyOfflineUser` never throws (it mirrors its own send
@@ -1412,6 +1398,25 @@ async function persistFailure(
       err: persistErr,
     });
   }
+
+  // After the memoized steps, so a replay never re-reports — the file's own
+  // settle-side convention (#8841); a notify-cost-breaker step exhaustion
+  // propagates to onFailure→settle, which reports that run's dead-letter via
+  // the settle path (lifecycle `failed`). Message path with a `reason` tag, so
+  // sentry_alert.spawn_agent_dead_letter can match it (#8719); never throws
+  // (server/spawn-dead-letter.ts).
+  reportSpawnDeadLetter({
+    reason,
+    actionClass: args.actionClass,
+    err,
+    extra: {
+      ...args.extra,
+      founderId: args.founderId,
+      messageId: args.messageId,
+      sourceRef: args.sourceRef,
+      actionSendId,
+    },
+  });
   return { acknowledged: false, failureReason: reason };
 }
 

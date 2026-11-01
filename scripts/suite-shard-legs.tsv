@@ -81,6 +81,7 @@ apps/cla-evidence/scripts/upload-evidence.test.sh	7
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
 apps/web-platform/scripts/dev-ledger-parity.test.sh	1
+apps/web-platform/scripts/home-census-trigger.test.sh	3
 apps/web-platform/scripts/lib/in-image-copy-src.test.sh	5
 apps/web-platform/scripts/lib/no-cross-context-import.test.sh	8
 apps/web-platform/scripts/lib/supabase-ref-resolver.test.sh	8
