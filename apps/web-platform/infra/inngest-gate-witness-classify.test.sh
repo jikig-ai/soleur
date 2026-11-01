@@ -58,7 +58,7 @@ echo "  (assert self-test OK — deliberate FAIL above is expected and subtracte
 echo "== SUT presence =="
 assert "classifier exists and is executable" "[[ -x '$SUT' ]]"
 assert "--selftest prints the discoverability line" \
-  "bash '$SUT' --selftest | grep -qxF 'inngest-gate-witness-classify selftest: ok'"
+  "[[ \"\$(bash '$SUT' --selftest)\" == *'inngest-gate-witness-classify selftest: ok'* ]]"
 
 EV=0
 c_case() { # $1 desc, $2 token, $3 flag, $4 expected
