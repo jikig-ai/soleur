@@ -545,6 +545,12 @@ processing same-repo contributor source and PR metadata through the Jikigai-keye
 subject to the CLA-scope question remaining open and to the Art. 14 posture below (which for
 this arm is materially better than for Arm B).
 
+*[Added 2026-11-01 (#10111).]* The Jikigai-keyed CI surface also now includes a scheduled real-SDK
+ask probe (PA-33 member (9)) that sends only fixed synthetic prompts and public plugin descriptions
+to Anthropic and never reads a contributor's pull-request source with the model, so it adds no
+contributor personal data and leaves this Arm C balancing unchanged. Draft; requires professional
+legal review.
+
 ---
 
 ## Art. 14 — assessed per arm

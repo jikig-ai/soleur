@@ -27,6 +27,16 @@
 > markers). Genuinely unmetered by anything: `ci.yml`'s `plugin-root-propagation-gate`
 > and `sandbox-canary-capture-gate`.
 >
+> **Added 2026-11-01 (#10111): the scheduled real-SDK ask probe.**
+> `scheduled-real-sdk-ask-probe.yml` is a further draw on the CI key. It is **unmetered by
+> the ledger and metered by its own summary**: the probe prints a measured `costUsd` per case
+> and a `TOTAL costUsd=` line into the job summary and a 90-day artifact
+> (`real-sdk-ask-probe-<run_id>`), and it uploads no `api-spend-*` artifact, so this procedure
+> never sees it. Caps: $4 per run (hard), $25 per month (planning ceiling), $2.50 per run
+> (review trigger). The ~$1.5 per run behind the ceiling is an UNVERIFIED planning estimate
+> until the first run is measured. The reported cost is the SDK's own estimate, not a billing
+> statement: compare it with the `soleur-ci-eval` workspace usage view.
+>
 > **Successor mechanism:** #6297 wires `cron-anthropic-cost-report` to the Anthropic
 > Admin Cost & Usage API for an authoritative **org-total**, superseding per-run artifact
 > capture. It is blocked on an un-mintable `ANTHROPIC_ADMIN_KEY` (the Admin API requires
