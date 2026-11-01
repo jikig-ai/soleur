@@ -636,10 +636,12 @@ describe("Guard 3 — the dependency tree stays repaired", () => {
   it("resolves every brace-expansion at or above its own line's patched floor", () => {
     expect.assertions(2);
     const found = braceExpansionResolutions();
-    // Anti-vacuity floored at the MEASURED population, not at 1. At >= 1 the matcher
-    // could be narrowed until two of the three resolutions were unwatched and this
-    // still passed.
-    expect(found.length).toBeGreaterThanOrEqual(3);
+    // Anti-vacuity floored at the MEASURED population. The 2026-11-01 medium/low
+    // batch consolidated every minimatch on 11.x, which wants brace-expansion ^5 —
+    // majors 1 and 2 were evacuated (no consumer), so exactly one copy remains.
+    // The drain guard's ("web-platform","brace-expansion",1|2) rows read (absent)
+    // as the reintroduction ratchet; this floor keeps the surviving line examined.
+    expect(found.length).toBeGreaterThanOrEqual(1);
     const verdicts = found.map(({ path, version }) => {
       const major = Number(version.split(".")[0]);
       const floor = Object.prototype.hasOwnProperty.call(
@@ -666,29 +668,28 @@ describe("Guard 3 — the dependency tree stays repaired", () => {
     // is fine; a top-level one is the defect.
     //
     // SCOPE, stated honestly: this asserts apps/web-platform ONLY. The repo
-    // ROOT package.json carries a top-level blanket `"brace-expansion":
-    // "^1.1.16"` (and a top-level `"js-yaml": "^4.3.1"`) right now, in exactly
-    // the shape forbidden here — an earlier version of this comment claimed
-    // the root used only a scoped override, which was false. Root is not
-    // covered because its blanket is inert there: its sole minimatch is 3.1.5,
-    // which wants ^1 anyway, and its resolved 1.1.18 is floored independently
-    // by scripts/assert-dependabot-drain.py's ("root", "brace-expansion", 1)
-    // row. Widening this guard to root is a deliberate separate change, not
-    // something to infer from this test's name.
+    // ROOT package.json carried a top-level blanket `"brace-expansion":
+    // "^1.1.16"` (and still carries a top-level `"js-yaml": "^4.3.2"`) — the
+    // brace-expansion pin was REMOVED 2026-11-01 when the minimatch@11
+    // consolidation left it consumerless (it also forced minimatch@11's own
+    // ^5.0.12 edge down to 1.1.21). Root is still not covered by this guard:
+    // its resolved copies are floored by scripts/assert-dependabot-drain.py's
+    // ("root", "brace-expansion", 1|5) rows. Widening this guard to root is a
+    // deliberate separate change, not something to infer from this test's name.
     expect(readPkg().overrides?.["brace-expansion"]).toBeUndefined();
   });
 
-  it("nests the three major lines independently instead of flattening them", () => {
+  it("resolves only the major lines consumers still need — no flattened or orphaned copies", () => {
     expect.assertions(1);
-    // The property wanted is that removing the blanket override let each consumer keep
-    // the major its minimatch needs — minimatch@3 wants ^1, rimraf's minimatch@9 wants
-    // ^2, minimatch@10 wants ^5. Asserting it as a SET rather than as
-    // `rimraf?.version` avoids a failure mode that names the wrong cause: rimraf is a
-    // TRANSITIVE dependency, so a Dependabot bump that drops it entirely would red this
-    // with "expected undefined to be '2'" under a test claiming the 2.x line regressed.
+    // The property wanted is that each resolved copy sits on a major some consumer
+    // actually needs. The 2026-11-01 medium/low batch consolidated every minimatch
+    // on 11.x (brace-expansion ^5), evacuating the 1.x and 2.x lines — minimatch@3
+    // (wanted ^1), rimraf's minimatch@9 (wanted ^2) and minimatch@10 are all gone.
+    // Asserting the exact set catches BOTH directions: a reintroduced old line
+    // (["1","5"]) and a flattening to a wrong single major (["1"] or ["2"]).
     expect(
       [...new Set(braceExpansionResolutions().map((r) => r.version.split(".")[0]))].sort(),
-    ).toEqual(["1", "2", "5"]);
+    ).toEqual(["5"]);
   });
 
   it("expands a brace glob without the `expand is not a function` crash", () => {
