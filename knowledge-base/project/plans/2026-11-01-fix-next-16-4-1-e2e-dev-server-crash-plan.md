@@ -51,6 +51,41 @@ reverted change had them.
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01 · **Mode:** sequential-fallback (Devin CLI harness —
+no Task/AskUserQuestion tool; all gates and deep-dives ran inline against the
+repo, never claimed as independent agent review).
+
+**Halts evaluated (§4.5–§4.13):** all pass — §4.5 fired (ECONNRESET) and the
+Network-Outage Deep-Dive is recorded under Hypotheses; §4.55 downtime trigger
+does not fire (normal container-restart deploy path); §4.6/§4.7 sections present
+and non-placeholder; §4.8 PAT sweep clean; §4.9 non-UI; §4.10 no store/connection
+added; §4.11 `lint-guard-contract.py` green on 2 guard entries; §4.12 Scope Check
+compliant (1 unfenced section, 5/5 asks mapped); §4.13 no autonomous task.
+
+**Key deepen findings:**
+
+1. **Near-miss population measured (verify-the-negative pass):**
+   `server/dsar-export.ts` throws `new Error("aborted")` at ~10 sites
+   (abort-signal arms). These carry NO `.code`, so the exact-pair predicate
+   (`message` + `code: "ECONNRESET"`) still exits on them — the no-code test arm
+   covers the population. A future contributor adding `.code = "ECONNRESET"` to a
+   thrown Error is the only masking path; the Guard-2 matrix pins that mutation.
+2. **Rule-id + attribution audit clean:** every `hr-*`/`wg-*`/`cq-*` citation
+   resolves live (`wg-architecture-decision-is-a-plan-deliverable` is
+   migrated-but-active in `scripts/migrated-rule-ids.txt`); #11772 open,
+   #11691 merged (squash `075b1889` is ancestor of origin/main), #11783 filed,
+   #9167/#7591/#8450 closed, #2591 open code-review (no file overlap), #5417 open.
+3. **Precedent-diff (§4.4):** the benign-abort branch is the first non-fatal
+   class in `crash-handlers.ts` — no precedent; pattern is novel (the sibling
+   `reportFatalAndExit` path is the only shape to mirror). The ADR-062 amendment
+   is the corresponding record.
+4. **Post-edit self-audit:** no symbol the plan drops or renames; all backticked
+   identifiers re-read from source (`warnSilentFallback`,
+   `isBenignClientAbort` is new-by-design, `FLOOR_ANCHORS`/`REQUIRED`/`MIN_*`
+   constants confirmed at their cited lines).
+
 ## Problem Statement
 
 Dependabot could not ship `next` 16.4.1 because the e2e job failed
@@ -87,7 +122,11 @@ and is planned, gated, and ADR-amended accordingly.
 
 Phase 1.4 trigger (`ECONNRESET`) — layers in L3→L7 order per
 `plan-network-outage-checklist.md`, each with verification artifact or cited
-opt-out:
+opt-out. **Network-Outage Deep-Dive status (deepen §4.5):** L3 firewall —
+not-applicable (loopback, artifact below); L3 DNS/routing — not-applicable
+(readiness poll succeeded earlier in the same job); L7 TLS — not-applicable
+(plain HTTP dev servers); L7 application — verified (the process threw).
+`SOLEUR_RULE_APPLIED` telemetry emitted for `hr-ssh-diagnosis-verify-firewall`.
 
 1. **L3 firewall allow-list** — opted out: the aborted connection is Playwright→dev-server on `127.0.0.1` inside one CI container; no host firewall filters loopback, and post-crash symptom is `ERR_CONNECTION_REFUSED` (nothing listening), not filtered SYN. Artifact: `playwright.config.ts` `baseURL: http://localhost:3099|3100`, `web-server.sh` exit-marker comment ("a mid-run death reads as bare net::ERR_CONNECTION_REFUSED").
 2. **L3 DNS / routing** — opted out: `localhost` resolves via the container's hosts file; the readiness poll `http://localhost:3100/login` succeeded earlier in the same job (the suite ran tests before dying), which proves resolution + routing worked. Artifact: e2e job log shape in #11772 — tests ran, then refused.
@@ -547,7 +586,7 @@ the sole predicate and `crash-handlers.test.ts` the sole assertion home.
 ## Dependencies & Risks
 
 - **Risk — classifier signature too narrow**: if upstream emits a different benign shape (e.g. `unhandledRejection` with `code: "ECONNRESET"` but message `"socket hang up"`), the crash recurs. Mitigation: Phase 1 repro confirms the observed signature is exactly `aborted`+ECONNRESET; the unhandledRejection arm covers the upstream-documented second shape; if Phase 1 shows a different signature, the predicate widens *only* to the observed superset — never a blanket ECONNRESET exemption.
-- **Risk — masked fatal**: an unrelated real error coincidentally carrying the exact pair would be swallowed as a warning. Mitigation: the pair is Node-internal-only (`connResetException`); application code does not produce `message === "aborted"` + `code === "ECONNRESET"` by accident; near-miss arms pin the boundary.
+- **Risk — masked fatal**: an unrelated real error coincidentally carrying the exact pair would be swallowed as a warning. Mitigation: measured at deepen time — app code DOES produce `Error("aborted")` (`server/dsar-export.ts`, ~10 abort-signal arms) but never assigns `.code`, so the exact-pair requirement still exits on that population; the only masking path is a future `.code = "ECONNRESET"` assignment, which the Guard-2 mutation matrix pins. Near-miss arms pin the boundary.
 - **Risk — Sentry volume**: prod abort storms create warn-event volume. Accepted: grouped issue, level warning, and a burst is itself a DoS-attempt signal worth having.
 - **Dependency — upstream release**: none required; mitigation is local. The upstream-watch issue tracks re-evaluation.
 - **Risk — e2e non-determinism on the bumped tree beyond the abort**: Phase 6 relies on the CI e2e run as oracle; a second, unrelated flake class would re-block the bump and is then a new issue, not a silent pass.
