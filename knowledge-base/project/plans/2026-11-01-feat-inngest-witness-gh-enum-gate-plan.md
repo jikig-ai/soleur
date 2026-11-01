@@ -533,3 +533,36 @@ wording, no ops procedure change. Mechanical UI-surface override scan: no `compo
 - #8593 (gate widening), #8080 item 1 (witness), #10390 (epic), #8054/#8017 (the cutover-day
   discoveries the witness replaces), #8316 (`inngest_host_dark_gate` retired), #8594 (overlap),
   #11695 (batch-1 precedent), ADR-296, ADR-252, ADR-199, ADR-100.
+
+## Deepen-Plan Run Record (2026-11-01)
+
+`soleur:deepen-plan` halt-gate outcomes, verified mechanically against this file:
+
+- **4.4 Precedent-diff:** precedent exists and is cited (dedicated-host arm, `op=registry-probe`
+  plumbing, `monitor-streak-state.sh` + `scheduled-rehearsal-skip-monitor.yml`). Scheduled-work
+  check: the witness attaches to an existing `*/15` workflow — no new scheduled job; the file's own
+  header carries the standing `new-scheduled-cron-prefer-inngest` override (an external monitor
+  cannot run on the thing it monitors).
+- **4.5 Network-outage:** incidental `timeout` mention only (advisory CI shard reds) — plan does not
+  address a connectivity symptom; gate not applicable.
+- **4.55 Downtime & Cutover:** no host replace, migration DDL, or serving-surface swap — skipped.
+- **4.6 User-Brand Impact:** section present, threshold `aggregate pattern` — pass.
+- **4.7 Observability:** 5 fields present, `command` first token `bash` (allowlisted), no `ssh`,
+  sub-15 s selftest, `expected_output` a literal — pass.
+- **4.8 PAT sweep:** zero hits — pass.
+- **4.9 UI wireframe:** no UI-surface files — skipped.
+- **4.10 Encryption Posture:** no `.tf`/`.sql`/cloud-init/store-class file; witness reads an existing
+  BS source over the existing transport — skipped.
+- **4.11 Guard Contract:** `python3 scripts/lint-guard-contract.py` green (2 guard entries);
+  assemblies are chokepoint-structural (extractor + corpus; lib-derived token census).
+- **4.12 Scope Check:** exactly one unfenced section, all asks mapped or justified-inferred,
+  `Recommendation: single PR` — pass.
+- **4.13 Task Design:** detection is file-list+diff scoped — no new workflow file, no new
+  `schedule:`/`on:` trigger, no new function file, no registry/pg_cron/timer/daemon — skipped.
+- **Fan-outs (Phases 2–6 research/review agents) not executed:** the planning subagent has no
+  nested-spawn tool; deferred to the parent pipeline per the batch-1 precedent — recorded in
+  `specs/feat-one-shot-8593-8080-witness/decision-challenges.md`.
+- **4.45 realism passes (run inline):** "report-only" claim verified — the gate lib is a pure
+  file-grading function with no op dispatch; "filesystem registration" verified against ADR-252's
+  own comment block in `infra-validation.yml` (`deploy-script-tests` job, `git ls-files` glob);
+  `inngest_host_dark_gate` retirement verified at the lib header; no dropped symbols to sweep.
