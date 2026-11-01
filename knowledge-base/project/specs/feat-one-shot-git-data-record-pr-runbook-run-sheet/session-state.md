@@ -57,3 +57,7 @@ structural-cause roll-up: L1, L8, L13, L18 are one gap, the sheet states abort/r
 - S1..S8 (simplicity): delete the false closing line; cut RF4 false clauses and replace with a retry clause; "As R1 and R2" for RF4 Checks; trim RF2; merge RF7 triggers into two groups; point RF7 sequence at the rehearsal R5/R6/R8; shrink delta bullet 3 (drop the wrong-mechanism deploy sentence and the PR-meta); drop RF9 date and link D6 section. L5: do not copy the open-items list, say the open items live on #8209 and the owner confirms them there before RF4.
 - Coverage consult leads verified real: host reboot/replace pointer (boot reopen section exists); maximum row age (2 minutes) on decision reads. Refuted: concurrency collision (git-data-cutover.yml has cancel-in-progress false and no schedule).
 
+### Fix round 1 (2026-11-01, commit fb9eb5f3da reviewed by six seats)
+
+Findings: 3 P1 (state rule keyed on the flag alone, re-pause reversal forbidden by the amendment, post-RF6 loss rule too narrow), about 12 P2, about 15 P3, all introduced by or left by the first fix commit. dedup: about 60 raw -> 20 unique. Structural cause: each new rule was written against the state the author was thinking about, not against every state the flag, pause, exemption and sentinel can be in. Resolved by CTO rulings R13 to R19 (decision-challenges.md) and one fix commit. Round 2 (targeted) and a verification pass follow.
+
