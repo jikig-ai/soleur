@@ -219,6 +219,7 @@ classify() {
 # run_probe_pass <n> [budget] -> redacted output in $WORK/red.<n>, exit code in P_RC
 run_probe_pass() {
   local n="$1" budget="${2:-}" raw="$WORK/raw.$1"
+  assert_fixture_dir "$WORK"
   local -a cmd
   read -r -a cmd <<<"$PROBE_CMD"
   if [ -n "$budget" ]; then
@@ -251,12 +252,27 @@ write_summary() { # outcome reason cost provenance attempts
   } >>"${GITHUB_STEP_SUMMARY:-/dev/stdout}"
 }
 
+# Canonical fixture-dir guard (plugins/soleur/test/test-helpers.sh), copied verbatim: a scratch dir
+# that is empty, relative or rooted at / must never be written under.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 cmd_run() {
   PROBE_CMD="${PROBE_CMD:-bun run apps/web-platform/scripts/dev-probe-destroy-ask.ts}"
-  local out_file="${PROBE_OUT_FILE:-${RUNNER_TEMP:-.}/real-sdk-ask-probe.out}"
+  local out_file="${PROBE_OUT_FILE:-${RUNNER_TEMP:-$PWD}/real-sdk-ask-probe.out}"
   local spent1 remaining attempts=1 cost2 total_cost outcome reason prov cost
   WORK="$(mktemp -d -t soleur-run.$$.XXXXXXXX)"
   trap 'rm -rf "$WORK"' EXIT
+  assert_fixture_dir "$WORK"
+  assert_fixture_dir "$out_file"
 
   run_probe_pass 1
   classify "$P_RC" "$WORK/red.1"
@@ -310,6 +326,7 @@ cmd_run() {
 build_body() { # outfile class(regression|blind) mode(new|again|passed) outcome reason cost prov run_url
   local out="$1" class="$2" mode="$3" outcome="$4" reason="$5" cost="$6" prov="$7" url="$8"
   local base="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/blob/main"
+  assert_fixture_dir "$out"
   {
     case "$mode" in
       passed) printf '%s\n\n' "A later run of the real-SDK ask probe subsequently passed. This issue stays OPEN: a green run never closes a regression issue (the lane may be flaky or a path outside the filter may still be inert); a human reviews and closes it." ;;

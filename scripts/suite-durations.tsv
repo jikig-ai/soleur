@@ -88,6 +88,7 @@ apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	84	measured
 apps/web-platform/scripts/lint-migration-immutability.test.sh	1315	measured
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	558	measured
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	76	measured
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	2868	measured
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	4698	measured
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	98	measured
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	535	measured

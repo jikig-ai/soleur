@@ -531,6 +531,23 @@ AFFECTED_CLAUDE_HOOKS_SKILL_CONTEXT_QUERIES_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # The `test/` TypeScript suite — same SUT as the hook's own .test.sh above.
+# plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh (#10111) — reads the file LIST (git ls-files) to
+# check the push-filter classification table, so its scan is scoped to the probe's files rather than the
+# whole tree; the subject is the workflow, the probe, the runner, the budget lib, the option-gate import
+# set, the ADR-284 amendment and the two required-checks lists it must stay out of.
+AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-real-sdk-ask-probe.yml"
+  "apps/web-platform/scripts/dev-probe-destroy-ask.ts"
+  "apps/web-platform/scripts/lib/probe-budget.ts"
+  "apps/web-platform/scripts/real-sdk-ask-probe.sh"
+  "apps/web-platform/server/permission-callback.ts"
+  "infra/github/ruleset-ci-required.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
+  "plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+)
+
 AFFECTED_TEST_PRE_MERGE_REBASE_PATHS=(
   ".claude/hooks/pre-merge-rebase.sh"
   "test/pre-merge-rebase.test.ts"
@@ -867,6 +884,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/memory-backstop.sh"
   # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
   ".github/workflows/inngest-key-rotate.yml"
+  # #10111: real-sdk-ask-probe-workflow.test.sh parses the workflow's triggers, posture and push-path filter at runtime.
+  ".github/workflows/scheduled-real-sdk-ask-probe.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -889,15 +908,27 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-server-flip-guard.sh"
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
   "apps/web-platform/lib/c4-canonical.mjs"
+  # #10111: real-sdk-ask-probe-workflow.test.sh statically extracts this probe's imports (Guard 1) and asserts its budget wiring.
+  "apps/web-platform/scripts/dev-probe-destroy-ask.ts"
+  # #10111: real-sdk-ask-probe-workflow.test.sh reads RUN_BUDGET_USD to keep the ADR-284 cap sentence in parity (AC18).
+  "apps/web-platform/scripts/lib/probe-budget.ts"
+  # #10111: real-sdk-ask-probe-workflow.test.sh checks the runner's allowlist, env names and AC6 strings against the workflow.
+  "apps/web-platform/scripts/real-sdk-ask-probe.sh"
   "apps/web-platform/server/auto-sync-trigger.ts"
   "apps/web-platform/server/c4-render.ts"
   "apps/web-platform/server/inngest/cron-manifest.ts"
   "apps/web-platform/server/notifications.ts"
+  # #10111: real-sdk-ask-probe-workflow.test.sh extracts its direct imports and classifies each against the push filter (Guard 1).
+  "apps/web-platform/server/permission-callback.ts"
   "apps/web-platform/server/prompt-injection-wrap.ts"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "apps/web-platform/test/broker-mechanism-spike.test.ts"
+  # #10111: real-sdk-ask-probe-workflow.test.sh asserts the probe is not a required context.
+  "infra/github/ruleset-ci-required.tf"
   "knowledge-base/engineering/architecture/decisions/"
+  # #10111: real-sdk-ask-probe-workflow.test.sh asserts cap and path-list parity with the ADR-284 amendment (AC8, AC18).
+  "knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
   "knowledge-base/legal/compliance-posture.md"
@@ -911,6 +942,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/git-data-store-dirty-scan.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  # #10111: real-sdk-ask-probe-workflow.test.sh asserts the probe is absent from the required-checks list.
+  "scripts/required-checks.txt"
   "scripts/setup-codex.sh"
   "scripts/setup-cursor.sh"
   "scripts/setup-devin.sh"

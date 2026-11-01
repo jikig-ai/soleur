@@ -90,6 +90,7 @@ apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	7
 apps/web-platform/scripts/lint-migration-immutability.test.sh	1
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	2
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	6
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	3
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	2
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	7
