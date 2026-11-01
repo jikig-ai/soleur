@@ -50,6 +50,7 @@ WATCHED_PACKAGES = {
     "js-yaml",
     "liquidjs",
     "nanoid",
+    "next",
     "undici",
     "zod",
 }
@@ -121,9 +122,13 @@ REQUIRED = [
     # 2026-10-31 critical/high batch (#11646 shape). The next 16.4.1 bump
     # (GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr CRITICAL + GHSA-p3m5-59mp-jv5r
     # HIGH) was SPLIT OUT after e2e showed a deterministic dev-server crash on
-    # the bumped tree; it lands in its own PR with its own row re-added here.
+    # the bumped tree; the crash was the benign inbound-abort signature hitting
+    # the ADR-062 fatal contract — classified non-fatal in
+    # apps/web-platform/server/crash-handlers.ts › isBenignClientAbort and the
+    # bump re-applied here in the same PR.
     # GHSA-mchm-gjx6-7h55 (CRITICAL): middleware bypass via tunnel route.
     ("web-platform", "@sentry/nextjs", 10, "10.75.2"),
+    ("web-platform", "next", 16, "16.4.1"),
     # GHSA-27r3-jxmh-p828 (HIGH): DoS via trailing bytes after compressed body.
     # Three manifests carry body-parser on the same major-2 floor.
     ("web-platform", "body-parser", 2, "2.4.0"),
@@ -169,6 +174,7 @@ FLOOR_ANCHORS = {
     ("liquidjs", 10): "10.27.2",  # GHSA-4r6h (HIGH) strictest of three #8065 advisories
     ("undici", 7): "7.29.0",
     ("nanoid", 3): "3.3.18",
+    ("next", 16): "16.4.1",      # GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr (CRITICAL) + GHSA-p3m5-59mp-jv5r (HIGH)
     ("ip-address", 10): "10.5.1",
     ("fast-uri", 3): "3.1.7",
     ("hono", 4): "4.12.34",
@@ -276,7 +282,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 35  # prior 27 + the eight rows of the 2026-10-31 critical/high batch
+    MIN_ROWS = 36  # prior 27 + the eight rows of the 2026-10-31 critical/high batch + the next-16 row re-applied with the crash classifier
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -284,7 +290,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 35  # prior 27 + the eight rows of the 2026-10-31 batch, which all resolve
+    MIN_RESOLVED = 36  # prior 27 + the eight rows of the 2026-10-31 batch + the next-16 row, all resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "

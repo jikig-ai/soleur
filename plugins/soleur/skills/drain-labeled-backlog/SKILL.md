@@ -127,7 +127,7 @@ After `one-shot` returns (PR merged), re-query the milestone using the same labe
 
 ```bash
 gh issue list --label "${LABEL:-deferred-scope-out}" --state open \
-  --milestone "$MILESTONE" --json number --jq 'length'
+  --milestone "$MILESTONE" --limit 100 --json number --jq 'length'
 ```
 
 Report: `Before: X, After: Y, Closed: Z` and the per-area drain.

@@ -227,6 +227,7 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/compliance-posture.md
 scripts/lint-orphan-test-suites	knowledge-base/project
 scripts/lint-orphan-test-suites	knowledge-base/project/learnings
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
+scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base
 scripts/pre-push-ratchet-lane	knowledge-base/legal
@@ -256,6 +257,7 @@ tests/commands/sync-rule-prune	knowledge-base/project/specs
 tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-freshness.json
 tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
+tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base

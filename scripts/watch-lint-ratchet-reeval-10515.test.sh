@@ -186,6 +186,9 @@ case "${1:-}" in
       for a in "$@"; do case "$a" in *mutation*) deny api "$@" ;; esac; done
       echo '{"data":{}}'; exit 0
     fi
+    # The enumeration bound (PR #11782) lands `--paginate` ahead of the
+    # endpoint token — shift it before the argv-shape check.
+    [[ "${1:-}" == --paginate ]] && shift
     [[ "$#" -eq 1 ]] || deny api "$@"
     path="$1"
     case "$path" in
@@ -268,11 +271,11 @@ run() {
 }
 WATCH_ROOT_OVERRIDE="$FIX"
 comments_posted() { grep -c '^issue comment ' "$MOCKD/calls" || true; }
-searches_made() { grep -c '^api search/issues' "$MOCKD/calls" || true; }
+searches_made() { grep -c '^api \(--paginate \)\?search/issues' "$MOCKD/calls" || true; }
 bill_calls() { grep -c '^api orgs/jikig-ai/settings/billing/usage' "$MOCKD/calls" || true; }
 view_calls() { grep -c '^issue view ' "$MOCKD/calls" || true; }
 total_calls() { wc -l < "$MOCKD/calls" | tr -d ' '; }
-decode_q() { local p="$1"; p="${p#api search/issues?q=}"; p="${p%%&*}"; printf '%b' "${p//%/\\x}"; }
+decode_q() { local p="$1"; p="${p#api --paginate }"; p="${p#api }"; p="${p#search/issues?q=}"; p="${p%%&*}"; printf '%b' "${p//%/\\x}"; }
 
 # Section `KEY` of $BODY (heading line through the line before the next ###/#### heading).
 sec() { awk -v h="${HEAD[$1]}" 'index($0,h)==1 {f=1; print; next} f && (/^### / || /^#### /) {exit} f {print}' <<<"$BODY"; }
@@ -293,6 +296,7 @@ argv_ok() {
     "issue view "[0-9]*" --json state,createdAt,comments") return 0 ;;
     "issue comment "[0-9]*" --body-file -") return 0 ;;
     "api graphql"*) [[ "$l" == *mutation* ]] && return 1; return 0 ;;
+    "api --paginate "*) [[ "$l" =~ ^api\ --paginate\ [^\ ]+$ ]] || return 1; return 0 ;;
     "api "*)
       [[ "$l" =~ ^api\ [^\ ]+$ ]] || return 1
       [[ "$l" == "api -"* ]] && return 1
@@ -509,7 +513,7 @@ ever_q=""; while IFS= read -r l; do [[ "$l" == *ever-better* ]] && ever_q="$(dec
 chk_quote && pass "S6d the encoded queries carry %22 around ever-better, 'changed files' and the budget phrase" || fail "S6d quoted phrases"
 
 # ---- S7: every query hardcodes the repo + window and carries no third-party text ----
-mkmock; hits eslint 2; run; base_queries="$(grep '^api search/issues' "$MOCKD/calls")"
+mkmock; hits eslint 2; run; base_queries="$(grep -E '^api (--paginate )?search/issues' "$MOCKD/calls")"
 bad=0
 while IFS= read -r l; do
   q="$(decode_q "$l")"
@@ -532,7 +536,7 @@ live="$(live_text "$BODY")"
 ! grep -qE '^###? Sweeper' <<<"$BODY" && [[ "$(( $(grep -o "$BT" <<<"$hl" | wc -l) % 2 ))" -eq 0 ]] \
   && pass "S8c the title cannot start a heading line and the bullet's backticks are balanced" || fail "S8c"
 [[ "$(last_line "$BODY")" == "$SENTINEL" ]] && pass "S8d the sentinel is still the exact last line with a hostile hit" || fail "S8d"
-[[ "$(grep '^api search/issues' "$MOCKD/calls")" == "$base_queries" ]] \
+[[ "$(grep -E '^api (--paginate )?search/issues' "$MOCKD/calls")" == "$base_queries" ]] \
   && pass "S8e the queries are identical with a hostile hit (no third-party text reaches a query)" || fail "S8e"
 
 # ---- S8f: invisible and format characters, a backtick and a 200-character run in a title and a login ----

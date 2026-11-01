@@ -465,6 +465,12 @@ export function infoSilentFallback(
  *   `untrusted-content-shape`, `untrusted-content-hook-error` (dedup key is the
  *   `workspaceId` (or "unknown"), an in-process token, NOT a userId; metadata-only
  *   `extra`), and `untrusted-content-flag-unresolved` (dedup key is the userId).
+ * - `crash-handlers` family (#11772): `client-abort` (warn-level via
+ *   `mirrorWarnWithDebounce`; dedup key is the constant `crash-handlers`, an
+ *   in-process token, NOT a userId). The trigger is an unauthenticated inbound
+ *   socket reset — every abort still emits a per-abort pino warn so the burst
+ *   count stays full-fidelity in container stdout, while the Sentry arm is
+ *   bounded to one envelope per process per 5 minutes.
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.
