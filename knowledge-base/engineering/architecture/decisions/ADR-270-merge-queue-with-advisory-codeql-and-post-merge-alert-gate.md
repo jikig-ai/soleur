@@ -978,3 +978,68 @@ the heading "Canary measurements (flip `adopting` to `accepted` when these hold)
 `adopting` until one clean pass" are superseded by this amendment, not rewritten.
 The pending measurements keep being recorded on #9454 as each completes; a measured failure of item 1 (the admin
 bypass) still triggers the rollback recipe above regardless of this status.
+
+### Addendum 2026-10-31 (#11678): `max_entries_to_merge` 1→3 + the queue-jump path
+
+**What changed.** `max_entries_to_merge` raised 1→3 under the Raise checklist above,
+in the same PR that lands `scripts/merge-queue-jump.sh` (a deliberate queue-jump
+path via GraphQL `enqueuePullRequest(jump: true)`).
+
+**Mechanism semantics (verified against GitHub docs, not assumed).** Merge limits
+batch merge *landings*, not `merge_group` *builds* — GitHub documents "Merge limits
+do not combine merge_group builds." Under ALLGREEN every queued position still pays
+its own cumulative candidate build, so the raise amortizes merge boundaries and
+post-merge work (push CI / deploy / alert-gate per group), not per-PR build wait
+(`max_entries_to_build = 2`, unchanged, is the build-concurrency knob and stays a
+canary-gated separate lever).
+
+**Enumeration design (Raise checklist item 1).** The CLA synthetic's verifier
+(`scripts/merge-queue-cla-verify.sh`) no longer trusts the single `pr-<N>` in
+`merge_group.head_ref` — that names only the deepest member. Members are the
+queue entries at `position <=` the entry whose `headCommit.oid == HEAD_SHA`
+(the headCommit binding anchors which entry owns this candidate; positions-≤
+the named PR's entry is the documented fallback). Fail-closed invariants:
+pagination must be fully consumed (`first:100`, `hasNextPage` dies), the member
+set must be non-empty, and the named PR must appear and be maximal (a
+non-deepest naming would silently skip the tail — the under-enumeration hole).
+Each member's own `headRefOid` (the entry's recorded queued head — a pushed PR
+would have been dequeued) must carry completed/success `cla-check` +
+`cla-evidence` from app 15368. Backward compatibility: singleton groups verify
+identically, so the verifier greens during the merge→apply window while the
+live value is still 1.
+
+**Guard changes.** Guard-2's safety pin became a sanctioned-set check `{1,3}`
+(the adoption window: a value-only 1↔3 PR needs no guard edit; removing `1`
+from the set is a separate deliberate act after soak). T-mq-1.m9 now mutates to
+an *unsanctioned* value. A grouped-shape fixture row (Q9) pins that a deeper
+member's `merge_group` run is judged on its own delta (`HEAD^1` = the shallower
+member's candidate), and the five `pr-<N>-` triage sites carry the grouped-ref
+caveat (member lookups correlate by `headSha`/`createdAt` when the
+`startswith("…/pr-<N>-")` select is empty).
+
+**Timeout re-derivation (checklist item 3).** `check_response_timeout_minutes`
+stays 75: the clock is per-candidate-build, not per-queue-dwell — a member's
+candidate build is dispatched at its position like a singleton's, and the
+measured bound (p95 44.1, longest success 60.5, canary item 5) is unchanged by
+grouping. Recorded keep-75 justification; if the canary shows the ejection
+clock counting from enqueue rather than build dispatch, re-derive before any
+further raise.
+
+**Open measurements for the canary** (agent-run, no SSH; record-as-observed):
+grouped `merge_group.head_ref` shape and which member `pr-<N>` names; whether
+in-flight group members stay listed in `mergeQueue.entries` while building;
+ALLGREEN bisection-vs-group-atomic ejection (the 0.85^N sizing assumes
+group-atomic); per-PR squash commit shape and push-event count per group
+(ADR-276 dedupe interaction); `headCommit.oid == HEAD_SHA` correlation on a
+real group.
+
+**Queue-jump path.** `scripts/merge-queue-jump.sh` is a deliberate operator
+act (`--reason` attribution comment, `--yes` on non-TTY, `expectedHeadOid`
+re-pinned after confirmation, distinct jumped-but-unattributed exit code),
+runbook at `knowledge-base/engineering/operations/runbooks/merge-queue-jump.md`.
+A jump keeps the integrated merge-queue checks (unlike `--admin`), rebuilds
+every in-flight entry, and — because it renumbers positions mid-verify — is
+the reason the enumeration binds by `headCommit` rather than by name alone.
+Rollback note: a queue-OFF arm remains the kill switch (the tf comment's
+block-removal recipe); a value-only 3→1 rollback is green by the {1,3}
+sanctioned set.

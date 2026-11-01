@@ -553,7 +553,7 @@ queue_gate() {
         [[ -z "$marker" ]] || rm -f "$marker"
         reason="removal reason: ${rm#removal=}"
         [[ "$rm" != removal=none && "$rm" != removal=- ]] || reason="seen in the queue earlier, no removal event read"
-        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
+        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed — under grouped merging (max_entries_to_merge=3) a member PR's group ref names the DEEPEST member, so if no run matches pr-$PR- list recent merge_group runs and correlate by headSha/createdAt; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
         exit 13
       fi
       return 0 ;;
