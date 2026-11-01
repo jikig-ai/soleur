@@ -3702,10 +3702,10 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
-# scripts/git-data-replication-signal-11704 — sibling #11736's followthrough suite.
-# Its script sources the two betterstack lib readers (real reads) and executes a
-# betterstack-query.sh it expects at scripts/betterstack-query.sh; the suite itself
-# stubs that file in a scratch tree — the edge stays as the SUT's runtime contract.
+# scripts/git-data-replication-signal-11704 — the suite copies the REAL libs
+# into its scratch tree (the `for _lib` loop) and the SUT `source`s them at
+# runtime; betterstack-query.sh + the SUT stay edge-declared per main's sibling
+# disposition (the SUT's runtime contract).
 AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/followthroughs/git-data-replication-signal.sh"
@@ -3767,6 +3767,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
   ".github/workflows/npm-publish.yml"
+  "knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md"
   "packages/opencode-plugin/package.json"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
