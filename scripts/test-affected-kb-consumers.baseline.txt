@@ -11,6 +11,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
