@@ -2,6 +2,7 @@
 title: "Run-log evidence preservation record for #11294 (Terraform random_id values printed in public Actions logs)"
 status: record
 date: 2026-10-31
+updated: 2026-11-01
 related: [11294, 10205]
 related_prs: [11551, 11674]
 ---
@@ -57,13 +58,14 @@ not committed, because it is a per-run map of where values were printed.
   a completed run of `jikig-ai/soleur` immediately before deletion.
 - **2 multi-attempt runs** (list C) were scanned and found **clean**, so they were not deleted and are
   not held.
-- No comment, issue body, issue or PR was edited or removed.
+- No comment, issue body, issue or PR was edited or removed on that date.
 
-## Held: 119 runs pending deletion
+## Held: 119 runs, deleted on 2026-11-01 after this file merged
 
-The remaining runs with value-shaped lines (115 production, 4 rehearsal = 119) were **held, not
-deleted**, because each is cited by a run id in a committed document or an open issue and deleting the
-run would break the citation. **These 119 are pending deletion once this file is merged**: this table
+The remaining runs with value-shaped lines (115 production, 4 rehearsal = 119) were **held on
+2026-10-31, not deleted**, because each is cited by a run id in a committed document or an open issue
+and deleting the run would break the citation. This file merged first (PR #11721); all 119 were then
+**deleted on 2026-11-01** (119 of 119 deleted, 0 skipped, each confirmed absent afterwards). The table
 is their preserved metadata, and the citations stay resolvable as ids with this file as the record.
 Citation basis: 112 cited by bare run id, 7 by run URL. "Citing location" is the first two files on
 `origin/main` that name the run id (counted by file), measured 2026-10-31.
@@ -193,13 +195,54 @@ Citation basis: 112 cited by bare run id, 7 by run URL. "Citing location" is the
 Workflow totals in the held set: Apply web-platform infra 97, Apply deploy-pipeline-fix 13, Terraform Drift Detection 5, inngest provision rehearsal 4.
 Conclusions: success 81, failure 38.
 
+## Comments and issue bodies, cleaned on 2026-11-01
+
+Run on 2026-11-01 under the owner's per-command go for each of the two execute commands. Counts only;
+no value was printed or read into this record.
+
+- **PR bot comments: 498 deleted.** Deleting a comment removes its edit history too.
+- **Issue bodies: 74 edited in place** (all verified), value-shaped lines replaced by a redaction marker.
+- **Issue bot comments: 234 edited in place** (232 verified by the script, 2 flagged
+  `verify-mismatch`; a separate rescan of both found no value-shaped line). 218 of the 732 bot
+  comments sat under `infra-drift` issues and 16 on #10835; they were redacted rather than deleted
+  because the drift workflows read the newest bot "Plan output" comment on those issues.
+- **Rescan after the edits:** 0 value-shaped lines in the 74 bodies and 0 in the 234 comments.
+- **Drift classifier:** the script's live old-versus-redacted verdict check was skipped (its worktree
+  path was gone). The earlier dry run compared verdicts on all 73 `infra-drift` issues and found them
+  identical. The next scheduled drift run on those issues is the live test.
+- **Other surfaces scanned, nothing found:** PR review comments (393 scanned, 0 hits), review
+  summaries (0 hits). No commit comments or discussions exist.
+- **Ledgers (not committed, kept in the operator's scratch area):**
+  `delete-bot-comments.EXECUTE.20261101T081522Z.ledger.tsv`, sha256
+  `700e72fdcbbb53017a82f3f0f1259ae2c7f092e577bc437edf41f086c7539e1c`;
+  `redact-issue-bodies.EXECUTE.20261101T084610Z.ledger.tsv`, sha256
+  `5ff90a80fd9e15a04cdbe61ce03780bd9593cb0a531e93e7b5534c9062a535a0`.
+
+### Residual exposure after the cleanup
+
+- **Edit history of the 74 bodies and 234 comments stays readable.** GitHub keeps earlier revisions of
+  an edited body or comment visible to any reader of a public repository. Editing in place did not
+  remove them. Only deleting the comment does, and that was not possible for these without breaking
+  the drift workflows.
+- **The exposed keys are not rotated.** Anyone who read a run log, comment or earlier revision before
+  the deletion or redaction may hold the values. The records above cannot show who did. Rotation is
+  tracked on the incident (#11294, #11711) and is an owner-run act.
+- **CLO position (2026-11-01).** The residual does not change the 2026-10-29 CLO determination
+  (`2026-10-29-clo-determination-11294-random-id-log-exposure-art-4-12.md`). It is a failed Art. 32
+  confidentiality measure that is still open. It is not evidence that any key was read or used. E3
+  stays inconclusive: nothing shows who read a log, comment or earlier revision before cleanup. E4 is
+  contained, not erased, because the edit history stays public. The breach-notification duties remain not engaged, and
+  the re-opener in §If the finding flips is unchanged. Rotation is owner-only and follows the soak that
+  closes 2026-11-01T15:15:48Z. **Re-assessment trigger:** if rotation is not recorded complete in #11294
+  by 2026-11-08, the CLO re-assesses. Evidence of use of a key starts a fresh 72h clock at once.
+
 ## Known gaps
 
 This record does not claim the exposure is fully enumerated. Not counted or not reachable:
 
-- **PR review comments** (inline diff comments), **commit comments**, **discussions** and the **edit
-  history** of issue and PR bodies and comments were not part of the census. Edit history in
-  particular survives an edit of the current body.
+- **Commit comments** and **discussions** do not exist in the repository. The **edit history** of
+  issue and PR bodies and comments was not part of the census and, for the 74 bodies and 234 comments
+  edited in place, still survives (see Residual exposure above).
 - The run **artifact list** endpoint returned HTTP 500 during the census, so artifacts were not
   scanned.
 - The **oldest runs have expired** logs (GitHub retention), so their logs were not readable and
