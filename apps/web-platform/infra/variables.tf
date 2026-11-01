@@ -77,7 +77,7 @@ variable "volume_size" {
 }
 
 variable "cf_api_token" {
-  description = "Cloudflare API token (Tunnel, Access, DNS, Notifications permissions)"
+  description = "Cloudflare API token (Tunnel, Access, DNS, Notifications permissions; PLUS post-#11181 widen 2026-10-30: account-level Load Balancing: Monitors and Pools:Edit + zone-level Load Balancers:Edit — APPENDED to the ops-owned user token, never rebuilt, verified live via cf-token-scope.sh --profile default-token --expect-lb-scopes → exit 0 with both LB probes 403->200 and all four retained probes still authorized. THIS DESCRIPTION IS THE SCOPE LEDGER per ADR-130 — a new LB-family resource needs a matching permission here AND on the live token, or the apply 403s.)"
   type        = string
   sensitive   = true
 }
