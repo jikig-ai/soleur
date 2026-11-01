@@ -1560,8 +1560,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.inngest_link_tls",
   "doppler_service_token.inngest",
   // ADR-282 addendum 2026-10-30 (#9927 item 4) - the FLIP token: read/write on the same isolated
-  // soleur-inngest/prd config, read only by inngest-cutover-flip.service through a cloud-init
-  // drop-in. Its `.key` feeds the host's user_data ONLY; it is created as a dependency of
+  // soleur-inngest/prd config, consumed as an EnvironmentFile only by inngest-cutover-flip.service (the
+  // redactor also reads it by value) through a cloud-init drop-in. Its `.key` feeds the host's user_data ONLY; it is created as a dependency of
   // hcloud_server.inngest on the gated inngest-host-replace dispatch (no -target there, CTO R1).
   // NEVER publish it to a `github_actions_secret`: the #5566 rule below would then force a per-merge
   // -target, and merging would mint a read/write token with nothing to read it.
@@ -5816,9 +5816,9 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
     expect(targets).not.toContain(FLIP);
   });
 
-  // CTO N9 + R9: the replace job runs the budget script in its `--cap-only` form (over-cap exit 1 and
-  // unmeasurable exit 2 block; the 384 B floor does NOT, it is enforced by the required infra-validation
-  // job). The pins below are STEP-SCOPED on comment-stripped text: a bare-token grep over the job is
+  // CTO N9 + R9 + R13: the replace job runs the budget script in its `--cap-only` form (over-cap exit 1 and
+  // unmeasurable exit 2 block; the 384 B floor does NOT: it is a PR-visible check in the infra-validation job
+  // `inngest-userdata-budget`, not a required status context (#6480), so not a merge gate). The pins below are STEP-SCOPED on comment-stripped text: a bare-token grep over the job is
   // satisfied by a nearby comment and by a step that cannot fail (`continue-on-error`, `if: false`).
   const BUDGET_STEP_TITLE = "- name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)";
   const BUDGET_RUN_LINE = /^\s*run:\s*bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only\s*$/;
@@ -5860,6 +5860,14 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
     expect(step).not.toMatch(/continue-on-error/);
     expect(step).not.toMatch(/^\s*if:/m);
     expect(step).not.toMatch(/\|\|\s*(true|:)/);
+    // KEY WHITELIST: the step carries exactly `name` and `run`. Any other step-level key (`env:` blanking CI so a
+    // missing terraform SKIPs with exit 0, a custom `shell:` template that makes `run` a no-op, `working-directory`,
+    // `timeout-minutes`, `uses`/`with`) can neuter the script while the three forbidden tokens above stay absent.
+    const stepKeys = step
+      .split("\n")
+      .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+      .filter((k): k is string => k !== undefined);
+    expect(stepKeys).toEqual(["name", "run"]);
     // job-level keys sit at 4-space indent; a job-level continue-on-error would neuter every step
     expect(job).not.toMatch(/^ {4}continue-on-error:/m);
   });
@@ -5872,7 +5880,9 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
       ["add continue-on-error", RUN_FULL + "        continue-on-error: true\n"],
       ["add if: false", "        if: false\n" + RUN_FULL],
       ["add || true", RUN_FULL.replace(" --cap-only", " --cap-only || true")],
-      ["add --floor-skip flag", RUN_FULL.replace(" --cap-only", " --cap-only --x")],
+      ["add a stray flag", RUN_FULL.replace(" --cap-only", " --cap-only --x")],
+      ["add env: CI blanked", RUN_FULL + "        env:\n          CI: \"\"\n"],
+      ["add a custom shell", RUN_FULL + "        shell: bash -c \"exit 0\" {0}\n"],
     ];
     for (const [label, replacement] of mutations) {
       const mutated = wf.replace(RUN_FULL, replacement);
@@ -5880,12 +5890,27 @@ describe("flip-token split: gate lockstep and the pre-destroy size gate", () => 
       const { step } = budgetStepOf(mutated);
       const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
       const blocking = !/continue-on-error/.test(step) && !/^\s*if:/m.test(step) && !/\|\|\s*(true|:)/.test(step);
-      expect(BUDGET_RUN_LINE.test(runLine) && blocking, label).toBe(false);
+      const keysOk = step
+        .split("\n")
+        .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+        .filter((k) => k !== undefined)
+        .join(",") === "name,run";
+      expect(BUDGET_RUN_LINE.test(runLine) && blocking && keysOk, label).toBe(false);
     }
     // pristine control: the same predicate is TRUE on the unmutated tree
     const { step } = budgetStepOf(wf);
     const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
     expect(BUDGET_RUN_LINE.test(runLine)).toBe(true);
+  });
+
+  test("the mid-replace recovery error points at the runbook matrix and names the owner go; it does not route by server presence", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
+    const line = job.split("\n").find((l) => l.includes("failed mid-replace")) ?? "";
+    expect(line).not.toBe("");
+    expect(line).toContain("Recover per the runbook recovery matrix");
+    expect(line).toContain("owner go");
+    expect(line).not.toMatch(/when the server is absent/);
+    expect(line).not.toMatch(/re-dispatch inngest-host-replace/);
   });
 
   test("non-vacuity: the order check tells a gated job from an ungated one", () => {

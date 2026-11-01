@@ -20,7 +20,8 @@
 # EMPTY scratch dir needs no providers, no S3 backend and no credentials, and never touches
 # state. The real root's map consumes hcloud_volume.inngest_redis_luks.id,
 # doppler_service_token.inngest.key and random_password.zot_pull.result — measuring on it would
-# require Doppler prd_terraform and would be unrunnable on a fork PR. Stub LENGTHS are what a
+# require Doppler prd_terraform and would be unrunnable on a fork PR. (The real map reads BOTH tokens:
+# doppler_service_token.inngest.key, the read-only boot token, and doppler_service_token.inngest_flip.key.) Stub LENGTHS are what a
 # size check needs, and each stub below is a length UPPER BOUND on its real value.
 #
 # THE BOUNDS, each justified rather than asserted (the #7299 review's standard):
@@ -51,9 +52,8 @@
 # to almost nothing, a real secret does not. So every secret stub (both Doppler tokens, the zot pull token,
 # the Better Stack token and the DSN key) is a hash-derived, random-shaped string: base64sha512 of a label,
 # `+` and `/` mapped to letters, cut to the stub width. Deterministic across runs, and no contiguous
-# token-shaped literal sits in this source. Measured cost of the entropy: the boot token's stub alone moved the
-# stored size by about +60 B (ADR-282 build record). The headroom this script reports is therefore measured
-# with high-entropy stubs for all five secrets. It is a bound on the real value only as far as each stub's
+# token-shaped literal sits in this source. The headroom this script reports is therefore measured with
+# high-entropy stubs for all five secrets (a repeated-filler stub would have under-reported the stored size). It is a bound on the real value only as far as each stub's
 # entropy and width bound the real one: the real Doppler body width is unverified.
 #
 # TWO DIFFERENT NUMBERS, NOT COMPARED. `INNGEST_GZIP_BUDGET` in
@@ -61,8 +61,12 @@
 # x-run stand-ins for variable-length secrets). This script's stored figure is terraform's own
 # base64gzip over hash-derived stubs. They are not tied to each other and neither is compared with the other.
 # The floor below (384 B of cap headroom) is the only margin this script gates. Measured with the stubs
-# above: 32,344 B stored, 424 B of cap headroom, i.e. 40 B over the floor. The stub-entropy bound for the
-# first replace is about 424 B of headroom; the pessimistic bound is 324 B to the Hetzner cap.
+# above (as of 2026-11-01): 32,344 B stored, 424 B of cap headroom, i.e. 40 B over the floor. The stub-entropy
+# bound for the first replace is about 424 B of headroom. A pessimistic render (the 2026-11-01 panel
+# performance seat's: random 48-character token bodies, a 64-character Better Stack token, 16- and 70-digit
+# random Sentry ids) stored about 32,444 B, i.e. about 324 B of headroom, which is 60 B BELOW the floor: on
+# that input this script's floor check would fail. The 324 B figure is an estimate from that one ad hoc
+# render and is not reproducible from this script alone.
 #
 # MEASURE WITH TERRAFORM'S OWN `base64gzip`, NEVER `gzip -9`. They are different compression
 # levels and `-9` OVERSTATES headroom. On a hard gate an optimistic measurement is worse
@@ -82,9 +86,15 @@
 #
 # Usage: bash apps/web-platform/infra/inngest-userdata-budget.sh [--json] [--cap-only] [out-rendered]
 #   --cap-only skips the 384 B headroom floor and keeps the over-cap (exit 1) and unmeasurable (exit 2)
-#   exits. It is the form the `inngest_host_replace` workflow job runs: the floor is a CI maintenance
-#   gate (the required `infra-validation` job runs it WITHOUT the flag), and must not block a recovery
-#   dispatch that is otherwise under the Hetzner cap.
+#   exits. It is the form the `inngest_host_replace` workflow job runs, before any destroy: it aborts above
+#   the cap or when the render cannot be measured, and must not block a recovery dispatch that is otherwise
+#   under the Hetzner cap.
+#   The 384 B headroom floor is a PR-visible policy check, NOT a merge gate. It runs in the infra-validation
+#   job `inngest-userdata-budget` (on PRs, where a failure shows on the PR, and on push to main, where a
+#   failure only opens the infra-validation failure notice) and in the floor rows of
+#   plugins/soleur/test/cloud-init-user-data-size.test.ts, which skip where terraform is absent. Neither is a
+#   required status context (#6480), so a floor breach can merge. The hard gate is the 32,768 B Hetzner cap.
+#   Before the replace go, the owner checks that the `inngest-userdata-budget` check on the head commit is green.
 #   out-rendered receives the STRIPPED render — the bytes that actually reach the host.
 set -uo pipefail
 
@@ -298,19 +308,24 @@ head -1 "$rendered" | grep -cx '#cloud-config' >/dev/null || {
 # cap is not enough: every addition to this template spends the same few hundred bytes, the 2026-09-08 outage
 # was a payload that crossed the line unnoticed, and a replace that lands within a few bytes of the cap has no
 # room for the next token or comment-free line. The floor is 384 B of cap headroom (stored <= cap - 384),
-# measured here, the only place that runs the real templatefile/base64gzip. The required `infra-validation.yml`
-# job `inngest-userdata-budget` enforces it; the `inngest_host_replace` job runs this script with `--cap-only`
-# BEFORE its plan step, which keeps exits 1 (over the cap) and 2 (unmeasurable) and skips the floor, so a
-# recovery dispatch is never blocked by a maintenance margin. (On the first replace after the split both token
+# measured here, the only place that runs the real templatefile/base64gzip. The `infra-validation.yml` job
+# `inngest-userdata-budget` runs it as a PR-visible check (not a required context, so not a merge gate: see
+# Usage above); the `inngest_host_replace` job runs this script with `--cap-only` BEFORE its plan step, which
+# keeps exits 1 (over the cap) and 2 (unmeasurable) and skips the floor, so a recovery dispatch is never
+# blocked by a maintenance margin. (On the first replace after the split both token
 # keys are unknown at plan time, so the in-plan length precondition is deferred to apply, after the destroy.)
-# If the floor is breached, shrink code: never raise INNGEST_GZIP_BUDGET and never add bytes.
-# INNGEST_BUDGET_FLOOR_BYTES is a TEST SEAM that can only RAISE the floor (an empty or non-numeric value falls
-# back to 384, and anything below 384 is clamped UP to it): cloud-init-user-data-size.test.ts raises it above
+# If the floor is breached, shed payload and do not add bytes (INNGEST_GZIP_BUDGET is the TypeScript model's
+# budget and is independent of this check).
+# INNGEST_BUDGET_FLOOR_BYTES is a TEST SEAM that can only RAISE the floor. It is validated as digits only; a
+# value that is empty, non-numeric or 10 or more characters long falls back to 384 (it never skips the floor),
+# leading zeros are stripped with `10#` (so the JSON `floor` is always a valid integer), and anything below 384
+# is clamped UP to it: cloud-init-user-data-size.test.ts raises it above
 # the real headroom and asserts exit EXACTLY 1, so the exit is proven live instead of vacuous. Exit 1 here,
 # 2 stays "unmeasurable". The effective floor is emitted in the --json output so a pin can read it.
 FLOOR_MIN=384
 floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-$FLOOR_MIN}"
-case "$floor_bytes" in ''|*[!0-9]*) floor_bytes="$FLOOR_MIN" ;; esac
+case "$floor_bytes" in ''|*[!0-9]*|??????????*) floor_bytes="$FLOOR_MIN" ;; esac
+floor_bytes=$(( 10#$floor_bytes ))
 [ "$floor_bytes" -lt "$FLOOR_MIN" ] && floor_bytes="$FLOOR_MIN"
 
 if [ "$JSON" -eq 1 ]; then
@@ -343,6 +358,6 @@ if [ "$stored_bytes" -ge "$cap" ]; then
 fi
 
 if [ "$CAP_ONLY" -eq 0 ] && [ "$headroom" -lt "$floor_bytes" ]; then
-  echo "inngest-userdata-budget: HEADROOM FLOOR BREACHED — ${headroom} B of cap headroom is below the ${floor_bytes} B floor (stored ${stored_bytes} B of ${cap} B). Shed payload (prose is stripped for free, so what remains is code); do NOT raise INNGEST_GZIP_BUDGET and do NOT add bytes." >&2
+  echo "inngest-userdata-budget: HEADROOM FLOOR BREACHED — ${headroom} B of cap headroom is below the ${floor_bytes} B floor (stored ${stored_bytes} B of ${cap} B). Shed payload (prose is stripped for free, so what remains is code) and do NOT add bytes; this floor is independent of INNGEST_GZIP_BUDGET (the TypeScript model's budget)." >&2
   exit 1
 fi

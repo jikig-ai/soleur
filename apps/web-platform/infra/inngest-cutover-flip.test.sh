@@ -48,6 +48,17 @@ assert_logger() {
   if [[ -s "$LOGTRACE" ]]; then pass "$desc"; else fail "$desc (no logger line emitted)"; fi
 }
 
+# RUNTIME CANARY SCAN (R14, replaces the T-flipsh text tripwire of inngest-flip-token.test.sh). In production
+# `doppler run` hands the READ/WRITE flip token to this script as DOPPLER_TOKEN, so the script must never print,
+# log, phone home or persist it. A synthetic token is exported for every case; each runner site captures the
+# script's stdout/stderr to "$WORK/out.log" (not /dev/null); teardown_case then fails if the canary appears
+# ANYWHERE under the case's work directory (output, the LOGGER and PHONE traces, STATE, LATCH, stub argv).
+# ACCEPTED LIMITS: it proves no leak on the paths the cases exercise; it cannot see a branch no case reaches,
+# the signed config-bundle copy of the script, or children of `doppler run` (they receive the token by design).
+FLIP_CANARY_TOKEN="dp.st.CANARYFLIP0123456789abcdef"
+export DOPPLER_TOKEN="$FLIP_CANARY_TOKEN"
+canary_leaked() { grep -rqF -- "$FLIP_CANARY_TOKEN" "$1" 2>/dev/null; }
+
 # INSTRUMENT SELF-TEST (#7761 review, P0). Every claim in this file dispatches through pass()/fail(),
 # and the assertion floor at the bottom used to dispatch through fail() too — so ONE edit (fail()
 # stops incrementing FAIL) made every assertion AND the floor that backstops them report green
@@ -62,6 +73,22 @@ if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
   printf 'FATAL: assertion counters are broken (PASS=%s FAIL=%s, expected 1/1).\n' "$PASS" "$FAIL" >&2
   exit 1
 fi
+# Canary scan controls (a FATAL, not an assertion, so the pinned count is unchanged): a script that prints
+# $DOPPLER_TOKEN, run through the SAME capture form the runners use, must make the scan hit; one that does not
+# print it must not. Without the positive control a scan that never matches would stay green forever.
+_cc="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$DOPPLER_TOKEN"\n' > "$_cc/leak.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "no secret here"\n' > "$_cc/clean.sh"
+mkdir -p "$_cc/leak" "$_cc/clean"
+env bash "$_cc/leak.sh" >>"$_cc/leak/out.log" 2>&1 || true
+env bash "$_cc/clean.sh" >>"$_cc/clean/out.log" 2>&1 || true
+if ! canary_leaked "$_cc/leak" || canary_leaked "$_cc/clean"; then
+  printf 'FATAL: the canary scan is vacuous or over-eager (leak hit=%s, clean hit=%s; expected exit 0 for leak, 1 for clean)\n' \
+    "$(canary_leaked "$_cc/leak"; echo $?)" "$(canary_leaked "$_cc/clean"; echo $?)" >&2
+  rm -rf "$_cc"
+  exit 1
+fi
+rm -rf "$_cc"
 PASS=0
 FAIL=0
 
@@ -203,7 +230,13 @@ EOF
   chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$NFTSTUB" "$PHONE"
 }
 
-teardown_case() { rm -rf "$WORK"; clean_host_state_slot; }
+teardown_case() {
+  # R14 canary scan BEFORE the work dir is removed (see FLIP_CANARY_TOKEN above).
+  if [[ -d "$WORK" ]] && canary_leaked "$WORK"; then
+    fail "canary token leaked into a case artifact under $WORK (the flip script must never emit DOPPLER_TOKEN)"
+  fi
+  rm -rf "$WORK"; clean_host_state_slot
+}
 
 # run_flip <flag> [EXTRA_VAR=val ...] -> echoes the exit code; populates the traces.
 run_flip() {
@@ -226,7 +259,7 @@ run_flip() {
       CUTOVER_VERIFY_INTERVAL_S=0 \
       CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
       ${extra[@]+"${extra[@]}"} \
-      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >>"$WORK/out.log" 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 
@@ -391,7 +424,7 @@ EOF
       CUTOVER_FLAG_SET_CMD="$FLAGSET" CUTOVER_LOGGER_CMD="$LOGGER" \
       INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
       CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 "$@" \
-      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >>"$WORK/out.log" 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 
@@ -432,7 +465,7 @@ env CUTOVER_FLIP_FLAG="armed" CUTOVER_SYSTEMCTL_CMD="$SYSCTL" \
     CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
     CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 \
     CUTOVER_REDIS_DBSIZE=0 \
-    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" --fixture-seams >>"$WORK/out.log" 2>&1 || rc=$?
 order=$(trace_csv)
 assert_eq "non-zero exit on flag_set(done) failure" "1" "$rc"
 assert_contains "flag reached terminal aborted after done-write failure" "$order" "flag:aborted"
@@ -1076,7 +1109,7 @@ EOF
 chmod +x "$CANARY_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="armed" \
-    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" >>"$WORK/out.log" 2>&1 || rc=$?
 assert_eq "a refused run still exits 0 (it takes the noop-unset arm)" "0" "$rc"
 if [[ -e "$CANARY" ]]; then
   fail "REFUSAL FAILED: the seam ran — canary exists at $CANARY"
@@ -1101,7 +1134,7 @@ chmod +x "$CANARY_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="" \
     CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
-    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" --fixture-seams >>"$WORK/out.log" 2>&1 || rc=$?
 assert_eq "an authorised run exits 0" "0" "$rc"
 if [[ -e "$CANARY" ]]; then
   pass "with --fixture-seams the seam IS honoured (canary written)"
@@ -1118,7 +1151,7 @@ setup_case
 PWNED_STATE="$WORK/pwned.state"
 rc=0
 env INNGEST_CUTOVER_STATE="$PWNED_STATE" CUTOVER_FLIP_FLAG="" \
-    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" >>"$WORK/out.log" 2>&1 || rc=$?
 assert_eq "the refused run exits 0" "0" "$rc"
 if [[ -e "$PWNED_STATE" ]]; then
   fail "REFUSAL FAILED: the caller-named state slot was written at $PWNED_STATE"
@@ -1143,7 +1176,7 @@ chmod +x "$ALT_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$ALT_STUB" CUTOVER_FLIP_FLAG="" \
     CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
-    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" --fixture-seams >>"$WORK/out.log" 2>&1 || rc=$?
 assert_eq "the alternate-root authorised run exits 0" "0" "$rc"
 if [[ -e "$ALT_CANARY" ]]; then
   pass "seams are honoured under a differently-named fixture root (argv, not path, authorises)"

@@ -162,6 +162,8 @@ expect_token_abort "T1m: boot token update"  "$(rc_obj 'doppler_service_token.in
 expect_token_pass  "T1n: flip token create"        "$(rc_obj 'doppler_service_token.inngest_flip' '"create"')"
 expect_token_pass  "T1o: flip token delete+create" "$(rc_obj 'doppler_service_token.inngest_flip' '"delete","create"')"
 expect_token_pass  "T1p: boot token no-op"         "$(rc_obj 'doppler_service_token.inngest' '"no-op"')"
+expect_token_pass  "T1o2: boot token create+delete (either replace order)" "$(rc_obj 'doppler_service_token.inngest' '"create","delete"')"
+expect_token_pass  "T1o3: flip token create+delete (either replace order)" "$(rc_obj 'doppler_service_token.inngest_flip' '"create","delete"')"
 
 # --- Test 1q: MUTATION — drop the doppler_token_touched PASS conjunct in a COPY: the T1k plan (flip
 #     forget, which the allow-set alone admits) must then PASS, proving the counter is what aborts it. ---
@@ -176,6 +178,29 @@ else
     pass
   else
     fail "T1q: with the dtt conjunct removed the flip-forget plan should PASS (proves the counter is the only thing aborting it)"
+  fi
+fi
+
+# --- Test 1r: the counter's WIRING. T1q proves the PASS conjunct; this proves the counter is also in
+#     plan_gate_assert_numeric. Without that member an uncomputed counter is the empty string and
+#     [[ "" -eq 0 ]] is TRUE, so a jq that stops emitting it would let a token update through.
+#     (a) source pin on the assert call; (b) behavioural twin of C16: with the counter emptied the gate
+#     must ABORT naming it, on an otherwise COMPLIANT plan (so nothing else can be the aborting counter). ---
+if grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | tr '\n' ' ' | grep -q 'plan_gate_assert_numeric[^;]*"doppler_token_touched=\${dtt}"'; then
+  pass
+else
+  fail "T1r: doppler_token_touched is not a member of the plan_gate_assert_numeric call (an uncomputed counter would coerce to zero)"
+fi
+write_plan "${BASE_PLAN},$(rc_obj 'doppler_service_token.inngest' '"no-op"')"
+awk -v n="jq -r '.doppler_token_touched'" '{ if (index($0, n)) sub(n, "jq -r '"'"'empty'"'"'"); print }' "${DIR:?}/lib/inngest-host-replace-gate.sh" > "$TMP/mutated-dtt.sh"
+if cmp -s "$TMP/mutated-dtt.sh" "${DIR:?}/lib/inngest-host-replace-gate.sh"; then
+  fail "T1r2: the empty-dtt mutation matched NOTHING in the gate; the extraction shape drifted"
+else
+  _rc=0; _out="$(bash -c "source '${DIR:?}/lib/plan-gate-preamble.sh'; source '$TMP/mutated-dtt.sh'; inngest_host_replace_gate '$TMP/plan.json'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 1 && "$_out" == *"counter parse failed"* && "$_out" == *"doppler_token_touched=''"* ]]; then
+    pass
+  else
+    fail "T1r2: an empty doppler_token_touched must ABORT naming it (rc=${_rc}): ${_out}"
   fi
 fi
 
@@ -457,11 +482,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 63 ]]; then
+if [[ "$_ran" -lt 67 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 63. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 67. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 63)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 67)\n' "$_ran"
 fi
 
 echo ""

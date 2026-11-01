@@ -4,8 +4,8 @@
 # WHAT IS BUILT. The dedicated Inngest host carries TWO Doppler credentials on the isolated
 # soleur-inngest/prd config: the read-only BOOT token (both on-host copies, /etc/default/inngest-doppler
 # and /etc/default/inngest-server) and a read/write FLIP token in a new root-only 0600 file,
-# /etc/default/inngest-flip, which ONLY inngest-cutover-flip.service reads, through a cloud-init
-# `write_files` drop-in whose later EnvironmentFile= overrides DOPPLER_TOKEN.
+# /etc/default/inngest-flip, consumed as an EnvironmentFile only by inngest-cutover-flip.service (the redactor also
+# reads it by value), through a cloud-init `write_files` drop-in whose later EnvironmentFile= overrides DOPPLER_TOKEN.
 #
 # WHAT IS GUARDED (the plan's `## Guard Contract`, Guards 1 and 2; Guard 3, the plan-time gates, lives in
 # tests/scripts/test-inngest-host-{replace,shape}-gate.sh and plugins/soleur/test/terraform-target-parity.test.ts).
@@ -24,8 +24,10 @@
 #      written before the item that arms soleur-inngest-provision.
 #   S  path-occurrence census: /etc/default/inngest-flip appears only in the drop-in, the flip printf and
 #      the redactor sed; no other reader or sourcer exists anywhere in the infra scripts.
-#   T  tripwire: inngest-cutover-flip.sh (which `doppler run` hands the READ/WRITE flip token to every child
-#      of) never expands DOPPLER_TOKEN or dumps its environment.
+#   (The former T text tripwire over inngest-cutover-flip.sh was DELETED, R14: a heuristic denylist produced a fresh
+#      bypass in two consecutive review rounds. Its job is done at RUNTIME by the canary scan in
+#      inngest-cutover-flip.test.sh: a synthetic DOPPLER_TOKEN is exported to every case, every runner's output is
+#      captured, and teardown_case fails if the canary appears anywhere in a case's work directory.)
 #
 # THE RENDER IS THE ARTIFACT. Everything reads the terraform render (inngest-userdata-budget.sh renders
 # cloud-init-inngest.yml through templatefile + the comment strip; its stub table is SHARED, not copied), so a
@@ -40,7 +42,9 @@
 # ADDED IN THE REVIEW ROUND (CTO R7-R11 and the K7 findings): R-g pins the drop-in as ONLY [Service] plus the one
 # EnvironmentFile= line, root:root 0644; W-otherkeys extends the by-value token census to EVERY other cloud-config key
 # (final_message, bootcmd, power_state, ...); S-glob refuses a glob EnvironmentFile= or a glob path under /etc/default
-# in the render, the bootstrap, every infra script and every parsed unit; T-flipsh covers more environment-dump forms;
+# in the render, the bootstrap, every infra script and every parsed unit (the compared token of a `==`/`!=`/`=~`
+# test is exempt PER TOKEN, never the whole line); R-g also requires the flip unit's drop-in directories to hold
+# exactly ONE write_files entry (a sibling `20-x.conf` carrying ExecStart= is refused);
 # the previously un-rowed headline checks (R-c, R-d, O-content, O-nochown, S-scripts, W-flip-empty, W-punct) each have
 # a killing row.
 #
@@ -48,7 +52,14 @@
 #   * Everything here is TEXT over the REPO copies. The signed config-bundle copy of inngest-cutover-flip.sh and the
 #     runtime `*.service.d` drop-ins reachable through infra-config-install (DEST_SPEC admits four on this host, and
 #     the content gate permits any EnvironmentFile=<path>) are not seen: they are residuals under #11816.
-#   * T-flipsh is a TRIPWIRE for the common environment-dump forms, not a closure of "never exposes the token".
+#   * The runtime canary scan in inngest-cutover-flip.test.sh replaces the deleted text tripwire (R14). It proves no
+#     leak on the paths that suite exercises. It cannot see a branch no case reaches, the config-bundle copy of the
+#     flip script, or children of `doppler run` (they receive the token by design).
+#   * Computed paths (`/etc/default/inngest-$n`, brace forms) evade S-glob's literal glob match.
+#   * The write guard checks each token line against [A-Za-z0-9._:/-] only (R8 as amended by R12): an extra clean
+#     bare-word line passes. The flip file is read by systemd and the redactor's sed and is NEVER sourced, so an
+#     extra line there is inert; /etc/default/inngest-doppler IS `.`-sourced as root, so there it would execute.
+#     Reachable only through a hostile Doppler API response; not new in this PR.
 #   * A `chmod 0644 /etc/default/inngest-*` runcmd item is seen only in its glob or literal-path form (S-glob, S-render,
 #     O-nochown); a chmod through a variable, `find -exec` or `install` with a computed path is an accepted gap.
 #   * A subshell source of the flip file inside the redactor (`( . /etc/default/inngest-flip )` in place of its
@@ -63,13 +74,13 @@ BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
 BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
 FLIPSH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
-EXPECTED_ROWS=43
-EXPECTED_RED=40
+EXPECTED_ROWS=40
+EXPECTED_RED=37
 EXPECTED_MUSTPASS=3
 # The pristine control's assertion inventory is EXACT (like C0_EXPECTED in cloud-init-inngest-provision-unit.test.sh):
 # a check deleted or turned into a no-op emit leaves every mutation row green, so the PASS-line count is pinned.
 # RAISE it in the same edit that adds an assertion.
-C0_EXPECTED=30
+C0_EXPECTED=29
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
 
@@ -428,7 +439,13 @@ def check(render, bootstrap, flipsh, infra):
                    and str(ent[0].get("permissions")) == "0644" and str(ent[0].get("owner")) == "root:root")
         g_ok = g_ok and this_ok
         g_detail.append("%s/%s directives=%s perm=%s owner=%s" % (d, f, ds, [str(e.get("permissions")) for e in ent], [str(e.get("owner")) for e in ent]))
-    o.chk("R-g", "the flip drop-in is ONLY [Service] plus the single EnvironmentFile=/etc/default/inngest-flip line (no ExecStart=, UnsetEnvironment=, Environment= or Condition), owner root:root, mode 0644",
+    # closed set: EVERY write_files entry under ANY drop-in directory that applies to the flip unit (<unit>.d, the
+    # <prefix>-.service.d forms, service.d) must be the one flip drop-in. A sibling `20-x.conf` with ExecStart= or
+    # UnsetEnvironment= would otherwise run under, or strip, the read/write token with R-a..R-g green.
+    sib = [str(w["path"]) for w in wf_list(doc) if any(str(w["path"]).startswith(SYSD + d2 + "/") for d2 in dropin_dirs(FLIP_UNIT))]
+    g_ok = g_ok and len(sib) == 1
+    g_detail.append("drop-ins under the flip unit's directories=%s" % sib)
+    o.chk("R-g", "the flip drop-in is ONLY [Service] plus the single EnvironmentFile=/etc/default/inngest-flip line (no ExecStart=, UnsetEnvironment=, Environment= or Condition), owner root:root, mode 0644, and it is the ONLY write_files entry under any drop-in directory of the flip unit",
           g_ok, "; ".join(g_detail))
 
     # ---- locate the runcmd items ----------------------------------------------------------------
@@ -478,7 +495,7 @@ def check(render, bootstrap, flipsh, infra):
         o.chk("W-punct", "every allowed punctuation class (. _ : / -) passes",
               rc == 0 and rec == "", "rc=%s" % rc)
         rc, rec, _ = guard_run([boot_val, flip_val, "extra-clean-line"])
-        o.chk("W-perline", "DOCUMENTED LIMIT (CTO N10): the guard is PER-LINE, so an extra individually-clean heredoc line is not refused. Reachable only through a hostile Doppler API response; the charset excludes '=', space, quotes, '$' and ';' so a clean extra line is a bare word and the flip file is read by systemd and sed, never sourced",
+        o.chk("W-perline", "DOCUMENTED LIMIT (CTO N10): the guard is PER-LINE, so an extra individually-clean heredoc line is not refused. Reachable only through a hostile Doppler API response; the charset excludes '=', space, quotes, '$' and ';' so a clean extra line is a bare word; the FLIP file is read by systemd and sed and never sourced (inert), but /etc/default/inngest-doppler IS sourced as root (R12 accepted residual)",
               rc == 0, "rc=%s" % rc)
     else:
         for cid in ("W-heredoc", "W-sites", "W-rewrite", "W-clean", "W-flip-unsafe", "W-boot-unsafe", "W-flip-empty", "W-punct", "W-perline"):
@@ -577,11 +594,15 @@ def check(render, bootstrap, flipsh, infra):
     # without naming it. Refused anywhere in the render, the bootstrap, every infra script and every parsed unit.
     GLOB = re.compile(r"/etc/default/[A-Za-z0-9._-]*[*?\[]")
     glob_hits = []
-    # a `[[ $x == /etc/default/* ]]` / `case` pattern COMPARISON names the glob without reading it, so it is not a hit
-    CMP = re.compile(r"(==|!=|=~)\s*\S*/etc/default/")
+    # a `[[ $x == /etc/default/* ]]` / `case` pattern COMPARISON names the glob without reading it, so it is not a hit.
+    # The exemption is PER TOKEN (R14): only the compared operand is removed before the glob match, so a comparison
+    # elsewhere on the line cannot hide a reading glob (`[[ $x == /etc/default/y ]] && for f in /etc/default/inngest-*`).
+    CMP = re.compile(r"(==|!=|=~)\s*\S*/etc/default/\S*")
+    def glob_hit(l):
+        return GLOB.search(CMP.sub("", l)) is not None
     for label, blob in (("render", text), ("bootstrap", btext)):
         for l in code_lines(blob):
-            if GLOB.search(l) and not CMP.search(l):
+            if glob_hit(l):
                 glob_hits.append("%s: %s" % (label, l.strip()[:60]))
     for fn in sorted(os.listdir(infra)):
         p = os.path.join(infra, fn)
@@ -589,7 +610,7 @@ def check(render, bootstrap, flipsh, infra):
             continue
         try:
             for l in code_lines(open(p, encoding="utf-8", errors="replace").read()):
-                if GLOB.search(l) and not CMP.search(l):
+                if glob_hit(l):
                     glob_hits.append("%s: %s" % (fn, l.strip()[:60]))
                     break
         except OSError:
@@ -601,21 +622,6 @@ def check(render, bootstrap, flipsh, infra):
     o.chk("S-glob", "no glob EnvironmentFile= and no glob path under /etc/default anywhere in the render, the bootstrap, the infra scripts or any parsed unit",
           not glob_hits, "; ".join(glob_hits[:3]))
 
-    # ---- T: tripwire on the flip script ---------------------------------------------------------
-    body = open(flipsh, encoding="utf-8").read()
-    bad = []
-    TRIP = re.compile("|".join([
-        r"\$\{?DOPPLER_TOKEN\b", r"\"\$DOPPLER_TOKEN", r"\bprintenv\b", r"(^|[;&|(]\s*|\s)env(\s|$)",
-        r"\bdeclare\s+-[a-zA-Z]*[px]", r"\btypeset\s+-[a-zA-Z]*[px]", r"\bexport\s+-[a-zA-Z]*p\b",
-        r"(^|[;&|(]\s*)export\s*($|[;&|)])", r"(^|[;&|(]\s*)set\s*($|[;&|)])", r"\bcompgen\s+-[a-zA-Z]*[ve]\b",
-        r"/proc/[^\s'\"]*environ", r"\$\{![A-Za-z_][A-Za-z0-9_]*[}@*\[]", r"\bENVIRON\b", r"\bos\.environ\b", r"\bgetenv\b",
-    ]))
-    for l in code_lines(body):
-        s = re.sub(r"\s#.*$", "", l)
-        if TRIP.search(s):
-            bad.append(s.strip()[:80])
-    o.chk("T-flipsh", "inngest-cutover-flip.sh has no non-comment DOPPLER_TOKEN expansion and no environment dump (printenv, env, bare export or set, declare/typeset -p/-x, export -p, compgen -v/-e, /proc/*/environ, ${!name}, awk ENVIRON, os.environ, getenv). A TRIPWIRE for the common forms, not a closure: doppler run hands the READ/WRITE flip token to every child of the script",
-          not bad and len(code_lines(body)) > 100, "hits=%s" % bad[:3])
     return o.fails
 
 # ----------------------------------------------------------------------------------------------
@@ -741,7 +747,7 @@ if [ "$C0_FAILS" -ne 0 ]; then
 fi
 
 # row <ID> <RED|PASS> <needle|-> <label> <mutation-kind> <args...>
-#   mutation-kind: yml <ft.py ops...> | boot <sed-script> | flip <sed-script> | env <VAR=1> yml <ops...>
+#   mutation-kind: yml <ft.py ops...> | boot <sed-script> | infra <file> <sed-script> | env <VAR=1> yml <ops...>
 MUTDIR="$W/mut"; mkdir -p "$MUTDIR"
 row() {
   local id="$1" kind="$2" needle="$3" label="$4" mk="$5"; shift 5
@@ -753,7 +759,6 @@ row() {
   case "$mk" in
     yml)  render="$MUTDIR/$id.yml"; python3 -I "$PY" mut "$PRISTINE" "$render" "$@" || mrc=$? ;;
     boot) boot="${MUTDIR:?}/$id.boot.sh"; sed -e "$1" "$BOOTSTRAP" > "${boot:?}"; cmp -s "$BOOTSTRAP" "$boot" && mrc=3 ;;
-    flip) flip="${MUTDIR:?}/$id.flip.sh"; sed -e "$1" "$FLIPSH" > "${flip:?}"; cmp -s "$FLIPSH" "$flip" && mrc=3 ;;
     infra) # <file> <sed-script>: a symlinked copy of the infra dir with ONE file replaced by its sed-edited copy
       idir="${MUTDIR:?}/$id.infra"; mkdir -p "$idir"
       for _f in "$SCRIPT_DIR"/*; do [ -f "$_f" ] && ln -s "$_f" "$idir/"; done
@@ -798,23 +803,20 @@ row G1-r12 RED  "S-render" "add a shell reader of the flip file (a '. /etc/defau
 row G1-rH1 RED  "R-a" "harness: the resolver ignores drop-in directories (also proves the dispatch is not vacuous)" env FLIPTEST_HARNESS_IGNORE_DROPINS=1 yml identity
 row G1-rH2 PASS -       "non-canonical: drop-in renamed 20-whatever.conf, 4-space-indented directives and a trailing comment" yml dropin_set "    [Service]\n    EnvironmentFile=/etc/default/inngest-flip\n    # trailing comment\n" dropin_path "/etc/systemd/system/inngest-cutover-flip.service.d/20-whatever.conf"
 row G1-rH3 PASS -       "non-canonical: the same drop-in delivered through a <prefix>-.service.d directory" yml dropin_path "/etc/systemd/system/inngest-cutover-.service.d/10-flip-token.conf"
-row G1-rT  RED  "T-flipsh" "tripwire: append a bare 'printenv' to a copy of inngest-cutover-flip.sh" flip '$a printenv'
-row G1-rT2 RED  "T-flipsh" "tripwire: append a bare 'export' (dumps every exported variable)" flip '$a export'
-row G1-rT3 RED  "T-flipsh" "tripwire: append an awk ENVIRON loop" flip '$a awk "BEGIN{for(k in ENVIRON)print k}"'
-row G1-rT4 RED  "T-flipsh" "tripwire: append a read of /proc/self/environ" flip '$a cat /proc/self/environ'
-row G1-rT5 RED  "T-flipsh" "tripwire: append 'compgen -e'" flip '$a compgen -e'
 row G1-rC  RED  "R-c" "a third unit resolves DOPPLER_TOKEN from a new, non-boot env file (write_files unit + file)" yml add_wf /etc/systemd/system/inngest-third.service "[Service]\nEnvironmentFile=/etc/default/inngest-third\n" add_wf /etc/default/inngest-third "DOPPLER_TOKEN=thirdvalue\n"
 row G1-rD  RED  "R-d" "the flip printf gains a second variable (EXTRA=1)" yml item_sub_raw flip 'DOPPLER_TOKEN=%s\n' 'DOPPLER_TOKEN=%s\nEXTRA=1\n'
 row G1-rO  RED  "O-content" "the flip printf loses its trailing newline" yml item_sub_raw flip 'DOPPLER_TOKEN=%s\n' 'DOPPLER_TOKEN=%s'
 row G1-rN  RED  "O-nochown" "append a runcmd item that chowns the flip file to deploy" yml append_item "chown root:deploy /etc/default/inngest-flip"
 row G1-rS  RED  "S-scripts" "a COPY of an infra script gains a reader of the flip file (. /etc/default/inngest-flip)" infra inngest-consumer-probe.sh '$a . /etc/default/inngest-flip'
 row G1-rG1 RED  "S-glob" "append a shell glob source: for f in /etc/default/inngest-*; do . \"\$f\"; done" yml append_item 'for f in /etc/default/inngest-*; do . "$f"; done'
+row G1-rG3 RED  "S-glob" "a comparison elsewhere on the line must not exempt a reading glob: [[ \$x == /etc/default/inngest-server ]] && for f in /etc/default/inngest-*" yml append_item '[[ "$f" == /etc/default/inngest-server ]] && for f in /etc/default/inngest-*; do . "$f"; done'
 row G1-rG2 RED  "S-glob" "add a write_files unit with a glob EnvironmentFile=-/etc/default/inngest-f*" yml add_wf /etc/systemd/system/inngest-glob.service "[Service]\nEnvironmentFile=-/etc/default/inngest-f*\n"
 row G1-rE1 RED  "R-g" "drop-in gains ExecStart=/bin/true (a replacement command under the read/write token)" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nExecStart=/bin/true\n"
 row G1-rE2 RED  "R-g" "drop-in gains UnsetEnvironment=DOPPLER_TOKEN" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nUnsetEnvironment=DOPPLER_TOKEN\n"
 row G1-rE3 RED  "R-g" "drop-in gains a literal Environment=" yml dropin_set "[Service]\nEnvironmentFile=/etc/default/inngest-flip\nEnvironment=X=1\n"
 row G1-rE4 RED  "R-g" "drop-in gains an unrelated [Unit] Condition (R-e only names the flip file)" yml dropin_set "[Unit]\nConditionPathExists=/run/x\n[Service]\nEnvironmentFile=/etc/default/inngest-flip\n"
 row G1-rE5 RED  "R-g" "drop-in write_files permissions 0644 -> 0666" yml dropin_perm 0666
+row G1-rE6 RED  "R-g" "a SIBLING drop-in 20-x.conf in the flip unit's directory carries ExecStart= (closed-set check)" yml add_wf /etc/systemd/system/inngest-cutover-flip.service.d/20-x.conf "[Service]\nExecStart=\nExecStart=/bin/true\n"
 
 echo "--- Guard 2: the write-time charset guard covers both Doppler tokens ---"
 row G2-r1  RED  "W-heredoc" "remove the flip token from the guard heredoc" yml guard_drop 1

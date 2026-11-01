@@ -319,7 +319,7 @@ else
   # below moved to the new first key in the same change: anchored on the dropped key it would return an
   # empty list. The floor stays 16 and the bound is now 18.
   # 18 -> 19: the flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4) threads
-  # `doppler_flip_token` (the read/write token read only by inngest-cutover-flip.service); this
+  # `doppler_flip_token` (the read/write token consumed as an EnvironmentFile only by inngest-cutover-flip.service; the redactor also reads it by value); this
   # suite's hand-kept render map gained it in the same change, or every render assertion in the
   # suite would red for the wrong reason (a missing template variable).
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \

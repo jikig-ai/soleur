@@ -53,8 +53,9 @@ fi
 # 1b. (#6178, split by ADR-282 addendum 2026-10-30 #9927 item 4) The credential is SPLIT.
 #     - doppler_service_token.inngest (the BOOT token; both on-host copies) is access = "read".
 #     - doppler_service_token.inngest_flip (the FLIP token) is access = "read/write", named
-#       "inngest-flip", and is read only by inngest-cutover-flip.service through the cloud-init
-#       drop-in (inngest-flip-token.test.sh proves the resolution; this block proves the grant).
+#       "inngest-flip", and is consumed as an EnvironmentFile only by inngest-cutover-flip.service (the
+#       redactor also reads it by value) through the cloud-init drop-in (inngest-flip-token.test.sh proves
+#       the resolution; this block proves the grant).
 #     The cutover flip FSM (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on
 #     soleur-inngest/prd via `doppler secrets set`; that write must run under a read/write token,
 #     and every OTHER consumer must hold a read-only one.

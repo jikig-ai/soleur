@@ -26,7 +26,8 @@
 // script would gzip to near-nothing and never trip it).
 
 import { test, expect, describe } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
@@ -2249,6 +2250,19 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
     expect(budgetSrc).not.toContain("STUBSTUB");
   });
 
+  test("the five stub labels are DISTINCT (two secrets hashed from one label are byte-identical and gzip dedups the second)", () => {
+    const code = budgetSrc.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    const labels = [...code.matchAll(/base64sha512\("([^"]+)"\)/g)].map((m) => m[1]);
+    expect(labels.length).toBe(5);
+    expect(new Set(labels).size).toBe(5);
+    // the boot and flip token stubs in particular
+    const label = (v: string) =>
+      /base64sha512\("([^"]+)"\)/.exec(budgetSrc.split("\n").find((l) => new RegExp("^\\s*" + v + "\\s*=").test(l)) ?? "")?.[1];
+    expect(label("doppler_token")).toBeDefined();
+    expect(label("doppler_flip_token")).toBeDefined();
+    expect(label("doppler_flip_token")).not.toBe(label("doppler_token"));
+  });
+
   test("the stub lines keep their exact widths (zot 40, Better Stack 64, DSN key 32)", () => {
     const w = (v: string) => {
       const line = budgetSrc.split("\n").find((l) => new RegExp("^\\s*" + v + "\\s*=").test(l)) ?? "";
@@ -2275,6 +2289,9 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
     expect(budgetSrc).toMatch(/^FLOOR_MIN=384$/m);
     expect(budgetSrc).toContain('floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-$FLOOR_MIN}"');
     expect(budgetSrc).toContain('[ "$floor_bytes" -lt "$FLOOR_MIN" ] && floor_bytes="$FLOOR_MIN"');
+    // seam hardening: digits only, 10+ characters fall back to the default, leading zeros stripped via 10#
+    expect(budgetSrc).toContain("''|*[!0-9]*|??????????*) floor_bytes=\"$FLOOR_MIN\" ;; esac");
+    expect(budgetSrc).toContain('floor_bytes=$(( 10#$floor_bytes ))');
     expect(budgetSrc).toContain('if [ "$CAP_ONLY" -eq 0 ] && [ "$headroom" -lt "$floor_bytes" ]; then');
     // No second numeric floor literal anywhere in code (comments excluded).
     const code = budgetSrc.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
@@ -2312,15 +2329,18 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
   test.skipIf(!hasTerraform)(
     "the seam can only RAISE the floor: 0, a lower number, and garbage all leave the effective floor at 384",
     () => {
-      for (const seam of ["0", "100", "abc", "-5"]) {
+      // 0384 and 08 carry leading zeros (the JSON floor must still be a valid integer: lastJson parses it);
+      // the two long values must NEVER skip the floor (a 19+ digit value used to make `[` error and exit 0).
+      for (const seam of ["0", "100", "abc", "-5", "0384", "08", "99999999999999999999", "9223372036854775808"]) {
         const r = runBudget(["--json"], seam);
         expect(r.status).toBe(0);
         expect(lastJson(r.stdout).floor).toBe(FLOOR);
       }
       const raised = runBudget(["--json"], "400");
+      expect(raised.status).toBe(0);
       expect(lastJson(raised.stdout).floor).toBe(400);
     },
-    240_000,
+    600_000,
   );
 
   test.skipIf(!hasTerraform)(
@@ -2334,5 +2354,70 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
       expect(j.cap_only).toBe(1);
     },
     120_000,
+  );
+
+  // `--cap-only` exists to keep the over-cap (exit 1) and unmeasurable (exit 2) exits on the replace job,
+  // so each is proven LIVE on an infra COPY (every file symlinked, one replaced). The script resolves its
+  // inputs from its own directory, so no seam is needed. Mutating `[ "$CAP_ONLY" -eq 0 ] &&` in front of the
+  // matching check turns the matching row red (proved in a sandbox in the PR record).
+  const infraCopy = (replace: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "inngest-budget-copy-"));
+    for (const f of readdirSync(INFRA)) {
+      if (statSync(join(INFRA, f)).isFile()) symlinkSync(join(INFRA, f), join(dir, f));
+    }
+    for (const [name, text] of Object.entries(replace)) {
+      rmSync(join(dir, name), { force: true });
+      writeFileSync(join(dir, name), text);
+    }
+    return dir;
+  };
+  const runCopy = (dir: string, args: string[]) =>
+    spawnSync("bash", [join(dir, "inngest-userdata-budget.sh"), ...args], { encoding: "utf8", env: process.env });
+
+  test.skipIf(!hasTerraform)(
+    "--cap-only keeps the OVER-CAP exit: a script copy with the cap lowered below the real size exits EXACTLY 1 with OVER CAP",
+    () => {
+      expect(budgetSrc).toMatch(/^cap=32768$/m);
+      const lowered = budgetSrc.replace(/^cap=32768$/m, "cap=30000");
+      expect(lowered).not.toBe(budgetSrc); // the mutation landed
+      const dir = infraCopy({ "inngest-userdata-budget.sh": lowered });
+      try {
+        for (const args of [["--cap-only", "--json"], ["--json"]]) {
+          const r = runCopy(dir, args);
+          expect(r.status).toBe(1);
+          expect(r.stderr).toContain("OVER CAP");
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    240_000,
+  );
+
+  test.skipIf(!hasTerraform)(
+    "--cap-only keeps the UNMEASURABLE exits (2): a tiny template trips the plausibility floor; a lost lifecycle.precondition trips the chain check",
+    () => {
+      const tiny = "#cloud-config\nruncmd:\n  - echo hi\n";
+      const d1 = infraCopy({ "cloud-init-inngest.yml": tiny });
+      const hostTf = readFileSync(join(INFRA, "inngest-host.tf"), "utf8");
+      const noPrecond = hostTf.replace(
+        /condition(\s*)=(\s*)length\(local\.inngest_user_data_b64gz\)/,
+        "condition$1=$2true || length(local.inngest_user_data_b64gz)",
+      );
+      expect(noPrecond).not.toBe(hostTf); // the mutation landed
+      const d2 = infraCopy({ "inngest-host.tf": noPrecond });
+      try {
+        const r1 = runCopy(d1, ["--cap-only", "--json"]);
+        expect(r1.status).toBe(2);
+        expect(r1.stderr).toContain("implausibly small");
+        const r2 = runCopy(d2, ["--cap-only", "--json"]);
+        expect(r2.status).toBe(2);
+        expect(r2.stderr).toContain("lifecycle.precondition");
+      } finally {
+        rmSync(d1, { recursive: true, force: true });
+        rmSync(d2, { recursive: true, force: true });
+      }
+    },
+    240_000,
   );
 });

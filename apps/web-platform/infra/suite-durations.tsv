@@ -91,7 +91,7 @@ apps/web-platform/infra/inngest-cutover-latch.test.sh	4000	measured
 apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	3000	measured
 apps/web-platform/infra/inngest-doublefire-probe.test.sh	4000	measured
 apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
-apps/web-platform/infra/inngest-flip-token.test.sh	4000	floor
+apps/web-platform/infra/inngest-flip-token.test.sh	9000	measured
 apps/web-platform/infra/inngest-gate-witness-classify.test.sh	1000	measured
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	8000	measured
 apps/web-platform/infra/inngest-host.test.sh	7000	measured
