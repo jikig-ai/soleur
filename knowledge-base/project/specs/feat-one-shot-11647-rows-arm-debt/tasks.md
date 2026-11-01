@@ -12,37 +12,37 @@ Never `git stash`. Read every file before editing it.
 
 ## Phase 1 — `estimate` provenance tier (S1)
 
-- [ ] 1.1 `scripts/regenerate-shard-manifest.py`: widen the `src` enum to
+- [x] 1.1 `scripts/regenerate-shard-manifest.py`: widen the `src` enum to
       `(measured, floor, estimate)` in `read_durations_rows` (:421) and
       `parse_durations_text` (:480); update both die messages (:423, :481-482)
-- [ ] 1.2 `read_durations` (:428-439) returns `(weights, floor_labels,
+- [x] 1.2 `read_durations` (:428-439) returns `(weights, floor_labels,
       est_labels)`; `weights` = `src ∈ {measured, estimate}`; call site
       :1142 updated; `src_map` build (:1209-1215) emits `estimate` for
       `--durations`-sourced est rows — never `measured`
-- [ ] 1.3 `read_durations_ms` (:593-603): `measured` list stays
+- [x] 1.3 `read_durations_ms` (:593-603): `measured` list stays
       `src == "measured"` only (`all_ms` already covers est weight).
       **`--durations` floor-median (:1174,:1207)**: `measured = weights`
       includes est labels post-1.2 — `floor_ms = median(measured.values())`
       must exclude `est_labels`; empty measured set → `DEFAULT_SUITE_MS`
       + WARN, mirroring the incremental path (:1026-1034). (Row 17.)
-- [ ] 1.4 `drift_violations` (:487-521): `base_e`/`new_e` sets;
+- [x] 1.4 `drift_violations` (:487-521): `base_e`/`new_e` sets;
       `estimate→measured` and `measured→estimate` emit named note lines;
       new measured over an est baseline counts toward total growth
-- [ ] 1.5 `drift_report_group` (:638-642): est rows join the DRIFT_ROW /
+- [x] 1.5 `drift_report_group` (:638-642): est rows join the DRIFT_ROW /
       FLOOR_UNMEASURED population
-- [ ] 1.6 `plugins/soleur/test/scripts-shard-manifest.test.sh`:
+- [x] 1.6 `plugins/soleur/test/scripts-shard-manifest.test.sh`:
       `check_durations` enum (:314) + enum comment (:284)
-- [ ] 1.7 `plugins/soleur/test/regenerate-shard-manifest.test.sh`: fixture
+- [x] 1.7 `plugins/soleur/test/regenerate-shard-manifest.test.sh`: fixture
       cases — est row supplies weight, re-emits `estimate` (never
       `measured`), excluded from floor median (est-only or est+measured
       `--durations` input prices floor rows off the measured median, not
       the blended one — :1207), est→measured / measured→est named notes
-- [ ] 1.8 Verify: `python3 -m pytest plugins/soleur/test/regenerate-shard-manifest.test.sh` —
+- [x] 1.8 Verify: `python3 -m pytest plugins/soleur/test/regenerate-shard-manifest.test.sh` —
       **NO: it is bash** → `bash plugins/soleur/test/regenerate-shard-manifest.test.sh` green;
       `bash plugins/soleur/test/scripts-shard-manifest.test.sh` green;
       `python3 scripts/regenerate-shard-manifest.py --incremental` dry-run prints
       unchanged totals
-- [ ] 1.9 `git commit` Phase 1 alone
+- [x] 1.9 `git commit` Phase 1 alone
 
 ## Phase 2 — `scripts/lib/rows-range.sh` + retire the four copies (S2)
 

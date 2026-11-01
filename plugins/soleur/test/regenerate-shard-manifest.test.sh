@@ -443,6 +443,112 @@ else
   check fail "fixture N: a src=floor row laundered into measured: $(cat "$WORK/N-durations.tsv" 2>/dev/null)"
 fi
 
+# === Fixture EST: src=estimate provenance tier (#11647) =====================================
+# An estimate is a DECLARED seeded price: it supplies weight to the packing like
+# a measurement, but it must re-emit src=estimate (never launder to measured),
+# and it must stay OUT of the floor median — a seeded arm price is not a
+# measurement, so it can never anchor the median new labels floor at.
+FE1="$WORK/EST1"; mkdir -p "$FE1"; assert_fixture_dir "$FE1"
+printf 'e-a\ne-b\ne-c\n' > "$FE1/registered.txt"
+printf 'e-a\t1000\tmeasured\ne-b\t90000\testimate\n' > "$FE1/in-durations.tsv"
+if python3 "$GEN" --durations "$FE1/in-durations.tsv" \
+     --registered-file "$FE1/registered.txt" --manifest "$FE1/manifest.tsv" \
+     --durations-out "$FE1/durations.tsv" --write \
+     > "$FE1/out.txt" 2> "$FE1/err.txt"; then
+  check pass "fixture EST1: mixed measured+estimate --durations input exits 0"
+else
+  check fail "fixture EST1: refused: $(tail -2 "$FE1/err.txt")"
+fi
+# Weight supply: e-b's declared 90000ms prices its leg — if the estimate had
+# been dropped or floored at 1000, no leg would sum to 90000.
+if grep -qE 'leg [0-9]+/[0-9]+: 90000ms' "$FE1/out.txt"; then
+  check pass "fixture EST1: the estimate row supplies its weight to the packing"
+else
+  check fail "fixture EST1: estimate weight did not reach the packing: $(grep 'leg ' "$FE1/out.txt")"
+fi
+if grep -qF $'e-b\t90000\testimate' "$FE1/durations.tsv" 2>/dev/null \
+   && ! grep -qF $'e-b\t90000\tmeasured' "$FE1/durations.tsv" 2>/dev/null; then
+  check pass "fixture EST1: estimate re-emits src=estimate — never launders to measured"
+else
+  check fail "fixture EST1: estimate provenance lost: $(grep 'e-b' "$FE1/durations.tsv" 2>/dev/null)"
+fi
+# Floor-median exclusion: the measured set is {e-a: 1000} — e-c must floor at
+# 1000, NOT at median(1000, 90000) = 45500 (the blended median an
+# est-anchored pool would produce).
+if grep -qF $'e-c\t1000\tfloor' "$FE1/durations.tsv" 2>/dev/null; then
+  check pass "fixture EST1: untimed label floors at the MEASURED-only median — estimate excluded"
+else
+  check fail "fixture EST1: the estimate anchored the floor median: $(grep 'e-c' "$FE1/durations.tsv" 2>/dev/null)"
+fi
+
+# EST2: an estimates-ONLY --durations input empties the measured pool — floor
+# falls back to DEFAULT_SUITE_MS (60000) WITH a WARN, mirroring the
+# incremental path's no-measured-rows degrade.
+FE2="$WORK/EST2"; mkdir -p "$FE2"; assert_fixture_dir "$FE2"
+printf 'f-a\nf-b\nf-c\n' > "$FE2/registered.txt"
+printf 'f-a\t7000\testimate\nf-b\t8000\testimate\n' > "$FE2/in-durations.tsv"
+if python3 "$GEN" --durations "$FE2/in-durations.tsv" \
+     --registered-file "$FE2/registered.txt" --manifest "$FE2/manifest.tsv" \
+     --durations-out "$FE2/durations.tsv" --write \
+     > "$FE2/out.txt" 2> "$FE2/err.txt"; then
+  check pass "fixture EST2: estimates-only --durations input still packs (exit 0)"
+else
+  check fail "fixture EST2: refused: $(tail -2 "$FE2/err.txt")"
+fi
+if grep -qF $'f-a\t7000\testimate' "$FE2/durations.tsv" 2>/dev/null \
+   && grep -qF $'f-c\t60000\tfloor' "$FE2/durations.tsv" 2>/dev/null; then
+  check pass "fixture EST2: est rows keep weight+provenance; untimed label floors at DEFAULT_SUITE_MS"
+else
+  check fail "fixture EST2: wrong rows: $(grep -v '^#' "$FE2/durations.tsv" 2>/dev/null)"
+fi
+if grep -q 'no measured rows' "$FE2/err.txt"; then
+  check pass "fixture EST2: the empty measured pool warns (DEFAULT_SUITE_MS fallback is audible)"
+else
+  check fail "fixture EST2: est-only input produced no no-measured-rows WARN: $(cat "$FE2/err.txt")"
+fi
+
+# EST3: estimate→measured is a NAMED drift-gate note — an estimate that finally
+# measures is the drift event the gate exists to name. Baseline: g-a estimate
+# + a 100s measured anchor so the +5000 growth stays under the 10% total cap.
+FE3="$WORK/EST3"; mkdir -p "$FE3"; assert_fixture_dir "$FE3"
+printf 'g-a\ng-anchor\n' > "$FE3/registered.txt"
+printf 'g-a\t3000\testimate\ng-anchor\t100000\tmeasured\n' > "$FE3/baseline.tsv"
+printf 'g-a\t5000\ng-anchor\t100000\n' > "$FE3/timings.tsv"
+if gen "$FE3" "$FE3/registered.txt" "$FE3/manifest.tsv" \
+     --durations-out "$FE3/durations.tsv" \
+     --baseline-durations "$FE3/baseline.tsv" --write \
+     > "$FE3/out.txt" 2> "$FE3/err.txt"; then
+  check pass "fixture EST3: estimate→measured write greens (exempt per-suite)"
+else
+  check fail "fixture EST3: refused: $(tail -2 "$FE3/err.txt")"
+fi
+if grep -q "estimate→measured 'g-a'" "$FE3/out.txt"; then
+  check pass "fixture EST3: estimate→measured emits its named note"
+else
+  check fail "fixture EST3: est→measured went unnamed: $(grep 'drift gate' "$FE3/out.txt" "$FE3/err.txt" 2>/dev/null)"
+fi
+
+# EST4: measured→estimate is a NAMED downgrade note — the inverse laundering
+# direction. Baseline h-a measured; the --durations input restamps it estimate.
+FE4="$WORK/EST4"; mkdir -p "$FE4"; assert_fixture_dir "$FE4"
+printf 'h-a\nh-anchor\n' > "$FE4/registered.txt"
+printf 'h-a\t5000\tmeasured\nh-anchor\t100000\tmeasured\n' > "$FE4/baseline.tsv"
+printf 'h-a\t3000\testimate\nh-anchor\t100000\tmeasured\n' > "$FE4/in-durations.tsv"
+if python3 "$GEN" --durations "$FE4/in-durations.tsv" \
+     --registered-file "$FE4/registered.txt" --manifest "$FE4/manifest.tsv" \
+     --durations-out "$FE4/durations.tsv" \
+     --baseline-durations "$FE4/baseline.tsv" --write \
+     > "$FE4/out.txt" 2> "$FE4/err.txt"; then
+  check pass "fixture EST4: measured→estimate write greens (a note, not a gate)"
+else
+  check fail "fixture EST4: refused: $(tail -2 "$FE4/err.txt")"
+fi
+if grep -q "measured→estimate 'h-a'" "$FE4/out.txt"; then
+  check pass "fixture EST4: measured→estimate emits its named downgrade note"
+else
+  check fail "fixture EST4: measured→est went unnamed: $(grep 'drift gate' "$FE4/out.txt" "$FE4/err.txt" 2>/dev/null)"
+fi
+
 # === Fixture O: zero usable timing rows → all-floor WARN-degrade =============================
 # Files exist but every row is excluded → the measured set is empty. The
 # generator warns and still writes a count-balanced all-floor manifest at

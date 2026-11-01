@@ -281,7 +281,7 @@ fi
 # The committed durations tables are the single duration source both consumers
 # read: CI regen writes them on --write, and the #8231 local parallel scheduler
 # re-packs them at an arbitrary worker count with zero gh calls. The contract:
-# rows are `label<TAB>ms<TAB>src` with src ∈ {measured,floor}, label-sorted, the
+# rows are `label<TAB>ms<TAB>src` with src ∈ {measured,floor,estimate}, label-sorted, the
 # label set EXACTLY equals the sibling manifest's (a label in one and not the
 # other means one consumer sees weight the other cannot place), and every label
 # is registered — a phantom durations row is the same stale-subset drift class
@@ -311,8 +311,8 @@ check_durations() {
   local bad=0
   while IFS=$'\t' read -r _lbl _ms _src _rest; do
     [[ -z "$_lbl" ]] && continue
-    if [[ -n "$_rest" || ! "$_ms" =~ ^[0123456789]+$ || ( "$_src" != "measured" && "$_src" != "floor" ) ]]; then
-      check fail "$name durations malformed row: '$_lbl' — expected 'label<TAB>ms<TAB>src' with src in {measured,floor}"
+    if [[ -n "$_rest" || ! "$_ms" =~ ^[0123456789]+$ || ( "$_src" != "measured" && "$_src" != "floor" && "$_src" != "estimate" ) ]]; then
+      check fail "$name durations malformed row: '$_lbl' — expected 'label<TAB>ms<TAB>src' with src in {measured,floor,estimate}"
       bad=$(( bad + 1 ))
     fi
   done <<< "$data"
