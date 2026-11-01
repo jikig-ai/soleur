@@ -75,7 +75,7 @@ P1 findings get the current active milestone. P2/P3 findings get `Post-MVP / Lat
 Detect the active milestone:
 
 ```bash
-gh api repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
+gh api --paginate repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
 ```
 
 ## Duplicate Detection
@@ -152,7 +152,7 @@ For reviews with 15+ findings, create issues sequentially to avoid GitHub API ra
 
 ## Sharp Edges
 
-- `gh issue create --milestone <value>` resolves against milestone **title**, not number. `--milestone 6` fails with `could not add to milestone '6': '6' not found` even when milestone 6 exists. Retrieve the title via `gh api /repos/<owner>/<repo>/milestones --jq '.[] | {number, title}'` and pass the title. The `number` field is REST-API-only. **Why:** filing #2272 retried with `--milestone "Post-MVP / Later"` to succeed.
+- `gh issue create --milestone <value>` resolves against milestone **title**, not number. `--milestone 6` fails with `could not add to milestone '6': '6' not found` even when milestone 6 exists. Retrieve the title via `gh api --paginate /repos/<owner>/<repo>/milestones --jq '.[] | {number, title}'` and pass the title. The `number` field is REST-API-only. **Why:** filing #2272 retried with `--milestone "Post-MVP / Later"` to succeed.
 
 ## Cost-of-Filing Gate Rationale (relocated from review/SKILL.md §5)
 

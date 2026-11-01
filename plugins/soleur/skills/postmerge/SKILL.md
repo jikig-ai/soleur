@@ -185,7 +185,7 @@ fi
 Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down (deeper probe: `/hooks/inngest-liveness`); this is a cheap read needing no Sentry token:
 
 ```bash
-gh issue list --label ci/inngest-down --state open \
+gh issue list --label ci/inngest-down --state open --limit 100 \
   --json number,title,createdAt --jq '.[] | "#\(.number) \(.title) (opened \(.createdAt))"'
 ```
 

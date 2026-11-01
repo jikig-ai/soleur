@@ -1121,7 +1121,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "Dedicated inngest host is serving again (server_active=active, http_code=200). Auto-closed by ${RUN_URL}." || true
           done
@@ -1218,7 +1218,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "A live inngest scheduler is back (the web unit is no longer quiesced, or the dedicated host is serving). Auto-closed by ${RUN_URL}." || true
           done

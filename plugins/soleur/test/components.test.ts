@@ -876,7 +876,16 @@ describe("invoice skill credential boundary (ADR-107)", () => {
 //      shape this lint exists to catch, reproduced inside the lint (#6786 review).
 //   2. The match must be findable mid-line, not anchored at a span opener: probes are
 //      frequently embedded in a shell assignment (`EXISTING=$(gh pr list …)`).
-const GH_LIST_CMD = /\bgh (?:pr|issue) list\b[^`\n]*/g;
+// `(?:\s|$)` after the subcommand, not `\b`: `gh issue list:` appears inside
+// error-message text ("… gh issue list: <stderr>") and `gh api:` in prose —
+// a colon after the subcommand marks a label, never an invocation. A real
+// call always continues with a space or ends the statement.
+const GH_LIST_CMD = /\bgh (?:pr|issue) list(?:\s|$)[^`\n]*/g;
+// Sibling families for the #8593 enumeration detector: `gh search issues|prs`
+// and `gh api` (list-endpoint discrimination below), captured with the same
+// line/backtick bounds as GH_LIST_CMD so a neighbor's flags cannot launder.
+const GH_SEARCH_CMD = /\bgh search (?:issues|prs)(?:\s|$)[^`\n]*/g;
+const GH_API_CMD = /\bgh api(?:\s|$)[^`\n]*/g;
 
 // An `is:`/`state:` qualifier inside the --search string. Mixing one of these with an
 // explicit --state is the exact contradiction that produced #6786 (an appended open
@@ -915,19 +924,30 @@ const EXEC_SURFACE_GLOBS = [
   ".github/workflows/**/*.yaml",
   ".github/actions/**/*.yml",
   ".github/actions/**/*.yaml",
+  // #8593 widened surfaces. `.github/scripts/` holds workflow-executed helpers
+  // (build-inngest-bootstrap-image.yml et al. run these) — `*/test/` fixtures
+  // deliberately encode probe shapes and stay out by path, same role as the
+  // `*.test.sh` filter below. `apps/web-platform/server/inngest/functions/*.ts`
+  // are cron-agent prompt files carrying executable `gh` instructions to
+  // agents holding `Bash(gh issue list:*)` grants — scanned as TEXT (the
+  // extractor works on raw lines; a "ts" surface strips `//` full-line
+  // comments so comment prose cannot false-positive).
+  ".github/scripts/**/*.sh",
+  "apps/web-platform/server/inngest/functions/*.ts",
   "knowledge-base/engineering/operations/runbooks/**/*.md",
 ];
 
-type Surface = "md" | "sh" | "yaml";
+type Surface = "md" | "sh" | "yaml" | "ts";
 
 function surfaceOf(path: string): Surface {
   if (path.endsWith(".sh")) return "sh";
   if (path.endsWith(".yml") || path.endsWith(".yaml")) return "yaml";
+  if (path.endsWith(".ts")) return "ts";
   return "md";
 }
 
 /** The repo-wide executable-surface corpus (deduped; *.test.sh excluded). */
-function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
+export function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   const seen = new Set<string>();
   const out: { file: string; raw: string; surface: Surface }[] = [];
   for (const glob of EXEC_SURFACE_GLOBS) {
@@ -938,8 +958,15 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
     // offender assertions would pass vacuously against an absent surface class.
     for (const rel of new Glob(glob).scanSync({ cwd: REPO_ROOT, dot: true })) {
       // Test fixtures deliberately encode the broken form; never admit them,
-      // even a future scripts/foo.test.sh landing under an included glob.
-      if (rel.endsWith(".test.sh")) continue;
+      // even a future scripts/foo.test.sh landing under an included glob. Same
+      // role for `.github/scripts/test/` (17 test-*.sh fixtures named test-*,
+      // not *.test.sh, so the `*.test.sh` filter above cannot see them — CTO
+      // ruling: the `*/test/` path exclusion is load-bearing) and for any
+      // `*.test.ts` that ever lands under the inngest functions glob.
+      if (rel.endsWith(".test.sh") || rel.endsWith(".test.ts")) continue;
+      // Scoped to the new .github/scripts glob: a `/test/` path segment there
+      // is a fixture directory, not an executable surface.
+      if (rel.startsWith(".github/scripts/") && rel.includes("/test/")) continue;
       if (seen.has(rel)) continue;
       seen.add(rel);
       out.push({
@@ -968,55 +995,85 @@ interface Probe {
 // SAME command and the narrowing/existence detectors must still see it.
 const STATEMENT_SEP = /&&|\|\||;/;
 
+interface GhStmt {
+  file: string;
+  stmt: string;
+  fenced: boolean;
+}
+
+/**
+ * Logical statements over each file's raw text: `\`-continued lines joined,
+ * fence delimiters and comment lines split out, `&&`/`||`/`;` chains split.
+ * Shared by every `gh` detector so a surface/comment rule lands once (#8593's
+ * `//` handling in "ts" files protects BOTH the #6786/#6793 search probes and
+ * the enumeration detector — they scan the same corpus).
+ */
+function ghStatements(
+  files: { file: string; raw: string; surface?: Surface }[],
+): GhStmt[] {
+  return files.flatMap(({ file, raw, surface = "md" }) => {
+    const stmts: GhStmt[] = [];
+    let fenced = false;
+    // A `\`-continued command accumulates here across physical lines, so a
+    // multi-line `gh … list` is captured whole — its --limit / jq drill
+    // routinely lives on a continuation line, and a line-bounded capture would
+    // both MISS that drill (false negative on the select-after-truncation
+    // class) and FALSE-POSITIVE on a correct probe whose --limit is one line
+    // down. GH_LIST_CMD stays newline-bounded and we split on STATEMENT_SEP, so
+    // an UNcontinued neighbour never launders (#6786).
+    let buf: string | null = null;
+    const flush = () => {
+      if (buf === null) return;
+      for (const stmt of buf.split(STATEMENT_SEP)) {
+        stmts.push({ file, stmt, fenced });
+      }
+      buf = null;
+    };
+    for (const line of raw.split("\n")) {
+      // Fence delimiters and shell/YAML comments are ALWAYS their own physical
+      // line and never part of a command, so they terminate any pending
+      // continuation and are handled BEFORE continuation-joining. This ordering
+      // is load-bearing: joining a comment line that ends in `\` would
+      // otherwise swallow the real probe on the next line into a comment that
+      // is then skipped whole (a `.sh`/`.yaml` false negative).
+      if (surface === "md" && /^\s*```/.test(line)) {
+        flush();
+        fenced = !fenced;
+        continue;
+      }
+      if (surface !== "md" && /^\s*#/.test(line)) {
+        flush();
+        continue;
+      }
+      // #8593: the "ts" surface treats a full-line `//` comment like `#` —
+      // flush + skip — or comment prose such as _cron-shared.ts's
+      // `// gh issue list --search …` false-positives on every detector.
+      if (surface === "ts" && /^\s*\/\//.test(line)) {
+        flush();
+        continue;
+      }
+      const cont = /\\\s*$/.test(line);
+      const body = cont ? line.replace(/\\\s*$/, "") : line;
+      buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
+      if (!cont) flush();
+    }
+    flush(); // trailing unterminated continuation
+    return stmts;
+  });
+}
+
 /** Every `gh pr|issue list` command carrying `--search`, one entry per command. */
 export function extractSearchProbes(
   files: { file: string; raw: string; surface?: Surface }[],
 ): Probe[] {
-  return files
-    .flatMap(({ file, raw, surface = "md" }) => {
-      const found: Probe[] = [];
-      let fenced = false;
-      // A `\`-continued command accumulates here across physical lines, so a
-      // multi-line `gh … list` is captured whole — its --limit / jq drill
-      // routinely lives on a continuation line, and a line-bounded capture would
-      // both MISS that drill (false negative on the select-after-truncation
-      // class) and FALSE-POSITIVE on a correct probe whose --limit is one line
-      // down. GH_LIST_CMD stays newline-bounded and we split on STATEMENT_SEP, so
-      // an UNcontinued neighbour never launders (#6786).
-      let buf: string | null = null;
-      const flush = () => {
-        if (buf === null) return;
-        for (const stmt of buf.split(STATEMENT_SEP)) {
-          for (const m of stmt.matchAll(GH_LIST_CMD)) {
-            found.push({ file, cmd: m[0].trim(), fenced });
-          }
-        }
-        buf = null;
-      };
-      for (const line of raw.split("\n")) {
-        // Fence delimiters and shell/YAML comments are ALWAYS their own physical
-        // line and never part of a command, so they terminate any pending
-        // continuation and are handled BEFORE continuation-joining. This ordering
-        // is load-bearing: joining a comment line that ends in `\` would
-        // otherwise swallow the real probe on the next line into a comment that
-        // is then skipped whole (a `.sh`/`.yaml` false negative).
-        if (surface === "md" && /^\s*```/.test(line)) {
-          flush();
-          fenced = !fenced;
-          continue;
-        }
-        if (surface !== "md" && /^\s*#/.test(line)) {
-          flush();
-          continue;
-        }
-        const cont = /\\\s*$/.test(line);
-        const body = cont ? line.replace(/\\\s*$/, "") : line;
-        buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
-        if (!cont) flush();
-      }
-      flush(); // trailing unterminated continuation
-      return found;
-    })
+  return ghStatements(files)
+    .flatMap(({ file, stmt, fenced }) =>
+      [...stmt.matchAll(GH_LIST_CMD)].map((m) => ({
+        file,
+        cmd: m[0].trim(),
+        fenced,
+      })),
+    )
     .filter(({ cmd }) => /--search\b/.test(cmd));
 }
 
@@ -1076,6 +1133,285 @@ export function findUnlimitedProbes(
     if (HAS_LIMIT.test(cmd)) return false;
     if (BOUNDED_LINKED_ISSUE.test(cmd)) return false;
     if (EXISTENCE_DRILL.test(cmd) && !POST_SEARCH_NARROWING.test(cmd)) return false;
+    return true;
+  });
+}
+
+// -- #8593 unbounded-enumeration detector ------------------------------------
+// #6793's gate covers `gh pr|issue list … --search` probes only; the identical
+// silent-30-row truncation via `gh issue list --label X` (no --search),
+// `gh search issues|prs`, and non-paginated `gh api` list endpoints was
+// invisible. This detector widens the ASSEMBLY, not the property: a `gh`
+// capture whose output feeds enumeration or post-narrowing must carry a
+// SUFFICIENT bound or a coded exemption.
+
+interface EnumProbe extends Probe {
+  /** Which `gh` family produced the capture. */
+  kind: "list" | "search" | "api";
+  /** The capture sits inside a `for <var> in $(…)` loop head — the output is
+   * iterated even when no jq/pipe consumer names it (the
+   * scheduled-inngest-health.yml close-enumeration shape). The match itself
+   * starts at `gh`, so the loop head is read off the statement prefix. */
+  forConsumed: boolean;
+}
+
+const FOR_CONSUMER = /\bfor\s+\w+\s+in\b/;
+
+/** Every enumeration-candidate `gh` capture, one entry per command. */
+export function extractEnumerations(
+  files: { file: string; raw: string; surface?: Surface }[],
+): EnumProbe[] {
+  return ghStatements(files).flatMap(({ file, stmt, fenced }) => {
+    const out: EnumProbe[] = [];
+    const push = (kind: EnumProbe["kind"], m: RegExpMatchArray) =>
+      out.push({
+        file,
+        cmd: m[0].trim(),
+        fenced,
+        kind,
+        forConsumed: FOR_CONSUMER.test(stmt.slice(0, m.index ?? 0)),
+      });
+    for (const m of stmt.matchAll(GH_LIST_CMD)) push("list", m);
+    for (const m of stmt.matchAll(GH_SEARCH_CMD)) push("search", m);
+    for (const m of stmt.matchAll(GH_API_CMD)) push("api", m);
+    return out;
+  });
+}
+
+// A consumer whose answer depends on the FULL result set — iterating elements
+// (`[]`), a `for`/`while`/`xargs` loop, a post-count (`wc`, `length`), a
+// post-narrow (`grep`, `select(`, `map(`), or a reorder/extremum
+// (`sort`, `*_by`, `last`). Anything the consumer sees only after the default
+// page cap applied is a silent-truncation site. `| jq` is listed because a jq
+// stage over a list capture is the same class even when its program names no
+// narrowing op.
+const ENUMERATION_CONSUMER =
+  /\[\]|\|\s*(?:grep|wc|jq|xargs|sort|uniq|head|tail|while)\b|\bselect\s*\(|\bmap\s*\(|\b(?:sort|min|max|group)_by\s*\(|\bsort\b|\blast\b|\blength\b/;
+
+// A `--head <branch>` probe is domain-bounded by headRefName cardinality —
+// the same argument as `linked:issue #N` (CTO ruling 2026-11-01): covers
+// .github/scripts/bump-inngest-bootstrap-pin.sh's two post-narrowing `--head`
+// probes. Coded as a pattern so the judgment is enforced, not narrated.
+const BOUNDED_HEAD = /--head\b/;
+
+// A sufficient bound is `-L N`/`--limit N` with N >= 100, or `--paginate`.
+// Bound PRESENCE is not sufficiency — `-L 1` greens the #6793 gate while an
+// enumerating `.[].number` consumer still truncates (the issue's named shape).
+// The operand must be separated by space or `=`: an attached `-L100` does not
+// match and flags (fail-CLOSED, same authoring contract as HAS_LIMIT).
+const LIMIT_OPERAND = /(?:^|\s)(?:-L|--limit)(?:\s+|\s*=\s*)(\d+)/g;
+
+function sufficientBound(cmd: string): boolean {
+  if (/--paginate\b/.test(cmd)) return true;
+  for (const m of cmd.matchAll(LIMIT_OPERAND)) {
+    if (parseInt(m[1], 10) >= 100) return true;
+  }
+  return false;
+}
+
+// A `gh api` WRITE is never an enumeration site: `-X`/`--method` with a
+// mutating verb, the `graphql` endpoint, or a `--field` (`-f`) payload (which
+// flips the request to POST). `-F`/`--raw-field` stays GET and is NOT here.
+const GH_API_WRITE =
+  /(?:^|\s)-X\s+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)--method(?:\s*=\s*|\s+)(?:POST|PUT|PATCH|DELETE)\b|\bgh api\s+graphql\b|(?:^|\s)-f(?:[=\s]|$)|(?:^|\s)--field(?:[=\s]|$)/;
+
+// `gh api` flags that consume the NEXT token as their value, so the endpoint
+// is the first remaining positional. Boolean flags (`--paginate`, `-i`, …)
+// start with `-` and are skipped without consuming.
+const API_FLAGS_WITH_VALUE = new Set([
+  "-X", "--method", "-H", "--header", "-f", "--field", "-F", "--raw-field",
+  "--jq", "-q", "--template", "--input", "--cache", "--hostname", "--preview",
+]);
+
+// An endpoint path segment that names ONE resource: a numeric id, a
+// `$VAR`/`${VAR}` expansion, or a doc placeholder (`<id>`, `{id}`, `:param`) —
+// docs and runbooks write all of these for the same item position. `^<` needs
+// no closing `>`: runbook placeholders contain spaces (`<reboot job id>`),
+// which split the token mid-placeholder.
+const API_ID_SEGMENT = /^\d+$|^\$|^<|^\{|^:/;
+
+// Endpoint roots that read ONE object, never a collection: `repos/o/r/pages`
+// (the Pages config), `rate_limit`, `meta`, … — collection-SHAPED but not
+// enumerable. A real sub-list under one (`pages/builds`) would mis-read as an
+// item; none exists in the corpus — the residual is documented, not hidden.
+const API_SINGLETON = new Set([
+  "pages", "rate_limit", "meta", "zen", "octocat", "emojis", "feeds",
+  "versions", "app", "gitignore", "license", "readme",
+]);
+
+// Collections whose second path segment names ONE resource BY NAME even as a
+// literal (env names, content paths, `base...head` compares, branch/secret/
+// variable names, commit SHAs) — `environments/web-platform-infra-apply` is an
+// item read, not a collection, while `environments` alone lists. `git` is
+// handled separately below (`git/trees/HEAD` is an item at depth 3, but
+// `git/refs` at depth 2 genuinely lists).
+const API_NAMED_CHILD = new Set([
+  "environments", "contents", "compare", "branches", "tags", "commits",
+  "secrets", "variables", "deployments", "hooks", "keys",
+]);
+
+// First-collection words used ONLY to tell `repos/<owner>/<repo>` literal
+// pairs from `repos/<one-var>/…` when stripping the scope — a literal second
+// segment that is NOT one of these is the repo name and goes with the owner.
+// Incompleteness fails open (an exotic collection eaten as a repo name reads
+// as an item); every entry the corpus exercises is pinned by the census.
+const API_LIST_WORDS = new Set([
+  "issues", "pulls", "comments", "commits", "branches", "tags", "releases",
+  "milestones", "labels", "assignees", "reviewers", "reviews", "files",
+  "actions", "workflows", "runs", "jobs", "artifacts", "caches",
+  "check-runs", "check-suites", "statuses", "annotations", "rulesets", "rules",
+  "contents", "environments", "pages", "code-scanning", "secret-scanning",
+  "dependabot", "code-security", "security-advisories", "vulnerability-alerts",
+  "automated-security-fixes", "private-vulnerability-reporting",
+  "compare", "git", "keys", "hooks", "secrets", "variables", "deployments",
+  "projects", "teams", "members", "installations", "events", "notifications",
+  "subscribers", "stargazers", "forks", "contributors", "collaborators",
+  "downloads", "topics", "languages", "invitations", "community", "license",
+  "readme", "builds", "properties", "interaction-limits", "merges",
+]);
+
+// After the scope prefix is stripped, a LIST endpoint is a bare collection
+// segment (`…/issues`, `…/milestones`, `search/issues`) or a chain of
+// collection words (`actions/workflows/<file>.yml/runs`) that bottoms out at
+// one — `…/<collection>/<id>` and everything under it (`pulls/<N>/files`,
+// `issues/<N>/comments`, `commits/<sha>/pulls`, `environments/<name>`,
+// `contents/<path>`) is a bounded item scope, not an enumeration (CTO ruling:
+// the under-item collections stay must-PASS).
+function apiPathIsList(segs: string[]): boolean {
+  if (segs.length === 0) return false;
+  if (API_SINGLETON.has(segs[0])) return false;
+  if (segs[0] === "search") return true;
+  if (segs.length === 1) return true;
+  if (segs[0] === "git" && segs.length >= 3) return false;
+  if (API_NAMED_CHILD.has(segs[0])) return false;
+  if (API_ID_SEGMENT.test(segs[1])) return false;
+  return apiPathIsList(segs.slice(1));
+}
+
+function apiEndpointIsList(cmd: string): boolean {
+  const m = /\bgh\s+api\b(.*)$/.exec(cmd);
+  if (!m) return false;
+  const toks = m[1].match(/"[^"\n]*"|'[^'\n]*'|\S+/g) ?? [];
+  let skipValue = false;
+  let endpoint: string | null = null;
+  for (const tok of toks) {
+    if (skipValue) {
+      skipValue = false;
+      continue;
+    }
+    const bare = tok.replace(/^["']|["']$/g, "");
+    if (API_FLAGS_WITH_VALUE.has(bare)) {
+      skipValue = true;
+      continue;
+    }
+    if (bare.startsWith("-")) continue;
+    endpoint = bare;
+    break;
+  }
+  // No positional endpoint (or graphql, excluded above by GH_API_WRITE anyway):
+  // not a list read. A variable endpoint (`gh api "$PATH"`) parses as one
+  // segment → list — fail-closed, it needs --paginate or a consumer-free call.
+  if (endpoint === null) return false;
+  const segs = endpoint.split("?")[0].split("/").filter(Boolean);
+  if (segs[0] === "repos") {
+    segs.shift();
+    // The owner/repo occupies the next 1-2 segments: an id-shaped seg always
+    // goes (`repos/$REPO/x` carries owner+name in ONE var; `repos/{owner}/{repo}`
+    // and `repos/$O/$R` carry it in two). A literal pair goes too when the
+    // second literal is not a collection word (`repos/jikig-ai/soleur`,
+    // `repos/o/r`); a literal first seg followed by a collection word is a
+    // combined literal scope (`repos/owner-name/issues` does not occur, but
+    // failing closed here would eat a real collection).
+    if (segs.length > 0 && API_ID_SEGMENT.test(segs[0])) segs.shift();
+    else if (
+      segs.length >= 2 &&
+      !API_LIST_WORDS.has(segs[0]) &&
+      !API_LIST_WORDS.has(segs[1])
+    ) {
+      segs.splice(0, 2);
+    } else if (segs.length > 0 && !API_LIST_WORDS.has(segs[0])) {
+      segs.shift();
+    }
+  } else if (
+    segs[0] === "orgs" ||
+    segs[0] === "users" ||
+    segs[0] === "teams" ||
+    segs[0] === "enterprises"
+  ) {
+    segs.splice(0, 2);
+  } else if (segs[0] === "user") {
+    segs.splice(0, 1);
+  }
+  return apiPathIsList(segs);
+}
+
+// Documented per-site exemptions — the census's "documented exclusion with
+// rationale" mechanism (#8593 AC5). A site lands here ONLY when the bound the
+// gate would impose would change the site's semantics: a deliberate top-K
+// query whose `--limit` IS the answer, a bound carried in a variable the
+// static scan cannot read, or a teaching example of manual pagination. Every
+// entry names the file, an anchored cmd substring, and the reason — never a
+// bare path (a bare path would exempt every FUTURE enumeration in the file).
+const DOCUMENTED_ENUMERATION_EXEMPTIONS: {
+  file: string;
+  cmdIncludes: string;
+  reason: string;
+}[] = [
+  {
+    file: "plugins/soleur/skills/product-roadmap/SKILL.md",
+    cmdIncludes: '--search "no:milestone sort:created-asc" --limit 5',
+    reason:
+      "deliberate top-K: the query asks for the FIVE oldest unmilestoned " +
+      "issues; `--limit 5` is the answer, not a truncation risk.",
+  },
+  {
+    file: "scripts/preflight-required-check-bypass.sh",
+    cmdIncludes: '-L "$MERGE_LIMIT"',
+    reason:
+      "the bound is a variable (MERGE_LIMIT=200 default, >= 100) — the static " +
+      "scan cannot read it; a literal would fight the SOLEUR_BYPASS_MERGE_LIMIT " +
+      "override. The site itself notes a capped list must not read as complete.",
+  },
+  {
+    file: "knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md",
+    cmdIncludes: "page=$p",
+    reason:
+      "a teaching example of MANUAL pagination (`for p in 1..6; page=$p`) — " +
+      "the bound is the loop the runbook is documenting; --paginate would " +
+      "rewrite the procedure it exists to teach.",
+  },
+];
+
+/**
+ * `gh` captures whose output feeds an enumeration/post-narrowing consumer and
+ * carry neither a sufficient bound (`-L N`/`--limit N` with N ≥ 100, or
+ * `--paginate`) nor a coded exemption — the #8593 silent-truncation class.
+ * Exemptions: a pure existence drill with no post-search narrowing, the
+ * bounded `linked:issue #N` query shape, `BOUNDED_HEAD` (`--head`), and the
+ * documented per-site table above. `gh api` item reads (`…/issues/<N>`,
+ * `pulls/<N>/files`) and writes are not enumeration sites and are filtered
+ * before the consumer test.
+ */
+export function findUnboundedEnumerations(
+  files: { file: string; raw: string; surface?: Surface }[],
+): EnumProbe[] {
+  return extractEnumerations(files).filter((p) => {
+    if (p.kind === "api") {
+      if (GH_API_WRITE.test(p.cmd)) return false;
+      if (!apiEndpointIsList(p.cmd)) return false;
+    }
+    if (!p.forConsumed && !ENUMERATION_CONSUMER.test(p.cmd)) return false;
+    if (BOUNDED_LINKED_ISSUE.test(p.cmd)) return false;
+    if (BOUNDED_HEAD.test(p.cmd)) return false;
+    if (EXISTENCE_DRILL.test(p.cmd) && !POST_SEARCH_NARROWING.test(p.cmd)) return false;
+    if (sufficientBound(p.cmd)) return false;
+    if (
+      DOCUMENTED_ENUMERATION_EXEMPTIONS.some(
+        (e) => e.file === p.file && p.cmd.includes(e.cmdIncludes),
+      )
+    ) {
+      return false;
+    }
     return true;
   });
 }
@@ -1449,6 +1785,247 @@ describe("collision-gate probes carry an explicit --state", () => {
         "fails open. Add a generous explicit `-L` (free per the perf note) unless the probe " +
         "is a pure existence drill with no post-search narrowing OR the bounded `linked:issue " +
         "#N` shape. See #6793.",
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8593 — unbounded-`gh`-enumeration detector. #6793's gate covered only
+// `gh pr|issue list … --search` probes on a subset of surfaces; the identical
+// silent-30-row truncation via `gh issue list --label X` (no --search),
+// `gh search issues|prs`, non-paginated `gh api` list endpoints, and the
+// `.github/scripts/` + `apps/web-platform/server/inngest/functions/*.ts`
+// surfaces was invisible to every detector. This block widens the assembly,
+// not the property: an enumeration- or post-narrowing-consuming `gh` capture on
+// an executable surface must carry a SUFFICIENT bound (`-L N`/`--limit N` with
+// N >= 100, or `--paginate` for `gh api`) or a principled exemption.
+// ---------------------------------------------------------------------------
+describe("unbounded gh enumerations carry an explicit sufficient bound (#8593)", () => {
+  // Synthesized negative controls (cq-test-fixtures-synthesized-only) — Guard 1
+  // matrix rows 1-7. The live corpus is clean, so these are the detector's only
+  // real discriminating power.
+  test("flags `gh issue list --label x --jq '.[].number'` with no -L (the issue's fixture)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --state open --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `-L 1` + `.[].number` — bound PRESENCE is not sufficiency", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x -L 1 --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh search issues … --jq 'length'` with no --limit", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'N=$(gh search issues "sec: alert repo:o/r is:open" --json number --jq \'length\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh search prs` enumerations the same way", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'N=$(gh search prs "repo:o/r is:open" --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh api` plural list endpoints feeding post-narrowing without --paginate", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'A=$(gh api "repos/o/r/issues?state=open" --jq \'.[].number\')' },
+        { file: "g.sh", surface: "sh", raw: 'R=$(gh api repos/o/r/rulesets --jq \'.[] | select(.enforcement=="active")\')' },
+        { file: "h.sh", surface: "sh", raw: 'Q=$(gh api "search/issues?q=foo&per_page=30" --jq \'.items[] | .number\')' },
+      ]),
+    ).toHaveLength(3);
+  });
+
+  test("flags `gh issue list … | grep` post-narrowing (the grep -cxF dedupe shape)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'match=$(gh issue list --label review-reminder --state open --json title --jq \'.[].title\' | grep -cxF "$expected_title")',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a second unbounded probe is flagged while a compliant sibling is not (per-capture)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.sh",
+          surface: "sh",
+          raw:
+            'OK=$(gh issue list --label a --state open --limit 100 --json number --jq \'.[].number\')\n' +
+            'BAD=$(gh issue list --label b --state open --json number --jq \'.[].number\')',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  // Must-PASS inputs (Guard 1 matrix row 8), each differing from the canonical
+  // bound in one way — a too-narrow exemption re-introduces the defect class
+  // this gate exists to close.
+  test("passes a --paginate gh api enumeration", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api --paginate "repos/o/r/issues?state=open&per_page=100" --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes an -L 100 enumeration and a --limit 200 one", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh issue list --label x --state open -L 100 --json number --jq \'.[].number\')' },
+        { file: "g.yml", surface: "yaml", raw: 'B=$(gh search issues "q" --limit 200 --json number --jq \'length\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes a pure `.[0]`/`// empty` existence drill with no bound", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'E=$(gh issue list --label x --state open --json number --jq \'.[0].number // empty\')' },
+        { file: "g.sh", surface: "sh", raw: 'N=$(gh api "repos/o/r/commits?sha=x&per_page=1" --jq \'.[0].commit.committer.date // empty\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes the bounded `linked:issue #N` query shape", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f", raw: '`gh pr list --search "linked:issue #5" --state all --json number --jq \'.[] | .number\'`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes a `gh pr list --head <branch>` post-narrowing probe (BOUNDED_HEAD)", () => {
+    // CTO ruling 2026-11-01: `--head <branch>` is domain-bounded by headRefName
+    // cardinality, the same argument as `linked:issue #N` — covers
+    // bump-inngest-bootstrap-pin.sh's two post-narrowing --head probes, coded
+    // as a pattern exemption so the judgment is enforced, not narrated.
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.sh",
+          surface: "sh",
+          raw: 'PR_LIST=$(gh pr list --repo "$R" --head "$BRANCH" --state open --json number,author --jq \'.[] | select(.author.login == "app/bot") | .number\')',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` single-resource item reads (…/<resource>/<N>)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .created_at' },
+        { file: "g.sh", surface: "sh", raw: 'gh api repos/o/r/issues/123 --jq .title' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` bounded under-item collections (pulls/<N>/files, issues/<N>/comments, commits/<sha>/pulls)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api "repos/o/r/pulls/123/files" --jq \'.[].filename\'' },
+        { file: "g.sh", surface: "sh", raw: 'gh api "repos/o/r/issues/$N/comments" --jq \'.[] | .body\'' },
+        { file: "h.sh", surface: "sh", raw: 'prs=$(gh api "repos/o/r/commits/${SHA}/pulls" | jq \'.[] | select(.state=="open")\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` writes (POST/PUT/DELETE, graphql, -f payload)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api -X POST "repos/$R/issues/$N/comments" -f body="$b"' },
+        { file: "g.sh", surface: "sh", raw: 'gh api --method DELETE "repos/$R/issues/comments/$ID"' },
+        { file: "h.sh", surface: "sh", raw: 'gh api graphql -f query="$q"' },
+        { file: "i.sh", surface: "sh", raw: 'gh api "repos/$R/issues" -f title="$t" -f body="$b" -f labels[]=x' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a full-line `//` comment in a .ts surface is skipped like a `#` comment", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.ts",
+          surface: "ts",
+          raw:
+            "// gh issue list --label x --state open --json number --jq '.[].number'\n" +
+            "// and a second comment: gh api repos/o/r/issues --jq '.[].n'\n" +
+            "const x = 1;",
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a .ts capture still flags a real enumeration instruction", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.ts",
+          surface: "ts",
+          raw: 'const PROMPT = `run: gh issue list --label x --state open --json number --jq \'.[].number\'`;',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  // The #8593 widening pins, same idiom as the #6793 surface pins above: the
+  // new surface classes and the new command families must each be non-empty in
+  // the live corpus, or the corpus assertion below is vacuous for them.
+  const corpus = execSurfaceFiles();
+
+  test("the widened surface classes are represented in the corpus", () => {
+    const has = {
+      githubScripts: corpus.some((f) => f.file.startsWith(".github/scripts/") && f.surface === "sh"),
+      inngestFns: corpus.some(
+        (f) => f.file.startsWith("apps/web-platform/server/inngest/functions/") && f.surface === "ts",
+      ),
+    };
+    expect(
+      has,
+      `corpus surface coverage ${JSON.stringify(has)} — a false means a widened surface class ` +
+        "(.github/scripts/**.sh, inngest functions/*.ts) is silently absent from the scan, " +
+        "so the enumeration offender check is vacuous for it",
+    ).toEqual({ githubScripts: true, inngestFns: true });
+  });
+
+  test("every command family is represented in the corpus", () => {
+    const enums = extractEnumerations(corpus);
+    const families = {
+      list: enums.some((p) => p.kind === "list"),
+      search: enums.some((p) => p.kind === "search"),
+      api: enums.some((p) => p.kind === "api"),
+    };
+    expect(
+      families,
+      `extraction saw ${JSON.stringify(families)} across ${corpus.length} files — a false ` +
+        "means a command family (gh pr|issue list / gh search issues|prs / gh api list " +
+        "endpoints) is regex-invisible, so the offender check is vacuous for it",
+    ).toEqual({ list: true, search: true, api: true });
+  });
+
+  test("no executable-surface enumeration lacks a sufficient bound or a principled exemption", () => {
+    expect(
+      findUnboundedEnumerations(corpus).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      "a `gh` enumeration that feeds `.[]`, `| grep`, `select(`, `map(`, `length` or a reorder " +
+        "silently truncates at the default row cap unless it carries `-L N`/`--limit N` " +
+        "(N >= 100) or `--paginate`, or qualifies for a coded exemption (pure existence " +
+        "drill with no post-search narrowing, `linked:issue #N`, or `--head <branch>`). " +
+        "See #8593 — every site this widened gate flags must be bounded or carry a " +
+        "documented exclusion in the same diff.",
     ).toEqual([]);
   });
 });

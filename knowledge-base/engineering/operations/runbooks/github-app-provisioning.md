@@ -81,7 +81,7 @@ Procedure:
    changes whenever the App is reinstalled). Run:
 
    ```bash
-   gh api /orgs/jikig-ai/installations \
+   gh api --paginate /orgs/jikig-ai/installations \
      --jq '.installations[] | select(.app_slug=="soleur-ai") | .id'
    ```
 
@@ -105,7 +105,7 @@ Procedure:
 3. Verify the installation now grants the new key:
 
    ```bash
-   gh api /orgs/jikig-ai/installations \
+   gh api --paginate /orgs/jikig-ai/installations \
      --jq '.installations[] | select(.app_slug=="soleur-ai") | .permissions'
    ```
 
