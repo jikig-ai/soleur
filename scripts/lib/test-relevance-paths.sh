@@ -171,6 +171,7 @@ CF_TUNNEL_BATTERY_PATHS=(
 LINT_ORPHAN_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/lint-orphan-test-suites.sh"                      # SUT
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # copied into the sandbox
   "apps/web-platform/infra/run-registered-suites.sh"        # copied; a REQUIRED_RUNNERS registration
   ".github/workflows"                                       # cp .github/workflows/*.yml — directory, see above
@@ -206,6 +207,7 @@ TAG_AUTHORSHIP_BATTERY_PATHS=(
 # added signal; it is declared by dependency instead and the hardlinked corpus is ADR-262 residual R3.
 TEST_ALL_AFFECTED_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # RWB_LIB
   "scripts/lint-orphan-test-suites.sh"                      # the census linter the sandbox arms drive
   "scripts/test-all-affected.test.sh"                       # SELF — see the note above

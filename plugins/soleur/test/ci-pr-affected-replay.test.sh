@@ -75,52 +75,16 @@ done
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
 DECLARED_TOTAL=582   # top-level `^mutate ` (470) + `^ow_mutate ` (112) call sites; ctl-* controls run ungated
-ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared sites
-_seen_rows_flag=0
-while (( $# )); do
-  case "$1" in
-    --rows)
-      shift
-      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
-        echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
-        exit 2
-      fi
-      if (( _seen_rows_flag == 1 )); then
-        echo "ERROR: --rows given twice — a range must be stated once" >&2
-        exit 2
-      fi
-      _seen_rows_flag=1
-      ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
-      ;;
-    *)
-      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-# Unconditional bounds: 1 <= A <= B <= DECLARED_TOTAL. Only runs when a flag was given —
-# the no-flag state ROWS_HI=0 is unreachable as a flag value because HI >= LO >= 1, so a
-# passed "0-0"/"N-0" can never silently decode into "all sites".
-if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
-  echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared sites." >&2
-  exit 2
-fi
+ROWS_UNIT=sites
+# shellcheck source=scripts/lib/rows-range.sh
+source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
+rows_parse_args "$@"
 
-# in_range: called once per gated site from inside the mutate/ow_mutate drivers, in file
-# order. _site_seq counts gated sites (never the unconditional content); EXECUTED counts
+# in_range (from the lib): called once per gated site from inside the mutate/ow_mutate drivers,
+# in file order. _site_seq counts gated sites (never the unconditional content); EXECUTED counts
 # dispatched sites. Unlike lint-orphan's dispatch-site gate there is no per-site ordinal
 # argument — the call order IS the declared order, and the end-of-file _site_seq ==
 # DECLARED_TOTAL check is the add/delete guard (a reorder keeps coverage total but silently re-maps the registered ranges — a balance skew, not a gap).
-_site_seq=0; EXECUTED=0
-in_range() {
-  _site_seq=$(( _site_seq + 1 ))
-  if (( ROWS_HI == 0 )) || (( ROWS_LO <= _site_seq && _site_seq <= ROWS_HI )); then
-    EXECUTED=$(( EXECUTED + 1 ))
-    return 0
-  fi
-  return 1
-}
 # Control paths drive mutate() for harness self-verification; they are not gated sites and
 # must not consume a _site_seq ordinal.
 _MUT_UNGATED=0
@@ -5179,12 +5143,7 @@ fi
 # Ranged-sum reconciliation (replaces FLOOR_MUTANTS/MUT_RUN>=SITES_MUTATE/OW_MUT_RUN>=OW_SITES):
 # every declared site reached the gate, the gate dispatched exactly the range, and every dispatched
 # site was a mutant run — a skipped or doubly-counted site cannot hide behind the kill floors.
-if (( _site_seq != DECLARED_TOTAL )); then
-  printf '[FATAL] range gate: %s gated sites reached in_range, expected %s — a mutate/ow_mutate line was added or deleted without re-splitting the registered --rows ranges\n' "$_site_seq" "$DECLARED_TOTAL" >&2; exit 1
-fi
-if (( EXECUTED != EXPECTED_EXECUTED )); then
-  printf '[FATAL] range gate: %s sites dispatched, expected %s for --rows %s-%s — the gate mis-selected\n' "$EXECUTED" "$EXPECTED_EXECUTED" "$ROWS_LO" "$ROWS_HI" >&2; exit 1
-fi
+rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == EXPECTED_EXECUTED, >= 1
 if (( MUT_RUN + OW_MUT_RUN != EXECUTED )); then
   printf '[FATAL] range gate: %s mutants ran but %s sites dispatched — a gated site bypassed the mutant drivers\n' "$((MUT_RUN + OW_MUT_RUN))" "$EXECUTED" >&2; exit 1
 fi

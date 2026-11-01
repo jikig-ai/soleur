@@ -68,7 +68,9 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 # ci.yml runs this file three times, once per third of the declared row space,
 # because the serial battery is the longest job in the workflow. `--rows A-B`
 # selects the inclusive range of DECLARED row sites this invocation executes;
-# unset means all.
+# unset means all. The shared preamble/gate lives in scripts/lib/rows-range.sh —
+# rows_parse_args refuses a repeated/malformed/unknown/out-of-bounds flag and
+# in_range sequences every row site through _site_seq/EXECUTED.
 # The CONTROL row and instrument self-test are unconditional — they are not
 # numbered row sites and run in every leg.
 #
@@ -77,45 +79,10 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
 # which is what keeps the per-leg floors honest (each leg must see the full
 # declared space, not just the sites inside its own range).
 DECLARED_TOTAL=42
-ROWS_LO=1
-ROWS_HI=0        # 0 = unset, meaning "all declared rows"
-while (( $# > 0 )); do
-  case "$1" in
-    --rows)
-      (( $# >= 2 )) || { echo "ERROR: --rows requires an A-B argument." >&2; exit 2; }
-      _rowspec="$2"; shift 2
-      if [[ ! "$_rowspec" =~ ^[0123456789]+-[0123456789]+$ ]]; then
-        echo "ERROR: --rows takes A-B with decimal bounds (got: '$_rowspec')." >&2
-        exit 2
-      fi
-      ROWS_LO=$(( 10#${_rowspec%-*} ))
-      ROWS_HI=$(( 10#${_rowspec#*-} ))
-      if (( ROWS_LO < 1 || ROWS_HI < ROWS_LO || ROWS_HI > DECLARED_TOTAL )); then
-        echo "ERROR: --rows $_rowspec is out of bounds: need 1 <= A <= B <= $DECLARED_TOTAL declared rows." >&2
-        exit 2
-      fi
-      ;;
-    *)
-      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
-      exit 2
-      ;;
-  esac
-done
-
-# The range gate. EVERY row site calls this exactly once, in file order — including
-# sites whose execution is skipped by the range — so _row_seq always reaches
-# DECLARED_TOTAL regardless of which half runs. EXECUTED counts the sites this
-# invocation actually ran.
-_row_seq=0
-EXECUTED=0
-in_range() {
-  _row_seq=$(( _row_seq + 1 ))
-  if (( ROWS_HI == 0 )) || (( _row_seq >= ROWS_LO && _row_seq <= ROWS_HI )); then
-    EXECUTED=$(( EXECUTED + 1 ))
-    return 0
-  fi
-  return 1
-}
+ROWS_UNIT=rows
+# shellcheck source=scripts/lib/rows-range.sh
+source "$REPO_ROOT/scripts/lib/rows-range.sh"
+rows_parse_args "$@"
 
 WORK="$(mktemp -d -t shard-mut.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 [[ "$WORK" == /* ]] || { echo "FATAL: WORK is not absolute (TMPDIR was relative?): $WORK" >&2; exit 2; }
@@ -1013,20 +980,7 @@ in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites
 #      that drifted out of the gate's reach (conditional, early exit) shows up here.
 #   3. IN_RANGE >= 1: a range covering no declared row is vacuous — it would
 #      report "all rows green" having run only the control.
-if (( _row_seq != DECLARED_TOTAL )); then
-  printf 'FAIL: declared-row drift — %d row site(s) reached the range gate, expected %d. A row was added or removed without updating DECLARED_TOTAL.\n' "$_row_seq" "$DECLARED_TOTAL" >&2
-  exit 1
-fi
-if (( ROWS_HI == 0 )); then
-  _expected_rows=$DECLARED_TOTAL
-else
-  _expected_rows=$(( ROWS_HI - ROWS_LO + 1 ))
-fi
-if (( EXECUTED != _expected_rows || EXECUTED < 1 )); then
-  _range_desc="${ROWS_LO}-${ROWS_HI}"; (( ROWS_HI == 0 )) && _range_desc="all"
-  printf 'FAIL: range accounting — %d row(s) executed, expected %d in range %s. The battery did not run its declared range to completion.\n' "$EXECUTED" "$_expected_rows" "$_range_desc" >&2
-  exit 1
-fi
+rows_gate_floor   # shared: _site_seq == declared total, EXECUTED == in-range count, >= 1
 TOTAL=$(( PASS + FAIL ))
 # Each executed row emits exactly one verdict, plus the unconditional CONTROL.
 if (( TOTAL != EXECUTED + 1 )); then

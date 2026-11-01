@@ -79,58 +79,15 @@ export LC_ALL=C
 # Ported from plugins/soleur/test/scripts-shard-totality-mutations.sh's DECLARED_TOTAL
 # contract, with the split site adapted: that battery is split by a ci.yml matrix, this one by
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
-# One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
-# the last flag win — the tiling extractor would then assert a coverage the battery ignores.
+# The shared preamble/gate now lives in scripts/lib/rows-range.sh, which keeps this battery's
+# two deliberate hardenings: a REPEATED --rows exits 2 rather than letting the last flag win —
+# the tiling extractor would then assert a coverage the battery ignores — and in_range takes an
+# optional ordinal argument that FATALs when it drifts from _site_seq.
 DECLARED_TOTAL=35   # the gated mutation rows M1..M35; C0/R1/R1b are unconditional
-ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
-_seen_rows_flag=0
-while (( $# )); do
-  case "$1" in
-    --rows)
-      shift
-      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
-        echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
-        exit 2
-      fi
-      if (( _seen_rows_flag == 1 )); then
-        echo "ERROR: --rows given twice — a range must be stated once" >&2
-        exit 2
-      fi
-      _seen_rows_flag=1
-      ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
-      ;;
-    *)
-      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-# Unconditional bounds: 1 <= A <= B <= DECLARED_TOTAL. Only runs when a flag was given —
-# the no-flag state ROWS_HI=0 is unreachable as a flag value because HI >= LO >= 1, so a
-# passed "0-0"/"N-0" can never silently decode into "all rows".
-if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
-  echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared rows." >&2
-  exit 2
-fi
-
-# in_range <M-ordinal>: called once per gated row site, in ROW_IDS order. _site_seq counts
-# gated sites (never C0/R1/R1b); the ordinal argument must equal it, so a duplicated or
-# reordered M-id FATALs instead of silently re-mapping the ranges. EXECUTED counts dispatched.
-_site_seq=0; EXECUTED=0
-in_range() {
-  local _ord="$1"
-  _site_seq=$(( _site_seq + 1 ))
-  if (( _ord != _site_seq )); then
-    echo "FATAL(harness): row M${_ord} reached the range gate as site ${_site_seq} — a duplicated or reordered ROW_IDS entry would silently re-map the registered ranges" >&2
-    exit 2
-  fi
-  if (( ROWS_HI == 0 )) || (( ROWS_LO <= _site_seq && _site_seq <= ROWS_HI )); then
-    EXECUTED=$(( EXECUTED + 1 ))
-    return 0
-  fi
-  return 1
-}
+ROWS_UNIT=rows
+# shellcheck source=scripts/lib/rows-range.sh
+source "$REPO_ROOT/scripts/lib/rows-range.sh"
+rows_parse_args "$@"
 
 PASS=0; FAIL=0; ROWS=0
 TMP="$(mktemp -d)" || exit 2
@@ -1315,15 +1272,7 @@ fi
 # — deleting R1 or R1b stayed green. Equality removes that slack; conservation below pins the
 # unconditional sites.)
 echo ""
-if (( _site_seq != DECLARED_TOTAL )); then
-  echo "FATAL: ${_site_seq} gated row sites reached the range gate, expected ${DECLARED_TOTAL} — a declared row was deleted or reordered, so the registered --rows ranges no longer name the real matrix." >&2
-  exit 1
-fi
-_EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
-if (( EXECUTED != _EXPECTED_EXECUTED )); then
-  echo "FATAL: ${EXECUTED} rows dispatched, expected ${_EXPECTED_EXECUTED} for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected." >&2
-  exit 1
-fi
+rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == in-range count, >= 1
 # Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b + R2. A
 # deleted R1/R1b/R2/C0 drops ROWS below EXECUTED+4 — the check that makes removing an
 # unconditional row loud.
