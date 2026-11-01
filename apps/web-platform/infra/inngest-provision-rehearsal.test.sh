@@ -109,6 +109,14 @@ yes "the environment lives on the soleur-inngest project" \
   "grep -qF 'project = \"soleur-inngest\"' < <(grep -A4 'resource \"doppler_environment\" \"rehearsal\"' '$REH_CODE' )"
 yes "the service token is READ-scoped (the provision path only reads)" \
   "grep -qE 'access[[:space:]]*=[[:space:]]*\"read\"' < <(awk '/resource \"doppler_service_token\" \"rehearsal\"/{f=1} f&&/^}/{print;exit} f' '$REH_CODE' )"
+# Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4): the template gained `doppler_flip_token`, and
+# this root renders the same template. The rehearsal host never arms the cutover flip, so it carries its
+# READ-only token in both files; the pass-through is pinned to the rehearsal token itself so a rehearsal can
+# never be handed a read/write one (no new rehearsal resource is created, so the plan-shape test is unchanged).
+yes "the template's doppler_flip_token is the REHEARSAL (read) token, never a read/write one" \
+  "grep -qE '^[[:space:]]*doppler_flip_token[[:space:]]*=[[:space:]]*doppler_service_token\.rehearsal\.key[[:space:]]*\$' '$REH_CODE'"
+no "the rehearsal root declares no read/write service token (it has no flip-token resource)" \
+  "grep -qE 'access[[:space:]]*=[[:space:]]*\"read/write\"' '$REH_CODE'"
 yes "INNGEST_REDIS_LUKS_KEY is seeded in the scratch env (the LUKS stage FATALs on an empty key — 'refusing an unencrypted mount', attempt-3)" \
   "grep -qF 'name       = \"INNGEST_REDIS_LUKS_KEY\"' '$REH_CODE'"
 yes "INNGEST_DIAGNOSTIC_BOOT is staged true (the rehearsal can never run a live scheduler)" \

@@ -1559,6 +1559,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // cert and the three Doppler copies) ARE per-merge targeted.
   "doppler_secret.inngest_link_tls",
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the FLIP token: read/write on the same isolated
+  // soleur-inngest/prd config, read only by inngest-cutover-flip.service through a cloud-init
+  // drop-in. Its `.key` feeds the host's user_data ONLY; it is created as a dependency of
+  // hcloud_server.inngest on the gated inngest-host-replace dispatch (no -target there, CTO R1).
+  // NEVER publish it to a `github_actions_secret`: the #5566 rule below would then force a per-merge
+  // -target, and merging would mint a read/write token with nothing to read it.
+  "doppler_service_token.inngest_flip",
   // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
   // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
   // (#6416 host_creates tripwire). Provision is operator-local after free-slot
@@ -1596,6 +1603,10 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply it — no host
   // to read it. Same class as doppler_service_token.git_data / .registry.
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the on-host flip token. Same class as
+  // doppler_service_token.inngest: consumed by the inngest host's cloud-init only, NOT published to a
+  // CI github_actions_secret (publishing it would void this entry under the #5566 rule above).
+  "doppler_service_token.inngest_flip",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
@@ -5738,11 +5749,91 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(15); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair)
+    expect(targets.length).toBe(16); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair; the flip-token split added doppler_service_token.inngest_flip)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4; CTO R1 and N9). Three facts that must
+ * hold together or a gate reds against its twin:
+ *   - the inngest_host job -targets doppler_service_token.inngest_flip (graph-redundant with
+ *     -target=hcloud_server.inngest, but the shape gate's allow set must EQUAL the -target set);
+ *   - the inngest_host_replace job does NOT (it keeps exactly its three -targets; the new token rides
+ *     in as a dependency of the server, like doppler_service_token.inngest does today);
+ *   - the replace job runs the offline user_data budget script BEFORE its plan step, because on the
+ *     first replace both token keys are unknown at plan time, so the hcloud_server.inngest length
+ *     precondition is deferred to APPLY, after the destroy (the 2026-09-08 stranded-host shape).
+ */
+describe("flip-token split: gate lockstep and the pre-destroy size gate", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const FLIP = "doppler_service_token.inngest_flip";
+  const shapeGateAllow = (): string[] => {
+    const lib = readFileSync(join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"), "utf8");
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    return [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  };
+
+  test("the inngest_host job -targets the flip token and the shape gate admits it", () => {
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))]).toContain(FLIP);
+    expect(shapeGateAllow()).toContain(FLIP);
+  });
+
+  test("the flip -target line is annotated as graph-redundant so nobody removes it as such", () => {
+    const job = extractJobBlock(wf, "inngest_host");
+    const at = job.indexOf(`-target='${FLIP}'`);
+    expect(at).toBeGreaterThan(-1);
+    expect(job.slice(Math.max(0, at - 3500), at)).toMatch(/graph-redundant/);
+  });
+
+  test("mutation: removing the new -target from inngest_host ALONE breaks the allow === -target equality", () => {
+    const mutated = wf.replace(/^\s*-target='doppler_service_token\.inngest_flip' \\\n/m, "");
+    expect(mutated).not.toBe(wf); // the mutation landed
+    const targets = [...extractAllTargets(extractJobBlock(mutated, "inngest_host"))].sort();
+    expect(targets).not.toEqual(shapeGateAllow());
+    // and the pristine tree is equal (non-vacuity of the comparison above)
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort()).toEqual(shapeGateAllow());
+  });
+
+  test("the final -target line still carries the redaction pipe, and only that line (the command ends there)", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host"));
+    const cmd = commandIn(job, /^\s*terraform plan\b.*-out=tfplan/);
+    const lines = cmd.split("\n");
+    expect(lines[lines.length - 1]).toMatch(/-target='doppler_service_token\.inngest' 2>&1 \| tf_redact_random_ids$/);
+    expect(lines.filter((l) => l.includes("tf_redact_random_ids")).length).toBe(1);
+    expect(lines.some((l) => l.includes(`-target='${FLIP}' \\`))).toBe(true);
+  });
+
+  test("the inngest_host_replace job keeps exactly its three -targets and does not target the flip token", () => {
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host_replace"))].sort();
+    expect(targets).toEqual(
+      ["hcloud_server.inngest", "hcloud_server_network.inngest", "hcloud_volume_attachment.inngest_redis_luks"].sort(),
+    );
+    expect(targets).not.toContain(FLIP);
+  });
+
+  test("the replace job runs inngest-userdata-budget.sh after setup-terraform and BEFORE the plan step (CTO N9)", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
+    const RUN = /^\s*(?:run:\s*)?bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh\s*$/gm;
+    expect([...job.matchAll(RUN)].length).toBe(1);
+    const budgetAt = job.search(RUN);
+    const setupAt = job.indexOf("hashicorp/setup-terraform");
+    const planAt = job.indexOf("name: Terraform plan (scoped inngest-host -replace) + destroy-guard");
+    expect(setupAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(budgetAt).toBeGreaterThan(setupAt);
+    expect(budgetAt).toBeLessThan(planAt);
+  });
+
+  test("non-vacuity: the presence/order check tells a gated job from an ungated one", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
+    const ungated = job.replace(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh/, "true");
+    expect(ungated).not.toBe(job);
+    expect(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh/.test(ungated)).toBe(false);
   });
 });
 

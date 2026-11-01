@@ -74,6 +74,69 @@ else
   pass
 fi
 
+# --- Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4). The FLIP token is a SECOND
+#     doppler_service_token upstream of the server's user_data, admitted by exact equality like the
+#     boot token. On the first replace after the split the boot token is delete+create (its `access`
+#     is ForceNew) and the flip token is a plain create; a later flip-only rotation is delete+create.
+#     The plan is STILL required to replace the server, so admitting the address cannot let a
+#     destructive plan through (T1h pins that direction). ---
+FLIP_CREATE="$(rc_obj 'doppler_service_token.inngest_flip' '"create"')"
+FLIP_REPLACE="$(rc_obj 'doppler_service_token.inngest_flip' '"delete","create"')"
+
+# --- Test 1d: PASS — the first replace after the split: server + deps, boot token delete+create,
+#     flip token create. ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T1d: server replace + boot token delete/create + flip token create should PASS (rc=0)"
+fi
+
+# --- Test 1e: PASS — a flip-token rotation: flip delete+create with the server replaced. ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FLIP_REPLACE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T1e: server replace + flip token delete/create should PASS (rc=0)"
+fi
+
+# --- Test 1f: FAIL — a LOOKALIKE address after a compliant flip token must still ABORT (exact
+#     equality, mirrors T1c: a prefix/substring match on `inngest_flip` would admit it). ---
+LOOKALIKE_TOKEN="$(rc_obj 'doppler_service_token.inngest_flip_x' '"create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FLIP_CREATE},${LOOKALIKE_TOKEN}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T1f: doppler_service_token.inngest_flip_x (lookalike) must ABORT (rc=1) — allow-set is exact-equality"
+else
+  pass
+fi
+
+# --- Test 1g: FAIL — the flip token is created but the server is NOT replaced. The token alone
+#     must never be a path to a green plan (fixture direction). ---
+write_plan "$(rc_obj 'hcloud_server.inngest' '"no-op"'),${FLIP_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T1g: a flip token create WITHOUT a server replace must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 1h: MUTATION — delete the address from the gate's def allow in a COPY and the T1d plan
+#     must ABORT. Proves T1d is graded by the allow-set entry, not by something incidental (a
+#     gate that admitted every doppler_service_token would pass T1d AND T1c's twin, so T1c/T1f
+#     cover the other direction). The copy is sourced in a subshell so the real gate stays loaded. ---
+MUT="$TMP/mut"; mkdir -p "$MUT"
+cp "${DIR}/lib/inngest-host-replace-gate.sh" "${DIR}/lib/plan-gate-preamble.sh" "$MUT/"
+sed -i '/"doppler_service_token\.inngest_flip"/d' "$MUT/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT/inngest-host-replace-gate.sh"; then
+  fail "T1h: HARNESS ABORT — the mutation did not land (the gate does not name doppler_service_token.inngest_flip)"
+else
+  write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
+  if ( source "$MUT/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+    fail "T1h: with the address removed from def allow, the T1d plan must ABORT (the allow-set entry is what admits it)"
+  else
+    pass
+  fi
+fi
+
 # --- Test 2: FAIL — Redis AOF volume destroyed (the preservation invariant) ---
 VOL_DELETE="$(rc_obj 'hcloud_volume.inngest_redis' '"delete","create"')"
 write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VOL_DELETE}"
@@ -354,9 +417,9 @@ fi
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 49 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 49. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 54. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 49)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 54)\n' "$_ran"
 fi
 
 echo ""

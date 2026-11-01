@@ -7,22 +7,22 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 ## Phase 1: Tests first (RED)
 
-- 1.1 Create `apps/web-platform/infra/inngest-flip-token.test.sh`
-  - 1.1.1 Section R: systemd-parser resolver over the unit population (census floor, drop-in merge across `<unit>.service.d`/`<prefix>-.service.d`/`service.d`, web-host drop-ins excluded)
-  - 1.1.2 Section X: `systemd-analyze --root=<dir> cat-config systemd/system/inngest-cutover-flip.service` cross-check plus a `systemd-run --user -p EnvironmentFile=... /usr/bin/env` last-wins leg (`systemctl --root cat` is refused by systemd; required in CI, loud counted skip where absent)
-  - 1.1.3 Section W: execute the guard item under `sh` with a recording phone-home stub; census anchored on `\$\{doppler_(flip_)?token\}`
-  - 1.1.4 Section O: execute the flip-write item in a temp dir, assert mode 600, `|| exit 1`, ordering before the arming item
-  - 1.1.5 Section S: path-occurrence census for `/etc/default/inngest-flip`
-  - 1.1.6 Mutation batteries for Guards 1 and 2 (rows and harness rows from the plan)
-- 1.2 Rewrite finding 1b in `apps/web-platform/infra/inngest-host.test.sh` (boot token `read`, flip token `read/write`, `name = "inngest-flip"`, block-scoped awk exiting at `^}`)
-- 1.3 Gate tests: `tests/scripts/test-inngest-host-replace-gate.sh`, `tests/scripts/test-inngest-host-shape-gate.sh`, `plugins/soleur/test/terraform-target-parity.test.ts` (floor 15 to 16, both exclusion sets)
-- 1.4 `cloud-init-inngest-provision-unit.test.sh` G4: keep `guards == 2`, reword the message
-- 1.5 `inngest-boot-emitter.test.sh`: add `doppler_flip_token` to `RENDER_EXPR`; redactor fixture row (rewrite both hard-coded paths once each, stub `doppler` and `jq`)
-- 1.6 `cloud-init-user-data-size.test.ts`: one consistent 53-char `SECRET_LENGTHS` for both tokens; floor-exit rows for the budget script
-- 1.7 `preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` 90 to 91 with the required comment
-- 1.8 Tripwire test: no non-comment `DOPPLER_TOKEN`/`printenv`/`env`/`declare -p`/`export -p` in `inngest-cutover-flip.sh`
-- 1.9 `inngest.test.sh` comment row (Condition-less drop-in is deliberate); rehearsal-test assertion (read token only); phone-home dp-mask synthetic-token row
-- 1.10 Confirm every new or changed assertion is RED for the right reason
+- [x] 1.1 Create `apps/web-platform/infra/inngest-flip-token.test.sh`
+  - [x] 1.1.1 Section R: systemd-parser resolver over the unit population (census floor, drop-in merge across `<unit>.service.d`/`<prefix>-.service.d`/`service.d`, web-host drop-ins excluded)
+  - [x] 1.1.2 Section X: `systemd-analyze --root=<dir> cat-config systemd/system/inngest-cutover-flip.service` cross-check plus a `systemd-run --user -p EnvironmentFile=... /usr/bin/env` last-wins leg (`systemctl --root cat` is refused by systemd; required in CI, loud counted skip where absent)
+  - [x] 1.1.3 Section W: execute the guard item under `sh` with a recording phone-home stub; census anchored on `\$\{doppler_(flip_)?token\}`
+  - [x] 1.1.4 Section O: execute the flip-write item in a temp dir, assert mode 600, `|| exit 1`, ordering before the arming item
+  - [x] 1.1.5 Section S: path-occurrence census for `/etc/default/inngest-flip`
+  - [x] 1.1.6 Mutation batteries for Guards 1 and 2 (rows and harness rows from the plan)
+- [x] 1.2 Rewrite finding 1b in `apps/web-platform/infra/inngest-host.test.sh` (boot token `read`, flip token `read/write`, `name = "inngest-flip"`, block-scoped awk exiting at `^}`)
+- [x] 1.3 Gate tests: `tests/scripts/test-inngest-host-replace-gate.sh`, `tests/scripts/test-inngest-host-shape-gate.sh`, `plugins/soleur/test/terraform-target-parity.test.ts` (floor 15 to 16, both exclusion sets)
+- [x] 1.4 `cloud-init-inngest-provision-unit.test.sh` G4: keep `guards == 2`, reword the message
+- [x] 1.5 `inngest-boot-emitter.test.sh`: add `doppler_flip_token` to `RENDER_EXPR`; redactor fixture row (rewrite both hard-coded paths once each, stub `doppler` and `jq`)
+- [x] 1.6 `cloud-init-user-data-size.test.ts`: one consistent 53-char `SECRET_LENGTHS` for both tokens; floor-exit rows for the budget script
+- [x] 1.7 `preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` 90 to 91 with the required comment
+- [x] 1.8 Tripwire test: no non-comment `DOPPLER_TOKEN`/`printenv`/`env`/`declare -p`/`export -p` in `inngest-cutover-flip.sh`
+- [x] 1.9 `inngest.test.sh` comment row (Condition-less drop-in is deliberate); rehearsal-test assertion (read token only); phone-home dp-mask synthetic-token row
+- [x] 1.10 Confirm every new or changed assertion is RED for the right reason
 
 ## Phase 2: Terraform
 

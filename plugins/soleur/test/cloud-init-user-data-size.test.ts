@@ -29,6 +29,7 @@ import { test, expect, describe } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
@@ -331,7 +332,13 @@ const SECRET_LENGTHS: Record<string, number> = {
   image_name: IMAGE_NAME.length,
   tunnel_token: 220,
   webhook_deploy_secret: 64,
-  doppler_token: 48,
+  // ONE consistent length for BOTH Doppler tokens of the dedicated Inngest host: `dp.st.prd.` (10) +
+  // the 48-char body that inngest-userdata-budget.sh stubs = 58. This table is a LENGTH model
+  // ("x".repeat(n) gzips to almost nothing), so it cannot resolve entropy; the byte-and-entropy gate
+  // is `inngest-userdata-budget.sh` (both stubs hash-derived there). A test below pins this value
+  // to the script's stub total so the two cannot drift.
+  doppler_token: 58,
+  doppler_flip_token: 58,
   resend_api_key: 40,
   ci_ssh_public_key_openssh: 120,
   git_transport_pubkey: 120,
@@ -2181,4 +2188,78 @@ locals {
       /identifier/,
     );
   });
+});
+
+// -----------------------------------------------------------------------------------------------
+// Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4). The dedicated Inngest host now bakes
+// TWO Doppler tokens into user_data (the read-only boot token and the read/write flip token). The
+// budget script's stubs were length upper bounds but NOT entropy upper bounds (a repeated STUB run
+// gzips to almost nothing, a real token does not), so both stubs became hash-derived and the script
+// gained a hard cap-headroom floor. These arms keep that change from being vacuous.
+// -----------------------------------------------------------------------------------------------
+describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (flip-token split)", () => {
+  const BUDGET_SH = join(INFRA, "inngest-userdata-budget.sh");
+  const budgetSrc = readFileSync(BUDGET_SH, "utf8");
+  const hasTerraform = spawnSync("terraform", ["version"], { encoding: "utf8" }).status === 0;
+
+  // The stub declaration, as the script writes it: join(".", ["dp", "st", "prd", substr(..., 0, N)])
+  const stubTotal = (varName: string): number => {
+    const m = new RegExp(
+      varName + String.raw`\s*=\s*join\("\.",\s*\["dp",\s*"st",\s*"prd",\s*substr\([^\n]*,\s*0,\s*(\d+)\)\]\)`,
+    ).exec(budgetSrc);
+    if (!m) throw new Error(`budget script has no hash-derived stub for ${varName}`);
+    return "dp.st.prd.".length + Number(m[1]);
+  };
+
+  test("both tokens are stubbed with hash-derived (high-entropy) values, not repeated filler", () => {
+    expect(stubTotal("doppler_token")).toBeGreaterThan(0);
+    expect(stubTotal("doppler_flip_token")).toBeGreaterThan(0);
+    // The old low-entropy stub must be gone from the token lines.
+    const tokenLines = budgetSrc.split("\n").filter((l) => /^\s*doppler(_flip)?_token\s*=/.test(l));
+    expect(tokenLines.length).toBe(2);
+    for (const l of tokenLines) expect(l).not.toContain("STUBSTUB");
+  });
+
+  test("SECRET_LENGTHS for both tokens equals the script's stub total (the model cannot drift)", () => {
+    expect(SECRET_LENGTHS.doppler_token).toBe(stubTotal("doppler_token"));
+    expect(SECRET_LENGTHS.doppler_flip_token).toBe(stubTotal("doppler_flip_token"));
+    expect(SECRET_LENGTHS.doppler_flip_token).toBe(SECRET_LENGTHS.doppler_token);
+  });
+
+  test("INNGEST_GZIP_BUDGET is unchanged: the flip-token split fits without raising the constant", () => {
+    expect(INNGEST_GZIP_BUDGET).toBe(32_300);
+  });
+
+  test.skipIf(!hasTerraform)(
+    "the floor is live: a floor above the real headroom exits EXACTLY 1 with the floor message",
+    () => {
+      const r = spawnSync("bash", [BUDGET_SH], {
+        encoding: "utf8",
+        env: { ...process.env, INNGEST_BUDGET_FLOOR_BYTES: "40000" },
+      });
+      // rc 2 (unmeasurable) is also non-zero and would let this row pass for the wrong reason.
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("HEADROOM FLOOR");
+      expect(r.stderr).not.toContain("OVER CAP");
+    },
+    120_000,
+  );
+
+  test.skipIf(!hasTerraform)(
+    "must-PASS: at the default floor the real render exits 0 with at least 512 B of cap headroom",
+    () => {
+      const r = spawnSync("bash", [BUDGET_SH, "--json"], {
+        encoding: "utf8",
+        env: { ...process.env, INNGEST_BUDGET_FLOOR_BYTES: "" },
+      });
+      expect(r.status).toBe(0);
+      const j = JSON.parse(r.stdout.trim().split("\n").pop() as string);
+      expect(j.headroom).toBeGreaterThanOrEqual(512);
+      // Bounded, not pinned (it drifts): a payload that collapsed to near nothing is the fail-open
+      // direction a ceiling-only gate cannot see.
+      expect(j.headroom).toBeLessThan(4_000);
+      expect(j.stored_bytes).toBeLessThanOrEqual(HETZNER_CAP - 512);
+    },
+    120_000,
+  );
 });
