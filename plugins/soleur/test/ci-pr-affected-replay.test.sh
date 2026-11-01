@@ -3402,6 +3402,38 @@ row_ow_empty_branch() {   # an empty head_branch must not collapse under the tab
   ow_probe
   [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT"
 }
+row_ow_trunc_baseline() {   # the unit-cap cut marks the sweep truncated, but the baseline reads are attempted whenever wall remains: baseline_grown is a MEASURED 0, never the unmeasured 0 the old TRUNC gate printed
+  ow_variant ow_u_cap
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'baseline_grown=0' <<<"$OWOUT" \
+    && [[ "$(ow_req_count "$OW_BL_PATH?ref=main")" -eq 1 && "$(ow_req_count "$OW_BL_PATH?ref=$OW_MSHA")" -eq 1 ]]
+}
+row_ow_baseline_deadline() {   # a baseline read the wall deadline cuts is a budget event: baseline_grown=unread and NOT YET, never a fabricated 0 and never CANNOT ESTABLISH
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
+  OW_ENV=(SOAK_BUDGET_S=14 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'baseline_grown=unread' <<<"$OWOUT" && grep -q 'read budget ended during the baseline reads' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_dispatch_trunc() {   # a read run whose job did not run emits no row but counts as READ: units_read stays the produced count while truncated=0 certifies the complete dispatch (the old units_read < readable_n predicate read this complete sweep as truncated)
+  ow_variant ow_u_cancelshort
+  [[ "$RC" -eq 0 ]] && grep -q 'units_read=8 truncated=0 baseline_grown=0' <<<"$OWOUT"
+}
+row_ow_interior_hole() {   # the first-dispatched oldest-first worker is cut on its FIRST read while every later-dispatched worker completes: an interior hole that could hide a defect — NOT YET naming the run, never a silent prefix claim
+  ow_case; ow_u_no_mg; ow_write
+  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_PARALLEL=2 SOAK_BUDGET_S=14 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'interior hole' <<<"$OWOUT" && grep -q 'run 5001' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_retry_deadline() {   # a retried read recomputes its deadline cap: the retry is killed by the FRESH cap (a budget cut, rc 46), never a stale-cap overrun that fails the read into CANNOT ESTABLISH
+  local jp1="repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp1")"; : > "$GHFIX/SLOW_$(keyof "$jp1")"
+  OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=20 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && [[ "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] && grep -q 'truncated=1' <<<"$OWOUT"
+}
+row_ow_e_cut() {   # the newest merge_group extras the deadline leaves unread: the pause check then lacks data, so it is an unmet criterion — never a silent stale-queue certification
+  ow_case; ow_write
+  local id; for id in 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=18 SLOW_S=4); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'the newest merge_group queue state was not read this sweep' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
 row_ow_budget() {   # the ONE wall deadline END=T0+SOAK_BUDGET_S bounds the read phase: the newest merge_group runs are dispatched FIRST, the first oldest-first read is unconditional, and every later launch needs LAUNCH_RSVD seconds of headroom — a cut is NOT YET (truncated=1), never CANNOT ESTABLISH
   ow_case; ow_write
   local id; for id in 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
@@ -3702,6 +3734,12 @@ chk "window probe: a failed read stops further launches" row_ow_stop_after_fail
 chk "window probe: exactly SOAK_PARALLEL reads are in flight at once (4 and 1), counted by the stub" row_ow_parallelism
 chk "window probe: a non-numeric run id from the API is CANNOT ESTABLISH at list time" row_ow_run_id
 chk "window probe: an empty head_branch does not shift the tab-separated run fields" row_ow_empty_branch
+chk "window probe: a unit-cap-truncated sweep still reads the baseline — baseline_grown is a measured 0, never the unmeasured 0 of the old TRUNC gate" row_ow_trunc_baseline
+chk "window probe: a baseline read cut by the wall deadline is a budget cut (baseline_grown=unread, NOT YET), never CANNOT ESTABLISH" row_ow_baseline_deadline
+chk "window probe: a read run whose job did not run emits no row yet counts as read — truncated stays 0 on a complete dispatch" row_ow_dispatch_trunc
+chk "window probe: a worker cut on its first read while later-dispatched workers completed is an interior hole, named in NOT YET" row_ow_interior_hole
+chk "window probe: a retried read recomputes the deadline cap — the retry cannot run the stale 60 s cap past END" row_ow_retry_deadline
+chk "window probe: the newest merge_group extras left unread by the deadline are an unmet criterion (the pause check lacks data)" row_ow_e_cut
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
   in_range || return 0   # ROWS-SPLIT: every top-level call site reaches the gate; out-of-range sites dispatch nothing
@@ -5130,7 +5168,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1282   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1288   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
