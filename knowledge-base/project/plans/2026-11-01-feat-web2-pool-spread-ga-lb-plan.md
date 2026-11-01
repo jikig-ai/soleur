@@ -681,6 +681,92 @@ UI surface); `Pencil available: N/A (no UI surface)`.
   `ga-monitor-fix` arm runs (`e2e`, `pyramid-justified: live vendor state — no unit
   substitute exists for monitor probe semantics`).
 
+## Downtime & Cutover
+
+**Offline-inducing operations in this change's blast radius, and the zero-downtime
+default for each:**
+
+1. **Monitor `type`/`port` update (in-PR, `ga-monitor-fix` arm).** A monitor update
+   changes probe semantics only — no traffic reroute. Zero-downtime by construction;
+   residual risk is a wrongly-green monitor, mitigated by the arm's post-apply
+   pool-health assertion (healthy:true or the run fails).
+2. **Drained origin add (in-PR, `ga-pool-update mode=drain`).** weight-0 origins receive
+   no traffic — CF routes only to weight>0 origins (ADR-068 §(b) drain semantics).
+   Zero-downtime by construction; the continuity probe rides the arm.
+3. **web-1 `placement_group_id` attach (window PR — reboot class, the 4.55 trigger).**
+   An in-place power-off reboot of the sole live origin is NOT zero-downtime — the
+   zero-downtime path is the #6027 blue-green sequence ALREADY recorded in the epic:
+   weight 0→1 to web-2 FIRST (post-gate), drain web-1, then reboot the **drained** host
+   and restore. Residual downtime is bounded to the drain window with automatic
+   rollback (epic step 4). The alternative accepted-and-rejected shape — attaching while
+   live — is exactly the "reboot the sole origin" incident the deferral exists to
+   prevent (server.tf:607-614, #5887).
+4. **Per-stage verification/rollback:** gate chain green → weight flip verified serving →
+   drain verified by rotation set → attach verified `0 to destroy` in the graded plan →
+   reboot → restore weight + health re-verified; rollback = weight 1→0 to web-2 +
+   restore web-1 (the LB's drain primitive is the same knob).
+
+## Enhancement Summary
+
+`soleur:deepen-plan` ran sequentially on this harness (no Task/MCP spawn capability —
+`Reviewed-Coverage: sequential-fallback`; per-section research agents, Context7,
+skills/learnings/review fan-outs were inlined, not independently spawned).
+
+### Gate verdicts
+
+- **4.6 User-Brand Impact:** PASS — `single-user incident` + `requires_cpo_signoff`.
+- **4.7 Observability:** PASS — 5-field block; `discoverability_test.command` =
+  `bash scripts/followthroughs/ga-lb-pool-soak-6027.sh` (allowlisted verb; repo-relative
+  script committed in this PR); `credentials_required` non-placeholder → SKIP-DECLARED.
+- **4.8 PAT-shaped variables:** PASS — no new token-shaped inputs.
+- **4.9 UI wireframe:** N/A — no UI-surface file.
+- **4.10 Encryption Posture:** PASS — LUKS store + Flexible exception w/ #10479, 60-day expiry.
+- **4.11 Guard Contract:** PASS — 3 guards, Property/Assembly/≥3-row matrices incl.
+  own-dispatch + second-member + must-PASS rows.
+- **4.12 Scope Check:** PASS — all 6 asks mapped, no BLOCKED.
+- **4.13 Task Design:** assessed — no new autonomous surface (existing workflow +
+  sweeper-enrolled probe under the followthrough convention).
+- **4.5 Network-Outage Deep-Dive:** FIRED (server.tf provisioner blocks) — L3 firewall
+  (:80/:443 permits vs :80 listener), L3 DNS/routing (edge serving), L7 TLS (TCP-fail on
+  :443), L7 app (/health contract) — all verified with live artifacts in `## Hypotheses`.
+- **4.55 Downtime & Cutover:** FIRED (reboot-class attach) — section added above;
+  blue-green drain-first sequence is the recorded default.
+
+### Round-1 realism passes (sequential)
+
+- **Verify-the-negative:** "CF never routes to weight-0" — ADR-068 §(b) drain semantics
+  + lb-weight-gate standby branch confirm; "GA trio -target-excluded" —
+  terraform-target-parity.test.ts:1338-1341 confirm; "notification transitivity inert in
+  arm" — arm -targets the pool already (confirms).
+- **Precedent-diff (4.4):** new arms mirror the `ga-overlay` skeleton verbatim —
+  checkout → infra-credentials → confirm literal → R2 creds → init → -targeted plan →
+  saved-plan grading → apply → continuity; the deliberate DIFF is update-typed graders +
+  the `mode` input + the `serve`-mode gate-chain step. No precedent for a mode-switched
+  arm — novel, flagged for review scrutiny.
+- **Post-edit self-audit:** no dropped/renamed symbols; `steering_policy` comment edit is
+  additive (`origin_steering` is a new block, not a rename).
+
+### Key improvements applied this pass
+
+- `## Downtime & Cutover` section (4.55 halt).
+- Notification policy re-routed from routine apply to the `ga-pool-update` arm's
+  `-target` set — a `filters.pool_id` resource reference would transitively pull the
+  pool into an unattended routine apply (#8705 class, sharp-edges:228).
+- `BASELINE_DECLARED_PROBES` bump recorded (sharp-edges:215).
+- Condition-C weight pairing specified as block-scoped awk-range, not line-grep
+  (sharp-edges:222 line-scanner class).
+
+### New considerations discovered
+
+- `load_balancing_health_alert` is provisionable on the Basic LB tier (verified live in
+  `available_alerts`) — closes the silent-origin-down gap as in-PR Terraform, not a
+  deferred alert wish.
+- `prd_workspaces_luks_marker` has no read-only token today (#9358) — the `serve` arm's
+  gate-chain step records it as an orchestrator prerequisite, not an in-PR blocker.
+- **Sequential fallback disclosure:** Eng/CTO/domain-leader/review agents could not be
+  spawned; the lenses were applied inline in this session. Findings marked
+  `pending - assumed` in decision-challenges.md await the parent's real CTO spawn.
+
 ## Hypotheses
 
 Network-outage checklist fired (the window apply path touches `hcloud_server.web`, whose
