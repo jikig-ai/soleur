@@ -1228,7 +1228,7 @@ instead:
 All three ops route to the operator via the `sentry_issue_alert.stale_bot_pr`
 rule (`apps/web-platform/infra/sentry/issue-alerts.tf`) — no dashboard gaze
 required. Discoverability without SSH:
-`gh api "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")) or (.head.ref|startswith("bot-fix/")))] | length'`.
+`gh api --paginate "/repos/jikig-ai/soleur/pulls?state=open&per_page=100" --jq '[.[] | select(.head.ref|startswith("ci/") or (.head.ref|startswith("self-healing/auto-")) or (.head.ref|startswith("bot-fix/")))] | length'`.
 
 ## References
 

@@ -36,6 +36,8 @@ STUBS="$FIX/bin"; mkdir -p "$STUBS"
 cat > "$STUBS/gh" <<'GH'
 #!/usr/bin/env bash
 FIX="${FT8076_FIX:?}"
+# $1 is `api`; skip a leading --paginate before the endpoint token.
+if [[ "$1" == "api" && "$2" == "--paginate" ]]; then set -- "$1" "$3" "${@:4}"; fi
 case "$1 $2" in
   "api search/issues"*)
     q="$2"

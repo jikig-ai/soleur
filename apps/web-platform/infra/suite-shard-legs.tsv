@@ -94,6 +94,7 @@ apps/web-platform/infra/inngest-cutover-latch.test.sh	2
 apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	3
 apps/web-platform/infra/inngest-doublefire-probe.test.sh	3
 apps/web-platform/infra/inngest-enumerate-reminders.test.sh	4
+apps/web-platform/infra/inngest-gate-witness-classify.test.sh	4
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	2
 apps/web-platform/infra/inngest-host.test.sh	1
 apps/web-platform/infra/inngest-inventory.test.sh	3
