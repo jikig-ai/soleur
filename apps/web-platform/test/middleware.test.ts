@@ -90,6 +90,17 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal")).toBe(false);
     });
 
+    test("/api/internal/home-census is public (Bearer-gated by route, not Supabase)", () => {
+      // Secret-gated, cookieless operator caller (same class as trigger-cron). Without
+      // PUBLIC_PATHS membership Supabase middleware 307s it to /login before the route's own
+      // gate runs. Exact entry only: a sibling or sub-path is not session-bypassed by prefix,
+      // and the bare /api/internal parent stays private.
+      expect(PUBLIC_PATHS).toContain("/api/internal/home-census");
+      expect(isPublicPath("/api/internal/home-census")).toBe(true);
+      expect(isPublicPath("/api/internal/home-census-x")).toBe(false);
+      expect(isPublicPath("/api/internal")).toBe(false);
+    });
+
     test("/api/internal/egress-audit-ingest is public (Bearer-gated by route, not Supabase)", () => {
       // Vector on the same host posts the egress rollup with no session cookie; without
       // PUBLIC_PATHS membership Supabase middleware would 307 it to /login before the
