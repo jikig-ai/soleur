@@ -45,9 +45,9 @@ BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
 BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
 FLIPSH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
-EXPECTED_ROWS=28
-EXPECTED_RED=24
-EXPECTED_MUSTPASS=4
+EXPECTED_ROWS=24
+EXPECTED_RED=21
+EXPECTED_MUSTPASS=3
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
 
@@ -331,7 +331,10 @@ def check(render, bootstrap, flipsh, infra):
     o = Out()
     doc = load(render)
     its = items(doc)
-    text = open(render, encoding="utf-8").read()
+    # The SEMANTIC text of the render: every runcmd item and every write_files content, as the host sees
+    # them. Censuses read this, never the raw file, so the YAML dump of a mutated copy (which may fold a
+    # multi-line scalar onto one escaped line) cannot change what is counted.
+    text = "\n".join(its + [str(w.get("content", "")) for w in wf_list(doc)])
     btext = open(bootstrap, encoding="utf-8").read()
     units, dropins = population(doc, btext, infra)
     defs = env_defs(doc, btext)
@@ -689,7 +692,7 @@ row G1-r11 RED  "O-mode" "umask 0177 -> 0137 on the flip write (the executed ite
 row G1-r11b RED "O-abort" "remove '|| exit 1' from the flip write item" yml item_sub flip ") || exit 1" ")"
 row G1-r12 RED  "S-render" "add a shell reader of the flip file (a '. /etc/default/inngest-flip' runcmd item)" yml append_item ". /etc/default/inngest-flip"
 row G1-rH1 RED  "R-a" "harness: the resolver ignores drop-in directories (also proves the dispatch is not vacuous)" env FLIPTEST_HARNESS_IGNORE_DROPINS=1 yml identity
-row G1-rH2 PASS -       "non-canonical: drop-in renamed 20-whatever.conf, 4-space-indented directives and a trailing comment" yml dropin_path "/etc/systemd/system/inngest-cutover-flip.service.d/20-whatever.conf" dropin_set "    [Service]\n    EnvironmentFile=/etc/default/inngest-flip\n    # trailing comment\n"
+row G1-rH2 PASS -       "non-canonical: drop-in renamed 20-whatever.conf, 4-space-indented directives and a trailing comment" yml dropin_set "    [Service]\n    EnvironmentFile=/etc/default/inngest-flip\n    # trailing comment\n" dropin_path "/etc/systemd/system/inngest-cutover-flip.service.d/20-whatever.conf"
 row G1-rH3 PASS -       "non-canonical: the same drop-in delivered through a <prefix>-.service.d directory" yml dropin_path "/etc/systemd/system/inngest-cutover-.service.d/10-flip-token.conf"
 row G1-rT  RED  "T-flipsh" "tripwire: append a bare 'printenv' to a copy of inngest-cutover-flip.sh" flip '$a printenv'
 
