@@ -59,8 +59,11 @@ die() {
 [[ "${HEAD_REF:-}" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)-([0-9a-f]{40})$ ]] \
   || die "head_ref does not match refs/heads/gh-readonly-queue/main/pr-<N>-<40 hex>"
 pr="${BASH_REMATCH[1]}"
-[[ "${BASH_REMATCH[2]}" == "$HEAD_SHA" ]] \
-  || die "head_ref embeds sha ${BASH_REMATCH[2]} but head_sha is ${HEAD_SHA} — a tampered pairing is refused"
+# The ref-embedded oid is minted when the group is (re)created and legitimately diverges from
+# HEAD_SHA whenever the candidate is rebuilt (a shallower member landing, a re-enqueue, or a
+# deeper member joining). Refusing the pairing ejects healthy entries — the authoritative
+# binding is each entry's headCommit.oid == HEAD_SHA below; the embedded oid is provenance.
+embedded="${BASH_REMATCH[2]}"
 
 # gh_read <label> <gh api args...> : the reply lands in $REPLY_JSON. Not a command substitution,
 # because die inside one would print into the captured variable and be swallowed. A gh failure is
@@ -180,4 +183,4 @@ while IFS=' ' read -r mpr mhead; do
   member_lines+=("pr${mpr}@${mhead:0:10}")
 done < <(jq -r '.[] | "\(.number) \(.head)"' <<<"$members")
 
-echo "merge-queue-cla-verify=OK members=${member_count} anchor=${anchor_kind} ${member_lines[*]}"
+echo "merge-queue-cla-verify=OK members=${member_count} anchor=${anchor_kind} embedded=${embedded} ${member_lines[*]}"
