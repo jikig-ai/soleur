@@ -97,10 +97,10 @@ TMP="$(mktemp "${TMPDIR:-/tmp}/ft11211.XXXXXX")" || cannot "mktemp failed"
 
 # Criterion 1, two plain Sentry reads (never one `op:[a,b]`), URL-encoded: ENQ = `feature:spawn-agent op:inngest-enqueue`,
 # STALE = `feature:spawn-agent op:inngest-replay-stale`, both since PR 11208 merged.
-SENTRY_BASE="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query="
-SENTRY_TAIL="&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"
-ENQ_URL="${SENTRY_BASE}feature%3Aspawn-agent%20op%3Ainngest-enqueue${SENTRY_TAIL}"  # [mut:enq-url]
-STALE_URL="${SENTRY_BASE}feature%3Aspawn-agent%20op%3Ainngest-replay-stale${SENTRY_TAIL}"  # [mut:stale-url]
+# Bound literals ride the /events/ logical line itself (lint rule 6): the bound on a
+# separate statement is the lint's declared blind spot, so BASE/TAIL assembly is inlined.
+ENQ_URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=feature%3Aspawn-agent%20op%3Ainngest-enqueue&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"  # [mut:enq-url]
+STALE_URL="https://de.sentry.io/api/0/organizations/jikigai-eu/events/?query=feature%3Aspawn-agent%20op%3Ainngest-replay-stale&start=2026-10-26T00%3A00%3A00&end=${END_ISO}&dataset=errors&per_page=100&field=id&field=timestamp"  # [mut:stale-url]
 
 # Criterion 2: ONE literal string. No interpolation, no `;`, `now() - interval` in SQL, never a shell-built timestamp.
 readonly QUERY="SELECT count(*) FILTER (WHERE s.clicked_at >= now() - interval '23 hours') AS recoverable, count(*) FILTER (WHERE s.clicked_at < now() - interval '23 hours') AS aged_out FROM public.action_sends s JOIN public.messages m ON m.id = s.message_id WHERE s.acknowledged_at IS NULL AND s.failure_reason IS NULL AND s.undone_at IS NULL AND s.cancellation_requested_at IS NULL AND m.status = 'draft' AND s.clicked_at < now() - interval '1 hour'"  # [mut:query]
