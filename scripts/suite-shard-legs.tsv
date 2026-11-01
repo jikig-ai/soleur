@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1222
-# generated-at=2026-10-31T19:54:21Z
+# generated-at=2026-10-31T22:11:33Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -249,6 +249,7 @@ plugins/soleur/test/main-health-monitor-workflow.test.sh	5
 plugins/soleur/test/merge-effect-class-parity.test.sh	1
 plugins/soleur/test/merge-queue-cla-verify.test.sh	3
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	7
+plugins/soleur/test/merge-queue-jump.test.sh	7
 plugins/soleur/test/merge-queue-stall-check.test.sh	5
 plugins/soleur/test/monitor-lock.test.sh	4
 plugins/soleur/test/monitor-pr-checks.test.sh	6
