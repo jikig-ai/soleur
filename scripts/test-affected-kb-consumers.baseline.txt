@@ -120,6 +120,7 @@ plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base/product/design
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 scripts/battery-tag-authorship	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
+scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
@@ -163,6 +164,7 @@ scripts/followthroughs/registry-clientip-alert-7530	knowledge-base
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 scripts/git-data-rehearsal-evidence-8211	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+scripts/git-data-replication-signal-11704	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md

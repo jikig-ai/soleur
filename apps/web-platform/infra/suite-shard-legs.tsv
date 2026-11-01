@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=4
-# generated-from-run=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
-# generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=4000
-# generated-at=2026-10-30T07:32:44Z
+# generated-at=2026-11-01T08:11:47Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -65,6 +65,7 @@ apps/web-platform/infra/git-data-render-strip-parity.test.sh	4
 apps/web-platform/infra/git-data-root-key.test.sh	2
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	1
 apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	4
+apps/web-platform/infra/git-data-stale-clone-push.test.sh	4
 apps/web-platform/infra/git-data-store-device-census.test.sh	1
 apps/web-platform/infra/git-data-template-strip.test.sh	2
 apps/web-platform/infra/git-data-transport-wrapper.test.sh	3

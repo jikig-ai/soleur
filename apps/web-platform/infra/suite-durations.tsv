@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
 # default-weight-ms=4000
-# generated-at=2026-10-30T07:32:44Z
+# generated-at=2026-10-31T23:54:22Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -62,6 +62,7 @@ apps/web-platform/infra/git-data-render-strip-parity.test.sh	2000	measured
 apps/web-platform/infra/git-data-root-key.test.sh	63000	measured
 apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	228500	measured
 apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	4000	measured
+apps/web-platform/infra/git-data-stale-clone-push.test.sh	4000	floor
 apps/web-platform/infra/git-data-store-device-census.test.sh	1000	measured
 apps/web-platform/infra/git-data-template-strip.test.sh	1000	measured
 apps/web-platform/infra/git-data-transport-wrapper.test.sh	1000	measured
