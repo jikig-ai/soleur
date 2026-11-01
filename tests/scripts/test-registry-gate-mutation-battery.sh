@@ -663,8 +663,8 @@ mutate "E46 GHCR signature read: the unclassified arm reverts to exit 4" engine 
   'die 4 "reading the signature ${sig_tag} at GHCR for ${repo} failed'
 
 mutate "E47 signature copy: the unclassified arm reverts to exit 4" engine \
-  'die 6 "copying the signature ${sig_tag} failed' \
-  'die 4 "copying the signature ${sig_tag} failed'
+  'die 6 "copying the signature ${sig_tag} for ${repo} failed' \
+  'die 4 "copying the signature ${sig_tag} for ${repo} failed'
 
 mutate "E48 sink signature read-back: the unclassified arm reverts to exit 4" engine \
   'die 6 "reading the signature ${sig_tag} back from the sink failed' \
