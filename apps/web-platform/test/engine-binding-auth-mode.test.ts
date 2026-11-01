@@ -83,6 +83,30 @@ describe("makeConversationAuthModeResolver", () => {
     expect(t.eqs).toHaveLength(0);
   });
 
+  describe("expectedWorkspaceId (#11594)", () => {
+    const run = (over: Record<string, unknown> = {}) =>
+      boundRun({ conversation_id: CONV, created_by: ME, auth_mode: "api-key", workspace_id: "ws-a", ...over });
+
+    it("equal workspaces resolve the bound mode", async () => {
+      use({ agent_engine_runs: [run()] });
+      await expect(makeConversationAuthModeResolver(ME, CONV)({ expectedWorkspaceId: "ws-a" })).resolves.toBe("api-key");
+    });
+
+    it("a different workspace throws workspace_mismatch, with no mode and no database text in the error", async () => {
+      use({ agent_engine_runs: [run()] });
+      const err = await makeConversationAuthModeResolver(ME, CONV)({ expectedWorkspaceId: "ws-b" }).catch((e) => e);
+      expect(err).toBeInstanceOf(ConversationAuthModeError);
+      expect((err as ConversationAuthModeError).reason).toBe("workspace_mismatch");
+      expect(JSON.stringify(err) + (err as Error).message).not.toContain("api-key");
+    });
+
+    it("no argument (the owner path) never compares workspaces", async () => {
+      use({ agent_engine_runs: [run({ workspace_id: "ws-anything" })] });
+      await expect(makeConversationAuthModeResolver(ME, CONV)()).resolves.toBe("api-key");
+      await expect(makeConversationAuthModeResolver(ME, CONV)({})).resolves.toBe("api-key");
+    });
+  });
+
   it("a tenant-client failure throws read_failed", async () => {
     h.tenant = { get client(): never { throw new Error("jwt mint failed"); } };
     await expect(makeConversationAuthModeResolver(ME, CONV)()).rejects.toMatchObject({ reason: "read_failed" });

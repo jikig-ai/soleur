@@ -2269,6 +2269,20 @@ rb_gate_mut 'merge_group:refs/heads/gh-readonly-queue/*)' 'merge_group:*)'
 landed_dir; [ -f "$D/rb.sh" ] || printf 'unchanged' > "$D/landed"
 mutant m_q8 T4 "Q8: with the REF gate removed from resolve_base the Q8 history is judged against HEAD^1 and goes RED" "new @allow scripts/future.sh CF_ACCESS_CLIENT_ID needs an ADR-241 line" head1
 
+# ── Q9 (#11678, grouped merging): under max_entries_to_merge=3 each queue position still builds
+# its own cumulative candidate, so a deeper member's HEAD^1 is the SHALLOWER member's candidate —
+# the deeper member is judged on its own delta only. The shallower member's own violation (an
+# un-ADR'd @allow committed as the entry ahead) does not bleed into the deeper member's run: it is
+# the shallower member's own run's job to catch it. Green here proves the judgment scopes to the
+# last member's delta, not the whole group.
+prep c_q9
+printf 'landed by the entry ahead in the queue\n' > "$D/fx/README.md"
+printf '@allow\tscripts/future.sh\tWEBHOOK_DEPLOY_SECRET\t-\t#9294:PR-2\n' >> "$BL"   # member-1's violation: no ADR line
+commit_all                                                                       # member-1's delta = HEAD^1
+q_allow; commit_all                                                              # member-2's own delta: ADR-ruled, clean
+knobs RF_EVENT=merge_group RF_EVENTREF=refs/heads/gh-readonly-queue/main/pr-3-0123abcd
+landed_dir; green c_q9 "Q9: a deeper group member is judged on its own delta (HEAD^1 = shallower member's candidate) — the shallower member's @allow violation does not red this run" "" head1
+
 # ── R14 (F-D): expiry formats and the boundary ────────────────────────────────────────────────────
 prep m39
 bl_set .github/workflows/canary-status.yml CF_ACCESS_CLIENT_ID 4 20261130
@@ -3155,7 +3169,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=602
+FLOOR=603
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
