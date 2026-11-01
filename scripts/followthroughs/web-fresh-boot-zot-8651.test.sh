@@ -202,7 +202,7 @@ run 3 TRANSIENT "a named-attribution patternless trail on a success job reads TR
 rc=0; GH_FX="$WORK/fx" PATH="$BIN:$PATH" bash -x "$PROBE" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 78 ] && ok "refuses to run under xtrace (exit 78)" || no "xtrace refusal: rc=$rc"
 
-MIN_CASES=18
+MIN_CASES=29
 if [ $((pass + fail)) -lt "$MIN_CASES" ]; then
   printf 'assertion floor: %d < %d — a case stopped running\n' $((pass + fail)) "$MIN_CASES"; exit 1
 fi
