@@ -234,6 +234,17 @@ describe("installCrashHandlers — benign client-abort classification", () => {
     expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
+  it("ECONNRESET code with an abort-containing message still exits", async () => {
+    const { uncaught } = await listeners();
+    // Pins the `includes("abort")` widening mutation: the substring is not
+    // the contract — `=== "aborted"` is.
+    const err = new Error("aborted by user");
+    (err as Error & { code?: string }).code = "ECONNRESET";
+    uncaught(err);
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(mirrorWarnWithDebounce).not.toHaveBeenCalled();
+  });
+
   it("non-Error rejection reason still exits", async () => {
     const { rejection } = await listeners();
     rejection("rejected");

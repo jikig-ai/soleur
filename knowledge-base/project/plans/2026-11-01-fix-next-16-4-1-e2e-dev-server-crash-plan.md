@@ -233,7 +233,7 @@ it is **this pipeline's own draft** on `feat-one-shot-11772-next-dev-server-cras
    file).
 5. **Amend ADR-062** (Deliverable C): record the benign-inbound-abort
    classification in `## Decision` and the rejected alternatives in
-   `## Alternatives Considered`.
+   `the `Rejected alternatives:` record in its Deliverable C carve-out.
 6. **Verify end-to-end** (implementation-phase repro below), then ship; the e2e
    CI job is the acceptance oracle.
 
@@ -298,7 +298,7 @@ it is **this pipeline's own draft** on `feat-one-shot-11772-next-dev-server-cras
 - `apps/web-platform/test/egress-audit-ingest.test.ts`: `/^16\.3\./` →
   `/^16\.4\./`; run that vitest file.
 - Amend `knowledge-base/engineering/architecture/decisions/ADR-062-*.md`
-  (`## Decision` Deliverable C note + `## Alternatives Considered` row).
+  (`## Decision` Deliverable C carve-out carrying the `Rejected alternatives:` record).
 - File the upstream-watch follow-through issue (see Alternative Approaches /
   deferral row) if not already filed at plan time.
 - Success criteria: vitest green; ADR diff committed; deferred item has a
@@ -461,7 +461,7 @@ review-time invocation per the expanded-trigger clause.
 
 ### ADR
 
-- **Amend ADR-062** (`knowledge-base/engineering/architecture/decisions/ADR-062-container-memory-cap-and-restart-attribution.md`): Deliverable C currently reads capture → `close(2000)` → `process.exit(1)` for `uncaughtException`/`unhandledRejection` unconditionally. This plan adds the first non-fatal class — the Node `connResetException` signature (`Error: aborted` + `code: ECONNRESET`, inbound client abort per vercel/next.js #49587) — which logs `warnSilentFallback` and keeps the process. `## Decision` gets the carve-out; `## Alternatives Considered` gets the upstream-patch, middleware-restructure, and suppress-and-retry rejections. Deliverable of this plan, Phase 5.
+- **Amend ADR-062** (`knowledge-base/engineering/architecture/decisions/ADR-062-container-memory-cap-and-restart-attribution.md`): Deliverable C currently reads capture → `close(2000)` → `process.exit(1)` for `uncaughtException`/`unhandledRejection` unconditionally. This plan adds the first non-fatal class — the Node `connResetException` signature (`Error: aborted` + `code: ECONNRESET`, inbound client abort per vercel/next.js #49587) — which logs `warnSilentFallback` and keeps the process. `## Decision` gets the carve-out carrying a `Rejected alternatives:` paragraph recording the upstream-patch, middleware-restructure, and respawn rejections (ADR-062 has no `## Alternatives Considered` section — the record lands inside Deliverable C). Deliverable of this plan, Phase 5.
 
 ### C4 views
 
@@ -523,7 +523,7 @@ the sole predicate and `crash-handlers.test.ts` the sole assertion home.
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | `isBenignClientAbort` body replaced with `return true` | RED (genuine-error arm still asserts exit; also the no-`code`/`socket hang up` arms) |
-| 2 | `message === "aborted"` check widened to `includes("abort")` | RED (near-miss arm: `AbortError: This operation was aborted`/`"aborted by user"` must exit — pinned by a same-code-different-message arm) |
+| 2 | `message === "aborted"` check widened to `includes("abort")` | RED (near-miss arm: `Error("aborted by user")` + `ECONNRESET` must exit — pinned by a same-code-different-message arm carrying the "abort" substring) |
 | 3 | `code === "ECONNRESET"` conjunct deleted (message-only match) | RED (arm: `new Error("aborted")` with no `code` must exit) |
 | 4 | classify branch moved after `reportFatalAndExit` (unreachable) or deleted | RED (benign arm asserts `exit` NOT called and warn emitted — a deleted branch drives exit and fails both) |
 | 5 | test arm mutated to expect exit on the benign signature | RED-vs-design: must stay must-PASS-only-if-correct — the benign arm asserts `exitSpy` NOT called, so flipping the expectation reds the suite against the implementation |
@@ -565,7 +565,7 @@ the sole predicate and `crash-handlers.test.ts` the sole assertion home.
 - [ ] AC4: `scripts/assert-dependabot-drain.py` contains `next` in WATCHED_PACKAGES, the `("web-platform", "next", 16, "16.4.1")` REQUIRED row, `("next", 16): "16.4.1"` in FLOOR_ANCHORS, `MIN_ROWS = 36`, `MIN_RESOLVED = 36`; `.test.sh` contains the `next:16:16.4.1` spec arm and `MIN_ASSERTIONS=34`; both suites green.
 - [ ] AC5: `egress-audit-ingest.test.ts` pins `/^16\.4\./` and the file is green under vitest on the bumped lockfile.
 - [ ] AC6: Live repro (Phase 1 shape: socket-abort against the dev server on the bumped tree) no longer kills the process — server logs/mirrors the abort and stays up; on the un-patched bumped tree the same repro crashed (verified during Phase 1).
-- [ ] AC7: ADR-062 `## Decision` Deliverable C records the benign-abort carve-out and `## Alternatives Considered` records the rejected options; committed in the same PR.
+- [ ] AC7: ADR-062 `## Decision` Deliverable C records the benign-abort carve-out and the carve-out's `Rejected alternatives:` paragraph records the rejected options; committed in the same PR.
 - [ ] AC8: The upstream-watch tracking issue exists (number recorded in tasks.md) — re-evaluation: adopt an upstream body-streams fix when a stable release carries it.
 - [ ] AC9: CI e2e job green on this branch (the #8450 classifier marks a package.json/lockfile diff applicable → the job runs) with no mid-run `e2e-webserver: exited` and no `⨯ uncaughtException` death.
 

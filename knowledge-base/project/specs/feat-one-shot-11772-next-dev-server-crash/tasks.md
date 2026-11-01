@@ -32,7 +32,7 @@ Issue: #11772 (closes). Deferral tracker: #11783 (upstream-fix adoption watch).
 ## Phase 5: Egress pin + ADR + close-out
 
 - [x] 5.1 `apps/web-platform/test/egress-audit-ingest.test.ts`: pin `/^16\.3\./` → `/^16\.4\./`; run `npx vitest run test/egress-audit-ingest.test.ts`.
-- [x] 5.2 Amend `knowledge-base/engineering/architecture/decisions/ADR-062-container-memory-cap-and-restart-attribution.md`: `## Decision` Deliverable C records the benign-inbound-abort carve-out (warn mirror, no exit); `## Alternatives Considered` records the rejected upstream-patch, middleware-restructure, and respawn options with one-line reasons.
+- [x] 5.2 Amend `knowledge-base/engineering/architecture/decisions/ADR-062-container-memory-cap-and-restart-attribution.md`: `## Decision` Deliverable C records the benign-inbound-abort carve-out (warn mirror, no exit); `Rejected alternatives:` paragraph records the rejected upstream-patch, middleware-restructure, and respawn options with one-line reasons.
 - [x] 5.3 Record deferral tracker issue number (#11783) in the PR-body reminder; `Closes #11772` per `wg-use-closes-n-in-pr-body-not-title-to`.
 - [x] 5.4 Non-goal (documented in-place, plan "Out of scope" row): the `team_names` mock-supabase route for the pre-existing `/api/team-names` 500 noise stays deferred to a separate PR — CTO-ruled 2026-11-01; do NOT treat the 500s as a crash precursor or a regression signal on this branch.
 
