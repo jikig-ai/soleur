@@ -883,15 +883,17 @@ _mq_guard2() {
     MQ_REASON="README params != tf: $(diff <(echo "$tf_p") <(echo "$rd_p") | tr '\n' ' ')"; return 1
   fi
   # SAFETY VALUES (not just parity: three sources can agree on a dangerous value).
-  #  - max_entries_to_merge == 1: merge-queue-cla-verify.sh takes the PR number from head_ref, which is exact only
-  #    for a one-PR group.
+  #  - max_entries_to_merge in {1,3}: merge-queue-cla-verify.sh enumerates group members
+  #    (head_ref names only the deepest), so multi-PR groups are supported — but the set is
+  #    deliberately {1,3} so an unsanctioned raise still fails while a value-only 1<->3
+  #    rollback/re-raise needs no guard edit (#11678 adoption window).
   #  - merge_method == SQUASH: matches `gh pr merge --squash` and the repo's linear-history contract.
   #  - check_response_timeout_minutes > the stall probe's threshold: else the probe cannot report before the queue
   #    ejects the entry silently.
   local me mm to thr
   me=$(_mq_val "$tf_p" max_entries_to_merge); mm=$(_mq_val "$tf_p" merge_method); to=$(_mq_val "$tf_p" check_response_timeout_minutes)
-  if [[ "$me" != "1" ]]; then
-    MQ_REASON="max_entries_to_merge=$me, must be 1 (the CLA verify takes the PR number from head_ref; a larger group batches PRs)"; return 1
+  if [[ "$me" != "1" && "$me" != "3" ]]; then
+    MQ_REASON="max_entries_to_merge=$me, must be in {1,3} (sanctioned set; the CLA verify enumerates group members — an unsanctioned raise is a deliberate act needing this guard's own edit)"; return 1
   fi
   if [[ "$mm" != "SQUASH" ]]; then MQ_REASON="merge_method=$mm, must be SQUASH"; return 1; fi
   thr=$(_mq_stall_threshold "$wf")
@@ -1037,9 +1039,9 @@ t_mq_mutations() {
     'FN:_mq_mut_commented_old_block'
   # 9-11 — SAFETY VALUES, changed consistently in all three sources so PARITY still holds and only
   # the safety assertion can catch it.
-  _mq_mutation "T-mq-1.m9 max_entries_to_merge 1 -> 2 in tf+DR+README (parity holds) -> RED on the safety value" \
+  _mq_mutation "T-mq-1.m9 max_entries_to_merge -> 7 in tf+DR+README (parity holds, unsanctioned value) -> RED on the safety value" \
     'max_entries_to_merge' tf,dr,readme \
-    's/(max_entries_to_merge[[:space:]]*=[[:space:]]*)1/\12/; s/("max_entries_to_merge":[[:space:]]*)1/\12/; s/^(\|[[:space:]]*`max_entries_to_merge`[[:space:]]*\|[[:space:]]*`)1/\12/'
+    's/(max_entries_to_merge[[:space:]]*=[[:space:]]*)[0-9]+/\17/; s/("max_entries_to_merge":[[:space:]]*)[0-9]+/\17/; s/^(\|[[:space:]]*`max_entries_to_merge`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\17/'
   _mq_mutation "T-mq-1.m10 merge_method SQUASH -> MERGE in tf+DR+README (parity holds) -> RED on the safety value" \
     'merge_method' tf,dr,readme \
     's/(merge_method[[:space:]]*=[[:space:]]*")SQUASH/\1MERGE/; s/("merge_method":[[:space:]]*")SQUASH/\1MERGE/; s/^(\|[[:space:]]*`merge_method`[[:space:]]*\|[[:space:]]*`)SQUASH/\1MERGE/'
@@ -1169,7 +1171,7 @@ resource "x" "y" {
       grouping_strategy                 = "ALLGREEN"
       min_entries_to_merge_wait_minutes = 0
       min_entries_to_merge              = 1
-      max_entries_to_merge              = 1
+      max_entries_to_merge              = 3
     }
   }
 }
@@ -1181,7 +1183,7 @@ cat > "$skeleton" << 'EOF'
     {"type": "merge_queue", "parameters": {
       "min_entries_to_merge_wait_minutes": 0, "max_entries_to_build": 2,
       "check_response_timeout_minutes": 60, "merge_method": "SQUASH",
-      "grouping_strategy": "ALLGREEN", "max_entries_to_merge": 1, "min_entries_to_merge": 1}},
+      "grouping_strategy": "ALLGREEN", "max_entries_to_merge": 3, "min_entries_to_merge": 1}},
     {"type": "required_status_checks", "parameters": {"required_status_checks": []}}
   ]
 }
@@ -1195,7 +1197,7 @@ FIX
 | `merge_method` | `SQUASH` |
 | `min_entries_to_merge_wait_minutes` | `0` |
 | `grouping_strategy` | `ALLGREEN` |
-| `max_entries_to_merge` | `1` |
+| `max_entries_to_merge` | `3` |
 | `min_entries_to_merge` | `1` |
 FIX
   printf '%s' '[{"context":"test","integration_id":15368}]' > "$d/canon"

@@ -564,6 +564,9 @@ const errorSchema = z.strictObject({
       "delegation_hourly_cap_exceeded",
       "delegation_daily_cap_exceeded",
       "delegation_cross_tenant",
+      // #11599 — authentication mode unresolved (deterministic) / unavailable (transient); not credential-blocked.
+      "auth_mode_unresolved",
+      "auth_mode_unavailable",
     ])
     .optional(),
   gateId: z.string().optional(),

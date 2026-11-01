@@ -15,6 +15,8 @@
 import { CREDENTIAL_SCHEMES, type CredentialScheme } from "@/lib/auth-scheme";
 
 import { matchAgentAuthFailure, type AgentAuthMatchKind } from "./agent-auth-match";
+// Import-free leaf (no Sentry, no observability): the one list of auth-mode causes, so a new cause fails `tsc` here too.
+import { AUTH_MODE_UNRESOLVED_CAUSES, type AuthModeUnresolvedCause } from "./auth-mode-error";
 
 /** A matcher kind plus the lease-time kind (a stored credential the CLI is known to drop, refused before any CLI spawn). */
 export type AuthFailureKind = AgentAuthMatchKind | "oauth_unusable";
@@ -25,6 +27,16 @@ const NEUTRAL = "check your credentials in Settings and try again";
 const INVALID_API_KEY_TENANT_COPY =
   "Anthropic rejected your API key. Check that it is active and copied in full, then re-enter it in Settings.";
 
+/**
+ * One recovery sentence appended to the operator-only (`oauth_token`) sign-in cells (#11599): the workspace owner who also has an
+ * API key saved can choose it for new conversations. The quoted label matches `authModeLabel` in the Settings component
+ * (pinned by test/agent-auth-user-message.test.ts). The mode is a workspace setting only the workspace owner can change, so the
+ * lead-in addresses the owner (CLO ruling L3, 2026-10-31; operator accounts are workspace owners of their own workspace) and
+ * names the workspace scope. Operator-only: never appended to a tenant (`api_key`) or neutral cell.
+ */
+const RECOVER_VIA_API_KEY_MODE =
+  'If you own this workspace and have an Anthropic API key saved, you can instead choose "My API key" in Settings (it applies to new conversations in this workspace, and a conversation keeps the mode it started with), then start a new conversation.';
+
 type CopyCell = { readonly api_key: string; readonly oauth_token: string; readonly neutral: string };
 
 const COPY: Record<AuthFailureKind, CopyCell> = {
@@ -32,20 +44,20 @@ const COPY: Record<AuthFailureKind, CopyCell> = {
     api_key:
       "We couldn't sign in to Claude with your Anthropic API key, so nothing ran. Re-enter your API key in Settings and try again.",
     oauth_token:
-      "We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again.",
+      `We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again. ${RECOVER_VIA_API_KEY_MODE}`,
     neutral: `We couldn't sign in to Claude, so nothing ran. Please ${NEUTRAL}.`,
   },
   invalid_api_key: {
     api_key: INVALID_API_KEY_TENANT_COPY,
     oauth_token:
-      "Anthropic rejected your saved credential. Generate a new token with claude setup-token and save it in Settings.",
+      `Anthropic rejected your saved credential. Generate a new token with claude setup-token and save it in Settings. ${RECOVER_VIA_API_KEY_MODE}`,
     neutral: `Anthropic rejected your credential. Please ${NEUTRAL}.`,
   },
   oauth_token_revoked: {
     // Unreachable for a tenant (an API key has no revocation reply): the cell reuses the invalid-key copy.
     api_key: INVALID_API_KEY_TENANT_COPY,
     oauth_token:
-      "Your subscription token has been revoked or has expired. Generate a new one with claude setup-token and save it in Settings.",
+      `Your subscription token has been revoked or has expired. Generate a new one with claude setup-token and save it in Settings. ${RECOVER_VIA_API_KEY_MODE}`,
     neutral: `Your credential has been revoked or has expired. Please ${NEUTRAL}.`,
   },
   session_expired: {
@@ -59,7 +71,7 @@ const COPY: Record<AuthFailureKind, CopyCell> = {
     api_key:
       "Claude couldn't authenticate your request. Re-enter your Anthropic API key in Settings and try again.",
     oauth_token:
-      "Claude couldn't authenticate your request. Save a fresh token from claude setup-token in Settings and try again.",
+      `Claude couldn't authenticate your request. Save a fresh token from claude setup-token in Settings and try again. ${RECOVER_VIA_API_KEY_MODE}`,
     neutral: `Claude couldn't authenticate your request. Please ${NEUTRAL}.`,
   },
   oauth_unusable: {
@@ -67,7 +79,7 @@ const COPY: Record<AuthFailureKind, CopyCell> = {
     api_key:
       "We couldn't sign in to Claude with your Anthropic API key, so nothing ran. Re-enter your API key in Settings and try again.",
     oauth_token:
-      "We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again. Nothing was billed to your API key.",
+      `We couldn't sign in to Claude with your saved subscription token, so nothing ran. Generate a new token with claude setup-token, save it in Settings, then try again. Nothing was billed to your API key. ${RECOVER_VIA_API_KEY_MODE}`,
     neutral: `We couldn't sign in to Claude, so nothing ran. Please ${NEUTRAL}.`,
   },
 };
@@ -93,28 +105,73 @@ export interface AuthFailureFrame {
   credentialScheme?: CredentialScheme;
 }
 
+/** The `error` frame for an authentication mode the lease could not resolve (#11599). Carries no credential scheme. */
+export interface AuthModeUnresolvedFrame {
+  type: "error";
+  message: string;
+  errorCode: AuthModeUnresolvedCause;
+}
+
+/** The two lease causes that mean "the authentication mode could not be resolved"; the cause names the recovery. */
+type AuthModeCause = AuthModeUnresolvedCause;
+
+/** Server-authored card copy. "authentication mode" is the Settings control's own term. `unresolved` is deterministic (a new
+ *  conversation is the exit), `unavailable` is transient (send again). "not processed" is true even when an earlier turn ran. */
+const AUTH_MODE_COPY: Record<AuthModeCause, string> = {
+  auth_mode_unresolved:
+    "We couldn't confirm which authentication mode this conversation uses, so your message was not processed. Start a new conversation to continue.",
+  auth_mode_unavailable:
+    "We couldn't check which authentication mode this conversation uses just now, so your message was not processed. Please send it again in a moment.",
+};
+
 /**
- * The lease refused a stored subscription credential of a class the CLI drops (`ByokLeaseError` cause `oauth_unusable`).
- * Duck-typed on purpose: this module must not import byok-lease (its static graph is heavy and partial test mocks of it would
- * undefine the class), and `name` + `cause` are the class's own contract.
+ * The cause of a duck-typed `ByokLeaseError`, or undefined for anything else. Duck-typed on purpose: this module must not
+ * import byok-lease (its static graph is heavy and partial test mocks of it would undefine the class), and `name` + `cause` are
+ * the class's own contract. Never `instanceof`.
  */
+function leaseErrorCause(err: unknown): unknown {
+  return err instanceof Error && err.name === "ByokLeaseError" ? (err as { cause?: unknown }).cause : undefined;
+}
+
+/** The lease refused a stored subscription credential of a class the CLI drops (`ByokLeaseError` cause `oauth_unusable`). */
 export function isOauthUnusableLeaseError(err: unknown): boolean {
-  return err instanceof Error && err.name === "ByokLeaseError" && (err as { cause?: unknown }).cause === "oauth_unusable";
+  return leaseErrorCause(err) === "oauth_unusable";
+}
+
+function isAuthModeCause(cause: unknown): cause is AuthModeCause {
+  return (AUTH_MODE_UNRESOLVED_CAUSES as readonly unknown[]).includes(cause);
 }
 
 /**
- * Log a failed session. A lease refusal of an unusable stored credential was already reported once by the lease (a closed
- * class, no value), so it logs at INFO: an ERROR line carrying `err` would reach Sentry a second time through the logger.
- * Everything else keeps the ERROR line it always had. `ctx` is spread into the log object at the top level, where the pino
- * formatter pseudonymises `userId` (ADR-029); callers pass it through rather than naming the field on a log line.
+ * The lease already reported this refusal itself (its own closed-class event), so a call-site error-tracker mirror or an
+ * ERROR log carrying `err` would double the count for one failed turn. Exactly three causes, deliberately NOT `fetch_failed`:
+ * a genuine database read failure is not reported by the lease and must still be mirrored.
+ */
+export function isLeaseRefusalReported(err: unknown): boolean {
+  const cause = leaseErrorCause(err);
+  return cause === "oauth_unusable" || isAuthModeCause(cause);
+}
+
+/**
+ * Log a failed session. A lease refusal the lease already reported (a closed class, no value) must not log an ERROR line
+ * carrying `err` (it would reach Sentry a second time through the logger). The unusable-token refusal logs at INFO; an
+ * unresolved authentication mode logs at WARN, because INFO never leaves the host (the log shipper forwards WARN and above) and
+ * this line is the only one tying the refusal to a conversation. Everything else keeps the ERROR line it always had.
+ * `ctx` is spread into the log object at the top level, where the pino formatter pseudonymises `userId` (ADR-029); callers pass
+ * it through rather than naming the field on a log line.
  */
 export function logSessionFailure(
-  log: { info: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void },
+  log: {
+    info: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
+    error: (obj: object, msg: string) => void;
+  },
   err: unknown,
   ctx: Record<string, unknown>,
   messages: { refused: string; failed: string },
 ): void {
   if (isOauthUnusableLeaseError(err)) log.info(ctx, messages.refused);
+  else if (isLeaseRefusalReported(err)) log.warn(ctx, `${messages.failed} (lease refused: authentication mode unresolved)`);
   else log.error({ err, ...ctx }, messages.failed);
 }
 
@@ -123,9 +180,16 @@ export function oauthUnusableFrame(): AuthFailureFrame {
   return buildAuthFailureFrame("oauth_unusable", "oauth_token");
 }
 
-/** The recovery frame for a lease refusal of an unusable stored credential, or null for any other error. */
-export function authFailureFrameFromLeaseError(err: unknown): AuthFailureFrame | null {
-  return isOauthUnusableLeaseError(err) ? oauthUnusableFrame() : null;
+/** The typed frame for an unresolved authentication mode. The ONE producer, used at every emit path. */
+export function authModeUnresolvedFrame(cause: AuthModeCause): AuthModeUnresolvedFrame {
+  return { type: "error", message: AUTH_MODE_COPY[cause], errorCode: cause };
+}
+
+/** The recovery frame for a lease refusal the lease reported itself, or null for any other error. */
+export function authFailureFrameFromLeaseError(err: unknown): AuthFailureFrame | AuthModeUnresolvedFrame | null {
+  const cause = leaseErrorCause(err);
+  if (cause === "oauth_unusable") return oauthUnusableFrame();
+  return isAuthModeCause(cause) ? authModeUnresolvedFrame(cause) : null;
 }
 
 /** The ONE producer of this frame, used at every site that can emit it (both runners, the lease catch, the ws-handler catch). */
