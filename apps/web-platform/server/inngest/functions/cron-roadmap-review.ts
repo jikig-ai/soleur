@@ -123,7 +123,7 @@ const ROADMAP_REVIEW_PROMPT = `You are the CPO performing a weekly roadmap consi
 ## Part 1: Issue-to-Milestone Alignment
 
 1. Read knowledge-base/product/roadmap.md
-2. Fetch all GitHub milestones (open and closed): gh api 'repos/jikig-ai/soleur/milestones?state=all&per_page=100' --jq '.[] | {number, title, state, open_issues, closed_issues}'
+2. Fetch all GitHub milestones (open and closed): gh api --paginate 'repos/jikig-ai/soleur/milestones?state=all&per_page=100' --jq '.[] | {number, title, state, open_issues, closed_issues}'
 3. Fetch all open issues with milestones: gh api 'repos/jikig-ai/soleur/issues?state=open&per_page=100' --paginate --jq '.[] | {number, title, milestone: .milestone.title}'
 4. For each open issue, check:
    - Is it assigned to the correct milestone per the roadmap?
@@ -159,7 +159,7 @@ ISSUE CLOSURE SAFETY: BEFORE closing or reassigning ANY issue:
   (c) NEVER close issues with the labels \`in-progress\`, \`wip\`, \`auto-merge\`, or any priority label \`priority/p0-critical\`, \`priority/p1-high\`. Skip and flag for human review instead.
 
 ROADMAP.MD CONFLICT GUARD: BEFORE editing knowledge-base/product/roadmap.md, run:
-  gh pr list --state open --search 'roadmap.md in:files' --json number,title,headRefName
+  gh pr list --state open --search 'roadmap.md in:files' -L 100 --json number,title,headRefName
 If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post a comment on that PR with your suggested updates and skip the roadmap.md edit in your own PR.
 
 FOG AND SCOPE RULE: The \`## Not Yet Specified\` and \`## Out of Scope\` sections of roadmap.md are bullet lists maintained only by the product-roadmap workshop. Never file issues for, reorder, or delete their entries. An open issue with an open blockedBy edge is waiting, not stale: never close it or flag it for inactivity.
