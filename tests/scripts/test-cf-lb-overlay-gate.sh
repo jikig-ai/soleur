@@ -274,6 +274,14 @@ run cf_lb_gate_ga_pool_update "$TMP/pu33.json" drain; ok "pool-update: string \"
 # alert_type pins on update too, not just create.
 mk pu34 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0}]}}},{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["update"],"after":{"enabled":true,"alert_type":"ssl_recommendation"}}}]}'
 run cf_lb_gate_ga_pool_update "$TMP/pu34.json" drain; ok "pool-update: policy UPDATE alert_type drift refused" $? 1
+# boolean enabled:false must refuse too — `.enabled // true` maps false→true in jq
+# (the // operator treats boolean false as empty); the pins use the null-only default.
+mk pu35 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0,"enabled":false}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu35.json" drain; ok "pool-update: boolean enabled:false origin refused (drain)" $? 1
+mk pu36 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1,"enabled":false},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu36.json" serve; ok "pool-update: boolean enabled:false web-1 refused (serve w1_ok)" $? 1
+mk g15 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["create"],"after":{"name":"web-1","origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0,"enabled":false}]}}}]}'
+run cf_lb_gate_ga "$TMP/g15.json"; ok "ga-overlay: boolean enabled:false origin refused (create)" $? 1
 # Output-capturing assertions: the pass-message suffix is mode-accurate (the old
 # ${mode/drain/...} printed a literal "serve" in serve mode).
 mk pc1 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${GA_LB_UPD},${POLICY_CREATE}]}"
@@ -294,6 +302,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 75 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 98 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi

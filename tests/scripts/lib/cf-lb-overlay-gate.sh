@@ -186,7 +186,7 @@ cf_lb_gate_ga() {
   w2ip_n=$(jq -r --arg ip2 "$web2_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["create"]) | .change.after.origins[]? | select(.address == $ip2)] | length' "$plan_json")
   w1ip_bad=$(jq -r --arg ip1 "$web1_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["create"]) | .change.after.origins[]? | select(.address == $ip1 and ((.weight | type) != "number" or .weight != 1))] | length' "$plan_json")
   w2ip_bad=$(jq -r --arg ip2 "$web2_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["create"]) | .change.after.origins[]? | select(.address == $ip2 and ((.weight // -1) != 0))] | length' "$plan_json")
-  ga_disabled=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["create"]) | .change.after.origins[]? | select((.enabled // true | tostring) == "false")] | length' "$plan_json")
+  ga_disabled=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["create"]) | .change.after.origins[]? | select((.enabled | if . == null then true else . end | tostring) == "false")] | length' "$plan_json")
   if [[ "$w1ip_n" == "0" ]]; then
     echo "::error::ga-overlay gate: no origin resolves to web-1's plan IP (${web1_ip}) — the create shape must land the serving member; a pool with no web-1 origin serves nothing. NOTHING applied."
     return 1
@@ -360,7 +360,7 @@ cf_lb_gate_ga_pool_update() {
     bad_origins=$(jq -r --arg ip1 "$web1_ip" --arg ip2 "$web2_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | (.address // "")] | map(select(. != $ip1 and . != $ip2)) | length' "$plan_json")
     # enabled via tostring — a STRING "false" must not sail past a boolean-typed
     # comparison (uniform with the pool/LB/policy coercion below).
-    disabled_n=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select((.enabled // true | tostring) == "false")] | length' "$plan_json")
+    disabled_n=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select((.enabled | if . == null then true else . end | tostring) == "false")] | length' "$plan_json")
     dup_names=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | (.name // "")] | group_by(.) | map(select(length > 1)) | length' "$plan_json")
     # A shadow member at a pinned address hides just as well as a shadow name —
     # {web-1@ip1, extra@ip1} splits weight off the declared member invisibly.
@@ -368,7 +368,7 @@ cf_lb_gate_ga_pool_update() {
     # Name↔IP binding: a canonical name parked on the OTHER host's IP is the
     # name/IP swap — the declared shape is {web-1@web1_ip, web-2@web2_ip}.
     misbound=$(jq -r --arg ip1 "$web1_ip" --arg ip2 "$web2_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select((.name == "web-1" and .address != $ip1) or (.name == "web-2" and .address != $ip2))] | length' "$plan_json")
-    w1_ok=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select(.name == "web-1" and ((.enabled // true | tostring) != "false") and ((.weight // 0) > 0))] | length' "$plan_json")
+    w1_ok=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select(.name == "web-1" and ((.enabled | if . == null then true else . end | tostring) != "false") and ((.weight // 0) > 0))] | length' "$plan_json")
     w1ip_n=$(jq -r --arg ip1 "$web1_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select(.address == $ip1)] | length' "$plan_json")
     w2ip_n=$(jq -r --arg ip2 "$web2_ip" '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["update"]) | .change.after.origins[]? | select(.address == $ip2)] | length' "$plan_json")
     if [[ "$bad_origins" != "0" ]]; then
