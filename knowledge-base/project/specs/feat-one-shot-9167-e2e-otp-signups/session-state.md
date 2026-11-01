@@ -44,3 +44,10 @@
 - Seats (background run_subagent, report-only): 6ac7c5b8 git-history, 37a15cad pattern-recognition, 24f6a62f architecture, 96089a8e security-sentinel, 398c37b9 code-quality, 127ea95d test-design. PANEL_SHA=300b566d56.
 - Pre-spawn: merge-tree rc=0 clean; collision precheck = own PR #11738 only; pushed 300b566d56.
 - Pre-existing failures tracked: #11754 (roster-entry-gate fixture drift + shallow-clone operator-agent-runnable).
+
+## Review/QA/Compound/Ship status
+- Review: 6-seat panel (all P3, no P1/P2) → all fixed in fix commits b1d520589c + a66025494c; 3-seat fix-round verified all closures + caught 2 more P3s (newline-in-tr-range, ]-bound) → fixed + verified.
+- QA: skipped per skill (no Browser:/API verify: steps; no dashboard/layout paths).
+- Compound: learning committed f7fd3c4faf.
+- Ship: probe-residue clean; pushed f7fd3c4faf; PR #11738 body = Closes #9167 + Ref #11299 + Changelog + test plan; label semver:patch; marked ready (mergeState BEHIND, mergeable). CI checks polling — many pending on congested queue.
+- Remaining: wait checks green → gh pr merge (or merge queue) → release workflow poll → post-merge verify → worktree cleanup → tally → <promise>DONE</promise>.
