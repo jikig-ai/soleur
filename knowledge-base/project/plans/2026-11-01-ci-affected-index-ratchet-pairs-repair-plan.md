@@ -323,15 +323,31 @@ runbook/ADR content changes.
 
 ## Enhancement Summary
 
-Gate dispositions verified at plan time: User-Brand section present (threshold `none`,
-scope-out bullet included); Observability block carries a locally-runnable
-`discoverability_test` (`python3 -I scripts/ci-pr-affected-replay.py ratchet`, first token
-`python3` on the Check-10 allowlist); no UI surface (Phase 2.5 mechanical override: no
-`.tsx`/`page.tsx`/`layout.tsx` in Files lists — NONE); no regulated-data surface and no
-(a)-(d) GDPR trigger; no new infrastructure (Phase 2.8 skip); no new persistent store or
-connection (Phase 2.11 skip); no architectural decision — extending declared edges of an
-existing mechanism per its own runbook (Phase 2.10 skip); deliverable introduces no new
-guard/gate — it edits the declaration data of the existing ratchet (Phase 2.12 not
-triggered, mirroring the #11781 disposition); no new autonomous-task surface (Phase 2.9.3
-skip); `## Scope Check` present with all three asks mapped and two justified `inferred`
-rows (npm-pair coverage, kb-consumers prune).
+Deepen-plan pass (2026-11-01, in-process sequential fallback — no Task/Workflow/Agent tool
+on this harness; the skill/learnings/research/review fan-outs ran as inline probes and a
+self-review, and `Reviewed-Coverage: sequential-fallback` is disclosed — no independent
+review agent ran):
+
+- **Halt gates verified:** 4.6 User-Brand (threshold `none`, scope-out bullet present,
+  planned files match zero sensitive-regex paths); 4.7 Observability (all 5 fields
+  populated, `discoverability_test` verb `python3` on the Check-10 allowlist, no `ssh`,
+  `expected_output` a matchable literal, command not suite-shaped); 4.8 PAT-shape sweep
+  (zero hits); 4.9 UI-wireframe (no UI surface — skipped); 4.10 Encryption Posture (no new
+  store/connection — skipped); 4.11 Guard Contract (deliverable edits an existing guard's
+  declaration data, introduces no new guard — skipped per the #11781 disposition); 4.12
+  Scope Check (exactly one unfenced section; all three asks mapped; two `inferred` rows
+  each carry a justification); 4.13 Task-Design (no new autonomous-task surface —
+  skipped); 4.5 Network-Outage (no trigger pattern); 4.55 Downtime (no offline-inducing
+  operation).
+- **4.4 Precedent-Diff Gate:** the repair shape is verbatim sibling-precedent — PR #11781
+  (same-day, same recipe) and accept.tsv:160-162; quoted inline in Research Insights.
+- **Plan-time sharp-edges pass produced one addition:** the `AFFECTED_*_PATHS` consumer
+  citation in Step 1 (test-all.sh `:3958-3967` label→array resolution), closing the
+  "list nothing consults" trap named in the catalogue.
+- **Markdownlint clean** on plan + tasks.md (MD010 tabs, MD032/MD038/MD004 all fixed).
+- **New considerations discovered at deepen:** the live ratchet reports **8** uncovered
+  pairs (live=1518), not the issue's 5 — #11688's npm-OIDC machinery added 3 after the
+  measurement; the npm runbook pair resolves to a rubric-(c) declared edge (test :1107
+  `[[ -f ]]` verdict dependency), not an accept row; declaring that edge vacates
+  `test-affected-kb-consumers.baseline.txt:100`, a second oracle file the fix must prune
+  in the same PR.
