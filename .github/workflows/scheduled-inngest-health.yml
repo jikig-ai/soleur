@@ -42,7 +42,15 @@ name: "Scheduled: Inngest Health Watchdog"
 on:
   schedule:
     - cron: '*/15 * * * *'   # every 15 min — inngest-down is a brand-survival outage
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: >-
+          Permit a missing or corrupt gate-witness streak artifact for THIS run only
+          (reseed after a retention lapse, a deleted artifact or a poisoned one).
+          Scheduled runs can never set it. Dispatch with --ref main.
+        type: boolean
+        default: false
 
 concurrency:
   group: scheduled-inngest-health
@@ -1244,6 +1252,7 @@ jobs:
           STREAK_ARTIFACT_NAME: inngest-gate-witness-streak
           STREAK_BRANCH: main
           STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
         run: bash scripts/monitor-streak-state.sh fetch
 
       - name: Execute-gate satisfiability witness (#8080)
@@ -1312,13 +1321,34 @@ jobs:
           # row's cutover_flag — suppression keys on it, so it must not come back
           # empty just because the gate refused before E11.
           WFLAG="$(grep -oE '^(flag|hb_flag)=[A-Za-z0-9_-]+' "$W_EMIT" | grep -vE '__UNREADABLE__' | tail -1 | cut -d= -f2 || true)"
+          W_PROBE_MSGS="$(printf '%s\n' "$(cat "$W_PROBE_ROWS")" \
+            | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | .raw? | fromjson?
+                  | select(inngest_probe_row)
+                  | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
+                  | .message' 2>/dev/null || true)"
           if [[ -z "$WFLAG" ]]; then
-            WFLAG="$(printf '%s\n' "$(cat "$W_PROBE_ROWS")" \
-              | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | .raw? | fromjson?
-                    | select(inngest_probe_row)
-                    | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
-                    | .message' 2>/dev/null \
+            WFLAG="$(printf '%s\n' "$W_PROBE_MSGS" \
               | grep -oE 'cutover_flag=[^ ]+' | tail -1 | cut -d= -f2 || true)"
+          fi
+          # hb fallback: an armed cutover between `op=arm` and the next hourly
+          # probe row is invisible to the probe fallback (the row still reads
+          # `aborted`) — read the newest same-boot inngest-cutover-flip
+          # `.message.flag` so the streak does not accrue refusals mid-arm.
+          if [[ -z "$WFLAG" ]]; then
+            WBID="$(printf '%s\n' "$W_PROBE_MSGS" \
+              | grep -oE 'boot_id=[0-9a-f-]+' | tail -1 | cut -d= -f2 || true)"
+            if [[ "$WBID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+              WFLAG="$(jq -Rrn --arg b "$WBID" '
+                  [ inputs
+                    | fromjson? | .raw? | fromjson?
+                    | select((._BOOT_ID | type) == "string" and ._BOOT_ID == $b)
+                    | select((.message | type) == "object")
+                    | { dt: (.dt // ""), flag: ((.message.flag // "") | tostring) }
+                  ] | (map(.dt) | max) as $newest
+                    | (map(select(.dt == $newest) | .flag) | unique) as $f
+                    | if ($f | length) == 1 then $f[0] else "" end' \
+                  < "$W_HB_ROWS" 2>/dev/null || true)"
+            fi
           fi
           WFLAG="$(strip_log_injection "${WFLAG:-unknown}")"
           [[ -n "$WFLAG" ]] || WFLAG="unknown"
@@ -1329,7 +1359,8 @@ jobs:
           # Streak bookkeeping (monitor-streak contract): `refusal` writes
           # RESTORED+1 so `seal` can prove the increment landed; `satisfy` resets
           # via VERDICT=pass; `suppressed` leaves the restored file so the streak
-          # is HELD (VERDICT=broken keeps the restored value).
+          # is HELD — `VERDICT=broken` is the only carrier verdict that round-trips
+          # the restored value unchanged (here it means "held", not "failed").
           PRIOR_N="${PRIOR:-0}"; [[ "$PRIOR_N" =~ ^[0-9]+$ ]] || PRIOR_N=0
           case "$ACTION" in
             refusal)    NEW_STREAK=$((PRIOR_N + 1)); SEAL_VERDICT="transient" ;;
@@ -1348,6 +1379,7 @@ jobs:
             echo "action=$ACTION"
             echo "streak=$NEW_STREAK"
             echo "seal_verdict=$SEAL_VERDICT"
+            echo "gate_rc=$W_GATE_RC"
           } >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -1366,6 +1398,7 @@ jobs:
         env:
           MATCHED: ${{ steps.witness-fetch.outputs.matched }}
           STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
         run: bash scripts/monitor-streak-state.sh assert
 
       - name: Upload gate-witness streak state (#8080)
@@ -1380,7 +1413,7 @@ jobs:
           overwrite: true
 
       - name: File or comment gate-witness issue (#8080, streak >= 8 or state failure)
-        if: always() && (steps.witness-fetch.outcome == 'failure' || steps.witness-seal.outcome == 'failure' || steps.witness-assert.outcome == 'failure' || steps.witness-upload.outcome == 'failure' || (steps.witness.outputs.action == 'refusal' && steps.witness.outputs.streak >= 8))
+        if: always() && github.ref == 'refs/heads/main' && (steps.witness-fetch.outcome == 'failure' || steps.witness-seal.outcome == 'failure' || steps.witness-assert.outcome == 'failure' || steps.witness-upload.outcome == 'failure' || (steps.witness.outputs.action == 'refusal' && steps.witness.outputs.streak >= 8))
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -1411,7 +1444,7 @@ jobs:
           fi
 
       - name: Auto-close gate-witness issue (gate satisfies again, #8080)
-        if: always() && steps.witness.outputs.action == 'satisfy'
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outputs.action == 'satisfy'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -1428,7 +1461,7 @@ jobs:
       # window. This arm keys on the step's OUTCOME (mirrors
       # "Dedicated-host consumer crashed").
       - name: Gate-witness consumer crashed (#8080)
-        if: always() && steps.witness.outcome != 'success' && steps.witness.outcome != 'skipped'
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outcome != 'success' && steps.witness.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
