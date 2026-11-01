@@ -40,5 +40,12 @@
 ## Work Phase
 
 - Status: complete (commit 1aaea00ccc — 3 files, 17+/1-)
+
+## Review Phase
+
+- Status: complete — 5-agent panel + shellcheck seat; tier none; 1 P2 (plan table
+  commit counts wrong — corrected + CTO R7 ruling on hot-anchor rubric), P3 nits
+  fixed (comment label, message: kind, R4 citation); fix round PASS (01ec85904a)
+- QA: skipped — plan carries no Test Scenarios section
 - Ratchet: exit=0 live=1510 baseline=1510; --print-baseline identical
 - kb-consumers suite 31/31; lint-orphan clean; 4 edges verified edge:declared
