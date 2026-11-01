@@ -227,11 +227,11 @@ no value was printed or read into this record.
 - **The exposed keys are not rotated.** Anyone who read a run log, comment or earlier revision before
   the deletion or redaction may hold the values. The records above cannot show who did. Rotation is
   tracked on the incident (#11294, #11711) and is an owner-run act.
-- **CLO position (2026-11-01).** The residual does not change the 2026-10-29 Art. 4(12) determination
+- **CLO position (2026-11-01).** The residual does not change the 2026-10-29 CLO determination
   (`2026-10-29-clo-determination-11294-random-id-log-exposure-art-4-12.md`). It is a failed Art. 32
   confidentiality measure that is still open. It is not evidence that any key was read or used. E3
   stays inconclusive: nothing shows who read a log, comment or earlier revision before cleanup. E4 is
-  contained, not erased, because the edit history stays public. Art. 33 and 34 remain not engaged, and
+  contained, not erased, because the edit history stays public. The breach-notification duties remain not engaged, and
   the re-opener in §If the finding flips is unchanged. Rotation is owner-only and follows the soak that
   closes 2026-11-01T15:15:48Z. **Re-assessment trigger:** if rotation is not recorded complete in #11294
   by 2026-11-08, the CLO re-assesses. Evidence of use of a key starts a fresh 72h clock at once.
