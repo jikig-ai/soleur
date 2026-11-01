@@ -5,19 +5,19 @@ Issues: #11607 (Closes), #11609 (Closes via PR body) | Context only: #11583 (sta
 
 ## Phase 1 — Fixture RED: web-fresh-boot-zot-8651 (write failing cases first)
 
-- [ ] 1.1 In `scripts/followthroughs/web-fresh-boot-zot-8651.test.sh`, extend `job()` (~:53) to emit a `steps` array on the job object — trail step `name` (prefix `Surface fresh-host Sentry breadcrumb trail`), `conclusion`, `startedAt`, `completedAt`; `startedAt: null` arm for the absent case.
-- [ ] 1.2 Add UNKNOWN STEP builders per `web-first-deploy-10585.test.sh:145-183`: `GH_LOG_BOM=$'\357\273\277'`; `ul()` (`<job>\tUNKNOWN STEP\t<bom?><ts> <line>`); `ulog()` faithful document — bare `Set up job` head, BOM'd prelude `##[group]Run` stamped BEFORE `startedAt`, BOM'd trail-step `##[group]Run` AT `startedAt`, payload lines, BOM'd next-step bound (`ULOG_NO_BOUND`/`ULOG_EARLY_HDR` arms as needed).
-- [ ] 1.3 Add failing cases per plan Test Scenarios (zot block): recovered PASS; recovered FAIL (DARK/GHCR on failure job — conclusion-agnostic); unrecoverable success job → 3 `TRANSIENT:`; missing `startedAt` → 3 `TRANSIENT:`; `skipped` step → 2 NOT YET; ANSI-echoed-only region → 2; EOF-bound region must-PASS.
-- [ ] 1.4 Run `bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh` — new cases RED, old green. Commit: `test(followthroughs): RED — UNKNOWN STEP fixtures for web-fresh-boot-zot-8651`
+- [x] 1.1 In `scripts/followthroughs/web-fresh-boot-zot-8651.test.sh`, extend `job()` (~:53) to emit a `steps` array on the job object — trail step `name` (prefix `Surface fresh-host Sentry breadcrumb trail`), `conclusion`, `startedAt`, `completedAt`; `startedAt: null` arm for the absent case.
+- [x] 1.2 Add UNKNOWN STEP builders per `web-first-deploy-10585.test.sh:145-183`: `GH_LOG_BOM=$'\357\273\277'`; `ul()` (`<job>\tUNKNOWN STEP\t<bom?><ts> <line>`); `ulog()` faithful document — bare `Set up job` head, BOM'd prelude `##[group]Run` stamped BEFORE `startedAt`, BOM'd trail-step `##[group]Run` AT `startedAt`, payload lines, BOM'd next-step bound (`ULOG_NO_BOUND`/`ULOG_EARLY_HDR` arms as needed).
+- [x] 1.3 Add failing cases per plan Test Scenarios (zot block): recovered PASS; recovered FAIL (DARK/GHCR on failure job — conclusion-agnostic); unrecoverable success job → 3 `TRANSIENT:`; missing `startedAt` → 3 `TRANSIENT:`; `skipped` step → 2 NOT YET; ANSI-echoed-only region → 2; EOF-bound region must-PASS.
+- [x] 1.4 Run `bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh` — new cases RED, old green. Commit: `test(followthroughs): RED — UNKNOWN STEP fixtures for web-fresh-boot-zot-8651`
 
 ## Phase 2 — zot probe implementation
 
-- [ ] 2.1 Extend the jobs jq (`web-fresh-boot-zot-8651.sh:51-53`) to TSV `databaseId\t<step conclusion // "absent">\t<step startedAt // "-">` (camelCase `startedAt` on `gh run view --json jobs`); `IFS=$'\t' read -r jid jstep jstart`.
-- [ ] 2.2 Designed-absence `continue` when `jstep` is `skipped`/`absent` (plan_only / pre-step runs).
-- [ ] 2.3 `log=${log//$'\r'/}; log=${log//$'\357\273\277'/}` after fetch; shared `emit_content` awk (ts strip + ANSI-drop) for named path AND region.
-- [ ] 2.4 Recovery on patternless named trail: 8178-verbatim region awk (`ts >= ${jstart:0:19}`, next-header/EOF bound) → `emit_content` → replace trail only when it carries `TRAIL_PATTERN`; else `recovery_cause`.
-- [ ] 2.5 Post-recovery tripwire `jcon == "success" && -z trail` → `TRANSIENT:` exit 3 with cause; non-success keeps `continue`; header comment updated.
-- [ ] 2.6 Re-run suite — all green incl. pre-existing; bump `MIN_CASES` (:101). Commit: `fix(followthroughs): zot probe recovers trail from UNKNOWN STEP logs via startedAt region slice (#11607)`
+- [x] 2.1 Extend the jobs jq (`web-fresh-boot-zot-8651.sh:51-53`) to TSV `databaseId\t<step conclusion // "absent">\t<step startedAt // "-">` (camelCase `startedAt` on `gh run view --json jobs`); `IFS=$'\t' read -r jid jstep jstart`.
+- [x] 2.2 Designed-absence `continue` when `jstep` is `skipped`/`absent` (plan_only / pre-step runs).
+- [x] 2.3 `log=${log//$'\r'/}; log=${log//$'\357\273\277'/}` after fetch; shared `emit_content` awk (ts strip + ANSI-drop) for named path AND region.
+- [x] 2.4 Recovery on patternless named trail: 8178-verbatim region awk (`ts >= ${jstart:0:19}`, next-header/EOF bound) → `emit_content` → replace trail only when it carries `TRAIL_PATTERN`; else `recovery_cause`.
+- [x] 2.5 Post-recovery tripwire `jcon == "success" && -z trail` → `TRANSIENT:` exit 3 with cause; non-success keeps `continue`; header comment updated.
+- [x] 2.6 Re-run suite — all green incl. pre-existing; bump `MIN_CASES` (:101). Commit: `fix(followthroughs): zot probe recovers trail from UNKNOWN STEP logs via startedAt region slice (#11607)`
 
 ## Phase 3 — rehearsal collector: fixture RED then implementation
 
