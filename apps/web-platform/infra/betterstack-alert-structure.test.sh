@@ -373,7 +373,7 @@ struct_env_hits() {
 # lines and trailing `# ...` comments are dropped, so a -target that is only TEXT cannot satisfy the parity rows.
 logtail_targets_of() {
   grep -vE '^[[:space:]]*(#|(-[[:space:]]+)?(run:[[:space:]]*)?(echo|printf)([[:space:]]|$))' "$1" | sed -E 's/[[:space:]]+#.*$//' \
-    | grep -oE -- '-target=logtail_[A-Za-z0-9_]+\.[A-Za-z0-9_-]+' | sed 's/^-target=//' | sort -u
+    | grep -oE -- '-target[= ]["'"'"']?logtail_[A-Za-z0-9_]+\.[A-Za-z0-9_-]+' | sed -E 's/^-target[= ]["'"'"']?//' | sort -u
 }
 
 # Declared-set helpers

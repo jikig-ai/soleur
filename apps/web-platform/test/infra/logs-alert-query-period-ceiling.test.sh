@@ -458,8 +458,14 @@ def main(infra_dir, apply_path, census_path):
     # The destroys applied (run 41239555181) and the lines were removed (#11672): a bare -target on an address with no
     # configuration plans a delete, so a leftover or re-added line is stale at best. Whole-line comments do not count.
     live_apply = [l for l in apply_text.split("\n") if not l.lstrip().startswith("#")]
+    # Positive control: a known LIVE neighbour proves the target list was extracted, so an empty or mis-read workflow
+    # cannot read as "all four absent".
+    if not any(re.search(r'-target[=\s]+["\']?logtail_exploration_alert\.claude_cost_daily_burn(?![A-Za-z0-9_])', l) for l in live_apply):
+        bad.append("target-list-not-extracted")
+    # `-target=addr`, `-target "addr"`, `-target='addr'` and `-target addr` all reach terraform, so all four spellings count.
     for t in GONE_TARGETS:
-        if any(t in l for l in live_apply):
+        addr = t.split("=", 1)[1]
+        if any(re.search(r'-target[=\s]+["\']?' + re.escape(addr), l) for l in live_apply):
             bad.append("retired-destroy-target-present:%s" % t)
     census_text = open(census_path, encoding="utf-8").read()
     # A LIVE entry: a non-comment line inside the INTENDED_DESTROYS dict, not a substring anywhere in the file (a
@@ -468,6 +474,8 @@ def main(infra_dir, apply_path, census_path):
     # Every live line of the WHOLE dict counts, whatever root key it sits under: the rows are retired, so one re-added
     # under any root is stale (a key-scoped read would let a re-add slip in under another root's key).
     live = [l.strip() for l in (cm.group(1).split("\n") if cm else []) if not l.strip().startswith("#")]
+    if cm is None or not live:
+        bad.append("census-dict-not-extracted")
     for e in GONE_CENSUS_ENTRIES:
         if any(e in l for l in live):
             bad.append("census-intended-destroy-present:%s" % e.strip('"'))
@@ -705,6 +713,21 @@ edit "$M5" apply.yml '              -target=logtail_exploration_alert.claude_cos
               -target=logtail_exploration_alert.luks_monitor_host_timer_dark \'
 landed M5 $?
 expect_red M5 "$M5" 'retired-destroy-target-present:-target=logtail_exploration_alert.luks_monitor_host_timer_dark'
+# M5c: the quoted spelling terraform also accepts (the workflow already uses it at the preflight step)
+M5C="$WORK/m5c"; snap "$M5C"
+edit "$M5C" apply.yml '              -target=logtail_exploration_alert.claude_cost_daily_burn \' '              -target=logtail_exploration_alert.claude_cost_daily_burn \
+              -target="logtail_exploration_alert.luks_monitor_host_timer_dark" \'
+landed M5c $?
+expect_red M5c "$M5C" 'retired-destroy-target-present:-target=logtail_exploration_alert.luks_monitor_host_timer_dark'
+# M5d: the live neighbour is not extracted (the target line is mangled), so "absent" proves nothing
+M5D="$WORK/m5d"; snap "$M5D"
+edit "$M5D" apply.yml '              -target=logtail_exploration_alert.claude_cost_daily_burn \' '              -target=logtail_exploration_alert.claude_cost_daily_burnX \'
+landed M5d $?
+expect_red M5d "$M5D" 'target-list-not-extracted'
+# M5e: the census dict header is respelled, so the read finds no dict and "absent" proves nothing
+M5E="$WORK/m5e"; snap "$M5E"
+edit "$M5E" census.sh 'INTENDED_DESTROYS = {' 'INTENDED_DESTROYS: dict = {'; landed M5e $?
+expect_red M5e "$M5E" 'census-dict-not-extracted'
 # M5b: re-add one of the four #11631 census rows to the live INTENDED_DESTROYS dict
 M5B="$WORK/m5b"; snap "$M5B"
 edit "$M5B" census.sh '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",' '        "doppler_secret.ghcr_read_user": "#8714 ADR-096 5.4",
@@ -928,7 +951,7 @@ if (( passes + fails != cases )); then
 fi
 # EXACT floor: the measured pass count of this file, compared with `!=` (a case deleted, a block that stopped
 # running, AND an unaccounted case added all trip it). Changing a case means setting it to the count printed above.
-MIN_PASSES=110
+MIN_PASSES=116
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; re-derive the floor.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
