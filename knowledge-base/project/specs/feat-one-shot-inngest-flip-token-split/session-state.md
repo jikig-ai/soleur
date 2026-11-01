@@ -40,3 +40,10 @@ dedup: ~63 raw -> 14 unique. structural-cause roll-up: one cause recurs across K
 | K12 | N10 dissent (rationale only): charset guard passes a value line equal to the heredoc terminator; boot file sourced as root | security P3 | CTO upholds/amends |
 | K13 | Sibling collisions: open #11766 also bumps BASELINE_DECLARED_PROBES 90->91 (post-both value 92); draft #10905 rewrites model.c4/json | history P2/P3 | PR body note; regenerate json, never hand-merge |
 | K14 | Pre-existing, left: baked-script stale comments (image carriers), drift auto-text "run terraform locally", 43 shellcheck warnings in 4 older suites | security, user-impact, semgrep | none (recorded) |
+
+## Review round
+
+- Panel SHA `10118fd1d8`: 12 seats, then the batched CTO spawn (R7-R11, recorded in `decision-challenges.md`) and a coverage consult. Tier: single-user incident.
+- Coverage-consult leads: (1) assembled runcmd shell semantics, REFUTED (the 39 rendered runcmd items pass `dash -n` and `bash -n`, both guard loops and the flip write in place); (2) plan JSON with unknown keys, not a defect (the gates read only address and actions for the token entries; residual: no recorded real plan of the token-replace shape); (3) no positive proof of capability inversion, CONFIRMED as a documentation gap (rehearsal root aliases both tokens to one read-only token; covered by the runbook plan check and the ADR limits); (4) boot-time flip-write abort has no push signal, CONFIRMED and accepted under N2 (#11820 scope widened to flip unit stalled, boot-time flip-write abort, and the key-continuity probe going silent).
+- The plan-phase lines above that state a 512 B floor, 572 B headroom, or that G3.7 catches a dead flip token are superseded by R7 (floor 384 B) and R11 (the liveness gates count error rows); the plan carries a dated correction note at its top.
+- Remaining: fix round (X tests, Y docs) -> targeted fix-round review -> qa -> compound -> ship

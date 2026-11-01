@@ -18,7 +18,7 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 - [x] 1.3 Gate tests: `tests/scripts/test-inngest-host-replace-gate.sh`, `tests/scripts/test-inngest-host-shape-gate.sh`, `plugins/soleur/test/terraform-target-parity.test.ts` (floor 15 to 16, both exclusion sets)
 - [x] 1.4 `cloud-init-inngest-provision-unit.test.sh` G4: keep `guards == 2`, reword the message
 - [x] 1.5 `inngest-boot-emitter.test.sh`: add `doppler_flip_token` to `RENDER_EXPR`; redactor fixture row (rewrite both hard-coded paths once each, stub `doppler` and `jq`)
-- [x] 1.6 `cloud-init-user-data-size.test.ts`: one consistent 53-char `SECRET_LENGTHS` for both tokens; floor-exit rows for the budget script
+- [x] 1.6 `cloud-init-user-data-size.test.ts`: one consistent 58-char (48-char body) `SECRET_LENGTHS` for both tokens (review round R7: the shared `doppler_token` stays 48; the inngest arm uses `INNGEST_SECRET_LENGTHS` with 58); floor-exit rows for the budget script
 - [x] 1.7 `preflight-discoverability-test.test.ts`: bump `BASELINE_DECLARED_PROBES` 90 to 91 with the required comment
 - [x] 1.8 Tripwire test: no non-comment `DOPPLER_TOKEN`/`printenv`/`env`/`declare -p`/`export -p` in `inngest-cutover-flip.sh`
 - [x] 1.9 `inngest.test.sh` comment row (Condition-less drop-in is deliberate); rehearsal-test assertion (read token only); phone-home dp-mask synthetic-token row
@@ -50,7 +50,7 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 ## Phase 5: Budget
 
-- [x] 5.1 `inngest-userdata-budget.sh`: both stubs high-entropy (48-char bodies, 58 total), flip var added, `stored <= cap - 512` floor with an env seam (test asserts rc == 1 exactly)
+- [x] 5.1 `inngest-userdata-budget.sh`: both stubs high-entropy (48-char bodies, 58 total), flip var added, `stored <= cap - 512` floor with an env seam (test asserts rc == 1 exactly) (review round R7: the floor is now 384 and the three other stubs are hash-derived; the seam can only raise it)
 - [x] 5.2 Record stored bytes, cap headroom and margin under 32,300; `INNGEST_GZIP_BUDGET` stays 32,300
 
 ## Phase 6: Records
@@ -64,6 +64,7 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 
 - [x] 7.1 New suite, `inngest-host.test.sh`, provision-unit, boot-emitter, the two gate suites, parity and size tests
 - [x] 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` and `bash scripts/lint-orphan-test-suites.sh`
-- [x] 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
+  - Recorded outcome (review round): no per-command exit code was recorded for these two commands. The evidence is commit `7fb0c7de32`: the repo ratchets were found by `scripts/test-all.sh --affected` and fixed there (workflow size gate, suite weight row, fixture operands).- [x] 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
 - [x] 7.4 `git diff --stat origin/main...HEAD -- <Files NOT to Edit>` prints nothing
 - [x] 7.5 `terraform fmt -check` and `terraform validate` if providers are cached (else report not run)
+  - Recorded outcome: `terraform fmt -check` rc 0; `terraform validate` success on the main root and on the rehearsal root; `validate-infra-templates.sh` not run (needs cloud-init on PATH).
