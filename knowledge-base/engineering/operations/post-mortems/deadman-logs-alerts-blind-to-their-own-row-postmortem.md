@@ -3,7 +3,7 @@ title: "Postmortem: the luks host-timer and cost-capture dead-man logs alerts co
 date: 2026-10-31
 incident_pr: 11653
 incident_window: "2026-09-27 (first nightly passing luks row the alert could not see) → 2026-10-30 (triaged: host healthy, alerts structurally blind)"
-recovery_at: "unresolved — heartbeats born paused by PR 11653; arming and the two Better Stack incident resolves are owner-gated, tracked on #11631"
+recovery_at: "2026-10-31 — both heartbeats armed (#11631); the two Better Stack incidents were already Resolved when the retired alerts were deleted"
 suspected_change: "Design defect from creation: two native Better Stack logs alerts evaluated a 26 h and a 24 h window, but the evaluator only reads the hot window (about 1 h measured on 2026-10-30), and the row they match is written once a day. Not a regression from a specific change."
 brand_survival_threshold: aggregate pattern
 status: ongoing
@@ -30,7 +30,7 @@ Two native Better Stack logs alerts, `luks_monitor_host_timer_dark` and `claude_
 
 ## Status
 
-ongoing — the old alerts are replaced by PR 11653, but the replacement heartbeats are born paused, so there is no paging dead-man for these two signals until the owner arms them (deadline 2026-11-13). The two Better Stack incidents also still need the owner's explicit resolve.
+ongoing — the old alerts were replaced by PR 11653 and both replacement heartbeats were armed on 2026-10-31 (#11631: two `verdict=beat` runs each; `arming_pending` dropped by record PR 11736). The two Better Stack incidents were already Resolved when the retired alerts were deleted, and the incident mirror closed #11048 and #11049. What remains open is the owner's agreement to close #11631, and #11671 and #11672.
 
 ## Symptom
 
@@ -137,7 +137,7 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #11631 | Arm the two heartbeats (read-back), resolve the two Better Stack incidents, then drop `arming_pending` (deadline 2026-11-13) | open |
+| #11631 | Arm the two heartbeats (read-back), resolve the two Better Stack incidents, then drop `arming_pending` | armed 2026-10-31, incidents already Resolved, `arming_pending` dropped by record PR 11736; open until the owner agrees to close |
 | #11671 | Measure whether `claude_cost_daily_burn` (24 h sum) shares the same hot-window blind spot | open |
 | #11672 | After the first green apply: remove the retained destroy targets and census rows, route the Sentry monitor, extract shared heartbeat plumbing | open |
 | #11670 | Move the feeder secrets into a branch-restricted GitHub Environment | open |

@@ -1994,16 +1994,18 @@ for res in ("luks_monitor_host_timer", "claude_cost_capture"):
     m = re.search(r'\{\s*name: "' + res + r'",(.*?)\n  \},\n', src, re.S)
     if not m:
         bad.append("manifest-row-missing-" + res); continue
-    b = m.group(1)
+    # Comment-stripped: the row's comments quote `paused: true` and may quote the old declaration, and prose must satisfy no pin.
+    b = re.sub(r"//[^\n]*", "", m.group(1))
     if 'arming: "external-probe"' not in b: bad.append("manifest-arming-" + res)
     if "paused: true" not in b: bad.append("manifest-paused-" + res)
     if 'file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml"' not in b: bad.append("manifest-evidence-file-" + res)
     if 'pattern: "bash scripts/deadman-heartbeat-feeder.sh"' not in b: bad.append("manifest-evidence-pattern-" + res)
-    if 'arming_pending: { tracking_issue: 11631, expires: "2026-11-13" }' not in b: bad.append("manifest-arming_pending-" + res)
+    # The key itself, in any spacing or quoting, may not return.
+    if re.search(r'\barming_pending\b["\']?\s*:', b): bad.append("manifest-arming_pending-still-declared-" + res)
 print("\n".join(bad))
 PYM
 )"
-if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, paused, arming_pending, evidenced by the workflow and the feeder invocation"
+if [[ -z "$_man" ]]; then pass "manifest: both rows are external-probe, source-paused, armed (no arming_pending), evidenced by the workflow and the feeder invocation"
 else fail "manifest violations: $(paste -sd, - <<<"$_man")"; fi
 # Counted either way (a skip is one pass), so the exact floors do not depend on whether the host has bun: the
 # deploy-script-tests CI job does not install it, and the manifest rows are also pinned statically just above.
