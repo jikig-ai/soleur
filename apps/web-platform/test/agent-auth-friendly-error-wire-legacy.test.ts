@@ -166,7 +166,7 @@ import { startAgentSession } from "../server/agent-runner";
 import { reportSilentFallback } from "../server/observability";
 import * as Sentry from "@sentry/nextjs";
 import { ByokLeaseError } from "../server/byok-lease";
-import { authFailureCopy } from "../server/agent-auth-user-message";
+import { authFailureCopy, authModeUnresolvedFrame } from "../server/agent-auth-user-message";
 import {
   PROBE_UNAVAILABLE_WARNING,
   __resetAgentAuthDedupeForTests,
@@ -329,6 +329,30 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     expect(mockLogError).not.toHaveBeenCalled();
   });
 
+  // #11599 — an unresolvable authentication mode gets its own typed frame (not the key_invalid "Update key" card), and the
+  // lease's own event is the only one: the call-site mirror and the ERROR log are skipped.
+  test.each(["auth_mode_unresolved", "auth_mode_unavailable"] as const)(
+    "a %s lease refusal sends the typed frame, adds no Sentry capture and no ERROR log",
+    async (cause) => {
+      mockQuery.mockImplementation(() => {
+        throw new ByokLeaseError(cause, "Authentication unavailable; retry shortly", cause === "auth_mode_unresolved" ? "unbound" : "read_failed");
+      });
+      await startAgentSession(USER, `conv-${cause}`, "cpo", "session-s");
+      expect(sent().filter((f) => f.type === "error")).toEqual([authModeUnresolvedFrame(cause)]);
+      expect(vi.mocked(Sentry.captureException)).not.toHaveBeenCalled();
+      expect(mockLogError).not.toHaveBeenCalled();
+    },
+  );
+
+  test("positive control for the skip: a non-lease error in the same harness IS captured and logged", async () => {
+    mockQuery.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    await startAgentSession(USER, "conv-liveness", "cpo", "session-s");
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledTimes(1);
+    expect(mockLogError).toHaveBeenCalledTimes(1);
+  });
+
   test("any other error keeps the generic path (sanitized text, mapped code, no scheme)", async () => {
     mockQuery.mockImplementation(() => {
       throw new ByokLeaseError("fetch_failed", "boom");
@@ -337,6 +361,7 @@ describe("legacy runner — friendly CLI auth-failure reply (#11086)", () => {
     const errors = sent().filter((f) => f.type === "error");
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toBe("error"); // the mocked sanitizer
+    expect(errors[0].errorCode).toBe("key_invalid");
     expect("credentialScheme" in errors[0]).toBe(false);
     // Positive control for the skip above: any other lease cause IS captured.
     expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledTimes(1);

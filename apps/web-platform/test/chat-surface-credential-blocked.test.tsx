@@ -797,3 +797,56 @@ describe("ChatSurface — credential blocked (#11525)", () => {
     });
   });
 });
+
+// #11599 — an unresolvable authentication mode is NOT a credential block: the card is titled for the setting, offers no
+// Reconnect (it does not resend and the socket stays up), stays dismissible, and the composer stays enabled.
+describe("ChatSurface — authentication mode unresolved (#11599)", () => {
+  const unresolved = {
+    code: "auth_mode_unresolved",
+    message: "We couldn't confirm which authentication mode this conversation uses, so your message was not processed. Start a new conversation to continue.",
+    action: { label: "Start a new conversation", href: "/dashboard/chat/new" },
+  };
+  const unavailable = {
+    code: "auth_mode_unavailable",
+    message: "We couldn't check which authentication mode this conversation uses just now, so your message was not processed. Please send it again in a moment.",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedOnSend = null;
+  });
+
+  it.each([
+    ["auth_mode_unresolved", unresolved],
+    ["auth_mode_unavailable", unavailable],
+  ])("%s: titled Authentication Mode Unavailable, no Reconnect, dismissible, composer enabled, no helper line", async (_c, lastError) => {
+    setWs({ lastError, messages: [userMsg({ unanswered: true })] });
+    await mountSurface();
+    const alert = screen.getByRole("alert");
+    expect(within(alert).getByText("Authentication Mode Unavailable")).toBeInTheDocument();
+    expect(within(alert).getByText(lastError.message)).toBeInTheDocument();
+    expect(within(alert).queryByRole("button", { name: "Reconnect" })).toBeNull();
+    expect(within(alert).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.queryByText(/Select Reconnect to continue/)).toBeNull();
+  });
+
+  it("the deterministic card carries the Start a new conversation action (same tab, not a credential card); the transient one carries none", async () => {
+    setWs({ lastError: unresolved });
+    const first = await mountSurface();
+    const link = screen.getByText("Start a new conversation").closest("a")!;
+    expect(link).toHaveAttribute("href", "/dashboard/chat/new");
+    expect(link).not.toHaveAttribute("target", "_blank");
+    first.unmount();
+
+    setWs({ lastError: unavailable });
+    await mountSurface();
+    expect(screen.queryByText("Start a new conversation")).toBeNull();
+  });
+
+  it("negative control: an ordinary connection error still offers Reconnect", async () => {
+    setWs({ lastError: { code: "unknown", message: "boom" } });
+    await mountSurface();
+    expect(within(screen.getByRole("alert")).getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+  });
+});

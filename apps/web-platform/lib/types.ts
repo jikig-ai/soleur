@@ -182,7 +182,12 @@ export type WSErrorCode =
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"
   | "delegation_daily_cap_exceeded"
-  | "delegation_cross_tenant";
+  | "delegation_cross_tenant"
+  // #11599 — the conversation's authentication mode could not be resolved. NOT credential-blocked codes (the key is
+  // fine and the composer stays enabled): `unresolved` is deterministic (start a new conversation), `unavailable` is
+  // transient (send again). Mirrored in `errorSchema.errorCode` (lib/ws-zod-schemas.ts); `_SchemaCovers` proves it.
+  | "auth_mode_unresolved"
+  | "auth_mode_unavailable";
 
 /** Single predicate for the credential-blocked pair (#11525): the chat is
  *  blocked (composer disabled, sends refused) iff the error code is one of
@@ -191,6 +196,15 @@ export function isCredentialErrorCode(
   code: string | null | undefined,
 ): code is "key_invalid" | "byok_key_missing" {
   return code === "key_invalid" || code === "byok_key_missing";
+}
+
+/** Single predicate for the authentication-mode pair (#11599): not a credential block (the composer stays enabled). Spell the
+ *  pair ONLY here on the client; test/auth-mode-code-parity.test.ts pins it to the server's `AUTH_MODE_UNRESOLVED_CAUSES` and
+ *  the wire schema (`lib/` cannot import the server leaf). */
+export function isAuthModeErrorCode(
+  code: string | null | undefined,
+): code is "auth_mode_unresolved" | "auth_mode_unavailable" {
+  return code === "auth_mode_unresolved" || code === "auth_mode_unavailable";
 }
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.

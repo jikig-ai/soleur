@@ -259,7 +259,9 @@ describe("network surface", () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  // Measured on Next 16.3.8: the framework adds all four x-forwarded-* headers to EVERY request
+  // Measured on Next 16.3.8, re-measured on 16.4.3 (identical four-header set, grepped
+  // from dist/compiled/next-server/server.runtime.prod.js): the framework adds all four
+  // x-forwarded-* headers to EVERY request
   // it serves, including Vector's. A check on them 401s every legitimate batch.
   it("accepts the x-forwarded-* headers Next.js adds to a request from Vector", async () => {
     const res = await POST(

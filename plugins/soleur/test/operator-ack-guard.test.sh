@@ -146,6 +146,7 @@ G1_EXEMPT=(
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh|local worktree cleanup prompts; no production write"
   "plugins/soleur/skills/feature-video/scripts/check_deps.sh|local dependency-install prompt on the founder's own machine; no production write"
   "plugins/soleur/skills/pencil-setup/scripts/check_deps.sh|local dependency-install prompt on the founder's own machine; no production write"
+  "scripts/merge-queue-jump.sh|deliberate operator queue-jump: --yes + non-empty --reason gate a mergeQueue position write; head-pinned enqueuePullRequest(jump:true) with post-confirm re-read (#11678)"
 )
 
 READ_SITE_RE='(^[[:space:]]*|[;&|][[:space:]]*|IFS=[[:space:]]*)read([[:space:]]|$)'
