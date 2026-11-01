@@ -20,7 +20,9 @@ export function parseWebServerEntries(configPath: string): {
 } {
   const text = stripComments(readFileSync(configPath, "utf-8"));
   const raw = text.slice(text.indexOf("webServer:"));
-  const block = raw.slice(0, raw.indexOf("]"));
+  // The array's close bracket sits on its own line; a bare indexOf("]") would
+  // truncate on a `]` inside an entry value (array field, indexed expr).
+  const block = raw.slice(0, raw.search(/\n\s*\]/));
   return { text, block, entries: block.split(/\bcommand:\s/).slice(1) };
 }
 

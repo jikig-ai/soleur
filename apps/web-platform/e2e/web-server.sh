@@ -34,6 +34,6 @@ elapsed=$(( $(date +%s) - start_ts ))
 # Control chars are stripped from the env-derived fields so a hostile value
 # cannot forge extra `e2e-webserver:` lines into the log stream.
 {
-  echo "e2e-webserver: exited rc=${rc} port=${PORT:-?} distdir=${NEXT_DIST_DIR:-?} uptime=${elapsed}s" | tr -d '\000-\037\177'
+  echo "e2e-webserver: exited rc=${rc} port=${PORT:-?} distdir=${NEXT_DIST_DIR:-?} uptime=${elapsed}s" | tr -d '\000-\011\013-\037\177'
 } >&"$marker_fd"
 exit "$rc"
