@@ -34,7 +34,7 @@ Constraint: no edit to `.github/workflows/apply-web-platform-infra.yml` (item 2b
 
 ## Phase 6: verification (battery-armed)
 - 6.1 Fast suites in the foreground; read each pass/fail line.
-- 6.2 Launch the battery detached (`setsid -n`), own Bash call, explicit `cd`, `LOG` and `RC` exported in that call; confirm pid and cwd; arm Monitor on the rc file with a deadline and pid liveness check; read `pre-flight: 78/78 anchors resolve uniquely` first.
+- 6.2 Launch the battery detached (`setsid nohup`; util-linux `setsid` here has no `-n`), own Bash call, explicit `cd`, `LOG` and `RC` exported in that call; confirm pid and cwd; arm Monitor on the rc file with a deadline and pid liveness check; read `pre-flight: 78/78 anchors resolve uniquely` first.
 - 6.3 Read the rc file: only 0 is passed; rc 6 or queued CI means the required `test` CI context is the gate; never call a local run passed otherwise.
 
 ## Phase 7: ship hygiene
