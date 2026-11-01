@@ -334,6 +334,17 @@ echo "== test-all-affected: mutation matrix =="
 # A DECLARED_TOTAL bump and the registered-range re-split land in the same commit.
 DECLARED_TOTAL=38   # the gated `# ---` row blocks below (a .. th8m); setup/floors are unconditional
 ROWS_UNIT=blocks
+# S4 per-block case floors (#11647): ROWS_COUNT_VAR names the counter in_range
+# snapshots per gate call; ROWS_BLOCK_CASES carries one declared `>=` minimum
+# per gated ordinal (index = ordinal-1). The declared counts are each block's
+# straight-line cases+= sites — loop-driven blocks (rc/re/tg/th census rows)
+# declare only their unconditional floor so legitimate case growth cannot
+# false-fire. Ordinals map to blocks: 1 a, 2 b, 3 c, 4 d, 5 e, 6 f, 7 g, 8 h,
+# 9 i, 10 j, 11 k, 12 k2-k4, 13 rc*, 14 re*, 15 l, 16 m, 17 n, 18 o, 19 p,
+# 20 q, 21 r, 22 s, 23 t, 24 u, 25 x, 26 w, 27 v, 28 y/z, 29 z8, 30 sc, 31 sc9,
+# 32 t1-t10/m*, 33 p1-p6/m4, 34 q1-q4/m6, 35 q7-q9, 36 tg, 37 th, 38 th6*/th8.
+ROWS_COUNT_VAR=cases
+ROWS_BLOCK_CASES=( 1 1 1 1 1 1 1 1 1 1 1 2 1 19 2 3 1 1 1 1 1 2 1 2 1 2 2 11 1 8 1 18 7 5 3 5 4 4 )
 # shellcheck source=scripts/lib/rows-range.sh
 source "$REPO_ROOT/scripts/lib/rows-range.sh"
 rows_parse_args "$@"
