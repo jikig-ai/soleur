@@ -11,4 +11,8 @@ Issue #11647 — ci/test-scripts `--rows` arm debt, 5 bundled items:
 4. Per-block declared case floors — hollowed-out blocks must red
 5. Arm-convention ADR + `-<letter>` split checklist
 
-Re-eval by 2026-11-14. Status: scaffold — planning pending.
+Re-eval by 2026-11-14. Status: planning artifacts written —
+`knowledge-base/project/plans/2026-11-01-chore-11647-rows-arm-debt-plan.md`,
+`tasks.md`, `decision-challenges.md` (16 ruling rows; item-1 premise flagged
+stale — all 9 arm rows are real measurements post-#11718, enum lands as
+mechanism only).
