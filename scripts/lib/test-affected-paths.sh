@@ -530,6 +530,23 @@ AFFECTED_CLAUDE_HOOKS_SKILL_CONTEXT_QUERIES_TEST_SH_PATHS=(
   ".claude/hooks/skill-context-queries.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh (#10111) — reads the file LIST (git ls-files) to
+# check the push-filter classification table, so its scan is scoped to the probe's files rather than the
+# whole tree; the subject is the workflow, the probe, the runner, the budget lib, the option-gate import
+# set, the ADR-284 amendment and the two required-checks lists it must stay out of.
+AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-real-sdk-ask-probe.yml"
+  "apps/web-platform/scripts/dev-probe-destroy-ask.ts"
+  "apps/web-platform/scripts/lib/probe-budget.ts"
+  "apps/web-platform/scripts/real-sdk-ask-probe.sh"
+  "apps/web-platform/server/permission-callback.ts"
+  "infra/github/ruleset-ci-required.tf"
+  "knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
+  "plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/required-checks.txt"
+)
+
 # The `test/` TypeScript suite — same SUT as the hook's own .test.sh above.
 AFFECTED_TEST_PRE_MERGE_REBASE_PATHS=(
   ".claude/hooks/pre-merge-rebase.sh"
