@@ -58,12 +58,12 @@ Hard limits for every task: no `apply_target=inngest-host-replace` dispatch, no 
 - [x] 6.1 ADR-282 build-record addendum (append-only, via `soleur:architecture`)
 - [x] 6.2 C4: `doppler -> inngest` edge description in `model.c4`; run `plugins/soleur/test/c4-count-parity.test.sh` and the two C4 tests
 - [x] 6.3 Runbook subsection (plus go-condition: green budget job on the dispatch SHA; drift-workflow note; flip-rotation caveat) in `inngest-server.md` (plan shape, replace-window impact, abort and rollback rule, three owner-only routes, rehearsal option, inngest-host abort-until-replace)
-- 6.4 PR body: lead with the merge-changes-nothing sentence; link the addendum; `Ref #9927`; cite #11816, #11817 and #11820
+- [x] 6.4 PR body: lead with the merge-changes-nothing sentence; link the addendum; `Ref #9927`; cite #11816, #11817 and #11820
 
 ## Phase 7: Verification
 
-- 7.1 New suite, `inngest-host.test.sh`, provision-unit, boot-emitter, the two gate suites, parity and size tests
-- 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` and `bash scripts/lint-orphan-test-suites.sh`
-- 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
-- 7.4 `git diff --stat origin/main...HEAD -- <Files NOT to Edit>` prints nothing
-- 7.5 `terraform fmt -check` and `terraform validate` if providers are cached (else report not run)
+- [x] 7.1 New suite, `inngest-host.test.sh`, provision-unit, boot-emitter, the two gate suites, parity and size tests
+- [x] 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` and `bash scripts/lint-orphan-test-suites.sh`
+- [x] 7.3 `inngest-userdata-budget.sh`; `mint-inngest-bootstrap-tag.sh --dry-run` expects `result=noop` (unshallow first)
+- [x] 7.4 `git diff --stat origin/main...HEAD -- <Files NOT to Edit>` prints nothing
+- [x] 7.5 `terraform fmt -check` and `terraform validate` if providers are cached (else report not run)
