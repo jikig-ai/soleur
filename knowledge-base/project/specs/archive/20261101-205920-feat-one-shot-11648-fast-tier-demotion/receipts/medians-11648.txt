@@ -1,0 +1,28 @@
+# medians-11648.txt — AC2 evidence receipt for #11648 fast-tier always-on demotion
+#
+# Source: 5 green merge_group runs' suite-timings-scripts-{0..7} artifacts at
+#   /tmp/soleur-run.3914000.CyLOI4ae/timings/{41273043589,41277321740,41277558935,41282610457,41283147833}/
+# Method: per label, MAX across the 8 script legs within each run dir (the
+#   regenerator keeps max — labels can appear on multiple legs with a 0ms dummy
+#   row), then MEDIAN across the 5 runs.
+# Cap: LOCAL_FAST_CAP_MS = 10000 (scripts/test-all-fast-tier-budget.test.sh).
+# Verdict rule (CTO dissent, decision-challenges.md Item 1): a label whose fresh
+#   median <= 10000 stays always-on as a measurement-artifact keep; all others demote.
+#
+# label                                                           medians per run (ms)                                  MEDIAN   committed  verdict
+#                                                                 043589   321740   558935   610457   147833             (ms)     weight(ms)
+scripts/test-all-group-affected                                   385940   378173   237544   379458   320642   MEDIAN   378173       3200   DEMOTE
+tests/scripts/lint-ratchet                                         24185    24431    28038    26989    22098   MEDIAN    24431       1222   DEMOTE
+plugins/soleur/test/check-deps-adapter-drift.test.sh               30028    24076    24212    18029    20210   MEDIAN    24076       2115   DEMOTE
+plugins/soleur/test/token-drift-workflow-causes.test.sh            20579    19967    13126    20223    16472   MEDIAN    19967       6108   DEMOTE
+.claude/hooks/grep-q-pipe-guard.test.sh                            16213    15753    11451    15761    13489   MEDIAN    15753       6081   DEMOTE
+scripts/lint-encryption-posture                                    11954    11413     8393    11545     9443   MEDIAN    11413       2954   DEMOTE
+plugins/soleur/test/gitleaks-merge-commit.test.sh                  11981    11824     9734    11849    10808   MEDIAN    11824       5441   DEMOTE
+scripts/lint-gh-argv-arg-live                                      14166    13435    11048    13459     6936   MEDIAN    13435       7092   DEMOTE
+#
+# Result: all 8 fresh medians > 10000 ms -> all 8 demote; zero measurement-artifact keeps.
+# Thinnest margin: scripts/lint-encryption-posture at 11,413 ms (2 of 5 runs under
+#   cap — contended-leg noise does not rescue the median).
+# Pin arithmetic: ALWAYS_ON_SUITES 122 - 8 = 114 members; floor = 114 - 5 = 109
+#   at both pin sites (_MIN_ALWAYS_ON_DECLARED in scripts/test-all.sh and the f1
+#   literal in scripts/test-all-affected.test.sh).

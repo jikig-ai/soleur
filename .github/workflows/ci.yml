@@ -430,7 +430,12 @@ jobs:
       - name: Ratchet the audit against the committed baseline
         shell: bash
         env:
-          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"
+          # 200s was pinned when the affected index was smaller; the selector's
+          # derive pass now runs ~200-260s on shared runners (script default 900).
+          # Measured: selector-timeout reds on PR #11779 (two consecutive runs)
+          # at ~45s local uncontended. Bound: strictly below the job timeout
+          # (row_wf_select_timeout), so 290 is the ceiling this job can carry.
+          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "290"
         run: |
           out="$RUNNER_TEMP/affected-index-ratchet.out"
           full="$RUNNER_TEMP/affected-index-ratchet.full"

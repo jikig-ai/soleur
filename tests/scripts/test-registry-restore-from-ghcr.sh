@@ -772,6 +772,97 @@ else
   fail "a missing source signature must exit 4, not warn" "$rc" "$out"
 fi
 
+# ── Unclassified read faults at the four verification/read sites exit 6, not 4 (#11667). ───────
+# These four arms used to send EVERY unrecognised fault to exit 4 ("NOT retryable", "do NOT
+# deploy"): a crane error the classifier cannot name was reported as a measured absence or
+# mismatch. Only a measured absence (NOTFOUND|BLOBMISSING) may stay 4; anything else is exit 6,
+# the loudest arm. Each row asserts the exit code, the site-specific phrase, that no stub
+# fixture was missing (a missing key would also exit non-zero and read as a pass), and that the
+# site's own call was the LAST crane call, so the verdict was reached AT that site.
+site_case() { # <name> <want-rc> <phrase-regex> <last-call-suffix> <fixture-key> <stderr>
+  local name="$1" want="$2" phrase="$3" suffix="$4" key="$5" err="$6" fx calls out rc last
+  fx="$TMP/fx-$name"; calls="$TMP/calls-$name"; : > "$calls"
+  ok_fixtures "$fx" "$TARGET"
+  fixture "$fx" "$key" 1 "" "$err"
+  out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+  last="$(tail -n 1 "$calls")"
+  if [[ "$rc" -eq "$want" ]] && grep -qE -- "$phrase" <<<"$out" \
+     && ! grep -qE 'NO FIXTURE|^stub:' <<<"$out" && [[ "$last" == *"$suffix" ]]; then
+    pass "$name => exit $want at its own site"
+  else
+    fail "$name must exit $want naming its site (last call: $last)" "$rc" "$out"
+  fi
+}
+SIGT="sha256-${D1#sha256:}"
+ERR_A="Error: zot internal ledger inconsistent (code 7f3a)"
+ERR_B="Error: unexpected sink response shape: frobnicated"
+site_case rc6-image-readback 6 'back after copying it failed with a result this script does not treat as a measured absence' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$ERR_A"
+site_case rc6-ghcr-signature-read 6 'at GHCR for .* failed with a result this script does not treat as a measured absence .*its absence is unproven' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$ERR_B"
+site_case rc6-signature-copy 6 'copying the signature .* failed with a result this script does not treat as a measured absence' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" "$ERR_A"
+site_case rc6-sink-signature-readback 6 'back from the sink failed with a result this script does not treat as a measured absence .*not known to be unsigned' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$ERR_B"
+# The counterparts: a MEASURED absence at the same sites keeps exit 4, so the rc-6 arm above is
+# the only thing that moved. (The GHCR-signature and sink-signature-readback absence rows are
+# the two existing exit-4 rows earlier in this file.)
+site_case rc4-image-readback-absent 4 'could not read .* back after copying it, so the restore is UNVERIFIED' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" \
+  "Error: GET http://${TARGET}/v2/${WP}/manifests/v0.249.4: MANIFEST_UNKNOWN: manifest unknown"
+site_case rc4-signature-copy-manifest-unknown 4 'could not be copied for' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" \
+  "Error: GET https://ghcr.io/v2/${WP}/manifests/${SIGT}: MANIFEST_UNKNOWN: manifest unknown"
+site_case rc4-signature-copy-blob-unknown 4 'could not be copied for' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" \
+  "Error: PUT http://${TARGET}/v2/${WP}/manifests/${SIGT}: BLOB_UNKNOWN: blob unknown to registry"
+# BLOBMISSING alone (no manifest-unknown text) at the three read sites: the exit-4 arm is
+# `NOTFOUND|BLOBMISSING`, and a mutant that drops either half must red a row.
+BLOBERR="Error: GET http://${TARGET}/v2/${WP}/blobs/sha256:00: BLOB_UNKNOWN: blob unknown to registry"
+site_case rc4-image-readback-blobmissing 4 'could not read .* back after copying it, so the restore is UNVERIFIED' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$BLOBERR"
+site_case rc4-ghcr-signature-read-blobmissing 4 'no cosign signature' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$BLOBERR"
+site_case rc4-sink-signature-readback-blobmissing 4 'restored UNSIGNED' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$BLOBERR"
+# CTO ruling 2026-11-01 (#11667): a CLASSIFIED corruption/format result at these four sites is
+# still exit 6 (a digest read never decompresses or hashes a blob; the copy site matches the
+# image-copy site), and the message names the class. Pinned so a later edit cannot move them to 4.
+CM_ERR="Error: error verifying sha256 checksum for sha256:aa"
+LF_ERR="Error: gzip: invalid header"
+site_case rc6-image-readback-contentmismatch 6 'class: CONTENTMISMATCH' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$CM_ERR"
+site_case rc6-image-readback-layerformat 6 'class: LAYERFORMAT' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$LF_ERR"
+site_case rc6-ghcr-signature-read-contentmismatch 6 'class: CONTENTMISMATCH' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$CM_ERR"
+site_case rc6-sink-signature-readback-layerformat 6 'class: LAYERFORMAT' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$LF_ERR"
+site_case rc6-ghcr-signature-read-layerformat 6 'class: LAYERFORMAT' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$LF_ERR"
+site_case rc6-signature-copy-contentmismatch 6 'class: CONTENTMISMATCH' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" "$CM_ERR"
+site_case rc6-signature-copy-layerformat 6 'class: LAYERFORMAT' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" "$LF_ERR"
+site_case rc6-sink-signature-readback-contentmismatch 6 'class: CONTENTMISMATCH' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$CM_ERR"
+# The NETWORK / DENIED arms at the same sites: the new `*) die 6` absorbs a deleted arm, which
+# would turn a retryable 3 (or abort 5/2) into a hard stop with nothing noticing.
+NET_ERR="Error: Get https://x/v2/: dial tcp 10.0.0.1:5000: connect: connection refused"
+DEN_ERR="Error: GET https://x/v2/: UNAUTHORIZED: authentication required"
+site_case rc5-image-readback-denied 5 'rejected this credential reading' \
+  "${TARGET}/${WP}:v0.249.4" "${TARGET}/${WP}:v0.249.4" "$DEN_ERR"
+site_case rc2-ghcr-signature-read-network 2 'GHCR was unreachable reading the signature' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$NET_ERR"
+site_case rc2-ghcr-signature-read-denied 2 'GHCR rejected this credential reading the signature' \
+  "ghcr.io/${WP}:${SIGT}" "ghcr.io/${WP}:${SIGT}" "$DEN_ERR"
+site_case rc5-signature-copy-denied 5 'rejected this credential copying the signature' \
+  "${TARGET}/${WP}:${SIGT}" "copy:${TARGET}/${WP}:${SIGT}" "$DEN_ERR"
+site_case rc3-sink-signature-readback-network 3 'became unavailable reading the signature' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$NET_ERR"
+site_case rc5-sink-signature-readback-denied 5 'rejected this credential reading the signature' \
+  "${TARGET}/${WP}:${SIGT}" "${TARGET}/${WP}:${SIGT}" "$DEN_ERR"
+
 # ── The floor must not be satisfiable by DUPLICATION. ────────────────────────────────────────
 # Found by mutation testing: counting is only a non-vacuity guard if the counted things differ.
 DUP_MANIFEST="$TMP/pins-dup.json"
@@ -1570,7 +1661,7 @@ fi
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=99
+MIN_ASSERTIONS=123
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

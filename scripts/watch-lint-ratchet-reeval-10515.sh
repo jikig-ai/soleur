@@ -98,7 +98,7 @@ run_search() {
     return 3
   }
   errf="$WN_ERRF"
-  raw="$(gh api "search/issues?q=${enc}&per_page=30&sort=created&order=desc" 2>"$errf")"
+  raw="$(gh api --paginate "search/issues?q=${enc}&per_page=30&sort=created&order=desc" 2>"$errf")"
   rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
   if [[ "$rc" -ne 0 ]]; then

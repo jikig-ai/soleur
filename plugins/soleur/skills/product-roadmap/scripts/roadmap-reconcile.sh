@@ -175,7 +175,7 @@ filter_frontier() {
 
 # --- CLI entrypoint (only when executed directly, never when sourced) ---
 _milestones_json() {
-  gh api 'repos/{owner}/{repo}/milestones?state=all&per_page=100' \
+  gh api --paginate 'repos/{owner}/{repo}/milestones?state=all&per_page=100' \
     --jq '[ .[] | {title, state, open_issues, closed_issues} ]'
 }
 
