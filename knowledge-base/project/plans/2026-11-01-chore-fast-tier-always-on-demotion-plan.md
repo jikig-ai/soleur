@@ -14,6 +14,23 @@ lane: cross-domain
 
 # chore: demote 8 always-on fast-tier labels exceeding the 10s committed cap to edge-selection (#11648)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01
+**Sections enhanced:** Observability (discoverability probe), all halt gates re-verified
+**Research agents used:** none spawnable in this harness (no Task tool) — gates 4.6–4.13 executed inline; per-section research substituted by the inline repo reads recorded in Research Insights. `Reviewed-Coverage: sequential-fallback` — no independent review is claimed.
+
+### Key Improvements
+
+1. `discoverability_test.command` replaced with a non-suite probe (`grep -c "LOCAL_FAST_CAP_MS=10000" scripts/test-all-fast-tier-budget.test.sh` → `1`) — the original `bash scripts/test-all-fast-tier-budget.test.sh` matched Check 10's suite-shape reject (`.test.` token, 15 s cap).
+2. Gate sweep confirmed: User-Brand Impact § (4.6) present with `none` threshold and no sensitive-path hits; Observability (4.7) schema complete; PAT (4.8), UI-wireframe (4.9), Encryption Posture (4.10), Task-Design (4.13) all not-triggered; Guard Contract lint green (4.11); Scope Check mechanically compliant (4.12).
+3. Conditional gates evaluated and skipped with reasons recorded: precedent-diff (4.4 — precedent exists: commit `01d2b5a0d8`), network-outage (4.5), downtime/cutover (4.55), scheduled-work pattern (none added).
+
+### New Considerations Discovered
+
+- Phase 4.7's trigger set is wider than plan Phase 2.9's: `scripts/` edits are non-docs, so the Observability section was required after all — kept and corrected.
+- `grep-q-pipe-guard`'s honest PJ_EXTS glob edges will still select it on most diffs — accepted and documented as the truthful classification, not masked (see per-suite table).
+
 ## Overview
 
 Eight labels in `ALWAYS_ON_SUITES` (`scripts/lib/test-affected-paths.sh`) carry committed weights below the `LOCAL_FAST_CAP_MS=10000` budget in `scripts/suite-durations.tsv`, but real CI timings — a `--timings-dir` re-price over five PR/merge_group runs (surfaced by the PR #11561 manifest regen, corroborated by the #11562 post-merge 8-run medians recorded in `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`) — put each above 10 s, so the next sanctioned durations regen (due by the issue's 2026-11-14 re-eval window) reds `scripts/test-all-fast-tier-budget.test.sh` unless the classification is decided first. Per the #9763 demotion doctrine, each crossed label leaves `ALWAYS_ON_SUITES` and becomes edge-selected: it keeps running on CI legs, merge_group, push and `--full`, and runs locally under `--affected` only when its declared/consumed/derived edge set matches the diff. Caps are not raised — the ratchet stands. The change removes the eight rows from `scripts/always-on-justifications.tsv`, re-pins the always-on census floor (`_MIN_ALWAYS_ON_DECLARED` in `scripts/test-all.sh` and its mirror literal in `scripts/test-all-affected.test.sh` f1), extends the `#9763 withdrawn-to-edge-selection` comment to name the resulting set, and reconciles the two audit surfaces that re-derive from classification (`scripts/test-affected-kb-consumers.baseline.txt`, and `scripts/ci-pr-affected-audit.accept.tsv` where a demoted suite's undeclared path mentions are citation-only — the committed ratchet baseline is shrink-only and cannot absorb new pairs).
@@ -166,8 +183,8 @@ logs:
   retention:       "GitHub Actions retention (repo default)"
 
 discoverability_test:
-  command:         bash scripts/test-all-fast-tier-budget.test.sh
-  expected_output: ALL PASS
+  command:         grep -c "LOCAL_FAST_CAP_MS=10000" scripts/test-all-fast-tier-budget.test.sh
+  expected_output: "1"
 ```
 
 ## Scope Check
