@@ -324,14 +324,34 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   trail as zero-line and takes its own tripwire on every aged job in its
   window (#11600). The countermeasure — proven in
   `git-data-boot-poll-8178.sh` (#8262) and adapted in
-  `web-first-deploy-10585.sh` (#11603): strip CR + the UTF-8 BOM globally
-  (`${log//.../}` — one mark per
-  section), then slice the step's output region on the runner's `##[group]Run`
-  headers, first header stamped at or after the step's `started_at` from the
-  jobs API, next header or EOF closing the region. Feed the region through the
-  same emitted-vs-echoed filter as the named path, and evaluate any
-  zero-parseable tripwire AFTER recovery — an empty region, no `started_at`,
-  or a region with no trail-pattern lines is the same CANNOT ESTABLISH.
+  `web-first-deploy-10585.sh` (#11603), `web-fresh-boot-zot-8651.sh` and
+  `git-data-rehearsal-evidence.sh` (#11607): strip CR + the UTF-8 BOM globally
+  (`${log//.../}` or `sed 's/\xef\xbb\xbf//g'` — exact three-byte sequence, one
+  mark per section; NEVER `tr -d`, which deletes the bytes independently and
+  corrupts other UTF-8), then slice the step's output region on the runner's
+  `##[group]Run` headers, first header stamped at or after the step's
+  `started_at` from the jobs API, next header or EOF closing the region. Feed
+  the region through the same emitted-vs-echoed filter as the named path, and
+  evaluate any zero-parseable tripwire AFTER recovery — an empty region, no
+  `started_at`, or a region with no trail-pattern lines is the same CANNOT
+  ESTABLISH. Two spelling/scope variants to check before copying: `gh run view
+  --json jobs` embeds camelCase `startedAt` (the 10585 probe's REST
+  `gh api …/jobs` reads snake_case `started_at`), and a WHOLE-RUN log
+  (`gh run view <id> --log`, not `--job`) carries every job's sections in one
+  stream — `git-data-rehearsal-evidence.sh` pre-filters the slice by field-1
+  job name so a sibling job's `##[group]Run` header cannot open the wrong
+  region, and re-attributes each region line as `<job>\t<step>\t<ts>
+  <content>` so the SAME anchored awk re-reads it (one parse grammar, no
+  second copy).
+- **`awk -v` binds its operand by POSITION in `var=value` form — `-v name
+  "$val"` (two argv entries) is not `-v name="$val"`.** Split, the name trips
+  gawk's `var=value` validation while the value falls into the program-text
+  position and nothing is written; under `2>/dev/null` plus an output-emptiness
+  check the crash lands on the helper's DESIGNED "unrecoverable" code and is
+  indistinguishable from it (#11607 — `step_region` in
+  `git-data-rehearsal-evidence.sh`, caught only by a fixture whose expected
+  outcome was a SUCCESSFUL recovery). See
+  `knowledge-base/project/learnings/2026-11-01-a-two-word-awk-v-mapped-the-helpers-crash-onto-its-designed-failure-code.md`.
 
 ## What the sweeper does NOT cover
 

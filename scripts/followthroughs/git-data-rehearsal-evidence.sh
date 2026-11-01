@@ -170,6 +170,13 @@ fetch_run() {
     if ! timeout 180 "${GHQ[@]}" run view "$id" --repo "$REPO" --attempt "$att" --log >"${WORK}/${slot}.log" 2>/dev/null || [[ ! -s "${WORK}/${slot}.log" ]]; then
       note_unread "gh-run-log-${slot}"; return 1
     fi
+    # Normalize ONCE for every consumer of this log (8178's idiom): gh writes a UTF-8 BOM at the start of EVERY
+    # step section after the first — landing after the two tab fields, immediately before the timestamp the
+    # `##[group]Run` region awk anchors on — one mark per section, so only a global strip clears them all. sed
+    # removes the exact three-byte SEQUENCE; `tr -d '\357\273\277'` would delete the three bytes INDEPENDENTLY
+    # and corrupt other UTF-8 («, ¿) in the content. The per-line `gsub(/\357\273\277/, "", $3)` inside the
+    # anchored awks below stays — idempotent on normalized input, keeps each awk self-sufficient.
+    sed -i 's/\r//g;s/\xef\xbb\xbf//g' "${WORK}/${slot}.log"
   fi
   return 0
 }
@@ -197,13 +204,84 @@ stepts() {
 # timestamp (stripped here). Matching is scoped to the EMITTING step and anchored at the start of the MESSAGE, so the step
 # source that `run:` echoes at the head of each group (it contains the same words after `echo "`) is never counted, and
 # neither is a line a dispatcher input echoed into another step's header.
+#
+# ATTRIBUTION EXPIRY (#11600/#11607): GitHub drops step-name attribution ~2-3 weeks after a job completes — every line
+# returns under field 2 `UNKNOWN STEP` while the content (and field 1, the job name) survives. The recovery trigger is a
+# graded step that produced ZERO lines under its own name — not a zero count for one regex: a step whose named lines are
+# present but fail `re` is a MEASURED zero (the failed-read-≠-zero contract cuts both ways), while a step with no named
+# lines at all is the attribution-expired shape. step_region then slices the step's `##[group]Run` output region —
+# field-1-scoped to the step's OWN job (a whole-run log carries every job's sections, e.g. `cutover` vs `wipe`, and a
+# sibling job's header stamped at/after the same startedAt must never open the region) — opened by the first header
+# stamped at or after the step's `startedAt` (camelCase, `gh run view --json jobs`), closed by the next header or EOF —
+# and re-attributes each region line as `<job>\t<prefix>\t<ts> <content>` into a scratch file the SAME anchored awks
+# re-read: one parse grammar, no second copy to drift. A step that ran but cannot be sliced (no usable `startedAt`, or
+# no `##[group]Run` header at/after it) is a FAILED READ — lcount returns 1 and the caller's existing note_unread arm
+# prints UNREAD(<token>); a skipped or absent step keeps the legitimate zero. Pinned assumption: field-1 job attribution
+# survives step-name expiry; if it ever expires too, step_region reports SR_OUTCOME=unsliceable → UNREAD —
+# loud, never counterfeit.
 LOG_TS='^[0-9T:.-]+Z '
-lcount() { # <log> <emitting step prefix> <message regex after the timestamp> -> REPLY = count; returns 1 when awk failed
-  REPLY="$(awk -F "$TAB" -v re="${LOG_TS}$3" -v st="$2" 'BEGIN { n = 0 } { gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { n++ } END { print n }' "$1" 2>/dev/null)" || return 1
-  [[ "$REPLY" =~ ^[0-9]+$ ]]
+# named_lines <slot> <step-name prefix> -> count of the fetched log's lines attributed to the step (0 = unattributed)
+named_lines() {
+  awk -F "$TAB" -v st="$2" 'index($2, st) == 1 { n++ } END { print n + 0 }' "${WORK}/$1.log" 2>/dev/null
 }
-lfirst() { # <log> <emitting step prefix> <message regex> -> first matching line's timestamp truncated to seconds
-  awk -F "$TAB" -v re="${LOG_TS}$3" -v st="$2" '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { split($3, a, " "); print substr(a[1], 1, 19) "Z"; exit }' "$1" 2>/dev/null
+# step_region <slot> <step-name prefix> -> STEP_REGION_FILE = ${WORK}/<slot>-<slug>.region.log; always
+# returns 0 and reports the outcome in SR_OUTCOME (a named discriminator — the argv-bearer sweep forbids
+# numeric-rc branching in bearer-curl library users):
+#   sliced      — region sliced and re-attributed into STEP_REGION_FILE;
+#   absent      — the step did not run: prefix absent from the jobs JSON, or conclusion `skipped` (designed absence);
+#   unsliceable — the step ran but the region cannot be sliced: no usable `startedAt`, or no `##[group]Run` header
+#                 at/after it (a degraded channel — the caller's UNREAD arm, never a printed zero).
+step_region() {
+  local slot="$1" pfx="$2" slug meta jn sconc st
+  SR_OUTCOME=unsliceable
+  slug="$(printf '%s' "$pfx" | tr -c 'A-Za-z0-9' '-')"
+  STEP_REGION_FILE="${WORK}/${slot}-${slug}.region.log"
+  meta="$(jq -r --arg p "$pfx" \
+    '[.jobs[] as $j | ($j.steps // [])[] | select((.name // "") | startswith($p)) | {jn: $j.name, con: (.conclusion // ""), st: (.startedAt // "")}][0] // empty
+     | "\(.jn)\t\(.con)\t\(.st)"' "${WORK}/${slot}.json" 2>/dev/null)"
+  [[ -n "$meta" ]] || { SR_OUTCOME=absent; return 0; }
+  IFS=$'\t' read -r jn sconc st <<<"$meta"
+  [[ "$sconc" == "skipped" ]] && { SR_OUTCOME=absent; return 0; }
+  [[ "$st" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]] || return 0
+  # The field-1 job-name pre-filter ($1 != jn -> next) is the ONE mechanism the --job-scoped prior ports never
+  # needed: a whole-run log carries sibling job sections whose `##[group]Run` headers could otherwise open the
+  # wrong region. The region derivation itself is git-data-boot-poll-8178.sh's awk verbatim (sub the two tab
+  # fields, ts = substr(1,19), `ts >= ps` opens, next header or EOF closes); each region line is re-attributed
+  # as `<job>\t<prefix>\t<ts> <content>` so the consumers' unchanged `index($2, st) == 1 && $3 ~ re` applies.
+  awk -F "$TAB" -v jn="$jn" -v ps="${st:0:19}" -v stn="$pfx" '
+    $1 != jn { next }
+    { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
+    line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }
+    started { printf "%s\t%s\t%s\n", jn, stn, line }' "${WORK}/${slot}.log" >"$STEP_REGION_FILE"
+  [[ -s "$STEP_REGION_FILE" ]] || return 0
+  SR_OUTCOME=sliced
+  return 0
+}
+lcount() { # <slot> <emitting step prefix> <message regex after the timestamp> -> REPLY = count; 1 = the read failed
+  local slot="$1" st="$2" re="$3"
+  REPLY="$(awk -F "$TAB" -v re="${LOG_TS}$re" -v st="$st" 'BEGIN { n = 0 } { gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { n++ } END { print n }' "${WORK}/${slot}.log" 2>/dev/null)" || return 1
+  [[ "$REPLY" =~ ^[0-9]+$ ]] || return 1
+  if [[ "$REPLY" == "0" && "$(named_lines "$slot" "$st")" == "0" ]]; then
+    step_region "$slot" "$st"
+    if [[ "$SR_OUTCOME" == sliced ]]; then
+      REPLY="$(awk -F "$TAB" -v re="${LOG_TS}$re" -v st="$st" 'BEGIN { n = 0 } { gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { n++ } END { print n }' "$STEP_REGION_FILE" 2>/dev/null)" || return 1
+      [[ "$REPLY" =~ ^[0-9]+$ ]]         # a region-measured zero is still a measured zero
+    elif [[ "$SR_OUTCOME" == absent ]]; then
+      :                                  # did not run — the named-path zero is the legitimate reading
+    else
+      return 1                           # ran but unsliceable — a failed read, never a zero
+    fi
+  fi
+}
+lfirst() { # <slot> <emitting step prefix> <message regex> -> first matching line's timestamp truncated to seconds
+  local slot="$1" st="$2" re="$3" out
+  out="$(awk -F "$TAB" -v re="${LOG_TS}$re" -v st="$st" '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { split($3, a, " "); print substr(a[1], 1, 19) "Z"; exit }' "${WORK}/${slot}.log" 2>/dev/null)"
+  if [[ -z "$out" && "$(named_lines "$slot" "$st")" == "0" ]]; then
+    step_region "$slot" "$st"
+    [[ "$SR_OUTCOME" == sliced ]] && \
+      out="$(awk -F "$TAB" -v re="${LOG_TS}$re" -v st="$st" '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { split($3, a, " "); print substr(a[1], 1, 19) "Z"; exit }' "$STEP_REGION_FILE" 2>/dev/null)"
+  fi
+  printf '%s' "$out"
 }
 
 fetch_ok_flip=0
@@ -258,8 +336,8 @@ if (( fetch_ok_flip )); then
   j="${WORK}/flip.json"; l="${WORK}/flip.log"
   stepc "$j" 'Write GIT_DATA_LUKS_CUTOVER_AT' flip-stamp; stamp_c="$REPLY"
   stepc "$j" 'Finalizer' flip-finalizer; fin="$REPLY"
-  if lcount "$l" 'Finalizer' 'finalizer: unwind complete[.]'; then done_n="$REPLY"; else done_n=""; fi
-  if lcount "$l" 'Finalizer' 'finalizer: writing GIT_DATA_STORE_ENABLED=false'; then start_n="$REPLY"; else start_n=""; fi
+  if lcount flip 'Finalizer' 'finalizer: unwind complete[.]'; then done_n="$REPLY"; else done_n=""; fi
+  if lcount flip 'Finalizer' 'finalizer: writing GIT_DATA_STORE_ENABLED=false'; then start_n="$REPLY"; else start_n=""; fi
   if [[ -z "$done_n" || -z "$start_n" ]]; then note_unread log-scan-flip; ran="$(UNRD log-scan-flip)"
   else
     if (( done_n > 0 )); then unwound="yes"; elif (( start_n > 0 )); then unwound="STARTED-NOT-COMPLETED"; else unwound="no"; fi
@@ -272,7 +350,7 @@ fi
 if (( fetch_ok_rb )); then
   j="${WORK}/rollback.json"; l="${WORK}/rollback.log"
   stepc "$j" 'Positive replication probe' rb-probe; probe_c="$REPLY"
-  if lcount "$l" 'Positive replication probe' '([[]git-data-cutover[]] )?STORE probe=probe verdict=ok'; then
+  if lcount rollback 'Positive replication probe' '([[]git-data-cutover[]] )?STORE probe=probe verdict=ok'; then
     if (( REPLY > 0 )); then seen="seen"; else seen="not seen"; fi
   else note_unread log-scan-rollback; seen="$(UNRD log-scan-rollback)"; fi
   ROLLBACK_LINE="$(printf '%s/%s   dispatched %s   conclusion %s   probe step %s   "STORE probe=probe verdict=ok" %s' \
@@ -301,7 +379,7 @@ fi
 # per-host: the workflow's own readback lines (`host web-N: git_data_store=<state> observed`) and their log timestamps.
 host_ts() { # <slot> <host label> <state>
   local l="${WORK}/$1.log" t=""
-  [[ -s "$l" ]] && t="$(lfirst "$l" 'Per-host git_data_store=' "host $2: git_data_store=$3 observed")"
+  [[ -s "$l" ]] && t="$(lfirst "$1" 'Per-host git_data_store=' "host $2: git_data_store=$3 observed")"
   [[ -n "$t" ]] && printf '%s' "$t" || return 1
 }
 PERHOST_LINE=""
@@ -438,8 +516,8 @@ proof_verdict() { # <slot> -> clear | store_not_empty | unknown | conflict | sca
   local l="${WORK}/$1.log" c ne
   [[ -s "$l" ]] || { echo unknown; return; }
   local re='((##[[][a-z]+[]]|::[a-z]+ title=[^:]*::)|[[]git-data-cutover[]] (STORE )?)(probe=[a-z-]+ )?verdict='
-  lcount "$l" 'Host-side proof' "${re}clear" || { echo scan; return; }; c="$REPLY"
-  lcount "$l" 'Host-side proof' "${re}store_not_empty" || { echo scan; return; }; ne="$REPLY"
+  lcount "$1" 'Host-side proof' "${re}clear" || { echo scan; return; }; c="$REPLY"
+  lcount "$1" 'Host-side proof' "${re}store_not_empty" || { echo scan; return; }; ne="$REPLY"
   if (( c > 0 && ne > 0 )); then echo conflict
   elif (( c > 0 )); then echo clear
   elif (( ne > 0 )); then echo store_not_empty
@@ -480,9 +558,18 @@ if [[ -n "$REFS" ]]; then
     j="${WORK}/refs.json"; l="${WORK}/refs.log"
     stepc "$j" "$REFS_STEP" refs-step; refs_step="$REPLY"
     refs_conf=""; refs_ans=""
-    if lcount "$l" "$REFS_STEP" '([[]git-data-cutover[]] )?REFS-CONFIRMED$'; then refs_conf="$REPLY"; fi
+    if lcount refs "$REFS_STEP" '([[]git-data-cutover[]] )?REFS-CONFIRMED$'; then refs_conf="$REPLY"; fi
     refs_msgs="$(awk -F "$TAB" -v re="${LOG_TS}([[]git-data-cutover[]] )?REFS_ASSERT ok " -v st="$REFS_STEP" \
       '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { m = $3; sub(/^[^ ]+ /, "", m); sub(/^[[]git-data-cutover[]] /, "", m); print m }' "$l" 2>/dev/null)" || refs_msgs=""
+    # Same two-phase as lcount: on an attribution-expired log the named extraction is empty; retry on the
+    # step_region re-attributed file (SR_OUTCOME=sliced). `unsliceable` already armed UNREAD(log-scan-refs)
+    # through refs_conf; `absent` keeps the legitimate empty.
+    if [[ -z "$refs_msgs" && "$(named_lines refs "$REFS_STEP")" == "0" ]]; then
+      step_region refs "$REFS_STEP"
+      [[ "$SR_OUTCOME" == sliced ]] && \
+        refs_msgs="$(awk -F "$TAB" -v re="${LOG_TS}([[]git-data-cutover[]] )?REFS_ASSERT ok " -v st="$REFS_STEP" \
+          '{ gsub(/\357\273\277/, "", $3) } index($2, st) == 1 && $3 ~ re { m = $3; sub(/^[^ ]+ /, "", m); sub(/^[[]git-data-cutover[]] /, "", m); print m }' "$STEP_REGION_FILE" 2>/dev/null)" || refs_msgs=""
+    fi
     refs_n="$(printf '%s' "$refs_msgs" | awk 'END { print NR }')"
     refs_c="$(jfield "$j" conclusion)"
     if [[ -z "$refs_conf" ]]; then note_unread log-scan-refs; REFS_LINE="$(UNRD log-scan-refs)"
