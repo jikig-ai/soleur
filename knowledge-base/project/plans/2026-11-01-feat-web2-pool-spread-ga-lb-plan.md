@@ -677,11 +677,14 @@ UI surface); `Pencil available: N/A (no UI surface)`.
   `lb-weight-gate.test.sh` §C runs, then C.3 fails (`unit`/static).
 - Given committed HCL where web-2's origins block carries `weight = 0`, when
   `lb-weight-gate.test.sh` §C runs, then C.3 passes (`unit`/static).
-- **API verify (post-merge, gated):** `doppler run -p soleur -c prd_terraform -- curl -s
-  -H "Authorization: Bearer $CF_API_TOKEN" https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/load_balancers/pools/$POOL_ID/health
-  | jq '.result.pop_health'` — expects each origin `healthy:true` after the
+- **API verify (post-merge, gated):** `doppler run -p soleur -c prd_terraform -- bash -c
+  'curl --disable --noproxy "*" -s --max-time 10
+  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health"
+  --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}")
+  | jq ".result.pop_health"'` — expects each origin `healthy:true` after the
   `ga-monitor-fix` arm runs (`e2e`, `pyramid-justified: live vendor state — no unit
-  substitute exists for monitor probe semantics`).
+  substitute exists for monitor probe semantics`). The bearer rides curl's stdin
+  `--config` channel, never argv — same form as the workflow's pool-health reads.
 
 ## Downtime & Cutover
 

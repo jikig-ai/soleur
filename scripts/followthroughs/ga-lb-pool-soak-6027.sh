@@ -105,15 +105,19 @@ cf_get() { # <url> -> body
 }
 
 # (a) pool health — every origin across every PoP must read healthy:true, and the
-#     read must carry >= 1 origin record (an empty pop_health is an instrument
-#     failure, not a vacuous PASS).
+#     read must carry >= 2 origin records: the pooled-member count is {web-1,
+#     web-2}, so a silently-dropped web-2 reads as an all-healthy single-record
+#     set (and an empty pop_health is an instrument failure). Fewer than 2 =>
+#     TRANSIENT, not FAIL: membership truth unreadable is CANNOT ESTABLISH — the
+#     same convention the empty-set case below already followed (a read failure
+#     retries next sweep rather than permanently reddening the tracker).
 POOL_ID=$(cf_get "${CF}/load_balancers/pools" | jq -r '.result[] | select(.name=="web-1") | .id') || POOL_ID=""
 [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || transient "web-1 pool id unresolvable or off-shape ('${POOL_ID}') — refusing to re-interpolate it"
 POOL_HEALTH=$(cf_get "${CF}/load_balancers/pools/${POOL_ID}/health") || transient "pool-health read failed"
 ORIGINS=$(printf '%s' "$POOL_HEALTH" | jq -r '[.result.pop_health[].origins[][]] | length' 2>/dev/null || true)
 case "$ORIGINS" in ''|*[!0-9]*) transient "pool-health payload unparseable" ;; esac
-if [[ "$ORIGINS" -lt 1 ]]; then
-  transient "pop_health carried no origin records — an empty set is not a verdict"
+if [[ "$ORIGINS" -lt 2 ]]; then
+  transient "pop_health carried ${ORIGINS} origin record(s) — the pooled set is {web-1, web-2}; a member's health record is missing (membership truth unreadable, not a verdict)"
 fi
 UNHEALTHY=$(printf '%s' "$POOL_HEALTH" | jq '[.result.pop_health[].origins[][] | select(.healthy != true)] | length' 2>/dev/null || true)
 case "$UNHEALTHY" in ''|*[!0-9]*) transient "pool-health unhealthy count unparseable" ;; esac

@@ -104,7 +104,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 310 -> 320 (#11294, +10): the "terraform stream key-material redaction" describe (sweep over every workflow, non-vacuity, no-escape rule,
 // mutation battery over every redacting step, drift ordering, variable-captured plans, and four public-sink tests: issue/comment/summary sinks, plan-output.txt writers, sticky PR comment feeds, sink mutation).
 // 320 -> 321 (#11294 follow-up, +1): the ANSI-colour pin (steps without -no-color print coloured lines; the filter strips colour first).
-const TEST_FLOOR = 321;
+// 321 -> 324 (#11766 fix round 2, +3): cf-lb-overlay ga_pool_update pins — the Plan gate step carries no `if:`, the
+// arm's -target set ⊇ {pool, LB, policy}, and the web-2 health precondition step exists/serve-gated/pre-plan.
+const TEST_FLOOR = 324;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -5758,8 +5760,12 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
 
   test("staging-overlay/teardown carry NO -target (whole-root plan / -destroy)", () => {
     for (const jobId of ["staging_overlay", "staging_teardown"]) {
+      const block = job(jobId);
+      // Job-exists guard: extractJobBlock returns "" for a renamed/deleted job,
+      // and zero -target on an absent job must not pass vacuously.
+      expect(block, `${jobId} job must exist in cf-lb-overlay.yml`).not.toEqual("");
       expect(
-        [...extractAllTargets(job(jobId))],
+        [...extractAllTargets(block)],
         `${jobId} must plan the whole throwaway root — a -target would scope the apply/destroy`,
       ).toEqual([]);
     }
@@ -5786,6 +5792,39 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
     const plan = extractStep(block, /Terraform plan \(GA pool/);
     expect(plan).not.toBeNull();
     expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(serve!));
+  });
+
+  test("the web-2 health precondition step is serve-gated and precedes the plan step", () => {
+    const block = job("ga_pool_update");
+    const health = extractStep(block, /web-2 health precondition/);
+    expect(health).not.toBeNull();
+    expect(health!).toMatch(/^\s*if: inputs\.mode == 'serve'\s*$/m);
+    const plan = extractStep(block, /Terraform plan \(GA pool/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(health!));
+  });
+
+  test("the ga_pool_update Plan gate step itself carries NO `if:` — a gated grader grades nothing", () => {
+    const block = job("ga_pool_update");
+    // extractStep-bounded: an `if:` added to the gate step goes red here; `if:`
+    // on OTHER steps is out of scope for this pin.
+    const gate = extractStep(block, /Plan gate/);
+    expect(gate).not.toBeNull();
+    expect(gate!).not.toMatch(/^\s*if:/m);
+  });
+
+  test("ga_pool_update -targets include the whole pool/LB/policy graded set", () => {
+    // Membership (⊇), not equality: dropping the policy target must go red —
+    // mirrors the ga_monitor_fix toEqual pin's intent without forbidding a
+    // legitimately-added fourth target.
+    const targets = [...extractAllTargets(job("ga_pool_update"))];
+    for (const t of [
+      "cloudflare_load_balancer_pool.web_1",
+      "cloudflare_load_balancer.app",
+      "cloudflare_notification_policy.web_lb_health",
+    ]) {
+      expect(targets).toContain(t);
+    }
   });
 });
 

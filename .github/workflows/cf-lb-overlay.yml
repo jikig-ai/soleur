@@ -751,12 +751,27 @@ jobs:
           # precondition provably holds — the orchestrator (#6027) sets the full env.
           # The outer `env DOPPLER_TOKEN=` scopes the prd read; the inner `env` hands
           # the wrapper the marker config's own token.
-          env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
+          #
+          # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
+          # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
+          # weight-flip authorization" and exits 0 WITHOUT evaluating Conditions
+          # A/B — a standby-state pass would let the serve arm proceed with zero
+          # flip preconditions proven. The flip-authorization marker
+          # `requires_runtime_bind_probe=true` is emitted on stdout ONLY by the
+          # Conditions A+B pass branch — it is the non-empty pass message this
+          # step must see.
+          GATE_OUT=""
+          GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \
-            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" || {
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1
           }
+          printf '%s\n' "$GATE_OUT"
+          if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
+            echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
       - name: web-2 health precondition (serve mode only)
         if: inputs.mode == 'serve'
         env:
@@ -769,6 +784,9 @@ jobs:
           # flip that adds an unhealthy web-2 routes ~half of app.soleur.ai traffic to a
           # dead origin under origin_steering random. Require web-2 healthy:true in the
           # CF pool-health read BEFORE any plan exists (same read the monitor-fix arm does).
+          # MEMBERSHIP FLOOR: the pooled set is {web-1, web-2} — a read carrying ONE
+          # record (or zero) is missing web-2's own record, and an absent record must
+          # never grade as healthy:true. Require n>=2 AND every record healthy.
           W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
             POOL_ID=$(curl --disable --noproxy "*" -s --max-time 10 \
               "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
@@ -778,15 +796,25 @@ jobs:
             curl --disable --noproxy "*" -s --max-time 10 \
               "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health" \
               --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \
-              | jq -r "[.result.pop_health[].origins[][] | .healthy] | if length == 0 then \"empty\" else (unique | join(\",\")) end"') || {
+              | jq -r "[.result.pop_health[].origins[][] | .healthy] | \"n=\" + (length | tostring) + \" h=\" + (if length == 0 then \"empty\" else (unique | join(\",\")) end)"') || {
             echo "::error::pool-health read failed — refusing to flip with health truth unprovable."
             exit 1
           }
-          case "$W2_HEALTH" in
-            *false*|empty|"") echo "::error::an origin reports healthy:${W2_HEALTH} — web-2 must be healthy:true before the serve flip routes traffic to it. NOTHING planned, NOTHING applied."; exit 1 ;;
-            true) echo "- web-2 origin health: true (serve precondition met)" >> "$GITHUB_STEP_SUMMARY" ;;
-            *) echo "::error::unparseable pool-health verdict '${W2_HEALTH}' — refusing."; exit 1 ;;
-          esac
+          W2_N="${W2_HEALTH#n=}"; W2_N="${W2_N%% *}"
+          W2_H="${W2_HEALTH##* h=}"
+          if [[ ! "$W2_N" =~ ^[0-9]+$ ]]; then
+            echo "::error::unparseable pool-health verdict '${W2_HEALTH}' — refusing."
+            exit 1
+          fi
+          if [[ "$W2_N" -lt 2 ]]; then
+            echo "::error::pool-health carried ${W2_N} origin record(s) — the pooled set is {web-1, web-2}; web-2's own record is absent, and an absent record is not a healthy:true. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          if [[ "$W2_H" != "true" ]]; then
+            echo "::error::an origin reports healthy:${W2_H} — web-2 must be healthy:true before the serve flip routes traffic to it. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          echo "- web-2 origin health: true across ${W2_N} pooled origin records (serve precondition met)" >> "$GITHUB_STEP_SUMMARY"
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

@@ -335,15 +335,54 @@ c3_scan_file() {
     blocks=$((blocks + 1))
     [[ "$has_w0" == "1" ]] || bad=$((bad + 1))
   done < <(awk '
-    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1; w2=0; w0=0; next }
-    inblock && /^[[:space:]]*\}/ { printf "%s|%s\n", w2, w0; inblock=0; next }
-    inblock && ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) { w2=1 }
-    inblock && $0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/ { w0=1 }
+    # Open of an origins block: the OPEN LINE itself is inspected too — a
+    # single-line `origins { name = "web-2" }` used to scan 0 0 0 (invisible to
+    # both the block census and the stray census). Braces are a DEPTH counter,
+    # not a boolean: a nested `header {}` must not close the scan early and
+    # misattribute the lines after it. The `next` here keeps a nested `origins`
+    # line inside a block on the depth>0 path (it deepens, never re-opens).
+    depth == 0 && /^[[:space:]]*origins[[:space:]]*\{/ {
+      w2 = ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) ? 1 : 0
+      # weight on the open line can only sit INLINE (after `origins {`), so the
+      # right-anchored-0 pattern is applied unanchored here; inside-line weight
+      # stays line-anchored below.
+      w0 = ($0 ~ /weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) ? 1 : 0
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
+    # A `}`-led line is a close, not content — a trailing comment cannot
+    # mint an origin member (same rule the boolean scan enforced).
+    depth > 0 && /^[[:space:]]*\}/ {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
+    depth > 0 {
+      if ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) w2 = 1
+      if ($0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) w0 = 1
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
   ' "$f")
   stray=$(awk '
-    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1 }
-    inblock && /^[[:space:]]*\}/ { inblock=0; next }
-    !inblock && ($0 ~ /hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
+    # Same depth discipline: "outside" is depth==0 AND not an origins open line;
+    # an origins block closes only when its OWN depth returns to 0.
+    depth == 0 && /^[[:space:]]*origins[[:space:]]*\{/ {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      next
+    }
+    depth > 0 {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      next
+    }
+    ($0 ~ /hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
     END { print n+0 }
   ' "$f")
   printf '%s %s %s\n' "$bad" "$blocks" "$stray"
@@ -425,6 +464,43 @@ c3_fixture stray 'resource "cloudflare_load_balancer" "app" {
   fallback_pool_id = hcloud_server.web["web-2"].ipv4_address
 }'
 assert_c3 "C.3-fixture: hcloud_server.web[\"web-2\"] attribute-assigned outside origins → stray" "0 0 1"
+# Single-line blocks: the open line's own content must be scanned — a one-line
+# origins block used to read as 0 0 0 (invisible to BOTH censuses).
+c3_fixture oneline 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" }
+}'
+assert_c3 "C.3-fixture: single-line web-2 origins block without weight → red" "1 1 0"
+c3_fixture oneline_ok 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" weight = 0 }
+}'
+assert_c3 "C.3-fixture: single-line drained member scans clean" "0 1 0"
+c3_fixture oneline_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" weight = 1 }
+}'
+assert_c3 "C.3-fixture: single-line hot web-2 member → red" "1 1 0"
+# Nested blocks must not close the origins scan early: a `header {}` inside
+# origins used to end the block at its own `}`, orphaning every line after it
+# (weight unscanned, name misattributed to the stray census).
+c3_fixture nested 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    check_response {
+      header { name = "x" }
+    }
+    name    = "web-2"
+    weight  = 0
+  }
+}'
+assert_c3 "C.3-fixture: nested block does not close the origins scan early" "0 1 0"
+c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    check_response {
+      header { name = "x" }
+    }
+    name    = "web-2"
+    weight  = 1
+  }
+}'
+assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
 rm -rf "$C3_TMP"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
