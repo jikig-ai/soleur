@@ -88,14 +88,28 @@ for cand in origin/main origin/master main master; do
 done
 [[ -n "$BASE_REF" ]] || BASE_REF="HEAD~1"
 
+# When the session roots at the main checkout, HEAD is main and the branch's
+# trailer/diff never enter the range — resolve the PR's head ref instead (#11682).
+PR_HEAD=$(gh pr view "$PR_NUM" --json headRefName --jq .headRefName 2>/dev/null || true)
+TIP=""
+if [[ -n "$PR_HEAD" ]] && git rev-parse --verify --quiet "origin/${PR_HEAD}" >/dev/null 2>&1; then
+  TIP="origin/${PR_HEAD}"
+elif git rev-parse --verify --quiet "refs/pull/${PR_NUM}/head" >/dev/null 2>&1; then
+  TIP="refs/pull/${PR_NUM}/head"
+elif git fetch --quiet origin "pull/${PR_NUM}/head" 2>/dev/null; then
+  TIP="FETCH_HEAD"  # fetched just above; covers pruned/deleted head branches
+else
+  TIP="HEAD"
+fi
+
 # Check if review trailer exists in branch commits
-TRAILER_CMO=$(git log "${BASE_REF}..HEAD" --format='%(trailers:key=Reviewed-By-CMO,valueonly)' 2>/dev/null | tr -d '[:space:]' || true)
+TRAILER_CMO=$(git log "${BASE_REF}..${TIP}" --format='%(trailers:key=Reviewed-By-CMO,valueonly)' 2>/dev/null | tr -d '[:space:]' || true)
 if [[ -n "$TRAILER_CMO" ]]; then
   exit 0
 fi
 
 # Check if diff touches marketing, content strategy, or blog
-CHANGED_MARKETING=$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null | grep -E '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' || true)
+CHANGED_MARKETING=$(git diff --name-only "${BASE_REF}...${TIP}" 2>/dev/null | grep -E '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' || true)
 if [[ -n "$CHANGED_MARKETING" ]]; then
   exit 0
 fi
