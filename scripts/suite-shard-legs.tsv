@@ -275,6 +275,7 @@ plugins/soleur/test/pr-overlap-preflight.test.sh	5
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	4
 plugins/soleur/test/proc.test.sh	1
 plugins/soleur/test/ralph-loop.test.sh	2
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	7
 plugins/soleur/test/redact-class-parity.test.sh	6
 plugins/soleur/test/regenerate-shard-manifest.test.sh	1
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	2

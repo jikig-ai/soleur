@@ -9,6 +9,7 @@ import {
   perCaseBudgetUsd,
   resolveRunBudgetUsd,
   costFromResult,
+  caseCostUsd,
   isBudgetExceededResult,
   createLedger,
   shouldRunCase,
@@ -138,23 +139,103 @@ describe("probe-budget: the cumulative ledger (Guard 5 rows 1, 3)", () => {
   });
 });
 
-describe("probe-budget: the probe source is wired to the helpers", () => {
-  const src = readFileSync(resolve(__dirname, "..", "scripts", "dev-probe-destroy-ask.ts"), "utf8");
-  it("imports the helpers and uses every call site", () => {
-    expect(src).toMatch(/from "\.\/lib\/probe-budget"/);
-    for (const sym of ["resolveRunBudgetUsd", "perCaseBudgetUsd", "costFromResult", "isBudgetExceededResult", "createLedger", "shouldRunCase"]) {
-      expect(src).toContain(sym);
+describe("probe-budget: a case with NO result frame is charged its cap (D4)", () => {
+  it("charges the measured total_cost_usd when a result frame is present", () => {
+    expect(caseCostUsd({ type: "result", total_cost_usd: 0.42 }, 0.5)).toEqual({ costUsd: 0.42, basis: "measured" });
+    // A frame that carries no usable cost is still a frame: the measurement is 0, as costFromResult defines it.
+    expect(caseCostUsd({ type: "result" }, 0.5)).toEqual({ costUsd: 0, basis: "measured" });
+  });
+
+  it("charges the per-case cap when the case ended with no result frame (error, abort, stranded request)", () => {
+    for (const frame of [undefined, null]) {
+      expect(caseCostUsd(frame, 0.5)).toEqual({ costUsd: 0.5, basis: "cap" });
+    }
+    expect(caseCostUsd(undefined, 0.1)).toEqual({ costUsd: 0.1, basis: "cap" });
+  });
+
+  it("a run of eight hung cases exhausts the ledger at the run cap instead of reading as free", () => {
+    const l = createLedger();
+    const perCase = perCaseBudgetUsd(8);
+    for (let i = 0; i < 8; i++) {
+      expect(shouldRunCase(l)).toBe(true);
+      l.record(caseCostUsd(undefined, perCase).costUsd);
+    }
+    expect(l.totalUsd()).toBeCloseTo(RUN_BUDGET_USD, 10);
+    expect(l.exhausted()).toBe(true);
+  });
+
+  it("with the old charge of 0 the same eight hung cases would have recorded nothing (the control the cap defeats)", () => {
+    const l = createLedger();
+    for (let i = 0; i < 8; i++) l.record(costFromResult(undefined));
+    expect(l.totalUsd()).toBe(0);
+  });
+});
+
+// The probe's top level runs the model on import, so its wiring is pinned against its COMMENT-STRIPPED source with anchored call forms.
+// A symbol-presence grep would stay green with a call removed (it would still match the import and the header prose).
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[ \t])\/\/.*$/gm, "$1");
+}
+
+describe("probe-budget: the probe source is wired to the helpers (anchored call forms, comments stripped)", () => {
+  const raw = readFileSync(resolve(__dirname, "..", "scripts", "dev-probe-destroy-ask.ts"), "utf8");
+  const src = stripComments(raw);
+
+  it("the comment stripper removes block and line comments but keeps URLs inside strings", () => {
+    const out = stripComments('/* a */ const x = "https://h/1"; // note\nconst y = 1; /** b */');
+    expect(out).toContain('"https://h/1"');
+    expect(out).not.toMatch(/note|\ba\b|\bb\b/);
+    expect(src).not.toContain("HARNESS-ONLY");
+  });
+
+  it("imports every helper from ./lib/probe-budget", () => {
+    const m = /import \{([^}]*)\} from "\.\/lib\/probe-budget";/.exec(src);
+    expect(m).not.toBeNull();
+    const names = (m?.[1] ?? "").split(",").map((x) => x.trim());
+    for (const sym of ["resolveRunBudgetUsd", "perCaseBudgetUsd", "caseCostUsd", "isBudgetExceededResult", "createLedger", "shouldRunCase"]) {
+      expect(names).toContain(sym);
     }
   });
-  it("sets maxBudgetUsd on the probe's own copy of the options, not through the production option builder's arguments", () => {
-    // The builder already has an optional, unset-by-default `maxBudgetUsd` argument that production callers do not use; the
-    // harness-only cap is assigned after the builder returns so the production option shape is unchanged by this probe.
-    expect(src).toMatch(/\(opts as any\)\.maxBudgetUsd = /);
-    expect(src).not.toMatch(/buildAgentQueryOptions\(\{[^}]*maxBudgetUsd/s);
+
+  it("derives the run budget from PROBE_RUN_BUDGET_USD and builds the ledger and per-case cap from it", () => {
+    expect(src).toMatch(/const runBudgetUsd = resolveRunBudgetUsd\(process\.env\.PROBE_RUN_BUDGET_USD\);/);
+    expect(src).toMatch(/const ledger = createLedger\(runBudgetUsd\);/);
+    expect(src).toMatch(/const caseBudgetUsd = perCaseBudgetUsd\(selected\.length, runBudgetUsd\);/);
   });
-  it("maps error_max_budget_usd to CANT-RUN:budget-exceeded and prints the TOTAL line before RESULT", () => {
-    expect(src).toContain("budget-exceeded");
-    expect(src.lastIndexOf("TOTAL costUsd=")).toBeGreaterThan(-1);
-    expect(src.lastIndexOf("TOTAL costUsd=")).toBeLessThan(src.lastIndexOf("RESULT: ${outcome}"));
+
+  it("sets maxBudgetUsd to the per-case cap on the probe's own copy of the options, never through the production builder's arguments", () => {
+    expect(src).toMatch(/\(opts as any\)\.maxBudgetUsd = caseBudgetUsd;/);
+    expect(src).not.toMatch(/buildAgentQueryOptions\(\{[^}]*maxBudgetUsd/s);
+    expect(src.indexOf("buildAgentQueryOptions({")).toBeLessThan(src.indexOf("(opts as any).maxBudgetUsd = caseBudgetUsd;"));
+  });
+
+  it("guards the case loop with shouldRunCase(ledger) and stops with a budget CANT-RUN before any model call", () => {
+    expect(src).toMatch(
+      /for \(const c of selected\) \{\s*if \(!shouldRunCase\(ledger\)\) \{\s*console\.log\(`PROBE \$\{c\.name\} verdict=CANT-RUN:budget-exceeded[^`]*`\);\s*cantRun = true;\s*budgetHit = true;\s*continue;\s*\}/,
+    );
+    // The guard precedes the only runCase call.
+    expect(src.indexOf("if (!shouldRunCase(ledger))")).toBeLessThan(src.indexOf("await runCase(c, caseBudgetUsd)"));
+  });
+
+  it("records the case cost on the ledger straight after the case runs", () => {
+    expect(src).toMatch(/const r = await runCase\(c, caseBudgetUsd\);\s*ran \+= 1;\s*ledger\.record\(r\.costUsd\);/);
+  });
+
+  it("keeps the LATEST result frame and charges the case through caseCostUsd(lastResult, caseBudgetUsd)", () => {
+    expect(src).toMatch(/if \(m\.type === "result"\) \{ release\(\); lastResult = m; \}/);
+    expect(src).toMatch(/const cost = caseCostUsd\(lastResult, caseBudgetUsd\);/);
+    expect(src).toMatch(/costUsd: cost\.costUsd, costBasis: cost\.basis, budgetExceeded: isBudgetExceededResult\(lastResult\)/);
+    expect(src).toMatch(/costUsd=\$\{r\.costUsd\.toFixed\(4\)\} costBasis=\$\{r\.costBasis\}/);
+  });
+
+  it("maps the SDK budget stop to a budget-exceeded verdict that sets budgetHit, and budgetHit wins the CANT-RUN reason", () => {
+    expect(src).toMatch(/if \(r\.budgetExceeded\) verdict = "BUDGET-EXCEEDED";/);
+    expect(src).toMatch(/if \(verdict === "BUDGET-EXCEEDED"\) \{ cantRun = true; budgetHit = true; \}/);
+    expect(src).toMatch(/`CANT-RUN:\$\{budgetHit \? "budget-exceeded" : cantRunReason\}`/);
+    expect(src).toMatch(/verdict=\$\{verdict === "BUDGET-EXCEEDED" \? "CANT-RUN:budget-exceeded" : verdict\}/);
+  });
+
+  it("prints TOTAL costUsd=<ledger total> immediately before the RESULT line", () => {
+    expect(src).toMatch(/console\.log\(`TOTAL costUsd=\$\{ledger\.totalUsd\(\)\.toFixed\(4\)\}`\);\s*console\.log\(`RESULT: \$\{outcome\} /);
   });
 });

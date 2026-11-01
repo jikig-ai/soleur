@@ -2201,7 +2201,7 @@
 "id": "18dfa40"
 },
 "1i97shu": {
-"title": "CI Claude turns (claude-code-action, ci.yml real-turn gates, the non-blocking scheduled real-SDK ask probe on a host-bwrap runner, ADR-284) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244)",
+"title": "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244); the non-blocking real-SDK ask probe (ADR-284)",
 "technology": "HTTPS",
 "source": {
 "model": "github"
@@ -3577,7 +3577,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 10854,
+"width": 10878,
 "height": 2596
 },
 "nodes": [
@@ -3802,7 +3802,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 10526,
+"x": 10550,
 "y": 0,
 "width": 327,
 "height": 180,
@@ -6206,38 +6206,38 @@
 "points": [
 [
 9624,
-2462
+2463
 ],
 [
-9933,
-2379
+9938,
+2381
 ],
 [
-10573,
-2195
+10597,
+2197
 ],
 [
-10573,
+10597,
 2095
 ],
 [
-10573,
+10597,
 859
 ],
 [
-10573,
+10597,
 859
 ],
 [
-10573,
+10597,
 859
 ],
 [
-10573,
-504
+10597,
+502
 ],
 [
-4806,
+4809,
 457
 ],
 [
@@ -6246,7 +6246,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10574,
+"x": 10598,
 "y": 1423,
 "width": 265,
 "height": 106
@@ -6440,24 +6440,24 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-10526,
-119
+10550,
+118
 ],
 [
-9824,
+9846,
 237
 ],
 [
-7069,
+7072,
 702
 ],
 [
-6323,
+6324,
 828
 ]
 ],
 "labelBBox": {
-"x": 9088,
+"x": 9104,
 "y": 411,
 "width": 262,
 "height": 73
@@ -8169,7 +8169,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates, the non-blocking \nscheduled real-SDK ask probe on a \nhost-bwrap runner, ADR-284) on the \nsoleur-ci-eval workspace key — ",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key \n(ADR-244); the non-blocking real-SDK ask ",
 "points": [
 [
 6313,
@@ -8215,7 +8215,7 @@
 "labelBBox": {
 "x": 10162,
 "y": 1628,
-"width": 244,
+"width": 268,
 "height": 106
 },
 "parent": null,
@@ -10702,7 +10702,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 5353,
+"x": 5352,
 "y": 1662,
 "width": 345,
 "height": 180,
@@ -13489,7 +13489,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates, the non-blocking \nscheduled real-SDK ask probe on a \nhost-bwrap runner, ADR-284) on the \nsoleur-ci-eval workspace key — ",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key \n(ADR-244); the non-blocking real-SDK ask ",
 "points": [
 [
 8696,
@@ -13571,7 +13571,7 @@
 "labelBBox": {
 "x": 8456,
 "y": 1263,
-"width": 244,
+"width": 268,
 "height": 107
 },
 "parent": null,
@@ -13812,7 +13812,7 @@
 1577
 ],
 [
-5681,
+5680,
 1656
 ]
 ],
@@ -13878,7 +13878,7 @@
 1469
 ],
 [
-5354,
+5355,
 1522
 ],
 [
@@ -13886,7 +13886,7 @@
 1595
 ],
 [
-5434,
+5433,
 1654
 ]
 ],
@@ -13913,7 +13913,7 @@
 "label": "Runtime secrets",
 "points": [
 [
-5354,
+5353,
 1732
 ],
 [
@@ -14900,11 +14900,11 @@
 "label": "Injects the registry-host boot \ncredential (scoped to the isolated \nsoleur-registry project's prd root — the \n4 admitted secrets ZOT_PULL/PUSH_TOKEN + \nBETTERSTACK_LOGS_TOKEN + ",
 "points": [
 [
-5699,
-1837
+5698,
+1836
 ],
 [
-5771,
+5770,
 1867
 ],
 [
@@ -15838,11 +15838,11 @@
 1349
 ],
 [
-5779,
+5778,
 1397
 ],
 [
-5529,
+5528,
 1469
 ],
 [
@@ -15867,11 +15867,11 @@
 ],
 [
 3583,
-1742
+1743
 ]
 ],
 "labelBBox": {
-"x": 5530,
+"x": 5529,
 "y": 1469,
 "width": 262,
 "height": 106
@@ -16462,7 +16462,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 16822,
+"width": 16846,
 "height": 3114
 },
 "nodes": [
@@ -16529,7 +16529,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__contributor",
-"x": 13136,
+"x": 13160,
 "y": 0,
 "width": 327,
 "height": 180,
@@ -16713,7 +16713,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "__platform_webapp",
-"x": 2675,
+"x": 2676,
 "y": 325,
 "width": 1314,
 "height": 302,
@@ -16748,7 +16748,7 @@
 "notation": "Data store",
 "kind": "database",
 "navigateTo": "__connectedRepoKb",
-"x": 13574,
+"x": 13598,
 "y": 0,
 "width": 346,
 "height": 180,
@@ -16787,7 +16787,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cursorCli",
-"x": 11382,
+"x": 11367,
 "y": 1699,
 "width": 341,
 "height": 180,
@@ -16826,7 +16826,7 @@
 "technology": "React, Next.js",
 "kind": "container",
 "navigateTo": "__platform_webapp_dashboard",
-"x": 2715,
+"x": 2716,
 "y": 407,
 "width": 324,
 "height": 180,
@@ -16862,7 +16862,7 @@
 "technology": "Supabase Auth",
 "kind": "container",
 "navigateTo": "__platform_webapp_auth",
-"x": 3149,
+"x": 3150,
 "y": 407,
 "width": 344,
 "height": 180,
@@ -16914,7 +16914,7 @@
 "technology": "Next.js API",
 "kind": "container",
 "navigateTo": "__platform_webapp_api",
-"x": 3603,
+"x": 3604,
 "y": 407,
 "width": 346,
 "height": 180,
@@ -17446,7 +17446,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__github",
-"x": 13123,
+"x": 13147,
 "y": 407,
 "width": 353,
 "height": 180,
@@ -17561,7 +17561,7 @@
 "notation": "Person",
 "kind": "actor",
 "navigateTo": "__publicReader",
-"x": 14354,
+"x": 14378,
 "y": 858,
 "width": 361,
 "height": 180,
@@ -17599,7 +17599,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__platform_grokBuild",
-"x": 12506,
+"x": 12588,
 "y": 1699,
 "width": 359,
 "height": 180,
@@ -17638,7 +17638,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 11578,
+"x": 11602,
 "y": 1279,
 "width": 349,
 "height": 180,
@@ -17716,7 +17716,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__projectZot",
-"x": 15287,
+"x": 15311,
 "y": 858,
 "width": 364,
 "height": 180,
@@ -17753,7 +17753,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anchoreGrype",
-"x": 15983,
+"x": 16007,
 "y": 857,
 "width": 336,
 "height": 182,
@@ -17793,7 +17793,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__devin",
-"x": 11965,
+"x": 11998,
 "y": 1699,
 "width": 362,
 "height": 180,
@@ -17830,7 +17830,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__npmRegistry",
-"x": 14826,
+"x": 14850,
 "y": 858,
 "width": 350,
 "height": 180,
@@ -17998,7 +17998,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 11438,
+"x": 11423,
 "y": 2068,
 "width": 1882,
 "height": 743,
@@ -18126,7 +18126,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 12446,
+"x": 12431,
 "y": 2150,
 "width": 336,
 "height": 180,
@@ -18164,7 +18164,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 12016,
+"x": 12001,
 "y": 2150,
 "width": 320,
 "height": 180,
@@ -18203,7 +18203,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 12892,
+"x": 12877,
 "y": 2150,
 "width": 387,
 "height": 180,
@@ -18239,7 +18239,7 @@
 "technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
 "kind": "component",
 "navigateTo": "__platform_plugin_destructiveGuard",
-"x": 11478,
+"x": 11463,
 "y": 2150,
 "width": 427,
 "height": 180,
@@ -18397,7 +18397,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cloudflare",
-"x": 13578,
+"x": 13602,
 "y": 1699,
 "width": 331,
 "height": 180,
@@ -18436,7 +18436,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 12440,
+"x": 12425,
 "y": 2571,
 "width": 348,
 "height": 200,
@@ -18474,7 +18474,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 15003,
+"x": 15008,
 "y": 2581,
 "width": 372,
 "height": 180,
@@ -18607,7 +18607,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 9281,
+"x": 9277,
 "y": 2150,
 "width": 354,
 "height": 180,
@@ -18717,7 +18717,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__ghcr",
-"x": 15412,
+"x": 15436,
 "y": 2150,
 "width": 356,
 "height": 180,
@@ -18755,7 +18755,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__inngestReleases",
-"x": 16100,
+"x": 16124,
 "y": 2149,
 "width": 344,
 "height": 182,
@@ -18844,7 +18844,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 10041,
+"x": 10026,
 "y": 2581,
 "width": 388,
 "height": 180,
@@ -18883,7 +18883,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__slack",
-"x": 10552,
+"x": 10537,
 "y": 2934,
 "width": 345,
 "height": 180,
@@ -18990,47 +18990,47 @@
 "points": [
 [
 10799,
-1429
+1427
 ],
 [
-10890,
+10893,
 1455
 ],
 [
-11002,
+11010,
 1484
 ],
 [
-11105,
+11117,
 1499
 ],
 [
-11226,
-1516
+11238,
+1515
 ],
 [
-12088,
-1487
+12095,
+1490
 ],
 [
-12206,
+12214,
 1519
 ],
 [
-12335,
+12360,
 1554
 ],
 [
-12466,
+12512,
 1631
 ],
 [
-12559,
-1693
+12620,
+1694
 ]
 ],
 "labelBBox": {
-"x": 12453,
+"x": 12497,
 "y": 1552,
 "width": 169,
 "height": 39
@@ -19132,10 +19132,10 @@
 ],
 [
 2448,
-529
+528
 ],
 [
-2705,
+2706,
 508
 ]
 ],
@@ -19161,60 +19161,60 @@
 "label": "Calls",
 "points": [
 [
-2967,
+2968,
 407
 ],
 [
-3004,
+3005,
 376
 ],
 [
-3048,
+3049,
 344
 ],
 [
-3094,
+3095,
 325
 ],
 [
-3176,
+3177,
 291
 ],
 [
-3203,
+3204,
 306
 ],
 [
-3292,
+3293,
 300
 ],
 [
-3406,
+3407,
 293
 ],
 [
-3442,
+3443,
 282
 ],
 [
-3548,
+3549,
 325
 ],
 [
-3593,
+3594,
 343
 ],
 [
-3636,
+3637,
 372
 ],
 [
-3673,
+3674,
 401
 ]
 ],
 "labelBBox": {
-"x": 3293,
+"x": 3294,
 "y": 256,
 "width": 57,
 "height": 39
@@ -19235,19 +19235,19 @@
 "label": "Spawns agent sessions",
 "points": [
 [
-3644,
+3645,
 587
 ],
 [
-3614,
+3615,
 603
 ],
 [
-3581,
+3582,
 618
 ],
 [
-3548,
+3549,
 627
 ],
 [
@@ -19518,46 +19518,46 @@
 ],
 [
 9602,
-1899
+1898
 ],
 [
 9921,
 1949
 ],
 [
-10103,
+10096,
 1978
 ],
 [
-10138,
+10129,
 2034
 ],
 [
-10320,
+10305,
 2060
 ],
 [
-10349,
+10333,
 2064
 ],
 [
-12364,
+12349,
 2058
 ],
 [
-12391,
+12376,
 2068
 ],
 [
-12437,
+12422,
 2083
 ],
 [
-12482,
+12467,
 2113
 ],
 [
-12518,
+12503,
 2144
 ]
 ],
@@ -19651,23 +19651,23 @@
 2063
 ],
 [
-11936,
+11921,
 2059
 ],
 [
-11961,
+11946,
 2068
 ],
 [
-12006,
+11991,
 2083
 ],
 [
-12049,
+12034,
 2113
 ],
 [
-12084,
+12069,
 2143
 ]
 ],
@@ -19693,11 +19693,11 @@
 "label": "[...]",
 "points": [
 [
-3949,
+3950,
 502
 ],
 [
-4478,
+4479,
 514
 ],
 [
@@ -19773,88 +19773,88 @@
 1306
 ],
 [
-10634,
-1237
+10633,
+1238
 ],
 [
 10854,
 1279
 ],
 [
-11161,
-1337
+11172,
+1338
 ],
 [
-11214,
+11228,
 1446
 ],
 [
-11523,
+11547,
 1499
 ],
 [
-11770,
-1540
-],
-[
-12405,
-1466
-],
-[
-12650,
+11673,
 1519
 ],
 [
-13062,
+12569,
+1492
+],
+[
+12693,
+1519
+],
+[
+13097,
 1606
 ],
 [
-13114,
+13145,
 1789
 ],
 [
-13523,
+13547,
 1889
 ],
 [
-13772,
-1950
+13796,
+1951
 ],
 [
-15649,
+15673,
 1879
 ],
 [
-15823,
+15847,
 2068
 ],
 [
-15917,
+15941,
 2170
 ],
 [
-15917,
+15941,
 2278
 ],
 [
-15823,
+15847,
 2380
 ],
 [
-15618,
-2604
+15639,
+2607
 ],
 [
-13453,
-2656
+13442,
+2657
 ],
 [
-12800,
+12784,
 2667
 ]
 ],
 "labelBBox": {
-"x": 12962,
+"x": 12999,
 "y": 1561,
 "width": 25,
 "height": 18
@@ -19939,68 +19939,68 @@
 1889
 ],
 [
-9369,
-1990
+9367,
+1989
 ],
 [
-10400,
-1830
+10394,
+1827
 ],
 [
-10782,
+10773,
 1949
 ],
 [
-10868,
+10857,
 1976
 ],
 [
-10866,
+10854,
 2034
 ],
 [
-10953,
+10938,
 2060
 ],
 [
-10969,
+10954,
 2064
 ],
 [
-13322,
+13307,
 2057
 ],
 [
-13335,
+13320,
 2068
 ],
 [
-13485,
+13470,
 2197
 ],
 [
-13511,
+13496,
 2357
 ],
 [
-13386,
+13371,
 2511
 ],
 [
-13313,
+13298,
 2600
 ],
 [
-13004,
+12989,
 2640
 ],
 [
-12800,
+12785,
 2658
 ]
 ],
 "labelBBox": {
-"x": 10954,
+"x": 10939,
 "y": 1974,
 "width": 200,
 "height": 56
@@ -20021,24 +20021,24 @@
 "label": "Reads/writes",
 "points": [
 [
-12614,
+12599,
 2330
 ],
 [
-12614,
+12599,
 2396
 ],
 [
-12614,
+12599,
 2488
 ],
 [
-12614,
+12599,
 2559
 ]
 ],
 "labelBBox": {
-"x": 12615,
+"x": 12600,
 "y": 2433,
 "width": 85,
 "height": 39
@@ -20059,24 +20059,24 @@
 "label": "Reads/writes",
 "points": [
 [
-12267,
+12252,
 2330
 ],
 [
-12336,
+12321,
 2398
 ],
 [
-12432,
+12417,
 2491
 ],
 [
-12505,
+12490,
 2563
 ]
 ],
 "labelBBox": {
-"x": 12448,
+"x": 12433,
 "y": 2433,
 "width": 85,
 "height": 39
@@ -20097,23 +20097,23 @@
 "label": "[...]",
 "points": [
 [
-3721,
+3722,
 587
 ],
 [
-3693,
+3694,
 643
 ],
 [
-3675,
+3676,
 713
 ],
 [
-3719,
+3720,
 758
 ],
 [
-3729,
+3730,
 768
 ],
 [
@@ -20255,23 +20255,23 @@
 "label": "Validates tokens",
 "points": [
 [
-3187,
+3188,
 587
 ],
 [
-3158,
+3159,
 603
 ],
 [
-3126,
+3127,
 618
 ],
 [
-3094,
+3095,
 627
 ],
 [
-3064,
+3065,
 636
 ],
 [
@@ -20733,11 +20733,11 @@
 "label": "[...]",
 "points": [
 [
-3949,
+3950,
 502
 ],
 [
-4612,
+4613,
 515
 ],
 [
@@ -20837,15 +20837,15 @@
 1714
 ],
 [
-5180,
+5178,
 1677
 ],
 [
-4839,
+4837,
 1689
 ],
 [
-4191,
+4190,
 1712
 ],
 [
@@ -20937,15 +20937,15 @@
 1756
 ],
 [
-4185,
+4184,
 1711
 ],
 [
-4839,
+4837,
 1689
 ],
 [
-5040,
+5038,
 1682
 ],
 [
@@ -21037,7 +21037,7 @@
 513
 ],
 [
-3959,
+3960,
 501
 ]
 ],
@@ -21681,23 +21681,23 @@
 "label": "Session/replay state",
 "points": [
 [
-3644,
+3645,
 587
 ],
 [
-3614,
+3615,
 604
 ],
 [
-3581,
+3582,
 618
 ],
 [
-3548,
+3549,
 627
 ],
 [
-3429,
+3430,
 660
 ],
 [
@@ -21710,7 +21710,7 @@
 ],
 [
 2278,
-674
+673
 ],
 [
 2249,
@@ -21903,11 +21903,11 @@
 "label": "Daily org cost/usage report (Admin API, \ncost-report cron)",
 "points": [
 [
-3949,
+3950,
 500
 ],
 [
-4793,
+4794,
 510
 ],
 [
@@ -21967,28 +21967,28 @@
 1219
 ],
 [
-10654,
-1318
+10659,
+1319
 ],
 [
-10787,
-1221
+10794,
+1222
 ],
 [
-11271,
+11283,
 1279
 ],
 [
-11370,
-1290
+11386,
+1291
 ],
 [
-11479,
-1310
+11500,
+1311
 ],
 [
-11568,
-1328
+11592,
+1329
 ]
 ],
 "labelBBox": {
@@ -22065,16 +22065,16 @@
 1279
 ],
 [
-11102,
+11110,
 1294
 ],
 [
-11386,
-1324
+11406,
+1325
 ],
 [
-11568,
-1345
+11592,
+1346
 ]
 ],
 "labelBBox": {
@@ -22143,24 +22143,24 @@
 626
 ],
 [
-12267,
-697
+12268,
+696
 ],
 [
-12512,
+12514,
 647
 ],
 [
-12717,
-606
+12727,
+605
 ],
 [
-12954,
-562
+12973,
+560
 ],
 [
-13113,
-532
+13137,
+531
 ]
 ],
 "labelBBox": {
@@ -22185,24 +22185,24 @@
 "label": "Opens untrusted PR — head code runs in \nfix-constraints Stage A (pull_request, \ncontents:read, no write token) (ADR-074)",
 "points": [
 [
-13300,
+13324,
 180
 ],
 [
-13300,
+13324,
 244
 ],
 [
-13300,
+13324,
 331
 ],
 [
-13300,
+13324,
 397
 ]
 ],
 "labelBBox": {
-"x": 13301,
+"x": 13325,
 "y": 240,
 "width": 262,
 "height": 72
@@ -22223,36 +22223,36 @@
 "label": "[...]",
 "points": [
 [
-3949,
+3950,
 485
 ],
 [
-4717,
+4718,
 433
 ],
 [
 7893,
-235
+236
 ],
 [
 10499,
 325
 ],
 [
-11485,
+11494,
 359
 ],
 [
-12663,
+12685,
 447
 ],
 [
-13113,
+13137,
 482
 ]
 ],
 "labelBBox": {
-"x": 8496,
+"x": 8566,
 "y": 266,
 "width": 25,
 "height": 18
@@ -22302,15 +22302,15 @@
 627
 ],
 [
-11484,
+11494,
 601
 ],
 [
-12663,
-536
+12684,
+535
 ],
 [
-13113,
+13137,
 509
 ]
 ],
@@ -22336,16 +22336,16 @@
 "label": "GitHub issue notifications — the \ndelivery hop the incident mirror lands \npages on: [ci/betterstack-incident] \nissues filed by \nscheduled-betterstack-incident-mirror.yml ",
 "points": [
 [
-13123,
-499
+13147,
+498
 ],
 [
-12862,
-504
+12882,
+503
 ],
 [
-12358,
-530
+12367,
+528
 ],
 [
 11949,
@@ -22422,36 +22422,36 @@
 "label": "Publishes the zot restart-loop alarm \nverdict, and since #8038 the weekly \nissue-flow measurement, which updates \none standing public issue with aggregate \ncounts (find-or-update, never re-filed) ",
 "points": [
 [
-13477,
+13501,
 511
 ],
 [
-13718,
+13742,
 531
 ],
 [
-14138,
+14162,
 574
 ],
 [
-14271,
+14295,
 647
 ],
 [
-14357,
+14381,
 694
 ],
 [
-14429,
+14453,
 781
 ],
 [
-14476,
+14500,
 850
 ]
 ],
 "labelBBox": {
-"x": 14405,
+"x": 14429,
 "y": 657,
 "width": 257,
 "height": 85
@@ -22471,60 +22471,60 @@
 "label": "CI installs a pinned Grok CLI (versioned \nx.ai binary, sha256 content pin) and \nruns the inspect-contract + golden-path \neval (grok-fidelity, ADR-245)",
 "points": [
 [
-13359,
+13383,
 587
 ],
 [
-13369,
+13393,
 606
 ],
 [
-13378,
+13402,
 627
 ],
 [
-13383,
+13407,
 647
 ],
 [
-13428,
+13452,
 820
 ],
 [
-13422,
+13446,
 874
 ],
 [
-13383,
+13407,
 1048
 ],
 [
-13320,
+13344,
 1327
 ],
 [
-13318,
-1435
+13337,
+1430
 ],
 [
-13108,
+13132,
 1629
 ],
 [
-13044,
-1688
+13083,
+1676
 ],
 [
-12955,
-1726
+13019,
+1711
 ],
 [
-12875,
-1750
+12957,
+1735
 ]
 ],
 "labelBBox": {
-"x": 13371,
+"x": 13394,
 "y": 1116,
 "width": 251,
 "height": 90
@@ -22545,15 +22545,15 @@
 "label": "[...]",
 "points": [
 [
-13124,
+13148,
 501
 ],
 [
-12564,
+12585,
 511
 ],
 [
-10853,
+10855,
 550
 ],
 [
@@ -22691,15 +22691,15 @@
 "label": "CI reaches the deny-all-public zot host \nto dual-push release images, and reaches \nweb-1's shell for the 25 terraform_data \nSSH provisioners (24 plus the read-only \nweb_1_host_key_probe; #9151 added ",
 "points": [
 [
-13124,
+13147,
 509
 ],
 [
-12682,
+12703,
 535
 ],
 [
-11492,
+11502,
 603
 ],
 [
@@ -22777,15 +22777,15 @@
 "label": "Hetzner Cloud control-plane API \n(api.hetzner.cloud), never the hosts \nthemselves. Named here: \ncutover-inngest.yml resolves the created \ntime of the ONE server named ",
 "points": [
 [
-13124,
+13147,
 509
 ],
 [
-12682,
+12703,
 534
 ],
 [
-11492,
+11501,
 601
 ],
 [
@@ -22887,16 +22887,16 @@
 "label": "Transport and root authentication LIVE \n(ADR-220 D1b accepted 2026-09-27). \nReviewer-gated root SSH from \ngit-data-cutover.yml (job `cutover`, \nenvironment web-platform-infra-apply, ",
 "points": [
 [
-13123,
+13148,
 502
 ],
 [
-12580,
+12601,
 513
 ],
 [
-10959,
-555
+10961,
+554
 ],
 [
 10741,
@@ -23030,39 +23030,39 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates, the non-blocking \nscheduled real-SDK ask probe on a \nhost-bwrap runner, ADR-284) on the \nsoleur-ci-eval workspace key — ",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key \n(ADR-244); the non-blocking real-SDK ask ",
 "points": [
 [
-13123,
-540
+13147,
+542
 ],
 [
-13020,
-567
+13044,
+569
 ],
 [
-12887,
-604
+12912,
+606
 ],
 [
-12773,
+12797,
 647
 ],
 [
-12659,
-690
+12674,
+691
 ],
 [
-12625,
-695
+12635,
+691
 ],
 [
 12527,
 766
 ],
 [
-12384,
-868
+12383,
+866
 ],
 [
 12380,
@@ -23077,30 +23077,30 @@
 1129
 ],
 [
-12144,
-1153
+12143,
+1152
 ],
 [
 12045,
 1219
 ],
 [
-12011,
-1241
+12017,
+1238
 ],
 [
-11974,
-1262
+11987,
+1256
 ],
 [
-11937,
-1282
+11957,
+1274
 ]
 ],
 "labelBBox": {
 "x": 12528,
 "y": 893,
-"width": 244,
+"width": 268,
 "height": 106
 },
 "parent": null,
@@ -23119,11 +23119,11 @@
 "label": "cron-gh-pages-cert-reissue (ADR-125, \nAP-019): transiently PATCHes the \napex+www dns_records proxied flag \nfalse→true to open a DNS-only window so \nGitHub/LE can validate the Pages cert ",
 "points": [
 [
-3949,
+3950,
 500
 ],
 [
-4806,
+4807,
 509
 ],
 [
@@ -23183,51 +23183,51 @@
 1219
 ],
 [
-11304,
-1308
+11314,
+1310
 ],
 [
-11460,
-1149
+11474,
+1147
 ],
 [
-11983,
+12007,
 1279
 ],
 [
-12208,
+12232,
 1334
 ],
 [
-12230,
+12254,
 1446
 ],
 [
-12455,
+12479,
 1499
 ],
 [
-12562,
+12586,
 1523
 ],
 [
-13338,
+13362,
 1479
 ],
 [
-13440,
+13464,
 1519
 ],
 [
-13531,
+13555,
 1554
 ],
 [
-13612,
+13636,
 1630
 ],
 [
-13668,
+13692,
 1692
 ]
 ],
@@ -23293,28 +23293,28 @@
 1629
 ],
 [
-7737,
-1738
+7746,
+1739
 ],
 [
-12275,
-1647
+12349,
+1643
 ],
 [
-12921,
+13003,
 1689
 ],
 [
-13145,
-1704
+13206,
+1703
 ],
 [
-13402,
-1737
+13437,
+1735
 ],
 [
-13568,
-1761
+13592,
+1759
 ]
 ],
 "labelBBox": {
@@ -23339,36 +23339,36 @@
 "label": "apply-web-platform-infra.yml issues \nREAD-ONLY GETs to the Cloudflare \nrulesets API (ADR-136, #6767): the \npre-apply entrypoint gate (a step AFTER \n`terraform plan` and BEFORE the main ",
 "points": [
 [
-13476,
+13500,
 549
 ],
 [
-13525,
+13549,
 571
 ],
 [
-13574,
+13598,
 603
 ],
 [
-13605,
+13629,
 647
 ],
 [
-13834,
-969
+13747,
+814
 ],
 [
-13792,
-1476
+13765,
+1443
 ],
 [
-13761,
+13768,
 1689
 ]
 ],
 "labelBBox": {
-"x": 13782,
+"x": 13749,
 "y": 1108,
 "width": 255,
 "height": 106
@@ -23525,84 +23525,84 @@
 "label": "[...]",
 "points": [
 [
-13124,
+13148,
 560
 ],
 [
-13078,
+13102,
 583
 ],
 [
-13031,
+13055,
 611
 ],
 [
-12995,
+13019,
 647
 ],
 [
-12854,
+12878,
 787
 ],
 [
-12933,
+12957,
 904
 ],
 [
-12796,
+12820,
 1048
 ],
 [
-12760,
-1086
+12802,
+1067
 ],
 [
-12029,
-1475
+12030,
+1487
 ],
 [
-11983,
+12007,
 1499
 ],
 [
-11860,
-1561
+11868,
+1565
 ],
 [
-11835,
+11837,
 1595
 ],
 [
-11702,
+11687,
 1629
 ],
 [
-11293,
-1733
+11286,
+1721
 ],
 [
-11175,
-1656
+11174,
+1657
 ],
 [
-10754,
+10764,
 1689
 ],
 [
-10448,
-1713
+10454,
+1714
 ],
 [
-10092,
+10094,
 1748
 ],
 [
 9882,
-1769
+1770
 ]
 ],
 "labelBBox": {
-"x": 12697,
+"x": 12713,
 "y": 1151,
 "width": 25,
 "height": 18
@@ -23848,27 +23848,27 @@
 1554
 ],
 [
-7055,
+7060,
 1584
 ],
 [
-6587,
+6594,
 1608
 ],
 [
-4715,
+4727,
 1689
 ],
 [
-4116,
+4123,
 1715
 ],
 [
-3407,
-1757
+3408,
+1758
 ],
 [
-3079,
+3078,
 1778
 ]
 ],
@@ -24078,12 +24078,12 @@
 "label": "Page view events",
 "points": [
 [
-2715,
+2716,
 503
 ],
 [
-2229,
-518
+2230,
+517
 ],
 [
 788,
@@ -24166,7 +24166,7 @@
 "label": "Statutory triage notifications (to the \nclaimed row's owner, today always the \nconfigured operator — ADR-269; reads are \nOwner-shared per ADR-066). Also the \npush-failure fallback: the cron falls ",
 "points": [
 [
-3949,
+3950,
 499
 ],
 [
@@ -24240,16 +24240,16 @@
 "label": "The release-outcome operator email: an \ninline `curl` to the Resend API from the \nrunner (NOT via webapp/api, which carry \nthe statutory-triage edges), one of \nfourteen Resend emitters under .github/ ",
 "points": [
 [
-13123,
-505
+13148,
+504
 ],
 [
-12687,
+12707,
 521
 ],
 [
-11582,
-571
+11584,
+570
 ],
 [
 11435,
@@ -24358,11 +24358,11 @@
 544
 ],
 [
-4903,
+4904,
 506
 ],
 [
-3959,
+3960,
 499
 ]
 ],
@@ -24388,11 +24388,11 @@
 "label": "Web Push delivery (VAPID) for statutory \ndeadline reminders; transport-accepted, \nnot receipt (ADR-136)",
 "points": [
 [
-3949,
+3950,
 502
 ],
 [
-5020,
+5021,
 524
 ],
 [
@@ -24442,56 +24442,56 @@
 1800
 ],
 [
-3392,
-1820
+3393,
+1819
 ],
 [
-4110,
+4117,
 1861
 ],
 [
-4715,
+4727,
 1889
 ],
 [
-6651,
-1980
+6658,
+1979
 ],
 [
-7135,
+7140,
 2020
 ],
 [
-9073,
+9072,
 2060
 ],
 [
-9310,
-2064
+9545,
+2069
 ],
 [
-13110,
-2058
+12859,
+2049
 ],
 [
-13347,
+13332,
 2068
 ],
 [
 14110,
-2097
+2098
 ],
 [
-15016,
+15035,
 2182
 ],
 [
-15401,
+15425,
 2220
 ]
 ],
 "labelBBox": {
-"x": 9074,
+"x": 9073,
 "y": 1949,
 "width": 281,
 "height": 106
@@ -24512,60 +24512,60 @@
 "label": "[...]",
 "points": [
 [
-13477,
+13501,
 503
 ],
 [
-13979,
+14003,
 517
 ],
 [
-15389,
+15413,
 564
 ],
 [
-15580,
+15604,
 647
 ],
 [
-15736,
+15760,
 715
 ],
 [
-15817,
+15841,
 777
 ],
 [
-15817,
+15841,
 947
 ],
 [
-15817,
+15841,
 947
 ],
 [
-15817,
+15841,
 947
 ],
 [
-15817,
+15841,
 1790
 ],
 [
-15817,
+15841,
 1923
 ],
 [
-15737,
+15761,
 2056
 ],
 [
-15672,
+15696,
 2142
 ]
 ],
 "labelBBox": {
-"x": 15818,
+"x": 15842,
 "y": 1356,
 "width": 25,
 "height": 18
@@ -24587,36 +24587,36 @@
 "label": "zot-image-mirror.yml builds the boot \nasset from upstream: fetches manifest D \nand every blob anonymously, verifies \neach digest, packages them reproducibly \nand publishes the immutable prerelease ",
 "points": [
 [
-13477,
+13501,
 499
 ],
 [
-13875,
+13899,
 502
 ],
 [
-14833,
+14857,
 523
 ],
 [
-15127,
+15151,
 647
 ],
 [
-15232,
+15256,
 692
 ],
 [
-15327,
+15351,
 781
 ],
 [
-15390,
+15414,
 851
 ]
 ],
 "labelBBox": {
-"x": 15293,
+"x": 15317,
 "y": 647,
 "width": 258,
 "height": 106
@@ -24641,56 +24641,56 @@
 1802
 ],
 [
-3392,
+3393,
 1824
 ],
 [
-4110,
+4117,
 1870
 ],
 [
-4715,
+4727,
 1889
 ],
 [
 7588,
-1981
+1980
 ],
 [
-8308,
-1899
+8305,
+1900
 ],
 [
-11182,
+11167,
 1949
 ],
 [
-12214,
+12207,
 1967
 ],
 [
-14811,
-1868
+14826,
+1866
 ],
 [
-15823,
+15847,
 2068
 ],
 [
-15914,
+15938,
 2086
 ],
 [
-16010,
+16034,
 2120
 ],
 [
-16090,
+16114,
 2153
 ]
 ],
 "labelBBox": {
-"x": 15761,
+"x": 15785,
 "y": 1949,
 "width": 259,
 "height": 106
@@ -24711,36 +24711,36 @@
 "label": "CI reaches upstream releases twice: \nbuild-inngest-bootstrap-image.yml \ndownloads the same pinned tarball (with \nthe checksums-file verify) when the \nbootstrap image is rebuilt, and the ",
 "points": [
 [
-13477,
+13501,
 502
 ],
 [
-14106,
+14130,
 515
 ],
 [
-16204,
+16228,
 566
 ],
 [
-16322,
+16346,
 647
 ],
 [
-16803,
+16827,
 978
 ],
 [
-16457,
+16481,
 1846
 ],
 [
-16320,
+16344,
 2140
 ]
 ],
 "labelBBox": {
-"x": 16567,
+"x": 16591,
 "y": 1313,
 "width": 254,
 "height": 106
@@ -24761,36 +24761,36 @@
 "label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
 "points": [
 [
-13477,
+13501,
 500
 ],
 [
-14027,
+14051,
 508
 ],
 [
-15685,
+15709,
 539
 ],
 [
-15900,
+15924,
 647
 ],
 [
-15987,
+16011,
 691
 ],
 [
-16055,
+16079,
 779
 ],
 [
-16098,
+16122,
 848
 ]
 ],
 "labelBBox": {
-"x": 16031,
+"x": 16055,
 "y": 647,
 "width": 263,
 "height": 106
@@ -24887,15 +24887,15 @@
 1889
 ],
 [
-7982,
+7981,
 2044
 ],
 [
-8878,
+8874,
 2168
 ],
 [
-9271,
+9267,
 2217
 ]
 ],
@@ -24937,44 +24937,44 @@
 1499
 ],
 [
-3442,
+3440,
 1510
 ],
 [
-4420,
-1482
+4407,
+1483
 ],
 [
-4554,
+4540,
 1519
 ],
 [
-4872,
+4868,
 1606
 ],
 [
-4882,
+4884,
 1791
 ],
 [
-5197,
+5209,
 1889
 ],
 [
-5975,
-2132
+5986,
+2124
 ],
 [
-8552,
-2216
+8550,
+2213
 ],
 [
-9270,
+9267,
 2234
 ]
 ],
 "labelBBox": {
-"x": 5198,
+"x": 5210,
 "y": 1776,
 "width": 25,
 "height": 18
@@ -24995,16 +24995,16 @@
 "label": "RESTORE path, added 2026-08-05 \n(#7277/ADR-169). After the recut \ndestroys the store, a needs:-chained job \ncopies the required pin set GHCR -> zot \nover the CF Tunnel bridge and verifies ",
 "points": [
 [
-13124,
+13148,
 502
 ],
 [
-12598,
+12618,
 515
 ],
 [
-11065,
-559
+11067,
+558
 ],
 [
 10858,
@@ -25135,12 +25135,12 @@
 2089
 ],
 [
-9652,
+9651,
 2118
 ],
 [
-9612,
-2144
+9610,
+2145
 ]
 ],
 "labelBBox": {
@@ -25185,12 +25185,12 @@
 2007
 ],
 [
-9384,
+9383,
 2081
 ],
 [
-9407,
-2140
+9405,
+2141
 ]
 ],
 "labelBBox": {
@@ -25215,120 +25215,120 @@
 "label": "Fetches its OWN zot image at first boot \nas the pinned release asset \nzot-image-<version>-<D12> (a prerelease \nof this repo) - NEVER from itself \n(bootstrap paradox) and NEVER from ",
 "points": [
 [
-9635,
-2187
+9631,
+2186
 ],
 [
-9832,
+9826,
 2128
 ],
 [
-10158,
+10150,
 2032
 ],
 [
-10439,
+10429,
 1949
 ],
 [
-10834,
+10821,
 1833
 ],
 [
-10921,
-1757
+10908,
+1756
 ],
 [
-11327,
+11312,
 1689
 ],
 [
-11400,
-1677
+11388,
+1676
 ],
 [
-12599,
-1682
+12640,
+1684
 ],
 [
-12650,
+12693,
 1629
 ],
 [
-12684,
+12727,
 1594
 ],
 [
-12659,
-1567
+12713,
+1564
 ],
 [
-12650,
+12693,
 1519
 ],
 [
-12648,
-1509
+12688,
+1507
 ],
 [
-12644,
-1508
+12677,
+1511
 ],
 [
-12642,
+12671,
 1499
 ],
 [
+12632,
+1409
+],
+[
 12624,
-1402
+1364
 ],
 [
-12593,
-1363
-],
-[
-12642,
+12671,
 1279
 ],
 [
-12670,
-1231
+12695,
+1235
 ],
 [
-12705,
-1250
+12726,
+1248
 ],
 [
-12750,
+12766,
 1219
 ],
 [
-12842,
-1153
+12859,
+1150
 ],
 [
-12865,
-1134
+12887,
+1135
 ],
 [
-12939,
+12963,
 1048
 ],
 [
-13006,
-970
+13030,
+971
 ],
 [
-13156,
+13181,
 732
 ],
 [
-13240,
+13264,
 596
 ]
 ],
 "labelBBox": {
-"x": 12643,
+"x": 12672,
 "y": 1313,
 "width": 265,
 "height": 106
@@ -25365,44 +25365,44 @@
 1499
 ],
 [
-3399,
+3397,
 1507
 ],
 [
-4075,
+4063,
 1494
 ],
 [
-4168,
+4154,
 1519
 ],
 [
-4497,
+4488,
 1607
 ],
 [
-4517,
+4510,
 1779
 ],
 [
-4839,
+4837,
 1889
 ],
 [
-6780,
-2554
+6776,
+2544
 ],
 [
-9303,
-2652
+9290,
+2649
 ],
 [
-10031,
-2667
+10016,
+2666
 ]
 ],
 "labelBBox": {
-"x": 5382,
+"x": 5379,
 "y": 1992,
 "width": 25,
 "height": 18
@@ -25475,15 +25475,15 @@
 2511
 ],
 [
-4658,
+4656,
 2659
 ],
 [
-9029,
+9015,
 2669
 ],
 [
-10031,
+10016,
 2670
 ]
 ],
@@ -25561,15 +25561,15 @@
 2511
 ],
 [
-5059,
+5056,
 2671
 ],
 [
-9077,
+9063,
 2672
 ],
 [
-10031,
+10015,
 2670
 ]
 ],
@@ -25595,16 +25595,16 @@
 "label": "[...]",
 "points": [
 [
-13123,
+13147,
 503
 ],
 [
-12615,
-517
+12635,
+516
 ],
 [
-11171,
-564
+11173,
+563
 ],
 [
 10975,
@@ -25695,20 +25695,20 @@
 1519
 ],
 [
-10394,
-1893
+10339,
+1714
 ],
 [
-10307,
-2368
+10266,
+2329
 ],
 [
-10260,
+10234,
 2571
 ]
 ],
 "labelBBox": {
-"x": 10308,
+"x": 10299,
 "y": 1561,
 "width": 25,
 "height": 18
@@ -25729,36 +25729,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-9589,
+9581,
 2330
 ],
 [
-9672,
+9662,
 2385
 ],
 [
-9784,
+9771,
 2455
 ],
 [
-9886,
+9871,
 2511
 ],
 [
-9932,
-2535
+9917,
+2536
 ],
 [
-9983,
-2560
+9968,
+2561
 ],
 [
-10032,
-2582
+10017,
+2583
 ]
 ],
 "labelBBox": {
-"x": 9887,
+"x": 9872,
 "y": 2400,
 "width": 264,
 "height": 106
@@ -25779,36 +25779,36 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-10286,
+10271,
 2581
 ],
 [
-10297,
+10282,
 2558
 ],
 [
-10309,
+10294,
 2534
 ],
 [
-10318,
+10303,
 2511
 ],
 [
-10462,
+10450,
 2137
 ],
 [
-10561,
+10556,
 1669
 ],
 [
-10600,
-1469
+10598,
+1468
 ]
 ],
 "labelBBox": {
-"x": 10492,
+"x": 10483,
 "y": 1949,
 "width": 262,
 "height": 106
@@ -25829,27 +25829,27 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-10041,
+10026,
 2665
 ],
 [
-9256,
-2648
+9242,
+2647
 ],
 [
-6317,
+6312,
 2569
 ],
 [
-5409,
+5406,
 2380
 ],
 [
-4248,
-2138
+4246,
+2139
 ],
 [
-4006,
+4005,
 1901
 ],
 [
@@ -25870,7 +25870,7 @@
 ]
 ],
 "labelBBox": {
-"x": 4277,
+"x": 4275,
 "y": 1949,
 "width": 269,
 "height": 106
@@ -25891,96 +25891,108 @@
 "label": "Incident mirror (ADR-298, epic #10390): \nscheduled-betterstack-incident-mirror.yml \nruns every 15 min (watchdog-dispatch \nprimary — it watches the paging \nsubstrate, so it cannot be ",
 "points": [
 [
-10344,
+10329,
 2581
 ],
 [
-10533,
+10518,
 2428
 ],
 [
-10919,
+10904,
 2126
 ],
 [
-11079,
+11064,
 2068
 ],
 [
-11101,
+11086,
 2060
 ],
 [
-11159,
+11144,
 2062
 ],
 [
-11182,
+11167,
 2060
 ],
 [
-11659,
-2017
+11687,
+2015
 ],
 [
-11776,
-1982
+11815,
+1983
 ],
 [
-12253,
+12335,
 1949
 ],
 [
-12443,
-1936
+12519,
+1937
 ],
 [
-13794,
-1973
+13824,
+1970
 ],
 [
-13965,
+13989,
 1889
 ],
 [
-14279,
-1735
+14124,
+1823
 ],
 [
-14221,
-1422
+14154,
+1770
 ],
 [
-14066,
+14205,
+1629
+],
+[
+14288,
+1399
+],
+[
+14144,
+1324
+],
+[
+14030,
 1108
 ],
 [
-13952,
-878
+13917,
+893
 ],
 [
-13925,
+13926,
 799
 ],
 [
-13718,
+13736,
 647
 ],
 [
-13650,
-597
+13671,
+595
 ],
 [
-13563,
-563
+13586,
+560
 ],
 [
-13487,
-540
+13510,
+538
 ]
 ],
 "labelBBox": {
-"x": 14193,
+"x": 14230,
 "y": 1518,
 "width": 261,
 "height": 106
@@ -26067,24 +26079,24 @@
 1777
 ],
 [
-3392,
+3393,
 1756
 ],
 [
-4110,
+4117,
 1711
 ],
 [
-4715,
+4727,
 1689
 ],
 [
-4886,
+4897,
 1683
 ],
 [
-7635,
-1693
+7636,
+1692
 ],
 [
 7794,
@@ -26307,15 +26319,15 @@
 "label": "CI is both an emitter and the applier: \nthe ./.github/actions/sentry-heartbeat \ncomposite posts ok|error check-ins from \n20 workflows, in two groups — 14 \nGHA-`schedule:`-fired (image-cve-scan ",
 "points": [
 [
-13124,
+13147,
 508
 ],
 [
-12682,
+12703,
 533
 ],
 [
-11492,
+11501,
 597
 ],
 [
@@ -26713,24 +26725,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-10359,
+10344,
 2760
 ],
 [
-10430,
+10415,
 2812
 ],
 [
-10520,
+10505,
 2876
 ],
 [
-10593,
+10578,
 2928
 ]
 ],
 "labelBBox": {
-"x": 10510,
+"x": 10495,
 "y": 2830,
 "width": 214,
 "height": 39
@@ -26751,48 +26763,48 @@
 "label": "Mobile push notification",
 "points": [
 [
-10897,
+10882,
 2977
 ],
 [
-11039,
+11024,
 2927
 ],
 [
-11216,
+11201,
 2833
 ],
 [
-11216,
+11201,
 2672
 ],
 [
-11216,
+11201,
 1788
 ],
 [
-11216,
+11201,
 1788
 ],
 [
-11216,
+11201,
 1788
 ],
 [
-11216,
-1586
+11201,
+1591
 ],
 [
-10984,
-1473
+10979,
+1478
 ],
 [
 10809,
-1417
+1420
 ]
 ],
 "labelBBox": {
-"x": 11217,
+"x": 11202,
 "y": 2218,
 "width": 150,
 "height": 39
@@ -26852,47 +26864,47 @@
 "points": [
 [
 10799,
-1428
+1427
 ],
 [
-10890,
-1455
+10893,
+1454
 ],
 [
-11002,
+11010,
 1483
 ],
 [
-11105,
+11117,
 1499
 ],
 [
-11236,
-1518
+11242,
+1517
 ],
 [
-11575,
-1481
+11565,
+1485
 ],
 [
-11702,
+11687,
 1519
 ],
 [
-11822,
-1554
+11818,
+1555
 ],
 [
-11943,
+11952,
 1631
 ],
 [
-12028,
-1693
+12047,
+1694
 ]
 ],
 "labelBBox": {
-"x": 11932,
+"x": 11940,
 "y": 1554,
 "width": 246,
 "height": 34
@@ -26912,72 +26924,72 @@
 "label": "CI installs a pinned CLI (versioned \nstatic.devin.ai setup script) and \nasserts it registers the manifest's \ndeclared skill set (harness-discovery, \nADR-245)",
 "points": [
 [
-13295,
+13319,
 587
 ],
 [
-13285,
+13310,
 702
 ],
 [
-13255,
+13279,
 905
 ],
 [
-13161,
+13185,
 1048
 ],
 [
-13137,
+13161,
 1085
 ],
 [
-13111,
-1075
+13134,
+1074
 ],
 [
-13083,
+13106,
 1108
 ],
 [
-12919,
-1308
+12945,
+1307
 ],
 [
-13032,
-1476
+13061,
+1473
 ],
 [
-12824,
+12857,
 1629
 ],
 [
-12689,
-1728
+12741,
+1718
 ],
 [
-12614,
-1650
+12676,
+1656
 ],
 [
-12451,
+12533,
 1689
 ],
 [
-12414,
-1698
+12480,
+1701
 ],
 [
-12375,
-1709
+12423,
+1716
 ],
 [
-12337,
-1721
+12370,
+1731
 ]
 ],
 "labelBBox": {
-"x": 13084,
+"x": 13107,
 "y": 1108,
 "width": 234,
 "height": 106
@@ -26999,47 +27011,47 @@
 "points": [
 [
 10799,
-1425
+1423
 ],
 [
-10890,
-1451
+10893,
+1449
 ],
 [
-11003,
-1480
+11011,
+1479
 ],
 [
-11105,
+11117,
 1499
 ],
 [
 11190,
-1514
+1512
 ],
 [
-11221,
-1480
+11217,
+1485
 ],
 [
-11299,
+11284,
 1519
 ],
 [
-11377,
-1557
+11362,
+1558
 ],
 [
-11444,
+11428,
 1631
 ],
 [
-11489,
+11474,
 1691
 ]
 ],
 "labelBBox": {
-"x": 11434,
+"x": 11418,
 "y": 1562,
 "width": 241,
 "height": 18
@@ -27135,51 +27147,51 @@
 1889
 ],
 [
-9347,
-2018
+9344,
+2017
 ],
 [
-10364,
-1802
+10352,
+1804
 ],
 [
-10722,
+10707,
 1949
 ],
 [
-10789,
+10774,
 1977
 ],
 [
-10775,
+10760,
 2033
 ],
 [
-10842,
+10827,
 2060
 ],
 [
-10894,
+10879,
 2080
 ],
 [
-12784,
+12769,
 2051
 ],
 [
-12837,
+12822,
 2068
 ],
 [
-12888,
+12873,
 2083
 ],
 [
-12937,
+12922,
 2113
 ],
 [
-12978,
+12963,
 2144
 ]
 ],
@@ -27225,19 +27237,19 @@
 1521
 ],
 [
-4854,
-1487
+4850,
+1488
 ],
 [
-4940,
+4935,
 1519
 ],
 [
-5014,
-1546
+5011,
+1545
 ],
 [
-5004,
+5002,
 1602
 ],
 [
@@ -27245,8 +27257,8 @@
 1629
 ],
 [
-5357,
-1730
+5358,
+1728
 ],
 [
 7489,
@@ -27281,39 +27293,39 @@
 1949
 ],
 [
-9999,
+9992,
 1978
 ],
 [
-10057,
+10049,
 2035
 ],
 [
-10320,
+10305,
 2060
 ],
 [
-10355,
+10340,
 2063
 ],
 [
-12804,
+12789,
 2057
 ],
 [
-12837,
+12822,
 2068
 ],
 [
-12888,
+12873,
 2083
 ],
 [
-12937,
+12922,
 2113
 ],
 [
-12978,
+12963,
 2144
 ]
 ],
@@ -27339,15 +27351,15 @@
 "label": "cron-ux-audit per-fire overlay: \nUNWRAPPED @playwright/mcp@0.0.75, \n--snapshot-mode none only; holds no \ntree- or value-returning tool (PA-31 \n§(g))",
 "points": [
 [
-3949,
+3950,
 500
 ],
 [
-4818,
+4819,
 508
 ],
 [
-8678,
+8679,
 552
 ],
 [
@@ -27403,80 +27415,80 @@
 1108
 ],
 [
-11270,
+11273,
 1127
 ],
 [
-12732,
+12758,
 1233
 ],
 [
-12936,
+12965,
 1279
 ],
 [
-13244,
-1347
+13271,
+1346
 ],
 [
-13309,
+13335,
 1408
 ],
 [
-13605,
+13629,
 1519
 ],
 [
-13733,
+13756,
 1566
 ],
 [
-13759,
+13782,
 1593
 ],
 [
-13891,
+13913,
 1629
 ],
 [
-14457,
+14480,
 1785
 ],
 [
-16119,
+16143,
 1619
 ],
 [
-16499,
+16523,
 2068
 ],
 [
-16589,
+16613,
 2174
 ],
 [
-16586,
+16610,
 2272
 ],
 [
-16499,
+16523,
 2380
 ],
 [
-16362,
-2551
+16383,
+2554
 ],
 [
-15716,
-2627
+15725,
+2629
 ],
 [
-15385,
+15390,
 2656
 ]
 ],
 "labelBBox": {
-"x": 13892,
+"x": 13914,
 "y": 1518,
 "width": 264,
 "height": 106
@@ -27497,24 +27509,24 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-13280,
+13265,
 2280
 ],
 [
-13679,
-2362
+13668,
+2361
 ],
 [
-14591,
+14593,
 2548
 ],
 [
-14993,
+14998,
 2630
 ]
 ],
 "labelBBox": {
-"x": 14389,
+"x": 14386,
 "y": 2408,
 "width": 259,
 "height": 90
@@ -27551,36 +27563,36 @@
 1499
 ],
 [
-4256,
+4254,
 1534
 ],
 [
-4617,
-1482
+4609,
+1484
 ],
 [
-4753,
+4743,
 1519
 ],
 [
-4854,
-1545
+4848,
+1546
 ],
 [
-4862,
-1595
+4858,
+1594
 ],
 [
 4961,
 1629
 ],
 [
-5037,
-1655
+4999,
+1642
 ],
 [
-6301,
-1880
+6341,
+1884
 ],
 [
 6381,
@@ -27595,31 +27607,31 @@
 2019
 ],
 [
-9356,
+9355,
 2060
 ],
 [
-9384,
+9383,
 2060
 ],
 [
-11368,
+11353,
 2060
 ],
 [
-11395,
+11380,
 2068
 ],
 [
-11454,
+11439,
 2083
 ],
 [
-11513,
+11498,
 2114
 ],
 [
-11562,
+11547,
 2145
 ]
 ],
@@ -27645,36 +27657,36 @@
 "label": "npm-publish.yml publishes \n@soleur/opencode on every release \n(#10723) via OIDC trusted publishing \n(ADR-309): the job's id-token exchanges \nfor a credential bound to this repo + ",
 "points": [
 [
-13477,
+13501,
 503
 ],
 [
-13801,
+13825,
 514
 ],
 [
-14479,
+14503,
 548
 ],
 [
-14690,
+14714,
 647
 ],
 [
-14787,
+14811,
 693
 ],
 [
-14873,
+14897,
 781
 ],
 [
-14930,
+14954,
 850
 ]
 ],
 "labelBBox": {
-"x": 14843,
+"x": 14867,
 "y": 647,
 "width": 256,
 "height": 106
@@ -27695,25 +27707,25 @@
 "label": "Loads via .grok/config.toml; the plugin \nroot resolves from the \nloader-substituted ${CLAUDE_PLUGIN_ROOT} \ntoken first, then GROK_PLUGIN_ROOT, then \nthe two managed Devin plugin caches by ",
 "points": [
 [
-12672,
+12756,
 1879
 ],
 [
-12664,
+12747,
 1930
 ],
 [
-12653,
-1996
+12733,
+1995
 ],
 [
-12643,
-2057
+12709,
+2058
 ]
 ],
 "labelBBox": {
-"x": 12354,
-"y": 1863,
+"x": 12433,
+"y": 1864,
 "width": 301,
 "height": 106
 },
@@ -27733,11 +27745,11 @@
 "label": "notifyInboxItem writes inbox_item + GET \n/api/inbox reads the merged feed (RLS \nOwner-scoped)",
 "points": [
 [
-3548,
+3549,
 627
 ],
 [
-3463,
+3464,
 651
 ],
 [
@@ -27762,7 +27774,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2774,
+"x": 2775,
 "y": 555,
 "width": 256,
 "height": 73
@@ -27857,11 +27869,11 @@
 "label": "Gated-tool gate creates, polls and \nconsumes an approval request \n(service-role RPCs); the Owner decides \nvia decide_approval as the authenticated \nuser (chat card, inbox landing page, ",
 "points": [
 [
-3548,
+3549,
 627
 ],
 [
-3509,
+3510,
 638
 ],
 [
@@ -27957,11 +27969,11 @@
 "label": "GET /api/crm/* RLS-owner-scoped read \nroutes (board/funnel/detail); \ncrm_get_contact_detail logs each PII \nread to beta_contact_access_log (Art. \n5(2))",
 "points": [
 [
-3548,
+3549,
 627
 ],
 [
-3468,
+3469,
 649
 ],
 [
@@ -28149,7 +28161,7 @@
 723
 ],
 [
-2005,
+2004,
 685
 ],
 [
@@ -28161,11 +28173,11 @@
 553
 ],
 [
-2442,
-519
+2443,
+518
 ],
 [
-2665,
+2666,
 506
 ]
 ],
@@ -28191,73 +28203,73 @@
 "label": "Opt-in release lookup \n(SOLEUR_UPDATE_CHECK=1 at session start) \nand the explicit, user-started \n/soleur:version compare: git ls-remote \n--tags against ",
 "points": [
 [
-13320,
+13305,
 2641
 ],
 [
-14278,
-2600
+14273,
+2601
 ],
 [
-15886,
+15909,
 2531
 ],
 [
-16017,
+16041,
 2511
 ],
 [
-16236,
+16260,
 2476
 ],
 [
-16364,
+16388,
 2556
 ],
 [
-16499,
+16523,
 2380
 ],
 [
-17194,
+17218,
 1472
 ],
 [
-15156,
+15180,
 1805
 ],
 [
-14299,
+14323,
 1048
 ],
 [
-14142,
+14166,
 909
 ],
 [
-14222,
+14246,
 767
 ],
 [
-14049,
+14073,
 647
 ],
 [
-13960,
+13984,
 585
 ],
 [
-13678,
+13702,
 542
 ],
 [
-13487,
+13511,
 518
 ]
 ],
 "labelBBox": {
-"x": 13936,
-"y": 876,
+"x": 13958,
+"y": 873,
 "width": 306,
 "height": 106
 },
@@ -28285,7 +28297,7 @@
 677
 ],
 [
-3849,
+3850,
 728
 ],
 [
@@ -28339,37 +28351,37 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-12148,
+12198,
 1879
 ],
 [
-12154,
+12216,
 1940
 ],
 [
-12173,
+12250,
 2017
 ],
 [
-12227,
+12309,
 2060
 ],
 [
-12240,
-2070
+12330,
+2075
 ],
 [
 12344,
-2063
+2061
 ],
 [
-12381,
-2066
+12366,
+2065
 ]
 ],
 "labelBBox": {
-"x": 12000,
-"y": 2065,
+"x": 11984,
+"y": 1887,
 "width": 265,
 "height": 106
 },
@@ -28389,39 +28401,39 @@
 "label": "Loads generated skill and agent stubs \nfrom the plugin root",
 "points": [
 [
-11701,
+11708,
 1879
 ],
 [
-11815,
+11839,
 1942
 ],
 [
-11979,
-2023
+12025,
+2021
 ],
 [
-12135,
+12199,
 2060
 ],
 [
-12187,
-2072
+12234,
+2067
 ],
 [
-12321,
-2051
+12323,
+2056
 ],
 [
-12381,
+12366,
 2065
 ]
 ],
 "labelBBox": {
-"x": 11786,
-"y": 1968,
+"x": 11788,
+"y": 1951,
 "width": 240,
-"height": 55
+"height": 56
 },
 "parent": null,
 "relations": [
@@ -34509,7 +34521,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 784,
+"width": 791,
 "height": 590
 },
 "nodes": [
@@ -34666,7 +34678,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates, the non-blocking \nscheduled real-SDK ask probe on a \nhost-bwrap runner, ADR-284) on the \nsoleur-ci-eval workspace key — ",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key \n(ADR-244); the non-blocking real-SDK ask ",
 "points": [
 [
 558,
@@ -34688,7 +34700,7 @@
 "labelBBox": {
 "x": 523,
 "y": 240,
-"width": 244,
+"width": 268,
 "height": 106
 },
 "parent": null,
@@ -36338,7 +36350,7 @@
 "id": "1c2swhn",
 "source": "github",
 "target": "anthropic",
-"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates, the non-blocking \nscheduled real-SDK ask probe on a \nhost-bwrap runner, ADR-284) on the \nsoleur-ci-eval workspace key — ",
+"label": "CI Claude turns (claude-code-action, \nci.yml real-turn gates) on the \nsoleur-ci-eval workspace key — \nspend-limited, never a prd key \n(ADR-244); the non-blocking real-SDK ask ",
 "points": [
 [
 3549,
@@ -36360,7 +36372,7 @@
 "labelBBox": {
 "x": 3548,
 "y": 650,
-"width": 244,
+"width": 268,
 "height": 106
 },
 "parent": null,
@@ -36380,35 +36392,35 @@
 "points": [
 [
 3729,
-584
+572
 ],
 [
-3761,
-603
+3770,
+593
 ],
 [
-3794,
-625
+3811,
+619
 ],
 [
-3821,
+3844,
 650
 ],
 [
-3872,
-697
+3893,
+696
 ],
 [
-3916,
+3931,
 760
 ],
 [
-3948,
+3958,
 813
 ]
 ],
 "labelBBox": {
-"x": 3911,
+"x": 3926,
 "y": 650,
 "width": 256,
 "height": 106
@@ -36430,35 +36442,35 @@
 "points": [
 [
 3729,
-516
+514
 ],
 [
-3863,
-534
+3867,
+530
 ],
 [
-4050,
-571
+4061,
+566
 ],
 [
-4195,
+4210,
 650
 ],
 [
-4269,
+4282,
 691
 ],
 [
-4337,
+4346,
 758
 ],
 [
-4386,
+4392,
 814
 ]
 ],
 "labelBBox": {
-"x": 4332,
+"x": 4341,
 "y": 650,
 "width": 265,
 "height": 106
@@ -36483,32 +36495,32 @@
 513
 ],
 [
-3991,
-533
+3993,
+532
 ],
 [
-4470,
-578
+4477,
+576
 ],
 [
-4625,
+4634,
 650
 ],
 [
-4706,
+4714,
 688
 ],
 [
-4781,
+4786,
 757
 ],
 [
-4834,
-814
+4838,
+815
 ]
 ],
 "labelBBox": {
-"x": 4781,
+"x": 4786,
 "y": 650,
 "width": 255,
 "height": 106
@@ -36533,32 +36545,32 @@
 505
 ],
 [
-4075,
+4076,
 515
 ],
 [
-4828,
-549
+4832,
+547
 ],
 [
-5064,
+5069,
 650
 ],
 [
-5149,
+5153,
 687
 ],
 [
-5227,
+5229,
 757
 ],
 [
-5282,
+5283,
 815
 ]
 ],
 "labelBBox": {
-"x": 5225,
+"x": 5228,
 "y": 693,
 "width": 25,
 "height": 18
@@ -36584,32 +36596,32 @@
 509
 ],
 [
-4108,
-526
+4109,
+525
 ],
 [
-4989,
+4992,
 572
 ],
 [
-5278,
+5281,
 650
 ],
 [
-5416,
+5418,
 688
 ],
 [
-5562,
+5563,
 758
 ],
 [
-5668,
+5669,
 817
 ]
 ],
 "labelBBox": {
-"x": 5557,
+"x": 5558,
 "y": 650,
 "width": 258,
 "height": 106
@@ -36630,7 +36642,7 @@
 "label": "[...]",
 "points": [
 [
-3729,
+3728,
 503
 ],
 [
@@ -36638,28 +36650,28 @@
 507
 ],
 [
-5448,
+5450,
 531
 ],
 [
-5843,
+5845,
 650
 ],
 [
-5961,
+5963,
 686
 ],
 [
-6082,
+6083,
 757
 ],
 [
-6169,
+6170,
 816
 ]
 ],
 "labelBBox": {
-"x": 6077,
+"x": 6078,
 "y": 693,
 "width": 25,
 "height": 18
@@ -36693,7 +36705,7 @@
 545
 ],
 [
-6130,
+6131,
 650
 ],
 [
@@ -36702,11 +36714,11 @@
 ],
 [
 6454,
-758
+757
 ],
 [
-6577,
-817
+6576,
+816
 ]
 ],
 "labelBBox": {

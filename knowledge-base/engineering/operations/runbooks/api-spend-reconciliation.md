@@ -32,9 +32,10 @@
 > the ledger and metered by its own summary**: the probe prints a measured `costUsd` per case
 > and a `TOTAL costUsd=` line into the job summary and a 90-day artifact
 > (`real-sdk-ask-probe-<run_id>`), and it uploads no `api-spend-*` artifact, so this procedure
-> never sees it. Caps: $4 per run (hard), $25 per month (planning ceiling), $2.50 per run
-> (review trigger). The ~$1.5 per run behind the ceiling is an UNVERIFIED planning estimate
-> until the first run is measured. The reported cost is the SDK's own estimate, not a billing
+> never sees it. Measured on the first self-test run (run 41295302456 at head 075832071a):
+> $0.5762 per run (`TOTAL costUsd=0.5762`, 8 cases PASS), which supersedes the $1.5 planning
+> estimate and puts the $25 ceiling at about 43 runs a month. Caps: $4 per run (soft by at most
+> one in-flight turn), $25 per month (ceiling), $2.50 per run (review trigger). The reported cost is the SDK's own estimate, not a billing
 > statement: compare it with the `soleur-ci-eval` workspace usage view.
 >
 > **Successor mechanism:** #6297 wires `cron-anthropic-cost-report` to the Anthropic

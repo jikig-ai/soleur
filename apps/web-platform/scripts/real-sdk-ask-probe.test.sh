@@ -56,6 +56,20 @@ eq() { # name expected actual
   if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (expected '$2', got '$3')"; fi
 }
 
+# INSTRUMENT SELF-TEST: drive the tally and both verdict-owning helpers once with a must-pass and once with a must-fail input, in a subshell
+# so the real counters are untouched, and read the result back. Reported with printf + exit, NOT through ok/bad/check/eq: a neutered
+# instrument must stop the suite, and it cannot be allowed to vouch for itself.
+st_tally="$( ( PASS=0; FAIL=0; ok a >/dev/null; bad b >/dev/null; echo "$PASS $FAIL" ) )"
+st_check_ok="$( ( PASS=0; FAIL=0; check a true >/dev/null; echo "$PASS $FAIL" ) )"
+st_check_bad="$( ( PASS=0; FAIL=0; check b false >/dev/null; echo "$PASS $FAIL" ) )"
+st_eq_ok="$( ( PASS=0; FAIL=0; eq a x x >/dev/null; echo "$PASS $FAIL" ) )"
+st_eq_bad="$( ( PASS=0; FAIL=0; eq b x y >/dev/null; echo "$PASS $FAIL" ) )"
+if [[ "$st_tally" != "1 1" || "$st_check_ok" != "1 0" || "$st_check_bad" != "0 1" || "$st_eq_ok" != "1 0" || "$st_eq_bad" != "0 1" ]]; then
+  printf 'FATAL: instrument self-test: tally "%s" (want "1 1"), check ok "%s" (want "1 0"), check must-fail "%s" (want "0 1"), eq ok "%s" (want "1 0"), eq must-fail "%s" (want "0 1")\n' \
+    "$st_tally" "$st_check_ok" "$st_check_bad" "$st_eq_ok" "$st_eq_bad" >&2
+  exit 1
+fi
+
 HOST_ONLY_LITERAL="host-only residual"
 NOT_OBSERVED_LITERAL="production arrival not observed"
 FORBIDDEN_LITERAL="verified in ""production"
@@ -100,7 +114,7 @@ put() { # n out-text rc
 run_runner() { # uses $SD; sets RC
   rm -f "$T/gho" "$T/summary" "$T/probe.out"
   PROBE_CMD="bash $T/bin/probe-stub.sh" PROBE_OUT_FILE="$T/probe.out" GITHUB_OUTPUT="$T/gho" GITHUB_STEP_SUMMARY="$T/summary" \
-    STUB_DIR="$SD" ANTHROPIC_API_KEY="${FAKE_KEY}" bash "${RUNNER_UNDER_TEST:-$RUNNER}" run >"$T/stdout" 2>"$T/stderr"
+    STUB_DIR="$SD" ANTHROPIC_API_KEY="${RUN_KEY-$FAKE_KEY}" GH_TOKEN="${RUN_GH_TOKEN-}" bash "${RUNNER_UNDER_TEST:-$RUNNER}" run >"$T/stdout" 2>"$T/stderr"
   RC=$?
 }
 gho() { sed -n "s/^$1=//p" "$T/gho" 2>/dev/null | tail -1; }
@@ -155,7 +169,7 @@ eq "row6b: no-anthropic-key is blind" "blind" "$(gho outcome)"
 eq "row6b: reason is no-anthropic-key" "no-anthropic-key" "$(gho reason)"
 eq "row6b: no rerun without a key" "1" "$(invocations)"
 
-new_scn r7; put last "$(gen_out 8 true - "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+new_scn r7; put last "$(gen_out 8 true 0.8 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
 run_runner
 eq "row7: two CANT-RUN passes end blind" "blind" "$(gho outcome)"
 eq "row7: reason is the enum value" "model-did-not-attempt-bash" "$(gho reason)"
@@ -166,6 +180,23 @@ new_scn r8; put last "RESULT: DIAGNOSTIC ($PROV_LINE, cases-run=1)" 4
 run_runner
 eq "row8: exit 4 / DIAGNOSTIC is blind" "blind" "$(gho outcome)"
 eq "row8: probe invoked once" "1" "$(invocations)"
+
+new_scn r8d; put last "RESULT: DIAGNOSTIC ($PROV_LINE, cases-run=1)" 0
+run_runner
+eq "row8d: DIAGNOSTIC at exit 0 is blind" "blind" "$(gho outcome)"
+eq "row8d: DIAGNOSTIC at a non-4 exit is contract drift, not diagnostic" "contract-drift" "$(gho reason)"
+eq "row8d: no rerun" "1" "$(invocations)"
+new_scn r8e; put last "RESULT: DIAGNOSTIC ($PROV_LINE, cases-run=1)" 3
+run_runner
+eq "row8e: DIAGNOSTIC at exit 3 is contract drift" "contract-drift" "$(gho reason)"
+
+for rc_bad in 0 1 4; do
+  new_scn r6rc$rc_bad; put last "$(gen_out 8 true 0.8 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" "$rc_bad"
+  run_runner
+  eq "CANT-RUN at exit $rc_bad (not 3) is blind" "blind" "$(gho outcome)"
+  eq "CANT-RUN at exit $rc_bad (not 3) is contract drift, not the claimed reason" "contract-drift" "$(gho reason)"
+  eq "CANT-RUN at exit $rc_bad (not 3) is not retried" "1" "$(invocations)"
+done
 
 new_scn r8b; put last "$(gen_out 8 true 0.8 "RESULT: FAIL ($PROV_LINE, cases-run=8)")" 1
 run_runner
@@ -178,25 +209,76 @@ new_scn r8c; put last "$(gen_out 8 true 0.8 "RESULT: FAIL ($PROV_LINE, cases-run
 run_runner
 eq "RESULT FAIL but exit 0 is not fail and not pass" "blind" "$(gho outcome)"
 
+echo "== Guard 3: RESULT PASS on top of a non-ok case verdict is contract drift (D3d) =="
+for badv in MODEL-DID-NOT-TRY FAIL SANDBOX-NOT-ENGAGED UNCONTROLLED CANT-RUN:budget-exceeded; do
+  new_scn pv_$badv; put last "$(gen_out 8 true 0.8 "$PASS_RESULT" | sed "s/^PROBE case-3 \(.*\)verdict=ok/PROBE case-3 \1verdict=$badv/")" 0
+  run_runner
+  check "verdict row: the mutated case line carries verdict=$badv" grep -q "verdict=$badv" "$T/probe.out"
+  eq "verdict row: RESULT PASS with one case verdict=$badv is blind" "blind" "$(gho outcome)"
+  eq "verdict row: ... and the reason is contract-drift" "contract-drift" "$(gho reason)"
+  eq "verdict row: ... and it is not retried" "1" "$(invocations)"
+done
+new_scn pv_ctl; put last "$(gen_out 8 true 0.8 "$PASS_RESULT")" 0
+run_runner
+eq "verdict control: the same matrix with every verdict=ok is pass" "pass" "$(gho outcome)"
+
 echo "== Guard 3: the rerun spends the REMAINING share of the single \$4 cap =="
 
-new_scn r9; put 1 "$(gen_out 8 true 3.20 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+new_scn r9; put 1 "$(gen_out 8 true 2.80 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
 put 2 "$(gen_out 8 true 0.40 "$PASS_RESULT")" 0
 run_runner
-eq "row9: second invocation receives the remainder" "0.80|test" "$(sed -n 2p "$SD/env.log")"
+eq "row9: second invocation receives the remainder" "1.20|test" "$(sed -n 2p "$SD/env.log")"
 eq "row9: rerun pass is pass" "pass" "$(gho outcome)"
-eq "row9: reported cost is the sum of both passes" "3.6000" "$(gho cost)"
+eq "row9: reported cost is the sum of both passes" "3.2000" "$(gho cost)"
 eq "row9: probe invoked exactly twice" "2" "$(invocations)"
 
 new_scn r9b; put last "$(gen_out 8 true 3.80 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
 run_runner
-eq "row9b: remainder under \$0.50 means no rerun" "1" "$(invocations)"
+eq "row9b: remainder under \$1.00 means no rerun" "1" "$(invocations)"
 eq "row9b: outcome is blind" "blind" "$(gho outcome)"
 
-new_scn r9c; put 1 "$(gen_out 8 true 3.50 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+new_scn r9c; put 1 "$(gen_out 8 true 3.00 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
 put 2 "$(gen_out 8 true 0.40 "$PASS_RESULT")" 0
 run_runner
-eq "row9c: remainder of exactly \$0.50 is still rerun" "0.50|test" "$(sed -n 2p "$SD/env.log")"
+eq "row9c: remainder of exactly \$1.00 is still rerun" "1.00|test" "$(sed -n 2p "$SD/env.log")"
+eq "row9c: ... and the probe ran twice" "2" "$(invocations)"
+
+new_scn r9d; put last "$(gen_out 8 true 3.01 "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+run_runner
+eq "row9d: a remainder of \$0.99 (just under the \$1.00 floor) is not rerun" "1" "$(invocations)"
+check "row9d: the log says why" grep -q 'not rerunning' "$T/stdout"
+
+new_scn r9e; put last "$(gen_out 8 true - "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+run_runner
+eq "row9e: pass-1 spend unknown (no TOTAL line) => no rerun (fail closed)" "1" "$(invocations)"
+eq "row9e: ... only one budget env line was recorded, so pass 2 never saw a budget" "1" "$(wc -l <"$SD/env.log" | tr -d ' ')"
+eq "row9e: outcome is blind" "blind" "$(gho outcome)"
+eq "row9e: reason is the CANT-RUN reason" "model-did-not-attempt-bash" "$(gho reason)"
+eq "row9e: cost is reported unknown" "unknown" "$(gho cost)"
+check "row9e: the log names the unknown spend" grep -q 'spend is unknown' "$T/stdout"
+
+new_scn r9f; put last "$(gen_out 8 true 'not-a-number' "RESULT: CANT-RUN:model-did-not-attempt-bash ($PROV_LINE, cases-run=8)")" 3
+run_runner
+eq "row9f: an unparseable TOTAL is also unknown spend => no rerun" "1" "$(invocations)"
+
+echo "== Guard 3: every retriable CANT-RUN reason is rerun once, on the remainder; the rest are not =="
+for rr in sandbox-not-engaged grant-not-live grant-control-not-established case-count-below-floor model-did-not-attempt-bash; do
+  new_scn retry_$rr; put last "$(gen_out 8 true 0.50 "RESULT: CANT-RUN:$rr ($PROV_LINE, cases-run=8)")" 3
+  run_runner
+  eq "retry $rr: probe invoked exactly twice" "2" "$(invocations)"
+  eq "retry $rr: pass 2 received the remainder" "3.50|test" "$(sed -n 2p "$SD/env.log")"
+  eq "retry $rr: the reason survives both passes" "$rr" "$(gho reason)"
+  eq "retry $rr: cost is the sum of both passes" "1.0000" "$(gho cost)"
+done
+new_scn retry_enum; put last "$(gen_out 8 true 0.50 "RESULT: CANT-RUN:something-the-probe-invented ($PROV_LINE, cases-run=8)")" 3
+run_runner
+eq "retry out-of-enum: probe invoked exactly twice (default is retriable)" "2" "$(invocations)"
+eq "retry out-of-enum: the reason defaults to cant-run" "cant-run" "$(gho reason)"
+for nr in budget-exceeded no-anthropic-key; do
+  new_scn noretry_$nr; put last "$(gen_out 8 true 0.50 "RESULT: CANT-RUN:$nr ($PROV_LINE, cases-run=8)")" 3
+  run_runner
+  eq "no retry $nr: probe invoked exactly once" "1" "$(invocations)"
+done
 
 echo "== Guard 3: untrusted values never reach \$GITHUB_OUTPUT raw (row 10) =="
 
@@ -236,6 +318,49 @@ check "summary carries the host-only residual" grep -qi "$HOST_ONLY_LITERAL" "$T
 check "summary carries 'production arrival not observed'" grep -qi "$NOT_OBSERVED_LITERAL" "$T/summary"
 check "summary never says verified in production" bash -c "! grep -qiF '$FORBIDDEN_LITERAL' '$T/summary' '$T/stdout' '$T/stderr'"
 
+echo "== Guard 3: redaction retains the risk-shaped benign text and masks exact values (D3e) =="
+JWT_FIX="eyJ""hbGciOiJIUzI1NiJ9.eyJ""zdWIiOiJwcm9iZSJ9.c2lnbmF0dXJlLXRva2Vu"
+HEX64="$(printf 'a%.0s' {1..64})"
+KEEP_PATH="/home/runner/work/soleur/soleur/apps/web-platform/scripts/dev-probe-destroy-ask.ts"
+KEEP_DIGEST="sha256:$HEX64"
+KEEP_HOSTPORT="probe.invalid:443"
+KEEP_DOTFILE="libkeyring.so.1"
+KEEP_WORD="ask-the-user-for-confirmation-before-deleting-things"
+KEEP_WORD2="risk-ant-colony-survey-results-for-the-workspace"
+new_scn redkeep; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"
+  echo "path: $KEEP_PATH"; echo "digest: $KEEP_DIGEST"; echo "endpoint: $KEEP_HOSTPORT"; echo "lib: $KEEP_DOTFILE"
+  echo "prose: $KEEP_WORD"; echo "prose2: $KEEP_WORD2"
+  echo "hdr: Authorization: Bearer opaquebearertoken123"; echo "jwt: $JWT_FIX"
+  echo "bare: sk-""$(printf 'y%.0s' {1..30})"; echo "kv: key=sk-""$(printf 'z%.0s' {1..30})"; echo "ant: sk-ant-""api03-ZZZZZZZZZZZZZZZZZZ")" 0
+run_runner
+for keep in "$KEEP_PATH" "$KEEP_DIGEST" "$KEEP_HOSTPORT" "$KEEP_DOTFILE" "$KEEP_WORD" "$KEEP_WORD2"; do
+  check "redaction keeps benign text: $keep" grep -qF -- "$keep" "$T/probe.out"
+done
+check "redaction masks the Authorization header value" bash -c "! grep -qF 'opaquebearertoken123' '$T/probe.out'"
+check "redaction keeps the Authorization header name" grep -qF 'Authorization: Bearer <redacted>' "$T/probe.out"
+check "redaction masks a JWT" bash -c "! grep -qF 'eyJ' '$T/probe.out'"
+check "redaction masks a bare sk- token at the start of a value" bash -c "! grep -qE 'sk-y{20}' '$T/probe.out'"
+check "redaction masks an sk- token after a non-alphanumeric boundary" bash -c "! grep -qE 'sk-z{20}' '$T/probe.out'"
+check "redaction masks an sk-ant- token" bash -c "! grep -qF 'ZZZZZZZZ' '$T/probe.out'"
+eq "retention: every other probe line is untouched (case lines still 8)" "8" "$(grep -c '^PROBE case-' "$T/probe.out")"
+
+OPAQUE_KEY='opq/key.with+meta*chars[1]\&x|y'
+OPAQUE_GH='ghtok$(id)-with"quote&\1'
+new_scn redexact; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"; echo "leak1: $OPAQUE_KEY"; echo "leak2: $OPAQUE_GH twice $OPAQUE_GH"; echo "short: abc123")" 0
+RUN_KEY="$OPAQUE_KEY" RUN_GH_TOKEN="$OPAQUE_GH" run_runner
+check "exact value: the ANTHROPIC_API_KEY value (regex metacharacters included) is masked in the artifact" bash -c "! grep -qF -- \"\$1\" '$T/probe.out'" _ "$OPAQUE_KEY"
+check "exact value: the GH_TOKEN value is masked in the artifact, both occurrences" bash -c "! grep -qF -- \"\$1\" '$T/probe.out'" _ "$OPAQUE_GH"
+check "exact value: ... and in the summary" bash -c "! grep -qF -- \"\$1\" '$T/summary'" _ "$OPAQUE_GH"
+check "exact value: ... and in stdout/stderr" bash -c "! grep -qF -- \"\$1\" '$T/stdout' '$T/stderr'" _ "$OPAQUE_KEY"
+check "exact value: the masked line keeps its label" grep -qF 'leak2: <redacted> twice <redacted>' "$T/probe.out"
+new_scn redshort; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"; echo "note: abc123 and abc1234")" 0
+RUN_KEY="abc123" RUN_GH_TOKEN="abc1234" run_runner
+check "exact value: a credential value under 8 characters is not literal-masked (it would mangle ordinary text)" grep -qF 'note: abc123 and abc1234' "$T/probe.out"
+new_scn redunset; put last "$(gen_out 8 true 0.8 "$PASS_RESULT"; echo "note: plain text stays")" 0
+RUN_KEY="" RUN_GH_TOKEN="" run_runner
+check "exact value: with no credential set nothing is masked and the run still passes" grep -qF 'note: plain text stays' "$T/probe.out"
+eq "exact value: ... outcome pass" "pass" "$(gho outcome)"
+
 new_scn sumfail; put last "$(gen_out 8 true 0.8 "RESULT: FAIL ($PROV_LINE, cases-run=8)")" 1
 run_runner
 check "fail summary carries the host-only residual" grep -qi "$HOST_ONLY_LITERAL" "$T/summary"
@@ -270,14 +395,22 @@ echo "== should-run =="
 
 cat >"$T/bin/gh" <<'GHSTUB'
 #!/usr/bin/env bash
-# Stub gh: records every call, serves fixtures, EXITS 64 on any argv the runner is not meant to send.
+# Stub gh: records every call, serves fixtures, and REFUSES (exit 64, argv logged to <stub-dir>/../gh-refused.log) any argv that is not
+# exactly one of the invocations the runner is modelled to send. A runner that drifts to a new flag, a new endpoint or a different
+# argument order is therefore red even if the drifted call would have worked against real gh.
 d="${GH_STUB_DIR:?}"
 mkdir -p "$d"
+refused="$(dirname "$d")/gh-refused.log"
 printf '%s\n' "$*" >>"$d/calls.log"
 n=$(wc -l <"$d/calls.log")
-has() { case " $* " in *" $HAS "*) return 0 ;; esac; return 1; }
+refuse() { printf '%s\n' "$*" >>"$refused"; echo "stub gh: refused argv: $*" >&2; exit 64; }
+REPO_FIXTURE="acme/widgets"
+LBL="ci/real-sdk-ask-probe"
+VIEW_JQ='[.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length'
+T_REG_S="[ci/real-sdk-ask-probe] real-SDK ask probe regression"
+T_BLIND_S="[ci/real-sdk-ask-probe] real-SDK ask probe blind"
 for a in "$@"; do
-  case "$a" in --body|-b|--body=*) echo "stub gh: inline --body is forbidden (use --body-file)" >&2; exit 64 ;; esac
+  case "$a" in --body|-b|--body=*) refuse "$@" ;; esac
 done
 bodyfile=""
 prev=""
@@ -286,30 +419,60 @@ for a in "$@"; do
   prev="$a"
 done
 [ -n "$bodyfile" ] && cp "$bodyfile" "$d/body.$n"
-case "$1 ${2-}" in
-  "api repos/"*)
-    case "$2" in repos/*/actions/workflows/*/runs\?*) : ;; *) echo "stub gh: unexpected api path $2" >&2; exit 64 ;; esac
-    [ -f "$d/api.fail" ] && exit 1
-    cat "$d/runs.json"; exit 0 ;;
-  "issue list")
-    HAS="--repo"; has "$@" || exit 64
-    [ -f "$d/list.fail" ] && exit 1
-    cat "$d/issues.json"; exit 0 ;;
-  "issue create")
-    HAS="--repo"; has "$@" || exit 64
-    HAS="--title"; has "$@" || exit 64
-    HAS="--body-file"; has "$@" || exit 64
-    echo "https://github.com/acme/widgets/issues/99"; exit 0 ;;
-  "issue comment")
-    HAS="--repo"; has "$@" || exit 64
-    HAS="--body-file"; has "$@" || exit 64
+case "$1" in
+  api)
+    [ "$#" -eq 2 ] || refuse "$@"
+    path="$2"
+    if [[ "$path" =~ ^repos/[^/]+/[^/]+/actions/workflows/[^/]+/runs\? ]]; then
+      case "$path" in *"branch=main"*) : ;; *) refuse "$@" ;; esac
+      case "$path" in *"status=completed"*) : ;; *) refuse "$@" ;; esac
+      case "$path" in *"per_page="*) : ;; *) refuse "$@" ;; esac
+      [ -f "$d/api.fail" ] && exit 1
+      cat "$d/runs.json"; exit 0
+    elif [[ "$path" =~ ^repos/[^/]+/[^/]+/actions/runs/([0-9]+)/jobs(\?per_page=[0-9]+)?$ ]]; then
+      id="${BASH_REMATCH[1]}"
+      [ -f "$d/jobs.fail" ] && exit 1
+      [ -f "$d/jobs.fail.$id" ] && exit 1
+      if [ -f "$d/jobs.$id.json" ]; then cat "$d/jobs.$id.json"; else cat "$d/jobs.default.json"; fi
+      exit 0
+    fi
+    refuse "$@" ;;
+  issue)
+    case "${2-}" in
+      list)
+        [ "$*" = "issue list --repo $REPO_FIXTURE --state open --label $LBL --limit 200 --json number,title" ] || refuse "$@"
+        [ -f "$d/list.fail" ] && exit 1
+        cat "$d/issues.json"; exit 0 ;;
+      view)
+        # issue view <N> --repo R --json comments --jq <exact expression>
+        [ "$#" -eq 9 ] && [[ "$3" =~ ^[0-9]+$ ]] && [ "$4 $5 $6 $7 $8" = "--repo $REPO_FIXTURE --json comments --jq" ] && [ "$9" = "$VIEW_JQ" ] || refuse "$@"
+        [ -f "$d/view.fail" ] && exit 1
+        # The real expression runs over a fixture, so the marker semantics are exercised and not assumed.
+        src="$d/comments.$3.json"; [ -f "$src" ] || src="$d/comments.default.json"
+        jq -r "$9" <"$src"; exit $? ;;
+      comment)
+        # issue comment <N> --repo R --body-file <file>
+        [ "$#" -eq 7 ] && [[ "$3" =~ ^[0-9]+$ ]] && [ "$4 $5 $6" = "--repo $REPO_FIXTURE --body-file" ] && [ -n "$7" ] || refuse "$@"
+        exit 0 ;;
+      close)
+        # issue close <N> --repo R --reason completed
+        [ "$#" -eq 7 ] && [[ "$3" =~ ^[0-9]+$ ]] && [ "$4 $5 $6 $7" = "--repo $REPO_FIXTURE --reason completed" ] || refuse "$@"
+        exit 0 ;;
+      create)
+        # issue create --repo R --title <one of the two exact titles> --body-file F --label type/security --label domain/engineering --label <p1|p2> --label LBL
+        [ "$#" -eq 16 ] || refuse "$@"
+        [ "$3 $4 $5" = "--repo $REPO_FIXTURE --title" ] || refuse "$@"
+        { [ "$6" = "$T_REG_S" ] && [ "${14}" = "priority/p1-high" ]; } || { [ "$6" = "$T_BLIND_S" ] && [ "${14}" = "priority/p2-medium" ]; } || refuse "$@"
+        [ "$7" = "--body-file" ] && [ -n "$8" ] || refuse "$@"
+        [ "$9 ${10} ${11} ${12} ${13} ${15} ${16}" = "--label type/security --label domain/engineering --label --label $LBL" ] || refuse "$@"
+        echo "https://github.com/acme/widgets/issues/99"; exit 0 ;;
+      *) refuse "$@" ;;
+    esac ;;
+  label)
+    # label create <name> --repo R --color C --description D (the exact argv; "$*" flattens the description's spaces)
+    [ "$*" = "label create $LBL --repo $REPO_FIXTURE --color D93F0B --description Scheduled real-SDK ask probe findings (ADR-284)" ] || refuse "$@"
     exit 0 ;;
-  "issue close")
-    HAS="--repo"; has "$@" || exit 64
-    exit 0 ;;
-  "label create")
-    exit 0 ;;
-  *) echo "stub gh: unexpected argv: $*" >&2; exit 64 ;;
+  *) refuse "$@" ;;
 esac
 GHSTUB
 chmod +x "$T/bin/gh"
@@ -340,16 +503,28 @@ repo_commit_file() { # path msg
 sha() { git -C "$REPO" rev-parse "$1"; }
 ZERO="0000000000000000000000000000000000000000"
 
-# runs_json <sha:conclusion>...
+# runs_json <sha:conclusion[:event]>... -- ids are assigned 1001, 1002, ... in order (newest first), event defaults to push.
 runs_json() {
-  local first=1 e
+  local first=1 e s rest concl ev id=1000
   printf '{"workflow_runs":['
   for e in "$@"; do
+    id=$((id + 1)); s="${e%%:*}"; rest="${e#*:}"; concl="${rest%%:*}"; ev=push
+    [[ "$rest" == *:* ]] && ev="${rest#*:}"
     [[ $first -eq 1 ]] || printf ','
     first=0
-    printf '{"head_sha":"%s","conclusion":%s,"status":"completed"}' "${e%%:*}" "$( [[ "${e#*:}" == null ]] && echo null || echo "\"${e#*:}\"" )"
+    printf '{"id":%s,"head_sha":"%s","event":"%s","conclusion":%s,"status":"completed"}' "$id" "$s" "$ev" "$( [[ "$concl" == null ]] && echo null || echo "\"$concl\"" )"
   done
   printf ']}\n'
+}
+# jobs_json <probe-step-conclusion|none> [job-name] : the jobs payload of one run. `none` omits the probe step (a skipped/billing-skip run).
+PSN="Run the real-SDK ask probe"
+jobs_json() {
+  local c="$1" jn="${2:-probe}"
+  if [[ "$c" == none ]]; then
+    printf '{"jobs":[{"name":"%s","steps":[{"name":"Set up job","conclusion":"success"},{"name":"Complete job","conclusion":"success"}]}]}\n' "$jn"
+  else
+    printf '{"jobs":[{"name":"%s","steps":[{"name":"Set up job","conclusion":"success"},{"name":"%s","conclusion":"%s"},{"name":"Complete job","conclusion":"success"}]}]}\n' "$jn" "$PSN" "$c"
+  fi
 }
 
 run_should() { # event before head ; env: GD (gh stub dir). sets SR (run= value) and RC
@@ -358,8 +533,9 @@ run_should() { # event before head ; env: GD (gh stub dir). sets SR (run= value)
     PUSH_BEFORE_SHA="$2" GITHUB_SHA="$3" GITHUB_OUTPUT="$T/gho" bash "$RUNNER" should-run >"$T/sr.out" 2>"$T/sr.err")
   RC=$?
   SR="$(sed -n 's/^run=//p' "$T/gho" 2>/dev/null | tail -1)"
+  SO="$(sed -n 's/^outcome=//p' "$T/gho" 2>/dev/null | tail -1)"
 }
-gd_new() { GD="$T/gh.$1"; rm -rf "$GD"; mkdir -p "$GD"; }
+gd_new() { GD="$T/gh.$1"; rm -rf "$GD"; mkdir -p "$GD"; jobs_json success >"$GD/jobs.default.json"; printf '{"comments":[]}\n' >"$GD/comments.default.json"; }
 
 # non-push events always run
 repo_init ev; A=$(sha HEAD); repo_commit_file docs/a.md B; gd_new ev; runs_json "$A:success" >"$GD/runs.json"
@@ -442,6 +618,132 @@ repo_init hooks; A=$(sha HEAD); mkdir -p "$REPO/plugins/soleur/hooks"; echo h >"
 run_should push "$A" "$(sha HEAD)"
 eq "a new file under plugins/soleur/hooks/ -> run=true" "true" "$SR"
 
+echo "== should-run: not-run output (D1) =="
+repo_init nr; A=$(sha HEAD); repo_commit_lock 0.3.284 2.1.284 1.0.1 B; gd_new nr; runs_json "$A:success" >"$GD/runs.json"
+run_should push "$A" "$(sha HEAD)"
+eq "run=false also emits outcome=not-run" "not-run" "$SO"
+eq "run=false: exactly two output lines (run, outcome)" "2" "$(wc -l <"$T/gho" | tr -d ' ')"
+repo_init nr2; A=$(sha HEAD); repo_commit_lock 0.3.290 2.1.284 1.0.0 B; gd_new nr2; runs_json "$A:success" >"$GD/runs.json"
+run_should push "$A" "$(sha HEAD)"
+eq "run=true emits no outcome line" "" "$SO"
+eq "run=true: exactly one output line" "1" "$(wc -l <"$T/gho" | tr -d ' ')"
+run_should schedule "$A" "$(sha HEAD)"
+eq "a non-push event emits no outcome line" "" "$SO"
+
+echo "== should-run: the baseline is the newest run that MEASURED (D2) =="
+# A -> B (the agent SDK moves) -> C (lock-only, non-SDK). The push under test is B..C; the question is which run is the baseline.
+mk_skip_repo() { repo_init "$1"; A=$(sha HEAD); repo_commit_lock 0.3.290 2.1.284 1.0.0 B; B=$(sha HEAD); repo_commit_lock 0.3.290 2.1.284 1.0.1 C; C=$(sha HEAD); gd_new "$1"; }
+# R(B) newest, R(A) older. B's run did not execute the probe step (billing skip / run=false): not a baseline, so the SDK move in B is still unmeasured.
+mk_skip_repo bs; runs_json "$B:success" "$A:success" >"$GD/runs.json"; jobs_json none >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "a run whose probe step was skipped is not a baseline -> falls back to the older measuring run -> run=true" "true" "$SR"
+check "the jobs endpoint was asked for the newest candidate first" grep -q '^api repos/acme/widgets/actions/runs/1001/jobs' "$GD/calls.log"
+check "... and then for the next candidate" grep -q '^api repos/acme/widgets/actions/runs/1002/jobs' "$GD/calls.log"
+jobs_json success >"$GD/jobs.1001.json"; : >"$GD/calls.log"
+run_should push "$B" "$C"
+eq "control: B's probe step succeeded -> B is the baseline -> lock-only non-SDK -> run=false" "false" "$SR"
+jobs_json failure >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "a probe that ran and FAILED was still a measurement -> baseline B -> run=false" "false" "$SR"
+jobs_json cancelled >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "a probe step that was cancelled is not a measurement -> run=true" "true" "$SR"
+jobs_json skipped >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "a probe step with conclusion skipped is not a measurement -> run=true" "true" "$SR"
+jobs_json success other-job >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "the probe step in a job NOT named probe does not count -> run=true" "true" "$SR"
+printf '{"jobs":[{"name":"probe","steps":[{"name":"Run the probe","conclusion":"success"}]}]}\n' >"$GD/jobs.1001.json"
+run_should push "$B" "$C"
+eq "a differently named step does not count -> run=true" "true" "$SR"
+printf '{"jobs":[]}\n' >"$GD/jobs.1001.json"; printf '{"jobs":[]}\n' >"$GD/jobs.1002.json"
+run_should push "$B" "$C"
+eq "no jobs at all -> no baseline -> run=true" "true" "$SR"
+echo 'not json' >"$GD/jobs.1001.json"; rm -f "$GD/jobs.1002.json"
+run_should push "$B" "$C"
+eq "an unparseable jobs payload -> run=true (fail toward running)" "true" "$SR"
+# the first candidate errors; the NEXT one (B, measuring) would make this a legitimate skip, so only fail-toward-running yields run=true
+runs_json "0000000000000000000000000000000000000002:success" "$B:success" >"$GD/runs.json"; jobs_json none >"$GD/jobs.1001.json"; : >"$GD/jobs.fail.1001"
+run_should push "$B" "$C"
+eq "a jobs API error on the first candidate -> run=true, even though the next candidate would qualify and skip" "true" "$SR"
+rm -f "$GD/jobs.fail.1001"
+run_should push "$B" "$C"
+eq "control: the same list without the API error -> the next candidate (B) is the baseline -> run=false" "false" "$SR"
+runs_json "$B:success" "$A:success" >"$GD/runs.json"
+
+# event filter: a pull_request-event run is never a baseline
+mk_skip_repo ev2; runs_json "$B:success:pull_request" "$A:success" >"$GD/runs.json"
+run_should push "$B" "$C"
+eq "a pull_request-event run is skipped as a baseline -> baseline A -> SDK moved in B -> run=true" "true" "$SR"
+check "... and its jobs were never queried" bash -c "! grep -q 'runs/1001/jobs' '$GD/calls.log'"
+# the run for this very head commit is never its own baseline
+mk_skip_repo selfb; runs_json "$C:success" "$B:success" >"$GD/runs.json"
+run_should push "$B" "$C"
+eq "a run of the head sha itself is not a baseline (B is) -> run=false" "false" "$SR"
+
+# candidate cap: 10 candidates are scanned, the 11th is never reached
+mk_skip_repo cap
+fake=0000000000000000000000000000000000000001
+list=(); for i in $(seq 1 10); do list+=("$fake:success"); done
+runs_json "${list[@]}" "$B:success" >"$GD/runs.json"
+for i in $(seq 1 10); do jobs_json none >"$GD/jobs.$((1000 + i)).json"; done
+run_should push "$B" "$C"
+eq "ten non-measuring candidates exhaust the scan; the 11th is not consulted -> run=true" "true" "$SR"
+check "... and exactly ten jobs lookups were made" test "$(grep -c '^api repos/acme/widgets/actions/runs/[0-9]*/jobs' "$GD/calls.log")" -eq 10
+list=(); for i in $(seq 1 9); do list+=("$fake:success"); done
+runs_json "${list[@]}" "$B:success" >"$GD/runs.json"; : >"$GD/calls.log"; jobs_json success >"$GD/jobs.1010.json"
+run_should push "$B" "$C"
+eq "control: the 10th candidate measures -> baseline B -> run=false" "false" "$SR"
+
+# only skipped runs exist
+mk_skip_repo allskip; runs_json "$B:success" "$A:success" >"$GD/runs.json"; jobs_json none >"$GD/jobs.default.json"
+run_should push "$B" "$C"
+eq "every candidate skipped -> no baseline -> run=true" "true" "$SR"
+
+# --no-renames: an allowlisted file moved out of the allowlist must still count as changed
+repo_init ren; A=$(sha HEAD)
+mkdir -p "$REPO/docs/moved"; git -C "$REPO" mv apps/web-platform/server/permission-callback.ts docs/moved/permission-callback.ts
+lock_json 0.3.284 2.1.284 1.0.5 >"$REPO/apps/web-platform/package-lock.json"; git -C "$REPO" commit -q -a -m rename
+gd_new ren; runs_json "$A:success" >"$GD/runs.json"
+run_should push "$A" "$(sha HEAD)"
+eq "an allowlisted file renamed out of the allowlist (plus a non-SDK lock change) -> run=true" "true" "$SR"
+
+# both lockfile versions empty for an SDK package
+repo_init noempty; A=$(sha HEAD)
+printf '{"packages":{"node_modules/left-pad":{"version":"1.0.0"}}}\n' >"$REPO/apps/web-platform/package-lock.json"; git -C "$REPO" commit -q -a -m nolk1
+A=$(sha HEAD); printf '{"packages":{"node_modules/left-pad":{"version":"1.0.1"}}}\n' >"$REPO/apps/web-platform/package-lock.json"; git -C "$REPO" commit -q -a -m nolk2
+gd_new noempty; runs_json "$A:success" >"$GD/runs.json"
+run_should push "$A" "$(sha HEAD)"
+eq "SDK versions empty in BOTH lockfiles (equal but unknown) -> run=true, not a false skip" "true" "$SR"
+
+echo "== should-run: parity with the SDK-bump gate and the allowlist members (D8b) =="
+runner_pkgs="$(sed -n 's/^SDK_PACKAGES=(\([^)]*\)).*/\1/p' "$RUNNER" | head -1)"
+gate_pkgs="$(sed -n 's/^SDK_PACKAGES=(\([^)]*\)).*/\1/p' "$SCRIPT_DIR/sdk-bump-sandbox-gate.sh" | head -1)"
+check "the SDK-bump gate's SDK_PACKAGES list was found" test -n "$gate_pkgs"
+eq "runner SDK_PACKAGES equals sdk-bump-sandbox-gate.sh's" "$gate_pkgs" "$runner_pkgs"
+
+# derive the allowlist from the runner itself; never restate it
+allow_members=()
+while IFS= read -r m; do allow_members+=("$m"); done < <(
+  awk '/^in_run_allowlist\(\)/{f=1} f&&/\) return [01] ;;$/{sub(/\) return [01] ;;$/,""); gsub(/^[ \t]+/,""); n=split($0,a,"|"); for(i=1;i<=n;i++) print a[i]} f&&/^}/{exit}' "$RUNNER")
+check "the allowlist derivation found at least 12 members (floor: an empty parse must not vacuously pass)" test "${#allow_members[@]}" -ge 12
+repo_init mem; A=$(sha HEAD); gd_new mem; runs_json "$A:success" >"$GD/runs.json"
+mi=0
+for m in "${allow_members[@]}"; do
+  mi=$((mi + 1)); f="${m/\*/probe-member.sh}"
+  git -C "$REPO" checkout -q -f -B "mem$mi" "$A"
+  mkdir -p "$REPO/$(dirname "$f")"; echo "member $mi" >>"$REPO/$f"
+  lock_json 0.3.284 2.1.284 "1.0.$((mi + 10))" >"$REPO/apps/web-platform/package-lock.json"
+  git -C "$REPO" add -A; git -C "$REPO" commit -q -m "member $mi"
+  run_should push "$A" "$(sha HEAD)"
+  eq "mixed push: allowlist member $f + a non-SDK lock change -> run=true" "true" "$SR"
+done
+git -C "$REPO" checkout -q -f -B memctl "$A"
+echo "x" >>"$REPO/docs/a.md"; lock_json 0.3.284 2.1.284 1.0.99 >"$REPO/apps/web-platform/package-lock.json"; git -C "$REPO" add -A; git -C "$REPO" commit -q -m ctl
+run_should push "$A" "$(sha HEAD)"
+eq "mixed-push control: a non-allowlisted file + the same non-SDK lock change -> run=false" "false" "$SR"
+
 # ---------------------------------------------------------------------------------------------------------------------------------
 echo "== Guard 4: file-issue =="
 
@@ -453,6 +755,8 @@ PM_LITERAL="2026-10-11-hosted-bash-ask-bypassed-by-sdk-auto-allow-postmortem.md"
 # run_filer <outcome> <reason> <cost> [job-result] [provenance]; env ISSUES_JSON
 run_filer() {
   gd_new filer; printf '%s' "${ISSUES_JSON:-[]}" >"$GD/issues.json"
+  [ -n "${COMMENTS_FIXTURE:-}" ] && printf '%s\n' "$COMMENTS_FIXTURE" >"$GD/comments.default.json"
+  [ -n "${VIEW_FAIL:-}" ] && : >"$GD/view.fail"
   PATH="$T/bin:$PATH" GH_STUB_DIR="$GD" GH_TOKEN=fake-token GITHUB_REPOSITORY=acme/widgets GITHUB_EVENT_NAME="${FILER_EVENT:-schedule}" \
     GITHUB_SERVER_URL=https://github.com GITHUB_RUN_ID=4242 PROBE_OUTCOME="$1" PROBE_REASON="$2" PROBE_COST="$3" PROBE_JOB_RESULT="${4-}" \
     PROBE_PROVENANCE="${5-$PROV_LINE}" bash "${RUNNER_UNDER_TEST:-$RUNNER}" file-issue >"$T/f.out" 2>"$T/f.err"
@@ -582,6 +886,72 @@ check "unknown outcome: exits non-zero" test "$FRC" -ne 0
 FILER_EVENT=pull_request ISSUES_JSON="[]" run_filer fail probe-fail 0.8
 eq "pull_request: the filer refuses to write" "0" "$(writes)"
 
+echo "== Guard 4: not-run is a no-op like skipped (D1) =="
+ISSUES_JSON="$(issues "20:$T_REG" "21:$T_BLIND")" run_filer not-run none unknown
+eq "not-run: no write" "0" "$(writes)"
+eq "not-run: no gh call at all" "0" "$(all_calls)"
+check "not-run: exits 0 (a run=false push must not turn the filer red)" test "$FRC" -eq 0
+check "not-run: prints that it files nothing" grep -q 'files nothing' "$T/f.out"
+ISSUES_JSON="[]" run_filer not-run "" "" skipped
+check "not-run with an empty reason and a skipped job result: still exit 0" test "$FRC" -eq 0
+ISSUES_JSON="[]" run_filer skipped none unknown
+check "skipped still prints that it files nothing" grep -q 'files nothing' "$T/f.out"
+ISSUES_JSON="[]" run_filer not_run x 1
+check "a near-miss spelling (not_run) is an unknown outcome and exits non-zero" test "$FRC" -ne 0
+
+echo "== Guard 4: issue bodies (D3f) =="
+FOOTER_LITERAL='Re-run: gh workflow run scheduled-real-sdk-ask-probe.yml (after merge) | Stop: soleur:cron-delete or disable the workflow | Tracking: #10111 | reason values: see norm_reason in apps/web-platform/scripts/real-sdk-ask-probe.sh | If you remove the ci/real-sdk-ask-probe label from an open issue the filer will open a duplicate'
+MARKER_LITERAL='<!-- real-sdk-ask-probe:passed -->'
+body_for() { # <comment|close-less> issue-number -> the body file of the 'issue comment <N>' call
+  local ln; ln="$(grep -n "^issue comment $1 " "$GD/calls.log" | head -1 | cut -d: -f1)"
+  [ -n "$ln" ] && cat "$GD/body.$ln"
+}
+footer_on_every_body() { # asserts the LAST line of every captured body is the footer; prints the number of bodies
+  local f n=0 bad=0
+  for f in "$GD"/body.*; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    [ "$(tail -n 1 "$f")" = "$FOOTER_LITERAL" ] || bad=$((bad + 1))
+  done
+  [ "$n" -ge 1 ] && [ "$bad" -eq 0 ]
+}
+ISSUES_JSON="[]" run_filer fail probe-fail 0.8
+check "new regression body ends with the footer" footer_on_every_body
+ISSUES_JSON="[]" run_filer blind cant-run 1.0
+check "new blind body ends with the footer" footer_on_every_body
+ISSUES_JSON="$(issues "20:$T_REG")" run_filer fail probe-fail 0.8
+check "'again' body ends with the footer" footer_on_every_body
+ISSUES_JSON="$(issues "20:$T_REG" "21:$T_BLIND")" run_filer pass pass 0.8
+check "'passed' bodies end with the footer" footer_on_every_body
+eq "passed: both bodies were captured (blind note + regression note)" "2" "$(ls "$GD"/body.* | wc -l | tr -d ' ')"
+check "blind passed note says it is being closed" bash -c "grep -qF 'This issue is being closed: the probe now passes.' <<<\"\$1\"" _ "$(body_for 21)"
+check "blind passed note does NOT claim the issue stays open" bash -c "! grep -qi 'stays OPEN' <<<\"\$1\"" _ "$(body_for 21)"
+check "regression passed note keeps 'stays OPEN'" bash -c "grep -qF 'stays OPEN' <<<\"\$1\"" _ "$(body_for 20)"
+check "regression passed note does not say it is being closed" bash -c "! grep -qF 'is being closed' <<<\"\$1\"" _ "$(body_for 20)"
+eq "regression passed note starts with the marker (first line)" "$MARKER_LITERAL" "$(body_for 20 | head -n 1)"
+eq "blind passed note carries no marker" "0" "$(body_for 21 | grep -cF "$MARKER_LITERAL")"
+check "the filer listed the comments of #20 with the exact expression" grep -qF 'issue view 20 --repo acme/widgets --json comments --jq [.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length' "$GD/calls.log"
+check "the filer never listed the comments of the blind issue (only regression notes are deduped)" bash -c "! grep -q '^issue view 21 ' '$GD/calls.log'"
+
+echo "== Guard 4: at most one 'subsequently passed' note per open regression issue (D3g) =="
+COMMENTS_FIXTURE='{"comments":[{"body":"first note"},{"body":"<!-- real-sdk-ask-probe:passed -->\n\nA later run ... subsequently passed."}]}' \
+  ISSUES_JSON="$(issues "20:$T_REG")" run_filer pass pass 0.8
+eq "a marker comment already present -> no second note" "0" "$(calls 'issue comment')"
+eq "... and the filer still exits 0" "0" "$FRC"
+check "... and says why" grep -q 'already carries a passed note' "$T/f.out"
+COMMENTS_FIXTURE='{"comments":[{"body":"a human quoted <!-- real-sdk-ask-probe:passed --> in the middle of a sentence"},{"body":" <!-- real-sdk-ask-probe:passed --> leading space"}]}' \
+  ISSUES_JSON="$(issues "20:$T_REG")" run_filer pass pass 0.8
+eq "control: the marker NOT at the start of a comment does not count -> the note is posted" "1" "$(calls 'issue comment')"
+COMMENTS_FIXTURE='{"comments":[]}' ISSUES_JSON="$(issues "20:$T_REG" "30:$T_REG")" run_filer pass pass 0.8
+eq "two open regression issues without a note each get exactly one" "2" "$(calls 'issue comment')"
+VIEW_FAIL=1 ISSUES_JSON="$(issues "20:$T_REG" "21:$T_BLIND")" run_filer pass pass 0.8
+eq "a comment-listing error posts no regression note (fail closed against spam)" "0" "$(calls 'issue comment 20')"
+check "... exits non-zero so the failure is visible" test "$FRC" -ne 0
+check "... but the blind issue is still closed" grep -q '^issue close 21 ' "$GD/calls.log"
+ISSUES_JSON="$(issues "20:$T_REG")" run_filer fail probe-fail 0.8
+eq "fail on an open regression issue still comments (no marker dedupe for 'again')" "1" "$(calls 'issue comment')"
+eq "... and does not read comments" "0" "$(calls 'issue view')"
+
 echo "== Guard 4 harness H1: a filer that always creates a second issue must make the suite RED =="
 # substring-match mutant: swap the jq equality for a contains()
 sed 's/\.title == \$t/(.title | contains($t))/' "$RUNNER" >"$T/mutant-filer.sh"
@@ -589,6 +959,59 @@ check "H1: the substring mutant differs from the runner" bash -c "! cmp -s '$RUN
 ISSUES_JSON="$(issues "7:$T_REG (old copy)")" RUNNER_UNDER_TEST="$T/mutant-filer.sh" run_filer fail probe-fail 0.8
 check "H1: the substring mutant adopts the decoy (row 1 would catch it)" test "$(calls 'issue create')" -eq 0
 
+echo "== gh stub strictness (D9): nothing the runner sent was refused, and the stub does refuse what it should =="
+check "the stub refused no argv during the whole suite" test ! -s "$T/gh-refused.log"
+st_run() { # argv... ; runs the stub in an isolated dir whose refusal log is its own
+  local r; rm -rf "$T/selftest"; mkdir -p "$T/selftest/gh"; printf '[]' >"$T/selftest/gh/issues.json"; printf '{"workflow_runs":[]}' >"$T/selftest/gh/runs.json"
+  PATH="$T/bin:$PATH" GH_STUB_DIR="$T/selftest/gh" "$T/bin/gh" "$@" >/dev/null 2>&1; r=$?
+  ST_RC=$r; ST_LOGGED="$(cat "$T/selftest/gh-refused.log" 2>/dev/null)"
+}
+st_run issue list --repo acme/widgets --state open --label ci/real-sdk-ask-probe --limit 200 --json number,title
+eq "stub control: the modelled issue list is served (exit 0)" "0" "$ST_RC"
+eq "stub control: ... and nothing is logged as refused" "" "$ST_LOGGED"
+st_run issue list --repo acme/widgets --state open --limit 200 --json number,title
+eq "stub: issue list without the label filter is refused (64)" "64" "$ST_RC"
+check "stub: ... and the argv is logged" test -n "$ST_LOGGED"
+st_run issue list --repo acme/widgets --state all --label ci/real-sdk-ask-probe --limit 200 --json number,title
+eq "stub: issue list with --state all is refused" "64" "$ST_RC"
+st_run api "repos/acme/widgets/actions/workflows/w.yml/runs?branch=dev&status=completed&per_page=30"
+eq "stub: runs list not on branch=main is refused" "64" "$ST_RC"
+st_run api "repos/acme/widgets/actions/workflows/w.yml/runs?branch=main&per_page=30"
+eq "stub: runs list without status=completed is refused" "64" "$ST_RC"
+st_run api "repos/acme/widgets/actions/workflows/w.yml/runs?branch=main&status=completed"
+eq "stub: runs list without per_page is refused" "64" "$ST_RC"
+st_run api "repos/acme/widgets/actions/workflows/w.yml/runs?branch=main&status=completed&per_page=30"
+eq "stub control: the modelled runs list is served" "0" "$ST_RC"
+st_run api "repos/acme/widgets/actions/runs/12/jobs?per_page=100"
+eq "stub control: the modelled jobs endpoint is served" "0" "$ST_RC" 
+st_run api "repos/acme/widgets/actions/runs/12/logs"
+eq "stub: an unmodelled api path is refused" "64" "$ST_RC"
+st_run issue close 5 --repo acme/widgets
+eq "stub: issue close without --reason completed is refused" "64" "$ST_RC"
+st_run issue close 5 --repo acme/widgets --reason "not planned"
+eq "stub: issue close with another reason is refused" "64" "$ST_RC"
+st_run issue close 5 --repo acme/widgets --reason completed
+eq "stub control: the modelled issue close is served" "0" "$ST_RC"
+st_run issue comment 5 --repo acme/widgets --body hi
+eq "stub: an inline --body is refused" "64" "$ST_RC"
+st_run issue view 5 --repo acme/widgets --json comments --jq '.comments | length'
+eq "stub: issue view with another jq expression is refused" "64" "$ST_RC"
+st_run issue view 5 --repo acme/widgets --json body --jq '[.comments[].body | select(startswith("<!-- real-sdk-ask-probe:passed -->"))] | length'
+eq "stub: issue view of another json field is refused" "64" "$ST_RC"
+st_run issue create --repo acme/widgets --title "[ci/real-sdk-ask-probe] something else" --body-file /dev/null --label type/security --label domain/engineering --label priority/p1-high --label ci/real-sdk-ask-probe
+eq "stub: issue create with an unmodelled title is refused" "64" "$ST_RC"
+st_run issue edit 5 --repo acme/widgets
+eq "stub: an unmodelled issue verb is refused" "64" "$ST_RC"
+st_run pr list
+eq "stub: an unmodelled command is refused" "64" "$ST_RC"
+
 echo
 echo "real-sdk-ask-probe.test.sh: $PASS passed, $FAIL failed"
+# Anti-vacuity floor: a LOWER BOUND on the assertions that ran (the measured count at the last edit). Reported with printf + exit, not through
+# eq/check, so it does not route through the helpers it backstops. Raise it with a new row.
+MIN_ASSERTIONS=331
+if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

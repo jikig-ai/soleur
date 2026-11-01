@@ -40,6 +40,16 @@ export function costFromResult(frame: unknown): number {
   return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;
 }
 
+/**
+ * The cost to charge one case (#10111 D4). A result frame present => its measured `total_cost_usd`. NO result frame (an error, an abort
+ * on the 180 s timer, a stranded permission request) => the case's own cap: the spend is unknown, and charging 0 would let a run of
+ * hung/errored cases look free and walk past the run budget. `basis` is printed on the PROBE line so a reader can tell the two apart.
+ */
+export function caseCostUsd(frame: unknown, caseBudgetUsd: number): { costUsd: number; basis: "measured" | "cap" } {
+  if (typeof frame === "object" && frame !== null) return { costUsd: costFromResult(frame), basis: "measured" };
+  return { costUsd: caseBudgetUsd, basis: "cap" };
+}
+
 /** True for the SDK's budget stop (`error_max_budget_usd`); that is a could-not-measure outcome, never a FAIL. */
 export function isBudgetExceededResult(frame: unknown): boolean {
   if (typeof frame !== "object" || frame === null) return false;

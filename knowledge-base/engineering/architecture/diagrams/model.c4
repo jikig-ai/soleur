@@ -724,7 +724,7 @@ model {
   claude -> supabase "Sessions and keys" { technology "HTTPS" }
   claude -> anthropic "LLM calls" { technology "HTTPS" }
   api -> anthropic "Daily org cost/usage report (Admin API, cost-report cron)" { technology "HTTPS" }
-  github -> anthropic "CI Claude turns (claude-code-action, ci.yml real-turn gates, the non-blocking scheduled real-SDK ask probe on a host-bwrap runner, ADR-284) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244)" { technology "HTTPS" }
+  github -> anthropic "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244); the non-blocking real-SDK ask probe (ADR-284)" { technology "HTTPS" }
   github -> npmRegistry "npm-publish.yml publishes @soleur/opencode on every release (#10723) via OIDC trusted publishing (ADR-309): the job's id-token exchanges for a credential bound to this repo + workflow filename — no long-lived NPM_TOKEN (the expired-credential class behind #11585's E404-masked-authz outage). npm masks publish-authz failures as 404 on PUT to an existing package" { technology "HTTPS (npm OIDC token exchange + registry PUT)" }
   evalharness -> anthropic "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-244)" { technology "HTTPS" }
   claude -> github "Git operations" { technology "HTTPS/SSH" }

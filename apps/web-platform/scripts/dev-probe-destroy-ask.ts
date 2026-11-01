@@ -16,7 +16,7 @@
  * sdk-bump-sandbox-gate.sh still only demands a `sdk-bump-verified:` commit attestation on a lockfile SDK change; it does not run this probe.
  * A change OUTSIDE the workflow's push filter is caught only by the next weekly run and the human ADR-284 Flip-criterion-5 check.
  * A full run makes one paid model call per case (8 by default). Cost is MEASURED: each PROBE line carries `costUsd=` (the SDK result frame's
- * `total_cost_usd`, an estimate and not a bill), and `TOTAL costUsd=<n>` is printed before RESULT. A hard $4 per-run cap
+ * `total_cost_usd`, an estimate and not a bill; a case that ends with NO result frame is charged its per-case cap and says `costBasis=cap`), and `TOTAL costUsd=<n>` is printed before RESULT. A hard $4 per-run cap
  * (scripts/lib/probe-budget.ts: RUN_BUDGET_USD) is enforced by a per-case `maxBudgetUsd` (HARNESS-ONLY, set below on the probe's own copy of
  * the options and never in the production option builder) plus a cumulative stop; PROBE_RUN_BUDGET_USD can only LOWER it (the runner passes
  * the remainder on a rerun). A case stopped by the SDK budget (`error_max_budget_usd`), and every case after the ledger reaches the cap,
@@ -72,7 +72,7 @@ import { resolveWorkspaceMode } from "../server/workspace-mode";
 import { createCanUseTool, isBashCommandSafe, type CanUseToolContext } from "../server/permission-callback";
 import { getBashApprovalCache } from "../server/permission-callback-bash-batch";
 import { detectDestroyAsk, logDestroyOutcome } from "../server/destroy-ask-lane";
-import { resolveRunBudgetUsd, perCaseBudgetUsd, costFromResult, isBudgetExceededResult, createLedger, shouldRunCase } from "./lib/probe-budget";
+import { resolveRunBudgetUsd, perCaseBudgetUsd, caseCostUsd, isBudgetExceededResult, createLedger, shouldRunCase } from "./lib/probe-budget";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
@@ -286,7 +286,7 @@ const pluginPath = resolve(__dirname, "..", "..", "..", "plugins", "soleur");
 const runBudgetUsd = resolveRunBudgetUsd(process.env.PROBE_RUN_BUDGET_USD);
 const ledger = createLedger(runBudgetUsd);
 
-async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[]; options: string[][]; ranTools: string[]; text: string; err?: string; seen: string[]; costUsd: number; budgetExceeded: boolean }> {
+async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[]; options: string[][]; ranTools: string[]; text: string; err?: string; seen: string[]; costUsd: number; costBasis: "measured" | "cap"; budgetExceeded: boolean }> {
   const cards: string[] = [];
   const seen: string[] = [];
   const options: string[][] = [];
@@ -388,7 +388,9 @@ async function runCase(c: Case, caseBudgetUsd: number): Promise<{ cards: string[
     clearTimeout(timer);
   }
   cache?.revoke();
-  return { cards, options, ranTools, text, err, seen, costUsd: costFromResult(lastResult), budgetExceeded: isBudgetExceededResult(lastResult) };
+  // No result frame (error, abort, stranded request) => the case is charged its own cap, not 0 (see caseCostUsd).
+  const cost = caseCostUsd(lastResult, caseBudgetUsd);
+  return { cards, options, ranTools, text, err, seen, costUsd: cost.costUsd, costBasis: cost.basis, budgetExceeded: isBudgetExceededResult(lastResult) };
 }
 
 let failed = false;
@@ -470,7 +472,7 @@ for (const c of selected) {
   if (verdict === "BUDGET-EXCEEDED") { cantRun = true; budgetHit = true; }
   if (c.preflightFile) { try { rmSync(c.preflightFile, { force: true }); } catch { /* best effort */ } }
   console.log(
-    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict === "BUDGET-EXCEEDED" ? "CANT-RUN:budget-exceeded" : verdict} costUsd=${r.costUsd.toFixed(4)} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllowsBeforeRun=${cacheAllowsBefore}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
+    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict === "BUDGET-EXCEEDED" ? "CANT-RUN:budget-exceeded" : verdict} costUsd=${r.costUsd.toFixed(4)} costBasis=${r.costBasis} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllowsBeforeRun=${cacheAllowsBefore}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
   );
 }
 

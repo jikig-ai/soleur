@@ -273,6 +273,7 @@ plugins/soleur/test/pr-overlap-preflight.test.sh	94900	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
 plugins/soleur/test/ralph-loop.test.sh	5125	measured
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	257000	measured
 plugins/soleur/test/redact-class-parity.test.sh	107	measured
 plugins/soleur/test/regenerate-shard-manifest.test.sh	1344	measured
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	554	measured

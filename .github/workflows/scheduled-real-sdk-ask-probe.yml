@@ -19,8 +19,8 @@
 #
 # Task design:
 #   trigger:        push to main on a narrow path allowlist (package-only pushes early-exit when neither SDK version moved), a weekly Monday run, workflow_dispatch, and a same-repo pull_request limited to edits of the files that execute with the key
-#   services:       reads the repo checkout and the SDK packages from npm; calls the Anthropic Messages API through the SDK on the CI-partitioned key; writes a job summary, a 90-day Actions artifact and (filer job only) GitHub issues in this repository
-#   next:           nothing automatic; a FAIL files the p1 regression issue and a blind run files the p2 blind issue, which a human triages
+#   services:       reads the repo checkout and the SDK packages from npm; calls the Anthropic Messages API through the SDK on the CI-partitioned key; writes a job summary, a 90-day Actions artifact and (filer job only) GitHub issues in this repository, and creates the ci/real-sdk-ask-probe label (idempotent)
+#   next:           nothing automatic; a FAIL files the p1 regression issue and a blind run files the p2 blind issue, which a human triages; a skipped (billing/spend-cap) run and a not-run push file nothing
 #   human_reentry:  comment on the tracking issue; rerun with gh workflow run scheduled-real-sdk-ask-probe.yml (post-merge only); stop it with soleur:cron-delete or by disabling the workflow; the regression issue is closed only by a human
 #   dedupe:         the filer matches open issues by exact title (jq equality, never the fuzzy search) and comments instead of opening a second; the runner reruns the whole probe at most once on the remaining budget and never on budget-exceeded
 #   source_dedupe:  exact-title match is the ticket-source dedupe: one open issue per class, "[ci/real-sdk-ask-probe] real-SDK ask probe regression" and "[ci/real-sdk-ask-probe] real-SDK ask probe blind"
@@ -28,7 +28,10 @@
 # Key scope: ANTHROPIC_API_KEY is in the env of exactly one step (id: probe) and, as a with: input, of the
 # anthropic-preflight action. No job-level or workflow-level env carries it; the filer job holds issues: write and no key.
 # The pull_request self-test runs the same-repo PR-head tree with the key in the probe step (same posture as the ci.yml
-# real-turn gates); fork pull requests and the Dependabot actor are excluded by the job condition.
+# real-turn gates); fork pull requests and the Dependabot actor are excluded by the job condition. The key therefore
+# executes the WHOLE PR-head tree on that self-test (npm ci, node_modules, the probe, the preflight action,
+# scripts/lib/bearer-curl.sh), not only the four files named in pull_request.paths: that filter limits when the paid
+# run TRIGGERS, not what runs with the key.
 # Guards: plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh (push-filter coverage + posture) and
 # apps/web-platform/scripts/real-sdk-ask-probe.test.sh (outcome classification + issue filer).
 
@@ -63,7 +66,9 @@ on:
       - apps/web-platform/scripts/lib/probe-budget.ts
 
 concurrency:
-  group: real-sdk-ask-probe
+  # One shared group for push, schedule and workflow_dispatch; each pull_request self-test gets its own per-PR group so
+  # a PR run never evicts the single pending main/cron run (GitHub keeps one pending run per group).
+  group: real-sdk-ask-probe${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -76,15 +81,16 @@ jobs:
     # workflow_dispatch are not pull_request events and pass the first clause.
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
-    # Derived from the first self-test run (2026-11-01): the 8-case probe step took 36 s and the whole job 1 min 40 s.
-    # The step ceiling covers one worst-case pass (8 cases x 180 s = 24 min) with margin; a run past it is a hang, and
-    # the filer files it as blind/no-outcome. The job ceiling adds setup (about 1 min) and the artifact upload.
-    timeout-minutes: 40
+    # Measured 2026-11-01 (self-test run 41295302456 at head 075832071a): probe step 36 s, job 1 min 40 s. These ceilings
+    # are hang backstops, not expectations: the whole-probe rerun runs inside the same step, so the step ceiling covers
+    # two worst-case passes (2 x 8 cases x 180 s = 48 min -> 50). A run past it is a hang and the filer files it as
+    # blind/no-outcome. The job ceiling adds setup (about 1 min), the preflight and the artifact upload.
+    timeout-minutes: 65
     permissions:
       contents: read
       actions: read
     outputs:
-      outcome: ${{ steps.probe.outputs.outcome || steps.skip.outputs.outcome }}
+      outcome: ${{ steps.probe.outputs.outcome || steps.skip.outputs.outcome || steps.should-run.outputs.outcome }}
       reason: ${{ steps.probe.outputs.reason }}
       cost: ${{ steps.probe.outputs.cost }}
       provenance: ${{ steps.probe.outputs.provenance }}
@@ -170,11 +176,12 @@ jobs:
             echo "outcome=skipped"
           } >> "$GITHUB_OUTPUT"
 
-      # The ONLY step that holds the key. Timeout provisional, see the job note.
+      # The ONLY step that holds the key. The name is a contract: the runner's PROBE_STEP_NAME constant selects the baseline
+      # run by this step name (the workflow suite pins the two equal). Ceiling: see the job note.
       - name: Run the real-SDK ask probe
         id: probe
         if: steps.should-run.outputs.run == 'true' && steps.preflight.outputs.ok == 'true'
-        timeout-minutes: 30
+        timeout-minutes: 50
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

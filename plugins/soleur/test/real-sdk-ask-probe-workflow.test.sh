@@ -17,6 +17,11 @@
 # ok()/no(); the tally machinery, the YAML loader, the import extractor and the glob matcher each have an instrument
 # self-test; every mutation battery restores from a pristine copy and asserts that the mutation LANDED.
 #
+# PARITY GUARDS (D8): the runner's in_run_allowlist case patterns equal RULED_PUSH_PATHS minus the package files
+#   (derived, not restated); the runner's PROBE_STEP_NAME equals the probe step's name: in the workflow; the job
+#   outcome expression feeds steps.should-run.outputs.outcome so a run=false push reaches the filer as not-run, and the
+#   runner's file-issue treats not-run as a no-op (driven for real against a refusing gh stub).
+#
 # Reads (declare in scripts/lib/test-affected-paths.sh): .github/workflows/scheduled-real-sdk-ask-probe.yml,
 #   apps/web-platform/scripts/dev-probe-destroy-ask.ts, apps/web-platform/scripts/real-sdk-ask-probe.sh,
 #   apps/web-platform/scripts/lib/probe-budget.ts, apps/web-platform/server/permission-callback.ts,
@@ -118,13 +123,13 @@ EXCLUDED|apps/web-platform/server/logger.ts|logging factory, no permission decis
 EXCLUDED|apps/web-platform/server/permission-log.ts|decision telemetry writer, emits after the decision is made
 EXCLUDED|apps/web-platform/server/observability.ts|Sentry/pino mirror helper, no permission decision
 EXCLUDED|apps/web-platform/server/notifications.ts|notification payload types only
-EXCLUDED|apps/web-platform/server/review-gate.ts|review-gate input extraction for the AskUserQuestion path, not the Bash must-ask lane
+EXCLUDED|apps/web-platform/server/review-gate.ts|the probe stubs abortableReviewGate, so a change to this file is not observable to the probe (covered by the unit tests and the weekly cron)
 EXCLUDED|apps/web-platform/server/sandbox.ts|workspace path containment helper for file tools, not the Bash lane
 EXCLUDED|apps/web-platform/server/support-directive.ts|support-persona skill allowlist, not in the probe wiring
 EXCLUDED|apps/web-platform/server/support-escalation.ts|support-persona denial helper, not in the probe wiring
 EXCLUDED|apps/web-platform/server/tool-path-checker.ts|file-tool path checks, not the Bash lane
 EXCLUDED|apps/web-platform/server/tool-pattern-checker.ts|file-tool glob checks, not the Bash lane
-EXCLUDED|apps/web-platform/server/tool-tiers.ts|gated-tier mapping for platform tools; the sibling gated-tier probe owns that property
+EXCLUDED|apps/web-platform/server/tool-tiers.ts|not a Bash-lane decider (assertAllowedToolsPreApprovalSafe blocks the Bash family independently); the sibling gated-tier probe dev-probe-approval-gate.ts is NOT scheduled anywhere (out of scope for #10111)
 EXCLUDED|apps/web-platform/server/approval/gate-flow.ts|durable-approval slice (ADR-309), flag-gated, separate from the destroy-ask lane
 EXCLUDED|apps/web-platform/server/approval/gate-types.ts|type declarations of the durable-approval slice
 EXCLUDED|apps/web-platform/server/approval/tools.ts|tool list of the durable-approval slice
@@ -166,6 +171,11 @@ PINS = {
 LOCAL_ACTIONS = {'./.github/actions/anthropic-preflight'}
 KEYREF = re.compile(r"secrets\s*(?:\.\s*ANTHROPIC_API_KEY\b|\[\s*['\"]ANTHROPIC_API_KEY['\"]\s*\])")
 CRON = '17 9 * * 1'
+# Shared group for push/schedule/dispatch; a pull_request self-test gets its own per-PR group so it never evicts the
+# single pending main/cron run (D5).
+GROUP_EXPR = "real-sdk-ask-probe${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}"
+# Two worst-case passes: the whole-probe rerun runs inside the same step (8 cases x 180 s per pass = 24 min).
+TWO_PASS_MIN = 2 * 8 * 180 // 60
 SET_LINE = re.compile(r'^set(\s+(-[A-Za-z]+|pipefail|-o\s+pipefail))+\s*$')
 XTRACE = [
     re.compile(r'(^|[\s;&|(])set\s+(-[A-Za-z]*x|[-+]o\s+xtrace)', re.M),
@@ -355,7 +365,7 @@ def cmd_posture(wf):
 
     # concurrency
     cc = doc.get('concurrency')
-    if not (isinstance(cc, dict) and cc.get('group') == 'real-sdk-ask-probe' and cc.get('cancel-in-progress') is False):
+    if not (isinstance(cc, dict) and cc.get('group') == GROUP_EXPR and cc.get('cancel-in-progress') is False):
         bad('CONCURRENCY', str(cc))
 
     # AC6: workflow name
@@ -457,6 +467,10 @@ def cmd_posture(wf):
         pst = ps.get('timeout-minutes')
         if not (isinstance(jt, int) and isinstance(pst, int) and 0 < pst < jt):
             bad('TIMEOUTS', 'job=%s probe-step=%s' % (jt, pst))
+        elif pst < TWO_PASS_MIN:
+            bad('TIMEOUT-TWO-PASS', 'probe-step=%s is below two worst-case passes (%d min)' % (pst, TWO_PASS_MIN))
+        elif jt - pst < 5:
+            bad('TIMEOUT-HEADROOM', 'job=%s leaves under 5 min over the probe step (%s) for setup and upload' % (jt, pst))
         pif2 = str(ps.get('if', ''))
         for needle in ("steps.should-run.outputs.run == 'true'", "steps.preflight.outputs.ok == 'true'"):
             if needle not in pif2:
@@ -474,6 +488,27 @@ def cmd_posture(wf):
     for o in ('outcome', 'reason', 'cost'):
         if o not in outs:
             bad('PROBE-OUTPUT-MISSING', o)
+    # D1/D8d: the job outcome is the FIRST non-empty of the probe, skip and should-run step outcomes, so a run=false
+    # push (should-run emits outcome=not-run) reaches the filer instead of an empty outcome (a false blind issue).
+    oexpr = str(outs.get('outcome', ''))
+    om = re.fullmatch(r'\$\{\{\s*(.*?)\s*\}\}', oexpr, re.S)
+    terms = [t.strip() for t in om.group(1).split('||')] if om else []
+
+    def sim(vals):
+        for t in terms:
+            mm = re.fullmatch(r'steps\.([A-Za-z0-9_-]+)\.outputs\.outcome', t)
+            if not mm:
+                return 'UNPARSEABLE'
+            if vals.get(mm.group(1), ''):
+                return vals[mm.group(1)]
+        return ''
+    for vals, want in (({'should-run': 'not-run'}, 'not-run'), ({'skip': 'skipped'}, 'skipped'), ({'probe': 'pass'}, 'pass'),
+                       ({'probe': 'fail', 'skip': 'skipped'}, 'fail'), ({}, '')):
+        got = sim(vals)
+        if got != want:
+            bad('OUTCOME-COMPOSE', 'step outputs %s yield job outcome %r, want %r (expression %r)' % (vals, got, want, oexpr))
+    if filer.get('steps') and not any(isinstance(s, dict) and (s.get('env') or {}).get('PROBE_OUTCOME') == '${{ needs.probe.outputs.outcome }}' for s in filer['steps']):
+        bad('FILER-OUTCOME-WIRE', 'no file-issue step passes PROBE_OUTCOME from needs.probe.outputs.outcome')
 
     # steps
     for jn, j in jobs.items():
@@ -544,6 +579,57 @@ def cmd_posture(wf):
     out('FACT jobs=%d' % len(jobs))
     out('FACT run_steps=%d' % run_steps)
     out('FACT uses=%d' % uses_n)
+    for line in v:
+        out(line)
+
+
+def runner_allowlist(runner):
+    """Case patterns of the runner's in_run_allowlist() arms that `return 0`, normalised to GitHub-glob spelling."""
+    t = open(runner, encoding='utf-8').read() if os.path.exists(runner) else ''
+    m = re.search(r'^in_run_allowlist\(\)\s*\{(.*?)^\}', t, re.S | re.M)
+    pats = set()
+    for line in (m.group(1) if m else '').split('\n'):
+        a = re.match(r'^\s*([^#\s)][^)]*?)\)\s*return\s+0\b', line)
+        if a:
+            for p in a.group(1).split('|'):
+                p = p.strip()
+                pats.add(p[:-2] + '/**' if p.endswith('/*') and not p.endswith('/**') else p)
+    return pats
+
+
+def cmd_allowlist(runner, ruled):
+    v = []
+    want = {l.strip() for l in open(ruled).read().split('\n') if l.strip()}
+    want = {e for e in want if os.path.basename(e) not in ('package.json', 'package-lock.json')}
+    got = runner_allowlist(runner)
+    if not got:
+        v.append('VIOLATION ALLOWLIST-UNREADABLE the runner has no in_run_allowlist() arms that return 0')
+    for e in sorted(want - got):
+        v.append('VIOLATION ALLOWLIST-MISSING %s is ruled but the runner in_run_allowlist does not return 0 for it' % e)
+    for e in sorted(got - want):
+        v.append('VIOLATION ALLOWLIST-EXTRA %s is in the runner in_run_allowlist but not in the ruled push paths' % e)
+    out('FACT patterns=%d' % len(got))
+    out('FACT ruled=%d' % len(want))
+    for line in v:
+        out(line)
+
+
+def cmd_stepname(wf, runner):
+    v = []
+    t = open(runner, encoding='utf-8').read() if os.path.exists(runner) else ''
+    m = re.search(r'^PROBE_STEP_NAME=(?:"([^"\n]*)"|\'([^\'\n]*)\')\s*(?:#.*)?$', t, re.M)
+    rname = (m.group(1) if m and m.group(1) is not None else (m.group(2) if m else '')) or ''
+    if not rname:
+        v.append('VIOLATION STEPNAME-RUNNER-UNREADABLE the runner has no PROBE_STEP_NAME="..." constant')
+    doc = load_wf(wf) if os.path.exists(wf) and os.path.getsize(wf) > 0 else {}
+    jobs = doc.get('jobs') if isinstance(doc.get('jobs'), dict) else {}
+    steps = [s for s in ((jobs.get('probe') or {}).get('steps') or []) if isinstance(s, dict) and s.get('id') == 'probe']
+    wname = str(steps[0].get('name', '')) if len(steps) == 1 else ''
+    if not wname:
+        v.append('VIOLATION STEPNAME-WF-UNREADABLE the workflow has no single probe step (id: probe) with a name:')
+    if rname and wname and rname != wname:
+        v.append('VIOLATION STEPNAME-PARITY runner PROBE_STEP_NAME=%r but the workflow probe step name: is %r' % (rname, wname))
+    out('FACT stepname=%s' % wname)
     for line in v:
         out(line)
 
@@ -797,6 +883,8 @@ def main():
     c = a[0]
     if c == 'posture': cmd_posture(a[1])
     elif c == 'envnames': cmd_envnames(a[1])
+    elif c == 'allowlist': cmd_allowlist(a[1], a[2])
+    elif c == 'stepname': cmd_stepname(a[1], a[2])
     elif c == 'stepenv': cmd_stepenv(a[1], a[2])
     elif c == 'steprun': cmd_steprun(a[1], a[2])
     elif c == 'allruns': cmd_allruns(a[1], a[2])
@@ -1054,6 +1142,49 @@ else
   no "interface check: workflow or runner absent ($WF_REL, $RUNNER_REL)"
 fi
 
+echo "== parity (D8): runner allowlist, PROBE_STEP_NAME, not-run composition =="
+ALLOW_REAL="VIOLATION unset"; STEPNAME_REAL="VIOLATION unset"
+if [[ -f "$WF" && -f "$RUNNER" ]]; then
+  # (a) the runner's in_run_allowlist case patterns == RULED_PUSH_PATHS minus the package files (derived, not restated)
+  helper allowlist "$RUNNER" "$SCRATCH/ruled-push.txt"
+  ALLOW_REAL="$OUT"
+  if any_v; then no "allowlist parity: $(grep '^VIOLATION' <<<"$OUT" | head -4 | tr '\n' '|')"; else ok "allowlist parity: the runner in_run_allowlist equals the ruled push paths minus the package files"; fi
+  ALLOW_N="$(fact patterns)"; RULED_N="$(fact ruled)"
+  if [[ "${ALLOW_N:-0}" -ge 12 && "${RULED_N:-0}" -ge 12 ]]; then ok "allowlist parity dispatch: $ALLOW_N runner patterns vs $RULED_N ruled non-package paths (floor 12)"; else no "allowlist parity dispatch: runner patterns=${ALLOW_N:-0} ruled=${RULED_N:-0}, floor 12"; fi
+  # (c) PROBE_STEP_NAME in the runner == the probe step name: in the workflow
+  helper stepname "$WF" "$RUNNER"
+  STEPNAME_REAL="$OUT"
+  if any_v; then no "PROBE_STEP_NAME parity: $(grep '^VIOLATION' <<<"$OUT" | head -3 | tr '\n' '|')"; else ok "PROBE_STEP_NAME parity: the runner constant equals the workflow probe step name"; fi
+  if [[ -n "$(fact stepname)" ]]; then ok "PROBE_STEP_NAME dispatch: a probe step name was read ($(fact stepname))"; else no "PROBE_STEP_NAME dispatch: no probe step name read"; fi
+  # (d) the runner emits outcome=not-run from should-run, and its file-issue treats not-run as a no-op (driven for real)
+  if grep -qE -- 'emit[[:space:]]+outcome[[:space:]]+not-run|outcome=not-run' "$RUNNER"; then ok "runner should-run emits outcome not-run"; else no "runner never emits outcome not-run"; fi
+  FSTUB="$SCRATCH/filer-stub"
+  mkdir -p "$FSTUB/bin"
+  assert_fixture_dir "$FSTUB"
+  cat > "$FSTUB/bin/gh" <<'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GH_STUB_LOG:?}"
+exit 1
+GHEOF
+  chmod +x "$FSTUB/bin/gh"
+  F_RC=0; F_OUT=""; F_GHLOG=""
+  drive_filer() { # <outcome>  -> F_RC F_OUT F_GHLOG (a gh stub that logs every call and fails)
+    : > "$FSTUB/gh.log"
+    F_OUT="$(env -i PATH="$FSTUB/bin:$PATH" HOME="$SCRATCH" GH_STUB_LOG="$FSTUB/gh.log" GITHUB_EVENT_NAME=push GITHUB_REPOSITORY=example/repo GITHUB_RUN_ID=1 PROBE_OUTCOME="$1" PROBE_JOB_RESULT=success bash --noprofile --norc "$RUNNER" file-issue 2>&1)"
+    F_RC=$?
+    F_GHLOG="$(cat "$FSTUB/gh.log")"
+  }
+  drive_filer not-run
+  if [[ "$F_RC" -eq 0 && -z "$F_GHLOG" ]] && grep -qF 'files nothing' <<<"$F_OUT"; then ok "composition: file-issue with PROBE_OUTCOME=not-run exits 0, calls no gh and says it files nothing"; else no "composition: not-run was not a clean no-op (rc=$F_RC gh='${F_GHLOG:0:80}' out='${F_OUT:0:120}')"; fi
+  drive_filer skipped
+  if [[ "$F_RC" -eq 0 && -z "$F_GHLOG" ]]; then ok "composition control: skipped is the same no-op"; else no "composition control: skipped was not a no-op (rc=$F_RC gh='${F_GHLOG:0:80}')"; fi
+  drive_filer fail
+  if [[ "$F_RC" -ne 0 && -n "$F_GHLOG" ]]; then ok "composition positive control: PROBE_OUTCOME=fail reaches gh (the stub is wired, so the empty not-run log means something)"; else no "composition positive control: fail never reached the gh stub (rc=$F_RC gh='${F_GHLOG:0:80}')"; fi
+  drive_filer not-ran
+  MUT_RUN=$((MUT_RUN + 1))
+  if [[ "$F_RC" -eq 2 && -z "$F_GHLOG" ]]; then MUT_KILLED=$((MUT_KILLED + 1)); ok "RED: composition a misspelt outcome (not-ran) is refused (rc 2), never treated as not-run"; else no "mutant survived: not-ran was tolerated (rc=$F_RC gh='${F_GHLOG:0:80}')"; fi
+fi
+
 echo "== Guard 1: push filter coverage (real files) =="
 cover() { # <wf> <table> <ruled> <probe> <perm> <adr>
   helper cover "$REPO_ROOT" "$1" "$2" "$3" "$4" "$PROBE_REL" "$5" "$PERM_REL" "$6"
@@ -1149,12 +1280,21 @@ if [[ -f "$PRISTINE_WF" ]] && ! grep -q '^VIOLATION' <<<"$POSTURE_REAL"; then
   posture_mut cron-changed CRON-SET "d['on']['schedule'][0]['cron']='*/5 * * * *'"
   posture_mut cancel-in-progress CONCURRENCY "d['concurrency']['cancel-in-progress']=True"
   posture_mut concurrency-group CONCURRENCY "d['concurrency']['group']='other'"
+  posture_mut concurrency-pr-segment-dropped CONCURRENCY "d['concurrency']['group']='real-sdk-ask-probe'"
+  posture_mut concurrency-pr-group-shared CONCURRENCY "d['concurrency']['group']=d['concurrency']['group'].replace('github.event.pull_request.number','github.run_id')"
   posture_mut name-residual-dropped NAME-RESIDUAL "d['name']='Scheduled: real-SDK ask probe'"
   posture_mut filer-if-pr-guard-dropped FILER-IF "d['jobs']['file-issue']['if']=d['jobs']['file-issue']['if'].replace(\"github.event_name != 'pull_request'\",'true')"
   posture_mut filer-if-main-guard-dropped FILER-IF "d['jobs']['file-issue']['if']=d['jobs']['file-issue']['if'].replace(\"github.ref == 'refs/heads/main'\",'true')"
   posture_mut filer-needs-dropped FILER-NEEDS "d['jobs']['file-issue'].pop('needs')"
   posture_mut preflight-after-probe PROBE-STEP-ORDER "s=d['jobs']['probe']['steps']; i=[k for k,x in enumerate(s) if x.get('id')=='preflight'][0]; p=s.pop(i); s.append(p)"
   posture_mut probe-timeout-inverted TIMEOUTS "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['timeout-minutes']=999"
+  posture_mut probe-timeout-below-two-passes TIMEOUT-TWO-PASS "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['timeout-minutes']=30"
+  posture_mut job-timeout-no-headroom TIMEOUT-HEADROOM "d['jobs']['probe']['timeout-minutes']=52"
+  posture_mut outcome-should-run-term-dropped OUTCOME-COMPOSE "d['jobs']['probe']['outputs']['outcome']=d['jobs']['probe']['outputs']['outcome'].replace(' || steps.should-run.outputs.outcome','')" "not-run"
+  posture_mut outcome-wrong-step-id OUTCOME-COMPOSE "d['jobs']['probe']['outputs']['outcome']=d['jobs']['probe']['outputs']['outcome'].replace('steps.should-run.outputs.outcome','steps.preflight.outputs.outcome')" "not-run"
+  posture_mut outcome-skip-term-dropped OUTCOME-COMPOSE "d['jobs']['probe']['outputs']['outcome']=d['jobs']['probe']['outputs']['outcome'].replace(' || steps.skip.outputs.outcome','')" "skipped"
+  posture_mut outcome-unparseable-operator OUTCOME-COMPOSE "d['jobs']['probe']['outputs']['outcome']=d['jobs']['probe']['outputs']['outcome'].replace(' || ',' && ')"
+  posture_mut filer-outcome-unwired FILER-OUTCOME-WIRE "[x for x in d['jobs']['file-issue']['steps'] if 'env' in x][0]['env']['PROBE_OUTCOME']='skipped'"
   posture_mut probe-timeout-dropped TIMEOUTS "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0].pop('timeout-minutes')"
   posture_mut artifact-retention ARTIFACT "[s for s in d['jobs']['probe']['steps'] if str(s.get('uses','')).startswith('actions/upload-artifact')][0]['with']['retention-days']=7"
   posture_mut artifact-if-always ARTIFACT "[s for s in d['jobs']['probe']['steps'] if str(s.get('uses','')).startswith('actions/upload-artifact')][0].pop('if')"
@@ -1249,7 +1389,7 @@ if [[ -f "$PRISTINE_WF" ]] && ! grep -q '^VIOLATION' <<<"$COVER_REAL"; then
     [[ "${#cand[@]}" -ge 2 ]] && break
   done < <(cd "$REPO_ROOT" && git ls-files 'apps/web-platform/server/*.ts' | grep -vE '\.test\.ts$')
   if [[ "${#cand[@]}" -ge 2 ]]; then
-    cp "$PRISTINE/$(basename "$PERM_REL")" "$MUTD/perm-row3.ts"
+    cat "$PRISTINE/$(basename "$PERM_REL")" > "$MUTD/perm-row3.ts"
     printf '\nimport {\n  zzNewOne,\n} from "./%s";\nexport const lazyTwo = () => import("./%s");\n' "${cand[0]}" "${cand[1]}" >> "$MUTD/perm-row3.ts"
     if ! cmp -s "$PRISTINE/$(basename "$PERM_REL")" "$MUTD/perm-row3.ts"; then
       ok "mutation landed: G1 row 3 two new direct imports (${cand[0]}, ${cand[1]})"
@@ -1327,6 +1467,39 @@ else
   no "parity mutants cannot run: ADR amendment / budget helper / workflow are not all present and green ($(grep '^VIOLATION' <<<"$PARITY_REAL" | head -3 | tr '\n' '|'))"
 fi
 
+echo "== parity mutants (D8): allowlist, PROBE_STEP_NAME =="
+PRISTINE_RUNNER="$PRISTINE/$(basename "$RUNNER_REL")"
+if [[ -f "$PRISTINE_WF" && -f "$PRISTINE_RUNNER" ]] && ! grep -q '^VIOLATION' <<<"$ALLOW_REAL" && ! grep -q '^VIOLATION' <<<"$STEPNAME_REAL"; then
+  allow_mut() { # <name> <code> <old> <new> [substring]  (text mutation of a runner copy)
+    local m="$MUTD/runner-$1.sh"
+    if mut_t "$1" "$PRISTINE_RUNNER" "$m" "$3" "$4"; then helper allowlist "$m" "$SCRATCH/ruled-push.txt"; expect_red "allowlist $1" "$2" "${5-}"; else MUT_RUN=$((MUT_RUN + 1)); fi
+  }
+  allow_mut allowlist-agent-env-dropped ALLOWLIST-MISSING '|apps/web-platform/server/agent-env.ts)' ')' "apps/web-platform/server/agent-env.ts"
+  allow_mut allowlist-probe-budget-dropped ALLOWLIST-MISSING '|apps/web-platform/scripts/lib/probe-budget.ts)' ')' "scripts/lib/probe-budget.ts"
+  allow_mut allowlist-extra-entry ALLOWLIST-EXTRA '|apps/web-platform/server/agent-env.ts)' '|apps/web-platform/server/agent-env.ts|apps/web-platform/server/logger.ts)' "apps/web-platform/server/logger.ts"
+  allow_mut allowlist-hooks-narrowed ALLOWLIST-MISSING 'plugins/soleur/hooks/*)' 'plugins/soleur/hooks/sub/*)' "plugins/soleur/hooks/**"
+  allow_mut allowlist-workflow-dropped ALLOWLIST-MISSING '.github/workflows/scheduled-real-sdk-ask-probe.yml) return 0' '.github/workflows/not-this-one.yml) return 0' "scheduled-real-sdk-ask-probe.yml"
+  : > "$MUTD/runner-empty.sh"
+  helper allowlist "$MUTD/runner-empty.sh" "$SCRATCH/ruled-push.txt"; expect_red "allowlist a runner without in_run_allowlist" ALLOWLIST-UNREADABLE
+  if [[ "$(fact patterns)" -lt 12 ]]; then ok "allowlist an empty runner trips the dispatch floor (patterns<12)"; else no "allowlist an empty runner did not trip the dispatch floor"; fi
+  # the derivation drops only package files: a package file in the runner arms is an EXTRA, not silently skipped
+  allow_mut allowlist-package-json-added ALLOWLIST-EXTRA '|apps/web-platform/server/agent-env.ts)' '|apps/web-platform/server/agent-env.ts|apps/web-platform/package.json)' "apps/web-platform/package.json"
+
+  # PROBE_STEP_NAME parity
+  if mut_r "PROBE_STEP_NAME constant renamed in the runner copy" "$PRISTINE_RUNNER" "$MUTD/runner-stepname.sh" '^(PROBE_STEP_NAME=["'"'"']?)Run the' '\g<1>Skip the'; then
+    helper stepname "$WF" "$MUTD/runner-stepname.sh"; expect_red "stepname the runner constant drifts from the workflow" STEPNAME-PARITY
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "probe step renamed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-stepname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0]['name']='Run the probe'"; then
+    helper stepname "$MUTD/wf-stepname.yml" "$RUNNER"; expect_red "stepname the workflow step drifts from the runner constant" STEPNAME-PARITY
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  if mut_y "probe step name removed in the workflow copy" "$PRISTINE_WF" "$MUTD/wf-noname.yml" "[s for s in d['jobs']['probe']['steps'] if s.get('id')=='probe'][0].pop('name')"; then
+    helper stepname "$MUTD/wf-noname.yml" "$RUNNER"; expect_red "stepname a nameless probe step" STEPNAME-WF-UNREADABLE
+  else MUT_RUN=$((MUT_RUN + 1)); fi
+  helper stepname "$WF" "$MUTD/runner-empty.sh"; expect_red "stepname a runner without the constant" STEPNAME-RUNNER-UNREADABLE
+else
+  no "parity mutants cannot run: the pristine workflow/runner is absent or a parity check is red ($(grep -h '^VIOLATION' <<<"${ALLOW_REAL-}${STEPNAME_REAL-}" | head -3 | tr '\n' '|'))"
+fi
+
 # ---------------------------------------------------------------------------------------------------------------
 # PRISTINE INTEGRITY: nothing above may have edited a live file.
 # ---------------------------------------------------------------------------------------------------------------
@@ -1343,11 +1516,11 @@ done
 echo ""
 echo "real-sdk-ask-probe-workflow.test.sh: $passes passed, $fails failed ($((passes + fails)) assertions, $MUT_KILLED/$MUT_RUN mutants killed)"
 if [[ "${#FAILED[@]}" -ne "$fails" ]]; then printf '[FATAL] ledger/counter disagree: %s vs %s\n' "${#FAILED[@]}" "$fails" >&2; exit 1; fi
-MIN_ASSERTIONS=244
+MIN_ASSERTIONS=292
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi
-MIN_MUTANTS=87
+MIN_MUTANTS=108
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

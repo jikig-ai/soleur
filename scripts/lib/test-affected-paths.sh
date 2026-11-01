@@ -530,7 +530,6 @@ AFFECTED_CLAUDE_HOOKS_SKILL_CONTEXT_QUERIES_TEST_SH_PATHS=(
   ".claude/hooks/skill-context-queries.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-# The `test/` TypeScript suite — same SUT as the hook's own .test.sh above.
 # plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh (#10111) — reads the file LIST (git ls-files) to
 # check the push-filter classification table, so its scan is scoped to the probe's files rather than the
 # whole tree; the subject is the workflow, the probe, the runner, the budget lib, the option-gate import
@@ -548,6 +547,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
   "scripts/required-checks.txt"
 )
 
+# The `test/` TypeScript suite — same SUT as the hook's own .test.sh above.
 AFFECTED_TEST_PRE_MERGE_REBASE_PATHS=(
   ".claude/hooks/pre-merge-rebase.sh"
   "test/pre-merge-rebase.test.ts"

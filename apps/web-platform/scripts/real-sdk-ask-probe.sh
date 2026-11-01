@@ -6,11 +6,14 @@
 # Offline suite: real-sdk-ask-probe.test.sh (stub probe, stub gh that exits 64 on unexpected argv, tiny real git repos).
 #
 # Subcommands (run from the repository root):
-#   should-run   Push events only; every other event prints run=true. Compares the push with the last COMPLETED, NON-CANCELLED run of
-#                this workflow on main (a run evicted from the concurrency queue is recorded as cancelled and must not hide an SDK change):
-#                any changed file in the push allowlist other than the two package files -> run=true; only the package files changed ->
+#   should-run   Push events only; every other event prints run=true. Compares the push with the newest MEASURING run of this workflow on
+#                main: completed, not cancelled, not a pull_request event, AND its `probe` job ran PROBE_STEP_NAME to success or failure
+#                (a billing-skipped or run=false run measured nothing and is never a baseline; a probe that ran and FAILED still measured).
+#                Up to 10 candidates are checked newest first through the jobs API; any API error or no qualifying candidate => run=true.
+#                Any changed file in the push allowlist other than the two package files -> run=true; only the package files changed ->
 #                run=true unless the resolved @anthropic-ai/claude-agent-sdk and @anthropic-ai/claude-code versions are equal in both
-#                lockfiles. Fails TOWARD running on any uncertainty. Writes run=true|false to $GITHUB_OUTPUT.
+#                lockfiles. Fails TOWARD running on any uncertainty. Writes run=true|false to $GITHUB_OUTPUT, plus outcome=not-run when run=false (so
+#                the job output and the filer see a not-run push as an explicit non-event, not as a missing outcome).
 #                Env: GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE_SHA (github.event.before), GITHUB_REPOSITORY, GH_TOKEN, WORKFLOW_FILE
 #                (default scheduled-real-sdk-ask-probe.yml; needs `actions: read`).
 #   run          Runs $PROBE_CMD (default: bun run apps/web-platform/scripts/dev-probe-destroy-ask.ts) with NODE_ENV=test, redacts the
@@ -21,7 +24,8 @@
 #                match). Env: PROBE_OUTCOME, PROBE_REASON, PROBE_COST, PROBE_PROVENANCE, PROBE_JOB_RESULT (needs.probe.result),
 #                GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_SERVER_URL, GH_TOKEN.
 #
-# Outcomes: pass | fail | blind (could not measure) | skipped (explicit, set by the workflow, never by this script).
+# Outcomes: pass | fail | blind (could not measure) | skipped (explicit, set by the workflow, never by this script) | not-run (should-run
+# printed run=false: nothing was measured and nothing is filed; behaves exactly like skipped in file-issue).
 # A pass is a measurement of the HOST-side SDK boundary only; no output here may describe it as production verification.
 #
 # xtrace refusal first: tracing echoes expanded values, and this script runs with a live API key and a GitHub token (#7797).
@@ -38,14 +42,21 @@ esac
 
 RUN_BUDGET_USD=4   # mirrors RUN_BUDGET_USD in scripts/lib/probe-budget.ts (the offline suite asserts equality)
 MIN_CASES=8        # mirrors MIN_DEFAULT_CASES in dev-probe-destroy-ask.ts (the offline suite asserts equality)
-MIN_RERUN_BUDGET_USD=0.50
+MIN_RERUN_BUDGET_USD=1.00   # a rerun below one dollar cannot finish eight cases (about $0.07 each when they run), so it is not worth the risk of a half-matrix
 LABEL="ci/real-sdk-ask-probe"
 TITLE_REGRESSION="[ci/real-sdk-ask-probe] real-SDK ask probe regression"
 TITLE_BLIND="[ci/real-sdk-ask-probe] real-SDK ask probe blind"
 ADR_PATH="knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
 POSTMORTEM_PATH="knowledge-base/engineering/operations/post-mortems/2026-10-11-hosted-bash-ask-bypassed-by-sdk-auto-allow-postmortem.md"
-SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")
+SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")   # parity with apps/web-platform/scripts/sdk-bump-sandbox-gate.sh (the offline suite asserts equality)
+# The probe step's `name:` in the workflow. should-run only trusts a baseline run whose `probe` job ran this step; the workflow suite
+# pins the two strings equal.
+PROBE_STEP_NAME="Run the real-SDK ask probe"
 LOCKFILE="apps/web-platform/package-lock.json"
+# The first line of a regression issue's "subsequently passed" note; the filer posts at most one per open regression issue.
+PASSED_MARKER="<!-- real-sdk-ask-probe:passed -->"
+# Every issue body ends with this: how to re-run, how to stop, what it tracks, where the reason values are defined, and the one way to cause a duplicate.
+ISSUE_FOOTER="Re-run: gh workflow run scheduled-real-sdk-ask-probe.yml (after merge) | Stop: soleur:cron-delete or disable the workflow | Tracking: #10111 | reason values: see norm_reason in apps/web-platform/scripts/real-sdk-ask-probe.sh | If you remove the ci/real-sdk-ask-probe label from an open issue the filer will open a duplicate"
 # Every user-visible string (job summary, issue bodies) carries this: the scope of what a result means.
 HOST_ONLY_RESIDUAL="host-only residual: this probe runs on a CI host with host bwrap, not in the hosted container whose sandbox is the variable behind #10054; the in-process Sentry capture proves emission only; production arrival not observed."
 
@@ -70,8 +81,21 @@ norm_prov() {
   if [[ "$1" =~ ^sdk=[A-Za-z0-9._+-]+\ cli=[A-Za-z0-9._+-]+$ ]]; then printf '%s' "$1"; else printf 'unknown'; fi
 }
 
+# redact: stdin -> stdout. Three layers: (1) the live credentials by exact value (a fixed-string scan in awk: the value is read from
+# ENVIRON, never interpolated into a pattern, so regex metacharacters or sed delimiters in it cannot break or bypass the mask; values
+# under 8 characters are skipped because they would mangle ordinary text); (2) credential-shaped headers and JWTs; (3) token-shaped
+# prefixes, where the `sk-` rules need a left boundary so a hyphenated word such as ask-the-user-... survives.
 redact() {
-  sed -E 's/sk-ant-[A-Za-z0-9_-]+/<redacted>/g; s/sk-[A-Za-z0-9_-]{20,}/<redacted>/g; s/gh[pousr]_[A-Za-z0-9]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9_]{20,}/<redacted>/g'
+  RDX_A="${ANTHROPIC_API_KEY-}" RDX_B="${GH_TOKEN-}" awk '
+    BEGIN { n = 0; if (length(ENVIRON["RDX_A"]) >= 8) lit[++n] = ENVIRON["RDX_A"]; if (length(ENVIRON["RDX_B"]) >= 8) lit[++n] = ENVIRON["RDX_B"] }
+    { line = $0
+      for (i = 1; i <= n; i++) {
+        out = ""
+        while ((p = index(line, lit[i])) > 0) { out = out substr(line, 1, p - 1) "<redacted>"; line = substr(line, p + length(lit[i])) }
+        line = out line
+      }
+      print line }' |
+    sed -E 's/([Aa]uthorization:[[:space:]]*[Bb]earer[[:space:]]+)[^[:space:]]+/\1<redacted>/g; s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted>/g; s/(^|[^A-Za-z0-9])sk-ant-[A-Za-z0-9_-]+/\1<redacted>/g; s/(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/\1<redacted>/g; s/gh[pousr]_[A-Za-z0-9]{20,}/<redacted>/g; s/github_pat_[A-Za-z0-9_]{20,}/<redacted>/g'
 }
 
 # =================================================================================================================================
@@ -94,7 +118,7 @@ lock_version() { # lockfile-content package -> version or empty
 cmd_should_run() {
   local event="${GITHUB_EVENT_NAME:-}" sha="${GITHUB_SHA:-}" before="${PUSH_BEFORE_SHA:-}"
   local repo="${GITHUB_REPOSITORY:-}" wf="${WORKFLOW_FILE:-scheduled-real-sdk-ask-probe.yml}"
-  local baseline runs files f pkg_changed=0 base_lock head_lock bv hv p
+  local baseline runs cands jobs measured rid rsha files f pkg_changed=0 base_lock head_lock bv hv p
 
   if [ "$event" != "push" ]; then
     emit run true
@@ -111,10 +135,32 @@ cmd_should_run() {
     echo "::notice::real-sdk-ask-probe: could not list previous runs, running"
     return 0
   fi
-  baseline="$(jq -r --arg sha "$sha" '[.workflow_runs[]? | select(.conclusion != null and .conclusion != "cancelled" and .head_sha != $sha)][0].head_sha // empty' <<<"$runs" 2>/dev/null || printf '')"
+  # Candidates, newest first: completed (the API filter), not cancelled/in-progress, not a PR run, not this very commit.
+  if ! cands="$(jq -r --arg sha "$sha" '[.workflow_runs[]? | select(.id != null and .conclusion != null and .conclusion != "cancelled" and .event != "pull_request" and .head_sha != $sha)][:10][] | "\(.id) \(.head_sha)"' <<<"$runs" 2>/dev/null)"; then
+    emit run true
+    echo "::notice::real-sdk-ask-probe: the previous-runs list was not parseable, running"
+    return 0
+  fi
+  baseline=""
+  while read -r rid rsha; do
+    [ -z "${rid:-}" ] && continue
+    [[ "$rid" =~ ^[0-9]+$ ]] || continue
+    if ! jobs="$(gh api "repos/${repo}/actions/runs/${rid}/jobs?per_page=100" 2>/dev/null)" \
+       || ! measured="$(jq -r --arg step "$PROBE_STEP_NAME" '[.jobs[]? | select(.name == "probe") | .steps[]? | select(.name == $step and (.conclusion == "success" or .conclusion == "failure"))] | length' <<<"$jobs" 2>/dev/null)" \
+       || ! [[ "$measured" =~ ^[0-9]+$ ]]; then
+      emit run true
+      echo "::notice::real-sdk-ask-probe: could not read the jobs of run ${rid}, running"
+      return 0
+    fi
+    if [ "$measured" -ge 1 ] && [[ "$rsha" =~ ^[0-9a-f]{40}$ ]]; then
+      baseline="$rsha"
+      break
+    fi
+    echo "::notice::real-sdk-ask-probe: run ${rid} did not execute '${PROBE_STEP_NAME}' (skipped or not run), not a baseline"
+  done <<<"$cands"
   if ! [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]; then
     emit run true
-    echo "::notice::real-sdk-ask-probe: no completed non-cancelled baseline run, running"
+    echo "::notice::real-sdk-ask-probe: no completed run that actually measured, running"
     return 0
   fi
   if ! git fetch --no-tags --depth=1 origin "$baseline" >/dev/null 2>&1; then
@@ -122,7 +168,7 @@ cmd_should_run() {
     echo "::notice::real-sdk-ask-probe: baseline ${baseline:0:12} could not be fetched, running"
     return 0
   fi
-  if ! files="$(git diff --name-only "$baseline" "$sha" 2>/dev/null)"; then
+  if ! files="$(git diff --no-renames --name-only "$baseline" "$sha" 2>/dev/null)"; then
     emit run true
     echo "::notice::real-sdk-ask-probe: could not diff ${baseline:0:12}..${sha:0:12}, running"
     return 0
@@ -157,6 +203,7 @@ cmd_should_run() {
     fi
   done
   emit run false
+  emit outcome not-run
   echo "::notice::real-sdk-ask-probe: only package files changed and neither SDK version moved since ${baseline:0:12}, skipping the paid probe"
   return 0
 }
@@ -167,9 +214,9 @@ cmd_should_run() {
 
 # classify <exit-code> <redacted-output-file>
 # The ONE place that computes the outcome. Sets C_OUTCOME (pass|fail|blind), C_REASON (norm_reason enum), C_RETRY (yes|no), C_COST, C_PROV.
-# `pass` needs exit 0 AND `RESULT: PASS` AND cases-run >= MIN_CASES AND >= MIN_CASES case lines AND remote refs unchanged.
+# `pass` needs exit 0 AND `RESULT: PASS` AND cases-run >= MIN_CASES AND >= MIN_CASES case lines, every one verdict=ok, AND remote refs unchanged.
 classify() {
-  local rc="$1" f="$2" result_line rest token cases_run case_lines refs_ok r
+  local rc="$1" f="$2" result_line rest token cases_run case_lines bad_verdicts refs_ok r
   C_OUTCOME=blind; C_REASON=crash; C_RETRY=no
   C_COST="$(norm_cost "$(sed -n 's/^TOTAL costUsd=\(.*\)$/\1/p' "$f" | tail -1)")"
   C_PROV="$(norm_prov "$(sed -n 's/^PROVENANCE \(sdk=[^ ]* cli=[^ ]*\)\( .*\)\{0,1\}$/\1/p' "$f" | head -1)")"
@@ -179,13 +226,15 @@ classify() {
   cases_run="$(sed -n 's/.*cases-run=\([0-9][0-9]*\).*/\1/p' <<<"$result_line" | tail -1)"
   [[ "$cases_run" =~ ^[0-9]+$ ]] || cases_run=0
   case_lines="$(awk '/^PROBE [^ ]+ .*verdict=/{n++} END{print n+0}' "$f")"
+  # Every case line must say verdict=ok for a PASS: a RESULT: PASS that sits on top of any other verdict is contract drift, not a measurement.
+  bad_verdicts="$(awk '/^PROBE [^ ]+ .*verdict=/{ match($0, /verdict=[^ ]*/); if (substr($0, RSTART, RLENGTH) != "verdict=ok") n++ } END{print n+0}' "$f")"
   refs_ok="$(awk '/^PROBE remote-refs-unchanged=/{l=$0} END{print (l ~ /^PROBE remote-refs-unchanged=true( |$)/) ? 1 : 0}' "$f")"
   case "$token" in
     "")
       C_REASON=crash
       ;;
     PASS)
-      if [ "$rc" -eq 0 ] && [ "$cases_run" -ge "$MIN_CASES" ] && [ "$case_lines" -ge "$MIN_CASES" ] && [ "$refs_ok" -eq 1 ]; then
+      if [ "$rc" -eq 0 ] && [ "$cases_run" -ge "$MIN_CASES" ] && [ "$case_lines" -ge "$MIN_CASES" ] && [ "$bad_verdicts" -eq 0 ] && [ "$refs_ok" -eq 1 ]; then
         C_OUTCOME=pass; C_REASON=pass
       else
         C_REASON=contract-drift
@@ -207,7 +256,8 @@ classify() {
       fi
       ;;
     DIAGNOSTIC)
-      C_REASON=diagnostic
+      # Exit 4 is the DIAGNOSTIC contract; the same token at any other exit code is drift, like PASS/FAIL/CANT-RUN above.
+      if [ "$rc" -eq 4 ]; then C_REASON=diagnostic; else C_REASON=contract-drift; fi
       ;;
     *)
       C_REASON=contract-drift
@@ -284,26 +334,33 @@ cmd_run() {
 
   if [ "$outcome" = "blind" ] && [ "$C_RETRY" = "yes" ]; then
     # One whole-probe rerun, on what is LEFT of the single run cap, so both passes together stay inside it.
-    spent1="$cost"; [ "$spent1" = "unknown" ] && spent1=0
-    remaining="$(awk -v cap="$RUN_BUDGET_USD" -v spent="$spent1" 'BEGIN{r=cap-spent; if(r<0)r=0; printf "%.2f", r}')"
-    if awk -v cap="$RUN_BUDGET_USD" -v spent="$spent1" -v min="$MIN_RERUN_BUDGET_USD" 'BEGIN{exit !((cap-spent) >= min - 1e-9)}'; then
-      echo "real-sdk-ask-probe: pass 1 was CANT-RUN:${reason}; rerunning once with \$${remaining} of the \$${RUN_BUDGET_USD} cap left"
-      attempts=2
-      run_probe_pass 2 "$remaining"
-      classify "$P_RC" "$WORK/red.2"
-      { printf '=== pass 2 (exit %s, budget %s) ===\n' "$P_RC" "$remaining"; cat "$WORK/red.2"; } >>"$out_file"
-      cat "$WORK/red.2"
-      cp "$WORK/red.2" "$WORK/final"
-      outcome="$C_OUTCOME"; reason="$C_REASON"; prov="$C_PROV"
-      cost2="$C_COST"
-      if [ "$cost" = "unknown" ] || [ "$cost2" = "unknown" ]; then
-        total_cost=unknown
-      else
-        total_cost="$(awk -v a="$cost" -v b="$cost2" 'BEGIN{printf "%.4f", a+b}')"
-      fi
-      cost="$total_cost"
+    spent1="$cost"
+    remaining=""
+    if [ "$spent1" = "unknown" ]; then
+      # Pass-1 spend is unknown (no parseable TOTAL line): the remainder cannot be computed, and a second pass on an unknown balance could
+      # overspend the single cap. Fail closed: no rerun.
+      echo "real-sdk-ask-probe: pass 1 was CANT-RUN:${reason} but its spend is unknown (no parseable TOTAL line); not rerunning (fail closed on the \$${RUN_BUDGET_USD} cap)"
     else
-      echo "real-sdk-ask-probe: pass 1 was CANT-RUN:${reason}; only \$${remaining} of the cap is left (< \$${MIN_RERUN_BUDGET_USD}), not rerunning"
+      remaining="$(awk -v cap="$RUN_BUDGET_USD" -v spent="$spent1" 'BEGIN{r=cap-spent; if(r<0)r=0; printf "%.2f", r}')"
+      if awk -v cap="$RUN_BUDGET_USD" -v spent="$spent1" -v min="$MIN_RERUN_BUDGET_USD" 'BEGIN{exit !((cap-spent) >= min - 1e-9)}'; then
+        echo "real-sdk-ask-probe: pass 1 was CANT-RUN:${reason}; rerunning once with \$${remaining} of the \$${RUN_BUDGET_USD} cap left"
+        attempts=2
+        run_probe_pass 2 "$remaining"
+        classify "$P_RC" "$WORK/red.2"
+        { printf '=== pass 2 (exit %s, budget %s) ===\n' "$P_RC" "$remaining"; cat "$WORK/red.2"; } >>"$out_file"
+        cat "$WORK/red.2"
+        cp "$WORK/red.2" "$WORK/final"
+        outcome="$C_OUTCOME"; reason="$C_REASON"; prov="$C_PROV"
+        cost2="$C_COST"
+        if [ "$cost" = "unknown" ] || [ "$cost2" = "unknown" ]; then
+          total_cost=unknown
+        else
+          total_cost="$(awk -v a="$cost" -v b="$cost2" 'BEGIN{printf "%.4f", a+b}')"
+        fi
+        cost="$total_cost"
+      else
+        echo "real-sdk-ask-probe: pass 1 was CANT-RUN:${reason}; only \$${remaining} of the cap is left (< \$${MIN_RERUN_BUDGET_USD}), not rerunning"
+      fi
     fi
   fi
 
@@ -329,7 +386,14 @@ build_body() { # outfile class(regression|blind) mode(new|again|passed) outcome 
   assert_fixture_dir "$out"
   {
     case "$mode" in
-      passed) printf '%s\n\n' "A later run of the real-SDK ask probe subsequently passed. This issue stays OPEN: a green run never closes a regression issue (the lane may be flaky or a path outside the filter may still be inert); a human reviews and closes it." ;;
+      passed)
+        if [ "$class" = "blind" ]; then
+          printf '%s\n\n' "This issue is being closed: the probe now passes."
+        else
+          # The marker is the first line: the filer counts it to post at most one such note per open regression issue.
+          printf '%s\n\n%s\n\n' "$PASSED_MARKER" "A later run of the real-SDK ask probe subsequently passed. This issue stays OPEN: a green run never closes a regression issue (the lane may be flaky or a path outside the filter may still be inert); a human reviews and closes it."
+        fi
+        ;;
       again)  printf '%s\n\n' "Another occurrence of this probe outcome." ;;
       *)
         if [ "$class" = "regression" ]; then
@@ -341,13 +405,14 @@ build_body() { # outfile class(regression|blind) mode(new|again|passed) outcome 
     esac
     printf -- '- outcome: %s\n- reason: %s\n- measured cost (SDK estimate, not a bill): $%s\n- SDK/CLI: %s\n- run: %s\n\n' "$outcome" "$reason" "$cost" "$prov" "$url"
     printf '%s\n\n' "Scope: ${HOST_ONLY_RESIDUAL}"
-    printf -- '- ADR-284 (see the "C9 result" paragraphs): %s/%s\n- Post-mortem: %s/%s\n' "$base" "$ADR_PATH" "$base" "$POSTMORTEM_PATH"
+    printf -- '- ADR-284 (see the "C9 result" paragraphs): %s/%s\n- Post-mortem: %s/%s\n\n' "$base" "$ADR_PATH" "$base" "$POSTMORTEM_PATH"
+    printf '%s\n' "$ISSUE_FOOTER"
   } >"$out"
 }
 
 cmd_file_issue() {
   local repo="${GITHUB_REPOSITORY:-}" event="${GITHUB_EVENT_NAME:-}" outcome="${PROBE_OUTCOME:-}" reason cost prov job="${PROBE_JOB_RESULT:-}"
-  local url issues_json class title prio num n rc=0 body
+  local url issues_json class title prio num n rc=0 body prior
 
   if [ "$event" = "pull_request" ]; then
     echo "real-sdk-ask-probe: the PR self-test never files issues"
@@ -367,7 +432,7 @@ cmd_file_issue() {
   fi
   prov="$(norm_prov "${PROBE_PROVENANCE:-}")"
   case "$outcome" in
-    skipped) echo "real-sdk-ask-probe: skipped is never a pass and files nothing"; return 0 ;;
+    skipped|not-run) echo "real-sdk-ask-probe: ${outcome} is never a pass and files nothing"; return 0 ;;
     pass|fail|blind) : ;;
     *) echo "::error::real-sdk-ask-probe: unknown outcome, refusing to file" >&2; return 2 ;;
   esac
@@ -397,6 +462,16 @@ cmd_file_issue() {
         gh issue close "$num" --repo "$repo" --reason completed >/dev/null || rc=1
       done
       for num in $reg_nums; do
+        # At most one "subsequently passed" note per open regression issue until it is closed: a daily green run must not bury the issue.
+        if ! prior="$(gh issue view "$num" --repo "$repo" --json comments --jq "[.comments[].body | select(startswith(\"${PASSED_MARKER}\"))] | length" 2>/dev/null)" || ! [[ "$prior" =~ ^[0-9]+$ ]]; then
+          echo "::error::real-sdk-ask-probe: could not read the comments of #${num}; not posting a passed note" >&2
+          rc=1
+          continue
+        fi
+        if [ "$prior" -ge 1 ]; then
+          echo "real-sdk-ask-probe: #${num} already carries a passed note, not posting another"
+          continue
+        fi
         build_body "$body" regression passed "$outcome" "$reason" "$cost" "$prov" "$url"
         gh issue comment "$num" --repo "$repo" --body-file "$body" >/dev/null || rc=1
       done
