@@ -39,4 +39,4 @@ Issue: #6027 (epic) | PR: #11766 | lane: cross-domain | threshold: single-user i
 - [ ] F1 Dispatch `arm=ga-monitor-fix` → web-1 `healthy:true` in pool-health API.
 - [ ] F2 Dispatch `arm=ga-pool-update -f mode=drain` → both origins healthy; web-2 zero traffic.
 - [ ] F3 (window, #6027): gate chain + runtime-bind probe → weight 0→1 + `ignore_changes` removal (first diffs) → drain → `ga-pool-update -f mode=serve` → placement attach reboot on drained host → restore → AC4 + AC11 soak → ADR-068 status flip.
-- [ ] F4 Tracker issue: `<!-- soleur:followthrough script=scripts/followthroughs/ga-lb-pool-soak-6027.sh earliest=<flip+7d> secrets=GH_TOKEN,CF_API_TOKEN,BETTERSTACK_API_TOKEN -->` + `follow-through` label.
+- [ ] F4 Tracker issue: `<!-- soleur:followthrough script=scripts/followthroughs/ga-lb-pool-soak-6027.sh earliest=<flip+7d> secrets=CF_API_TOKEN,CF_ACCOUNT_ID,BETTERSTACK_API_TOKEN -->` + `follow-through` label. Operator prerequisite at enrollment: create GH secrets `CF_API_TOKEN` + `CF_ACCOUNT_ID` (values from Doppler `soleur/prd_terraform`) — absent, the sweeper Guard 3 reports REQUIRED SECRET MISSING by design.

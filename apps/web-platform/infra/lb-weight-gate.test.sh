@@ -303,41 +303,60 @@ assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (li
 assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2\"" server.tf \
   'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
 
-# C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence).
-#       With web-2 pooled as a drained member (ADR-068 §(b) — weight 0, health-checked,
-#       zero traffic until the #6027 window flip), the assertion tightens to BLOCK-SCOPE:
-#       every `origins` block naming web-2 must carry `weight = 0`, and no LB may point
-#       `default_pool_ids` at a web-2 pool. The weight pairing is awk-ranged over the
-#       `origins {}` block containing `name = "web-2"` — never a bare line-grep, which a
-#       dropped `weight` term would satisfy silently. Glob $SCRIPT_DIR explicitly
-#       (terraform-cwd class). Fail-closed: zero .tf files = FAIL; a file declaring an LB
-#       resource that references web-2 OUTSIDE an origins block also fails (a web-2
-#       pool/record smuggle is not a drained origin).
+# C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence;
+#       pairing/anchoring hardened PR #11766). With web-2 pooled as a drained member
+#       (ADR-068 §(b) — weight 0, health-checked, zero traffic until the #6027 window
+#       flip), the assertion is BLOCK-SCOPE over the .tf files that declare a
+#       cloudflare_load_balancer* resource:
+#         * every `origins {}` block that points at web-2 — by `name = "web-2"` OR by
+#           an `hcloud_server.web["web-2"]` reference ANYWHERE in the block (so a
+#           renamed origin cannot dodge the pin) — must carry `weight = 0` where the
+#           0 is RIGHT-ANCHORED (space/#/EOL after it — `weight = 0.5` must not
+#           satisfy a prefix match);
+#         * outside `origins {}` blocks, an `hcloud_server.web["web-2"]` reference
+#           ANYWHERE on a line (attribute-assigned, not line-anchored) or a line-
+#           anchored `name = "web-2"` is a STRAY — a web-2 pool/record smuggle is
+#           not a drained origin.
+#       What it pins, stated precisely (the earlier comment overstated it): it does
+#       NOT match label references like `default_pool_ids` entries — those name
+#       `cloudflare_load_balancer_pool.<label>` resources, not `hcloud_server.web`.
+#       It pins the ORIGIN-SIDE shape: web-2 can only be reached as a weight-0
+#       origin of a declared pool, never via a stray web-2-addressed construct.
+#       The weight pairing is awk-ranged over the `origins {}` block — never a
+#       bare line-grep, which a dropped `weight` term would satisfy silently.
+#       Glob $SCRIPT_DIR explicitly (terraform-cwd class). Fail-closed: zero .tf
+#       files = FAIL.
+# c3_scan_file <file> -> "<bad_blocks> <w2_blocks> <stray>" — ONE helper so the
+# synthetic fixtures below grade the SHIPPED logic, not a copy of it.
+c3_scan_file() {
+  local f="$1" bad=0 blocks=0 stray
+  while IFS='|' read -r has_w2 has_w0; do
+    [[ "$has_w2" == "1" ]] || continue
+    blocks=$((blocks + 1))
+    [[ "$has_w0" == "1" ]] || bad=$((bad + 1))
+  done < <(awk '
+    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1; w2=0; w0=0; next }
+    inblock && /^[[:space:]]*\}/ { printf "%s|%s\n", w2, w0; inblock=0; next }
+    inblock && ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) { w2=1 }
+    inblock && $0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/ { w0=1 }
+  ' "$f")
+  stray=$(awk '
+    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1 }
+    inblock && /^[[:space:]]*\}/ { inblock=0; next }
+    !inblock && ($0 ~ /hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
+    END { print n+0 }
+  ' "$f")
+  printf '%s %s %s\n' "$bad" "$blocks" "$stray"
+}
 web2_bad_blocks=0; web2_blocks=0; web2_stray=0; tf_seen=0
 for f in "$SCRIPT_DIR"/*.tf; do
   [[ -f "$f" ]] || continue
   tf_seen=$((tf_seen + 1))
   grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f" || continue
-  # Block-scoped pairing: walk origins {} blocks; the one containing name = "web-2"
-  # must carry weight = 0. Outside origins blocks, any web-2 reference is a stray.
-  while IFS='|' read -r has_w2 has_w0; do
-    [[ "$has_w2" == "1" ]] || continue
-    web2_blocks=$((web2_blocks + 1))
-    [[ "$has_w0" == "1" ]] || web2_bad_blocks=$((web2_bad_blocks + 1))
-  done < <(awk '
-    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1; w2=0; w0=0; next }
-    inblock && /^[[:space:]]*\}/ { printf "%s|%s\n", w2, w0; inblock=0; next }
-    inblock && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/ { w2=1 }
-    inblock && /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0/ { w0=1 }
-  ' "$f")
-  # Stray web-2 references outside any origins block (a web-2 pool or record smuggle).
-  file_stray=$(awk '
-    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1 }
-    inblock && /^[[:space:]]*\}/ { inblock=0; next }
-    !inblock && ($0 ~ /^[[:space:]]*hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
-    END { print n+0 }
-  ' "$f")
-  web2_stray=$((web2_stray + file_stray))
+  read -r f_bad f_blocks f_stray < <(c3_scan_file "$f")
+  web2_bad_blocks=$((web2_bad_blocks + f_bad))
+  web2_blocks=$((web2_blocks + f_blocks))
+  web2_stray=$((web2_stray + f_stray))
 done
 TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
@@ -349,6 +368,64 @@ elif [[ "$web2_bad_blocks" -gt 0 || "$web2_stray" -gt 0 ]]; then
 else
   PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: $web2_blocks web-2 origins block(s) at weight = 0, no stray web-2 references — drained member holds"
 fi
+
+# C.3-fixtures — synthetic .tf driving the SHIPPED c3_scan_file (PR #11766 review:
+# the `weight = 0.5` prefix-match bypass and the renamed-origin escape were both
+# measured green). Assert on the helper's <bad blocks stray> triple.
+C3_TMP="$(mktemp -d)"
+c3_fixture() { # $1=name $2=hcl -> runs c3_scan_file, echoes the triple into C3_OUT
+  printf '%s\n' "$2" > "$C3_TMP/$1.tf"
+  C3_OUT="$(c3_scan_file "$C3_TMP/$1.tf")"
+}
+assert_c3() { # $1=desc $2=expected "<bad> <blocks> <stray>"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$C3_OUT" == "$2" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 — expected '$2', got '$C3_OUT'"
+  fi
+}
+c3_fixture good 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 0
+  }
+}'
+assert_c3 "C.3-fixture: well-formed drained member (weight = 0) scans clean" "0 1 0"
+c3_fixture half 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 0.5
+  }
+}'
+assert_c3 "C.3-fixture: weight = 0.5 is NOT drained (right-anchored 0) → red" "1 1 0"
+c3_fixture renamed 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "standby"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 1
+  }
+}'
+assert_c3 "C.3-fixture: renamed origin still resolving web-2 IP pairs by address → red" "1 1 0"
+c3_fixture missing 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+  }
+}'
+assert_c3 "C.3-fixture: web-2 origins block with no weight term → red" "1 1 0"
+c3_fixture stray 'resource "cloudflare_load_balancer" "app" {
+  zone_id          = var.cf_zone_id
+  fallback_pool_id = hcloud_server.web["web-2"].ipv4_address
+}'
+assert_c3 "C.3-fixture: hcloud_server.web[\"web-2\"] attribute-assigned outside origins → stray" "0 0 1"
+rm -rf "$C3_TMP"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
 MIN_CASES=72

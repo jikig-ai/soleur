@@ -23,6 +23,7 @@ MON='{"address":"cloudflare_load_balancer_monitor.lb_staging","change":{"actions
 POOL='{"address":"cloudflare_load_balancer_pool.lb_staging","change":{"actions":["create"]}}'
 LB='{"address":"cloudflare_load_balancer.lb_staging","change":{"actions":["create"],"after":{"name":"lb-staging.soleur.ai"}}}'
 WEB1='{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}}'
+WEB2='{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}}'
 GA_LB='{"address":"cloudflare_load_balancer.app","change":{"actions":["create"],"after":{"name":"app.soleur.ai","enabled":true,"proxied":true}}}'
 GA_POOL='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["create"],"after":{"origins":[{"address":"203.0.113.10"}]}}}'
 GA_MON='{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["create"],"after":{"path":"/health"}}}'
@@ -82,8 +83,8 @@ mk t5 '{"resource_changes":[{"address":"cloudflare_record.lb_staging","change":{
 run cf_lb_gate_teardown "$TMP/t5.json"; ok "teardown: create refused" $? 1
 
 # --- ga arm ---
-mk g1 "{\"resource_changes\":[${WEB1},${GA_MON},${GA_POOL},${GA_LB}]}"
-run cf_lb_gate_ga "$TMP/g1.json"; ok "ga: trio creates + no-op dep + pinned attrs pass" $? 0
+mk g1 "{\"resource_changes\":[${WEB1},${WEB2},${GA_MON},${GA_POOL},${GA_LB}]}"
+run cf_lb_gate_ga "$TMP/g1.json"; ok "ga: trio creates + no-op deps + pinned attrs pass" $? 0
 mk g2 "{\"resource_changes\":[${WEB1},${GA_LB},{\"address\":\"cloudflare_record.app\",\"change\":{\"actions\":[\"delete\"]}}]}"
 run cf_lb_gate_ga "$TMP/g2.json"; ok "ga: record delete refused" $? 1
 mk g3 "{\"resource_changes\":[${WEB1},${GA_LB},{\"address\":\"doppler_secret.x\",\"change\":{\"actions\":[\"forget\"]}}]}"
@@ -105,6 +106,11 @@ mk g10 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":
 run cf_lb_gate_ga "$TMP/g10.json"; ok "ga: {web-1,web-2} origins ⊆ plan-resolved set pass" $? 0
 mk g11 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["create"],"after":{"origins":[{"address":"203.0.113.10"},{"address":"6.6.6.6"}]}}},{"address":"cloudflare_load_balancer.app","change":{"actions":["create"],"after":{"name":"app.soleur.ai"}}}]}'
 run cf_lb_gate_ga "$TMP/g11.json"; ok "ga: third-IP origin beside resolved set refused" $? 1
+# web-2's resolved IP is load-bearing since the drained member landed: a plan
+# missing web-2's no-op entry cannot prove the origins set even when every
+# origin happens to be web-1.
+mk g12 "{\"resource_changes\":[${WEB1},${GA_MON},${GA_POOL},${GA_LB}]}"
+run cf_lb_gate_ga "$TMP/g12.json"; ok "ga: missing web-2 no-op (origins unverifiable) refused" $? 1
 
 # --- ga-monitor-fix arm ---
 MON_UPD='{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["update"],"after":{"type":"http","port":80,"path":"/health","expected_codes":"200"}}}'
@@ -124,15 +130,24 @@ mk mu7 "{\"resource_changes\":[${MON_UPD},{\"address\":\"data.hcloud_server.web_
 run cf_lb_gate_ga_monitor_update "$TMP/mu7.json"; ok "monitor-fix: deferred data read tolerated" $? 0
 mk mu8 '{"resource_changes":[{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["update"],"after":{"type":"http","port":80,"path":"/healthz","expected_codes":"200"}}}]}'
 run cf_lb_gate_ga_monitor_update "$TMP/mu8.json"; ok "monitor-fix: wrong path refused" $? 1
+mk mu9 '{"resource_changes":[{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["update"],"after":{"type":"http","port":80,"path":"/health","expected_codes":"2xx"}}}]}'
+run cf_lb_gate_ga_monitor_update "$TMP/mu9.json"; ok "monitor-fix: expected_codes drift refused" $? 1
 run cf_lb_gate_ga_monitor_update "$TMP/nonexistent.json"; ok "monitor-fix: unreadable plan refused" $? 1
 
 # --- ga-pool-update arm ---
-WEB2='{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}}'
+# The REAL first-dispatch plan shape is {pool=update, lb=update, policy=create} —
+# the notification policy is a NEW resource, so its first plan emits ["create"]
+# and the gate must admit it (pool/LB stay update-only).
 POOL_DRAIN='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0}]}}}'
-POLICY_UPD='{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["update"]}}'
-mk pu1 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${POLICY_UPD}]}"
-run cf_lb_gate_ga_pool_update "$TMP/pu1.json" drain; ok "pool-update: drain origins {web-1@1,web-2@0} + policy pass" $? 0
-mk pu2 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}]}'
+POOL_SERVE='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}'
+GA_LB_UPD='{"address":"cloudflare_load_balancer.app","change":{"actions":["update"],"after":{"name":"app.soleur.ai","enabled":true,"proxied":true,"session_affinity":"none","default_pool_ids":["0123abcd"]}}}'
+POLICY_CREATE='{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["create"],"after":{"enabled":true,"alert_type":"load_balancing_health_alert"}}}'
+POLICY_UPD='{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["update"],"after":{"enabled":true,"alert_type":"load_balancing_health_alert"}}}'
+mk pu1 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu1.json" drain; ok "pool-update: drain {pool=update,lb=update,policy=create} first-dispatch passes" $? 0
+mk pu1b "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${POLICY_UPD}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu1b.json" drain; ok "pool-update: update-verb policy also admitted" $? 0
+mk pu2 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_SERVE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pu2.json" drain; ok "pool-update: drain-mode web-2 weight=1 (smuggled flip) refused" $? 1
 mk pu3 "{\"resource_changes\":[${WEB1},${POOL_DRAIN}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pu3.json" drain; ok "pool-update: web-2 IP unresolvable refused" $? 1
@@ -144,12 +159,58 @@ mk pu6 '{"resource_changes":[]}'
 run cf_lb_gate_ga_pool_update "$TMP/pu6.json" drain; ok "pool-update: empty plan refused" $? 1
 mk pu7 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pu7.json" bogus; ok "pool-update: invalid mode refused" $? 1
-mk pu8 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}]}'
-run cf_lb_gate_ga_pool_update "$TMP/pu8.json" serve; ok "pool-update: serve-mode weight=1 admitted (gate chain runs in the job)" $? 0
+mk pu8 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_SERVE},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu8.json" serve; ok "pool-update: serve-mode 0→1 flip passes (gate chain runs in the job)" $? 0
 mk pu9 "{\"resource_changes\":[${WEB1},${WEB2},{\"address\":\"cloudflare_load_balancer_pool.web_1\",\"change\":{\"actions\":[\"create\"],\"after\":{\"origins\":[{\"name\":\"web-1\",\"address\":\"203.0.113.10\",\"weight\":1}]}}}]}"
-run cf_lb_gate_ga_pool_update "$TMP/pu9.json" drain; ok "pool-update: create verb refused" $? 1
+run cf_lb_gate_ga_pool_update "$TMP/pu9.json" drain; ok "pool-update: create verb on the pool refused" $? 1
+mk pu9b "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${GA_LB}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu9b.json" drain; ok "pool-update: create verb on the LB refused" $? 1
 mk pu10 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},{\"address\":\"hcloud_server.web[\\\"web-1\\\"]\",\"change\":{\"actions\":[\"delete\"]}}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pu10.json" drain; ok "pool-update: destructive host change refused" $? 1
+# Per-IP drain pin: a renamed origin block still resolving web-2's IP is bound by
+# the pin regardless of name.
+mk pu11 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"standby","address":"203.0.113.20","weight":1}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu11.json" drain; ok "pool-update: renamed origin at web-2 IP @1 (drain) refused" $? 1
+# Duplicate names: a second name=="web-2" @1 must not hide behind the pinned @0.
+mk pu12 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu12.json" drain; ok "pool-update: duplicate web-2 origins (@0 hides @1) refused" $? 1
+# Origins ⊆ is never enough alone: a pool whose after-state dropped web-1 serves
+# nothing at all.
+mk pu13 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-2","address":"203.0.113.20","weight":0}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu13.json" drain; ok "pool-update: dropped web-1 (no serving member) refused" $? 1
+mk pu14 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu14.json" drain; ok "pool-update: empty origins list refused" $? 1
+out=$(cf_lb_gate_ga_pool_update "$TMP/pu14.json" drain 2>&1); rc=$?
+[[ $rc -eq 1 && "$out" == *"no origins in pool after-state"* ]]; ok "pool-update: empty origins gets the distinct refusal (not a weight verdict)" $? 0
+mk pu14b '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu14b.json" drain; ok "pool-update: absent origins key refused" $? 1
+# A graded set with no pool update mis-described as w2_weight=-1 — the distinct
+# message now names the real gap.
+mk pu15 "{\"resource_changes\":[${WEB1},${WEB2},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu15.json" drain; ok "pool-update: LB/policy-only plan refused" $? 1
+out=$(cf_lb_gate_ga_pool_update "$TMP/pu15.json" drain 2>&1); rc=$?
+[[ $rc -eq 1 && "$out" == *"no cloudflare_load_balancer_pool.web_1 update in the graded set"* ]]; ok "pool-update: no-pool-update emits the distinct refusal message" $? 0
+# Serve-mode weight invariant: the drained shape under mode=serve is a refused
+# no-flip, not a pass.
+mk pu16 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pu16.json" serve; ok "pool-update: serve-mode drained web-2 (no flip) refused" $? 1
+# Resource after-state pins refuse EXPLICIT bad values.
+mk pu17 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0}]}}},{"address":"cloudflare_load_balancer.app","change":{"actions":["update"],"after":{"name":"app.soleur.ai","enabled":false}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu17.json" drain; ok "pool-update: lb.app enabled=false refused" $? 1
+mk pu18 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0}]}}},{"address":"cloudflare_load_balancer.app","change":{"actions":["update"],"after":{"name":"app.soleur.ai","session_affinity":"cookie"}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu18.json" drain; ok "pool-update: lb.app session_affinity!=none refused (ADR-068 b.3)" $? 1
+mk pu19 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":0}]}}},{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["create"],"after":{"enabled":false,"alert_type":"load_balancing_health_alert"}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu19.json" drain; ok "pool-update: policy enabled=false refused" $? 1
+mk pu20 '{"resource_changes":[{"address":"hcloud_server.web[\"web-1\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.10"}}},{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.20"}}},{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["update"],"after":{"origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"","weight":0}]}}}]}'
+run cf_lb_gate_ga_pool_update "$TMP/pu20.json" drain; ok "pool-update: empty-address origin refused" $? 1
+# Output-capturing assertions: the pass-message suffix is mode-accurate (the old
+# ${mode/drain/...} printed a literal "serve" in serve mode).
+mk pc1 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_DRAIN},${GA_LB_UPD},${POLICY_CREATE}]}"
+out=$(cf_lb_gate_ga_pool_update "$TMP/pc1.json" drain 2>/dev/null); rc=$?
+[[ $rc -eq 0 && "$out" == *"ga-pool-update:drain"*", web-2 weight=0"* ]]; ok "pool-update: drain pass message carries the weight=0 suffix" $? 0
+mk pc2 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_SERVE},${GA_LB_UPD},${POLICY_CREATE}]}"
+out=$(cf_lb_gate_ga_pool_update "$TMP/pc2.json" serve 2>/dev/null); rc=$?
+[[ $rc -eq 0 && "$out" == *"ga-pool-update:serve"*"pass"* && "$out" != *"web-2 weight=0"* ]]; ok "pool-update: serve pass message carries NO drain suffix" $? 0
 
 # --- malformed ---
 mk m1 'not json'
@@ -158,6 +219,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 25 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 75 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi

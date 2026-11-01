@@ -1518,7 +1518,8 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
    `cloudflare_notification_policy.web_lb_health` (`load_balancing_health_alert`,
    verified in `available_alerts` on this account's tier — unlike the `http_alert_*`
    Enterprise types) pages on origin-down: this exact silent failure class must page.
-2. **web-2 pooling shape.** §(b)'s "structurally absent" reading is replaced by the
+2. **web-2 pooling shape.** Correction **(b.3)** (PR #5968) — "drain web-2 STRUCTURALLY
+   (omit its pool from `default_pool_ids`), not `weight = 0`" — is superseded by the
    drained member it always meant: web-2 is a pool origin at `weight = 0` — health-checked,
    zero traffic — until the #6027 window flips 0→1 behind the §(c) gate chain
    (`lb-weight-gate-with-marker.sh`, run fail-closed by the new `ga-pool-update` arm in
@@ -1528,6 +1529,11 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
    pool); origin selection is pinned as `origin_steering { policy = "random" }` on the
    pool (CTO ruling: `hash` is de facto session affinity contradicting
    `session_affinity="none"`; `least_*` meaningless at a {1,0} drained shape).
+   The new shape neutralizes (b.3)'s two objections to `weight = 0`: the
+   affinity-cookie override is refused structurally (`session_affinity = "none"`
+   pinned in cloudflare-lb.tf and re-asserted by the ga-pool-update grader), and
+   the refactor-drops-the-block concern is closed by the C.3-sweep's block-scoped
+   weight pairing in lb-weight-gate.test.sh.
 
 Apply path unchanged in kind, widened in set: `ga-monitor-fix` and `ga-pool-update` are
 two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` (per-arm confirm literals,

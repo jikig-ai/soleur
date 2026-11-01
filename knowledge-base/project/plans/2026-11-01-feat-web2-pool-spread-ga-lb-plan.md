@@ -27,7 +27,7 @@ Continuation of clustering epic #6027 after the #11181 non-cutover track complet
 2026-11-01: the Cloudflare GA load balancer is live on app.soleur.ai (monitor + web-1
 pool + LB, applied via `cf-lb-overlay.yml` ga-overlay). A live read-only check run during
 planning confirmed the resume brief's hypothesis: the monitor is `type=https` probing
-origin :443 while the only origin listener is HTTP :80, so CF reports the web-1 origin
+origin :443 while the origin publishes only HTTP :80 and :3000 (never :443), so CF reports the web-1 origin
 permanently **down** (`failure_reason: "TCP connection failed"`) and the LB routes solely
 through `fallback_pool_id` — which points at the same pool, making the dead health signal
 invisible. This plan repairs the monitor to probe the path traffic actually takes
@@ -46,7 +46,8 @@ Three independent defects/forks land in one PR:
 
 1. **Dead health signal (live-verified).** `cloudflare_load_balancer_monitor.web` is
    `type = "https"` with no `port` → CF probes origin :443 over TLS. web-1's container
-   publishes `0.0.0.0:80:3000` only (cloud-init.yml:808); nothing listens on :443. Live CF
+   publishes `0.0.0.0:80:3000` and `0.0.0.0:3000:3000` (cloud-init.yml:808-809); nothing
+   listens on :443. Live CF
    API read (2026-11-01): pool `web-1` origin `135.181.45.178` → `healthy:false`,
    `failure_reason:"TCP connection failed"`. The B1 self-fallback masks it — traffic flows,
    steering evidence does not. The committed comment's premise ("origin firewall permits
@@ -348,7 +349,7 @@ logs:
 
 discoverability_test:
   command: bash scripts/followthroughs/ga-lb-pool-soak-6027.sh
-  expected_output: "pool-healthy"
+  expected_output: "[PASS] pool %s all origins healthy; edge 200; %d incidents in window"
   credentials_required: "CF_API_TOKEN (Zone.Account Load Balancing read) + BETTERSTACK_API_TOKEN — pool origin health and incident counts have no unauthenticated substitute (preflight Check 10 SKIP-DECLARED)"
 ```
 
@@ -401,7 +402,8 @@ exception:
 from `apply-web-platform-infra.yml` (terraform-target-parity.test.ts:1338-1341 pins this).
 New arms on `cf-lb-overlay.yml` carry the updates: `ga-monitor-fix` then
 `ga-pool-update` (mode=drain for this PR's shape). The notification policy rides the
-routine apply via a new `-target` entry. Blast radius: monitor update is
+`ga-pool-update` arm's `-target` set (NOT the routine apply — the filters.pool_id
+transitivity trap, same as task 3.2). Blast radius: monitor update is
 probe-semantics-only (no traffic change); pool update adds a weight-0 origin (no traffic
 change); both take the continuity-probe step post-apply.
 
@@ -775,8 +777,8 @@ blocks):
 
 1. **L3 firewall allow-list.** `firewall.tf` permits CF edge IPs on :80 AND :443; the
    failing probe hits :443 where no listener exists. [verified: firewall.tf:21,54 +
-   cloud-init.yml:808 `-p 0.0.0.0:80:3000` — the :80 publish is the only origin
-   listener]
+   cloud-init.yml:808-809 — the origin publishes `0.0.0.0:80:3000` AND
+   `0.0.0.0:3000:3000`; :443 remains the port with no listener]
 2. **L3 DNS/routing.** `app.soleur.ai` resolves and serves 200 through the CF edge
    today (the LB + retained A record both route to web-1). [verified: ga-overlay
    post-apply continuity green 2026-11-01 per the brief + live pool read]

@@ -641,22 +641,49 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          # One monitor interval (60s) + consecutive_up settle before reading.
-          sleep 70
-          POOL_ID=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
-            curl -s "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
-              -H "Authorization: Bearer ${CF_API_TOKEN}" | jq -r ".result[] | select(.name==\"web-1\") | .id"')
-          [[ -n "$POOL_ID" ]] || { echo "::error::could not resolve the web-1 pool id post-apply"; exit 1; }
-          HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
-            curl -s \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health\" \
-              -H \"Authorization: Bearer \${CF_API_TOKEN}\" | jq -r '[.result.pop_health[].origins[][] | .healthy] | unique | join(\",\")'")
+          # The monitor needs one 60s interval + consecutive_up to republish. Poll the
+          # pool-health endpoint every 15s against a ~5min deadline (well inside this
+          # job's timeout-minutes:20) rather than a fixed sleep 70 that grades whatever
+          # the edge happens to report at second 70.
+          # The bearer rides curl's stdin --config channel, never argv (Rule E); the
+          # double-quoted `bash -c` script escapes the CF_* expansions so they resolve
+          # inside the doppler-run child, while ${POOL_ID} expands here.
+          POOL_ID=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+            curl --disable --noproxy '*' -s --max-time 10 \
+              \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools\" \
+              --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\") \
+              | jq -r '.result[] | select(.name==\"web-1\") | .id'")
+          # Re-interpolated into the health URL below — pin the id shape first.
+          [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || { echo "::error::web-1 pool id unresolvable or off-shape ('${POOL_ID}') — refusing to re-interpolate it into the health URL."; exit 1; }
+          HEALTH_JSON=""; ORIGINS=0; HEALTH=""
+          for i in $(seq 1 20); do
+            HEALTH_JSON=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+              curl --disable --noproxy '*' -s --max-time 10 \
+                \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health\" \
+                --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\")" || true)
+            ORIGINS=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][]] | length' 2>/dev/null || printf '0')
+            HEALTH=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][] | .healthy] | unique | join(",")' 2>/dev/null || true)
+            [[ "$ORIGINS" =~ ^[0-9]+$ ]] || ORIGINS=0
+            if [[ "$ORIGINS" -ge 1 && "$HEALTH" == "true" ]]; then
+              echo "pool-health green after ~$((i * 15))s (${ORIGINS} origin record(s))"
+              break
+            fi
+            sleep 15
+          done
           {
             echo "### GA monitor-fix post-apply pool health"
             echo "- Pool: ${POOL_ID}"
-            echo "- Origin health verdicts: ${HEALTH}"
+            echo "- Origin records seen: ${ORIGINS}"
+            echo "- Origin health verdicts: ${HEALTH:-none}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # An EMPTY pop_health is not a verdict — grade it as an instrument failure,
+          # never as healthy or unhealthy.
+          if [[ "$ORIGINS" -lt 1 ]]; then
+            echo "::error::pop_health carried no origin records across the ~5min poll — the health read cannot be graded (an empty set is not a verdict). Investigate the pool/monitor wiring."
+            exit 1
+          fi
           if [[ "$HEALTH" != "true" ]]; then
-            echo "::error::pool-health reports unhealthy origin(s) (${HEALTH}) one interval after the http/:80 monitor applied — the probe semantics did not take; investigate origin reachability from WEU."
+            echo "::error::pool-health reports unhealthy origin(s) (${HEALTH}) across the ~5min poll after the http/:80 monitor applied — the probe semantics did not take; investigate origin reachability from WEU."
             exit 1
           fi
           echo "Pool reports all origins healthy — the monitor probes the real :80 listener."
@@ -702,9 +729,18 @@ jobs:
       - name: §(c) gate chain (serve mode only — fail-closed BEFORE plan)
         if: inputs.mode == 'serve'
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_PROJECT: soleur
-          DOPPLER_CONFIG: prd
+          # TWO tokens, two scopes — secrets.DOPPLER_TOKEN is prd_terraform-scoped and
+          # can read NEITHER config this step needs:
+          #   DOPPLER_TOKEN_PRD           — the `doppler run -c prd` that injects the
+          #     gate's SOLEUR_*/GIT_DATA_* inputs (same secret apply-web-platform-infra.yml
+          #     binds for its prd reads).
+          #   DOPPLER_TOKEN_LUKS_MARKER   — the wrapper's own marker read. Its token is
+          #     the prd_workspaces_luks_marker WRITE token (no read-only token exists on
+          #     that config — lb-weight-gate-with-marker.sh:15) and it reaches the
+          #     wrapper ONLY via env DOPPLER_TOKEN.
+          # Tokens ride env assignments ONLY — argv must never carry one.
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          DOPPLER_TOKEN_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
         run: |
           set -euo pipefail
           # The wrapper reads the WORKSPACES_LUKS marker from its dedicated config via
@@ -713,11 +749,44 @@ jobs:
           # unprovable precondition (absent marker, unset rotation, relay not bound)
           # fails closed with a named sub_condition. It can only pass when every
           # precondition provably holds — the orchestrator (#6027) sets the full env.
-          doppler run --preserve-env -p soleur -c prd -- \
+          # The outer `env DOPPLER_TOKEN=` scopes the prd read; the inner `env` hands
+          # the wrapper the marker config's own token.
+          env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
+            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1
           }
+      - name: web-2 health precondition (serve mode only)
+        if: inputs.mode == 'serve'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # The §(c) chain proves marker/precondition state, not origin health — a serve
+          # flip that adds an unhealthy web-2 routes ~half of app.soleur.ai traffic to a
+          # dead origin under origin_steering random. Require web-2 healthy:true in the
+          # CF pool-health read BEFORE any plan exists (same read the monitor-fix arm does).
+          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
+            POOL_ID=$(curl --disable --noproxy "*" -s --max-time 10 \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
+              --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \
+              | jq -r ".result[] | select(.name==\"web-1\") | .id")
+            [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || exit 2
+            curl --disable --noproxy "*" -s --max-time 10 \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health" \
+              --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \
+              | jq -r "[.result.pop_health[].origins[][] | .healthy] | if length == 0 then \"empty\" else (unique | join(\",\")) end"') || {
+            echo "::error::pool-health read failed — refusing to flip with health truth unprovable."
+            exit 1
+          }
+          case "$W2_HEALTH" in
+            *false*|empty|"") echo "::error::an origin reports healthy:${W2_HEALTH} — web-2 must be healthy:true before the serve flip routes traffic to it. NOTHING planned, NOTHING applied."; exit 1 ;;
+            true) echo "- web-2 origin health: true (serve precondition met)" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::unparseable pool-health verdict '${W2_HEALTH}' — refusing."; exit 1 ;;
+          esac
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -744,6 +813,10 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
+          # Emergent ordering: -target=cloudflare_load_balancer_pool.web_1 transitively
+          # pulls cloudflare_load_balancer_monitor.web (the pool's `monitor` reference),
+          # so a pending monitor change lands in this plan and the grader refuses it —
+          # ga-monitor-fix must run BEFORE ga-pool-update, by construction.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \

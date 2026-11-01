@@ -2135,6 +2135,27 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     }
   });
 
+  test("every OPERATOR_APPLIED_EXCLUSIONS member exists as a declared resource (stale-member guard)", () => {
+    // Mirror of the token-exclusions non-vacuity loop above: a member left in the
+    // set after its resource is deleted silently permits a real coverage miss —
+    // #11194 removed hcloud_volume{,_attachment}.git_data for exactly this reason.
+    // The ONE deliberate exception: the cert-reissue DNS-edit token is
+    // OPERATOR-MINTED by design — no cloudflare_api_token resource exists to
+    // declare (cf-cert-reissue-token.tf header: the mint needs "User API Tokens:
+    // Edit", which var.cf_api_token lacks). The entry documents the operator JIT
+    // path; if that ever becomes a resource, drop the exception.
+    const UNDECLARED_BY_DESIGN = new Set<string>([
+      "cloudflare_api_token.gh_pages_cert_reissue_dns_edit",
+    ]);
+    for (const t of OPERATOR_APPLIED_EXCLUSIONS) {
+      if (UNDECLARED_BY_DESIGN.has(t)) continue;
+      expect(
+        allResources,
+        `${t} is an OPERATOR_APPLIED_EXCLUSIONS member but is not a declared resource — a stale member silently permits a coverage miss`,
+      ).toContain(t);
+    }
+  });
+
   test("guard FAILS on a synthetic new un-targeted resource (non-vacuity)", () => {
     const synthetic = `
 resource "github_actions_secret" "synthetic_forgotten_secret" {
@@ -5695,6 +5716,77 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
       expect(targets).toEqual(allow);
     });
   }
+});
+
+/**
+ * cf-lb-overlay.yml arm↔gate parity (#6027 continuation, PR #11766). The saved-plan
+ * graders in tests/scripts/lib/cf-lb-overlay-gate.sh only hold when the workflow
+ * calls them over the arm's real -target set, in the right order — a saved plan
+ * wider than the grader's allow-set reaches an ungraded apply, and the §(c) serve
+ * gate chain must run BEFORE the plan it guards. Invocation-pinning precedent:
+ * the git-data interlock's measured mutations (deleting the call, `if: false`).
+ */
+describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering (#11766)", () => {
+  const wf = readFileSync(resolve(REPO_ROOT, ".github/workflows/cf-lb-overlay.yml"), "utf8");
+  const job = (id: string) => extractJobBlock(wf, id);
+
+  // [jobId, the subset of the grader's allow-set the arm may -target]. An arm's
+  // -target set must never EXCEED what its grader admits: the excess would apply
+  // ungraded. (Allow-sets from cf-lb-overlay-gate.sh's per-arm comment block.)
+  const ARM_TARGET_ALLOW: Array<[string, string[]]> = [
+    ["staging_record", ["cloudflare_record.lb_staging"]],
+    ["ga_overlay", ["cloudflare_load_balancer_monitor.web", "cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app"]],
+    ["ga_monitor_fix", ["cloudflare_load_balancer_monitor.web"]],
+    ["ga_pool_update", ["cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app", "cloudflare_notification_policy.web_lb_health"]],
+  ];
+
+  test("each targeted arm's -target set ⊆ its gate allow-set", () => {
+    for (const [jobId, allow] of ARM_TARGET_ALLOW) {
+      const targets = extractAllTargets(job(jobId));
+      expect(targets.size, `${jobId} must carry -target(s)`).toBeGreaterThan(0);
+      for (const t of targets) {
+        expect(allow, `${jobId} -target=${t} exceeds its gate allow-set`).toContain(t);
+      }
+    }
+  });
+
+  test("the monitor-fix arm -targets ONLY the monitor", () => {
+    expect([...extractAllTargets(job("ga_monitor_fix"))]).toEqual([
+      "cloudflare_load_balancer_monitor.web",
+    ]);
+  });
+
+  test("staging-overlay/teardown carry NO -target (whole-root plan / -destroy)", () => {
+    for (const jobId of ["staging_overlay", "staging_teardown"]) {
+      expect(
+        [...extractAllTargets(job(jobId))],
+        `${jobId} must plan the whole throwaway root — a -target would scope the apply/destroy`,
+      ).toEqual([]);
+    }
+  });
+
+  test("ga_pool_update invokes the grader with the dispatch mode, BEFORE the apply", () => {
+    const block = stripComments(job("ga_pool_update"));
+    // A dropped mode argument would grade every serve plan with the drain pin —
+    // fail-closed by accident, not by contract. The call must carry the mode env.
+    const CALL = /cf_lb_gate_ga_pool_update "\$RUNNER_TEMP\/ga-pool-update-plan\.json" "\$\{POOL_UPDATE_MODE\}"/;
+    expect(block).toMatch(CALL);
+    const applyAt = block.indexOf("terraform apply -no-color -input=false -auto-approve tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeLessThan(applyAt);
+  });
+
+  test("the §(c) serve gate chain step precedes the plan step", () => {
+    const block = job("ga_pool_update");
+    const serve = extractStep(block, /§\(c\) gate chain/);
+    expect(serve).not.toBeNull();
+    // The `if:` is ON the step — not a decoy elsewhere in the job (the
+    // cq-assert-anchor-not-bare-token precedent for step-level conditionals).
+    expect(serve!).toMatch(/^\s*if: inputs\.mode == 'serve'\s*$/m);
+    const plan = extractStep(block, /Terraform plan \(GA pool/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(serve!));
+  });
 });
 
 /**
