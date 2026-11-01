@@ -14,6 +14,37 @@ brand_survival_threshold: none
 
 # fix: port UNKNOWN STEP attribution-expiry recovery to sibling step-anchored probes (#11607, #11609)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01 — sequential-fallback mode: no agent-spawn tool in this environment, so the per-section research agents (Phase 4), the two implementation-realism passes (Phase 4.45) and the all-review-agents fan-out (Phase 5) were adjudicated inline by the orchestrator against the cited sources rather than spawned.
+
+### Gate results
+
+- 4.4 Precedent-diff — PASS. Pattern-bound behavior = "log-region derivation for an attribution-expired `gh run view --log`". Canonical precedents: `git-data-boot-poll-8178.sh:202-209` (region awk carried verbatim, `sub` two tab fields, `ts=substr(line,1,19)`, `ts >= ps` gate, next-header/EOF bound) and `web-first-deploy-10585.sh` post-26ec69c3 (patternless-trigger + shared-filter + post-recovery tripwire shape). Intentional divergences, called out in Technical Considerations: (a) `.startedAt` camelCase from embedded `run view --json jobs` (both siblings) vs the REST `started_at` the prior ports consume; (b) field-1 job-name pre-filter before the slice (rehearsal only — whole-run logs); (c) recovery delivered as re-attributed region FILES re-consumed by the unchanged anchored awks (rehearsal) vs `emit_rows` on a variable (10585); (d) `emit_content` content-only projection (zot) vs `emit_rows`' `ts\tcontent` rows.
+- 4.45 Verify-the-negative — PASS (inline). The plan's negative claims ("never reads an attribution-expired proven trail as no run", "never counterfeits a measured zero", "never invents an UNREAD" on a skipped step) hold by construction: `step_region` fires only when the named anchor yields zero AND the jobs JSON shows the step ran; rc-2 → return 1 → the caller's existing `note_unread` arm; rc-1 (absent/skipped) → the original zero/empty. Self-audit: `lcount`/`lfirst` signature change has its call-site census enumerated (:261-262,275,304,441-442,484-485) — no orphan caller.
+- 4.5 Network-outage — skip (no trigger patterns).
+- 4.55 Downtime & Cutover — skip (no offline-inducing operation).
+- 4.6 User-Brand Impact — PASS (section present; `none` threshold with challengeable line; no sensitive-path diff → no scope-out needed).
+- 4.7 Observability — PASS (all 5 fields; `grep` first token allowlisted; no shell metachars in command; <15 s; literal `expected_output: startedAt`).
+- 4.8 PAT-shaped variable — PASS (zero matches on the prescribed regex sweep).
+- 4.9 UI wireframe — skip (no UI-surface files).
+- 4.10 Encryption Posture — skip (no store/connection).
+- 4.11 Guard Contract — PASS (`lint-guard-contract.py` clean, 2 guard entries; adequacy read: assemblies name the parse chokepoints, matrices are design-derived — own-dispatch, second-member, order/lifetime, harness, must-PASS rows each present).
+- 4.12 Scope Check — PASS (exactly one unfenced section; 6 asks mapped verbatim; inferred items each justified; `Recommendation: single PR`).
+- 4.13 Task-Design — skip (no new autonomous-task surface).
+
+### Key Improvements
+
+1. Per-probe lookback re-evaluation landed as a first-class section with measured conclusions — including the finding that the zot probe's tracker retired ~2026-10-14 (dormant today, latent-total on re-enrollment), which the issue's criterion asked for before porting.
+2. The rehearsal collector's port designed to its own contract: whole-run logs get a field-1 job-scoped slice and re-attribution into region files re-consumed by the UNCHANGED `lcount`/`lfirst`/refs awks — the shared-emit-filter property expressed in that script's idiom, preserving failed-read-≠-zero (UNREAD tokens, never counterfeited zeros or the false-healthy `unwound no`).
+3. The `tr -d '\357\273\277'` byte-wise-delete hazard is named explicitly with the safe exact-sequence alternatives — the failure shape a naive file-port would most plausibly introduce.
+
+### New Considerations Discovered
+
+- `gh run view --json jobs` (embedded, camelCase `startedAt`) vs REST `gh api …/jobs` (snake_case `started_at`) — the issue's "same fix shape" phrasing needed this adaptation pinned per-consumer.
+- `index($2, …)` census over `scripts/followthroughs/` confirms exactly the two named siblings (three awk sites in rehearsal, one in zot); other `--log` consumers read steps via the jobs JSON API and are unaffected.
+- The `git-data cutover` workflow's two-job layout (`cutover`/`wipe`) makes the whole-run job-name pre-filter load-bearing — the one mechanism neither prior port needed.
+
 ## Overview
 
 GitHub drops step-name attribution on completed job logs roughly two to three weeks after a run finishes: every log line returns under field 2 `UNKNOWN STEP` while the content survives intact. PR #11603 (squash 26ec69c3) fixed this exposure in `scripts/followthroughs/web-first-deploy-10585.sh` by recovering the step's output region on the runner's `##[group]Run` headers, opened by the first header stamped at or after the step's `started_at` from the jobs API. Two sibling probes anchor their log parses on the same `index($2, step)` step-name column and carry the same exposure: `web-fresh-boot-zot-8651.sh` and `git-data-rehearsal-evidence.sh`. This plan ports the merged fix shape to both, documents each probe's lookback-window conclusion per issue #11607's re-evaluation criteria, adds attribution-expired fixtures to both probe suites using the `GH_LOG_BOM`/`ul()`/`ulog()` idiom proven in `web-first-deploy-10585.test.sh`, and discharges the decision-challenge recorded in #11609 by closing it in the PR body. Issue #11583 is a permanently-open standing watchdog carried as context only — no `Closes` line. Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
