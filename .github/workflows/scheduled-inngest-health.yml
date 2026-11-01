@@ -1325,18 +1325,14 @@ jobs:
             | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | .raw? | fromjson?
                   | select(inngest_probe_row)
                   | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
-                  | .message' 2>/dev/null || true)"
+                  | [(.dt // ""), .message] | @tsv' 2>/dev/null || true)"
+          # hb fallback runs BEFORE the probe-row fallback: the FSM's own
+          # heartbeat attests the CURRENT flag at ~1-2/min, while the newest
+          # probe row's cutover_flag may sit on a row the gate refused before
+          # grading it (an `armed` on an ungraded row must not suppress).
           if [[ -z "$WFLAG" ]]; then
-            WFLAG="$(printf '%s\n' "$W_PROBE_MSGS" \
-              | grep -oE 'cutover_flag=[^ ]+' | tail -1 | cut -d= -f2 || true)"
-          fi
-          # hb fallback: an armed cutover between `op=arm` and the next hourly
-          # probe row is invisible to the probe fallback (the row still reads
-          # `aborted`) — read the newest same-boot inngest-cutover-flip
-          # `.message.flag` so the streak does not accrue refusals mid-arm.
-          if [[ -z "$WFLAG" ]]; then
-            WBID="$(printf '%s\n' "$W_PROBE_MSGS" \
-              | grep -oE 'boot_id=[0-9a-f-]+' | tail -1 | cut -d= -f2 || true)"
+            WBID="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'boot_id=[0-9a-f-]+' | head -1 | cut -d= -f2 || true)"
             if [[ "$WBID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
               WFLAG="$(jq -Rrn --arg b "$WBID" '
                   [ inputs
@@ -1350,8 +1346,14 @@ jobs:
                   < "$W_HB_ROWS" 2>/dev/null || true)"
             fi
           fi
+          # Probe-row fallback (dt-ordered, never positional tail -1): the
+          # newest probe row's cutover_flag.
+          if [[ -z "$WFLAG" ]]; then
+            WFLAG="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)"
+          fi
           WFLAG="$(strip_log_injection "${WFLAG:-unknown}")"
-          [[ -n "$WFLAG" ]] || WFLAG="unknown"
+          [[ "$WFLAG" =~ ^[a-z0-9_-]{1,32}$ ]] || WFLAG="unknown"
 
           ACTION="$(bash "$GITHUB_WORKSPACE/scripts/inngest-gate-witness-classify.sh" "$TOKEN" "$WFLAG")"
           [[ "$ACTION" =~ ^(satisfy|refusal|suppressed)$ ]] || ACTION="refusal"
@@ -1429,7 +1431,7 @@ jobs:
           gh label create "priority/p2-medium" --repo "$GH_REPO" --color FBCA04 2>/dev/null || true
           echo "::error::#8080 gate-witness: execute-gate refused by cron (token=${TOKEN}, streak=${STREAK}) or the streak store failed — Run: ${RUN_URL}"
           TITLE="[ci/inngest-gate-witness] execute-gate unsatisfiable by cron"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number --jq '.[0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r --arg t "unsatisfiable by cron" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           BODY="$(printf '%s\n' \
             "gate token: \`${TOKEN:-<none>}\`" "cutover flag: \`${FLAG:-<none>}\`" "consecutive refusals: \`${STREAK:-<none>}\`" "" \
             "The \`inngest_execute_registry_gate\` pre-flight predicate has refused ${STREAK:-N} consecutive 15-minute watchdog runs while no cutover was in flight. The next cutover dispatch will hit this refusal cold — diagnose it now, not on cutover day (#8017, #8054 were both found that way)." "" \
@@ -1451,7 +1453,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r '.[] | select(.title | contains("unsatisfiable by cron")) | .number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "The execute-gate satisfied on a cron witness run (token=dark). Auto-closed by ${RUN_URL}." || true
           done

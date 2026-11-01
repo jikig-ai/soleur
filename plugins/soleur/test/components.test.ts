@@ -880,12 +880,12 @@ describe("invoice skill credential boundary (ADR-107)", () => {
 // error-message text ("… gh issue list: <stderr>") and `gh api:` in prose —
 // a colon after the subcommand marks a label, never an invocation. A real
 // call always continues with a space or ends the statement.
-const GH_LIST_CMD = /\bgh (?:pr|issue) list(?:\s|$)[^`\n]*/g;
+const GH_LIST_CMD = /\bgh (?:pr|issue) list(?:[\s)"']|$)[^`\n]*/g;
 // Sibling families for the #8593 enumeration detector: `gh search issues|prs`
 // and `gh api` (list-endpoint discrimination below), captured with the same
 // line/backtick bounds as GH_LIST_CMD so a neighbor's flags cannot launder.
-const GH_SEARCH_CMD = /\bgh search (?:issues|prs)(?:\s|$)[^`\n]*/g;
-const GH_API_CMD = /\bgh api(?:\s|$)[^`\n]*/g;
+const GH_SEARCH_CMD = /\bgh search (?:issues|prs)(?:[\s)"']|$)[^`\n]*/g;
+const GH_API_CMD = /\bgh api(?:[\s)"']|$)[^`\n]*/g;
 
 // An `is:`/`state:` qualifier inside the --search string. Mixing one of these with an
 // explicit --state is the exact contradiction that produced #6786 (an appended open
@@ -1102,7 +1102,7 @@ export function findContradictingStateProbes(
 const HAS_LIMIT = /(?:^|\s)(?:-L|--limit)(?:[=\s]|$)/;
 // A pure existence drill: reduce the result to "does ≥1 row exist?". Safe at the
 // 30-row cap — if >30 rows match, ≥1 certainly does.
-const EXISTENCE_DRILL = /\.\[0\]|\/\/\s*empty|first\s*\(/;
+const EXISTENCE_DRILL = /\.\[0\](?![,\d])|\/\/\s*empty|first\s*\(/;
 // A result-set operation that runs AFTER the search, so it operates on the
 // already-truncated 30 rows and its result depends on the FULL match set: an
 // exact-match select, a count, or a REORDER (sort/min/max/group). When present,
@@ -1118,7 +1118,7 @@ const POST_SEARCH_NARROWING =
 // under 30, so a `linked:issue #N` probe never needs an explicit cap (D2b). The
 // `#` anchor keeps this from exempting an unrelated string containing
 // "linked:issue". This is what keeps one-shot/SKILL.md:55 byte-identical.
-const BOUNDED_LINKED_ISSUE = /linked:issue\s+#/;
+const BOUNDED_LINKED_ISSUE = /linked:issue\s+#\S/;
 
 /**
  * Search probes that neither cap the result set (`-L`/`--limit`) nor qualify for
@@ -1214,6 +1214,11 @@ function sufficientBound(cmd: string): boolean {
 // flips the request to POST). `-F`/`--raw-field` stays GET and is NOT here.
 const GH_API_WRITE =
   /(?:^|\s)-X\s+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)--method(?:\s*=\s*|\s+)(?:POST|PUT|PATCH|DELETE)\b|\bgh api\s+graphql\b|(?:^|\s)-f(?:[=\s]|$)|(?:^|\s)--field(?:[=\s]|$)/;
+// An explicit GET verb wins over the `-f`/`--field` write arm: `gh api -X GET
+// <endpoint> -f q=…` is a READ (dev-ledger-reconcile.yml:344 idiom) — without
+// this short-circuit the `-f` arm exempts an unpaginated list read.
+const GH_API_GET =
+  /(?:^|\s)-X\s+GET\b|(?:^|\s)--method(?:\s*=\s*|\s+)GET\b/i;
 
 // `gh api` flags that consume the NEXT token as their value, so the endpoint
 // is the first remaining positional. Boolean flags (`--paginate`, `-i`, …)
@@ -1333,13 +1338,17 @@ function apiEndpointIsList(cmd: string): boolean {
       segs.shift();
     }
   } else if (
-    segs[0] === "orgs" ||
-    segs[0] === "users" ||
-    segs[0] === "teams" ||
-    segs[0] === "enterprises"
+    segs.length >= 2 &&
+    (segs[0] === "orgs" ||
+      segs[0] === "users" ||
+      segs[0] === "teams" ||
+      segs[0] === "enterprises")
   ) {
+    // A bare `gh api users`/`gh api orgs` IS a paginated list endpoint — only
+    // strip the scope pair when a second segment exists; the bare root must
+    // fall through to apiPathIsList (which returns true on length-1).
     segs.splice(0, 2);
-  } else if (segs[0] === "user") {
+  } else if (segs[0] === "user" && segs.length >= 2) {
     segs.splice(0, 1);
   }
   return apiPathIsList(segs);
@@ -1397,14 +1406,21 @@ export function findUnboundedEnumerations(
 ): EnumProbe[] {
   return extractEnumerations(files).filter((p) => {
     if (p.kind === "api") {
-      if (GH_API_WRITE.test(p.cmd)) return false;
+      if (GH_API_WRITE.test(p.cmd) && !GH_API_GET.test(p.cmd)) return false;
       if (!apiEndpointIsList(p.cmd)) return false;
     }
     if (!p.forConsumed && !ENUMERATION_CONSUMER.test(p.cmd)) return false;
     if (BOUNDED_LINKED_ISSUE.test(p.cmd)) return false;
-    if (BOUNDED_HEAD.test(p.cmd)) return false;
+    // BOUNDED_HEAD and sufficientBound are tested on the dequoted command —
+    // `--head`/`--limit 100`/`--paginate` inside a `--search`/`--jq` string is
+    // data, not a bound (structural-enumeration seat, PR #11782).
+    const bareCmd = p.cmd.replace(
+      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+      '""',
+    );
+    if (BOUNDED_HEAD.test(bareCmd)) return false;
     if (EXISTENCE_DRILL.test(p.cmd) && !POST_SEARCH_NARROWING.test(p.cmd)) return false;
-    if (sufficientBound(p.cmd)) return false;
+    if (sufficientBound(bareCmd)) return false;
     if (
       DOCUMENTED_ENUMERATION_EXEMPTIONS.some(
         (e) => e.file === p.file && p.cmd.includes(e.cmdIncludes),
@@ -1978,6 +1994,81 @@ describe("unbounded gh enumerations carry an explicit sufficient bound (#8593)",
           surface: "ts",
           raw: 'const PROMPT = `run: gh issue list --label x --state open --json number --jq \'.[].number\'`;',
         },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  // forConsumed axis (test-design seat, PR #11782 — it was a mutation survivor
+  // with no discriminating fixture): the close-enumeration `for n in $(gh …)`
+  // shape IS the scheduled-inngest-health.yml arm this detector exists for.
+  test("flags an unbounded `for n in $(gh issue list …)` close-enumeration loop", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'for n in $(gh issue list --repo "$R" --label x --state open --json number --jq \'.[].number\'); do gh issue close "$n"; done',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("passes the same for-loop with --limit 100 (the corpus convention)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'for n in $(gh issue list --repo "$R" --label x --state open --limit 100 --json number --jq \'.[].number\'); do gh issue close "$n"; done',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("flags a zero-arg / paren-terminated capture the old \\b terminator dropped", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'for n in $(gh issue list); do echo "$n"; done' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh api -X GET <list> -f q=…` — explicit GET defeats the -f write arm", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api -X GET "repos/o/r/issues?state=open" -f per_page=30 --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags bare `gh api users`/`gh api orgs` root collections", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'U=$(gh api users --jq \'.[].login\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a bound token inside a quoted --search string is data, not a bound", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --search "fix --limit 100 regression" --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("`--head` inside a quoted --jq/--search arg does not exempt", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --json number --jq \'.[].number | "--head"\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags an OR-widened linked:issue search (`linked:issue # OR …` is not bounded)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh pr list --search "linked:issue # OR is:open" --json number --jq \'.[].number\')' },
       ]),
     ).toHaveLength(1);
   });
