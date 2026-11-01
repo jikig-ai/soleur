@@ -164,8 +164,13 @@ gate's own evolution). No new vendor surface.
      `--search` semantics unchanged): a capture is an offender when it feeds enumeration /
      post-narrowing — `.[].`, `| grep`, `select(`, `map(`, `length`, `sort_by`/`min_by`/`max_by`/`last`
      — and carries neither a sufficient bound nor an exemption. Sufficient bound: `-L N`/`--limit N`
-     with **N ≥ 100**, or `--paginate` (gh api). Exemptions unchanged: existence drill with no
-     post-search narrowing (`EXISTENCE_DRILL` + `POST_SEARCH_NARROWING`), `BOUNDED_LINKED_ISSUE`.
+     with **N ≥ 100**, or `--paginate` (gh api). Exemptions: existence drill with no
+     post-search narrowing (`EXISTENCE_DRILL` + `POST_SEARCH_NARROWING`), `BOUNDED_LINKED_ISSUE`,
+     and **new `BOUNDED_HEAD = /--head\b/`** (CTO ruling 2026-11-01: `--head <branch>` is
+     domain-bounded by headRefName cardinality, same argument as `linked:issue #N` — covers
+     `bump-inngest-bootstrap-pin.sh`'s two post-narrowing `--head` probes at :503/:556 which the
+     widened detector would otherwise flag; coded as a pattern exemption, not a documented
+     exclusion, so the judgment is enforced not narrated).
      `--limit` *presence* alone no longer greens an enumerating probe — the `-L 1` + `.[].number`
      shape the issue names must flag.
    - Extend `EXEC_SURFACE_GLOBS` with `.github/scripts/**/*.sh` **excluding `*/test/` fixtures**
@@ -177,7 +182,8 @@ gate's own evolution). No new vendor surface.
      `gh issue list --label x --jq '.[].number'` with no `-L`; RED on `-L 1` + `.[].number`;
      RED on `gh search issues … --jq 'length'`; RED on `gh api …/issues` without `--paginate`;
      PASS on `--paginate`, `-L 100`, `.[0]` drills, `linked:issue #N`, `//`-comment probes in a `.ts`
-     fixture, single-resource `gh api …/pulls/123`).
+     fixture, single-resource `gh api …/pulls/123`, **must-PASS `gh pr list --head <branch>`**
+     feeding a post-narrowing consumer — the BOUNDED_HEAD fixture).
    - Corpus offender assertion stays `toEqual([])` — every site the widened detector flags must be
      fixed or document-exempted **in this PR** (census step, Phase A3).
 2. **Bound the six named sites:**

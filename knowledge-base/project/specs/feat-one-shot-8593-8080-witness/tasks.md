@@ -22,13 +22,16 @@ sed anchor); commit with the repo CLA-allowlisted identity via `git -c user.name
 - [ ] 2.2 Add `findUnboundedEnumerations` (sibling of `findUnlimitedProbes`): enumeration /
       post-narrowing shapes (`.[].`, `| grep`, `select(`, `map(`, `length`, `sort_by`/`min_by`/`max_by`/`last`)
       require `-L N ≥ 100` or `--paginate`; keep `EXISTENCE_DRILL`/`POST_SEARCH_NARROWING`/
-      `BOUNDED_LINKED_ISSUE` exemptions.
+      `BOUNDED_LINKED_ISSUE` exemptions and add coded `BOUNDED_HEAD = /--head\b/` (CTO ruling:
+      `--head` is domain-bounded by headRefName cardinality; covers bump-inngest-bootstrap-pin.sh
+      :503/:556 post-narrowing probes).
 - [ ] 2.3 Add `"ts"` surface to `surfaceOf` + full-line `//` comment handling (flush+skip).
 - [ ] 2.4 Extend `EXEC_SURFACE_GLOBS`: `.github/scripts/**/*.sh` (exclude `*/test/`),
       `apps/web-platform/server/inngest/functions/*.ts` (exclude `*.test.ts` if any exist in that
       dir — verify).
 - [ ] 2.5 Synthesized controls per Guard-1 matrix rows 1–8 (incl. `-L 1` insufficiency,
-      `gh api` item-vs-list pair, `//`-comment probe, must-PASS set).
+      `gh api` item-vs-list pair, `//`-comment probe, must-PASS `gh pr list --head` post-narrowing
+      fixture for BOUNDED_HEAD, must-PASS set).
 - [ ] 2.6 Bound the six named sites: `scheduled-inngest-health.yml` (both `for n in $(…)` loops,
       `--limit 100`), `review-reminder.yml` + `strategy-review-check.sh` (`--search` server-narrow
       + `--limit 100` + keep `grep -cxF`), `codeql-to-issues.yml` (existence-drill rewrite),
