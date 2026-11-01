@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1222
-# generated-at=2026-10-31T20:36:09Z
+# default-weight-ms=1223
+# generated-at=2026-11-01T23:04:46Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -455,6 +455,7 @@ scripts/lib/legal-base-ref.test.sh	324	measured
 scripts/lib/legal-normalise-property.test.sh	1222	floor
 scripts/lib/legal-normalise.test.sh	227	measured
 scripts/lib/repo-write-boundary.test.sh	14643	measured
+scripts/lib/rows-range.test.sh	1223	floor
 scripts/lib/rule-line-regex-parity.test.sh	13	measured
 scripts/lib/scratch-root.test.sh	119	measured
 scripts/lib/supabase-logs-verdict.test.sh	128	measured

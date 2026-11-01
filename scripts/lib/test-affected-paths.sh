@@ -879,6 +879,14 @@ AFFECTED_SCRIPTS_LIB_LEGAL_NORMALISE_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/lib/rows-range.test.sh (#11647, S2/row 12) — parse/floor unit coverage
+# for the shared --rows preamble lib; glob-registered under scripts/lib/*.test.sh.
+AFFECTED_SCRIPTS_LIB_ROWS_RANGE_TEST_SH_PATHS=(
+  "scripts/lib/rows-range.test.sh"
+  "scripts/lib/rows-range.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/c4-model-freshness.test.sh — re-renders the committed
 # LikeC4 artifact from the .c4 sources and byte-compares; both are data to it.
 AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
