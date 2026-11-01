@@ -303,29 +303,51 @@ assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (li
 assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2\"" server.tf \
   'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
 
-# C.3 — no cloudflare_load_balancer pools web-2 at weight>0 (pre-flip). With the LB now
-#       landed (Phase 6 overlay-add, ADR-068 §(b)), the assertion tightens to: no pool origin
-#       references web-2 and no LB default_pool_ids includes a web-2 pool. web-2 stays
-#       structurally absent until the cutover soak marker (GIT_DATA_LUKS_CUTOVER_AT) is satisfied.
-# Glob $SCRIPT_DIR explicitly (terraform-cwd class). Fail-closed: zero .tf files = FAIL.
-web2_pool_hits=0; tf_seen=0
+# C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence).
+#       With web-2 pooled as a drained member (ADR-068 §(b) — weight 0, health-checked,
+#       zero traffic until the #6027 window flip), the assertion tightens to BLOCK-SCOPE:
+#       every `origins` block naming web-2 must carry `weight = 0`, and no LB may point
+#       `default_pool_ids` at a web-2 pool. The weight pairing is awk-ranged over the
+#       `origins {}` block containing `name = "web-2"` — never a bare line-grep, which a
+#       dropped `weight` term would satisfy silently. Glob $SCRIPT_DIR explicitly
+#       (terraform-cwd class). Fail-closed: zero .tf files = FAIL; a file declaring an LB
+#       resource that references web-2 OUTSIDE an origins block also fails (a web-2
+#       pool/record smuggle is not a drained origin).
+web2_bad_blocks=0; web2_blocks=0; web2_stray=0; tf_seen=0
 for f in "$SCRIPT_DIR"/*.tf; do
   [[ -f "$f" ]] || continue
   tf_seen=$((tf_seen + 1))
-  # Only flag files that actually declare an LB AND address web-2 as an origin/pool.
-  if grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f"; then
-    if grep -qE 'hcloud_server\.web\["web-2"\]|name[[:space:]]*=[[:space:]]*"web-2"' "$f"; then
-      web2_pool_hits=$((web2_pool_hits + 1))
-    fi
-  fi
+  grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f" || continue
+  # Block-scoped pairing: walk origins {} blocks; the one containing name = "web-2"
+  # must carry weight = 0. Outside origins blocks, any web-2 reference is a stray.
+  while IFS='|' read -r has_w2 has_w0; do
+    [[ "$has_w2" == "1" ]] || continue
+    web2_blocks=$((web2_blocks + 1))
+    [[ "$has_w0" == "1" ]] || web2_bad_blocks=$((web2_bad_blocks + 1))
+  done < <(awk '
+    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1; w2=0; w0=0; next }
+    inblock && /^[[:space:]]*\}/ { printf "%s|%s\n", w2, w0; inblock=0; next }
+    inblock && /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/ { w2=1 }
+    inblock && /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0/ { w0=1 }
+  ' "$f")
+  # Stray web-2 references outside any origins block (a web-2 pool or record smuggle).
+  file_stray=$(awk '
+    /^[[:space:]]*origins[[:space:]]*\{/ { inblock=1 }
+    inblock && /^[[:space:]]*\}/ { inblock=0; next }
+    !inblock && ($0 ~ /^[[:space:]]*hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
+    END { print n+0 }
+  ' "$f")
+  web2_stray=$((web2_stray + file_stray))
 done
 TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no .tf files found under $SCRIPT_DIR (fail-closed — dir moved?)"
-elif [[ "$web2_pool_hits" -eq 0 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: no LB .tf references web-2 (web-2 structurally absent pre-flip)"
+elif [[ "$web2_blocks" -lt 1 ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 — the drained member is missing (or a resource label was renamed; assertions must not vacuously pass)"
+elif [[ "$web2_bad_blocks" -gt 0 || "$web2_stray" -gt 0 ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_bad_blocks web-2 origins block(s) without 'weight = 0' + $web2_stray stray web-2 reference(s) outside origins blocks — web-2 must stay a drained member pre-flip"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_pool_hits LB .tf file(s) reference web-2 — keep web-2 out of default_pool_ids pre-flip"
+  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: $web2_blocks web-2 origins block(s) at weight = 0, no stray web-2 references — drained member holds"
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---

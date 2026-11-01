@@ -3100,7 +3100,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `git_data_replication_success` marker rows from Better Stack through the read connection (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // those rows exist only in the stored log stream and Better Stack has no unauthenticated reader, so no probe verifies the same
   // property without the credentials; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
-  const BASELINE_DECLARED_PROBES = 90;
+  const BASELINE_DECLARED_PROBES = 91;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

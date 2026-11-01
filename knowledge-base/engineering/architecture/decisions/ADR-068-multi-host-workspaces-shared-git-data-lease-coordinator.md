@@ -1504,3 +1504,32 @@ Accepted residual, tracked as #11716: a stale clone that holds the current lease
 - **Credential posture of the flip pause read.** `--only-secrets` on the reader is hygiene: it narrows what doppler injects into the step, but the token itself can still read `prd_terraform`. It is not isolation.
 - **Unanchored marker and reporter readers (accepted residual).** The success-marker and reporter-line readers (`scripts/followthroughs/git-data-replication-signal.sh`, the flip workflow, `quiet-window.ts`) match their closed grammars as substrings and take the host from the Better Stack `host_name` field. A foreign emitter that logs under a web host's `host_name` and quotes the phrase could supply a MARKERS_PRESENT reading or a reporter row. Pre-existing for the reporter line; the marker inherits it. The signal-script reads are advisory evidence for an owner decision, not an authorization. For the flip's pause read the direction matters: the every-row-equals-1 rule means a forged `=0` row can only add a refusal, but a forged `=1` row could stand in for a host whose real reporter row is missing, and nothing here prevents that; the writer would need to log under a web host's `host_name` in the Better Stack source.
 - **F23, runbook R3.** A `git-data-overlay-not-descendant` warn row does not change the R3 verdict; it is read as a count and recorded in the rehearsal record, not treated as a gating blemish.
+## Addendum — 2026-11-01 (#6027 continuation, PR #11766): GA LB monitor transport + web-2 as a drained member
+
+Two corrections against §(b) as-shipped 2026-11-01, both verified live before this amendment:
+
+1. **Monitor transport.** The `type=https` monitor probes origin:443/TLS, but the origin
+   publishes only `0.0.0.0:80:3000` (cloud-init) and the `ssl="flexible"` config rule on
+   `app.soleur.ai` makes HTTP:80 the real CF→origin path. Live CF pool-health read:
+   `healthy:false` / `TCP connection failed` since the GA overlay applied — the B1
+   self-fallback hid it (traffic still routes when every pool is down). The monitor is
+   now `type="http"`, `port=80`, `/health`, `expected_codes="200"` — the probe replicates
+   the request shape traffic actually takes. A new
+   `cloudflare_notification_policy.web_lb_health` (`load_balancing_health_alert`,
+   verified in `available_alerts` on this account's tier — unlike the `http_alert_*`
+   Enterprise types) pages on origin-down: this exact silent failure class must page.
+2. **web-2 pooling shape.** §(b)'s "structurally absent" reading is replaced by the
+   drained member it always meant: web-2 is a pool origin at `weight = 0` — health-checked,
+   zero traffic — until the #6027 window flips 0→1 behind the §(c) gate chain
+   (`lb-weight-gate-with-marker.sh`, run fail-closed by the new `ga-pool-update` arm in
+   `mode=serve` BEFORE plan). Live gate state 2026-11-01: `GIT_DATA_STORE_ENABLED=false`,
+   `GIT_DATA_LUKS_CUTOVER_AT` and `SOLEUR_PROXY_BIND` absent — the flip is not authorized
+   today. LB `steering_policy` stays `"off"` (it selects between POOLS — one default
+   pool); origin selection is pinned as `origin_steering { policy = "random" }` on the
+   pool (CTO ruling: `hash` is de facto session affinity contradicting
+   `session_affinity="none"`; `least_*` meaningless at a {1,0} drained shape).
+
+Apply path unchanged in kind, widened in set: `ga-monitor-fix` and `ga-pool-update` are
+two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` (per-arm confirm literals,
+`environment: web-platform-infra-apply`, saved-plan graders `cf_lb_gate_ga_monitor_update`
++ `cf_lb_gate_ga_pool_update`) — the `ga-overlay` gate keeps create-only semantics.

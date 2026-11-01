@@ -368,3 +368,11 @@ excluded from current burn until then.
   [health details](https://developers.cloudflare.com/load-balancing/understand-basics/health-details/),
   [Load Balancing FAQ (monitor source IPs)](https://developers.cloudflare.com/load-balancing/troubleshooting/load-balancing-faq/),
   [v4→v5 migration (key renames)](https://developers.cloudflare.com/terraform/schema-changes/), [monitors](https://developers.cloudflare.com/load-balancing/monitors/)
+
+## GA update arms (2026-11-01, #6027 continuation)
+
+Two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` cover UPDATE semantics on the live GA trio — `ga-overlay` keeps create-only semantics.
+
+- `arm=ga-monitor-fix` — confirm `FIX-GA-LB-MONITOR`. Updates `cloudflare_load_balancer_monitor.web` only; grader `cf_lb_gate_ga_monitor_update` pins the after-state to `{type:http, port:80, path:/health, expected_codes:200}` (the https/:443 create shape probed a port nothing listens on and reported every origin permanently down, hidden by the B1 self-fallback). Post-apply asserts every pool origin reports `healthy:true` one monitor interval later. Deployable immediately — needs no flip authorization.
+- `arm=ga-pool-update -f mode=drain` — confirm `UPDATE-GA-LB-POOL`. Updates the GA pool + LB + `cloudflare_notification_policy.web_lb_health`; grader `cf_lb_gate_ga_pool_update` confines changes to that set, resolves every origin address from the plan's `hcloud_server.web[*]` no-op entries (never a literal), and pins web-2's after-weight to `0`.
+- `arm=ga-pool-update -f mode=serve` — the #6027 maintenance-window 0→1 flip ONLY: the job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) fail-closed BEFORE plan, so an unauthorized flip never reaches a grader. Requires the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).

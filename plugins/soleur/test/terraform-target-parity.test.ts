@@ -1339,6 +1339,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "cloudflare_load_balancer_monitor.web",
   "cloudflare_load_balancer_pool.web_1",
   "cloudflare_load_balancer.app",
+  // Same class: the LB health alert references the pool (filters.pool_id), so a
+  // routine-apply -target on it would transitively pull the pool — and the web-2
+  // origin update — into an unattended apply (#8705 class). It rides the
+  // ga-pool-update arm's -target set instead (PR #11766).
+  "cloudflare_notification_policy.web_lb_health",
   // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
   // Pages cert-reissue routine + its prd doppler_secret. Minting a
   // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
