@@ -259,3 +259,12 @@ No cross-domain implications detected — infrastructure/tooling wording change 
 - The `Edit` `old_string` values are unique per file today; if a sibling PR changes either line before this one merges, re-read the file and re-measure the byte delta rather than reusing -12.
 - The runbook edit must not touch the lowercase "do not deploy" sentence; AC5 checks it survives.
 - The parent-tracker reference (hash sign followed by 9757) is to be typed only in the PR body write; this plan deliberately does not spell it with the hash.
+
+## Addendum — 2026-11-01 (review rounds 1 and 2, supersedes the scope statements above)
+
+The review panel and two fix-round passes widened the runbook edit beyond the single row-4 cell this plan prescribed. The workflow edit is unchanged (two strings, -12 bytes). Where the text above conflicts with this addendum, this addendum wins:
+
+- **Runbook scope.** The runbook now changes in six places: the resolver sentence near the start of the exit-code section, rows 2, 3 and 4 of the exit-code table, the "If the restore job fails" section, and the "Rollback narrows" bullet. `git diff --numstat` for the runbook is no longer `1 1`; AC2's runbook half and the "nothing else" statements above are superseded.
+- **AC5.** The row-4 anchored grep no longer finds "a repeat means". Row 4 now reads "NOT retryable; read the per-entry lines. A digest, blob or signature failure means the copy is landing wrong, not that it was interrupted." Re-anchor AC5 on "NOT retryable; read the per-entry lines." within the row-4 line.
+- **Row-4 trailing clause.** It is no longer left alone: the ruling covered one phrase, the literal edit orphaned "a repeat", and four seats asked for it to be reconciled.
+- **#11667 comment (task 4.5, AC9).** The two planner-added strings no longer exist in that form. The comment lists instead the items recorded in decision-challenges.md under "Review findings left for the #11667 comment".
