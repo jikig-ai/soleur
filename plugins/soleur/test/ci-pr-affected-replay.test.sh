@@ -3030,8 +3030,8 @@ chk "job wiring mutant: a trailing comment on timeout-minutes reds the alone-on-
 chk "job wiring mutant: timeout-minutes above 5 reds the timeout row" wf_mut timeout-six $'\n    timeout-minutes: 5\n' $'\n    timeout-minutes: 6\n' row_wf_timeout
 chk "job wiring mutant: fetch-depth: 1 reds the checkout row" wf_mut depth-one $'\n          fetch-depth: 2\n' $'\n          fetch-depth: 1\n' row_wf_checkout
 chk "job wiring mutant: persist-credentials removed reds the checkout row" wf_mut creds-gone $'\n          persist-credentials: false\n' $'\n' row_wf_checkout
-chk "job wiring mutant: the selector timeout removed reds the comparison row" wf_mut seltimeout-gone $'\n          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"\n' $'\n' row_wf_select_timeout
-chk "job wiring mutant: a selector timeout equal to the job timeout (300) reds the comparison row" wf_mut seltimeout-300 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"' 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "300"' row_wf_select_timeout
+chk "job wiring mutant: the selector timeout removed reds the comparison row" wf_mut seltimeout-gone $'\n          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "290"\n' $'\n' row_wf_select_timeout
+chk "job wiring mutant: a selector timeout equal to the job timeout (300) reds the comparison row" wf_mut seltimeout-300 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "290"' 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "300"' row_wf_select_timeout
 chk "job wiring: the step's run: script, executed with a stub python3 as GitHub runs it, passes the exit code through and prints the marker, the summary and no annotation on a pass" row_wf_run_pass
 chk "job wiring: the step's exit code IS the ratchet's (1 a verdict, 2 infrastructure) and each is annotated with its reason" row_wf_run_exit_code
 chk "job wiring: python3 dying (rc 1, 127) or exiting 0 with no marker is exit 2 reason=no-marker" row_wf_run_no_marker
