@@ -3700,6 +3700,16 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# scripts/git-data-replication-signal-11704 — sibling #11736's followthrough suite.
+# Its script sources the two betterstack lib readers and executes betterstack-query.sh
+# (BSQ="${ROOT}/scripts/betterstack-query.sh", `bash "$BSQ"`) — real reads.
+AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
+  "scripts/betterstack-query.sh"
+  "scripts/followthroughs/git-data-replication-signal.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/betterstack-sources.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "apps/web-platform/infra/git-data.tf"
   "plugins/soleur/test/lib/git-fixture-env.sh"
