@@ -42,6 +42,64 @@ branch's draft docs PR #11768:
    time: not queued, auto-merge disarmed, last removal `failed_checks` at
    01:14Z — pre-hotfix).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-01
+**Sections enhanced:** gate verification pass over all sections (deepen-plan
+Phases 4.4–4.13 run in-process; the agent fan-outs of Phases 2/3/4/5 could not
+run — this harness has no Task tool, so skill/learnings/research/review
+sub-agents were applied inline by the planner instead, same resolution as
+`specs/feat-one-shot-9963-syslog-systemd-journald-path`).
+
+### Gate Verdicts (deepen-plan)
+
+- **4.4 Precedent-diff:** learning-file frontmatter diffed against the sibling
+  corpus file `learnings/workflow-patterns/2026-10-31-verify-platform-semantics-before-scoping-a-knob-issue.md`
+  — precedent adopted verbatim. No lock/SQL/atomic patterns in scope.
+- **4.5 Network-outage / 4.55 Downtime:** no trigger → skipped.
+- **4.6 User-Brand Impact:** PASS — section present, threshold `none`, concrete
+  artifact named; files are `knowledge-base/**` only, outside the sensitive-path
+  regex, so no scope-out bullet required.
+- **4.7 Observability:** pure-docs (`knowledge-base/**` only) → gate skips
+  silently; the `## Observability` block still validates (5 fields present and
+  non-placeholder; `discoverability_test.command` starts with allowlisted
+  `grep`, carries no SSH and no shell metacharacters; `expected_output` is the
+  literal `1`).
+- **4.8 PAT-shaped variable:** PASS — zero matches.
+- **4.9 UI wireframe:** no UI-surface files → skipped.
+- **4.10 Encryption Posture:** no `.tf`/migration/cloud-init/compose files; the
+  word "queue" in prose is GitHub's merge-queue feature, not a store this plan
+  introduces, and no new cross-component connection is created → skipped.
+- **4.11 Guard Contract:** deliverable contains no guard → skipped.
+- **4.12 Scope Check:** PASS — exactly one unfenced `## Scope Check`; all
+  subsections present; all asks mapped; `Recommendation: single PR` present.
+- **4.13 Task Design:** no new autonomous-task surface → skipped.
+
+### Citation Verification (deepen quality checks)
+
+- Squash SHAs `c743ff93`, `220633355f`, `4393472919`, `0e8a6ebb02`,
+  `95231bda1b`, `4366c47940` — all confirmed ancestors of `origin/main`.
+- PR states re-verified live: #11681, #11753, #11739, #11734, #11756, #11728
+  all MERGED; #11768 OPEN (this branch's WIP draft).
+- Issue states re-verified live: #11678 CLOSED; #11682, #10959, #10860,
+  #10448, #10865 OPEN.
+- Rule-ID citation audit: only `wg-cla-signed-author-before-merge` is cited;
+  verified ACTIVE in `AGENTS.md`.
+- Label audit: `type/bug`, `priority/p2-medium`, `domain/engineering`,
+  `meta/machinery` all exist (`gh label list`).
+- Every `knowledge-base/` path the plan cites resolves on disk.
+- All plan-prescribed probes were executed at plan time (run list, GraphQL
+  queue read, alert-gate run list) — outputs recorded in Research Insights.
+
+### New Considerations Discovered
+
+- #11688 `mergeStateStatus` drifted `UNKNOWN` → `DIRTY` between the parent
+  session's measurement and this pass; Phase 0 of the plan re-reads live state
+  at write time so the addendum never cites a stale verdict.
+- The members=3 group produced **one push event per member landing** (three
+  `codeql-main-alert-gate.yml` runs) — measured during planning and written
+  into the addendum content spec.
+
 ## Research Insights
 
 **Relevant file paths.**
