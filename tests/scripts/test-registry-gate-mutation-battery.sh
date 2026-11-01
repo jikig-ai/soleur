@@ -648,6 +648,44 @@ mutate "E44 GHCR login feeder dropped (stdin is empty, the GHCR login has no pas
   'if ! printf '\''%s'\'' "$GHCR_TOKEN" | $CRANE auth login ghcr.io' \
   'if ! $CRANE auth login ghcr.io'
 
+# ── E45-E52: unclassified read faults exit 6, only a measured absence exits 4 (#11667). ─────
+# One row per arm at each of the four read/copy sites. E45-E48 turn the new exit-6 arm back into
+# the old catch-all exit 4 (an unrecognised crane error would again read as "NOT retryable, do
+# not deploy"); E49-E52 widen the exit-4 arm to everything (a measured absence would read as
+# "could not classify"). Either direction must turn the restore suite RED.
+
+mutate "E45 image read-back: the unclassified arm reverts to exit 4" engine \
+  'die 6 "reading ${dst} back after copying it failed' \
+  'die 4 "reading ${dst} back after copying it failed'
+
+mutate "E46 GHCR signature read: the unclassified arm reverts to exit 4" engine \
+  'die 6 "reading the signature ${sig_tag} at GHCR for ${repo} failed' \
+  'die 4 "reading the signature ${sig_tag} at GHCR for ${repo} failed'
+
+mutate "E47 signature copy: the unclassified arm reverts to exit 4" engine \
+  'die 6 "copying the signature ${sig_tag} for ${repo} failed' \
+  'die 4 "copying the signature ${sig_tag} for ${repo} failed'
+
+mutate "E48 sink signature read-back: the unclassified arm reverts to exit 4" engine \
+  'die 6 "reading the signature ${sig_tag} back from the sink failed' \
+  'die 4 "reading the signature ${sig_tag} back from the sink failed'
+
+mutate "E49 image read-back: a measured absence is reported as could-not-classify (exit 6)" engine \
+  'NOTFOUND|BLOBMISSING) die 4 "could not read ${dst} back' \
+  'NOTFOUND|BLOBMISSING) die 6 "could not read ${dst} back'
+
+mutate "E50 GHCR signature read: a measured absence is reported as could-not-classify (exit 6)" engine \
+  'NOTFOUND|BLOBMISSING) die 4 "no cosign signature (${sig_tag}) found at GHCR' \
+  'NOTFOUND|BLOBMISSING) die 6 "no cosign signature (${sig_tag}) found at GHCR'
+
+mutate "E51 signature copy: a measured absence is reported as could-not-classify (exit 6)" engine \
+  'NOTFOUND|BLOBMISSING) die 4 "the signature ${sig_tag} could not be copied' \
+  'NOTFOUND|BLOBMISSING) die 6 "the signature ${sig_tag} could not be copied'
+
+mutate "E52 sink signature read-back: a measured absence is reported as could-not-classify (exit 6)" engine \
+  'NOTFOUND|BLOBMISSING) die 4 "the signature ${sig_tag} is not readable back' \
+  'NOTFOUND|BLOBMISSING) die 6 "the signature ${sig_tag} is not readable back'
+
 restore_pristine
 
 echo
@@ -659,8 +697,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 70 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 70. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 78 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 78. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 
