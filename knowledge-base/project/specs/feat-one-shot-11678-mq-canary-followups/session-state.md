@@ -38,3 +38,7 @@
 
 - Status: pending
 - cto_spawns=0
+
+## Compound Phase
+
+- Status: complete — session-error inventory clean (all errors self-corrected via clear messages; discoverability exit applies). Arc learning already captured in `learnings/workflow-patterns/2026-11-01-minted-oid-is-provenance-headcommit-is-the-binding.md` (review-hardened: `## Key Insight`, `## Tags`, shallowest-member provenance gloss). No new AGENTS.md rule warranted — CMO gate defect tracked at #11682, ratchet drift at #11771, harness no-Task-tool deviation disclosed (sequential-fallback).
