@@ -106,8 +106,8 @@ ADR-032 2026-07-01 and 2026-09-14 rulings.
 | Param | Value | Note |
 | --- | --- | --- |
 | `merge_method` | `SQUASH` | Matches `gh pr merge --squash`. |
-| `grouping_strategy` | `ALLGREEN` | Safe default; every group is one PR at `max_entries_to_merge = 1`. |
-| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-270 raise checklist. |
+| `grouping_strategy` | `ALLGREEN` | A failing member splits/ejects the group; group-atomic ejection assumed by the 3-member sizing. |
+| `max_entries_to_merge` | `3` | Raised 1→3 on #11678 under the ADR-270 raise checklist: batches merge LANDINGS, not `merge_group` builds. `merge-queue-cla-verify.sh` enumerates every member (head_ref names only the deepest). Sanctioned values per Guard 2: {1,3}. |
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |

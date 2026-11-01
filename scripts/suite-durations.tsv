@@ -2,8 +2,9 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1222
-# generated-at=2026-10-31T17:07:53Z
+# generated-at=2026-10-31T22:11:33Z
 # generator=regenerate-shard-manifest.py v3
+# growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
 .claude/hooks/bare-head-self-heal.test.sh	1222	floor
@@ -246,6 +247,7 @@ plugins/soleur/test/main-health-monitor-workflow.test.sh	3379	measured
 plugins/soleur/test/merge-effect-class-parity.test.sh	1222	floor
 plugins/soleur/test/merge-queue-cla-verify.test.sh	21200	measured
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	3070	measured
+plugins/soleur/test/merge-queue-jump.test.sh	1222	floor
 plugins/soleur/test/merge-queue-stall-check.test.sh	20208	measured
 plugins/soleur/test/monitor-lock.test.sh	1222	floor
 plugins/soleur/test/monitor-pr-checks.test.sh	245125	measured
@@ -332,6 +334,7 @@ plugins/soleur/test/zot-image-mirror-publish.test.sh	413	measured
 scripts/actions-queue-health	2503	measured
 scripts/actions-queue-tail-8450	1990	measured
 scripts/alarm-issue-filing-guard	2320	measured
+scripts/always-on-ledger	1222	floor
 scripts/anthropic-admin-key-6297	1883	measured
 scripts/anthropic-double-bill-8611	92	measured
 scripts/assert-dependabot-drain-live	40	measured
@@ -561,6 +564,7 @@ scripts/test-all-affected-b	502348	measured
 scripts/test-all-affected-c	517988	measured
 scripts/test-all-affected-d	610788	measured
 scripts/test-all-capacity-signal	4519	measured
+scripts/test-all-corpus-weight-budget	1222	floor
 scripts/test-all-enumerate-toolchain	21652	measured
 scripts/test-all-fast-tier-budget	708	measured
 scripts/test-all-group-affected	3200	measured

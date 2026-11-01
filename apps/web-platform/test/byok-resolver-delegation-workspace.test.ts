@@ -298,6 +298,12 @@ describe("resolveKeyOwnerThenLease forwards the mode resolver on every lease bra
     await expect(resolveKeyOwnerThenLease(MEMBER, MEMBER, async () => "x", { resolveAuthMode })).resolves.toBe("ran");
     expect(captured).toHaveLength(1);
     expect(captured[0].resolveAuthMode).toBe(resolveAuthMode);
+    // #11594 — the delegation's workspace rides to the lease on the delegated branch ONLY. The lease's cross-owner api-key
+    // skip compares the conversation binding's workspace with it, so a dropped or mis-conditioned argument here silently
+    // turns the feature into a no-op (and a value on a direct branch would hand a non-delegated lease a workspace to match).
+    // The caller is the workspace context, so a direct branch must not carry the key-owner's id as a workspace either.
+    expect(captured[0].delegationWorkspaceId).toBe(_name === "delegated row" ? SHARED_WS : undefined);
+    expect(captured[0].delegationId).toBe(_name === "delegated row" ? "deleg-1" : undefined);
   });
 
   test.each(branches)("%s: restOnly forwards no resolver and still leases (must-pass input)", async (_name, arrange) => {
