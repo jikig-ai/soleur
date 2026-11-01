@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Guards 1 and 2 (plus the AC6 / AC10 / AC18 / AC19 string and parity assertions) for the scheduled real-SDK
 # ask-probe workflow (#10111 Part 1, ADR-284 amendment). Plan:
-# knowledge-base/project/plans/2026-11-01-chore-scheduled-real-sdk-ask-probe-plan.md (Guard Contract).
+# knowledge-base/project/plans/archive/20261101-180926-2026-11-01-chore-scheduled-real-sdk-ask-probe-plan.md (Guard Contract).
 #
 # GUARD 1 - the workflow's push path filter covers the probe's decision-relevant inputs (depth 1): every file named
 #   by ADR-284 Flip criterion 5 and every DIRECT local import of dev-probe-destroy-ask.ts and permission-callback.ts is
