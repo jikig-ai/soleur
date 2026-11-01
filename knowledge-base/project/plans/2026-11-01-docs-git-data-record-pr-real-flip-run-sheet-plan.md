@@ -137,7 +137,7 @@ Scoped only. Never the unscoped full gate.
 - `bash apps/web-platform/infra/git-data-refs-assert.test.sh`, `git-data-cutover-access.test.sh`, `git-data-wipe-assert.test.sh` (with the loopback env CI uses if it needs it), `git-data-wipe-access.test.sh`, and `bash tests/scripts/test-git-data-root-key-arm.sh`.
 - Heading diff: `grep -nE '^#{1,4} '` on the runbook before and after; the only delta is the one new `###` heading.
 - Secret scan before every push (the repo's secret-scan hook or script, whichever `plugins/soleur` documents); the diff carries counts, host names, times and run ids only.
-- Commit with the trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; push; PR #11812 body: summary, `Ref #8211`, `Ref #11704`, the decision table from `decision-challenges.md`, the comment URLs, the session URL `https://claude.ai/code/session_018yoBtY15pXShUA8WFVwcne`, ending with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Mark ready; wait for required checks green; do not arm auto-merge; do not merge. Skip every merge and post-merge phase.
+- Commit with the trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; push; PR #11812 body: summary, `Ref #8211`, `Ref #11704`, the decision table from `decision-challenges.md`, the comment URLs, the session URL `the session URL given in the task brief`, ending with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Mark ready; wait for required checks green; do not arm auto-merge; do not merge. Skip every merge and post-merge phase.
 
 ## Files to Edit
 
@@ -215,3 +215,7 @@ No GDPR gate trigger: no schema, migration, auth flow, API route or new processi
 - No edit to any hash-bound payload, including item 5's code comment (deferred to the payload batch with #11433, #10296, #9066).
 - No answer to the owner-only decisions: #8209 outcome, the pause-off window question, waiting past 2026-11-04, the CLO calls.
 - No new test, no new issue, no ADR, no dispatch, no flag flip, no Doppler write.
+
+## Amendments after review (2026-11-01)
+
+The six-seat review of PR #11812 (two P1, about 25 P2/P3) and the CTO rulings R1 to R11 changed the E3 text. The runbook is authoritative for the run sheet; where the E3 rows above differ from it, the runbook wins. The rulings and the review round are rows R1 to R12 of `decision-challenges.md`. The changes: the abort, retry and rollback paths are keyed on the flag state read first; the hold-limit exit at the go gate is rollback with the pause kept on; a rollback after RF6 needs a counted owner decision for ended-session triggers; the window bans, row age, host-reboot pointer and per-host go gate were added; the RF7 detail moved below the table; "canary" was replaced by "synthetic account".
