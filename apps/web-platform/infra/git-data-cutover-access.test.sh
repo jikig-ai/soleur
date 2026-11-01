@@ -2539,7 +2539,7 @@ PSBAD
   [ -s "$PSD/block.sh" ] || _ps_bad="$_ps_bad [empty-block]"
   ! grep -qE 'set[[:space:]]+-[a-zA-Z]*x|set[[:space:]]+-o[[:space:]]+xtrace' "$PSD/block.sh" || _ps_bad="$_ps_bad [xtrace]"
   ! grep -qF '2>/dev/null' "$PSD/block.sh" || _ps_bad="$_ps_bad [stderr-discarded]"
-  ! grep -E '(^|[;[:space:]])(echo|fail)[[:space:]]' "$PSD/block.sh" | grep -qE 'BS_DOPPLER_TOKEN|pause_rows|pause_tsv|BS_ERR' || _ps_bad="$_ps_bad [prints-rows-or-token]"
+  ! grep -qE 'BS_DOPPLER_TOKEN|pause_rows|pause_tsv|BS_ERR' < <(grep -E '(^|[;[:space:]])(echo|fail)[[:space:]]' "$PSD/block.sh") || _ps_bad="$_ps_bad [prints-rows-or-token]"
   if [ -z "$_ps_bad" ]; then pass "PS9: the block has no xtrace, never discards stderr and prints no rows or credential"
   else fail "PS9: a static pin of the pause block failed" "$_ps_bad"; fi
   # PS10 — the 75 s bound is exact: a newest row at 75 s passes after one read, at 76 s refuses after three.
