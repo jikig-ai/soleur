@@ -124,7 +124,7 @@ fi
 #     gate that admitted every doppler_service_token would pass T1d AND T1c's twin, so T1c/T1f
 #     cover the other direction). The copy is sourced in a subshell so the real gate stays loaded. ---
 MUT="$TMP/mut"; mkdir -p "$MUT"
-cp "${DIR}/lib/inngest-host-replace-gate.sh" "${DIR}/lib/plan-gate-preamble.sh" "$MUT/"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT:?}/"
 sed -i '/"doppler_service_token\.inngest_flip"/d' "$MUT/inngest-host-replace-gate.sh"
 if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT/inngest-host-replace-gate.sh"; then
   fail "T1h: HARNESS ABORT — the mutation did not land (the gate does not name doppler_service_token.inngest_flip)"

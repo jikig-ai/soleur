@@ -652,8 +652,8 @@ row() {
   esac
   case "$mk" in
     yml)  render="$MUTDIR/$id.yml"; python3 -I "$PY" mut "$PRISTINE" "$render" "$@" || mrc=$? ;;
-    boot) boot="$MUTDIR/$id.boot.sh"; sed -e "$1" "$BOOTSTRAP" > "$boot"; cmp -s "$BOOTSTRAP" "$boot" && mrc=3 ;;
-    flip) flip="$MUTDIR/$id.flip.sh"; sed -e "$1" "$FLIPSH" > "$flip"; cmp -s "$FLIPSH" "$flip" && mrc=3 ;;
+    boot) boot="${MUTDIR:?}/$id.boot.sh"; sed -e "$1" "$BOOTSTRAP" > "${boot:?}"; cmp -s "$BOOTSTRAP" "$boot" && mrc=3 ;;
+    flip) flip="${MUTDIR:?}/$id.flip.sh"; sed -e "$1" "$FLIPSH" > "${flip:?}"; cmp -s "$FLIPSH" "$flip" && mrc=3 ;;
     none) ;;
   esac
   if [ "$mrc" -ne 0 ]; then

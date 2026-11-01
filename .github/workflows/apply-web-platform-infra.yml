@@ -1779,11 +1779,8 @@ jobs:
         # Since #6894 the plan must ALSO pass inngest_host_shape_gate (ADR-142 Guard 3): every
         # action must be in the gate's per-address permitted table (creates PERMITTED, never
         # REQUIRED), and the gate's allow-set is exactly the -target= list below.
-        # The doppler_service_token.inngest_flip line below is GRAPH-REDUNDANT:
-        # -target='hcloud_server.inngest' already pulls both tokens in through the dependency
-        # closure (the flip token feeds the server's user_data). It exists so that the shape gate's
-        # allow set stays EQUAL to this list (terraform-target-parity.test.ts asserts the equality)
-        # - do not remove it as redundant (ADR-282 addendum 2026-10-30, the flip-token split).
+        # The inngest_flip -target is graph-redundant (the server already pulls it in); it keeps the
+        # shape-gate allow set EQUAL to this list (parity test). Do not remove it (ADR-282 addendum).
         run: |
           set -uo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
@@ -2044,14 +2041,9 @@ jobs:
         run: terraform init -input=false -lockfile=readonly
 
       - name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)
-        # CTO N9 (flip-token split). On the first replace after the split BOTH Doppler token keys are
-        # unknown at plan time (the boot token is `-/+`, the flip token `+`), so hcloud_server.inngest's
-        # user_data length precondition is DEFERRED to APPLY, after the destroy - the 2026-09-08
-        # stranded-host shape (Hetzner rejects the CREATE after the DESTROY has succeeded). This offline
-        # step (needs only terraform; stubs the keys with hash-derived values of the right width) is the
-        # only gate that runs BEFORE the destroy: it renders the template exactly as inngest-host.tf does
-        # and exits non-zero over the cap or below its 512 B cap-headroom floor, failing the job before
-        # any plan or destroy. Fails closed in CI (exit 2, unmeasurable, is a failure too).
+        # CTO N9: on the first replace after the flip-token split both token keys are unknown at plan
+        # time, so the user_data length precondition is deferred to APPLY (after the destroy). This
+        # offline step is the only pre-destroy size gate; see runbooks/inngest-server.md.
         run: bash apps/web-platform/infra/inngest-userdata-budget.sh
 
       - name: Warn if SENTRY_DSN is absent (#6500)
