@@ -339,7 +339,9 @@ kr_read_host() {
   timeout "$(kr_cap 240)" bash "$KR_HOST_STATE" --since "$1" --no-errors > "$f" 2> "$KR_TMP/hs.err" || KR_HS_EXIT=$?
   [[ "$KR_HS_EXIT" == 0 ]] || return 0
   KR_HS_SERVING="$(sed -n -E 's/^  VERDICT        (NOT )?SERVING   SERVING=(yes|no)( .*)?$/\2/p' "$f" | head -1)"
-  KR_HS_BOOT="$(sed -n -E 's/^  boot_id        ([0-9a-f]{8,36})$/\1/p' "$f" | head -1)"
+  # /proc/sys/kernel/random/boot_id is a hyphenated UUID; the tls-health rows carry its first 8 hex.
+  KR_HS_BOOT="$(sed -n -E 's/^  boot_id        ([0-9a-f-]{8,36})$/\1/p' "$f" | head -1)"
+  KR_HS_BOOT="${KR_HS_BOOT//-/}"
   KR_HS_BOOT="${KR_HS_BOOT:0:8}"
   obs="$(sed -n -E 's/^  observed_at    ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}).*$/\1/p' "$f" | head -1)"
   [[ -n "$obs" ]] && KR_HS_OBS="$(kr_epoch "${obs/ /T}Z")"
