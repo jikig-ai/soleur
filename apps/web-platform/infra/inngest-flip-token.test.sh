@@ -853,7 +853,8 @@ else
   python3 -I "$PY" mut "$PRISTINE" "$W/x-mis.yml" dropin_sub "[Service]" "[Unit]" || die "X1 control mutation did not land"
   python3 -I "$PY" dropin "$W/x-mis.yml" > "$XR/etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf"
   X_MIS="$(systemd-analyze verify --root="$XR" "$UNIT_IN_ROOT" 2>&1)"
-  if ! grep -q "Unknown key 'EnvironmentFile' in section \[Unit\]" <<<"$X_MIS"; then
+  # systemd wording differs by version: "Unknown key 'X' in section [Unit]" vs "Unknown key name 'X' in section 'Unit'"
+  if ! grep -qE "Unknown key( name)? 'EnvironmentFile' in section (\[Unit\]|'Unit')" <<<"$X_MIS"; then
     x_skip "this systemd-analyze did not flag a misplaced EnvironmentFile= (control failed): $(head -c 160 <<<"$X_MIS" | tr '\n' ' ')"
   else
     python3 -I "$PY" dropin "$PRISTINE" > "$XR/etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf"
