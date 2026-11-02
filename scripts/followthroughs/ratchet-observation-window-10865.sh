@@ -22,8 +22,8 @@
 #       `failure` in the jobs API, so both the conclusion and the marker are evidence and the job must have RUN); a genuine `exit=1` (a real new
 #       pair) is NOT green and does NOT restart the window, bot PR or not;
 #   (d) job wall time (completed_at - started_at) over EVERY unit that ran and is not an incident, red and timed-out units included (a ceiling must see the
-#       tail): p95 (nearest rank) at most P95_MAX (210) s and the maximum at most MAX_MAX (270) s. These two ceilings are PROVISIONAL: the only prior
-#       figure is a local mean of 203 s and no hosted datapoint existed when they were ruled; the CTO agent re-rules them (a dated row with the measured
+#       tail): p95 (nearest rank) at most P95_MAX (240) s and the maximum at most MAX_MAX (285) s. These two ceilings are PROVISIONAL: first ruled 210/270 s when the
+#       only prior figure was a local mean of 203 s, re-ruled 240/285 s by the CTO agent on 2026-11-02 from the whole post-PR5 population (372 jobs, p95 218 s, max 284 s; runbook observation log); the CTO agent re-rules them again (a dated row with the measured
 #       series and a change of these two constants, nothing else) at the close of the window or at the 30-day trigger, whichever is first;
 #   (e) composition among the green pull_request units: one docs-only PR (every file a knowledge-base markdown file or a root markdown file), one
 #       DRAFT PR (read from the issue timeline: draft at the unit's own time), and one bot PR (a user of type Bot) when one occurs; when none
@@ -50,7 +50,7 @@
 # evidence does NOT latch across sweeps, and the one sweep that sees every criterion is what closes the tracker. The time arithmetic is in the runbook. A run whose
 # conclusion is `cancelled` is skipped before any jobs read. RESTART FLOOR: a drain PR (label `s4-drain`) merged inside the window changes the baseline, the live set and the oracle, so
 # only runs created after the LATER of the PR3a merge and the latest drain merge count (runbook, "The drain claim"; one issues read; the status line's `window opened=` is that floor, while
-# age_days and the 30-day triggers stay anchored to the PR3a merge). Closing #10865 authorizes nothing: PR3b (#10859) stays held.
+# age_days and the 30-day triggers stay anchored to the PR3a merge; the label list is read through the mixed issues endpoint, which needs the token's pull-requests scope, so drain_sentinel_check refuses with exit 3 when the merged sentinel PR is missing from it). Closing #10865 authorizes nothing: PR3b (#10859) stays held.
 #
 # Exit codes (sweep-followthroughs.sh contract): 0 PASS; 2 NOT YET (an unmet criterion; the sweeper comments and leaves the tracker open); 3 CANNOT ESTABLISH
 # (a tool, GH_TOKEN or a read failed, or a job log carried no marker for a run that concluded success: the sweeper retries); 78 refused to run under xtrace
@@ -79,6 +79,7 @@ umask 077   # the work directory and the worker files hold API metadata and run 
 
 REPO="jikig-ai/soleur"
 PR3A=10851
+DRAIN_SENTINEL=11226   # PR5: carries the label s4-drain, merged 2026-10-26T21:59:35Z; an independent lower bound for the restart floor (drain_sentinel_check); retired with the probe
 JOB="affected-index-ratchet"
 STEP="Ratchet the audit against the committed baseline"
 BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
@@ -86,8 +87,8 @@ BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
 ORACLE=(".github/workflows/ci.yml" "scripts/ci-pr-affected-replay.py" "plugins/soleur/scripts/lint-ratchet.py" "scripts/ci-pr-affected-audit.accept.tsv" "scripts/lib/test-affected-paths.sh" "scripts/test-all.sh" "$BASELINE")
 MIN_PR=3
 MIN_MG=3
-P95_MAX=210   # PROVISIONAL (see (d))
-MAX_MAX=270   # PROVISIONAL (see (d))
+P95_MAX=240   # PROVISIONAL (see (d)); re-ruled 2026-11-02 from 210
+MAX_MAX=285   # PROVISIONAL (see (d)); re-ruled 2026-11-02 from 270
 TIMEOUT_WALL=290
 REVIEW_DAYS=30
 MAX_PAGES="${SOAK_MAX_PAGES:-40}"
@@ -175,11 +176,28 @@ age_days=$(( (NOW - merged_epoch) / 86400 ))
 floor_src="pr3a"   # which merge the floor came from, printed on the status line
 drain_json="$(api "repos/$REPO/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100")" || fail_api "s4-drain pulls"
 drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 100 then error("full page") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
+# --- the floor sentinel (2026-11-02): the label list is read through the MIXED issues endpoint, which GitHub filters to issues when the token has no pull-requests scope, so an unscoped token reads [] and the floor
+# silently stays at the PR3a merge (both 2026-11-01 sweeper runs printed floor=pr3a). DRAIN_SENTINEL is a PR known to carry the label and to be merged; when the pulls endpoint says it is merged and the label list is empty or
+# older than it, the floor was not applied and the probe refuses (exit 3) before it lists a single run. One extra request (inside the 100-request reserve of the quota formula). The line is built only from constants.
+drain_sentinel_check() {
+  local s_json s_at s_epoch
+  s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"
+  s_at="$(jq -r 'if type != "object" then error("not an object") else (.merged_at // "") end' <<<"$s_json" 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
+  [[ -z "$s_at" || "$s_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain sentinel (parse)"
+  [[ -n "$s_at" ]] || return 0
+  s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
+  if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then
+    echo "CANNOT ESTABLISH: s4-drain floor not applied: the label list does not carry sentinel PR $DRAIN_SENTINEL (check the sweeper token's pull-requests scope)"
+    exit 3
+  fi
+}
 [[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain pulls (parse)"
+drain_epoch=0
 if [[ -n "$drain_at" ]]; then
   drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
   if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; floor_src="s4-drain"; fi
 fi
+drain_sentinel_check
 
 # --- read one job: sets RJ_EX, RJ_REASON, RJ_WALL, RJ_RAN (RJ_EX is 2 with reason no-marker when the job concluded without an emitted marker) ---------
 # Called inside a read_unit worker subshell (fail_api's `exit` ends that worker; the main shell then reports its one fixed line and exits 3), never in a command substitution.
