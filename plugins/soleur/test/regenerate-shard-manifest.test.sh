@@ -122,7 +122,7 @@ for banned in __run_boundary declined-suite failed-suite killed-suite tripped-su
 done
 check pass "boundary/skip/FAIL/KILLED/TRIPWIRE/unregistered rows all excluded"
 
-if grep -q 'dropping timed-but-unregistered' "$WORK/A-err.txt"; then
+if grep -q 'dropping priced-but-unregistered' "$WORK/A-err.txt"; then
   check pass "unregistered label drop is warned, not silent"
 else
   check fail "unregistered label was dropped WITHOUT a WARN — silent filtering hides fixture leaks"
@@ -283,7 +283,7 @@ if [[ "$(grep -cv '^#' "$WORK/H-manifest.tsv" 2>/dev/null || true)" == "3" ]] \
 else
   check fail "fixture H: wrong-group labels leaked into the heavy manifest"
 fi
-if grep -q 'dropping timed-but-unregistered' "$WORK/H-err.txt"; then
+if grep -q 'dropping priced-but-unregistered' "$WORK/H-err.txt"; then
   check pass "fixture H: wrong-group drop is warned, not silent"
 else
   check fail "fixture H: light-group labels dropped WITHOUT a WARN"
@@ -304,7 +304,7 @@ else
   check fail "fixture I: all-floor degrade refused: $(tail -2 "$WORK/I-err.txt")"
 fi
 if grep -qF $'light-only-1\t60000\tfloor' "$WORK/I-dur.tsv" 2>/dev/null \
-   && grep -q 'dropping timed-but-unregistered' "$WORK/I-err.txt"; then
+   && grep -q 'dropping priced-but-unregistered' "$WORK/I-err.txt"; then
   check pass "fixture I: untimed registered labels floor-table; dropped timings still warn"
 else
   check fail "fixture I: floor tabling or the unregistered-drop WARN is missing"
