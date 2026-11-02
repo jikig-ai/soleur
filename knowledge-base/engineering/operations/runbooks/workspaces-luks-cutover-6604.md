@@ -1121,8 +1121,10 @@ itself would not alert). For #11631 both heartbeats were armed on 2026-10-31 and
 The retired logs alert's incident does not resolve itself once the alert is gone: incident `1023423999`
 (luks, issue #11048) and incident `1020832712` (cost capture, issue #11049). Do this AFTER the read-back above,
 so the open incident stays as the visible record until the replacement is proven. **The write token's scope for
-this endpoint is UNVERIFIED**: `POST /api/v2/incidents/<id>/resolve` is from Better Stack's public API reference
-and has not been exercised from this repo. If the API answers 401 or 403, stop, record the status code on #11631,
+this endpoint is verified (2026-11-02)**: `BETTERSTACK_API_TOKEN`'s write scope works on
+`POST /api/v2/incidents/<id>/resolve` (HTTP 200, `resolved_at` 2026-11-02T22:32:29Z; evidence: the 22:32 UTC comment
+on #11869). Verified scope is not authorization: the production-write rule in this heading still applies to every
+run. If the API answers 401 or 403, stop, record the status code on #11631,
 and do not retry with a different token without a fresh authorization. Paste the helpers block at the top and run
 `TARGET=<target> bash resolve-incident.sh`.
 
