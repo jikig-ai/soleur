@@ -790,6 +790,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
+          REPO_FULL: ${{ github.repository }}
           R_WEBPLAT: ${{ needs.test-webplat.result }}
           R_BUN: ${{ needs.test-bun.result }}
           R_SCRIPTS: ${{ needs.test-scripts.result }}
@@ -1166,7 +1167,7 @@ jobs:
           # `-L 100` is the fetch bound the #8593 enumeration gate reads
           # (`--paginate`/`-L ≥100`); the jq slice then keeps the LAST 50
           # COMPLETED runs — the rolling window the rate is defined on.
-          RED_RATE=$(gh run list -R "${{ github.repository }}" --workflow ci.yml --branch main --event push -L 100 \
+          RED_RATE=$(gh run list -R "$REPO_FULL" --workflow ci.yml --branch main --event push -L 100 \
             --json status,conclusion \
             --jq '[.[] | select(.status == "completed")][0:50] as $c | "\([$c[] | select(.conclusion == "failure")] | length)/\($c | length)"' \
             2>/dev/null || echo "unavailable")
