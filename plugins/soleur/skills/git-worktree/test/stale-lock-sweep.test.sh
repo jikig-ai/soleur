@@ -38,12 +38,11 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # GNU coreutils preflight — the sweep + this test use GNU `stat -c%Y` and
-# `touch -d '<rel>'` (Linux/CI ubuntu target). Skip cleanly on a non-GNU host
-# (e.g. BSD/macOS dev box) instead of hard-erroring at plant() with a confusing
-# "invalid date format".
+# `touch -d '<rel>'` (Linux/CI ubuntu target). A host that cannot measure is
+# UNRESOLVED (exit 3), never a green SKIP — the suite asserted nothing (#8773).
 if ! stat -c%Y "$TMP" >/dev/null 2>&1 || ! touch -d '1 second ago' "$TMP/.probe" 2>/dev/null; then
-  echo "SKIP: GNU coreutils (stat -c / touch -d relative) required — non-GNU host"
-  exit 0
+  echo "UNRESOLVED: GNU coreutils missing (stat -c%Y / touch -d relative unsupported) — non-GNU host; this suite asserted nothing"
+  exit 3
 fi
 rm -f "$TMP/.probe"
 

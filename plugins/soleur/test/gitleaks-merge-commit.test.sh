@@ -53,6 +53,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
 
 set +e -uo pipefail
@@ -82,7 +88,6 @@ pass() {
 }
 
 TMP=$(mktemp -d -t gitleaks-merge-commit.XXXXXXXX)
-trap 'rm -rf "$TMP"' EXIT
 
 # Synthesized Doppler-shape token, assembled at runtime. The doppler-api-token
 # rule is used deliberately instead of database-url-with-password: it keeps this

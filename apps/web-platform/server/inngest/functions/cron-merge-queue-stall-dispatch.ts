@@ -448,12 +448,10 @@ export const cronMergeQueueStallDispatch = inngest.createFunction(
       { scope: "account", key: '"cron-dispatch"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "*/10 * * * *" },
+      { event: "cron/merge-queue-stall-dispatch.manual-trigger" },
+    ],
   },
-  [
-    { cron: "*/10 * * * *" },
-    { event: "cron/merge-queue-stall-dispatch.manual-trigger" },
-  ],
-  cronMergeQueueStallDispatchHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronMergeQueueStallDispatchHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

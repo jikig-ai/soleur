@@ -59,7 +59,7 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { parse as parseYaml } from "yaml";
-import { resolve, join, posix } from "path";
+import { resolve, join, posix, relative } from "path";
 import {
   readFileSync,
   existsSync,
@@ -69,6 +69,7 @@ import {
   mkdtempSync,
   mkdirSync,
   rmSync,
+  symlinkSync,
 } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -93,7 +94,19 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 // 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
-const TEST_FLOOR = 297;
+// 297 -> 299 (2026-10-27 eMudhra cloudflared plan, +2; the 311 on main counted the +12 of #11179, whose destroy-workflow pins left with the workflow at #11195): the hardcoded 3-file PIN_WORKFLOWS test was replaced by the
+// .github/-wide pin census describe (census+parity, canonical source) plus its mutation-battery describe — 3 tests in, 1 out.
+// 299 -> 310 (#10540 +6 on this branch; main stood at 304 with #11194). #10540: the "inngest key rotation derivation" describe (app copies derive from the dedicated random_id, the per-merge
+// closure edge without an hcloud_* member, the per-merge target pins, the inngest_host shape gate still refusing a random_id touch,
+// and the existsSync-guarded pins on inngest-key-rotate.yml). #11194: the plaintext-id interlock wire pins (replace job incl. rotate; create job),
+// the wiring-predicate mutation battery and the executed-step test; the retired-address assertion REPLACED the GIT_DATA_PRESERVED_VOLUMES test
+// one-for-one (declared count unchanged by it). Exact: grep -cE '^\s*test\(' = 310.
+// 310 -> 320 (#11294, +10): the "terraform stream key-material redaction" describe (sweep over every workflow, non-vacuity, no-escape rule,
+// mutation battery over every redacting step, drift ordering, variable-captured plans, and four public-sink tests: issue/comment/summary sinks, plan-output.txt writers, sticky PR comment feeds, sink mutation).
+// 320 -> 321 (#11294 follow-up, +1): the ANSI-colour pin (steps without -no-color print coloured lines; the filter strips colour first).
+// 321 -> 324 (#11766 fix round 2, +3): cf-lb-overlay ga_pool_update pins — the Plan gate step carries no `if:`, the
+// arm's -target set ⊇ {pool, LB, policy}, and the web-2 health precondition step exists/serve-gated/pre-plan.
+const TEST_FLOOR = 324;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -102,6 +115,14 @@ const WEB_PLATFORM_WORKFLOW = resolve(
 const DEPLOY_PIPELINE_FIX_WORKFLOW = resolve(
   REPO_ROOT,
   ".github/workflows/apply-deploy-pipeline-fix.yml",
+);
+// #10540 — the dispatch-only Inngest key-rotation workflow. Another change creates the file; the pins below read it only
+// when it exists (existsSync-guarded), so this suite is green both before and after the workflow lands. It is deliberately
+// NOT folded into `webPlatformTargets` / `allTargets` / `coveredUnion`: those are the per-merge coverage sets, and a
+// dispatch-only workflow's targets must not broaden them (same reasoning as stripDispatchJobs).
+const INNGEST_KEY_ROTATE_WORKFLOW = resolve(
+  REPO_ROOT,
+  ".github/workflows/inngest-key-rotate.yml",
 );
 
 // Resources that are intentionally NOT auto-applied by either CI workflow.
@@ -1167,7 +1188,7 @@ function stripDispatchJobs(workflowText: string): string {
   // either, and is left folded-in historically; registry_host_replace is stripped explicitly
   // here as the current best practice for a new dispatch job.
   // git_data_host_replace (#6242, ADR-103): the same current best practice — its 5 -targets are
-  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + both volume attachments +
+  // ALL git-data OPERATOR_APPLIED_EXCLUSIONS (server + network + the LUKS volume attachment +
   // firewall attachment), so stripping it does not change the coverage anchor today, but keeps
   // the parity boundary uniform so a FUTURE git-data -target that is NOT already an exclusion
   // cannot silently mask a per-merge miss.
@@ -1281,10 +1302,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_private_key.git_provision",
   "doppler_secret.git_provision_ssh_private_key",
   "hcloud_server.git_data",
-  "hcloud_volume.git_data",
-  "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
+  // (#11194) hcloud_volume.git_data and hcloud_volume_attachment.git_data left this set: both were
+  // destroyed at the provider on 2026-10-27 and are in no .tf file. GIT_DATA_RETIRED_ADDRESSES
+  // (below) pins them ABSENT from every git-data dispatch job's -target/-replace lines.
   // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
   // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
   // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
@@ -1311,6 +1333,19 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "tls_self_signed_cert.proxy_server",
   "doppler_secret.proxy_tls_key",
   "doppler_secret.proxy_tls_cert",
+  // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
+  // (monitor, web-1 pool, LB on app.soleur.ai). Stays deliberately excluded after
+  // the 2026-10-30 CF_API_TOKEN widen (the 2026-10-27 code-10000 premise below is
+  // obsolete): the GA overlay is a sequenced human-watched act, not a push apply —
+  // it rides the `ga-overlay` arm of cf-lb-overlay.yml (#11181 F3 machinery).
+  "cloudflare_load_balancer_monitor.web",
+  "cloudflare_load_balancer_pool.web_1",
+  "cloudflare_load_balancer.app",
+  // Same class: the LB health alert references the pool (filters.pool_id), so a
+  // routine-apply -target on it would transitively pull the pool — and the web-2
+  // origin update — into an unattended apply (#8705 class). It rides the
+  // ga-pool-update arm's -target set instead (PR #11766).
+  "cloudflare_notification_policy.web_lb_health",
   // #6657 (ADR-125 / AP-019) — the DNS-edit-only Cloudflare token for the GitHub
   // Pages cert-reissue routine + its prd doppler_secret. Minting a
   // cloudflare_api_token requires "User API Tokens: Edit", which the per-PR CI
@@ -1326,8 +1361,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // #5274 Sub-PR 3.D (ADR-068) — the fresh LUKS git-data volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's MAINTENANCE-WINDOW cutover apply
   // (the volume attaches to the RUNNING git-data host; guest-side cryptsetup unlocks it
-  // at boot), NOT the #5566 per-PR-CI class. Same class as hcloud_volume.git_data + the
-  // git-data doppler_secrets above.
+  // at boot), NOT the #5566 per-PR-CI class. Same class as the git-data doppler_secrets above.
   //   `doppler_service_token.git_data` is an OPERATOR-APPLIED token exception (see
   //   OPERATOR_APPLIED_TOKEN_EXCLUSIONS below): unlike doppler_service_token.write /
   //   .kb_drift (whose `.key` is published into a paired github_actions_secret consumed
@@ -1500,6 +1534,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
   // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
+  // The dedicated pair (random_id + doppler_secret, signing and event) is dispatch-applied by TWO workflows, neither of which is a
+  // per-merge path: the `inngest_host` job (additive-only; its shape gate refuses any random_id touch) and, since #10540, the
+  // owner-authorised `inngest-key-rotate.yml` (phase 1 `-replace`s exactly this pair; phase 2 `-replace`s the app copies
+  // `doppler_secret.inngest_{signing,event}_key_prd`, which derive their value from the dedicated random_id). Hence the
+  // exclusions below stay: a merge never rotates a key. The pins in "inngest key rotation derivation (#10540)" hold the edge.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -1527,6 +1566,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // cert and the three Doppler copies) ARE per-merge targeted.
   "doppler_secret.inngest_link_tls",
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the FLIP token: read/write on the same isolated
+  // soleur-inngest/prd config, consumed as an EnvironmentFile only by inngest-cutover-flip.service (the
+  // redactor also reads it by value) through a cloud-init drop-in. Its `.key` feeds the host's user_data ONLY; it is created as a dependency of
+  // hcloud_server.inngest on the gated inngest-host-replace dispatch (no -target there, CTO R1).
+  // NEVER publish it to a `github_actions_secret`: the #5566 rule below would then force a per-merge
+  // -target, and merging would mint a read/write token with nothing to read it.
+  "doppler_service_token.inngest_flip",
   // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
   // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
   // (#6416 host_creates tripwire). Provision is operator-local after free-slot
@@ -1564,6 +1610,10 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply it — no host
   // to read it. Same class as doppler_service_token.git_data / .registry.
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the on-host flip token. Same class as
+  // doppler_service_token.inngest: consumed by the inngest host's cloud-init only, NOT published to a
+  // CI github_actions_secret (publishing it would void this entry under the #5566 rule above).
+  "doppler_service_token.inngest_flip",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
@@ -1579,6 +1629,431 @@ const AUDIT_PENDING_UNCOVERED = new Set<string>([
   "doppler_secret.live_verify_user_password",
   "random_password.live_verify_user",
 ]);
+
+describe("inngest key rotation derivation (#10540)", () => {
+  const read = (f: string) => stripComments(readFileSync(resolve(INFRA_DIR, f), "utf8"));
+  const APP = ["doppler_secret.inngest_signing_key_prd", "doppler_secret.inngest_event_key_prd"];
+  const DEDICATED_IDS = ["random_id.inngest_signing_key_dedicated", "random_id.inngest_event_key_dedicated"];
+
+  /** Body of one resource (brace-matched) from comment-stripped HCL, or null. */
+  function resourceBody(stripped: string, addr: string): string | null {
+    const [type, name] = addr.split(".");
+    const m = new RegExp(`(?:^|\\n)\\s*resource\\s+"${type}"\\s+"${name}"\\s*\\{`).exec(stripped);
+    if (!m) return null;
+    let depth = 0;
+    for (let i = m.index + m[0].length - 1; i < stripped.length; i++) {
+      if (stripped[i] === "{") depth++;
+      else if (stripped[i] === "}" && --depth === 0) return stripped.slice(m.index + m[0].length, i);
+    }
+    return null;
+  }
+
+  /** Transitive resource-reference closure of `roots` over every infra .tf file (config references only). */
+  function closure(roots: string[]): Set<string> {
+    const texts = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8")));
+    const declared = new Set(texts.flatMap((t) => extractAllResources(t)));
+    const seen = new Set<string>();
+    const stack = [...roots];
+    while (stack.length) {
+      const addr = stack.pop() as string;
+      if (seen.has(addr)) continue;
+      seen.add(addr);
+      const body = texts.map((t) => resourceBody(t, addr)).find((b) => b !== null) ?? "";
+      for (const m of body.matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z0-9_]+)\b/g)) {
+        const ref = `${m[1]}.${m[2]}`;
+        if (declared.has(ref) && !seen.has(ref)) stack.push(ref);
+      }
+    }
+    return seen;
+  }
+
+  test("the app soleur/prd key copies take their value from the dedicated random_id, not the orphaned _prd one", () => {
+    const stripped = read("inngest.tf");
+    const sign = resourceBody(stripped, APP[0]) ?? "";
+    const evt = resourceBody(stripped, APP[1]) ?? "";
+    expect(sign).toMatch(/value\s*=\s*"signkey-prod-\$\{random_id\.inngest_signing_key_dedicated\.hex\}"/);
+    expect(evt).toMatch(/value\s*=\s*random_id\.inngest_event_key_dedicated\.hex/);
+    expect(sign + evt).not.toMatch(/random_id\.inngest_(signing|event)_key_prd/);
+    // ignore_changes stays, so the per-merge plan shows no diff for the app copies.
+    expect(sign).toMatch(/ignore_changes\s*=\s*\[value\]/);
+    expect(evt).toMatch(/ignore_changes\s*=\s*\[value\]/);
+  });
+
+  test("the per-merge closure of the app key copies gains the random_id.*_dedicated edge and has no hcloud_* / terraform_data member", () => {
+    const c = closure(APP);
+    for (const id of DEDICATED_IDS) expect(c.has(id), `${id} is in the closure of the app key copies`).toBe(true);
+    expect([...c].filter((a) => a.startsWith("hcloud_") || a.startsWith("terraform_data."))).toEqual([]);
+    // Non-vacuity: the walker does follow references (the dedicated secret reaches its random_id and its project).
+    const d = closure(["doppler_secret.inngest_signing_key_dedicated"]);
+    expect(d.has("random_id.inngest_signing_key_dedicated")).toBe(true);
+    expect(d.has("doppler_project.inngest")).toBe(true);
+  });
+
+  test("the per-merge workflow still `-target`s the app key copies and the (now orphaned) _prd random_ids", () => {
+    const perMerge = extractAllTargets(stripDispatchJobs(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")));
+    for (const a of [...APP, "random_id.inngest_signing_key_prd", "random_id.inngest_event_key_prd"]) {
+      expect(perMerge.has(a), `${a} per-merge -target`).toBe(true);
+    }
+    // The dedicated pair is dispatch-applied only: no per-merge target (a merge must never rotate a key).
+    for (const a of [...DEDICATED_IDS, "doppler_secret.inngest_signing_key_dedicated", "doppler_secret.inngest_event_key_dedicated"]) {
+      expect(perMerge.has(a), `${a} must not be a per-merge -target`).toBe(false);
+    }
+  });
+
+  test("the inngest_host shape gate still refuses a random_id touch (it stays additive-only; rotation has its own route)", () => {
+    const gate = resolve(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh");
+    expect(existsSync(gate)).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "ik-shape-gate-"));
+    try {
+      const run = (actions: string[]) => {
+        const plan = join(dir, "plan.json");
+        writeFileSync(
+          plan,
+          JSON.stringify({
+            format_version: "1.2",
+            resource_changes: [{ address: "random_id.inngest_signing_key_dedicated", change: { actions } }],
+          }),
+        );
+        return spawnSync("bash", ["-c", `source "${gate}"; inngest_host_shape_gate "${plan}"`], { encoding: "utf8" });
+      };
+      const replace = run(["delete", "create"]);
+      expect(replace.status).toBe(1);
+      expect(replace.stdout + replace.stderr).toMatch(/reason=generated_secret_touched/);
+      // Non-vacuity: the same address as a no-op passes, so the refusal above is about the action, not the harness.
+      expect(run(["no-op"]).status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("when inngest-key-rotate.yml exists, every literal -target it spells is in the rotation allowlist (never hcloud_* / terraform_data)", () => {
+    if (!existsSync(INNGEST_KEY_ROTATE_WORKFLOW)) return; // guarded: green before and after the workflow lands
+    const allowed = new Set([
+      ...DEDICATED_IDS,
+      "doppler_secret.inngest_signing_key_dedicated",
+      "doppler_secret.inngest_event_key_dedicated",
+      ...APP,
+    ]);
+    const targets = [...extractAllTargets(readFileSync(INNGEST_KEY_ROTATE_WORKFLOW, "utf8"))];
+    // The script may build the target list from its own table, so an empty literal set is acceptable here; the
+    // rotate script's suite owns the exact-set pin (Guard 1). What this pins is that nothing outside the table appears.
+    expect(targets.filter((t) => !allowed.has(t))).toEqual([]);
+  });
+
+  test("the rotation workflow is read by this suite's file list only through the existsSync guard (non-vacuity of the guard)", () => {
+    // Both arms are exercised by whichever state the tree is in; this row asserts the constant points at the real path.
+    expect(INNGEST_KEY_ROTATE_WORKFLOW.endsWith(".github/workflows/inngest-key-rotate.yml")).toBe(true);
+    expect(existsSync(resolve(REPO_ROOT, ".github/workflows"))).toBe(true);
+  });
+});
+
+// ─── #11294: terraform plan/apply/refresh/destroy streams must not print random_* key material ─────────────────────────────
+// `random_id`'s `id` is the base64url of its bytes, and the web-platform root derives live secrets from it (Inngest signing /
+// event / manual-trigger keys, the GitHub webhook secret, the egress-audit ingest token, the KB-drift signing key, the tunnel
+// secret). Any plan that refreshes one prints `random_id.X: Refreshing state... [id=<value>]` to the PUBLIC Actions log (or
+// into a public issue / PR comment body), and an apply prints it again on `Creation complete` / `Modifying`. Masking cannot
+// help (the value is never a secret to the runner) and a `-target` change cannot help (a targeted plan refreshes its
+// dependencies), so every such step pipes through tf_redact_random_ids. This sweep covers EVERY workflow, not a site list:
+// a step either redacts, or runs on a terraform root whose own .tf files declare no key-bearing random_* resource (a claim
+// the test derives from the HCL, so adding a random_id to a "clean" root turns its steps red).
+const REDACT_FN = "tf_redact_random_ids";
+const REDACT_LIB = "tests/scripts/lib/tf-redact-random-ids.sh";
+/** Types whose `id` carries the value. random_password.id is the constant "none", so it is not key-bearing. */
+const LEAKING_RANDOM = /(?:^|\.)random_(?:id|string|uuid|bytes)\./;
+const LEAKING_RANDOM_DECL = /^\s*resource\s+"(random_(?:id|string|uuid|bytes))"\s+"(\w+)"/gm;
+const INNGEST_KEY_TARGET = /^doppler_secret\.inngest_(?:signing|event)_key_(?:prd|dedicated)$/;
+const TF_VERBS = "plan|apply|refresh|destroy";
+
+type TfStep = { file: string; job: string; name: string; run: string; code: string; verb: string; dir: string; targets: string[] };
+
+function tfSteps(files: Record<string, string>): TfStep[] {
+  const out: TfStep[] = [];
+  for (const [file, text] of Object.entries(files)) {
+    const doc = parseYaml(text) as { env?: Record<string, unknown>; jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<Record<string, unknown>> }> };
+    for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+      for (const st of def?.steps ?? []) {
+        const run = typeof st.run === "string" ? st.run : "";
+        const code = run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+        // The command position excludes `echo`/`printf` lines that merely MENTION a terraform verb in a message.
+        const cmd = code.split("\n").filter((l) => !/^\s*(echo|printf)\b/.test(l)).join("\n");
+        const m = new RegExp(`^\\s*(?:.*--\\s*\\\\\\n\\s*)?terraform\\s+(${TF_VERBS})\\b`, "m").exec(cmd);
+        if (!m) continue;
+        const envs = { ...(doc.env ?? {}), ...(def?.env ?? {}) };
+        const wd = String(st["working-directory"] ?? "").replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (_, k) => String(envs[k] ?? ""));
+        const dir = /matrix\.directory/.test(wd) ? "MATRIX" : wd;
+        const targets = [...cmd.matchAll(/-target=(?:'([^']+)'|"([^"]+)"|([^\s\\'"]+))/g)]
+          .map((t) => (t[1] ?? t[2] ?? t[3]).split("[")[0])
+          .filter((t) => !t.startsWith("$"));
+        out.push({ file, job, name: String(st.name ?? st.id ?? ""), run, code, verb: m[1], dir, targets });
+      }
+    }
+  }
+  return out;
+}
+function liveTfFiles(): Record<string, string> {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  const files: Record<string, string> = {};
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml")).sort()) files[`.github/workflows/${f}`] = readFileSync(join(dir, f), "utf8");
+  return files;
+}
+/** A real pipe consumer plus the sourced library, not a comment or an echo that merely names the function. */
+const hasRedactor = (s: TfStep) => new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(s.code) && s.code.includes(REDACT_LIB);
+const stripRedactor = (s: TfStep): TfStep => ({ ...s, code: s.code.replace(new RegExp(`\\|\\s*${REDACT_FN}\\b`, "g"), ""), run: s.run.replace(new RegExp(`\\|\\s*${REDACT_FN}\\b`, "g"), "") });
+/**
+ * The key-bearing random_* resources a terraform ROOT declares in its own top-level .tf files, or null when the root cannot be
+ * resolved (unknown dir, matrix, a `module` block that could hide a declaration): null is never treated as clean.
+ */
+function rootLeaks(dir: string, seen = new Set<string>()): string[] | null {
+  if (!dir || dir === "MATRIX" || dir.includes("${{")) return null;
+  const abs = resolve(REPO_ROOT, dir);
+  if (!existsSync(abs) || !lstatSync(abs).isDirectory()) return null;
+  if (seen.has(abs)) return [];
+  seen.add(abs);
+  const tf = readdirSync(abs).filter((n) => n.endsWith(".tf"));
+  if (tf.length === 0) return null;
+  const leaks: string[] = [];
+  for (const f of tf) {
+    const text = stripComments(readFileSync(join(abs, f), "utf8"));
+    for (const m of text.matchAll(LEAKING_RANDOM_DECL)) leaks.push(`${m[1]}.${m[2]}`);
+    // A module can hide a declaration: follow LOCAL sources (any other source is unresolvable, so never "clean").
+    for (const mod of text.matchAll(/^\s*module\s+"[^"]+"\s*\{[\s\S]*?\bsource\s*=\s*"([^"]+)"/gm)) {
+      const src = mod[1];
+      if (!/^\.{1,2}\//.test(src)) return null;
+      const sub = rootLeaks(relative(REPO_ROOT, resolve(abs, src)), seen);
+      if (sub === null) return null;
+      leaks.push(...sub.map((x) => `${src}:${x}`));
+    }
+  }
+  return leaks.sort();
+}
+/** Resource-reference closure of `roots` over the web-platform infra HCL (what a -target refresh pulls in). */
+function refClosure(roots: string[]): Set<string> {
+  const texts = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8")));
+  const declared = new Set(texts.flatMap((t) => extractAllResources(t)));
+  const bodyOf = (addr: string): string => {
+    const [type, name] = addr.split(".");
+    for (const t of texts) {
+      const m = new RegExp(`(?:^|\\n)\\s*resource\\s+"${type}"\\s+"${name}"\\s*\\{`).exec(t);
+      if (!m) continue;
+      let depth = 0;
+      for (let i = m.index + m[0].length - 1; i < t.length; i++) {
+        if (t[i] === "{") depth++;
+        else if (t[i] === "}" && --depth === 0) return t.slice(m.index + m[0].length, i);
+      }
+    }
+    return "";
+  };
+  const seen = new Set<string>();
+  const stack = roots.filter((r) => declared.has(r));
+  while (stack.length) {
+    const addr = stack.pop() as string;
+    if (seen.has(addr)) continue;
+    seen.add(addr);
+    for (const m of bodyOf(addr).matchAll(/\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z0-9_]+)\b/g)) {
+      const ref = `${m[1]}.${m[2]}`;
+      if (declared.has(ref) && !seen.has(ref)) stack.push(ref);
+    }
+  }
+  return seen;
+}
+
+describe("terraform stream key-material redaction (#11294, every workflow)", () => {
+  const files = liveTfFiles();
+  const steps = tfSteps(files);
+  const WEB_ROOT = "apps/web-platform/infra";
+  const id = (s: TfStep) => `${s.file}#${s.job}#${s.name}`;
+
+  /** Steps that neither redact nor run on a root proven free of key-bearing random_* resources. */
+  function violations(pop: TfStep[]): string[] {
+    const v: string[] = [];
+    for (const s of pop) {
+      // Rule 2 (no escape): a step naming a key-bearing address in a -target must redact, whatever its root.
+      const keyed = s.targets.filter((t) => LEAKING_RANDOM.test(t) || INNGEST_KEY_TARGET.test(t) || /_dedicated$/.test(t));
+      if (keyed.length && !hasRedactor(s)) v.push(`${id(s)}: -target names ${keyed.slice(0, 3).join(", ")} but never pipes through ${REDACT_FN}`);
+      if (hasRedactor(s)) continue;
+      // Rule 1: redact, unless the step's root declares nothing key-bearing.
+      const leaks = rootLeaks(s.dir);
+      if (leaks === null) v.push(`${id(s)}: ${s.verb} on an unresolved terraform root (${s.dir || "no working-directory"}) does not redact`);
+      else if (leaks.length) v.push(`${id(s)}: ${s.verb} on ${s.dir} (declares ${leaks.slice(0, 3).join(", ")}${leaks.length > 3 ? ", ..." : ""}) does not redact`);
+    }
+    return v;
+  }
+
+  test("every terraform plan/apply/refresh/destroy step in every workflow redacts random_* ids, or runs on a root that declares none", () => {
+    expect(violations(steps)).toEqual([]);
+  });
+
+  test("the sweep is not vacuous: it sees the known workflows, and the root classification matches the HCL", () => {
+    expect(steps.length, "terraform steps found").toBeGreaterThanOrEqual(55);
+    const filesSeen = new Set(steps.map((s) => s.file.split("/").pop()));
+    for (const f of [
+      "apply-web-platform-infra.yml", "apply-deploy-pipeline-fix.yml", "scheduled-terraform-drift.yml", "infra-validation.yml",
+      "inngest-provision-rehearsal.yml", "git-data-rung2-rehearsal.yml", "apply-sentry-infra.yml", "apply-github-infra.yml", "apply-git-data-root-key.yml",
+    ]) expect(filesSeen.has(f), `${f} contributes terraform steps`).toBe(true);
+    const redacting = steps.filter(hasRedactor);
+    expect(redacting.length, "redacting steps").toBeGreaterThanOrEqual(44);
+    // Roots that print key material (the sweep requires redaction there) vs. proven-clean roots (it does not).
+    const webLeaks = rootLeaks(WEB_ROOT) as string[];
+    for (const a of ["random_id.tunnel_secret", "random_id.github_webhook_secret", "random_id.inngest_signing_key_dedicated", "random_id.egress_audit_ingest_token", "random_id.kb_drift_ingest_signing_key"]) {
+      expect(webLeaks, `web root declares ${a}`).toContain(a);
+    }
+    expect((rootLeaks("apps/web-platform/infra/inngest-provision-rehearsal") ?? []).length, "the inngest rehearsal root declares random_id keys").toBeGreaterThan(0);
+    for (const clean of ["apps/web-platform/infra/sentry", "apps/web-platform/infra/git-data-root-key", "apps/web-platform/infra/rung2-rehearsal"]) {
+      if (existsSync(resolve(REPO_ROOT, clean))) expect(rootLeaks(clean), `${clean} is a resolved root with no key-bearing random_*`).toEqual([]);
+    }
+    // Every non-redacting step is on a root classified clean (not unresolved), and the web root has none at all.
+    for (const s of steps.filter((x) => !hasRedactor(x))) expect(rootLeaks(s.dir), `${id(s)} root`).toEqual([]);
+    expect(steps.filter((s) => s.dir === WEB_ROOT && !hasRedactor(s)).map(id)).toEqual([]);
+    // The reference closure of the per-merge target set reaches the key-bearing random_ids (the reason the stream leaks at all).
+    const perMerge = steps.find((s) => s.file.endsWith("apply-web-platform-infra.yml") && s.job === "apply" && /^Terraform plan \(allow-list/.test(s.name)) as TfStep;
+    expect([...refClosure(perMerge.targets)].filter((x) => LEAKING_RANDOM.test(x))).toEqual(expect.arrayContaining(["random_id.tunnel_secret", "random_id.github_webhook_secret"]));
+    expect([...refClosure(["hcloud_firewall.inngest"])].filter((x) => LEAKING_RANDOM.test(x))).toEqual([]);
+  });
+
+  test("a step whose -target list names a key-bearing address redacts, with no escape", () => {
+    const keyedSteps = steps.filter((s) => s.targets.some((t) => LEAKING_RANDOM.test(t) || INNGEST_KEY_TARGET.test(t) || /_dedicated$/.test(t)));
+    expect(keyedSteps.length, "the population is not empty").toBeGreaterThanOrEqual(2);
+    expect(keyedSteps.filter((s) => !hasRedactor(s)).map(id)).toEqual([]);
+  });
+
+  test("mutation: deleting the redactor from ANY redacting step on a key-bearing root is reported, and a clean-root step is not", () => {
+    expect(violations(steps), "pristine baseline").toEqual([]);
+    const onLeakyRoot = steps.filter((s) => hasRedactor(s) && (rootLeaks(s.dir) === null || (rootLeaks(s.dir) as string[]).length > 0));
+    expect(onLeakyRoot.length).toBeGreaterThanOrEqual(44);
+    for (const s of onLeakyRoot) {
+      const stripped = stripRedactor(s);
+      expect(hasRedactor(stripped), `${id(s)}: mutation landed`).toBe(false);
+      expect(violations([stripped]).length, `${id(s)}: removing the redactor is caught`).toBeGreaterThan(0);
+    }
+    // A step that only SOURCES the library (or names the function in an echo) does not count as redacting.
+    const probe = onLeakyRoot[0];
+    const sourceOnly = { ...stripRedactor(probe), code: `${stripRedactor(probe).code}\necho ${REDACT_FN}` };
+    expect(violations([sourceOnly]).length, "a bare mention is not a redactor").toBeGreaterThan(0);
+    // The checker is root-driven: the same step relocated to a clean root passes, to an unresolved one fails.
+    expect(violations([{ ...stripRedactor(probe), dir: "apps/web-platform/infra/sentry", targets: [] }]), "clean root").toEqual([]);
+    expect(violations([{ ...stripRedactor(probe), dir: "MATRIX", targets: [] }]).length, "matrix root").toBeGreaterThan(0);
+  });
+
+  test("steps that run without -no-color print ANSI-coloured lines, so the filter must strip colour before it matches (run 41125333991 leaked one)", () => {
+    // `ESC[1m` ends in an alphanumeric, so an address anchored on a non-word character never matched a coloured line.
+    const uncoloured = steps.filter((s) => hasRedactor(s) && !/-no-color/.test(s.code) && !/TF_CLI_ARGS/.test(s.code));
+    expect(uncoloured.length, "redacting steps that run coloured").toBeGreaterThanOrEqual(4);
+    expect(uncoloured.map((s) => s.job)).toContain("apply");
+    const lib = readFileSync(resolve(REPO_ROOT, REDACT_LIB), "utf8");
+    expect(lib, "the filter removes CSI sequences before any match").toMatch(/\\\[\[0-9;\?\]\*\[A-Za-z\]/);
+    // Behavioural: a coloured Refreshing line (synthesized value) comes out redacted through the real library.
+    const esc = "\u001b";
+    const input = `${esc}[0m${esc}[1mrandom_id.tunnel_secret: Refreshing state... [id=Synth-Fixture_0000000aSynth-Fixture_000000]${esc}[0m\n`;
+    const out = spawnSync("bash", ["-c", `source "${resolve(REPO_ROOT, REDACT_LIB)}"; tf_redact_random_ids`], { input, encoding: "utf8" });
+    expect(out.status).toBe(0);
+    expect(out.stdout).toContain("random_id.tunnel_secret: Refreshing state... [id=<redacted>]");
+    expect(out.stdout).not.toContain("Synth-Fixture");
+  });
+
+  test("the drift plan redacts BEFORE the 60000-byte cut and the file that is cat'ed into the public issue body", () => {
+    const drift = steps.find((s) => s.file.endsWith("scheduled-terraform-drift.yml") && s.job === "drift-check" && /^Terraform plan \(drift detection\)/.test(s.name)) as TfStep;
+    expect(drift.code).toMatch(/printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids \| head -c 60000 > \$\{RUNNER_TEMP\}\/plan-output\.txt/);
+    const src = drift.code.indexOf(REDACT_LIB);
+    expect(src, "the library is sourced before it is used").toBeGreaterThan(-1);
+    expect(src).toBeLessThan(drift.code.indexOf("| tf_redact_random_ids"));
+    expect(existsSync(resolve(REPO_ROOT, REDACT_LIB))).toBe(true);
+  });
+
+  test("variable-captured plans (PR comment, post-apply drift) are redacted before the value leaves the step", () => {
+    const prComment = steps.find((s) => s.file.endsWith("infra-validation.yml") && s.job === "plan") as TfStep;
+    expect(prComment.code).toMatch(/PLAN_OUTPUT=\$\(printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids\)/);
+    expect(prComment.code.indexOf("tf_redact_random_ids)")).toBeLessThan(prComment.code.indexOf("GITHUB_OUTPUT"));
+    const post = steps.find((s) => s.file.endsWith("apply-deploy-pipeline-fix.yml") && /^Post-apply full-root drift plan/.test(s.name)) as TfStep;
+    expect(post.code).toMatch(/PLAN_OUTPUT=\$\(printf '%s' "\$PLAN_OUTPUT" \| tf_redact_random_ids\)/);
+  });
+  // ─── Public SINKS (issue bodies / comments, PR comments, step summaries), not just stdout ──────────────────────────────────
+  // The same bytes reach `gh issue comment`, a sticky PR comment and $GITHUB_STEP_SUMMARY when a step copies terraform text
+  // there (the drift workflow's issue + ledger comments carried `[id=<value>]` lines for weeks). A step that has a terraform
+  // text source AND a public sink must redact, or every line that touches the source must be a value-free selection
+  // (`grep` of plan headers, resource addresses, `Plan:`/`Error:`), or a plain redirect into a file that is itself swept.
+  type TfDoc = { jobs?: Record<string, { steps?: Array<Record<string, unknown>> }> };
+  const TEXT_SRC = /tfplan\.txt|\$\{?PLAN_OUTPUT\b|plan-output\.txt|terraform show -no-color/;
+  const PUBLIC_SINK = /GITHUB_STEP_SUMMARY|gh (?:issue|pr) |--body(?:-file)?\b/;
+  const VALUE_FREE_ALT = /^\^?(?:Plan:|Error:|will be |must be |[a-z][a-z0-9_]*\.[a-z0-9_]+)/;
+  /** Logical lines of a run block: continuations joined, comments dropped. */
+  const logicalLines = (run: string) => run.replace(/\\\n\s*/g, " ").split("\n").filter((l) => !/^\s*#/.test(l));
+  function valueFreeGrep(line: string): boolean {
+    const pats = [...line.matchAll(/\bgrep\s+(?:-[A-Za-z]+\s+)*(?:-e\s+)?(?:'([^']*)'|"([^"]*)"|([A-Za-z0-9_.^:|-]+))/g)];
+    const extra = [...line.matchAll(/\s-e\s+(?:'([^']*)'|"([^"]*)"|([A-Za-z0-9_.^:-]+))/g)];
+    const all = [...pats, ...extra].map((m) => m[1] ?? m[2] ?? m[3]).filter((p) => p !== undefined);
+    return all.length > 0 && all.every((p) => p.split("|").every((alt) => VALUE_FREE_ALT.test(alt)));
+  }
+  /** Steps copying terraform text toward a public sink without redacting and without a value-free selection. */
+  function sinkViolations(): string[] {
+    const v: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      const doc = parseYaml(text) as TfDoc;
+      for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+        for (const st of def?.steps ?? []) {
+          const run = typeof st.run === "string" ? st.run : "";
+          const where = `${file}#${job}#${String(st.name ?? st.id ?? "")}`;
+          if (!run) continue;
+          const lines = logicalLines(run);
+          if (!lines.some((l) => TEXT_SRC.test(l)) || !lines.some((l) => PUBLIC_SINK.test(l))) continue;
+          if (new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(run) && run.includes(REDACT_LIB)) continue;
+          for (const l of lines.filter((x) => TEXT_SRC.test(x))) {
+            const toFile = /terraform show -no-color[^|>]*>\s*\S+\s*(?:\|\|\s*true)?$/.test(l); // `terraform show … > tfplan.txt`
+            const echoOnly = /^\s*(?:echo|printf)\b[^|]*$/.test(l) && !/\$\{?PLAN_OUTPUT\b/.test(l);
+            // plan-output.txt is only ever written through the redactor (the writer test below), so reading it is value-free.
+            const redactedArtifact = /\bcat\s+\S*plan-output\.txt\s*$/.test(l.trim());
+            if (toFile || echoOnly || redactedArtifact) continue;
+            if (!valueFreeGrep(l)) v.push(`${where}: ${l.trim().slice(0, 140)}`);
+          }
+        }
+      }
+    }
+    return v;
+  }
+
+  test("every step that copies terraform text toward an issue/PR comment/body or step summary redacts or selects only value-free lines", () => {
+    expect(sinkViolations()).toEqual([]);
+  });
+
+  test("every writer of plan-output.txt (cat'ed into the public drift issue/comment/email) redacts before the redirect", () => {
+    const writers: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      for (const l of logicalLines(text)) if (/>\s*\S*plan-output\.txt/.test(l)) writers.push(`${file}: ${l.trim()}`);
+    }
+    expect(writers.length, "the drift workflow writes plan-output.txt").toBeGreaterThanOrEqual(1);
+    expect(writers.filter((w) => !/\|\s*tf_redact_random_ids\b[^>]*>/.test(w))).toEqual([]);
+  });
+
+  test("a sticky PR comment that interpolates a step's plan output is fed by a redacting step", () => {
+    const fed: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+      const doc = parseYaml(text) as TfDoc;
+      for (const [job, def] of Object.entries(doc?.jobs ?? {})) {
+        const stepsOfJob = def?.steps ?? [];
+        for (const st of stepsOfJob) {
+          const msg = String((st.with as Record<string, unknown> | undefined)?.message ?? "");
+          for (const m of msg.matchAll(/steps\.([A-Za-z0-9_-]+)\.outputs\.plan\b/g)) {
+            const prod = stepsOfJob.find((p) => p.id === m[1]);
+            const run = typeof prod?.run === "string" ? prod.run : "";
+            if (!(new RegExp(`\\|\\s*${REDACT_FN}\\b`).test(run) && run.includes(REDACT_LIB))) fed.push(`${file}#${job}: steps.${m[1]}.outputs.plan is not redacted`);
+            else fed.push(`ok:${file}#${job}`);
+          }
+        }
+      }
+    }
+    expect(fed.length, "the PR plan comment exists").toBeGreaterThanOrEqual(1);
+    expect(fed.filter((x) => !x.startsWith("ok:"))).toEqual([]);
+  });
+
+  test("mutation: a summary/issue sink fed from unredacted terraform text is reported", () => {
+    const bad = { run: 'set -euo pipefail\nterraform show -no-color tfplan > tfplan.txt\ncat tfplan.txt >> "$GITHUB_STEP_SUMMARY"\n' };
+    const lines = logicalLines(bad.run);
+    expect(lines.some((l) => TEXT_SRC.test(l)) && lines.some((l) => PUBLIC_SINK.test(l))).toBe(true);
+    expect(lines.filter((l) => TEXT_SRC.test(l) && !valueFreeGrep(l) && !/terraform show -no-color[^|>]*>\s*\S+\s*$/.test(l)).length).toBeGreaterThan(0);
+    // and a header-only grep is accepted while a catch-all grep is not
+    expect(valueFreeGrep("grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >> \"$GITHUB_STEP_SUMMARY\"")).toBe(true);
+    expect(valueFreeGrep("grep -E 'id|hex' tfplan.txt >> \"$GITHUB_STEP_SUMMARY\"")).toBe(false);
+  });
+});
 
 describe("terraform -target parity — ALL managed resources are reachable (non-SSH, #5566)", () => {
   let allResources: string[];
@@ -1673,6 +2148,27 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     }
   });
 
+  test("every OPERATOR_APPLIED_EXCLUSIONS member exists as a declared resource (stale-member guard)", () => {
+    // Mirror of the token-exclusions non-vacuity loop above: a member left in the
+    // set after its resource is deleted silently permits a real coverage miss —
+    // #11194 removed hcloud_volume{,_attachment}.git_data for exactly this reason.
+    // The ONE deliberate exception: the cert-reissue DNS-edit token is
+    // OPERATOR-MINTED by design — no cloudflare_api_token resource exists to
+    // declare (cf-cert-reissue-token.tf header: the mint needs "User API Tokens:
+    // Edit", which var.cf_api_token lacks). The entry documents the operator JIT
+    // path; if that ever becomes a resource, drop the exception.
+    const UNDECLARED_BY_DESIGN = new Set<string>([
+      "cloudflare_api_token.gh_pages_cert_reissue_dns_edit",
+    ]);
+    for (const t of OPERATOR_APPLIED_EXCLUSIONS) {
+      if (UNDECLARED_BY_DESIGN.has(t)) continue;
+      expect(
+        allResources,
+        `${t} is an OPERATOR_APPLIED_EXCLUSIONS member but is not a declared resource — a stale member silently permits a coverage miss`,
+      ).toContain(t);
+    }
+  });
+
   test("guard FAILS on a synthetic new un-targeted resource (non-vacuity)", () => {
     const synthetic = `
 resource "github_actions_secret" "synthetic_forgotten_secret" {
@@ -1730,29 +2226,309 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
     expect(wpi.cloudflaredSha256).toBe(dpf.cloudflaredSha256);
   });
 
-  // #6604: the pin is now replicated into the git-data + workspaces-luks cutover/verify workflows
-  // (all feed the same cf-tunnel-ssh-bridge composite). A pin bump that updated only the two apply
-  // workflows would leave these on a stale version/SHA — the bridge download fails CLOSED (aborts),
-  // not a silent hole, hence this is a drift tripwire. Assert EVERY workflow carrying the pin matches
-  // the canonical (apply-web-platform-infra) value.
-  test("the cloudflared pin matches across ALL workflows that declare it (#6604)", () => {
-    const grabPin = (rel: string) => {
-      const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
-      return {
-        version: /^\s*CLOUDFLARED_VERSION:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
-        sha256: /^\s*CLOUDFLARED_SHA256:\s*"([^"]+)"/m.exec(src)?.[1] ?? null,
-      };
-    };
-    const PIN_WORKFLOWS = [
-      ".github/workflows/git-data-cutover.yml",
-      ".github/workflows/workspaces-luks-cutover.yml",
-      ".github/workflows/workspaces-luks-verify.yml",
-    ];
-    for (const wf of PIN_WORKFLOWS) {
-      const pin = grabPin(wf);
-      expect(pin.version, `${wf} CLOUDFLARED_VERSION`).toBe(wpi.cloudflaredVersion);
-      expect(pin.sha256, `${wf} CLOUDFLARED_SHA256`).toBe(wpi.cloudflaredSha256);
+});
+
+// ─── cloudflared pin parity census — every pin site under .github/ ──────────
+// Guard 1 of the 2026-10-27 eMudhra plan (supersedes the #6604 hardcoded
+// PIN_WORKFLOWS list). The pin is replicated to 10 sites across 9 workflows —
+// 5 env-form `CLOUDFLARED_VERSION:`/`CLOUDFLARED_SHA256:` pairs AND 5
+// call-site literal `cloudflared-version:`/`cloudflared-sha256:` pairs inside
+// `with:` blocks. The old list only saw the env form in 3 named files: a
+// literal-site bump (e.g. apply-web-platform-infra.yml's own second pin in the
+// SAME file that owns the canonical env pair) was invisible, so a partial bump
+// stayed green. The census DISCOVERS sites by scanning
+// `.github/workflows/*.yml` + `.github/actions/*/action.yml`; no file list is
+// restated here, so an 11th pin site added anywhere under .github/ is caught
+// the day it lands. Canonical = apply-web-platform-infra.yml's env pin.
+//
+// A `cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}` site RESOLVES through
+// its own workflow's env pin — it is conformant iff that workflow declares a
+// CONCRETE env pin of the same kind (itself censused). A resolved site in a
+// file with no matching env declaration is flagged: at runtime it expands to
+// an empty string, which is the dangling-reference class. Other `${{ }}`
+// expressions (inputs.*, secrets.*) FORWARD a value supplied elsewhere — the
+// composite actions' `CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}`
+// lines are exactly that — and are conformant by construction: the producer
+// site (a caller's literal, or the caller's own env pin) is itself censused.
+
+/** The canonical source of truth — the env pair in this workflow. */
+const CANONICAL_PIN_WORKFLOW = ".github/workflows/apply-web-platform-infra.yml";
+
+/** Anti-vacuity floor: the MEASURED site count on main (5 env pairs + 5
+ *  literal pairs). `>=`, not `===`, so an added site never needs an edit here;
+ *  a census that finds ~nothing proves nothing. */
+const MIN_CLOUDFLARED_PIN_SITES = 10;
+
+interface CloudflaredPinSite {
+  file: string;
+  form: "env" | "literal";
+  kind: "version" | "sha256";
+  value: string;
+  /** true for ANY `${{ ... }}` expression — the value is supplied elsewhere. */
+  resolved: boolean;
+  /** true specifically for `${{ env.CLOUDFLARED_* }}` — needs a concrete env
+   *  pin of the same kind in the same file or it expands to "" at runtime. */
+  envRef: boolean;
+}
+
+/** Every file the census scans: `.github/workflows/*.yml` +
+ *  `.github/actions/<dir>/action.yml`, discovered (never listed). */
+function listGithubPinFiles(githubDir = resolve(REPO_ROOT, ".github")): string[] {
+  const files: string[] = [];
+  const wfDir = join(githubDir, "workflows");
+  for (const f of readdirSync(wfDir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .sort()) {
+    files.push(join(wfDir, f));
+  }
+  const actionsDir = join(githubDir, "actions");
+  if (existsSync(actionsDir)) {
+    for (const d of readdirSync(actionsDir).sort()) {
+      const a = join(actionsDir, d, "action.yml");
+      if (existsSync(a) && lstatSync(a).isFile()) files.push(a);
     }
+  }
+  return files;
+}
+
+/** The live census input as a relpath→text map (the shape mutations perturb). */
+function readCloudflaredPinFileMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const abs of listGithubPinFiles()) {
+    map[relative(REPO_ROOT, abs).split("/").join("/")] = readFileSync(
+      abs,
+      "utf8",
+    );
+  }
+  return map;
+}
+
+// A pin declaration is a YAML mapping key at line start — a `#`-commented or
+// mid-line prose mention can never satisfy it. Values: quoted scalars,
+// `${{ ... }}` expressions, or bare scalars.
+const CLOUDFLARED_PIN_LINE_RE =
+  /^\s*(CLOUDFLARED_VERSION|CLOUDFLARED_SHA256|cloudflared-version|cloudflared-sha256)\s*:\s*(?:"([^"]*)"|'([^']*)'|(\$\{\{[^}]*\}\})|([^\s#]+))/;
+
+const CLOUDFLARED_ENV_REF_RE =
+  /^\$\{\{\s*env\.(CLOUDFLARED_VERSION|CLOUDFLARED_SHA256)\s*\}\}$/;
+
+/** Discover every pin site in the given file map (pure — mutations inject or
+ *  perturb entries to prove the verdict discriminates). */
+function cloudflaredPinCensus(
+  files: Record<string, string>,
+): CloudflaredPinSite[] {
+  const sites: CloudflaredPinSite[] = [];
+  for (const [file, text] of Object.entries(files)) {
+    for (const line of text.split("\n")) {
+      const m = CLOUDFLARED_PIN_LINE_RE.exec(line);
+      if (!m) continue;
+      const key = m[1];
+      const value = m[2] ?? m[3] ?? m[4] ?? m[5] ?? "";
+      sites.push({
+        file,
+        form: key === key.toUpperCase() ? "env" : "literal",
+        kind: /VERSION$/i.test(key) ? "version" : "sha256",
+        value,
+        resolved: value.startsWith("${{"),
+        envRef: CLOUDFLARED_ENV_REF_RE.test(value),
+      });
+    }
+  }
+  return sites;
+}
+
+/** Canonical pin = the env pair in CANONICAL_PIN_WORKFLOW *of the map under
+ *  test* — mutating that file's env pin must red the whole census. */
+function canonicalCloudflaredPin(files: Record<string, string>): {
+  version: string | null;
+  sha256: string | null;
+} {
+  const text = files[CANONICAL_PIN_WORKFLOW];
+  const inv = text
+    ? extractWorkflowInvariants(text)
+    : { cloudflaredVersion: null, cloudflaredSha256: null };
+  return { version: inv.cloudflaredVersion, sha256: inv.cloudflaredSha256 };
+}
+
+/** Every way the census is RED, as named problems (empty = GREEN). */
+function cloudflaredPinVerdict(files: Record<string, string>): string[] {
+  const canonical = canonicalCloudflaredPin(files);
+  if (!canonical.version || !canonical.sha256) {
+    return [
+      `canonical-unreadable: ${CANONICAL_PIN_WORKFLOW} env pin did not parse`,
+    ];
+  }
+  const problems: string[] = [];
+  const sites = cloudflaredPinCensus(files);
+  const locations = new Set(sites.map((s) => `${s.file}#${s.form}`));
+  if (locations.size < MIN_CLOUDFLARED_PIN_SITES) {
+    problems.push(
+      `vacuous-census: only ${locations.size} pin sites discovered (< ${MIN_CLOUDFLARED_PIN_SITES})`,
+    );
+  }
+  for (const s of sites) {
+    if (s.envRef) {
+      // The ref resolves through this file's OWN env pin — conformant iff a
+      // CONCRETE (non-${{}}) env token of the same kind exists in that file
+      // (it is itself censused for parity). Absent, the ref expands to "" at
+      // runtime: the dangling-reference class.
+      const backed = sites.some(
+        (t) =>
+          t.file === s.file &&
+          t.form === "env" &&
+          t.kind === s.kind &&
+          !t.value.startsWith("${{"),
+      );
+      if (!backed) {
+        problems.push(
+          `${s.file}: ${s.form} ${s.kind} forwards to env.${s.value.match(/env\.(\w+)/)?.[1] ?? "?"} but the file declares no env pin`,
+        );
+      }
+      continue;
+    }
+    if (s.resolved) continue; // inputs.*/secrets.*/vars.* — forwards a value supplied elsewhere
+    const want = s.kind === "version" ? canonical.version : canonical.sha256;
+    if (s.value !== want) {
+      problems.push(
+        `${s.file}: ${s.form} ${s.kind} pin ${JSON.stringify(s.value)} != canonical ${JSON.stringify(want)}`,
+      );
+    }
+  }
+  for (const loc of locations) {
+    const kinds = new Set(
+      sites
+        .filter((s) => `${s.file}#${s.form}` === loc)
+        .map((s) => s.kind),
+    );
+    if (!kinds.has("version")) {
+      problems.push(`${loc}: sha256 declared with no version pin`);
+    }
+    if (!kinds.has("sha256")) {
+      problems.push(`${loc}: version declared with no sha256 pin`);
+    }
+  }
+  return problems;
+}
+
+describe("cloudflared pin parity census — every pin site under .github/ (#6604 superseded)", () => {
+  let files: Record<string, string>;
+  beforeAll(() => {
+    files = readCloudflaredPinFileMap();
+  });
+
+  test(`the census discovers >= ${MIN_CLOUDFLARED_PIN_SITES} pin sites (anti-vacuity)`, () => {
+    const locations = new Set(
+      cloudflaredPinCensus(files).map((s) => `${s.file}#${s.form}`),
+    );
+    // The canonical env pin must resolve from the live map — a verdict that
+    // cannot read its own reference point is detector-broken, not green.
+    const canonical = canonicalCloudflaredPin(files);
+    expect(canonical.version).not.toBeNull();
+    expect(canonical.sha256).not.toBeNull();
+    expect(locations.size).toBeGreaterThanOrEqual(MIN_CLOUDFLARED_PIN_SITES);
+    // Every discovered site is a COMPLETE pair — version and sha256 together.
+    for (const loc of locations) {
+      const kinds = new Set(
+        cloudflaredPinCensus(files)
+          .filter((s) => `${s.file}#${s.form}` === loc)
+          .map((s) => s.kind),
+      );
+      expect(kinds, `${loc} carries a half-pair`).toEqual(
+        new Set(["version", "sha256"]),
+      );
+    }
+  });
+
+  test("every pin site (env + literal forms) equals the canonical env pin", () => {
+    expect(cloudflaredPinVerdict(files)).toEqual([]);
+  });
+});
+
+describe("cloudflared pin census mutation battery", () => {
+  const mutate = (
+    live: Record<string, string>,
+    file: string,
+    fn: (text: string) => string,
+  ): Record<string, string> => ({ ...live, [file]: fn(live[file] ?? "") });
+
+  test("a divergent pin at ANY site turns the verdict RED; the resolved-ref row stays GREEN", () => {
+    const live = readCloudflaredPinFileMap();
+    const V = (files: Record<string, string>) => cloudflaredPinVerdict(files);
+
+    expect(V(live)).toEqual([]); // control: a RED below is the mutation's doing
+
+    // Row 1 — bump ONLY reusable-release.yml's literal pin (env pins untouched).
+    const row1 = mutate(
+      live,
+      ".github/workflows/reusable-release.yml",
+      (t) => t.replace(/cloudflared-version:\s*"[^"]+"/, 'cloudflared-version: "0.0.0-stale"'),
+    );
+    expect(V(row1).join("\n")).toMatch(/reusable-release\.yml/);
+
+    // Row 2 — bump ONLY the canonical ENV pin: every other site diverges.
+    const row2 = mutate(live, CANONICAL_PIN_WORKFLOW, (t) =>
+      t.replace(/CLOUDFLARED_VERSION:\s*"[^"]+"/, 'CLOUDFLARED_VERSION: "0.0.0-stale"'),
+    );
+    const v2 = V(row2);
+    expect(v2.length).toBeGreaterThan(0);
+    expect(v2.join("\n")).toMatch(/git-data-cutover\.yml/);
+
+    // Row 3 — an 11th workflow the old hardcoded list never named carries a
+    // stale literal pin: the census (not a file list) is what catches it.
+    const row3 = {
+      ...live,
+      ".github/workflows/zz-new-bridge-consumer.yml":
+        'name: x\njobs:\n  j:\n    steps:\n      - uses: ./.github/actions/cf-tunnel-ssh-bridge\n        with:\n          cloudflared-version: "0.0.0-stale"\n          cloudflared-sha256: "deadbeef"\n',
+    };
+    expect(V(row3).join("\n")).toMatch(/zz-new-bridge-consumer\.yml/);
+
+    // Row 4 — a scan that finds nothing is RED, never vacuous-green.
+    const renamed: Record<string, string> = {};
+    for (const [k, t] of Object.entries(live)) {
+      renamed[k] = t
+        .replaceAll("CLOUDFLARED_VERSION", "TUNNEL_VERSION")
+        .replaceAll("CLOUDFLARED_SHA256", "TUNNEL_SHA256")
+        .replaceAll("cloudflared-version", "tunnel-version")
+        .replaceAll("cloudflared-sha256", "tunnel-sha256");
+    }
+    const v4 = V(renamed);
+    expect(v4.length).toBeGreaterThan(0);
+    expect(v4.join("\n")).toMatch(/vacuous-census|canonical-unreadable/);
+
+    // Row 5 — a literal site MOVED to `${{ env.* }}` refs inside a workflow
+    // that declares the env pin stays GREEN (it resolves through canonical).
+    const row5 = mutate(live, CANONICAL_PIN_WORKFLOW, (t) =>
+      t
+        .replace(
+          /cloudflared-version:\s*"[^"]+"/,
+          "cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}",
+        )
+        .replace(
+          /cloudflared-sha256:\s*"[^"]+"/,
+          "cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}",
+        ),
+    );
+    expect(V(row5)).toEqual([]);
+
+    // Row 5b — the same ref in a file WITHOUT an env pin dangles: RED.
+    const row5b = mutate(
+      live,
+      ".github/workflows/reusable-release.yml",
+      (t) =>
+        t.replace(
+          /cloudflared-version:\s*"[^"]+"/,
+          "cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}",
+        ),
+    );
+    expect(V(row5b).join("\n")).toMatch(/no env pin/);
+
+    // Row 6 — a half-pair (version with no sha256) is RED wherever it sits.
+    const row6 = {
+      ...live,
+      ".github/workflows/zz-half-pair.yml":
+        'env:\n  CLOUDFLARED_VERSION: "0.0.0-stale"\n',
+    };
+    expect(V(row6).join("\n")).toMatch(/no sha256 pin/);
   });
 });
 
@@ -1786,10 +2562,12 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
 // `["web-1"]` for_each key. That wedged the targeted CI plan RED on every run.
 //
 // The fix is NOT to add these bases to the per-PR `-target=` allow-list:
-// `hcloud_server.web` carries `placement_group_id` + `for_each = var.web_hosts`
-// (server.tf), so targeting it in the UNATTENDED per-PR path forces a power-off
-// reboot of the running prod host (and transitively creates the placement group
-// / a second host). They are consumed by the operator's ADR-068 Phase-3
+// `hcloud_server.web` carries `for_each = var.web_hosts` (server.tf): a
+// reboot-class non-ignored delta (`server_type`) on it in the UNATTENDED per-PR
+// path forces a reboot of the running prod host, and targeting it would
+// transitively have created the placement group / a second host. (The placement_group_id attach
+// itself is suppressed while the attribute sits in lifecycle.ignore_changes —
+// the deferral this file's later describe pins.) They are consumed by the operator's ADR-068 Phase-3
 // MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
 // CI plan self-heals with zero workflow change. This guard therefore asserts
 // every `moved` endpoint is EITHER `-target=`ed OR documented as operator-consumed
@@ -2056,19 +2834,19 @@ describe("registry-host-replace dispatch -target/-replace set (scoped; store pre
 });
 
 // The `apply_target=git-data-host-replace` dispatch job (`git_data_host_replace`, #6242, ADR-103)
-// runs a SCOPED, GUARDED `terraform apply -replace='hcloud_server.git_data'` + 5 `-target`s
-// (server + private NIC + BOTH volume attachments + firewall attachment) to re-run the git-data
-// host's cloud-init WITHOUT SSH. UNLIKE registry, BOTH data volumes (hcloud_volume.git_data* ) and
-// the LUKS passphrase are PRESERVED BY OMISSION — deliberately NOT in the -target set. This guard
-// pins the target/replace set to EXACTLY the 5 git-data addresses, proves NEITHER data volume is in
-// the set (the omission that preserves them), and asserts the dispatch job is stripped from the
-// per-merge coverage anchor. It locks the load-bearing invariant that the workflow's 5 `-target`
-// lines correspond 1:1 to the gate's 5-member allow-set (a drift on either side would otherwise
-// only surface at live-dispatch time).
+// runs a SCOPED, GUARDED `terraform apply -replace='hcloud_server.git_data'` + its `-target`s
+// (server + private NIC + the LUKS volume attachment + firewall attachment + the host-key pin) to
+// re-run the git-data host's cloud-init WITHOUT SSH. UNLIKE registry, the LUKS data volume
+// (hcloud_volume.git_data_luks) and the LUKS passphrase are PRESERVED BY OMISSION — deliberately
+// NOT in the base -target set. This guard pins the target/replace set to EXACTLY the git-data
+// addresses below, proves the retired plaintext pair is in NO -target/-replace line of either
+// git-data dispatch job, and asserts the dispatch job is stripped from the per-merge coverage
+// anchor. It locks the load-bearing invariant that the workflow's `-target` lines correspond 1:1
+// to the gate's allow-set (a drift on either side would otherwise only surface at live-dispatch
+// time).
 const GIT_DATA_REPLACE_TARGETS = [
   "hcloud_server.git_data",
   "hcloud_server_network.git_data",
-  "hcloud_volume_attachment.git_data",
   "hcloud_volume_attachment.git_data_luks",
   "hcloud_firewall_attachment.git_data",
   // (#7226, ADR-237) The pin is re-published by the replace that rotates the key.
@@ -2086,14 +2864,28 @@ const GIT_DATA_ROTATE_TARGETS = [
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
 ];
-// The data volumes preserved by OMISSION from the BASE set — the LUKS volume joins the set
-// only inside the rotate arm's conditional, so each is asserted ABSENT from the
-// unconditional -target lines and PRESENT in the rotate arm.
-const GIT_DATA_PRESERVED_VOLUMES = [
-  "hcloud_volume.git_data",
-];
+// (#11194) The plaintext pair destroyed at the provider on 2026-10-27 and removed from the HCL. It
+// must appear in NO `-target`/`-replace` line of either git-data dispatch job: a `-target` that
+// matches nothing exits 0 silently (terraform), so only this assertion — not the plan — notices a
+// re-added line. (The LUKS volume is preserved by omission from the BASE set and joins only inside
+// the rotate arm's EXTRA_ conditional; that half is pinned by the rotate-trio test below.)
+const GIT_DATA_RETIRED_ADDRESSES = ["hcloud_volume.git_data", "hcloud_volume_attachment.git_data"];
+// Every `-target=`/`-replace=` flag in a job block that names a retired address (exact address, so
+// the `_luks` siblings never match). Comment lines are excluded.
+function retiredFlagLines(block: string): string[] {
+  const alt = GIT_DATA_RETIRED_ADDRESSES.map((a) => a.replace(/\./g, "[.]")).join("|");
+  // `[= ]`: terraform accepts `-target addr` as well as `-target=addr`, and either spelling (also with
+  // a single leading dash) re-adds the line. The lookbehind makes `-{1,2}` bite: without it the regex is
+  // unanchored and a lone `-` already matches inside `--replace`, so the two-dash control proved nothing.
+  const re = new RegExp(`(?<![-\\w])-{1,2}(?:target|replace)[= ]['"]?(?:${alt})(?![A-Za-z0-9_])`);
+  return block.split("\n").filter((l) => !/^\s*#/.test(l) && re.test(l));
+}
+// The same scan, counting every git-data flag line it COULD have matched (non-vacuity).
+function gitDataFlagLines(block: string): string[] {
+  return block.split("\n").filter((l) => !/^\s*#/.test(l) && /-(?:target|replace)=['"]?[a-z_]+[.]git_data/.test(l));
+}
 
-describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext volume preserved by omission)", () => {
+describe("git-data-host-replace dispatch -target/-replace set (scoped; LUKS volume preserved by omission; plaintext pair retired)", () => {
   let gitDataTargets: string[];
   let gitDataJobBlock: string;
   let replaceAddrs: string[];
@@ -2120,7 +2912,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     rotateReplaces = extractReplaceAddrs(rotateBlock);
   });
 
-  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
+  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources", () => {
     expect([...gitDataTargets].sort()).toEqual(
       [...GIT_DATA_REPLACE_TARGETS].sort(),
     );
@@ -2197,7 +2989,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
   });
 
   test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
-    // The apply step used to carry an inline loop asserting BOTH data volumes preserved, which failed
+    // The apply step used to carry an inline loop asserting the data volumes preserved, which failed
     // the rotate dispatch on its own intended LUKS replace. Every pin below runs on the step with
     // comments stripped, anchored on a non-comment line: a comment that quotes the construct (the
     // step documents all of them) must not satisfy a pin.
@@ -2233,7 +3025,7 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
     expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
     // The rotate failure annotation is its own arm, and an unknown mode takes a neutral arm rather
-    // than the plain-replace claim that both volumes are preserved.
+    // than the plain-replace claim that the LUKS volume is preserved.
     expect(step).toMatch(/^\s*rotate\)\n\s*echo "::error::terraform apply \(git-data-host-rotate\) failed mid-replace/m);
     expect(step).toMatch(/^\s*\*\)\n\s*echo "::error::terraform apply \(git-data host\) failed mid-replace and the dispatch mode is unknown/m);
     // Exactly one call site in the job (the Observability probe counts it).
@@ -2262,14 +3054,53 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
   });
 
-  test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
-    // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
-    // untargeted resource cannot be planned for destroy, so omission is what preserves it.
-    // The LUKS volume is NOT here — rotate legitimately replaces it, inside the EXTRA_ arm.
-    for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
-      expect(gitDataTargets).not.toContain(vol);
-      expect(gitDataRotateTargets).not.toContain(vol);
-    }
+  test("neither retired plaintext address is in ANY -target/-replace line of the replace job or the create job (#11194)", () => {
+    // The retired pair is in no .tf file, so a re-added line would match nothing and terraform
+    // would exit 0 silently; the gates' allow-sets would then also have to be widened to PASS it,
+    // which the retired-address rows in their suites refuse. This is the workflow half.
+    const createBlock = extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "git_data_host_create");
+    // Non-vacuity: the scan sees real git-data flag lines in BOTH jobs, so "none retired" is a
+    // property of those lines rather than of an empty extraction.
+    expect(gitDataFlagLines(gitDataJobBlock).length).toBeGreaterThan(3);
+    expect(gitDataFlagLines(createBlock).length).toBeGreaterThan(10);
+    expect(retiredFlagLines(gitDataJobBlock)).toEqual([]);
+    expect(retiredFlagLines(createBlock)).toEqual([]);
+    // Detector control: the scan DOES flag a retired flag line, and spares the LUKS siblings.
+    expect(retiredFlagLines("  -target='hcloud_volume_attachment.git_data' \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -replace='hcloud_volume.git_data' \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -target='hcloud_volume.git_data_luks' \\")).toHaveLength(0);
+    expect(retiredFlagLines("  -target='hcloud_volume_attachment.git_data_luks' \\")).toHaveLength(0);
+    expect(retiredFlagLines("  # -target='hcloud_volume.git_data' (a comment)")).toHaveLength(0);
+    // The space spelling (`-target addr` / `-replace addr`, one or two dashes) is the same flag.
+    expect(retiredFlagLines("  -target hcloud_volume.git_data \\")).toHaveLength(1);
+    expect(retiredFlagLines("  --replace hcloud_volume_attachment.git_data \\")).toHaveLength(1);
+    expect(retiredFlagLines("  -target hcloud_volume.git_data_luks \\")).toHaveLength(0);
+    // A flag glued to a paren (the EXTRA_TARGET+=(...) shape) is still a flag line.
+    expect(retiredFlagLines("  EXTRA_TARGET+=(-target='hcloud_volume.git_data')")).toHaveLength(1);
+  });
+
+  test("the retired plaintext pair is not DECLARED as a resource in apps/web-platform/infra/*.tf (#11194)", () => {
+    // A re-declared `hcloud_volume.git_data` would give the gates' retired-address refusal nothing to
+    // refuse against and silently re-create the plaintext store. The anchor is the quoted resource name
+    // followed by its opening brace, so the `git_data_luks` siblings can never match.
+    const declared = (src: string): string[] =>
+      src
+        .split("\n")
+        .filter((l) => !/^\s*#/.test(l))
+        .filter((l) => /^\s*resource\s+"(?:hcloud_volume|hcloud_volume_attachment)"\s+"git_data"\s*\{/.test(l));
+    const files = listInfraTfFiles();
+    expect(files.length).toBeGreaterThan(10);
+    // Non-vacuity: the scan reads the real declarations of the LUKS pair, which it must NOT flag.
+    const all = files.map((f) => readFileSync(f, "utf8")).join("\n");
+    expect(all).toMatch(/^\s*resource\s+"hcloud_volume"\s+"git_data_luks"\s*\{/m);
+    expect(all).toMatch(/^\s*resource\s+"hcloud_volume_attachment"\s+"git_data_luks"\s*\{/m);
+    expect(declared(all)).toEqual([]);
+    // Positive control: the detector flags each retired declaration and spares the siblings and comments.
+    expect(declared('resource "hcloud_volume" "git_data" {')).toHaveLength(1);
+    expect(declared('resource "hcloud_volume_attachment" "git_data" {')).toHaveLength(1);
+    expect(declared('resource "hcloud_volume" "git_data_luks" {')).toHaveLength(0);
+    expect(declared('resource "hcloud_volume_attachment" "git_data_luks" {')).toHaveLength(0);
+    expect(declared('# resource "hcloud_volume" "git_data" {')).toHaveLength(0);
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
@@ -2304,6 +3135,158 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
   });
 });
 
+// ─── (#11194, ADR-239 Amendment 2026-10-28) the plaintext-id interlock on both git-data dispatch jobs ──
+//
+// Between the PR that retires the plaintext arms from the gates and the PR that blanks
+// `git_data_volume_id` in git-data.tf, the gates PASS a plaintext-free plan while the module call
+// still renders a destroyed device id into `user_data`: a dispatch in that window would replace the
+// live host into the bootstrap's `plaintext_unverified` FATAL. `git_data_plaintext_id_interlock`
+// (tests/scripts/lib/git-data-birth-readiness-gate.sh) refuses it. These pins hold the WIRING: a
+// function nobody calls protects nothing, and the function's own verdicts live in
+// tests/scripts/test-git-data-birth-readiness-gate.sh. Each pin runs on the step with comments
+// stripped, anchored on a real top-level line a comment cannot produce.
+//
+// The step carries NO `if:` in either job (the census suite's G5c row, ADR-241 D-Guard-5, forbids
+// one on a gate step). In the replace job (which also serves rotate) a refusal is downgraded to a
+// warning only when PLAN_ONLY is the exact string `true`; everything else blocks.
+const IL_SOURCE_LINE =
+  /^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-birth-readiness-gate\.sh"$/m;
+const IL_CALL =
+  /^ {10}if ! v="\$\(git_data_plaintext_id_interlock "\$\{GITHUB_WORKSPACE\}\/apps\/web-platform\/infra\/git-data\.tf"\)"; then\n([\s\S]*?)\n {10}fi$/m;
+// The replace job's refusal body: the strict `true` downgrade (warning, no exit) beside a blocking
+// else (error, exit 1). Both halves in one expression so neither can be dropped alone.
+const IL_REPLACE_BODY =
+  /^ {12}if \[\[ "\$\{PLAN_ONLY:-\}" == "true" \]\]; then\n {14}echo "::warning::[^\n]*\$\{v\}[^\n]*"\n {12}else\n {14}echo "::error::[^\n]*\$\{v\}[^\n]*"\n {14}exit 1\n {12}fi$/m;
+
+/** The wiring predicate shared by the real-tree pin and its mutants. Returns the failed clauses. */
+function interlockStepProblems(stepRaw: string, opts: { replaceJob: boolean }): string[] {
+  const step = stripComments(stepRaw);
+  const bad: string[] = [];
+  if (!IL_SOURCE_LINE.test(step)) bad.push("source line");
+  const call = step.match(IL_CALL);
+  if (!call) bad.push("call");
+  if (!/^\s*set -euo pipefail$/m.test(step)) bad.push("set -euo pipefail");
+  if (/continue-on-error/.test(step)) bad.push("continue-on-error");
+  // No `if:` on the step in either job (a condition is a way to skip a gate).
+  if (/^ {8}if:/m.test(step)) bad.push("step-level if");
+  // The function's output is captured, echoed to the step log, CR/LF-stripped, and carried INSIDE every
+  // annotation (an annotation has no "verdict above"); the pass path echoes it too.
+  if (call) {
+    if (!call[1].startsWith('            echo "$v"\n')) bad.push("verdict echo");
+    if (!call[1].includes("v=\"${v//[$'\\r\\n']/ }\"")) bad.push("verdict CR/LF strip");
+    if (!call[1].endsWith('\n          else\n            echo "$v"')) bad.push("verdict pass echo");
+  }
+  const annotations = step.split("\n").filter((l) => /echo "::(?:warning|error)::/.test(l));
+  if (annotations.length !== (opts.replaceJob ? 2 : 1) || annotations.some((l) => !l.includes("${v}"))) bad.push("verdict in annotation");
+  if (opts.replaceJob) {
+    if (!/^ {8}env:\n {10}PLAN_ONLY: \$\{\{ inputs\.plan_only \}\}$/m.test(step)) bad.push("PLAN_ONLY env");
+    if (!call || !IL_REPLACE_BODY.test(call[0])) bad.push("strict downgrade + blocking default");
+  } else {
+    // The create route has no verification mode: a plain blocking refusal, no downgrade.
+    if (!call || !/^\s*exit 1$/m.test(call[1])) bad.push("exit 1");
+    if (/PLAN_ONLY|plan_only/.test(step)) bad.push("create job must not read plan_only");
+  }
+  return bad;
+}
+
+describe("git-data dispatch jobs run the plaintext-id interlock before planning (#11194)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+
+  function stepOf(jobId: string, planTitle: RegExp): { raw: string; job: string } {
+    const job = extractJobBlock(wf, jobId);
+    const raw = extractStep(job, /Plaintext-id interlock/);
+    expect(raw, `${jobId}: the interlock step must exist`).not.toBeNull();
+    // It runs BEFORE the plan step: nothing has been planned or created when it refuses.
+    const planRaw = extractStep(job, planTitle);
+    expect(planRaw, `${jobId}: the plan step must exist`).not.toBeNull();
+    expect(job.indexOf(raw!)).toBeGreaterThan(-1);
+    expect(job.indexOf(raw!)).toBeLessThan(job.indexOf(planRaw!));
+    return { raw: raw!, job };
+  }
+
+  test("git_data_host_replace (replace and rotate): the interlock precedes the plan, is unconditional, and downgrades only on plan_only == true", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    expect(interlockStepProblems(raw, { replaceJob: true })).toEqual([]);
+  });
+
+  test("git_data_host_create: the interlock precedes the plan and is plainly blocking", () => {
+    const { raw } = stepOf("git_data_host_create", /Terraform plan \(scoped git-data birth\)/);
+    expect(interlockStepProblems(raw, { replaceJob: false })).toEqual([]);
+  });
+
+  test("the wiring predicate reds on each way to disarm the replace-job step (mutation battery, control first)", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    // CONTROL: the unmutated step is clean, so every red below is the mutation's.
+    expect(interlockStepProblems(raw, { replaceJob: true })).toEqual([]);
+    const mutants: Array<[string, (t: string) => string, string]> = [
+      ["a step-level if: skipping the gate", (t) => t.replace("        env:\n", "        if: inputs.plan_only != true\n        env:\n"), "step-level if"],
+      ["a non-strict downgrade (!= \"false\")", (t) => t.replace('== "true" ]]; then', '!= "false" ]]; then'), "strict downgrade"],
+      ["a downgrade that is always taken", (t) => t.replace('if [[ "${PLAN_ONLY:-}" == "true" ]]; then', "if true; then"), "strict downgrade"],
+      ["the blocking exit dropped from the else arm", (t) => t.replace("              exit 1\n            fi\n", "            fi\n"), "strict downgrade"],
+      ["the verdict not echoed to the step log", (t) => t.replace('            echo "$v"\n            v=', "            v="), "verdict echo"],
+      ["the CR/LF strip removed", (t) => t.replace(/ {12}v="\$\{v\/\/[^\n]*\n/, ""), "verdict CR/LF strip"],
+      ["the verdict left out of the annotations", (t) => t.replace(/\$\{v\} \(usually/g, "(usually"), "verdict in annotation"],
+      ["the pass path no longer echoes the verdict", (t) => t.replace('\n          else\n            echo "$v"', ""), "verdict pass echo"],
+      ["the call removed", (t) => t.replace(/git_data_plaintext_id_interlock "/, 'true "'), "call"],
+      ["continue-on-error added", (t) => t.replace("        env:\n", "        continue-on-error: true\n        env:\n"), "continue-on-error"],
+    ];
+    for (const [label, mutate, clause] of mutants) {
+      const m = mutate(raw);
+      expect(m, `mutation did not land: ${label}`).not.toBe(raw);
+      expect(interlockStepProblems(m, { replaceJob: true }).join("|"), label).toContain(clause);
+    }
+    // The create job must NOT grow a downgrade: its pin reds when one appears.
+    const createRaw = stepOf("git_data_host_create", /Terraform plan \(scoped git-data birth\)/).raw;
+    const withDowngrade = createRaw.replace("        run: |", "        env:\n          PLAN_ONLY: ${{ inputs.plan_only }}\n        run: |");
+    expect(withDowngrade).not.toBe(createRaw);
+    expect(interlockStepProblems(withDowngrade, { replaceJob: false }).join("|")).toContain("create job must not read plan_only");
+  });
+
+  test("EXECUTED: the replace-job step blocks (rc 1) on a non-empty literal unless PLAN_ONLY is exactly `true` (then a warning, rc 0), and passes on an empty one", () => {
+    const { raw } = stepOf("git_data_host_replace", /Terraform plan \(scoped git-data-host -replace\)/);
+    const runBody = raw.split("\n").slice(raw.split("\n").findIndex((l) => /^ {8}run: \|$/.test(l)) + 1);
+    const script = runBody.map((l) => l.replace(/^ {10}/, "")).join("\n");
+    expect(script).toContain("git_data_plaintext_id_interlock");
+    const ws = mkdtempSync(resolve(tmpdir(), "il-wf-"));
+    try {
+      mkdirSync(resolve(ws, "tests/scripts"), { recursive: true });
+      mkdirSync(resolve(ws, "apps/web-platform/infra"), { recursive: true });
+      symlinkSync(resolve(REPO_ROOT, "tests/scripts/lib"), resolve(ws, "tests/scripts/lib"));
+      const tf = resolve(ws, "apps/web-platform/infra/git-data.tf");
+      const run = (literal: string, planOnly: string | undefined) => {
+        writeFileSync(tf, `module "git_data_userdata" {\n  git_data_volume_id = ${literal}\n}\n`);
+        const env: Record<string, string> = { PATH: process.env.PATH ?? "", GITHUB_WORKSPACE: ws };
+        if (planOnly !== undefined) env.PLAN_ONLY = planOnly;
+        const r = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+        return { rc: r.status, out: `${r.stdout}${r.stderr}` };
+      };
+      // CONTROL: an empty literal passes with PLAN_ONLY unset, false or true, so the refusals below are the literal's.
+      for (const po of [undefined, "false", "true"]) {
+        const ok = run('""', po);
+        expect(ok.rc, `empty literal, PLAN_ONLY=${po}`).toBe(0);
+        expect(ok.out).toContain("git_data_plaintext_id_interlock: PASS");
+      }
+      for (const po of [undefined, "", "false", "TRUE", "1", "yes"]) {
+        const r = run('"106867358"', po);
+        expect([po, r.rc]).toEqual([po, 1]);
+        expect(r.out).toContain("::error::");
+        // The verdict rides INSIDE the annotation (not "above" it), and in the step log.
+        expect(r.out).toMatch(/::error::[^\n]*plaintext-id interlock: [^\n]*ABORT[^\n]*non-empty \(line 2\)/);
+        expect(r.out).toMatch(/^git_data_plaintext_id_interlock: ABORT/m);
+        expect(r.out, "the value must never reach the log").not.toContain("106867358");
+      }
+      const dg = run('"106867358"', "true");
+      expect(dg.rc).toBe(0);
+      expect(dg.out).toContain("::warning::plan_only");
+      expect(dg.out).toMatch(/::warning::plan_only[^\n]*ABORT[^\n]*non-empty \(line 2\)/);
+      expect(dg.out).not.toContain("::error::");
+      expect(dg.out, "the value must never reach the log").not.toContain("106867358");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
 // ─── (#7226, ADR-237) host-key pinning: the per-PR list, the probe, the redeploy jobs ────
 //
 // Guard 4 row 6: neither git-data pin address may ride the per-PR apply — a routine merge
@@ -2320,6 +3303,7 @@ const PIN_REDEPLOY_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/git-data-pin
 const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-web-platform-infra.yml",
   "apply-deploy-pipeline-fix.yml",
+  "cf-lb-overlay.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
 ];
@@ -2450,7 +3434,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(3);
+    expect(found.length).toBe(4);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -4697,7 +5681,9 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
       ["the alias no longer reads the volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)\$\{hcloud_volume\.inngest_redis_luks\.id\}/m, "$110626194"), /alias does not interpolate hcloud_volume\.inngest_redis_luks\.id/],
       ["the alias reads the volume only in a comment", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)$/m, "  # $1\n  inngest_luks_wrong_volume_alias = \"scsi-0HC_Volume_1\""), /alias does not interpolate/],
       ["the alias reads a sibling volume", wf, alertsTf.replace(/^(  inngest_luks_wrong_volume_alias = .*)hcloud_volume\.inngest_redis_luks\.id/m, "$1hcloud_volume.workspaces_luks.id"), /alias does not interpolate/],
-      ["the sql local stops using the alias", wf, alertsTf.replace("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
+      // replaceAll: since #11526 the alias is interpolated on BOTH legs of the dual-path
+      // predicate, so a single-occurrence replace leaves a live reference and the row survives.
+      ["the sql local stops using the alias", wf, alertsTf.replaceAll("${local.inngest_luks_wrong_volume_alias}", "x"), /sql does not interpolate local\.inngest_luks_wrong_volume_alias/],
       ["the exploration stops reading the sql local", wf, alertsTf.replace("trimspace(local.inngest_luks_wrong_volume_sql)", "trimspace(\"select 1\")"), /sql_query does not read local\.inngest_luks_wrong_volume_sql/],
       ["the exploration resource renamed", wf, alertsTf.replace('resource "logtail_exploration" "inngest_luks_wrong_volume"', 'resource "logtail_exploration" "inngest_luks_wrong_volume_x"'), /logtail_exploration\.inngest_luks_wrong_volume: missing/],
       ["the apply job not found (renamed)", wf.replace(/^ {2}apply:/m, "  apply_renamed:"), alertsTf, /apply job extracted 0 targets/],
@@ -4746,6 +5732,114 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
 });
 
 /**
+ * cf-lb-overlay.yml arm↔gate parity (#6027 continuation, PR #11766). The saved-plan
+ * graders in tests/scripts/lib/cf-lb-overlay-gate.sh only hold when the workflow
+ * calls them over the arm's real -target set, in the right order — a saved plan
+ * wider than the grader's allow-set reaches an ungraded apply, and the §(c) serve
+ * gate chain must run BEFORE the plan it guards. Invocation-pinning precedent:
+ * the git-data interlock's measured mutations (deleting the call, `if: false`).
+ */
+describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering (#11766)", () => {
+  const wf = readFileSync(resolve(REPO_ROOT, ".github/workflows/cf-lb-overlay.yml"), "utf8");
+  const job = (id: string) => extractJobBlock(wf, id);
+
+  // [jobId, the subset of the grader's allow-set the arm may -target]. An arm's
+  // -target set must never EXCEED what its grader admits: the excess would apply
+  // ungraded. (Allow-sets from cf-lb-overlay-gate.sh's per-arm comment block.)
+  const ARM_TARGET_ALLOW: Array<[string, string[]]> = [
+    ["staging_record", ["cloudflare_record.lb_staging"]],
+    ["ga_overlay", ["cloudflare_load_balancer_monitor.web", "cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app"]],
+    ["ga_monitor_fix", ["cloudflare_load_balancer_monitor.web"]],
+    ["ga_pool_update", ["cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app", "cloudflare_notification_policy.web_lb_health"]],
+  ];
+
+  test("each targeted arm's -target set ⊆ its gate allow-set", () => {
+    for (const [jobId, allow] of ARM_TARGET_ALLOW) {
+      const targets = extractAllTargets(job(jobId));
+      expect(targets.size, `${jobId} must carry -target(s)`).toBeGreaterThan(0);
+      for (const t of targets) {
+        expect(allow, `${jobId} -target=${t} exceeds its gate allow-set`).toContain(t);
+      }
+    }
+  });
+
+  test("the monitor-fix arm -targets ONLY the monitor", () => {
+    expect([...extractAllTargets(job("ga_monitor_fix"))]).toEqual([
+      "cloudflare_load_balancer_monitor.web",
+    ]);
+  });
+
+  test("staging-overlay/teardown carry NO -target (whole-root plan / -destroy)", () => {
+    for (const jobId of ["staging_overlay", "staging_teardown"]) {
+      const block = job(jobId);
+      // Job-exists guard: extractJobBlock returns "" for a renamed/deleted job,
+      // and zero -target on an absent job must not pass vacuously.
+      expect(block, `${jobId} job must exist in cf-lb-overlay.yml`).not.toEqual("");
+      expect(
+        [...extractAllTargets(block)],
+        `${jobId} must plan the whole throwaway root — a -target would scope the apply/destroy`,
+      ).toEqual([]);
+    }
+  });
+
+  test("ga_pool_update invokes the grader with the dispatch mode, BEFORE the apply", () => {
+    const block = stripComments(job("ga_pool_update"));
+    // A dropped mode argument would grade every serve plan with the drain pin —
+    // fail-closed by accident, not by contract. The call must carry the mode env.
+    const CALL = /cf_lb_gate_ga_pool_update "\$RUNNER_TEMP\/ga-pool-update-plan\.json" "\$\{POOL_UPDATE_MODE\}"/;
+    expect(block).toMatch(CALL);
+    const applyAt = block.indexOf("terraform apply -no-color -input=false -auto-approve tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeLessThan(applyAt);
+  });
+
+  test("the §(c) serve gate chain step precedes the plan step", () => {
+    const block = job("ga_pool_update");
+    const serve = extractStep(block, /§\(c\) gate chain/);
+    expect(serve).not.toBeNull();
+    // The `if:` is ON the step — not a decoy elsewhere in the job (the
+    // cq-assert-anchor-not-bare-token precedent for step-level conditionals).
+    expect(serve!).toMatch(/^\s*if: inputs\.mode == 'serve'\s*$/m);
+    const plan = extractStep(block, /Terraform plan \(GA pool/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(serve!));
+  });
+
+  test("the web-2 health precondition step is serve-gated and precedes the plan step", () => {
+    const block = job("ga_pool_update");
+    const health = extractStep(block, /web-2 health precondition/);
+    expect(health).not.toBeNull();
+    expect(health!).toMatch(/^\s*if: inputs\.mode == 'serve'\s*$/m);
+    const plan = extractStep(block, /Terraform plan \(GA pool/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(health!));
+  });
+
+  test("the ga_pool_update Plan gate step itself carries NO `if:` — a gated grader grades nothing", () => {
+    const block = job("ga_pool_update");
+    // extractStep-bounded: an `if:` added to the gate step goes red here; `if:`
+    // on OTHER steps is out of scope for this pin.
+    const gate = extractStep(block, /Plan gate/);
+    expect(gate).not.toBeNull();
+    expect(gate!).not.toMatch(/^\s*if:/m);
+  });
+
+  test("ga_pool_update -targets include the whole pool/LB/policy graded set", () => {
+    // Membership (⊇), not equality: dropping the policy target must go red —
+    // mirrors the ga_monitor_fix toEqual pin's intent without forbidding a
+    // legitimately-added fourth target.
+    const targets = [...extractAllTargets(job("ga_pool_update"))];
+    for (const t of [
+      "cloudflare_load_balancer_pool.web_1",
+      "cloudflare_load_balancer.app",
+      "cloudflare_notification_policy.web_lb_health",
+    ]) {
+      expect(targets).toContain(t);
+    }
+  });
+});
+
+/**
  * inngest_host SHAPE GATE (#6894, ADR-142 Guard 3): wired into the job, and its allow-set IS the
  * job's -target set.
  *
@@ -4791,11 +5885,175 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(15); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair)
+    expect(targets.length).toBe(16); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair; the flip-token split added doppler_service_token.inngest_flip)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4; CTO R1 and N9). Three facts that must
+ * hold together or a gate reds against its twin:
+ *   - the inngest_host job -targets doppler_service_token.inngest_flip (graph-redundant with
+ *     -target=hcloud_server.inngest, but the shape gate's allow set must EQUAL the -target set);
+ *   - the inngest_host_replace job does NOT (it keeps exactly its three -targets; the new token rides
+ *     in as a dependency of the server, like doppler_service_token.inngest does today);
+ *   - the replace job runs the offline user_data budget script BEFORE its plan step, because on the
+ *     first replace both token keys are unknown at plan time, so the hcloud_server.inngest length
+ *     precondition is deferred to APPLY, after the destroy (the 2026-09-08 stranded-host shape).
+ */
+describe("flip-token split: gate lockstep and the pre-destroy size gate", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const FLIP = "doppler_service_token.inngest_flip";
+  const shapeGateAllow = (): string[] => {
+    const lib = readFileSync(join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"), "utf8");
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    return [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  };
+
+  test("the inngest_host job -targets the flip token and the shape gate admits it", () => {
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))]).toContain(FLIP);
+    expect(shapeGateAllow()).toContain(FLIP);
+  });
+
+  test("the flip -target line is annotated as graph-redundant so nobody removes it as such", () => {
+    const job = extractJobBlock(wf, "inngest_host");
+    const at = job.indexOf(`-target='${FLIP}'`);
+    expect(at).toBeGreaterThan(-1);
+    expect(job.slice(Math.max(0, at - 3500), at)).toMatch(/graph-redundant/i);
+  });
+
+  test("mutation: removing the new -target from inngest_host ALONE breaks the allow === -target equality", () => {
+    const mutated = wf.replace(/^\s*-target='doppler_service_token\.inngest_flip' \\\n/m, "");
+    expect(mutated).not.toBe(wf); // the mutation landed
+    const targets = [...extractAllTargets(extractJobBlock(mutated, "inngest_host"))].sort();
+    expect(targets).not.toEqual(shapeGateAllow());
+    // and the pristine tree is equal (non-vacuity of the comparison above)
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort()).toEqual(shapeGateAllow());
+  });
+
+  test("the final -target line still carries the redaction pipe, and only that line (the command ends there)", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host"));
+    const cmd = commandIn(job, /^\s*terraform plan\b.*-out=tfplan/);
+    const lines = cmd.split("\n");
+    expect(lines[lines.length - 1]).toMatch(/-target='doppler_service_token\.inngest' 2>&1 \| tf_redact_random_ids$/);
+    expect(lines.filter((l) => l.includes("tf_redact_random_ids")).length).toBe(1);
+    expect(lines.some((l) => l.includes(`-target='${FLIP}' \\`))).toBe(true);
+  });
+
+  test("the inngest_host_replace job keeps exactly its three -targets and does not target the flip token", () => {
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host_replace"))].sort();
+    expect(targets).toEqual(
+      ["hcloud_server.inngest", "hcloud_server_network.inngest", "hcloud_volume_attachment.inngest_redis_luks"].sort(),
+    );
+    expect(targets).not.toContain(FLIP);
+  });
+
+  // CTO N9 + R9 + R13: the replace job runs the budget script in its `--cap-only` form (over-cap exit 1 and
+  // unmeasurable exit 2 block; the 384 B floor does NOT: it is a PR-visible check in the infra-validation job
+  // `inngest-userdata-budget`, not a required status context (#6480), so not a merge gate). The pins below are STEP-SCOPED on comment-stripped text: a bare-token grep over the job is
+  // satisfied by a nearby comment and by a step that cannot fail (`continue-on-error`, `if: false`).
+  const BUDGET_STEP_TITLE = "- name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)";
+  const BUDGET_RUN_LINE = /^\s*run:\s*bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only\s*$/;
+  /** The budget step out of a (raw or mutated) workflow text: comment-stripped, from its `- name:` line
+   *  to the next sibling step. Throws unless exactly one such step exists. */
+  function budgetStepOf(workflowText: string): { job: string; step: string } {
+    const job = stripComments(extractJobBlock(workflowText, "inngest_host_replace"));
+    const lines = job.split("\n");
+    const starts = lines.map((l, i) => (l.trim() === BUDGET_STEP_TITLE ? i : -1)).filter((i) => i >= 0);
+    if (starts.length !== 1) throw new Error(`budgetStepOf: ${starts.length} budget steps, expected 1`);
+    let end = lines.length;
+    for (let i = starts[0] + 1; i < lines.length; i++) {
+      if (/^\s{6}- /.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return { job, step: lines.slice(starts[0], end).join("\n") };
+  }
+
+  test("the replace job runs inngest-userdata-budget.sh --cap-only after setup-terraform and BEFORE the plan step", () => {
+    const { job, step } = budgetStepOf(wf);
+    const runLines = step.split("\n").filter((l) => /^\s*run:/.test(l));
+    expect(runLines.length).toBe(1);
+    expect(BUDGET_RUN_LINE.test(runLines[0])).toBe(true);
+    // exactly one invocation of the script in the whole job
+    expect([...job.matchAll(/inngest-userdata-budget\.sh(?!\))/g)].length).toBe(1);
+    const stepAt = job.indexOf(BUDGET_STEP_TITLE);
+    const setupAt = job.indexOf("hashicorp/setup-terraform");
+    const planAt = job.indexOf("name: Terraform plan (scoped inngest-host -replace) + destroy-guard");
+    expect(setupAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(stepAt).toBeGreaterThan(setupAt);
+    expect(stepAt).toBeLessThan(planAt);
+  });
+
+  test("the budget step is BLOCKING: no continue-on-error, no `if:`, no `|| true`, and the job has none either", () => {
+    const { job, step } = budgetStepOf(wf);
+    expect(step).not.toMatch(/continue-on-error/);
+    expect(step).not.toMatch(/^\s*if:/m);
+    expect(step).not.toMatch(/\|\|\s*(true|:)/);
+    // KEY WHITELIST: the step carries exactly `name` and `run`. Any other step-level key (`env:` blanking CI so a
+    // missing terraform SKIPs with exit 0, a custom `shell:` template that makes `run` a no-op, `working-directory`,
+    // `timeout-minutes`, `uses`/`with`) can neuter the script while the three forbidden tokens above stay absent.
+    const stepKeys = step
+      .split("\n")
+      .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+      .filter((k): k is string => k !== undefined);
+    expect(stepKeys).toEqual(["name", "run"]);
+    // job-level keys sit at 4-space indent; a job-level continue-on-error would neuter every step
+    expect(job).not.toMatch(/^ {4}continue-on-error:/m);
+  });
+
+  test("mutation: each way of neutering or reshaping the budget step reds a pin", () => {
+    const RUN_FULL = "        run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only\n";
+    expect(wf).toContain(RUN_FULL);
+    const mutations: Array<[string, string]> = [
+      ["drop --cap-only", RUN_FULL.replace(" --cap-only", "")],
+      ["add continue-on-error", RUN_FULL + "        continue-on-error: true\n"],
+      ["add if: false", "        if: false\n" + RUN_FULL],
+      ["add || true", RUN_FULL.replace(" --cap-only", " --cap-only || true")],
+      ["add a stray flag", RUN_FULL.replace(" --cap-only", " --cap-only --x")],
+      ["add env: CI blanked", RUN_FULL + "        env:\n          CI: \"\"\n"],
+      ["add a custom shell", RUN_FULL + "        shell: bash -c \"exit 0\" {0}\n"],
+    ];
+    for (const [label, replacement] of mutations) {
+      const mutated = wf.replace(RUN_FULL, replacement);
+      expect(mutated, label).not.toBe(wf); // the mutation landed
+      const { step } = budgetStepOf(mutated);
+      const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+      const blocking = !/continue-on-error/.test(step) && !/^\s*if:/m.test(step) && !/\|\|\s*(true|:)/.test(step);
+      const keysOk = step
+        .split("\n")
+        .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+        .filter((k) => k !== undefined)
+        .join(",") === "name,run";
+      expect(BUDGET_RUN_LINE.test(runLine) && blocking && keysOk, label).toBe(false);
+    }
+    // pristine control: the same predicate is TRUE on the unmutated tree
+    const { step } = budgetStepOf(wf);
+    const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+    expect(BUDGET_RUN_LINE.test(runLine)).toBe(true);
+  });
+
+  test("the mid-replace recovery error points at the runbook matrix and names the owner go; it does not route by server presence", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
+    const line = job.split("\n").find((l) => l.includes("failed mid-replace")) ?? "";
+    expect(line).not.toBe("");
+    expect(line).toContain("Recover per the runbook recovery matrix");
+    expect(line).toContain("owner go");
+    expect(line).not.toMatch(/when the server is absent/);
+    expect(line).not.toMatch(/re-dispatch inngest-host-replace/);
+  });
+
+  test("non-vacuity: the order check tells a gated job from an ungated one", () => {
+    const { job } = budgetStepOf(wf);
+    const ungated = job.replace(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only/, "true");
+    expect(ungated).not.toBe(job);
+    expect(/inngest-userdata-budget\.sh --cap-only/.test(ungated)).toBe(false);
   });
 });
 
@@ -5266,7 +6524,7 @@ describe("registry recut step order is a safety property", () => {
 // `apply_target=git-data-host-create` (ADR-149) is the ONLY automated route that can
 // create the git-data store. It is NOT a widened git-data-host-replace: that gate
 // requires actions ⊇ {delete,create}, fires its luks_passphrase_touched arm on a CREATE,
-// and rests its 5-member allow-set on "preserved by OMISSION" — an argument that INVERTS
+// and rests its allow-set on "preserved by OMISSION" — an argument that INVERTS
 // on a birth, where an omitted address is a MISSING resource rather than a protected one.
 // So the two -target sets stay separately pinned, and the job is asserted below to borrow
 // neither the sibling gate nor its allow-set.
@@ -5283,11 +6541,9 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // private-net IP (#6416). runcmd is once-per-instance and ADR-115 bars git-data from
   // the reboot primitive, so that host must be REPLACED, not repaired.
   "hcloud_server_network.git_data",
-  "hcloud_volume.git_data",
   "hcloud_volume.git_data_luks",
-  // DOWNSTREAM — omit either and the store boots with its volume unmounted. For the LUKS
-  // one that means at-rest encryption is absent while every artifact claims it present.
-  "hcloud_volume_attachment.git_data",
+  // DOWNSTREAM — omit it and the store boots with its volume unmounted: at-rest encryption is
+  // absent while every artifact claims it present.
   "hcloud_volume_attachment.git_data_luks",
   // UPSTREAM of its own attachment (the attachment references .id), which is why it is in
   // the set at all — and why the gate needs a separate firewall-CONTENT arm: being in the
@@ -5385,7 +6641,9 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
 
   test("the -target set equals the constant, exactly", () => {
     const targets = [...extractAllTargets(jobBlock)].sort();
-    // Non-vacuity: the extraction must actually find the twenty members.
+    // Non-vacuity: the extraction must actually find the members (the count follows the constant;
+    // a hard-coded number here is what went stale when the plaintext pair left).
+    expect(targets.length).toBeGreaterThan(10);
     expect(targets.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(targets).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });
@@ -5443,7 +6701,10 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // Non-vacuity floors: an extraction that found nothing would make the union assertion
     // below pass only by accident of the other terms.
     expect(presence.length).toBeGreaterThan(10);
-    expect(entailed.length).toBe(3);
+    // The entailed loop is EXACTLY these two members (not "some"): a third silently joining it would
+    // demand `creates == 1` of a resource a resumed dispatch legitimately re-plans as a no-op, and one
+    // silently leaving would stop demanding its create.
+    expect([...entailed].sort()).toEqual(["hcloud_server_network.git_data", "hcloud_volume_attachment.git_data_luks"]);
 
     // The two members the gate handles by their own dedicated arms rather than by a loop:
     // the server (the `creates == 1` identity arm) and the firewall attachment (an
@@ -5458,6 +6719,9 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     ].sort();
 
     expect(union).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
+    // The partition is DISJOINT: the loops' sizes plus the two dedicated-arm members add up to the
+    // target set exactly, so the entailed count follows the lists rather than a hard-coded number.
+    expect(presence.length + entailed.length + 2).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
 
     // (AC8b) The two #6982 additions must join the PRESENCE half specifically. In the
     // entailed loop they would demand `creates == 1`, which a resumed dispatch cannot
@@ -5512,7 +6776,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
 
   test("stripDispatchJobs removes the job's targets from the coverage set", () => {
     const stripped = extractAllTargets(stripDispatchJobs(wf));
-    // All twenty are exclusions, so folding them in would assert per-merge coverage for
+    // All are exclusions, so folding them in would assert per-merge coverage for
     // a fan-out the per-merge apply deliberately never touches.
     expect(stripped.has("doppler_config.git_data_prd")).toBe(false);
     // Non-vacuity for the strip: the job block genuinely carries the target.
@@ -5712,7 +6976,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);
     expect(authmapAt).toBeLessThan(planAt);
-    // A job-level continue-on-error would make all three interlocks non-blocking at once,
+    // A job-level continue-on-error would make every interlock (the three mechanical ones and the plaintext-id one) non-blocking at once,
     // outside every step body the per-step loop inspects.
     expect(jobBlock).not.toMatch(/^\s{4}continue-on-error:/m);
   });
@@ -5765,7 +7029,7 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(rAuthmap).toBeLessThan(rPlan);
     expect(rAuthmap).toBeLessThan(rApply);
 
-    // H2 — A JOB-LEVEL `continue-on-error` DISARMS ALL THREE INTERLOCKS AT ONCE, and it
+    // H2 — A JOB-LEVEL `continue-on-error` DISARMS EVERY INTERLOCK AT ONCE, and it
     // sits outside every step body the assertions above read. The step-level loop claims to
     // pin "the three ways" a step can be disarmed; this is a fourth, one level up.
     expect(replaceBlock).not.toMatch(/^\s{4}continue-on-error:/m);
@@ -5855,7 +7119,8 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
           .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+$/.test(a)),
       ),
     ].sort();
-    // Non-vacuity: the extraction must actually find the twenty members.
+    // Non-vacuity: the extraction must actually find the members.
+    expect(gateBases.length).toBeGreaterThan(10);
     expect(gateBases.length).toBe(GIT_DATA_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...GIT_DATA_BIRTH_TARGET_BASES].sort());
   });
@@ -7294,7 +8559,7 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
     .split("\n")
     .map((l) => l.trim().replace(/\s+/g, " "))
     .filter((l) => l !== "");
-  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+ 2>&1 \| tf_redact_random_ids$/;
   const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
   const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
   const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
@@ -7326,9 +8591,12 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
   // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
   const steps: Step[] = [
     { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    // #10540 Fork 1: the redaction helper is sourced under errexit (a missing file aborts the step) and the plan's stream goes
+    // through it; the plan's own status is then PIPESTATUS[0], not $?.
+    { kind: "stmt", name: "source tf-redact-random-ids.sh", test: eq('source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"') },
     { kind: "stmt", name: "set +e", test: eq("set +e") },
     { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
-    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "stmt", name: "rc=${PIPESTATUS[0]}", test: eq("rc=${PIPESTATUS[0]}") },
     { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
     { kind: "stmt", name: "set -e", test: eq("set -e") },
     { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
@@ -8553,7 +9821,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(code).toContain("secrets.DOPPLER_TOKEN_WRITE");
     expect(code).toMatch(/--name-transformer tf-var -- \\\n\s+env "TF_VAR_inngest_link_tls=\$\{TF_LINK\}" \\\n\s+terraform plan/);
     // The apply consumes ONLY the saved, gated plan: no -target/-replace/-var, ends in tfplan.
-    expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan");
+    expect(/^\s*terraform apply (.*)$/m.exec(code)![1]).toBe("-no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids");
     expect([...extractAllTargets(flagJob)]).toEqual([TLS_FLAG]);
     // Every `doppler run` in the job keeps the Tier-B precedence (ADR-241 D6).
     const runs = code.split("\n").filter((l) => /doppler run\b/.test(l));

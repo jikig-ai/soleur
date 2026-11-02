@@ -2,13 +2,16 @@
 // One view per C4 level. `view <id> of <element>` gives LikeC4 automatic
 // clickable drill-down: in the context view the `platform` box drills into
 // `containers`; in `containers` the `plugin` box drills into `components`.
-// GAP (2026-10-11 audit, re-confirmed 2026-10-18): platform.webapp.egressForwarder,
+// GAP (2026-10-11 audit, re-confirmed 2026-10-18, 2026-10-25 and 2026-11-01): platform.webapp.egressForwarder,
 // platform.infra.egressGw and publicInternet (#9534, ADR-278) exist in model.c4 but are
 // included in NO view, so the egress path does not render. Adding them changes the layout,
 // so it needs a regenerate-c4-model.sh run in the same change (c4-model-freshness gate).
-// GAP (2026-10-18 audit): when the `version` command component noted in model.c4 is added,
+// GAP (2026-10-18 audit, re-confirmed 2026-10-25 and 2026-11-01): when the `version` command component noted in model.c4 is added,
 // it also needs a `platform.plugin.version` include in the components view below.
-// last-verified: 2026-10-18
+// GAP (2026-10-25 audit, re-confirmed 2026-11-01): when the OpenCode harness element noted in model.c4 ("DRIFT (2026-10-25")
+// is added, include it in BOTH the context and containers views next to cursorCli. Its
+// founder and platform.plugin endpoints are already listed in both, so its edges render (#7332).
+// last-verified: 2026-11-01
 views {
 
   // ---- C4 L1: System Context --------------------------------------------
@@ -40,10 +43,18 @@ views {
       // (betterstack, founder) are already in this view so the
       // betterstack -> slack -> founder wake path renders (#7332).
       slack,
+      // #10390/ADR-298: the incident mirror's betterstack -> github read edge
+      // and github -> founder delivery edge render without further includes —
+      // all three endpoints are already listed above. (The mirror's issue
+      // WRITE is github-internal; LikeC4 rejects self-relations, so it lives
+      // on the betterstack -> github edge description.)
       // #7980: the browser the agent drives is an L1 external system like every other
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
       // it renders connected rather than as a disconnected box (#7332).
-      playwrightMcp
+      playwrightMcp,
+      // ADR-310: npmRegistry is the publish target of github -> npmRegistry;
+      // both endpoints are listed so the edge renders (#7332).
+      npmRegistry
 
     style element.tag == #external {
       color muted
@@ -61,7 +72,7 @@ views {
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
-      platform.infra.supabase, platform.infra.operationalInbox, platform.infra.crmStore, platform.infra.tunnel, platform.infra.hetzner,
+      platform.infra.supabase, platform.infra.operationalInbox, platform.infra.approvalStore, platform.infra.crmStore, platform.infra.tunnel, platform.infra.hetzner,
       platform.infra.inngest, platform.infra.inngestPostgres, platform.infra.inngestRedis,
       platform.infra.coordinator, platform.infra.scheduler,
       platform.infra.gitDataStore, platform.infra.sessionStore, platform.infra.workspacesVolume,
@@ -69,6 +80,8 @@ views {
       // #9168/ADR-260: slack renders the betterstack -> slack -> founder wake path
       // here too — both endpoints are already included (#7332).
       slack,
+      // #10390/ADR-298: betterstack -> github and github -> founder (the
+      // incident mirror) render here as well — all endpoints included (#7332).
       connectedRepoPlugin, connectedRepoKb,
       // #8205: devin -> platform.plugin delivery edge needs both endpoints in
       // the view (#7332 rule — same mechanism as playwrightMcp below).
@@ -86,7 +99,10 @@ views {
       // W2 / ADR-277: the destructive-command guard is a plugin component at the same depth as
       // snapshotGuard; the compound-node rule above applies, so the engine.hooks -> destructiveGuard
       // edge renders only when its descendant endpoint is listed. It has no external counterpart.
-      platform.plugin.destructiveGuard
+      platform.plugin.destructiveGuard,
+      // ADR-310: npmRegistry renders the github -> npmRegistry publish edge —
+      // both endpoints listed (#7332).
+      npmRegistry
 
     style element.tag == #external {
       color muted

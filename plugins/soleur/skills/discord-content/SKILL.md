@@ -123,4 +123,4 @@ Display the draft so the user can post it manually. Do not retry automatically.
 - JSON-escape all content before inserting into the webhook payload
 - If the brand guide's `## Channel Notes > ### Discord` section is missing, generate content using only the `## Voice` section (no error)
 - If the user selects "Edit", incorporate their feedback and regenerate -- do not present the same draft
-- When posting via webhook, always include `username` and `avatar_url` fields to ensure consistent bot identity -- webhook messages freeze author identity at post time
+- When content references a public tool, platform, company, or product by name, include its official website URL and/or verified social media handle if available. Verify handles via the entity's official website or verified account — never guess. See the brand guide's `## Voice > ### Do's and Don'ts` for the full policy.

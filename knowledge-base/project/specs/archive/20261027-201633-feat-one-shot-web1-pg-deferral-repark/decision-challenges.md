@@ -1,0 +1,10 @@
+# Decision Challenges — feat-one-shot-web1-pg-deferral-repark
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Revert scope: brief says "restore all three touched files" but commit 6f530d494a touched four (adds tests/scripts/lib/web-host-birth-gate.sh) | technical | Ruled by CTO agent, 2026-10-27: revert the whole commit — the birth-gate comment is part of the same atomic change; a partial revert leaves the file claiming the placement_group_id arm is LIVE coverage against a delta terraform can no longer emit once ignore_changes is restored. Evidence: git show 6f530d494a --stat lists 4 files; git apply --check -R passes on all four. Rejected: 3-file partial revert (leaves a false LIVE claim). Dissent: none recorded. |
+| Does the revert require an ADR-068 amendment? | technical | Ruled by CTO agent, 2026-10-27: no amendment — the ADR's 2026-07-03 and 2026-07-05 amendments already record the four-element ignore list and the GA-window removal trigger as the standing state; the revert re-aligns code with the recorded decision rather than reversing it (PR #11217 was premature execution, not a decision change). Evidence: ADR-068 amendment text asserts ignore_changes equals the four-element list as the web_2_recreate baseline. Rejected: amending the ADR (would falsify a document that is accurate again). Dissent: none recorded. |
+| Verification bar for "terraform plan no longer surfaces the diff" | technical | Ruled by CTO agent, 2026-10-27: static verification is the required arm — grep of the restored ignore_changes line plus terraform validate and the parity suite; identical suppression was live-verified 2026-07-03 (31 add 2 change to 31 add 1 change). Optional live plan only if creds exist. Rejected: mandating a live plan (requires R2 backend and Hetzner creds not present in the pipeline environment). Dissent: none recorded. |
+| PR body reference form | operator (scope) | Ref 11181 and Ref 6027 only, never Closes or Fixes — prescribed verbatim by the operator brief; both issues remain open because issue 6027 performs the real removal at cutover. |

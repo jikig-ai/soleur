@@ -1,7 +1,10 @@
 // PR-H (#4077) — POST /api/dashboard/today/[id]/edit
 //
 // Updates messages.draft_preview for a row owned by the caller. Only
-// status='draft' rows are editable.
+// status='draft' rows are editable, and only while no action_sends approval row exists:
+// the approval pins the draft body by hash, so an edit after it would strand the approval
+// behind draft_changed_since_approval (409 draft_already_approved, #10543). A failed
+// approval lookup fails closed (500).
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP exports + dynamic.
 
@@ -44,6 +47,33 @@ export async function POST(
     return NextResponse.json(
       { error: "invalid_draft_preview" },
       { status: 400 },
+    );
+  }
+
+  // #10543 (CTO Q2): once an approval row exists the WORM action_sends row pins the draft body by
+  // hash (per_send_body_sha256) and cannot be replaced, so an edit would leave a pending approval
+  // that every later Send refuses (draft_changed_since_approval) with no way to re-approve. Refuse
+  // the edit instead: the draft stays as approved and a re-click replays it. Fail closed on a
+  // lookup error.
+  const { data: approval, error: approvalErr } = await supabase
+    .from("action_sends")
+    .select("id")
+    .eq("message_id", messageId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (approvalErr) {
+    reportSilentFallback(approvalErr, {
+      feature: "dashboard-edit",
+      op: "action-sends-lookup",
+      message: "Failed to check for an existing approval before edit",
+      extra: { userId, messageId },
+    });
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+  if (approval) {
+    return NextResponse.json(
+      { error: "draft_already_approved", message_id: messageId },
+      { status: 409 },
     );
   }
 

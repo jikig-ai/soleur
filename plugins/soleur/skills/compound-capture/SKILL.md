@@ -238,7 +238,7 @@ Replace `<category>` with the mapped category and `<filename>` with the generate
 </step>
 
 <step number="7" required="false" depends_on="6">
-### Step 7: Cross-Reference & Critical Pattern Detection
+### Step 7: Cross-Reference & Required-Reading Detection
 
 If similar issues found in Step 3:
 
@@ -251,26 +251,9 @@ Already includes cross-reference from Step 6.
 
 **Update patterns if applicable:**
 
-If this represents a common pattern (3+ similar issues):
+If this repo keeps `knowledge-base/project/patterns/`: extend an existing page, or note it for a new page once 5 or more learnings share the class (a page needs 5+ evidence entries, so one learning cannot create one). Structure pages with [pattern-page-template.md](./assets/pattern-page-template.md). A pattern page is added or extended by a reviewed PR, never written directly. Otherwise emit one line: `skipped: no patterns directory`.
 
-```bash
-# Add to knowledge-base/project/learnings/patterns/common-solutions.md
-cat >> knowledge-base/project/learnings/patterns/common-solutions.md << 'EOF'
-
-## [Pattern Name]
-
-**Common symptom:** [Description]
-**Root cause:** [Technical explanation]
-**Solution pattern:** [General approach]
-
-**Examples:**
-- [Link to doc 1]
-- [Link to doc 2]
-- [Link to doc 3]
-EOF
-```
-
-**Critical Pattern Detection (Optional Proactive Suggestion):**
+**Required-Reading Detection (Optional Proactive Suggestion):**
 
 If this issue has automatic indicators suggesting it might be critical:
 
@@ -286,9 +269,9 @@ Then in the decision menu, add a note:
 
 But **NEVER auto-promote**. User decides via decision menu (Option 2).
 
-**Template for critical pattern addition:**
+**Required-reading entries:**
 
-When user selects Option 3 (Add to Required Reading), use the template from [critical-pattern-template.md](./assets/critical-pattern-template.md) to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/project/learnings/patterns/critical-patterns.md`.
+When user selects Option 2, propose a pattern page with `required_reading: true`. In a repo without a patterns directory, append the entry to `knowledge-base/project/learnings/patterns/required-reading.md`.
 </step>
 
 <step number="8" required="false" depends_on="6">
@@ -538,7 +521,7 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+2. Add to Required Reading - Propose a pattern page (`required_reading: true`)
 3. Link related issues - Connect to similar problems
 4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
 5. Create new skill - Extract into new learning skill
@@ -566,10 +549,10 @@ User selects this when:
 Action:
 
 1. Extract pattern from the documentation
-2. Format as ❌ WRONG vs ✅ CORRECT with code examples
-3. Add to `knowledge-base/project/learnings/patterns/critical-patterns.md`
+2. Fill the template sections (root cause, fix with a short wrong-versus-correct example, evidence)
+3. Write the pattern page with `required_reading: true` (or, without a patterns directory, append the entry to `knowledge-base/project/learnings/patterns/required-reading.md`)
 4. Add cross-reference back to this doc
-5. Confirm: "✓ Added to Required Reading. All subagents will see this pattern before code generation."
+5. Only after step 3 wrote the entry or page: confirm "✓ Required-reading entry proposed."
 
 **Option 3: Link related issues**
 
@@ -769,7 +752,7 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+2. Add to Required Reading - Propose a pattern page (`required_reading: true`)
 3. Link related issues - Connect to similar problems
 4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
 5. Create new skill - Extract into new learning skill

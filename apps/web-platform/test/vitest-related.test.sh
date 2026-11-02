@@ -420,7 +420,7 @@ if [[ -z "$_b2_if" ]]; then
   fail "B2 — eligibility if-block not found (arm would pass vacuously)"
 else
   _b2_ok=1
-  for needle in '_ENUMERATE == 0' '-z "${CI:-}"' 'SOLEUR_TEST_FORCE_ALL:-}' '_diff_detect_ok" == "1' '_diff_head_ok" == "1' '_AFFECTED == 1' '-z "$_aff_fallback"' 'TEST_GROUP" == "affected"' 'webplat_related_meta_hit' 'webplat_related_files'; do
+  for needle in '_ENUMERATE == 0' '-z "${CI:-}"' 'SOLEUR_TEST_FORCE_ALL:-}' '_diff_detect_ok" == "1' '_diff_head_ok" == "1' '_AFFECTED == 1' '-z "$_aff_fallback"' 'webplat_related_meta_hit' 'webplat_related_files'; do
     grep -qF -- "$needle" <<<"$_b2_if" || { _b2_ok=0; echo "  missing conjunct token: $needle" >&2; }
   done
   (( _b2_ok == 1 )) && pass "B2 — eligibility conjuncts present with polarity in the arm" || fail "B2 — missing conjuncts"
@@ -587,19 +587,21 @@ else
   fail "M5a — CI-conjunct mutation did not land"
 fi
 
-# M5b — remove the all-group disjunct → the bare-invocation path
+# M5b — negate the affected conjunct → the bare-invocation path
 # (_AFFECTED==1, no fallback) computes empty where the live block narrows.
-M5B="$TMP/test-all-m5b.sh"; sed 's/ || { (( _AFFECTED == 1 )) \&\& \[\[ -z "$_aff_fallback" \]\]; }//' "$RUNNER" > "$M5B"
+# Post-#8621 the conjunct is a single && arm covering both spellings — the
+# alias arms _AFFECTED identically — so there is no disjunct to remove.
+M5B="$TMP/test-all-m5b.sh"; sed 's/(( _AFFECTED == 1 )) \&\& \[\[ -z "$_aff_fallback" \]\]/(( _AFFECTED == 9 ))/' "$RUNNER" > "$M5B"
 if ! diff -q "$RUNNER" "$M5B" >/dev/null 2>&1; then
   _live=$(_run_comp "$_M5_RUNNER" '')
   _mut=$(_run_comp "$M5B" '')
   if [[ -n "$_live" && -z "$_mut" ]]; then
-    pass "M5b — removing the all-group disjunct declines the bare path (load-bearing)"
+    pass "M5b — negating the affected conjunct declines the bare path (load-bearing)"
   else
-    fail "M5b — disjunct mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
+    fail "M5b — conjunct mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
   fi
 else
-  fail "M5b — all-group-disjunct mutation did not land"
+  fail "M5b — affected-conjunct mutation did not land"
 fi
 
 # M5c — remove the _aff_fallback conjunct → a degraded run narrows inside

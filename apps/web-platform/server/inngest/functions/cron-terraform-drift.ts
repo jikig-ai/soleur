@@ -117,12 +117,10 @@ export const cronTerraformDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 6,18 * * *" },
+      { event: "cron/terraform-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 6,18 * * *" },
-    { event: "cron/terraform-drift.manual-trigger" },
-  ],
-  cronTerraformDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronTerraformDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -16,6 +16,22 @@
 # dial-side only — it changes which host the CLI CONNECTS TO for health checks.
 # It does not affect what containers bind to.
 #
+# POST-START DEFAULT-PRIVILEGE NORMALIZE (ADR-303)
+# ----------------------------------------------
+# On 2026-10-30 hosted Supabase stops auto-granting Data API access to NEW
+# `public`-schema tables (changelog 45329). A local stack that still installs
+# the old default privileges makes the rls-authz-fuzz gate measure PLATFORM
+# DEFAULTS, not migration GRANTs — a circular proof (P6). So on every
+# start-class verb (`start`, `db start`, `db reset` — reset recreates the
+# database and reinstalls the bootstrap defacls) this wrapper runs `supabase`
+# WITHOUT exec, then applies Supabase's documented revoke-default-privileges
+# SQL inside the running db container, and fails LOUD if the normalized state
+# cannot be established. The `[api] auto_expose_new_tables` config key does NOT exist on
+# pinned CLI 2.84.2 (added by supabase/cli#5239, merged 2026-05-26, post-2.84.2)
+# — do not "simplify" this into a config.toml line; dead config at best, a
+# parse failure at worst. On any CLI bump to >=v2.116.0 the declarative key
+# becomes REQUIRED instead (unset re-enables auto-expose, per cli#6337).
+#
 # USAGE
 #   supabase-local.sh assert          # verify loopback-only binding; the gate
 #   supabase-local.sh <any supabase subcommand> [args...]
@@ -30,10 +46,16 @@
 #      daemon is not evidence of safety. `ensure_network` also uses 2 for
 #      "cannot create/remove the network" — in both cases the stack was NOT
 #      started, so the safe reading is identical: nothing is running unverified.
+#      The post-start normalize uses 2 as well: the stack came up but its
+#      default privileges could NOT be proven normalized — reporting a green
+#      `start` for a stack still carrying bootstrap auto-grants would silently
+#      degrade the rls-authz-fuzz grant gate into measuring platform defaults.
 # 127  the `supabase` CLI is not on PATH (passthrough only).
 #
 # Dependencies: docker. (No jq — the assert path parses with grep so it runs in
-# the minimal PATH the test harness and CI provide.)
+# the minimal PATH the test harness and CI provide. The post-start normalize
+# likewise runs psql INSIDE the db container via `docker exec`, so no host-side
+# psql is needed — CI installs postgresql-client only after `start`.)
 
 set -euo pipefail
 
@@ -88,7 +110,9 @@ supabase-local.sh — loopback-bound wrapper for the local Supabase stack (ADR-1
 
   supabase-local.sh start|stop|status|db ...|migration ...|gen ...
       Passthrough to the Supabase CLI with --network-id applied, so containers
-      publish to 127.0.0.1 instead of 0.0.0.0.
+      publish to 127.0.0.1 instead of 0.0.0.0. Start-class verbs (`start`,
+      `db start`, `db reset`) additionally normalize default privileges —
+      new public relations get no automatic api-role grants (ADR-303).
 
   supabase-local.sh --help
       This message.
@@ -318,6 +342,144 @@ ensure_snippets_dir() {
   mkdir -p "${SCRIPT_DIR}/../supabase/snippets"
 }
 
+# ---------------------------------------------------------------------------
+# normalize_default_privileges — flip the fresh stack to post-2026-10-30
+# default privileges (ADR-303, PRIMARY mechanism per the 2026-10-26 CTO ruling;
+# the [api] auto_expose_new_tables key does not exist on pinned CLI 2.84.2).
+#
+# Applies Supabase's documented "Revoke default privileges" SQL
+# <!-- verified: 2026-10-27 source: https://supabase.com/docs/guides/api/securing-your-api -->
+# for the migration role (`postgres` — the docs' verbatim form), then sweeps
+# for every OTHER pg_default_acl owner whose entries still grant the api roles
+# on public tables/sequences (the ruling's "owner set may be broader"
+# catch-all).
+#
+# ROLE THE PSQL SESSION RUNS AS — load-bearing. On the pinned image the
+# bootstrap defacl entries in `public` are owned by `supabase_admin`, NOT by
+# `postgres`, and `ALTER DEFAULT PRIVILEGES FOR ROLE <other>` requires
+# superuser or membership in that role — a `psql -U postgres` session CANNOT
+# alter supabase_admin's defacls, so the sweep raised mid-run, ON_ERROR_STOP
+# fired, and `start` exited 2 on a correctly-functioning stack (CI run
+# 121583902510). `supabase_admin` IS the image's superuser, so a session under
+# it can alter its own AND postgres's defacls; the docker-exec'd psql connects over in-container TCP with the image's
+# documented local admin password (supabase_admin/postgres) — unix-socket peer auth does
+# NOT cover this role (measured: CI job 121606494650 password-auth failure). The docs'
+# two FUNCTION statements are
+# deliberately omitted: the 10-30 flip does not change function defaults, the
+# in-schema form is inert against the built-in PUBLIC EXECUTE default
+# (supabase#49338), and the schema-less `revoke execute on functions from
+# public` goes BEYOND the flip — it would strip the PUBLIC EXECUTE default the
+# migration corpus's SECURITY DEFINER RPCs rely on (that surface is governed by
+# ADR-112's own two-tier guard, not this one).
+#
+# Runs psql INSIDE the db container (precedent:
+# learnings/2026-07-11 §4 — `docker exec -i supabase_db_<project> psql`), so no
+# host-side psql is required: the fuzz CI job installs postgresql-client only
+# AFTER `start`. The closing DO block re-reads pg_default_acl and RAISES if any
+# api-role default table/sequence privilege remains — the normalize fails loud
+# rather than letting `start` report green over a stack whose grant state the
+# fuzz gate would misread as migration-authored.
+# ---------------------------------------------------------------------------
+normalize_default_privileges() {
+  # Locate THIS project's db container by the same label the assert gate scopes
+  # on, so a second stack on the host cannot receive our revokes.
+  local db_id ps_rc
+  db_id=""
+  set +e
+  db_id="$(docker ps --filter "label=${PS_LABEL_FILTER}" --filter "name=supabase_db" --format '{{.ID}}' 2>/dev/null | head -1)"
+  ps_rc=$?
+  set -e
+  if [[ "$ps_rc" -ne 0 ]]; then
+    echo "supabase-local: post-start normalize — cannot reach the Docker daemon to locate" >&2
+    echo "supabase-local: the db container; default privileges were NOT normalized." >&2
+    return 2
+  fi
+  if [[ -z "${db_id//[[:space:]]/}" ]]; then
+    echo "supabase-local: post-start normalize — no supabase_db container found for this" >&2
+    echo "supabase-local: stack (label ${PS_LABEL_FILTER}). Refusing to report a successful" >&2
+    echo "supabase-local: start while default privileges are unverified." >&2
+    return 2
+  fi
+
+  if ! docker exec -i -e PGPASSWORD=postgres "$db_id" psql -h 127.0.0.1 -U supabase_admin -d postgres --no-psqlrc -v ON_ERROR_STOP=1 <<'NORMALIZE_SQL'; then
+-- Supabase's documented "Revoke default privileges" statements, verbatim in
+-- the `for role postgres` form (securing-your-api; `postgres` is the migration
+-- role). The bootstrap defacl owner on the pinned image is `supabase_admin` —
+-- the owner-agnostic sweep below reaches it and any other owner; the psql
+-- session itself runs AS `supabase_admin` (the image's superuser) because
+-- `postgres` cannot `alter default privileges for role` another role.
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  revoke all on sequences from anon, authenticated, service_role;
+
+-- Owner-agnostic sweep: any OTHER pg_default_acl owner (e.g. a supabase_admin
+-- entry the image bootstrapped) whose entries still confer api-role default
+-- table/sequence privileges in `public` gets the same revoke. aclexplode
+-- grantee 0 is PUBLIC — a PUBLIC default grant reaches every api role.
+do $$
+declare
+  o record;
+begin
+  for o in
+    select distinct own.rolname as owner_name
+    from pg_default_acl d
+    join pg_roles own on own.oid = d.defaclrole
+    join pg_namespace ns on ns.oid = d.defaclnamespace
+    where ns.nspname = 'public'
+      and d.defaclobjtype in ('r', 'S')
+      and exists (
+        select 1
+        from aclexplode(d.defaclacl) a
+        left join pg_roles g on g.oid = a.grantee
+        where a.grantee = 0
+           or g.rolname in ('anon', 'authenticated', 'service_role')
+      )
+  loop
+    execute format(
+      'alter default privileges for role %I in schema public revoke all on tables from anon, authenticated, service_role',
+      o.owner_name);
+    execute format(
+      'alter default privileges for role %I in schema public revoke all on sequences from anon, authenticated, service_role',
+      o.owner_name);
+  end loop;
+end $$;
+
+-- Fail-closed proof, in the same session: if ANY api-role (or PUBLIC) default
+-- table/sequence privilege survives in `public` — an owner the sweep could not
+-- alter, a defacl shape the sweep missed — raise rather than let `start`
+-- report green over an un-normalized stack. The rls-authz-fuzz gate re-asserts
+-- this state independently; this is the start-side half.
+do $$
+declare
+  bad int;
+begin
+  select count(*) into bad
+  from pg_default_acl d
+  join pg_namespace ns on ns.oid = d.defaclnamespace
+  where ns.nspname = 'public'
+    and d.defaclobjtype in ('r', 'S')
+    and exists (
+      select 1
+      from aclexplode(d.defaclacl) a
+      left join pg_roles g on g.oid = a.grantee
+      where a.grantee = 0
+         or g.rolname in ('anon', 'authenticated', 'service_role')
+    );
+  if bad > 0 then
+    raise exception 'supabase-local normalize: % api-role default table/sequence privilege(s) remain in pg_default_acl after revoke', bad;
+  end if;
+end $$;
+NORMALIZE_SQL
+    echo "supabase-local: post-start normalize FAILED — the stack's default privileges could" >&2
+    echo "supabase-local: not be proven normalized. Reporting start as failed rather than letting" >&2
+    echo "supabase-local: the fuzz gate measure platform defaults as if they were migration grants." >&2
+    return 2
+  fi
+  echo "supabase-local: normalized default privileges — new public relations/sequences get no automatic api-role grants (ADR-303)."
+  return 0
+}
+
 main() {
   case "${1:-}" in
     ""|--help|-h|help)
@@ -347,6 +509,36 @@ main() {
         stop|status) ;;
         *) ensure_network; ensure_snippets_dir ;;
       esac
+      # Start-class verbs (`start`, `db start`, `db reset`) get the post-start
+      # normalize: run `supabase` WITHOUT exec so the wrapper survives to apply
+      # the revoke-default-privileges SQL, then propagate the start verb's own
+      # exit code. `db reset` belongs here because it recreates the database —
+      # the image bootstrap's defacl entries come back with it, and without a
+      # re-normalize the fuzz gate silently resumes measuring platform
+      # defaults. A failing start skips the normalize — the stack never
+      # provably came up, so start's own nonzero is the correct (and already
+      # loud) verdict; a normalize that cannot prove the pg_default_acl state
+      # fails the whole verb (never a quiet green over bootstrap defaults).
+      _start_class=0
+      case "${1:-}" in
+        start) _start_class=1 ;;
+        db) [[ "${2:-}" == "start" || "${2:-}" == "reset" ]] && _start_class=1 ;;
+      esac
+      if [[ "$_start_class" == "1" ]]; then
+        set +e
+        supabase --network-id "$NETWORK_NAME" "$@"
+        start_rc=$?
+        set -e
+        if [[ "$start_rc" -ne 0 ]]; then
+          exit "$start_rc"
+        fi
+        # normalize returns 0 or 2 only; a bare `exit $?` would misread as
+        # "propagate whatever the last builtin produced" — be explicit.
+        if ! normalize_default_privileges; then
+          exit 2
+        fi
+        exit 0
+      fi
       # --network-id MUST precede "$@" so subcommands using `--` passthrough
       # (e.g. `db lint -- --strict`) still parse correctly.
       exec supabase --network-id "$NETWORK_NAME" "$@"

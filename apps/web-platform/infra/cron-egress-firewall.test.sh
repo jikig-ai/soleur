@@ -350,6 +350,81 @@ if ! cmp -s "$LOADER" "$LOADER_NO8443" && grep -qE 'ip daddr \$\{EGRESS_GW_IP\} 
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the 10.0.1.40:8443 pin cannot see its own deletion (vacuous)"
 fi
+# #8211 PR-D: the git-data transport (ssh, tcp/22) needs ITS OWN accept in the container egress chain. The Inngest rules above are the
+# precedent (a bash literal, not a templated value); the destination is the git-data private IP, git-data.tf local.git_data_private_ip.
+PIN_GD='ip daddr 10\.0\.1\.20 tcp dport 22 accept comment "soleur-egress: git-data transport"'
+assert_grep "git-data transport tcp/22 accept (#8211)" "$PIN_GD" "$LOADER"
+GD_TF_IP="$(sed -nE 's/^[[:space:]]*git_data_private_ip[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' "$SCRIPT_DIR/git-data.tf" | sed -n '1p')"
+if [[ -n "$GD_TF_IP" ]] && grep -qF -- "ip daddr $GD_TF_IP tcp dport 22 accept" "$LOADER"; then
+  PASS=$((PASS + 1)); echo "  PASS: the loader's git-data accept names the address git-data.tf publishes ($GD_TF_IP)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the loader's git-data accept does not name local.git_data_private_ip from git-data.tf (got '${GD_TF_IP:-unparsed}')"
+fi
+GD_LINE="$(grep -n 'ip daddr 10\.0\.1\.20 tcp dport 22 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+if [[ -n "$GD_LINE" && -n "$DROP_RULE_LINE" && "$GD_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: git-data accept precedes the default drop (line $GD_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: git-data accept must precede the default drop (gd=$GD_LINE drop=$DROP_RULE_LINE)"
+fi
+# Scope: exactly one accept names the git-data host and exactly one non-comment loader line matches `dport 22`: no wider ssh accept.
+if [[ "$(grep -vE '^[[:space:]]*#' "$LOADER" | grep -c '10\.0\.1\.20')" -eq 1 && "$(grep -vE '^[[:space:]]*#' "$LOADER" | grep -cE 'dport[[:space:]]+22([^0-9]|$)')" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the git-data accept is the only rule naming 10.0.1.20 and the only dport-22 rule (one address, one port)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the loader carries a second 10.0.1.20 rule or a second dport-22 rule (scope widened)"
+fi
+# Mutation: delete the git-data accept from a COPY; the pin must go RED on it (and the Inngest accepts that stay must not mask it).
+LOADER_NOGD="$SUITE_SCRATCH/loader-no-gd.sh"
+grep -v 'ip daddr 10\.0\.1\.20 tcp dport 22 accept' "$LOADER" > "$LOADER_NOGD"
+if ! cmp -s "$LOADER" "$LOADER_NOGD" && grep -qE 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER_NOGD" \
+   && grep -qE -- "$PIN_GD" "$LOADER" && ! grep -qE -- "$PIN_GD" "$LOADER_NOGD"; then
+  PASS=$((PASS + 1)); echo "  PASS: mutation: deleting the git-data accept is visible to the pin"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the git-data pin cannot see its own deletion (vacuous)"
+fi
+# #8211 review (test-design P2): the per-rule pin above passes while a SIBLING rule widens the exposure. So the WHOLE accept set of the loader's
+# Phase 3 chain is pinned (normalised: prefix and trailing comment stripped, variables left as written; the gateway accept is the one templated
+# line), and the only non-accept verdict rules ahead of the git-data accept are the link-local drop and the two port-53 exfil drops.
+gd_norm() { sed -E 's/.*add rule ip filter SOLEUR-EGRESS //; s/ comment .*//'; }
+gd_accept_set() { grep -vE '^[[:space:]]*#' "$1" | grep -F 'add rule ip filter SOLEUR-EGRESS ' | gd_norm | grep -E '(^| )accept$' | LC_ALL=C sort; }
+gd_early_verdicts() { grep -E '^add rule ip filter SOLEUR-EGRESS ' "$1" | awk '/ ip daddr 10\.0\.1\.20 tcp dport 22 accept/ { seen=1 } !seen { print }' | gd_norm | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+GD_ACCEPT_PIN="$(LC_ALL=C sort <<'PIN'
+ct state established,related accept
+oifname "$BRIDGE_IF" accept
+udp dport 53 ip daddr @soleur_egress_dns accept
+tcp dport 53 ip daddr @soleur_egress_dns accept
+ip daddr $BRIDGE_GW tcp dport 8288 accept
+ip daddr 10.0.1.40 tcp dport 8288 accept
+ip daddr 10.0.1.40 tcp dport 8443 accept
+ip daddr 10.0.1.20 tcp dport 22 accept
+ip daddr @soleur_egress_allow accept
+ip daddr @soleur_egress_allow_cidr accept
+ip daddr ${EGRESS_GW_IP} tcp dport 8443 accept
+PIN
+)"
+GD_EARLY_PIN="$(cat <<'PIN'
+ip daddr 169.254.0.0/16 counter drop
+udp dport 53 counter drop
+tcp dport 53 counter drop
+PIN
+)"
+gd_pins_ok() { [[ "$(gd_accept_set "$1")" == "$GD_ACCEPT_PIN" && "$(gd_early_verdicts "$1")" == "$GD_EARLY_PIN" ]]; }
+if gd_pins_ok "$LOADER"; then
+  PASS=$((PASS + 1)); echo "  PASS: the loader's whole accept set equals the reviewed pin (11 rules) and only the pinned drops precede the git-data accept"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the loader's accept set or the verdicts ahead of the git-data accept drifted from the reviewed pin"
+  diff <(gd_accept_set "$LOADER") <(printf '%s\n' "$GD_ACCEPT_PIN") | head -6; gd_early_verdicts "$LOADER" | head -6
+fi
+GD_MUT_OK=1; gd_pins_ok "$LOADER" || GD_MUT_OK=0   # the unmutated loader must be green first, or a red mutant proves nothing
+for gd_m in "/tcp dport 22 accept comment/a add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 accept comment \"x\"" \
+            "/tcp dport 22 accept comment/i add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 counter drop comment \"x\""; do
+  sed -E "$gd_m" "$LOADER" > "$SUITE_SCRATCH/loader-gd-mut.sh"
+  if cmp -s "$LOADER" "$SUITE_SCRATCH/loader-gd-mut.sh" || gd_pins_ok "$SUITE_SCRATCH/loader-gd-mut.sh"; then GD_MUT_OK=0; fi
+done
+if [[ "$GD_MUT_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: mutation: a sibling /24 accept after, or a shadowing /24 drop before, the git-data accept is visible to the pins"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: mutation: a sibling accept or a shadowing drop around the git-data accept is NOT visible to the pins (vacuous)"
+fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
@@ -1823,6 +1898,8 @@ ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
   mkdir -p "$d/bin"
   cat > "$d/bin/nft" << 'MOCK'
 #!/bin/bash
+# One rule per line with a leading tab, like the live `nft list chain` text (the post-apply assert anchors on the line start).
+emit() { printf '%s\n' "$1" | sed 's/ ; /\n\t/g; s/^/\t/'; }
 case "$*" in
   "list chain ip filter DOCKER-USER") if [[ -n "${GA_JUMPOLD:-}" ]]; then echo "jump SOLEUR-EGRESS-OLD"; else echo "jump SOLEUR-EGRESS"; fi; exit 0 ;;
   "list chain ip filter SOLEUR-EGRESS")
@@ -1830,12 +1907,24 @@ case "$*" in
     # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
     # `... default drop log`, which a sentinel that loses its closing quote would mistake for the drop.
     if [[ -n "${GA_NODROP:-}" ]]; then
-      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0
+      emit 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0
     fi
     if [[ -n "${GA_NO8443:-}" ]]; then
-      echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.9.9.9 tcp dport 8443 accept ; cidr allowlist'; exit 0
+      emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.9.9.9 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0
     fi
-    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0 ;;
+    if [[ -n "${GA_GDDROP:-}" ]]; then
+      emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 drop ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0
+    fi
+    if [[ -n "${GA_GDDECOY:-}" ]]; then
+      emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.99 tcp dport 22 accept comment "note: ip daddr 10.0.1.20 tcp dport 22 accept" ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0
+    fi
+    if [[ -n "${GA_GDAFTER:-}" ]]; then
+      emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop" ; ip daddr 10.0.1.20 tcp dport 22 accept'; exit 0
+    fi
+    if [[ -n "${GA_NOGD:-}" ]]; then
+      emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.21 tcp dport 22 accept ; ip daddr 10.0.1.20 tcp dport 2222 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0
+    fi
+    emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -2015,6 +2104,41 @@ GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 grep -q 'ASSERT-FAILED: dedicated-inngest-8443-accept' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: no 10.0.1.40 :8443 accept (another daddr's 8443 accept does not count) -> ASSERT-FAILED: dedicated-inngest-8443-accept, non-zero exit" "$GA_OK"
+
+# Row B2c (#8211 PR-D): no tcp/22 accept for the git-data host (a different host's :22 accept and the git-data host's other port do not
+# count) -> its own sentinel, non-zero. Every other accept is intact, so only the new assert can see it.
+GA_D="$(ga_setup nogd)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NOGD=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: no 10.0.1.20 :22 accept (another host's :22 and the same host's other port do not count) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
+
+# Row B2d (#8211 review): a DROP rule for the git-data host's :22 (no accept anywhere for it) must not satisfy the sentinel: dropping the
+# ` accept` token from the pattern would turn it green.
+GA_D="$(ga_setup gddrop)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GDDROP=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: a 10.0.1.20 :22 DROP rule (no accept) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
+
+# Row B2e (#8211 review): the accept listed AFTER the terminal default drop is a dead rule: the sentinel is positional.
+GA_D="$(ga_setup gdafter)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GDAFTER=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: the 10.0.1.20 :22 accept listed AFTER the default drop (dead rule) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
+
+# Row B2f (#8211 review): the address appears only inside ANOTHER rule's comment (the real rule is for a different host): the sentinel is
+# anchored on the rule's line start, so the comment text does not satisfy it.
+GA_D="$(ga_setup gddecoy)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GDDECOY=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: the git-data rule text only inside another rule's comment (the real accept is for a different host) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
 
 # Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
 GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
@@ -2227,8 +2351,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 352 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 352. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 410 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 410. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

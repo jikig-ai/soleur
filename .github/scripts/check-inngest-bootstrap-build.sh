@@ -91,12 +91,11 @@ cp apps/web-platform/infra/inngest-server-flip-guard.sh "$BUILD_DIR/inngest-serv
 cp apps/web-platform/infra/cat-inngest-cutover-state.sh "$BUILD_DIR/cat-inngest-cutover-state.sh"
 cp apps/web-platform/infra/inngest-cutover-flip.service "$BUILD_DIR/inngest-cutover-flip.service"
 cp apps/web-platform/infra/inngest-cutover-flip.timer "$BUILD_DIR/inngest-cutover-flip.timer"
-# LUKS blue-green cutover trio (#6894) — dedicated-host only, same delivery as the flip trio.
-# Four sites enumerate these (this staging, COPY, chmod, ENTRYPOINT); miss one and the
-# bootstrap's fail-closed install aborts the boot rather than skipping the unit.
-cp apps/web-platform/infra/inngest-luks-cutover.sh "$BUILD_DIR/inngest-luks-cutover.sh"
-cp apps/web-platform/infra/inngest-luks-cutover.service "$BUILD_DIR/inngest-luks-cutover.service"
-cp apps/web-platform/infra/inngest-luks-cutover.timer "$BUILD_DIR/inngest-luks-cutover.timer"
+# Trace retention (#5150). cloud-init docker-cps these from the image root
+# because they are words of STAGED. The host bootstrap installs them.
+cp apps/web-platform/infra/inngest-trace-retention.sh "$BUILD_DIR/inngest-trace-retention.sh"
+cp apps/web-platform/infra/inngest-trace-retention.sql "$BUILD_DIR/inngest-trace-retention.sql"
+cp apps/web-platform/infra/inngest-trace-retention.sqlite.sql "$BUILD_DIR/inngest-trace-retention.sqlite.sql"
 
 # Conditional Vector env block — empty pin values produce empty
 # ENV lines, which the bootstrap script's `${VECTOR_CLI_VERSION:-}`
@@ -118,14 +117,14 @@ COPY inngest-server-flip-guard.sh /inngest-server-flip-guard.sh
 COPY cat-inngest-cutover-state.sh /cat-inngest-cutover-state.sh
 COPY inngest-cutover-flip.service /inngest-cutover-flip.service
 COPY inngest-cutover-flip.timer /inngest-cutover-flip.timer
-COPY inngest-luks-cutover.sh /inngest-luks-cutover.sh
-COPY inngest-luks-cutover.service /inngest-luks-cutover.service
-COPY inngest-luks-cutover.timer /inngest-luks-cutover.timer
-RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-luks-cutover.sh
+COPY inngest-trace-retention.sh /inngest-trace-retention.sh
+COPY inngest-trace-retention.sql /inngest-trace-retention.sql
+COPY inngest-trace-retention.sqlite.sql /inngest-trace-retention.sqlite.sql
+RUN chmod +x /inngest-bootstrap.sh /inngest-redis-bootstrap.sh /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-trace-retention.sh
 # The bootstrap script reads /tmp/vector.toml + /tmp/inngest-redis.* +
 # /tmp/inngest-cutover-flip.* (flip trio + guard, #6178) at install time;
 # stage the OCI-bundled assets there at entrypoint.
-ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && cp /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-cutover-flip.service /inngest-cutover-flip.timer /tmp/ && cp /inngest-luks-cutover.sh /inngest-luks-cutover.service /inngest-luks-cutover.timer /tmp/ && /inngest-bootstrap.sh"]
+ENTRYPOINT ["/bin/bash", "-c", "cp /vector.toml /tmp/vector.toml && cp /inngest-redis.conf /inngest-redis.service /inngest-redis-bootstrap.sh /tmp/ && cp /inngest-cutover-flip.sh /inngest-server-flip-guard.sh /cat-inngest-cutover-state.sh /inngest-cutover-flip.service /inngest-cutover-flip.timer /tmp/ && /inngest-bootstrap.sh"]
 DOCKERFILE
 
 # The candidate tag is LOCAL-ONLY: -t names it so `docker build` output is inspectable,

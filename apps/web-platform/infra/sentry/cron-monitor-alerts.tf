@@ -42,16 +42,25 @@ locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
   cron_monitor_alert_unrouted = {
-    # #9274 — added under the two-PR rule: deliberately not in
-    # monitor_ids; a future PR may route it once the loop is measured. Real
-    # cover meanwhile: a dead reaper lets armed bot PRs sit >48h, which
-    # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds
-    # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
-    # monitor itself still opens a Sentry issue on failure.
-    scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # #4672 — the approval-queue expiry sweep's liveness monitor, added under the two-PR rule: not in monitor_ids until
+    # its first apply. There is NO independent cover for a dead sweep today: the only issue alert on the sweep's output
+    # (sentry_alert.approval_gate_unanswered) is emitted BY the sweep, so a dead sweep emits nothing, and no Better Stack
+    # missing-SOLEUR_APPROVAL_SWEEP monitor exists in infra/ (verified by grep). Until routed, a missed or failed
+    # check-in only opens a Sentry issue nobody is emailed about. The flag stays off meanwhile, so no live request can be
+    # stranded; routing this monitor into cron_monitor_failure is therefore a REQUIRED item on the approval-queue flag-flip
+    # checklist (ADR-309 "Flag lifecycle", flag-create-handover.md): route it before the flag is turned on for anyone.
+    scheduled_approval_expiry = "routing is a flip-checklist item: no independent cover exists (gate_unanswered is emitted by the sweep itself); route before the approval-queue flag is turned on (#4672)"
+    # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
+    # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
+    # first measured check-in.
+    scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
+    # #11631 — the dead-man heartbeat feeder's liveness monitor, added under the two-PR rule: the Better Stack
+    # heartbeats (soleur-luks-monitor-host-timer-prd, soleur-claude-cost-capture-prd) are the paging surface and
+    # time out when the feeder goes dark; route this after three measured check-ins (tracked on #11672).
+    scheduled_deadman_heartbeat_feeder = "the Better Stack heartbeats are the paging surface; route after three measured check-ins (tracked on #11672)"
     # #8211 PR-B2 — the git-data erasure re-drive's liveness monitor, added under the two-PR rule: a
     # monitor id that does not exist yet must not appear in monitor_ids (the plan projection errors).
     # Real cover meanwhile: the oldest-pending-age gauge and the 20/28-day Sentry error issues the
@@ -68,67 +77,26 @@ resource "sentry_alert" "cron_monitor_failure" {
   frequency_minutes = 1441
   # ONE element per declared sentry_cron_monitor, minus the unrouted map, sorted.
   monitor_ids = [
-    sentry_cron_monitor.cron_action_required_sla.id,
     sentry_cron_monitor.cron_egress_resolve.id,
     sentry_cron_monitor.cron_email_ingress_probe.id,
-    sentry_cron_monitor.cron_github_cidr_refresh.id,
     sentry_cron_monitor.cron_kb_template_health.id,
-    sentry_cron_monitor.cron_weekly_release_digest.id,
     sentry_cron_monitor.cron_workspace_sync_health.id,
     sentry_cron_monitor.image_cve_scan.id,
     sentry_cron_monitor.main_health_monitor.id,
-    sentry_cron_monitor.scheduled_actions_queue_health.id,
-    sentry_cron_monitor.scheduled_agent_native_audit.id,
-    sentry_cron_monitor.scheduled_anthropic_cost_report.id,
     sentry_cron_monitor.scheduled_anthropic_credit_probe.id,
-    sentry_cron_monitor.scheduled_architecture_diagram_sync.id,
-    sentry_cron_monitor.scheduled_bug_fixer.id,
-    sentry_cron_monitor.scheduled_campaign_calendar.id,
-    sentry_cron_monitor.scheduled_cloud_task_heartbeat.id,
-    sentry_cron_monitor.scheduled_community_monitor.id,
-    sentry_cron_monitor.scheduled_competitive_analysis.id,
-    sentry_cron_monitor.scheduled_compound_promote.id,
-    sentry_cron_monitor.scheduled_content_generator.id,
-    sentry_cron_monitor.scheduled_content_publisher.id,
-    sentry_cron_monitor.scheduled_content_vendor_drift.id,
-    sentry_cron_monitor.scheduled_daily_triage.id,
-    sentry_cron_monitor.scheduled_devin_docs_drift.id,
-    sentry_cron_monitor.scheduled_domain_model_drift.id,
-    sentry_cron_monitor.scheduled_follow_through.id,
     sentry_cron_monitor.scheduled_github_app_drift_guard.id,
-    sentry_cron_monitor.scheduled_growth_audit.id,
-    sentry_cron_monitor.scheduled_growth_execution.id,
     sentry_cron_monitor.scheduled_heartbeat_reconcile.id,
     sentry_cron_monitor.scheduled_inngest_cron_watchdog.id,
     sentry_cron_monitor.scheduled_inngest_health.id,
     sentry_cron_monitor.scheduled_inngest_probe_heartbeat.id,
-    sentry_cron_monitor.scheduled_integration_suites.id,
-    sentry_cron_monitor.scheduled_legal_audit.id,
-    sentry_cron_monitor.scheduled_linkedin_token_check.id,
-    sentry_cron_monitor.scheduled_machinery_drain.id,
     sentry_cron_monitor.scheduled_marketplace_drift.id,
     sentry_cron_monitor.scheduled_membership_health.id,
     sentry_cron_monitor.scheduled_merge_queue_stall_dispatch.id,
-    sentry_cron_monitor.scheduled_nag_4216_readiness.id,
     sentry_cron_monitor.scheduled_oauth_probe.id,
-    sentry_cron_monitor.scheduled_plausible_goals.id,
-    sentry_cron_monitor.scheduled_prod_version_drift.id,
     sentry_cron_monitor.scheduled_realtime_probe.id,
-    sentry_cron_monitor.scheduled_roadmap_review.id,
-    sentry_cron_monitor.scheduled_rule_prune.id,
-    sentry_cron_monitor.scheduled_ruleset_bypass_audit.id,
     sentry_cron_monitor.scheduled_sentry_alert_drift.id,
-    sentry_cron_monitor.scheduled_seo_aeo_audit.id,
-    sentry_cron_monitor.scheduled_skill_freshness.id,
-    sentry_cron_monitor.scheduled_stale_deferred_scope_outs.id,
-    sentry_cron_monitor.scheduled_strategy_review.id,
-    sentry_cron_monitor.scheduled_supabase_advisor_scan.id,
-    sentry_cron_monitor.scheduled_supabase_disk_io.id,
     sentry_cron_monitor.scheduled_supabase_watchdog.id,
     sentry_cron_monitor.scheduled_terraform_drift.id,
-    sentry_cron_monitor.scheduled_ux_audit.id,
-    sentry_cron_monitor.scheduled_weekly_analytics.id,
-    sentry_cron_monitor.scheduled_workspace_gc.id,
     sentry_cron_monitor.workspaces_luks_verify.id,
     sentry_cron_monitor.zot_restart_loop_alarm.id,
   ]

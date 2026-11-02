@@ -138,13 +138,22 @@ describe("fetchFromGitData — authorized read", () => {
     // guarded `reset --hard refs/remotes/git-data/<primary>` to overlay the tip.
     expect(argv).toContain(`+refs/soleur/worktrees/${WT}/heads/*:refs/remotes/git-data/*`);
     expect(argv).toContain(`+refs/soleur/worktrees/${WT}/tags/*:refs/tags/*`);
+    // CTO F13: rescue heads (`soleur-store-tip-<sha12>`, one per distinct skipped store tip) are
+    // excluded from the overlay fetch — they are never overlaid, and pulling them all at every
+    // graft would grow the 60 s fetch without bound. NEGATIVE refspec, NOT --prune (which would
+    // delete store-only branches). Argument position is not asserted: git applies a negative
+    // refspec to the whole fetch, whatever its position. That the refspec really excludes the
+    // rescue heads is proven against real git in ensure-workspace-repo-ancestry-real-git.test.ts (S5).
+    const negative = `^refs/soleur/worktrees/${WT}/heads/soleur-store-tip-*`;
+    expect(argv).toContain(negative);
+    expect(argv).not.toContain("--prune");
     // NEGATIVE (the data-loss hazard the retarget closes): NO refspec destination
     // may map into a local branch — a `+…:refs/heads/*` force-fetch into a live
     // checked-out branch discards local-only commits.
     expect(argv.some((a) => a.includes(":refs/heads/"))).toBe(false);
     // The transport target MUST be the EXPLICIT URL built from the authorized
     // workspaceId — never a local remote NAME that could point at another tenant.
-    expect(argv).toContain(`ssh://git@10.0.1.20/repositories/${WS_A}.git`);
+    expect(argv).toContain(`ssh://git@10.0.1.20/mnt/git-data/repositories/${WS_A}.git`);
     expect(argv).not.toContain("git-data");
   });
 

@@ -690,7 +690,8 @@ reset_fakes() {
   export FAKE_TURBO_RC=0 FAKE_TURBO_EXPECT=""
   export FAKE_RUNNER_RC=0 FAKE_RUNNER_AFFECTED_RC="" FAKE_RUNNER_FULL_RC=""
   export FAKE_PM_TEST_RC=0
-  export FAKE_GIT_FAIL_OTHERS=0
+  export FAKE_GIT_FAIL_OTHERS=0 FAKE_GIT_FAIL_VERB=""
+  export FAKE_CT_RC=0 FAKE_CT_SLEEP="" FAKE_CT_NOLEDGER=0
 }
 
 RSEQ=0; RC=0; OUT=""
@@ -1282,6 +1283,14 @@ GITFAILBIN="$TESTROOT/bin-gitfail"; mkdir -p "$GITFAILBIN"
 ln -sf "$BIN"/* "$GITFAILBIN/"
 cat > "$GITFAILBIN/git" <<'SHIM'
 #!/usr/bin/env bash
+if [[ -n "${FAKE_GIT_FAIL_VERB:-}" ]]; then
+  for _a in "$@"; do
+    if [[ "$_a" == "$FAKE_GIT_FAIL_VERB" ]]; then
+      echo "stub git: simulated $FAKE_GIT_FAIL_VERB failure" >&2
+      exit 1
+    fi
+  done
+fi
 if [[ "${FAKE_GIT_FAIL_OTHERS:-0}" == "1" ]]; then
   _ls=0; _oth=0
   for _a in "$@"; do
@@ -1757,6 +1766,574 @@ else
 fi
 unset _f _hits _head _PORT_FILES port_hits _BANNED _allsrc _h _golist_unb
 
+# ====================== Guard 4 — content trigger (#10924 P4b) ==================
+# A config-declared string, ADDED to a file under configured globs, makes a passing
+# selected/inert run also run a configured command. Every "ran" claim below is
+# asserted against the invocation ledger (the `ctcmd` line the stub appends), never
+# against an exit code alone, and every marker row pins the WHOLE line. The pattern
+# is a synthesized `zz-marker/` so nothing here is hard-coded to this repository.
+
+CT_PAT='zz-marker/'
+CT_RUN='AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=delegated stack=runner ci=none'
+
+write_ct_cmd() { # <repo> — logs `ctcmd seq=<ledger line>`; honours FAKE_CT_RC / _SLEEP / _NOLEDGER
+  mkdir -p "$1/scripts"
+  cat > "$1/scripts/ct-cmd.sh" <<'CT'
+#!/usr/bin/env bash
+[[ "${FAKE_CT_NOLEDGER:-0}" == 1 ]] || printf 'ctcmd\tseq=%s\n' "$(( $(wc -l < "${FAKE_LOG:?}") + 1 ))" >> "$FAKE_LOG"
+[[ -z "${FAKE_CT_SLEEP:-}" ]] || sleep "$FAKE_CT_SLEEP"
+exit "${FAKE_CT_RC:-0}"
+CT
+  cat > "$1/scripts/other-cmd.sh" <<'CT'
+#!/usr/bin/env bash
+printf 'otherctcmd\n' >> "${FAKE_LOG:?}"
+exit 0
+CT
+  chmod +x "$1/scripts/ct-cmd.sh" "$1/scripts/other-cmd.sh"
+}
+
+ct_cfg() { # <paths-json> [pattern] [command] [extra-json-members]
+  printf '{"content_trigger_pattern":"%s","content_trigger_paths":%s,"content_trigger_command":"%s"%s}' \
+    "${2:-$CT_PAT}" "$1" "${3:-bash scripts/ct-cmd.sh}" "${4:-}"
+}
+
+# mk_ct_repo <name> <paths-json> [pattern] [command] [extra] — delegated-runner repo with
+# the trigger armed. Config, command stubs and a base test file that ALREADY names the
+# pattern are all committed in BASE, so only the rows' own changes are in the diff.
+mk_ct_repo() {
+  local r; r="$(mk_repo "$1" "${CT_BRANCH:-main}")"
+  write_runner_capable "$r"; write_ct_cmd "$r"
+  write_config "$r" "$(ct_cfg "$2" "${3:-$CT_PAT}" "${4:-bash scripts/ct-cmd.sh}" "${5:-}")"
+  mkdir -p "$r/tests"
+  printf 'l1\n%s present\nl3\n' "$CT_PAT" > "$r/tests/base.test.sh"
+  [[ "${CT_WITH_CI:-0}" == 1 ]] && seed_ci "$r"
+  seal_base "$r"
+  printf '%s' "$r"
+}
+
+ct_seq() { sed -n "/^$1/{=;q}" "$CALLS"; } # <ledger-prefix> -> first ledger line number
+want_marker() { # <label> <exact AFFECTED_GATE line>
+  local got; got="$(sed -n 's/^.*\(AFFECTED_GATE ran=.*\)$/\1/p' <<<"$OUT" | tail -n 1)"
+  if [[ "$got" == "$2" ]]; then pass "$1"
+  else fail "$1 — marker '$got' want '$2'"; fi
+}
+
+# T1 [M1]: a committed file under a glob adds the pattern → the command runs, after the
+# runner, and the marker names it.
+R_T1="$(mk_ct_repo ct1 '["tests/*"]')"
+commit_chg "$R_T1" tests/new.test.sh "added $CT_PAT here"
+reset_fakes; run_gate "$R_T1" gate
+want_rc 0 "T1: a firing diff passes"
+want_call "T1: the runner ran" 'test-all	--affected'
+want_call "T1: the content-trigger command ran (ledger)" '^ctcmd	'
+want_marker "T1: whole marker line carries content_trigger=ran" "$CT_RUN content_trigger=ran"
+_rl="$(ct_seq 'test-all')"; _cl="$(ct_seq 'ctcmd')"
+if [[ -n "$_rl" && -n "$_cl" ]] && (( _rl < _cl )); then
+  pass "T1/M3: the command ran AFTER the primary run (ledger sequence $_rl < $_cl)"
+else
+  fail "T1/M3: ordering broken — runner line '$_rl', command line '$_cl'"
+fi
+unset _rl _cl
+
+# T2 [M2]: two changed files; the first is clean, the SECOND matches — a scan that
+# stops at the first compliant file would miss it.
+R_T2="$(mk_ct_repo ct2 '["tests/*"]')"
+commit_chg "$R_T2" tests/a-clean.test.sh 'nothing to see'
+commit_chg "$R_T2" tests/b-hit.test.sh "x $CT_PAT y"
+reset_fakes; run_gate "$R_T2" gate
+want_call "T2: the second changed file fires the trigger" '^ctcmd	'
+want_marker "T2: marker" "$CT_RUN content_trigger=ran"
+
+# T3 [M8]: a NEW UNTRACKED file with the pattern fires (a typical in-progress fixture).
+R_T3="$(mk_ct_repo ct3 '["tests/*"]')"
+chg "$R_T3" tests/untracked.test.sh "u $CT_PAT"
+reset_fakes; run_gate "$R_T3" gate
+want_call "T3: an untracked file under the globs fires the trigger" '^ctcmd	'
+want_marker "T3: marker" "$CT_RUN content_trigger=ran"
+
+# T4 [M4]: the pattern is already in the file; an unrelated line is added ADJACENT to
+# it. A scan of whole files, or with context lines, would fire — the added line must be
+# the only text that counts.
+R_T4="$(mk_ct_repo ct4 '["tests/*"]')"
+printf 'l1\n%s present\nNEW unrelated line\nl3\n' "$CT_PAT" > "$R_T4/tests/base.test.sh"
+assert_fixture_dir "$R_T4"; git -C "$R_T4" add -A; git -C "$R_T4" commit -q -m "adjacent"
+reset_fakes; run_gate "$R_T4" gate
+want_no_call "T4: a pre-existing mention does not fire" '^ctcmd	'
+want_marker "T4: marker says clear" "$CT_RUN content_trigger=clear"
+
+# T5 [M5]: no resolvable base → the scan cannot decide → the command RUNS.
+R_T5="$(mk_repo ct5)"; write_runner_capable "$R_T5"; write_ct_cmd "$R_T5"
+write_config "$R_T5" "$(ct_cfg '["tests/*"]')"; mkdir -p "$R_T5/tests"; printf 'base\n' > "$R_T5/tests/base.test.sh"
+assert_fixture_dir "$R_T5"; git -C "$R_T5" add -A; git -C "$R_T5" commit -q -m base; git -C "$R_T5" checkout -q -b feature
+commit_chg "$R_T5" tests/x.test.sh 'no pattern at all'
+reset_fakes; run_gate "$R_T5" gate
+want_rc 0 "T5: an undecidable scan still passes when the command passes"
+want_call "T5: the command ran although the scan could not decide" '^ctcmd	'
+want_marker "T5: marker names scan-error" "$CT_RUN content_trigger=scan-error"
+want_out "T5: the undecided leg is named" 'content-trigger scan could not decide \(leg=no-base\)'
+
+# T6 [M6]: the command's own failure is the gate's failure.
+R_T6="$(mk_ct_repo ct6 '["tests/*"]')"
+commit_chg "$R_T6" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=1; run_gate "$R_T6" gate
+want_rc 1 "T6: a failing command fails the gate"
+want_marker "T6: whole marker line" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=content-trigger-failed stack=runner ci=none content_trigger=failed"
+want_out "T6: the failure is named on stdout with its rc" '^CONTENT_TRIGGER_FAILED rc=1$'
+want_out "T6: and a remedy points at the config key" 'remedy: run the content_trigger_command'
+
+# T7 [M3]: a failing PRIMARY run skips the command (ledger proves it) and says so.
+R_T7="$(mk_ct_repo ct7 '["tests/*"]')"
+commit_chg "$R_T7" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_RUNNER_RC=1; run_gate "$R_T7" gate
+want_rc 1 "T7: a failing primary run fails the gate"
+want_no_call "T7: the command did not run behind a failed primary" '^ctcmd	'
+want_marker "T7: marker says skipped" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=failed stack=runner ci=none content_trigger=skipped"
+
+# T8: the pattern added OUTSIDE the globs does not fire.
+R_T8="$(mk_ct_repo ct8 '["tests/*"]')"
+commit_chg "$R_T8" src/outside.sh "$CT_PAT"
+reset_fakes; run_gate "$R_T8" gate
+want_no_call "T8: a changed file outside the globs does not fire" '^ctcmd	'
+want_marker "T8: marker says clear" "$CT_RUN content_trigger=clear"
+
+# T9 [M7]: a LARGE untracked file (many SHORT lines — one 300 KB line does not reproduce it)
+# naming the pattern on its first line. Read through a pipe under pipefail, grep -q's early exit SIGPIPEs the producer and the hit reads as a
+# miss; the scan reads the file directly.
+R_T9="$(mk_ct_repo ct9 '["tests/*"]')"
+{ printf '%s\n' "$CT_PAT"; yes 'filler line of text' | head -n 40000; } > "$R_T9/tests/big.test.sh"
+reset_fakes; run_gate "$R_T9" gate
+want_call "T9: a >64 KB untracked file with an early hit fires" '^ctcmd	'
+want_marker "T9: and the scan DECIDED (ran, not scan-error: an undecided scan also runs the command)" "$CT_RUN content_trigger=ran"
+
+# T10 [M9]: nothing here ADDS text containing the pattern, so none may fire:
+# (a) a path that names it; (b) a diff that only REMOVES the line naming it; (c) a pure
+# rename of a file that names it.
+R_T10A="$(mk_ct_repo ct10a '["tests/*"]')"
+commit_chg "$R_T10A" "tests/${CT_PAT}hello.txt" 'plain content'
+reset_fakes; run_gate "$R_T10A" gate
+want_no_call "T10a: a path naming the pattern does not fire" '^ctcmd	'
+R_T10B="$(mk_ct_repo ct10b '["tests/*"]')"
+assert_fixture_dir "$R_T10B"; printf 'l1\nl3\n' > "$R_T10B/tests/base.test.sh"; git -C "$R_T10B" add -A; git -C "$R_T10B" commit -q -m "removal"
+reset_fakes; run_gate "$R_T10B" gate
+want_no_call "T10b: a removal-only diff does not fire" '^ctcmd	'
+R_T10C="$(mk_ct_repo ct10c '["tests/*"]')"
+assert_fixture_dir "$R_T10C"; git -C "$R_T10C" mv tests/base.test.sh tests/renamed.test.sh; git -C "$R_T10C" commit -q -m "rename"
+reset_fakes; run_gate "$R_T10C" gate
+want_call "T10c: a rename of a file that names the string fires (--no-renames: delete plus add)" '^ctcmd	'
+
+# T11 [M10]: the exits that are not a selected verdict never run the command, and
+# --explain reports without running anything.
+R_T11="$(mk_ct_repo ct11 '["tests/*"]')"
+commit_chg "$R_T11" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_T11" selfcheck --self-check
+want_no_call "T11: --self-check never runs the command" '^ctcmd	'
+reset_fakes; run_gate "$R_T11" explain --explain
+want_rc 0 "T11: --explain exits 0"
+want_out "T11: --explain reports the armed trigger and its state" '^CONTENT_TRIGGER armed=1 state=fired paths=1$'
+want_no_call "T11: --explain never runs the command" '^ctcmd	'
+reset_fakes; run_gate "$R_T11" gate --full
+want_no_call "T11: --full never runs the command" '^ctcmd	'
+want_no_out "T11: a --full marker carries no content_trigger field" 'content_trigger='
+R_T11B="$(mk_ct_repo ct11b '["tests/*"]' "$CT_PAT" 'bash scripts/ct-cmd.sh' ',"test_command":"bash scripts/other-cmd.sh"')"
+reset_fakes; run_gate "$R_T11B" explain --explain
+want_no_out "T11: the test_command explain arm prints no CONTENT_TRIGGER line" 'CONTENT_TRIGGER'
+
+# T12: the budget bounds the command. With a CI workflow the deferral is rc 6; with none
+# the command's own expiry exit (124) is a plain failure.
+R_T12="$(CT_WITH_CI=1 mk_ct_repo ct12 '["tests/*"]' "$CT_PAT" 'bash scripts/ct-cmd.sh' ',"budget_seconds":2')"
+commit_chg "$R_T12" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_CT_SLEEP=6; run_gate "$R_T12" gate
+want_rc 6 "T12: the budget expiring inside the command defers (CI detected)"
+want_out "T12: the deferral marker prints" 'AFFECTED_GATE_BUDGET_DEFERRED'
+want_marker "T12: the command started and timed out: field is deferred, not skipped" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=budget-deferred stack=runner ci=.github/workflows/ci.yml content_trigger=deferred"
+R_T12C="$(CT_WITH_CI=1 mk_ct_repo ct12c '["tests/*"]' "$CT_PAT" 'bash scripts/ct-cmd.sh' ',"budget_seconds":60')"
+commit_chg "$R_T12C" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_T12C" gate
+want_rc 0 "T12: the same CI repo without the sleep passes (the budget, not the CI, caused the deferral)"
+want_marker "T12: and reports ran" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=delegated stack=runner ci=.github/workflows/ci.yml content_trigger=ran"
+R_T12B="$(mk_ct_repo ct12b '["tests/*"]')"
+commit_chg "$R_T12B" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=124; run_gate "$R_T12B" gate
+want_rc 1 "T12: an expiry-shaped exit without a CI workflow is a plain failure"
+
+# T13: config errors are refused, each naming the key.
+ct_bad() { # <name> <json> <ere>
+  local r; r="$(mk_cfg_repo "$1" "$2")"
+  reset_fakes; run_gate "$r" gate
+  want_rc 4 "T13: $1 refused"
+  want_out "T13: $1 names the cause" "$3"
+}
+ct_bad ct13-nopaths '{"content_trigger_pattern":"x/"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-nocmd '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*"]}' 'bad-config key=content_trigger_command'
+ct_bad ct13-nopattern '{"content_trigger_paths":["tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_pattern'
+ct_bad ct13-emptypaths '{"content_trigger_pattern":"x/","content_trigger_paths":[],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-all '{"content_trigger_pattern":"x/","content_trigger_paths":["*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-deepall '{"content_trigger_pattern":"x/","content_trigger_paths":["**/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-vacuous '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*"],"content_trigger_command":"true"}' 'bad-config key=content_trigger_command'
+ct_bad ct13-emptypat '{"content_trigger_pattern":"","content_trigger_paths":["tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_pattern'
+ct_bad ct13-nlpat '{"content_trigger_pattern":"a\nb","content_trigger_paths":["tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_pattern'
+ct_bad ct13-numpat '{"content_trigger_pattern":3,"content_trigger_paths":["tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_pattern'
+ct_bad ct13-strpaths '{"content_trigger_pattern":"x/","content_trigger_paths":"tests/*","content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dotslash '{"content_trigger_pattern":"x/","content_trigger_paths":["./tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-abs '{"content_trigger_pattern":"x/","content_trigger_paths":["/tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-trailslash '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-secondall '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*","*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-emptyglob '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*",""],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-arrcmd '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*"],"content_trigger_command":["bash"]}' 'bad-config key=content_trigger_command'
+
+# T14: a path with a space and a non-ASCII character, under a repo whose diff config
+# strips or rewrites prefixes, fires; the hook honours --base while defaulting to
+# origin/main.
+R_T14="$(mk_ct_repo ct14 '["tests/*"]')"
+assert_fixture_dir "$R_T14"; git -C "$R_T14" config diff.noprefix true
+assert_fixture_dir "$R_T14"; git -C "$R_T14" config diff.mnemonicPrefix true
+_b0="$(git -C "$R_T14" rev-parse origin/main)"
+commit_chg "$R_T14" 'tests/dir with space/é.test.sh' "$CT_PAT"
+reset_fakes; run_gate "$R_T14" gate
+want_call "T14: a spaced, non-ASCII path fires despite diff.noprefix/mnemonicPrefix" '^ctcmd	'
+assert_fixture_dir "$R_T14"; git -C "$R_T14" update-ref refs/remotes/origin/main HEAD
+reset_fakes; run_gate "$R_T14" gate
+want_no_call "T14: with origin/main at HEAD nothing is pending" '^ctcmd	'
+reset_fakes; run_gate "$R_T14" gate --base "$_b0"
+want_call "T14: --base steers the scan" '^ctcmd	'
+unset _b0
+
+# T15: the inert path. A docs-only diff that nonetheless names the pattern runs the
+# command and no longer claims "docs-only"; without the pattern it still does.
+mk_inert_ct_repo() { # <name>
+  local r; r="$(mk_repo "$1")"; seed_js "$r"; write_ct_cmd "$r"
+  write_config "$r" "$(ct_cfg '["docs/*"]')"
+  [[ "${CT_WITH_CI:-0}" == 1 ]] && seed_ci "$r"
+  seal_base "$r"; printf '%s' "$r"
+}
+R_T15="$(mk_inert_ct_repo ct15)"
+commit_chg "$R_T15" docs/note.md "$CT_PAT"
+reset_fakes; run_gate "$R_T15" gate
+want_rc 0 "T15: an inert diff that fires the trigger passes"
+want_call "T15: the command ran on the inert path" '^ctcmd	'
+want_no_out "T15: no 'docs-only change' claim after the command ran" 'docs-only change'
+want_marker "T15: whole marker line" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=inert-content-trigger stack=- ci=none content_trigger=ran"
+R_T15B="$(mk_inert_ct_repo ct15b)"
+commit_chg "$R_T15B" docs/note.md 'plain prose'
+reset_fakes; run_gate "$R_T15B" gate
+want_out "T15: a clean inert diff keeps the docs-only claim" 'docs-only change'
+want_no_call "T15: and runs nothing" '^ctcmd	'
+want_out "T15: and the marker says clear" 'reason=inert stack=- ci=none content_trigger=clear$'
+
+# T16: the committed repo config arms the trigger on a real checkout.
+run_gate "$REPO_ROOT" explain --explain
+want_rc 0 "T16: the live repo's gate config validates"
+want_out "T16: the live repo's trigger is armed" '^CONTENT_TRIGGER armed=1 state='
+_ct_cfg_cmd="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("content_trigger_command",""))' "$REPO_ROOT/.soleur-test-gate.json" 2>/dev/null || true)"
+_ct_cfg_pat="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("content_trigger_pattern",""))' "$REPO_ROOT/.soleur-test-gate.json" 2>/dev/null || true)"
+if [[ "$_ct_cfg_cmd" == "bash scripts/test-affected-kb-consumers.test.sh" && "$_ct_cfg_pat" == "knowledge""-base/" ]]; then
+  pass "T16: the committed trigger runs the dropped-consumer ratchet on the kb path"
+else
+  fail "T16: the committed trigger is '$_ct_cfg_pat' -> '$_ct_cfg_cmd'"
+fi
+unset _ct_cfg_cmd _ct_cfg_pat
+
+
+# ---- adapter arm, scan legs, glob/config edge cases, marker honesty ----
+
+# E1: --explain on an INERT diff reports and runs nothing (the inert exit is a third
+# explain-capable exit; the flag that arms the hook must not make it run the command).
+R_CTE1="$(mk_inert_ct_repo cte1)"
+commit_chg "$R_CTE1" docs/note.md "$CT_PAT"
+reset_fakes; run_gate "$R_CTE1" explain --explain
+want_no_call "CTE1: --explain on an inert diff never runs the command" '^ctcmd	'
+want_out "CTE1: and reports the scan state" '^CONTENT_TRIGGER armed=1 state=fired paths=1$'
+
+# A: the ADAPTER arm (a repo with no capability-positive runner).
+mk_adapter_ct() { # <name> — vitest stack, trigger armed on src/*
+  local r; r="$(mk_repo "$1")"; seed_js "$r"; write_ct_cmd "$r"
+  write_config "$r" "$(ct_cfg '["src/*"]')"; seal_base "$r"; printf '%s' "$r"
+}
+R_A1="$(mk_adapter_ct cta1)"
+commit_chg "$R_A1" src/fx.test.ts "import x; // $CT_PAT"
+reset_fakes; run_gate "$R_A1" gate
+want_rc 0 "A1: an adapter-arm selected run passes"
+want_call "A1: and ran the command" '^ctcmd	'
+want_field "A1: marker field" content_trigger 'ran'
+want_field "A1: mode is selected" mode 'selected'
+reset_fakes; run_gate "$R_A1" gate --full
+want_no_call "A2: an operator's --full never runs the command (adapter arm)" '^ctcmd	'
+want_no_out "A2: and the marker carries no field" 'content_trigger='
+reset_fakes; run_gate "$R_A1" explain --explain --full
+want_no_out "A3: the adapter-arm --explain under an operator --full prints no CONTENT_TRIGGER line" 'CONTENT_TRIGGER'
+want_no_call "A3: and runs nothing" '^ctcmd	'
+reset_fakes; run_gate "$R_A1" explain --explain
+want_no_call "A3: --explain on the adapter arm runs nothing" '^ctcmd	'
+want_out "A3: and reports the armed trigger" '^CONTENT_TRIGGER armed=1 state=fired paths=1$'
+# A4: a gate-side escalation to full (a global-paths hit) still runs the command: the
+# stack adapter's full run never runs the repo-declared command.
+R_A4="$(mk_adapter_ct cta4)"
+commit_chg "$R_A4" src/fx.test.ts "import x; // $CT_PAT"
+commit_chg "$R_A4" package.json '{"name":"fixture-js","private":true,"scripts":{"test":"vitest run"},"devDependencies":{"vitest":"^4.0.0"},"x":1}'
+reset_fakes; run_gate "$R_A4" gate
+want_field "A4: the diff escalated to full (global paths)" reason 'global-paths'
+want_field "A4: mode=full" mode 'full'
+want_call "A4: the command ran although the gate escalated to full" '^ctcmd	'
+want_field "A4: marker field" content_trigger 'ran'
+
+# S: every scan leg that cannot decide runs the command (fail toward coverage).
+for _leg in diff merge-base; do
+  R_S="$(mk_ct_repo cts-$_leg '["tests/*"]')"
+  commit_chg "$R_S" tests/new.test.sh 'no pattern here'
+  reset_fakes; export FAKE_GIT_FAIL_VERB="$_leg"
+  run_gate_path "$GITFAILBIN:$BASEPATH" "$R_S" gate
+  want_call "S: a failing git $_leg still runs the command" '^ctcmd	'
+  want_field "S: git $_leg failure is a scan-error" content_trigger 'scan-error'
+  case "$_leg" in diff) _want='leg=diff' ;; *) _want='leg=no-merge-base' ;; esac
+  want_out "S: git $_leg failure names its own leg" "$_want"
+done
+unset _want
+R_S="$(mk_ct_repo cts-ls '["tests/*"]')"
+commit_chg "$R_S" tests/new.test.sh 'no pattern here'
+reset_fakes; export FAKE_GIT_FAIL_VERB=ls-files
+run_gate_path "$GITFAILBIN:$BASEPATH" "$R_S" gate
+want_call "S: a failing git ls-files still runs the command" '^ctcmd	'
+want_out "S: and names the leg" 'leg=ls-files'
+# A --base that looks like an option is never handed to git as one.
+reset_fakes; run_gate "$R_S" gate --base --all
+want_call "S: an option-shaped --base is a scan-error that runs the command" '^ctcmd	'
+want_out "S: and names the leg" 'leg=bad-base'
+unset _leg R_S
+
+# W: what the tracked/untracked legs read.
+R_W1="$(mk_ct_repo ctw1 '["tests/*"]')"
+printf 'l1\n%s present\nl3\nunstaged %s\n' "$CT_PAT" "$CT_PAT" > "$R_W1/tests/base.test.sh"
+reset_fakes; run_gate "$R_W1" gate
+want_call "W1: an UNSTAGED edit of a tracked file fires" '^ctcmd	'
+R_W2="$(mk_ct_repo ctw2 '["tests/*"]')"
+printf 'l1\n%s present\nl3\nstaged %s\n' "$CT_PAT" "$CT_PAT" > "$R_W2/tests/base.test.sh"
+assert_fixture_dir "$R_W2"; git -C "$R_W2" add tests/base.test.sh
+reset_fakes; run_gate "$R_W2" gate
+want_call "W2: a STAGED edit of a tracked file fires" '^ctcmd	'
+R_W3="$(mk_ct_repo ctw3 '["docs/*","tests/*"]')"
+commit_chg "$R_W3" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_W3" gate
+want_call "W3: a hit under the LAST of two globs fires" '^ctcmd	'
+reset_fakes; run_gate "$R_W3" explain --explain
+want_out "W3: --explain counts both globs" '^CONTENT_TRIGGER armed=1 state=fired paths=2$'
+R_W4="$(mk_ct_repo ctw4 '["tests/*","docs/*"]')"
+commit_chg "$R_W4" docs/new.txt "$CT_PAT"
+reset_fakes; run_gate "$R_W4" gate
+want_call "W4: a hit under the SECOND of two globs fires" '^ctcmd	'
+R_W5="$(mk_ct_repo ctw5 '["tests/*"]')"
+chg "$R_W5" src/outside.sh "$CT_PAT"
+reset_fakes; run_gate "$R_W5" gate
+want_no_call "W5: an UNTRACKED file outside the globs does not fire" '^ctcmd	'
+want_field "W5: marker says clear" content_trigger 'clear'
+R_W6="$(mk_ct_repo ctw6 '["tests/*"]')"
+commit_chg "$R_W6" .gitignore 'tests/ignored.test.sh'
+chg "$R_W6" tests/ignored.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_W6" gate
+want_no_call "W6: a gitignored untracked file does not fire" '^ctcmd	'
+want_field "W6: and the scan answered clear" content_trigger 'clear'
+R_W7="$(mk_ct_repo ctw7 '["tests/*"]')"
+printf 'a\0%s\n' "$CT_PAT" > "$R_W7/tests/blob.test.sh"
+reset_fakes; run_gate "$R_W7" gate
+want_call "W7: an untracked file with a NUL byte fires (as the tracked --text leg does)" '^ctcmd	'
+R_W8="$(mk_ct_repo ctw8 '["tests/*"]')"
+commit_chg "$R_W8" .gitattributes 'tests/attr.test.sh -diff'
+commit_chg "$R_W8" tests/attr.test.sh "x $CT_PAT"
+reset_fakes; run_gate "$R_W8" gate
+want_field "W8: a tracked file marked -diff is still read (--text)" content_trigger 'ran'
+R_W9="$(mk_ct_repo ctw9 '["tests/*"]')"
+printf 'outside %s\n' "$CT_PAT" > "$TESTROOT/outside-target.txt"
+ln -s "$TESTROOT/outside-target.txt" "$R_W9/tests/link.test.sh"
+reset_fakes; run_gate "$R_W9" gate
+want_no_call "W9: an untracked symlink is not read" '^ctcmd	'
+want_field "W9: and the scan answered clear" content_trigger 'clear'
+R_W10="$(mk_ct_repo ctw10 '["tests/*"]')"
+commit_chg "$R_W10" 'tests/q"uote.test.sh' "$CT_PAT"
+reset_fakes; run_gate "$R_W10" gate
+want_call "W10: a tracked file whose name git C-quotes still runs the command" '^ctcmd	'
+want_out "W10: scan-error, leg quoted-path" 'leg=quoted-path'
+R_W11="$(mk_ct_repo ctw11 '["tests/*"]')"
+chg "$R_W11" 'tests/q"u.test.sh' 'nothing'
+reset_fakes; run_gate "$R_W11" gate
+want_call "W11: an untracked C-quoted name runs the command" '^ctcmd	'
+want_out "W11: scan-error, leg quoted-path" 'leg=quoted-path'
+R_W12="$(mk_ct_repo ctw12 '["tests/*"]')"
+for _i in $(seq 1 501); do printf 'x\n' > "$R_W12/tests/gen$_i.txt"; done
+reset_fakes; run_gate "$R_W12" gate
+want_call "W12: an untracked tree past the read cap runs the command" '^ctcmd	'
+want_out "W12: scan-error, leg untracked-cap" 'leg=untracked-cap'
+unset _i
+R_W13="$(mk_ct_repo ctw13 '["tests/*"]' 'a.b/')"
+commit_chg "$R_W13" tests/new.test.sh 'only axb/ here'
+reset_fakes; run_gate "$R_W13" gate
+want_no_call "W13: the pattern is a FIXED string ('.' is not a wildcard)" '^ctcmd	'
+want_field "W13: and the scan answered clear" content_trigger 'clear'
+commit_chg "$R_W13" tests/other.test.sh 'literal a.b/ here'
+reset_fakes; run_gate "$R_W13" gate
+want_call "W13: and the literal form fires" '^ctcmd	'
+R_W14="$(CT_BRANCH=master mk_ct_repo ctw14 '["tests/*"]')"
+commit_chg "$R_W14" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_W14" gate
+want_field "W14: origin/master is the fallback base" content_trigger 'ran'
+R_W15="$(mk_ct_repo ctw15 '["tests/*.test.sh"]')"
+assert_fixture_dir "$R_W15"; git -C "$R_W15" config diff.renames false
+commit_chg "$R_W15" 'tests/dir with space/é.test.sh' "$CT_PAT"
+reset_fakes; run_gate "$R_W15" gate
+want_field "W15: a spaced path under a SUFFIX glob fires (the TAB git appends is stripped)" content_trigger 'ran'
+
+# P: a primary that is refused owns the verdict.
+R_P1="$(mk_ct_repo ctp1 '["tests/*"]')"
+commit_chg "$R_P1" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_RUNNER_RC=4; run_gate "$R_P1" gate
+want_no_call "P1: a refused (rc 4) primary does not run the command" '^ctcmd	'
+want_marker "P1: marker says skipped" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=runner-refused stack=runner ci=none content_trigger=skipped"
+
+# I: an inert diff whose command fails keeps the marker honest.
+R_I1="$(mk_inert_ct_repo cti1)"
+commit_chg "$R_I1" docs/note.md "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=1; run_gate "$R_I1" gate
+want_rc 1 "I1: an inert diff whose command fails fails the gate"
+want_marker "I1: marker is not the inert counts under mode=none" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=content-trigger-failed stack=- ci=none content_trigger=failed"
+# I2: the inert exit precedes the generic budget arming, so it arms its own: a command
+# killed (137) on an inert diff with a detected CI workflow defers to CI like any other run.
+R_I2="$(CT_WITH_CI=1 mk_inert_ct_repo cti2)"
+commit_chg "$R_I2" docs/note.md "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=137; run_gate "$R_I2" gate
+want_rc 6 "I2: an inert diff with CI and a killed command defers (the budget is armed on the inert exit)"
+want_field "I2: field is deferred" content_trigger 'deferred'
+
+# ---- second batch: escalated full, deferred primary, 137, bounds, fixed strings, dead globs ----
+
+# A5: a degraded census (git ls-files --others fails) escalates the adapter to full; the
+# trigger must still run. (ARG_FULL is set by the escalation, ARG_FULL_REQUESTED is not.)
+R_A5="$(mk_adapter_ct cta5)"
+commit_chg "$R_A5" src/fx.test.ts "import x; // $CT_PAT"
+printf 'import { test } from "vitest";\ntest("n", () => {});\n' > "$R_A5/src/new.test.ts"
+reset_fakes; export FAKE_GIT_FAIL_OTHERS=1
+run_gate_path "$GITFAILBIN:$BASEPATH" "$R_A5" gate
+want_field "A5: the census degraded to full" reason 'census-degraded'
+want_call "A5: the command ran although the gate escalated to full" '^ctcmd	'
+
+# P2: a delegated primary that defers (rc 6 via budget) owns the verdict: command skipped.
+R_P2="$(CT_WITH_CI=1 mk_ct_repo ctp2 '["tests/*"]' "$CT_PAT" 'bash scripts/ct-cmd.sh' ',"budget_seconds":60')"
+commit_chg "$R_P2" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_RUNNER_RC=124; run_gate "$R_P2" gate
+want_rc 6 "P2: a runner expiry defers (CI detected)"
+want_no_call "P2: and the command does not run behind a deferred primary" '^ctcmd	'
+want_field "P2: marker says skipped" content_trigger 'skipped'
+
+# D137: the command itself exiting 137 under an active budget with CI defers like 124.
+R_D1="$(CT_WITH_CI=1 mk_ct_repo ctd1 '["tests/*"]' "$CT_PAT" 'bash scripts/ct-cmd.sh' ',"budget_seconds":60')"
+commit_chg "$R_D1" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=137; run_gate "$R_D1" gate
+want_rc 6 "D137: a command exit of 137 under an active budget defers"
+want_field "D137: field is deferred" content_trigger 'deferred'
+want_out "D137: the SIGKILL note is printed" 'exited 137'
+want_out "D137: and the human line says only the command is owed" 'only the command is owed to CI'
+
+# U: untracked-leg bounds and guards.
+R_U1="$(mk_ct_repo ctu1 '["tests/*"]' 'a.b/')"
+printf 'axb/ only\n' > "$R_U1/tests/untracked.test.sh"
+reset_fakes; run_gate "$R_U1" gate
+want_no_call "U1: the UNTRACKED leg also matches a fixed string ('.' is not a wildcard)" '^ctcmd	'
+want_field "U1: and answered clear" content_trigger 'clear'
+printf 'a.b/ here\n' > "$R_U1/tests/untracked2.test.sh"
+reset_fakes; run_gate "$R_U1" gate
+want_call "U1: the literal form fires" '^ctcmd	'
+R_U2="$(mk_ct_repo ctu2 '["tests/*"]')"
+for _i in $(seq 1 500); do printf 'x\n' > "$R_U2/tests/gen$_i.txt"; done
+reset_fakes; run_gate "$R_U2" gate
+want_field "U2: exactly 500 candidate files is within the read cap" content_trigger 'clear'
+unset _i
+R_U3="$(mk_ct_repo ctu3 '["tests/*"]')"
+mkdir -p "$R_U3/gen"; ( cd "$R_U3/gen" && seq 1 20001 | sed 's/^/f/' | xargs touch )
+reset_fakes; run_gate "$R_U3" gate
+want_out "U3: an untracked listing past 20000 entries declines (cap, outside the globs)" 'leg=untracked-cap'
+want_call "U3: and runs the command" '^ctcmd	'
+if [[ "$(id -u)" != "0" ]]; then
+  R_U4="$(mk_ct_repo ctu4 '["tests/*"]')"
+  printf 'x\n' > "$R_U4/tests/locked.test.sh"; chmod 000 "$R_U4/tests/locked.test.sh"
+  reset_fakes; run_gate "$R_U4" gate
+  want_out "U4: an unreadable untracked file (grep error) declines" 'leg=grep'
+  chmod 600 "$R_U4/tests/locked.test.sh"
+fi
+
+# X: pattern shapes the scan must treat literally.
+R_X1="$(mk_ct_repo ctx1 '["tests/*"]' '-xq/')"
+commit_chg "$R_X1" tests/new.test.sh 'a -xq/ b'
+reset_fakes; run_gate "$R_X1" gate
+want_field "X1: a leading-dash pattern is a pattern, not an option" content_trigger 'ran'
+R_X1U="$(mk_ct_repo ctx1u '["tests/*"]' '-xq/')"
+chg "$R_X1U" tests/untracked.test.sh 'c -xq/ d'
+reset_fakes; run_gate "$R_X1U" gate
+want_field "X1: (untracked leg alone: nothing committed to mask it)" content_trigger 'ran'
+R_X2="$(mk_ct_repo ctx2 '["tests/*"]' 'a\\b/')"
+printf '%s\n' 'x a\b/ y' > "$R_X2/tests/new.test.sh"  # commit_chg's printf %b would eat the backslash
+assert_fixture_dir "$R_X2"; git -C "$R_X2" add -A; git -C "$R_X2" commit -q -m "backslash"
+reset_fakes; run_gate "$R_X2" gate
+want_field "X2: a backslash in the pattern reaches awk verbatim (ENVIRON, not -v)" content_trigger 'ran'
+
+# B: base preference.
+R_B1="$(mk_ct_repo ctb1 '["tests/*"]')"
+commit_chg "$R_B1" tests/new.test.sh "$CT_PAT"
+assert_fixture_dir "$R_B1"; git -C "$R_B1" update-ref refs/remotes/origin/master HEAD
+reset_fakes; run_gate "$R_B1" gate
+want_field "B1: origin/main is preferred over origin/master (a stale master at HEAD must not hide the fixture)" content_trigger 'ran'
+
+# R: renames.
+R_R1="$(mk_ct_repo ctr1 '["tests/*"]')"
+mkdir -p "$R_R1/docs"; printf 'moves in %s\n' "$CT_PAT" > "$R_R1/docs/fx.sh"
+assert_fixture_dir "$R_R1"; git -C "$R_R1" add -A; git -C "$R_R1" commit -q -m "docs fx"
+git -C "$R_R1" update-ref refs/remotes/origin/main HEAD
+assert_fixture_dir "$R_R1"; git -C "$R_R1" mv docs/fx.sh tests/fx.sh
+printf 'unrelated edit\n' >> "$R_R1/tests/fx.sh"
+reset_fakes; run_gate "$R_R1" gate
+want_field "R1: moving a file that names the string INTO the globs, with an edit, fires" content_trigger 'ran'
+
+# V: explain under an operator --full is silent (a real --full would not run the command).
+R_V1="$(mk_ct_repo ctv1 '["tests/*"]')"
+commit_chg "$R_V1" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_V1" explain --explain --full
+want_no_out "V1: --explain --full prints no CONTENT_TRIGGER line" 'CONTENT_TRIGGER'
+want_no_call "V1: and runs nothing" '^ctcmd	'
+
+# G: config globs that can never match, or match too much.
+ct_bad ct13-brace '{"content_trigger_pattern":"x/","content_trigger_paths":["{a,b}/x"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dslash '{"content_trigger_pattern":"x/","content_trigger_paths":["tests//x"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dotseg '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/./x"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dotdot '{"content_trigger_pattern":"x/","content_trigger_paths":["../tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-space '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/* "],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-bang '{"content_trigger_pattern":"x/","content_trigger_paths":["!tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-notp '{"content_trigger_pattern":"x/","content_trigger_paths":["[!p]*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dot '{"content_trigger_pattern":"x/","content_trigger_paths":["."],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-trailingdot '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/."],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-hiddenonly '{"content_trigger_pattern":"x/","content_trigger_paths":[".h*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dotted '{"content_trigger_pattern":"x/","content_trigger_paths":["x/*.z"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-capq '{"content_trigger_pattern":"x/","content_trigger_paths":["Q*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-newlineglob '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*\nfoo"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+
+# H1: the ledger is the discriminator. With the stub's ledger write removed the gate
+# still REPORTS the command ran — so a row asserting the ledger would be RED.
+R_H1="$(mk_ct_repo cth1 '["tests/*"]')"
+commit_chg "$R_H1" tests/new.test.sh "$CT_PAT"
+reset_fakes; export FAKE_CT_NOLEDGER=1; run_gate "$R_H1" gate
+want_out "H1: the marker still claims the run" 'content_trigger=ran$'
+if grep -q '^ctcmd	' "$CALLS"; then fail "H1: the ledger was written despite the stub write being removed"
+else pass "H1: no ledger line without the stub write — every ledger row would go RED"; fi
+
+# H2: different pattern, globs and command still fire — nothing is hard-coded.
+R_H2="$(mk_ct_repo cth2 '["src/*"]' 'qq-other/' 'bash scripts/other-cmd.sh')"
+commit_chg "$R_H2" src/new.sh 'uses qq-other/ here'
+reset_fakes; run_gate "$R_H2" gate
+want_call "H2: a different pattern/glob/command fires" '^otherctcmd'
+want_no_call "H2: and the default command stays dark" '^ctcmd	'
+
+# H3: an UNARMED gate prints the pre-change marker line, byte for byte.
+R_H3="$(mk_repo cth3)"; write_runner_capable "$R_H3"; seal_base "$R_H3"
+commit_chg "$R_H3" tests/new.test.sh "$CT_PAT"
+reset_fakes; run_gate "$R_H3" gate
+want_marker "H3: unarmed marker is unchanged" "$CT_RUN"
+unset R_CTE1 R_A1 R_A4 R_A5 R_P1 R_P2 R_D1 R_I1 R_I2 R_U1 R_U2 R_U3 R_U4 R_X1 R_X1U R_X2 R_B1 R_R1 R_V1 R_W1 R_W2 R_W3 R_W4 R_W5 R_W6 R_W7 R_W8 R_W9 R_W10 R_W11 R_W12 R_W13 R_W14 R_W15 R_T12C R_T1 R_T2 R_T3 R_T4 R_T5 R_T6 R_T7 R_T8 R_T9 R_T10A R_T10B R_T10C R_T11 R_T11B R_T12 R_T12B R_T14 R_T15 R_T15B R_H1 R_H2 R_H3
+
 # ============================ cross-run contract ===============================
 # G1-10: every run path emits the marker — a second exit site that fires before the
 # emit leaves a run with no AFFECTED_GATE line, and these loops catch it.
@@ -1792,6 +2369,8 @@ else
 fi
 unset _kind _rc _of _xfail _badword
 
-print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-60}"
+# Floor = the full count less a little slack for the rows that
+# depend on a host binary (jq): it is a floor, so a deleted block of rows reddens it.
+print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-467}"
 
 

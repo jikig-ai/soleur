@@ -395,6 +395,8 @@ npm ci --ignore-scripts --prefix apps/web-platform   # needed by the webplat arm
 
 ## Sharp Edges
 
+- **A worktree attached by hand (`git worktree add` of an existing branch; `create` only makes new branches) has no lease, and a clean pushed worktree without an active lease is reapable by a sibling session's `cleanup-merged`.** Right after the manual add run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh" acquire_lease <branch> <skill> <minutes>` and confirm with `is_lease_active`; a lease is a time-boxed reservation (clamped to 24 h), so re-acquire it after a long pause. Commit and push as you go: a reaped directory loses only what was never committed. #10975 lost a worktree this way mid-gate.
+
 - **A `cd <abs path under the bare root>` from inside a worktree SUCCEEDS, and every command after it reads `main`.** The bare checkout carries the same tree (`apps/web-platform`, `plugins/soleur`, …) as every worktree, so a path written from memory resolves there without error and the suite you run reports on a branch you are not on — measured on #8418: `cd /data/…/soleur/apps/web-platform 2>/dev/null || cd <worktree>/apps/web-platform` took the FIRST arm and `vitest` printed 57/57 about `main`. The only tell is the harness's `# Environment update` notice. Anchor every `cd` on `$PWD` or `git rev-parse --show-toplevel`, never on a remembered absolute; `hr-when-in-a-worktree-never-read-from-bare` has no hook, so the discipline is the guard. **Why:** #8418.
 - **A git hook running in a LINKED WORKTREE exports `GIT_DIR` and `GIT_INDEX_FILE` as ABSOLUTE
   paths, and they override a subprocess's `cwd` and `git -C`.** A plain clone exports no

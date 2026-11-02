@@ -389,12 +389,10 @@ export const cronRulePrune = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 9 1 1,4,7,10 *" },
+      { event: "cron/rule-prune.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 1 1,4,7,10 *" },
-    { event: "cron/rule-prune.manual-trigger" },
-  ],
-  cronRulePruneHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronRulePruneHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

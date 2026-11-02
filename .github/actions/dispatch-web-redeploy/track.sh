@@ -102,9 +102,11 @@ trap 'rm -rf "$TMP"' EXIT
 
 # --- 1. Target tag from the running container ---------------------------------------
 RUNNING_VERSION="$(curl -sf --max-time 15 "$HEALTH_URL" 2>/dev/null | jq -r '.version // ""' 2>/dev/null || echo "")"
+RAW_VERSION="$RUNNING_VERSION"
+RUNNING_VERSION="${RUNNING_VERSION#v}"  # canonicalize like resolve-web1-known-good-tag.sh — a v-prefixed .version must not produce vv*
 TARGET_TAG="v${RUNNING_VERSION}"
 if [[ ! "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "::error::dispatch-web-redeploy: cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RUNNING_VERSION}'). The fleet is not reporting a released BUILD_VERSION — the same-version redeploy has nothing safe to re-run. verdict=redeploy_tag_unresolved"
+  echo "::error::dispatch-web-redeploy: cannot resolve a semver tag for the running container from ${HEALTH_URL} (.version='${RAW_VERSION}'). The fleet is not reporting a released BUILD_VERSION — the same-version redeploy has nothing safe to re-run. verdict=redeploy_tag_unresolved"
   exit 1
 fi
 echo "running version ${RUNNING_VERSION} → target tag ${TARGET_TAG} (same-image reload, no release)"

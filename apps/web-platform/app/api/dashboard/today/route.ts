@@ -13,6 +13,11 @@
 // rapid-refresh re-redact-thrash. 60s window is bounded by the
 // brand-survival threshold's acceptable freshness.
 //
+// The dashboard page's own fetcher sends `cache: "no-store"` (#11569/#11572 D22) and today it is the only
+// caller, so this max-age currently binds nothing; it stays as the bound for any future caller and for shared
+// caches. The page needs the archive from a Discard/Dismiss to show on its next revalidation, which a 60 s
+// browser-cached copy would defeat, so the cards also remove the acted-on item from the SWR list (use-refresh-today).
+//
 // Uses createClient() (cookie-scoped, RLS-enforced) so a malformed query
 // CANNOT leak cross-founder rows. Belt-and-suspenders: explicit
 // .eq("user_id", user.id) filter alongside table-level RLS.

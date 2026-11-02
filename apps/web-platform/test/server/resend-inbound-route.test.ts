@@ -350,7 +350,7 @@ describe("POST /api/webhooks/resend-inbound — recipients (ADR-269 routing key)
 });
 
 describe("POST /api/webhooks/resend-inbound — event emission", () => {
-  it("happy path emits exactly one email/inbound.received event with v:1 and receivedAt passthrough", async () => {
+  it("happy path emits exactly one email/inbound.received event with v:1 in data and receivedAt passthrough", async () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
@@ -359,7 +359,8 @@ describe("POST /api/webhooks/resend-inbound — event emission", () => {
       expect.objectContaining({
         id: `resend-${SVIX_ID}`,
         name: "email/inbound.received",
-        v: "1",
+        // inngest@4 SendEventPayload omits the top-level `v` — the version
+        // marker stays inside `data` (see the route comment).
         data: {
           v: "1",
           svixId: SVIX_ID,

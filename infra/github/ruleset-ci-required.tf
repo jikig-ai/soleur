@@ -343,10 +343,16 @@ resource "github_repository_ruleset" "ci_required" {
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured
     # p95 44.1 min, longest success 60.5 min (above the old 60) and one
     # `checks_timed_out` ejection. The stall probe (45 min) stays below it.
+    # `max_entries_to_merge = 3` (raised from 1 on #11678 under the ADR-270 raise
+    # checklist): groups batch merge LANDINGS, not `merge_group` builds — each
+    # position still pays its own cumulative candidate build. Preconditions landed
+    # in the same PR: merge-queue-cla-verify.sh enumerates every member PR
+    # (head_ref names only the deepest), and the Guard-2 safety pin sanctions
+    # {1,3} so a value-only 1->3 or 3->1 PR needs no guard edit.
     merge_queue {
       merge_method                      = "SQUASH"
       grouping_strategy                 = "ALLGREEN"
-      max_entries_to_merge              = 1
+      max_entries_to_merge              = 3
       min_entries_to_merge              = 1
       min_entries_to_merge_wait_minutes = 0
       max_entries_to_build              = 2

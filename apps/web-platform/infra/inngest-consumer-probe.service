@@ -31,10 +31,10 @@ SyslogIdentifier=inngest-consumer-probe
 # heartbeat URL). There is ONE dedicated inngest host, so unlike the per-host zot/NIC beats this
 # is a single shared beat and the mapping is an identity — the git-data probe precedent (C3:
 # "single-host makes masking moot"). The indirection is kept anyway so all three web probes read
-# identically. `doppler run` injects INNGEST_CONSUMER_URL; bash indirect expansion resolves it
-# under the generic name the script reads. `$$` is the SYSTEMD escape for a literal `$` (systemd
-# expands `$VAR`/`${VAR}` in ExecStart), so bash receives `${!INNGEST_CONSUMER_URL_KEY}`.
-# Shipped as a FILE rather than a heredoc so this nested-quoted doppler ExecStart survives intact
-# (the container-restart-monitor precedent in server.tf).
+# identically. `doppler run` injects INNGEST_CONSUMER_URL, and the probe resolves it through the
+# key NAME itself, AFTER its xtrace refusal. The ExecStart below expands and exports NOTHING
+# (#9639, #10637): the URL is a credential, and a wrapper that expanded it would print it under a
+# traced launch before the probe could refuse. doppler-injection-bound.test.sh rejects an indirect
+# expansion in the Exec directives of a doppler-run unit.
 EnvironmentFile=/etc/default/inngest-consumer-probe
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export INNGEST_CONSUMER_URL="$${!INNGEST_CONSUMER_URL_KEY}"; exec /usr/local/bin/inngest-consumer-probe.sh'\'''
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/inngest-consumer-probe.sh'

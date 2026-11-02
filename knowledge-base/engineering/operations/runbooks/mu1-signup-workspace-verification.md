@@ -218,7 +218,7 @@ after any App settings change):
   other `jikig-ai`-owned repos, so narrowing to "Only select
   repositories" would regress unrelated workflows). Confirm the
   installation id has not changed via
-  `gh api /orgs/jikig-ai/installations --jq '.installations[] |
+  `gh api --paginate /orgs/jikig-ai/installations --jq '.installations[] |
   select(.app_slug == "soleur-ai") | {id, repository_selection}'`.
   Expected: `{"id": 122213433, "repository_selection": "all"}`.
 - Credential provenance after #9995: `dev_scheduled` carries the

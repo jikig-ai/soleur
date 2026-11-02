@@ -122,10 +122,21 @@ step "[1/${TOTAL_STEPS}] terraform apply (R2 bucket + CF Lock Rules + 2 scoped t
 # Pull supporting values from prd_terraform (existing config — no admin scope
 # needed for these specific values).
 CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain)
-# State-backend creds (R2-as-S3 access for soleur-terraform-state — already
-# scoped to that bucket).
-STATE_KEY=$(doppler secrets get AWS_ACCESS_KEY_ID    -p soleur -c prd_terraform --plain)
-STATE_SEC=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+# State-backend creds: the soleur-terraform-state R2 bucket's READ/WRITE pair
+# lives in Tier B (soleur-infra-privileged/prd) as TF_STATE_AWS_* — the
+# prd_terraform AWS_* pair is read-only since O5b (#8209/ADR-241) and 403s the
+# apply's state PutObject. All-or-none: a half-set pair authenticates as nobody.
+STATE_KEY=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID    -p soleur-infra-privileged -c prd --plain) \
+  || { echo "::error::TF_STATE_AWS_ACCESS_KEY_ID unreadable in soleur-infra-privileged/prd" >&2; exit 1; }
+STATE_SEC=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain) \
+  || { echo "::error::TF_STATE_AWS_SECRET_ACCESS_KEY unreadable in soleur-infra-privileged/prd" >&2; exit 1; }
+# Present-but-empty is the other half of all-or-none (mirrors bootstrap-live-verify.sh's
+# -z check and apply-web-platform-infra.yml's empty-pair abort): `get --plain` on an empty
+# secret exits 0, and an empty pair fails the backend auth as a bare 403, not a named error.
+if [[ -z "$STATE_KEY" || -z "$STATE_SEC" ]]; then
+  echo "::error::TF_STATE_AWS_* pair is empty in soleur-infra-privileged/prd" >&2
+  exit 1
+fi
 
 # Common TF env (reused across init/apply/output calls).
 tf_env() {

@@ -1,0 +1,164 @@
+name: code-quality follow-ups watch
+
+# Weekly watcher that gives three open trackers an autonomous start:
+#   - #9730  re-evaluate GitHub Code Quality, due on or after 2026-11-14
+#   - #10515 lint-ratchet user-mode deferrals, due on or after 2027-01-18
+#   - #11177 brand-hex gate misses a chained add-then-commit (event-gated, P3)
+# Each job runs ONE committed, read-only script from scripts/ that gathers the data its
+# re-evaluation needs and posts it ONCE as a comment on its tracker. NOTIFY-ONLY: nothing
+# here closes, reopens, edits, labels or locks an issue, changes a repository setting, or
+# enables Code Quality. The only GitHub write is `gh issue comment` on the script's own
+# tracker (suite Guard 1 pins this with a recorded-argv oracle and a static allowlist census).
+# The keep-off or turn-on ruling is NOT made here: the posted comment says the next
+# `soleur:go` session has the CTO agent record it from the data.
+#
+# WHY a dedicated workflow and not a follow-through sweeper tracker: the sweeper comments
+# on every non-pass verdict with no per-verdict dedup and exit 0 closes the issue, so a
+# notify-only probe on an OPEN tracker would comment daily; the follow-through convention
+# routes this shape to a dedicated scheduled workflow (CTO ruling F2).
+#
+# WHY GitHub Actions and not an Inngest cron: the work is purely repo-scoped (GitHub API reads,
+# git history, one issue comment), uses only the default token with no app secret and no Sentry
+# integration, and gains nothing from `step.run` replay. The in-repo precedent is
+# registration-narrowing-watch.yml (PR #9660) and codeql-1537-revisit-watch.yml; the Inngest-first
+# scheduling rule is ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md
+# (three ADR files share the number 033; this is the Inngest-cron one). The
+# `*-watch.yml` name is deliberate: the Inngest-preference hook gates new `scheduled-*.yml`
+# files by filename.
+#
+# DEFAULT BRANCH ONLY: a dispatch from any other ref is skipped, because the scripts measure
+# the checked-out history and a feature-branch run could spend a once-only notice on commits
+# that never merged. A `schedule` event always runs on the default branch, so the guard lets
+# it through without consulting the payload (the repository default-branch field is not
+# relied on for scheduled runs, where it was not observable before the first real Monday).
+# The dispatch arm compares the full ref against the repository's default-branch NAME (not the
+# literal `main`, and a tag of the same name does not match). The repository condition keeps
+# a fork that enabled Actions from posting this repository's numbers on the fork's own issues.
+#
+# NOISE: weekly cadence means up to 7 days between a date and the post (first post
+# 2026-11-16 for #9730; 2027-01-18 is itself a Monday). A human-deleted or edited bot
+# comment makes the next Monday re-post once (acceptable); a tracker closed then reopened
+# resumes and reads its sentinel correctly. The guarantee is AT-LEAST-ONCE: a post that
+# lands server-side but fails client-side is still deduplicated by its sentinel next run,
+# and an operator who posts a real (non-dry) run locally posts as themselves, which the
+# bot-only sentinel reader does not count - run locally with --dry-run only.
+#
+# CONCURRENCY: with cancel-in-progress false the group keeps one running and one pending run, and a
+# third arrival replaces the pending one (negligible at a weekly cadence).
+#
+# RENAME OR TRANSFER: a repository rename or transfer makes all three job `if:` lines (which name
+# jikig-ai/soleur) skip silently; update them in the same change.
+#
+# SELF-DISABLE: once a tracker is not OPEN, or no longer resolves, its job is a cheap
+# no-op that prints a ::notice:: pointing here.
+#
+# RESIDUAL RISK (CTO ruling S2, documented not mitigated): a dropped or delayed scheduled run
+# and a persistent exit 3 show only as a missing or red run on the Actions tab; GitHub's failure
+# email goes to the account that last edited the cron line, which may not be watched. There is
+# deliberately no dead-man alarm (it would recreate the sweeper's daily noise). The post-merge
+# check is `gh workflow list` plus a `dry_run` dispatch, then confirming the first Monday's
+# scheduled run (`gh run list --event schedule`) did not skip the jobs.
+#
+# RETIREMENT: when #9730, #10515 and #11177 are all closed, delete every site below in one PR
+# (or one tracker's job, script and suite when only that tracker closes):
+#   - .github/workflows/code-quality-followups-watch.yml (this file)
+#   - scripts/lib/watch-notify-once.sh (only when the last job goes)
+#   - scripts/watch-code-quality-reeval-9730.sh and its .test.sh
+#   - scripts/watch-lint-ratchet-reeval-10515.sh and its .test.sh
+#   - scripts/watch-brand-hex-triggers-11177.sh and its .test.sh
+#   - the three run_suite lines in scripts/test-all.sh
+#   - the matching rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
+#   - the false-positive accept rows for the two watch suites that need them (6 for 10515, 5 for 11177) in
+#     scripts/ci-pr-affected-audit.accept.tsv (the replay ratchet fails on a stale accept row)
+#   - NOTE: scripts/watch-code-quality-reeval-9730.test.sh carries the ONE static forbidden-verb
+#     census; when that suite is deleted, move the census to the next surviving suite.
+#   - (leave the pointer comments on the trackers: they are harmless and a PR cannot delete them)
+#
+# To test manually without posting:
+#   gh workflow run code-quality-followups-watch.yml -f dry_run=true
+# A dispatch without dry_run=true on the default branch posts the REAL once-only notices
+# (each script still honours its own earliest date and sentinel).
+
+on:
+  schedule:
+    - cron: '17 9 * * 1' # Mondays 09:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Gather and print the would-be comments; post nothing and spend no sentinel'
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: code-quality-followups-watch
+  cancel-in-progress: false
+
+jobs:
+  reeval-9730:
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Post the Code Quality re-evaluation data on #9730 (once, on or after 2026-11-14)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          bash scripts/watch-code-quality-reeval-9730.sh ${args[@]+"${args[@]}"}
+
+  reeval-10515:
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Post the lint-ratchet re-evaluation data on #10515 (once, on or after 2027-01-18)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          bash scripts/watch-lint-ratchet-reeval-10515.sh ${args[@]+"${args[@]}"}
+
+  triggers-11177:
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test the two #11177 re-evaluate-when triggers (comments only when one fires)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          bash scripts/watch-brand-hex-triggers-11177.sh ${args[@]+"${args[@]}"}

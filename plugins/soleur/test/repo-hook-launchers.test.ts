@@ -34,7 +34,7 @@ const devinBaseline: Invocation[] = [
     "cla-signed-author-gate.sh", "context-reviewed-gate.sh", "follow-through-directive-gate.sh", "grep-rewrite.sh",
     "kb-domain-allowlist-guard.sh", "no-memory-write.sh", "pkill-self-match-guard.sh", "pre-merge-auto-close-scan.sh",
     "pre-merge-rebase.sh", "prod-write-defer-gate.sh", "ship-net-issue-flow-gate.sh", "ship-operator-step-gate.sh",
-    "ship-runbook-ssh-gate.sh", "ship-soak-followthrough-gate.sh", "ship-unpushed-commits-gate.sh", "ship-kb-archive-gate.sh",
+    "ship-cmo-content-gate.sh", "ship-runbook-ssh-gate.sh", "ship-soak-followthrough-gate.sh", "ship-unpushed-commits-gate.sh", "ship-kb-archive-gate.sh",
     "guardrails.sh", "iac-plan-write-guard.sh", "kb-domain-allowlist-guard.sh", "no-memory-write.sh",
     "new-scheduled-cron-prefer-inngest.sh", "worktree-write-guard.sh",
   ].map(bash),
@@ -110,7 +110,7 @@ function expectMarker(registration: Registration, expected: Invocation, cwd: str
 
 test("enumerates every actual affected registration and freezes original invocation semantics", () => {
   expect(codex).toHaveLength(2);
-  expect(devin).toHaveLength(37);
+  expect(devin).toHaveLength(38);
   expect(affected.map((entry) => invocation(entry.command))).toEqual(baseline);
   expect(new Set(baseline.map((entry) => entry.target)).size).toBeGreaterThan(25);
 });

@@ -5,6 +5,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { fetchInboxSources } from "@/server/inbox-sources";
 import { mergeAndRank } from "@/lib/inbox-severity";
+import { enrichApprovalInboxRows } from "@/server/approval/inbox-enrich";
 
 /**
  * GET /api/inbox — the unified, severity-ranked attention inbox
@@ -42,7 +43,12 @@ async function getHandler(req: Request, user: VerifiedUser) {
     const { inboxRows, emailRows } = await fetchInboxSources(supabase, {
       archived,
     });
-    return NextResponse.json({ items: mergeAndRank(inboxRows, emailRows) });
+    // #4672 — approval rows get their text and expiry from the request itself (RLS read; a failure keeps the static title).
+    const enriched = await enrichApprovalInboxRows(
+      supabase as unknown as Parameters<typeof enrichApprovalInboxRows>[0],
+      inboxRows,
+    );
+    return NextResponse.json({ items: mergeAndRank(enriched, emailRows) });
   } catch (error) {
     // No PII: never log sender/subject/title — only the pseudonymous id.
     reportSilentFallback(error, {

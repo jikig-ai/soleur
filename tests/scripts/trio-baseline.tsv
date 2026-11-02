@@ -110,6 +110,9 @@
 .github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/git-data-cutover.yml	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/git-data-cutover.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-key-rotate.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-key-rotate.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+.github/workflows/inngest-key-rotate.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/inngest-link-flip.yml	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/inngest-link-flip.yml	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 .github/workflows/inngest-link-flip.yml	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
@@ -138,6 +141,9 @@ apps/web-platform/infra/infra-config-verify.sh	CF_ACCESS_CLIENT_SECRET	tier-a	20
 apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_ID	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/infra-config-verify.sh	FALLBACK:CI_SSH_ACCESS_TOKEN_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/infra-config-verify.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+apps/web-platform/infra/inngest-key-rotate-workflow.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/inngest-link-flip-workflow.test.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/inngest-link-flip-workflow.test.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 apps/web-platform/infra/inngest-link-flip-workflow.test.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
@@ -180,15 +186,6 @@ scripts/check-deploy-script-parity.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	
 scripts/check-deploy-script-parity.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 scripts/cutover-inngest.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
-scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
-scripts/followthroughs/canary-promotion-5875.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/canary-promotion-5875.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-activation-7220.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-activation-7220.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-fatal-channel-7220.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/infra-config-fatal-channel-7220.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
 scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-4
 scripts/followthroughs/inngest-soak-6178.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-4
 scripts/followthroughs/inngest-soak-6178.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-4
@@ -198,9 +195,6 @@ scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh	CF_ACCESS_CLIENT_SECRET	s
 scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh	CF_ACCESS_CLIENT_SECRET_NOT_SET	sink	-	#9294:PR-4
 scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
 scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh	WEBHOOK_DEPLOY_SECRET_NOT_SET	sink	-	#9294:PR-4
-scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_ID	sink	-	#9294:PR-4
-scripts/followthroughs/workspace-isolation-verdict-2640.sh	CF_ACCESS_CLIENT_SECRET	sink	-	#9294:PR-4
-scripts/followthroughs/workspace-isolation-verdict-2640.sh	WEBHOOK_DEPLOY_SECRET	sink	-	#9294:PR-4
 scripts/inngest-link-flip.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 scripts/inngest-link-flip.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 scripts/inngest-link-flip.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2

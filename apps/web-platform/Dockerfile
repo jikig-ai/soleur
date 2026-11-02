@@ -103,14 +103,14 @@ RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
 # KEEP IN SYNC with the lockfile's node_modules/vitest version: the pin is
 # asserted by test/dockerfile-vitest-version-pin.test.ts so the canary runs the
 # vitest the suite was authored against. `--before` bounds the floating
-# transitive tree to the day after vitest 4.1.11's publish date (2026-08-18);
+# transitive tree to the day after vitest 4.1.12's publish date (2026-10-15);
 # `--ignore-scripts` matches the likec4 install mode.
-RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
+RUN npm install -g vitest@4.1.12 --before=2026-10-16 --ignore-scripts
 
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner
 
-# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
+# CACHE-ORDERING INVARIANT (registry layer cache, reusable-release.yml cache-to=type=inline):
 # the heavy installs (claude-code and likec4 in the `cli-tools` ancestor above, then
 # apt, gh and playwright below) MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA`
 # block — BUILD_SHA changes every commit and busts every layer beneath it. Keeping
@@ -422,8 +422,15 @@ RUN set -e; \
     [ -z "$all" ] || { echo "FATAL: unexpected file-cap binaries: $all" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
+# With GIT_DATA_STORE_ENABLED=true a workspace's working tree lives at <WORKTREE_ROOT>/<id>, and WORKTREE_ROOT
+# defaults to /var/lib/soleur/worktrees (server/workspace-resolver.ts). The image must own that directory for
+# uid 1001: nothing is mounted there (the tree sits in the container's writable layer and is discarded at
+# redeploy), so without it every session fails EACCES at mkdir. Only the leaf is chowned: /var/lib/soleur stays
+# root-owned, because the egress-token mount lands under it. git-data-flag-precheck.sh gates the flip on this line.
 RUN useradd --no-log-init --uid 1001 -m soleur \
-    && chown -R soleur:soleur .next
+    && chown -R soleur:soleur .next \
+    && mkdir -p /var/lib/soleur/worktrees \
+    && chown 1001:1001 /var/lib/soleur/worktrees
 USER soleur
 RUN git config --global user.name "github-actions[bot]" \
     && git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"

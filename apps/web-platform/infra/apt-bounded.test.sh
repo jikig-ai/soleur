@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
 # Unit suite for lib/apt-bounded.sh (#9379, #9395): one shared budget of apt seconds on every in-container apt
-# cycle in the four consumer suites (three git-data suites and the provision-unit Tier B build), with expiry routed to the declared environment decline
-# (FIXTURE_APT_FAILED + exit 100) and every non-timeout failure keeping its own rc.
+# cycle in the six consumer suites (git-data-ownership, git-data-runcmd-rehearsal, git-data-cutover-access,
+# htpasswd-stdin, cloud-init-inngest-provision-unit and sandbox-masked-proc-docker), with expiry routed to the declared
+# environment decline (FIXTURE_APT_FAILED + exit 100) and every non-timeout failure keeping its own rc.
 #
 # Host-only: a stub `apt-get` on PATH and the real coreutils `timeout`; no docker, no network.
 # Behaviour rows drive the helper in a fresh `bash` (set -u, the shell the container drivers give it).
-# The assembly row is DERIVED from the four consumer suites and binds each docker site to its arm, its mount,
+# The assembly row is DERIVED from the six consumer suites and binds each docker site to its arm, its mount,
 # its source line and its rc handling; it reads the suites' text, so it pins what the text says, and the
 # containers' run-time behaviour is covered by the rows above it.
 #
@@ -40,14 +41,68 @@ if [ "$_st" != "1 1 1" ]; then
 fi
 
 W="$(mktemp -d "${TMPDIR}/aptb.XXXXXX")"
-trap 'rm -rf "$W"' EXIT
+trap 'chmod -R u+rwX "$W" 2>/dev/null; rm -rf "$W"' EXIT
 STUB="$W/bin"; mkdir -p "$STUB"
 # Stub apt-get. Mode comes from GD_STUB_MODE; every invocation appends one line to GD_STUB_CALLS.
 cat > "$STUB/apt-get" <<'STUBEOF'
 #!/usr/bin/env bash
 echo "$*" >> "${GD_STUB_CALLS:?}"
 n=$(wc -l < "${GD_STUB_CALLS}")
+# CACHE SIMULATION (Guard 4, #10781). Modes cache, cache-stall-once, cache-perms and cache-perms-fail model apt's use of
+# `-o Dir::State::lists=` / `-o Dir::Cache::archives=`: a network cost is recorded in GD_STUB_NET ONLY when the lists are
+# empty (FETCH-INDEX) or the package is neither in the archives dir (FETCH-PKG) nor resumable from archives/partial
+# (RESUME-PKG); a populated lists dir costs one REVALIDATE (the conditional GET, not a download). A missing partial/ dir
+# is fatal exactly as in real apt (rc 100); `install` needs the lists. Without a -o the call uses a fresh, private
+# default dir of its own, so every call pays the network (what a per-container private cache looks like). The stub is
+# EXACT-ARGV: any `-o` key it does not model (only Dir::State::lists, Dir::Cache::archives, Acquire::Retries) and any flag
+# beyond -qq/-y/--no-install-recommends exits 64, so an option the lib quietly gains cannot ride along green.
+_opt() { local k="$1" a prev=""; shift; for a in "$@"; do if [ "$prev" = -o ]; then case "$a" in "$k"=*) printf '%s' "${a#*=}"; return ;; esac; fi; prev="$a"; done; }
+_cache_apt() {
+  local verb="$1" lists archives p prev="" a; shift
+  local -a pkgs=()
+  lists="$(_opt Dir::State::lists "$@")"; archives="$(_opt Dir::Cache::archives "$@")"
+  for a in "$@"; do
+    if [ "$prev" = -o ]; then
+      case "${a%%=*}" in Dir::State::lists|Dir::Cache::archives|Acquire::Retries) ;; *) echo "stub: unmodeled -o key '${a%%=*}'" >&2; return 64 ;; esac
+      prev=""; continue
+    fi
+    case "$a" in -o) prev=-o ;; -qq|-y|--no-install-recommends) ;; -*) echo "stub: unmodeled flag '$a'" >&2; return 64 ;; *) pkgs+=("$a") ;; esac
+  done
+  case "${GD_STUB_MODE}" in cache-perms*) [ -z "$lists" ] || chmod -R u+rwX "$lists" 2>/dev/null; [ -z "$archives" ] || chmod -R u+rwX "$archives" 2>/dev/null ;; esac
+  case "$verb" in
+    update)
+      if [ -z "$lists" ]; then echo "FETCH-INDEX private" >> "${GD_STUB_NET:?}"
+      else
+        [ -d "$lists/partial" ] || { echo "E: List directory $lists/partial is missing. - Acquire (2: No such file or directory)" >&2; return 100; }
+        if [ -e "$lists/InRelease" ]; then echo "REVALIDATE" >> "${GD_STUB_NET:?}"; else echo "FETCH-INDEX shared" >> "${GD_STUB_NET:?}"; : > "$lists/InRelease"; fi
+      fi ;;
+    install)
+      if [ -n "$lists" ] && [ ! -e "$lists/InRelease" ]; then echo "E: Unable to locate package ${pkgs[0]:-?}" >&2; return 100; fi
+      if [ -n "$archives" ]; then
+        [ -d "$archives/partial" ] || { echo "E: Archives directory $archives/partial is missing. - Acquire (2: No such file or directory)" >&2; return 100; }
+        for p in "${pkgs[@]}"; do
+          if [ -e "$archives/$p.deb" ]; then continue
+          elif [ -e "$archives/partial/$p.deb.part" ]; then echo "RESUME-PKG $p" >> "${GD_STUB_NET:?}"; mv "$archives/partial/$p.deb.part" "$archives/$p.deb"
+          else
+            echo "FETCH-PKG $p" >> "${GD_STUB_NET:?}"
+            if [ "${GD_STUB_MODE}" = cache-stall-once ] && [ ! -e "${GD_STUB_STALLED:?}" ]; then
+              : > "$GD_STUB_STALLED"; : > "$archives/partial/$p.deb.part"
+              sleep 300 & echo "$!" > "${GD_STUB_CHILD:?}"; wait
+            fi
+            : > "$archives/$p.deb"
+          fi
+        done
+      else for p in "${pkgs[@]}"; do echo "FETCH-PKG $p private" >> "${GD_STUB_NET:?}"; done; fi ;;
+  esac
+  case "${GD_STUB_MODE}" in
+    cache-perms*) # what a root apt leaves behind: download-user dirs and files the host user cannot remove
+      for d in "$lists" "$archives"; do [ -z "$d" ] || { : > "$d/partial/lock"; chmod 600 "$d/partial/lock" "$d/InRelease" 2>/dev/null; chmod 500 "$d/partial"; }; done ;;
+  esac
+  return 0
+}
 case "${GD_STUB_MODE:?}" in
+  cache|cache-stall-once|cache-perms) _cache_apt "$@"; exit $? ;;
+  cache-perms-fail) case "$1" in update) _cache_apt "$@"; exit $? ;; *) _cache_apt "$@" || exit $?; echo "E: install failed" >&2; exit 100 ;; esac ;;
   ok)   exit 0 ;;
   fail) echo "E: Failed to fetch http://alice:s3cr3t@proxy.invalid:3128/ubuntu/dists/noble/InRelease  Unable to connect" >&2
         echo "E: Failed to fetch http://bob:p@ss/w0rd@proxy2.invalid:3128/x  Unable to connect" >&2
@@ -55,6 +110,7 @@ case "${GD_STUB_MODE:?}" in
         echo "Proxy-Authorization: Basic dXNlcjpwdw==" >&2
         echo "Get:1 http://archive.ubuntu.com/ubuntu noble InRelease" >&2
         exit 100 ;;
+  fail-long) i=0; while [ "$i" -lt 30 ]; do i=$((i + 1)); printf 'Get:%s http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [%s] %0120d\n' "$i" "$i" 0 >&2; done; exit 100 ;;
   fail-install) case "$1" in update) exit 0 ;; *) echo "E: install failed" >&2; exit 100 ;; esac ;;
   hang) sleep 300 & echo "$!" > "${GD_STUB_CHILD:?}"; wait ;;
   hang-once) if [ "$n" -eq 1 ]; then sleep 300 & echo "$!" > "${GD_STUB_CHILD:?}"; wait; fi; exit 0 ;;
@@ -70,16 +126,16 @@ chmod +x "$STUB/apt-get"
 # per call unless KEEP_STATE=1 (rows that chain calls to prove the budget is SHARED); PRE_SPENT seeds it.
 run_helper() {
   local mode="$1" budget="$2"; shift 2
-  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; : > "$CALLS"; : > "$OUT"; : > "$ERR"
+  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; NET="$W/net"; : > "$CALLS"; : > "$NET"; : > "$OUT"; : > "$ERR"
   rm -f "$W/child"
   if [ "${KEEP_STATE:-0}" != 1 ]; then
-    rm -rf "$W/state"
+    chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"; rm -f "$W/stalled"
     if [ "$budget" != unset ]; then mkdir -p "$W/state"; printf '%s\n' "$budget" > "$W/state/budget"; printf '%s\n' "${PRE_SPENT:-}" | sed '/^$/d' > "$W/state/spent"; fi
   fi
   local t0; t0=$(date +%s)
   RC=0
   # shellcheck disable=SC2016  # single-quoted on purpose: expands inside the fresh bash
-  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_CHILD="$W/child" \
+  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_NET="$NET" GD_STUB_STALLED="$W/stalled" GD_STUB_CHILD="$W/child" \
     GD_APT_LOG="$W/apt.log" GD_APT_BACKOFFS="${GD_APT_BACKOFFS:-0 0}" GD_APT_STATE_DIR="${GD_APT_STATE_DIR:-$W/state}" \
     bash --noprofile --norc -c 'set -u; . "$1" || exit 97; shift; gd_apt_install_bounded "$@"' _ "$LIB" "${@:-curl}" \
     >"$OUT" 2>"$ERR" || RC=$?
@@ -238,6 +294,304 @@ if printf '%s\n' "$_ao" | grep -cx >/dev/null 'rc2=0 budget=7 spent=3' && printf
    && cmp -s "$LIB" "$_ad/apt-bounded.sh" && [ "$_oct" = 8 ] && [ "$_badrc" -eq 2 ] && [ "$_ia" -eq 0 ]; then
   pass "A19: arm is idempotent on disk and keeps spent, copies the lib, normalises 08, rejects abc; the summary reports; the armed dir drives the helper"
 else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')] oct=[$_oct] bad-rc=$_badrc helper-rc=$_ia"; fi
+
+# ── Guard 4: the shared apt cache (#10781) ───────────────────────────────────────────────
+# A cache-simulating stub (modes cache*, above) records a network cost only when the lists are empty or the package is
+# not in the archives dir, so a warm run that still costs a fetch turns a row red. The state dir is armed by the REAL
+# host half (gd_apt_state_arm), not hand-built, so a missing partial/ dir is fatal here exactly as in real apt.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+arm_state() { local d="${2:-$W/state}"; assert_fixture_dir "$d"; chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d" "$W/stalled"; ( . "$LIB"; gd_apt_state_arm "$d" "$1" ) >/dev/null 2>&1; }
+n_net() { grep -c "^$1" "$NET" || true; }
+
+# G4-1 — cold then warm on the SAME state dir: the second container makes ZERO downloads (one REVALIDATE only).
+row
+arm_state 60
+KEEP_STATE=1 run_helper cache 60 curl python3
+_c_rc=$RC; _c_calls=$(calls); _c_fetch=$(n_net FETCH); _c_net="$(tr '\n' '|' < "$NET")"
+KEEP_STATE=1 run_helper cache 60 curl python3
+_w_rc=$RC; _w_calls=$(calls); _w_fetch=$(n_net FETCH); _w_reval=$(n_net REVALIDATE)
+if [ "$_c_rc" -eq 0 ] && [ "$_c_calls" -eq 2 ] && [ "$_c_fetch" -eq 3 ] \
+   && [ "$_w_rc" -eq 0 ] && [ "$_w_calls" -eq 2 ] && [ "$_w_fetch" -eq 0 ] && [ "$_w_reval" -eq 1 ]; then
+  pass "G4-1: cold container downloads the index and both packages (3 fetches); the warm second container makes 0 downloads (1 revalidation)"
+else fail "G4-1: shared cache cold/warm" "cold rc=$_c_rc calls=$_c_calls fetches=$_c_fetch net=[$_c_net] stderr=[$(head -c 200 "$ERR")]; warm rc=$_w_rc calls=$_w_calls fetches=$_w_fetch revalidations=$_w_reval net=[$(tr '\n' '|' < "$NET")]"; fi
+
+# G4-2 — BOTH apt calls carry the same -o Dir::State::lists / Dir::Cache::archives, derived from the state dir
+# (an alternate dir proves no second literal), placed before Acquire::Retries. The WHOLE argv of each call is pinned,
+# not a substring: an extra `-o` (AllowInsecureRepositories, Check-Valid-Until, Dir::State::status) or flag is a finding.
+row
+_alt="$W/alt"; arm_state 60 "$_alt"
+GD_APT_STATE_DIR="$_alt" KEEP_STATE=1 run_helper cache 60 curl python3
+_u="$(grep '^update ' "$CALLS" || true)"; _i="$(grep '^install ' "$CALLS" || true)"
+_exp_o="-o Dir::State::lists=${_alt}/lists -o Dir::Cache::archives=${_alt}/archives -o Acquire::Retries=5"
+if [ "$RC" -eq 0 ] && [ "$_u" = "update -qq ${_exp_o}" ] && [ "$_i" = "install -y -qq ${_exp_o} curl python3" ] && [ "$(calls)" -eq 2 ]; then
+  pass "G4-2: update AND install pass EXACTLY -qq/-y, -o Dir::State::lists=<state>/lists -o Dir::Cache::archives=<state>/archives (derived from GD_APT_STATE_DIR) -o Acquire::Retries=5, nothing else; the A1 shape still holds"
+else fail "G4-2: shared -o options on both calls" "rc=$RC update=[$_u] install=[$_i] stderr=[$(head -c 200 "$ERR")]"; fi
+rm -rf "$_alt"
+
+# G4-3 — the arm creates lists/partial and archives/partial, and a NON-CANONICAL state (a pre-existing populated lists/
+# and a different budget) still works: the index is not re-downloaded, the packages are.
+row
+rm -rf "$W/state" "$W/stalled"; mkdir -p "$W/state/lists"; : > "$W/state/lists/InRelease"
+( . "$LIB"; gd_apt_state_arm "$W/state" 45 ) >/dev/null 2>&1; _arm_rc=$?
+_parts=no; [ -d "$W/state/lists/partial" ] && [ -d "$W/state/archives/partial" ] && _parts=yes
+KEEP_STATE=1 run_helper cache 45 curl
+if [ "$_arm_rc" -eq 0 ] && [ "$_parts" = yes ] && [ "$(cat "$W/state/budget")" = 45 ] && [ "$RC" -eq 0 ] \
+   && [ "$(n_net FETCH-INDEX)" -eq 0 ] && [ "$(n_net FETCH-PKG)" -eq 1 ]; then
+  pass "G4-3: arm creates lists/partial and archives/partial; a pre-existing lists/ with another budget (45) still arms and cycles (index reused, package fetched)"
+else fail "G4-3: arm partial dirs / pre-existing lists" "arm-rc=$_arm_rc partial-dirs=$_parts budget=$(cat "$W/state/budget" 2>/dev/null) rc=$RC net=[$(tr '\n' '|' < "$NET")] stderr=[$(head -c 200 "$ERR")]"; fi
+
+# G4-4 — a download stalled mid-package is cut at the attempt cap and the retry RESUMES from archives/partial
+# instead of starting over, inside the budget; the shared dirs are what make the retry cheap.
+row
+arm_state 60
+GD_APT_ATTEMPT_CAP=2 KEEP_STATE=1 run_helper cache-stall-once 60 curl
+reap_child
+if [ "$RC" -eq 0 ] && [ "$ELAPSED" -le 10 ] && [ "$(calls)" -eq 4 ] && [ "$(n_net FETCH-PKG)" -eq 1 ] && [ "$(n_net RESUME-PKG)" -eq 1 ] && [ "$(spent_total)" -le 10 ]; then
+  pass "G4-4: a stalled download is cut at the cap and the retry resumes from archives/partial (rc 0 after ${ELAPSED}s, 4 apt calls, 1 fetch + 1 resume, charged $(spent_total)s)"
+else fail "G4-4: capped then resumed" "rc=$RC elapsed=${ELAPSED}s calls=$(calls) net=[$(tr '\n' '|' < "$NET")] spent=$(spent_total)"; fi
+
+# G4-5 — the host can REMOVE the state dir after a run on EVERY exit path. The stub leaves what a root apt leaves
+# (download-user dirs mode 0500 or 0700, files 0600); the helper's container-side chmod must open them, on success, on
+# exhausted apt errors, with the budget already spent (no apt run at all) and on a timeout. "Open" means files rw for
+# others AND directories rwx for others (a directory without x cannot be entered, so the host rm -rf would fail on a
+# different uid), except the sourced script, which is deliberately 0644 (below); and the script the NEXT container sources as root is NOT left group/other-writable (G4-7).
+row
+_g5=""
+_g5_check() { # <label>: nothing left non-rw for others (and no directory without x for others), the sourced script not g/o-writable, and the host removes the tree
+  local bad badx lax rmrc=0
+  bad="$(find "$W/state" \( -type d -o -type f \) ! -perm -006 ! -path "$W/state/apt-bounded.sh" 2>/dev/null | head -3 | tr '\n' ' ')"
+  badx="$(find "$W/state" -type d ! -perm -007 2>/dev/null | head -3 | tr '\n' ' ')"
+  lax="$(find "$W/state/apt-bounded.sh" -perm /022 2>/dev/null | head -1)"
+  rm -rf "$W/state" 2>/dev/null || rmrc=$?
+  if [ -n "$bad" ] || [ -n "$badx" ] || [ -n "$lax" ] || [ "$rmrc" -ne 0 ] || [ -e "$W/state" ]; then _g5="${_g5} $1:[non-open=${bad:-none} dirs-without-o-x=${badx:-none} script-g/o-writable=${lax:-no} rm-rc=$rmrc still-there=$( [ -e "$W/state" ] && echo yes || echo no )]"; fi
+  chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"
+}
+_seed_perms() { # a 0500 download-user dir (the stub's shape) and a 0700 one holding a 0600 file, as a root apt leaves them
+  mkdir -p "$W/state/archives/partial" "$W/state/lists/partial"
+  : > "$W/state/archives/partial/lock"; chmod 600 "$W/state/archives/partial/lock"; chmod 500 "$W/state/archives/partial"
+  : > "$W/state/lists/partial/lock"; chmod 600 "$W/state/lists/partial/lock"; chmod 700 "$W/state/lists/partial"
+}
+arm_state 60; _seed_perms; KEEP_STATE=1 run_helper cache-perms 60 curl;             [ "$RC" -eq 0 ]   || _g5="${_g5} success:[rc=$RC]";  _g5_check success
+arm_state 60; _seed_perms; KEEP_STATE=1 run_helper cache-perms-fail 60 curl;        [ "$RC" -eq 100 ] || _g5="${_g5} apt-error:[rc=$RC]"; _g5_check apt-error
+arm_state 60; _seed_perms; printf '99\n' >> "$W/state/spent"; KEEP_STATE=1 run_helper cache-perms 60 curl
+[ "$RC" -eq 100 ] && [ "$(calls)" -eq 0 ] || _g5="${_g5} spent:[rc=$RC calls=$(calls)]";                                                                        _g5_check spent
+arm_state 3; _seed_perms; GD_APT_ATTEMPT_CAP=1 KEEP_STATE=1 run_helper hang 3 curl; reap_child
+[ "$RC" -eq 100 ] || _g5="${_g5} timeout:[rc=$RC]";                                                                                                               _g5_check timeout
+if [ -z "$_g5" ]; then
+  pass "G4-5: after success, exhausted apt errors, a spent budget and a timeout every file is rw and every directory rwx for others, the sourced script is not g/o-writable, and the host can remove the state dir"
+else fail "G4-5: state dir not removable by the host" "$_g5"; fi
+
+# G4-6 — a --no-install-recommends call site (sandbox-masked-proc-docker, cloud-init-inngest-provision-unit) keeps its
+# argument order: the flag stays the first package-side argument, after the shared options.
+row
+arm_state 60
+KEEP_STATE=1 run_helper cache 60 --no-install-recommends bubblewrap procps
+_i="$(grep '^install ' "$CALLS" || true)"
+if [ "$RC" -eq 0 ] && grep -qE '^install -y -qq -o Dir::State::lists=[^ ]+ -o Dir::Cache::archives=[^ ]+ -o Acquire::Retries=5 --no-install-recommends bubblewrap procps$' <<<"$_i" && [ "$(n_net FETCH-PKG)" -eq 2 ]; then
+  pass "G4-6: --no-install-recommends keeps its position (after the shared options and Acquire::Retries, before the packages)"
+else fail "G4-6: --no-install-recommends order" "rc=$RC install=[$_i] net=[$(tr '\n' '|' < "$NET")]"; fi
+
+# G4-7 — the script the NEXT container sources AS ROOT (<state>/apt-bounded.sh) must not be group/other-writable: the
+# open-everything chmod the host rm -rf needs (directory permissions) must not make the code root executes writable by any
+# other uid. Checked right after the HOST arm and again after a run (the container-side wrapper re-opens the tree), and
+# the host must still be able to remove the dir with the script's go-w cleared.
+row
+arm_state 60
+_lax_arm="$(find "$W/state/apt-bounded.sh" -perm /022 2>/dev/null | head -1)"
+_ro_arm=no; [ -r "$W/state/apt-bounded.sh" ] && _ro_arm=yes
+KEEP_STATE=1 run_helper cache-perms 60 curl
+_lax_run="$(find "$W/state/apt-bounded.sh" -perm /022 2>/dev/null | head -1)"
+_rmrc=0; rm -rf "$W/state" 2>/dev/null || _rmrc=$?
+if [ -z "$_lax_arm" ] && [ "$_ro_arm" = yes ] && [ "$RC" -eq 0 ] && [ -z "$_lax_run" ] && [ "$_rmrc" -eq 0 ] && [ ! -e "$W/state" ]; then
+  pass "G4-7: the sourced <state>/apt-bounded.sh is readable and not group/other-writable right after the arm and after a run, and the host still removes the dir"
+else fail "G4-7: sourced script left writable" "after-arm=[${_lax_arm:-ok}] readable=$_ro_arm run-rc=$RC after-run=[${_lax_run:-ok}] rm-rc=$_rmrc"; fi
+chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"
+
+# G4-8 — the sticky bit. G4-7 clears go-w on the script, but the state dir is a+rwX (0777) so that the host user can remove a
+# tree root created: without the sticky bit ANY uid with write on the DIRECTORY (the download user `_apt` runs inside the same
+# container) can `mv new <state>/apt-bounded.sh` over a file it cannot write, or `rm` it, and the next root container sources the
+# replacement. The dir must carry `t` after the HOST arm AND after the container-side wrapper (a hand-built, non-sticky state dir
+# stands in for one whose bit was lost), and the host user must still be able to remove the tree.
+row
+arm_state 60
+_st_arm=no; [ -k "$W/state" ] && _st_arm=yes
+_st_mode="$(stat -c %a "$W/state")"
+rm -rf "$W/state"
+run_helper ok 60 curl      # hand-built state dir (budget + spent only): the wrapper alone must set the bit
+_st_run=no; [ -k "$W/state" ] && _st_run=yes
+_st_rc=$RC
+_st_rm=0; chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state" 2>/dev/null || _st_rm=$?
+if [ "$_st_arm" = yes ] && [ "$_st_mode" = 1777 ] && [ "$_st_run" = yes ] && [ "$_st_rc" -eq 0 ] && [ "$_st_rm" -eq 0 ] && [ ! -e "$W/state" ]; then
+  pass "G4-8: the state dir is sticky (1777) after the host arm and after the container-side wrapper, and the host user still removes the tree"
+else fail "G4-8: state dir not sticky" "after-arm=$_st_arm mode=$_st_mode after-run=$_st_run run-rc=$_st_rc rm-rc=$_st_rm"; fi
+chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"
+
+# G4-9 — the REAL attempt: as a uid that owns neither the dir nor the script, inside a container, create a file in the state dir
+# (must still work: apt writes its own files there), then try to rename it over <state>/apt-bounded.sh and to remove the script
+# (both must be refused and the script must be byte-identical afterwards), then the host removes the tree. Docker-gated: with no
+# daemon or no local bash:3.2 the row says so out loud (a SKIP (loud) line) and G4-8 carries the host-side proof.
+row
+if docker info >/dev/null 2>&1 && docker image inspect bash:3.2 >/dev/null 2>&1; then
+  arm_state 60
+  _other_uid=1234; [ "$(id -u)" = "$_other_uid" ] && _other_uid=1235
+  # shellcheck disable=SC2016  # the script expands inside the container
+  _g9="$(docker run --rm --user "$_other_uid" -v "$W/state:/w" bash:3.2 bash -c '
+    : > /w/replacement && echo CREATED
+    mv -f /w/replacement /w/apt-bounded.sh 2>/dev/null && echo RENAMED_OVER
+    rm -f /w/apt-bounded.sh 2>/dev/null
+    [ -e /w/apt-bounded.sh ] || echo REMOVED
+    echo END' 2>&1)"
+  _g9_same=no; cmp -s "$LIB" "$W/state/apt-bounded.sh" && _g9_same=yes
+  _g9_rm=0; chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state" 2>/dev/null || _g9_rm=$?
+  if grep -qx CREATED <<<"$_g9" && grep -qx END <<<"$_g9" && ! grep -qxE 'RENAMED_OVER|REMOVED' <<<"$_g9" \
+     && [ "$_g9_same" = yes ] && [ "$_g9_rm" -eq 0 ] && [ ! -e "$W/state" ]; then
+    pass "G4-9: as uid ${_other_uid} in a container the state dir accepts new files but refuses a rename over, and a removal of, the sourced script (still byte-identical); the host removes the tree"
+  else fail "G4-9: another uid could replace or remove the sourced script" "container-out=[$(printf '%s' "$_g9" | tr '\n' '|' | head -c 300)] script-identical=$_g9_same host-rm-rc=$_g9_rm"; fi
+  chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"
+else
+  echo "SKIP (loud): G4-9 needs a reachable docker daemon and a local bash:3.2 image; the host-side sticky bit is asserted by G4-8" >&2
+  pass "G4-9: SKIPPED (no docker daemon or no local bash:3.2) — loud skip printed; G4-8 asserts the sticky bit on the host"
+fi
+
+# ── gd_apt_out_tail: the host-side excerpt of a captured container log ──────────────────────
+# The suites' failure/skip excerpts must start with the FIXTURE_APT_CAUSE line (the runner keeps only grep -A3 around the
+# first FAIL marker, 40 lines, 2000 chars per line, and the one-line consumers join the tail with `tr`), then the SCRUBBED
+# block and nothing else: the lines around it in a captured log are unscrubbed container stdout.
+_ct="$W/cap"
+_mkcap() { # <err-file> <pre-lines>: noise + the helper's real stderr + noise, like `docker run ... > file 2>&1`
+  { local i=0; while [ "$i" -lt "$2" ]; do i=$((i + 1)); printf 'PRE-NOISE-%s unscrubbed container stdout\n' "$i"; done; cat "$1"; printf 'POST-NOISE-1 FIXTURE-FAIL: after the helper\nPOST-NOISE-2\n'; } > "$_ct"
+}
+
+# H1 — a full 20-line scrubbed block: the cause FIRST, then exactly GD_APT_TAIL_LINES scrubbed lines (the last ones), and no
+# noise from either side; the output is bounded by 1 + GD_APT_TAIL_LINES.
+row
+run_helper fail-long 60 curl; _h1_rc=$RC
+_mkcap "$ERR" 6
+_h1="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
+_h1_n=$(printf '%s\n' "$_h1" | wc -l | tr -d ' ')
+_h1_want=$(( $( . "$LIB"; printf '%s' "$GD_APT_TAIL_LINES" ) + 1 ))
+if [ "$_h1_rc" -eq 100 ] && [ "$_h1_want" -eq 21 ] && grep -qE '^FIXTURE_APT_CAUSE: apt-error ' < <(head -n 1 <<<"$_h1") \
+   && [ "$_h1_n" -eq "$_h1_want" ] && grep -qE '^Get:30 ' <<<"$_h1" && grep -qE '^Get:11 ' <<<"$_h1" \
+   && ! grep -qE '^Get:10 ' <<<"$_h1" && ! grep -qE 'NOISE|FIXTURE_APT_FAILED' <<<"$_h1"; then
+  pass "gd_apt_out_tail H1: cause line first, then exactly the last $(( _h1_want - 1 )) scrubbed lines, bounded at ${_h1_want} lines in all, none of the unscrubbed lines around them"
+else fail "gd_apt_out_tail H1: full block" "apt rc=$_h1_rc lines=$_h1_n want=$_h1_want head=[$(printf '%s\n' "$_h1" | head -n 2 | cut -c1-120 | tr '\n' '|')] tail=[$(printf '%s\n' "$_h1" | tail -n 2 | cut -c1-100 | tr '\n' '|')]"; fi
+
+# H2 — a SHORT scrubbed block (fewer lines than the cap, here the 5-line `fail` stub accumulated over 3 attempts): the
+# helper takes the exact count the cause line carries, so it never reaches back into the unscrubbed lines above the block.
+row
+run_helper fail 60 curl; _h2_rc=$RC
+_h2_blk=$(( $(wc -l < "$ERR") - 2 ))   # stderr = scrubbed block + cause + marker
+_mkcap "$ERR" 30
+_h2="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
+_h2_n=$(printf '%s\n' "$_h2" | wc -l | tr -d ' ')
+if [ "$_h2_rc" -eq 100 ] && [ "$_h2_blk" -ge 3 ] && [ "$_h2_blk" -lt 20 ] && [ "$_h2_n" -eq $(( _h2_blk + 1 )) ] \
+   && grep -qE '^FIXTURE_APT_CAUSE: apt-error ' < <(head -n 1 <<<"$_h2") && ! grep -qE 'NOISE' <<<"$_h2" \
+   && grep -qF 'archive.ubuntu.com/ubuntu noble InRelease' <<<"$_h2" && ! grep -qF 's3cr3t' <<<"$_h2"; then
+  pass "gd_apt_out_tail H2: a ${_h2_blk}-line scrubbed block yields the cause plus exactly those ${_h2_blk} lines (no reach into the 30 unscrubbed lines above), credentials still scrubbed"
+else fail "gd_apt_out_tail H2: short block" "apt rc=$_h2_rc block=$_h2_blk lines=$_h2_n head=[$(printf '%s\n' "$_h2" | head -n 2 | cut -c1-120 | tr '\n' '|')]"; fi
+
+# H3 — no cause line (an httpd/alpine arm, or a container that died before apt): the plain short tail the caller asked for.
+row
+printf 'l1\nl2\nl3\nl4\nl5\nl6\n' > "$_ct"
+_h3="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 3 ) 2>&1 )"
+_h3m="$( ( . "$LIB"; gd_apt_out_tail "$W/does-not-exist" 3 ) 2>&1 )"
+if [ "$_h3" = "$(printf 'l4\nl5\nl6')" ] && [ -z "$_h3m" ]; then
+  pass "gd_apt_out_tail H3: with no cause line it is the caller's plain tail -n; a missing capture prints nothing"
+else fail "gd_apt_out_tail H3: no-cause fallback" "got=[$(printf '%s' "$_h3" | tr '\n' '|')] missing=[$_h3m]"; fi
+
+# H4 — THE RUNNER'S EXCERPT PATH, executed with the real MARKER_ERE and caps read from run-registered-suites.sh: grep -E -A3
+# around the FAIL marker, the first DUMP_CAP lines, cut -c1-2000 per line. The three shapes the suites print (a `echo FAIL:` with
+# a multi-line detail, the same with a leading note, and the one-line `tr` form of the ownership/htpasswd/cutover suites) must
+# all keep the cause, on 20 LONG lines where the one-line form is far over 2000 characters.
+row
+RUNNER="${DIR}/run-registered-suites.sh"
+_mre="$(sed -n "s/^MARKER_ERE='\(.*\)'\$/\1/p" "$RUNNER" | head -n 1)"; _cap="$(sed -n 's/^DUMP_CAP=\([0-9][0-9]*\)$/\1/p' "$RUNNER" | head -n 1)"
+run_helper fail-long 60 curl; _mkcap "$ERR" 6
+_excerpt() { grep -E -A3 --no-group-separator "$_mre" | head -n "$_cap" | cut -c1-2000; }
+_oneline_len=$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 | tr '\n' ' ' ) | wc -c | tr -d ' ')
+_x_multi="$( { echo "FAIL: T5 MUTATION: shape one"; echo "      $( . "$LIB"; gd_apt_out_tail "$_ct" 5)"; } | _excerpt )"
+_x_note="$( { echo "FAIL: T5 MUTATION: shape two"; echo "      docker rc=1 (measured classes); tail: $( . "$LIB"; gd_apt_out_tail "$_ct" 5)"; } | _excerpt )"
+_x_one="$( { printf '  FAIL %s\n       %s\n' "runtime arm: the driver did not complete" "$( . "$LIB"; gd_apt_out_tail "$_ct" 5 | tr '\n' ' ')"; } | _excerpt )"
+_hx=ok; for _v in "$_x_multi" "$_x_note" "$_x_one"; do grep -qF 'FIXTURE_APT_CAUSE: apt-error ' <<<"$_v" || _hx=lost; done
+if [ -n "$_mre" ] && [ -n "$_cap" ] && [ "$_oneline_len" -gt 2000 ] && [ "$_hx" = ok ]; then
+  pass "gd_apt_out_tail H4: through the runner's real excerpt (MARKER_ERE, grep -A3, ${_cap} lines, cut 2000) the cause survives in all three suite shapes, including a ${_oneline_len}-char one-line form"
+else fail "gd_apt_out_tail H4: runner excerpt" "marker-ere=[${_mre:-<not found in run-registered-suites.sh>}] cap=[${_cap:-?}] oneline-chars=$_oneline_len verdict=$_hx multi=[$(printf '%s' "$_x_multi" | head -c 160)] one=[$(printf '%s' "$_x_one" | head -c 160)]"; fi
+
+# H5 — workflow-command defence is IN the helper, so every consumer gets it: a `::error::` (or `##[error]`) opener in the captured
+# container output, in the scrubbed block, the cause line or the no-cause fallback, is defused, and the text around it survives.
+row
+_cause_ok='FIXTURE_APT_CAUSE: apt-error stage=update attempt=3 attempt_secs=1 spent_before=0s budget=60s rc=100 tail_lines=2'
+printf 'PRE\n::error::injected-leading\nE: Failed ::warning::mid-line ##[error]hash-form\n%s\n' "$_cause_ok" > "$_ct"
+_h5a="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
+printf '::notice::fallback-leading\nplain ##[group]x\n' > "$_ct"
+_h5b="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
+printf 'FIXTURE_APT_CAUSE: ::stop-commands::tok tail_lines=0\n' > "$_ct"
+_h5c="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
+_h5bad=""; for _v in "$_h5a" "$_h5b" "$_h5c"; do grep -qE '::|##\[' <<<"$_v" && _h5bad="${_h5bad} [$(printf '%s' "$_v" | tr '\n' '|' | head -c 120)]"; done
+if [ -z "$_h5bad" ] && grep -qF 'injected-leading' <<<"$_h5a" && grep -qF 'mid-line' <<<"$_h5a" && grep -qF 'hash-form' <<<"$_h5a" \
+   && grep -qF 'fallback-leading' <<<"$_h5b" && grep -qF 'stop-commands' <<<"$_h5c"; then
+  pass "gd_apt_out_tail H5: no '::' or '##[' survives in the scrubbed block, the cause line or the no-cause fallback, and the surrounding text is kept"
+else fail "gd_apt_out_tail H5: workflow-command openers not defused" "still-live=${_h5bad:-none} a=[$(printf '%s' "$_h5a" | tr '\n' '|' | head -c 200)] b=[$(printf '%s' "$_h5b" | tr '\n' '|' | head -c 100)]"; fi
+
+# H6 — the lines above a cause line are trusted ONLY with a valid tail_lines= (the scrubbed block's own count). No count, an empty or
+# non-numeric one: the cause line ALONE (the lines above could be unscrubbed stdout). A forged oversized count is clamped at
+# GD_APT_TAIL_LINES, never at the forged number. An honest small count is still honoured exactly.
+row
+_h6_n() { # <cause-line>: the number of lines gd_apt_out_tail prints with 30 unscrubbed lines above that cause line
+  { local i=0; while [ "$i" -lt 30 ]; do i=$((i + 1)); printf 'UNSCRUBBED-%s secret-ish container stdout\n' "$i"; done; printf '%s\n' "$1"; } > "$_ct"
+  ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 | wc -l | tr -d ' '
+}
+_h6_bare="$(_h6_n 'FIXTURE_APT_CAUSE: x')"
+_h6_none="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 rc=124')"
+_h6_abc="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=abc')"
+_h6_empty="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=')"
+_h6_forged="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=999')"
+_h6_huge="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=99999999999999999999999')"
+_h6_wrap="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=18446744073709551617')"
+_h6_three="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=3')"
+_h6_cap=$(( $( . "$LIB"; printf '%s' "$GD_APT_TAIL_LINES" ) + 1 ))
+_h6_leak="$( { printf 'UNSCRUBBED-1 secret\n'; printf 'FIXTURE_APT_CAUSE: x\n'; } > "$_ct"; ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 | grep -c UNSCRUBBED || true )"
+if [ "$_h6_bare" -eq 1 ] && [ "$_h6_none" -eq 1 ] && [ "$_h6_abc" -eq 1 ] && [ "$_h6_empty" -eq 1 ] && [ "$_h6_forged" -eq "$_h6_cap" ] && [ "$_h6_huge" -eq "$_h6_cap" ] && [ "$_h6_wrap" -eq "$_h6_cap" ] \
+   && [ "$_h6_three" -eq 4 ] && [ "$_h6_leak" -eq 0 ]; then
+  pass "gd_apt_out_tail H6: a cause line with no valid tail_lines= prints itself alone (bare, absent, abc, empty), a forged 999, 23-digit or 2^64+1 (wraps to 1 in shell arithmetic) count is clamped to ${_h6_cap} lines, an honest 3 gives 4"
+else fail "gd_apt_out_tail H6: tail_lines trust" "bare=$_h6_bare absent=$_h6_none abc=$_h6_abc empty=$_h6_empty forged999=$_h6_forged (want $_h6_cap) huge=$_h6_huge (want $_h6_cap) wrap2^64+1=$_h6_wrap (want $_h6_cap) three=$_h6_three (want 4) unscrubbed-leak=$_h6_leak"; fi
+
+# H7 — a skip message must carry its apt cause inside the first 400 bytes, because run-registered-suites.sh relays every
+# `SKIP (loud): ` line through `cut -b1-400` (relay_grep). gd_apt_skip_field gives the short `apt=<cause> stage=<s> attempt=<n>`
+# token, and every `arm_skip "T5|S1|T17 ..."` call site of the rehearsal suite (the three prefixes the follow-through probe
+# matches) and every other arm_skip that embeds the S1 note must open with it, with only a short literal before it.
+row
+run_helper fail 60 curl; _mkcap "$ERR" 4
+_h7_f="$( . "$LIB"; gd_apt_skip_field "$_ct" )"
+printf 'no cause here\n' > "$_ct";                                          _h7_none="$( . "$LIB"; gd_apt_skip_field "$_ct" )"
+printf 'FIXTURE_APT_CAUSE: ::error::evil stage=x attempt=1\n' > "$_ct";    _h7_evil="$( . "$LIB"; gd_apt_skip_field "$_ct" )"
+printf 'FIXTURE_APT_CAUSE: x\n' > "$_ct";                                   _h7_bare="$( . "$LIB"; gd_apt_skip_field "$_ct" )"
+_h7_src="$(sed 's/^[[:space:]]*#.*$//' "$REH")"
+_h7_sites="$(printf '%s\n' "$_h7_src" | grep -E '^[[:space:]]*(did-not-run\) )?arm_skip "(T5|S1|T17|S2)[ (]' || true)"
+_h7_n=$(printf '%s\n' "$_h7_sites" | grep -c . || true)
+_h7_bad=""
+while IFS= read -r _l; do
+  [ -n "$_l" ] || continue
+  _lit="${_l#*arm_skip \"}"; _lit="${_lit%%\$\{*}"       # the literal text before the first expansion
+  # shellcheck disable=SC2016  # literal source text
+  grep -qE 'arm_skip "(T5|S1|T17|S2)[^$]*\$\{(S1_APT|S1_NOTE|_t5m_apt|_t17m_apt)\}' <<<"$_l" && [ "${#_lit}" -le 200 ] || _h7_bad="${_h7_bad} [${_l:0:70}… literal-before-field=${#_lit}]"
+done <<< "$_h7_sites"
+# shellcheck disable=SC2016  # literal source text
+_h7_note=$(printf '%s\n' "$_h7_src" | grep -c 'S1_NOTE="\${S1_APT}; ' || true)
+# 400 bytes minus the 'SKIP (loud): ' the line is printed with, minus the 200-byte literal cap, leaves room for the field (<= 80 bytes).
+if [ "$_h7_f" = "apt=apt-error stage=update attempt=3" ] && [ "$_h7_none" = "apt=none" ] && [ "$_h7_evil" = "apt=none" ] && [ "$_h7_bare" = "apt=none" ] \
+   && [ "$_h7_n" -ge 9 ] && [ -z "$_h7_bad" ] && [ "$_h7_note" -eq 1 ] && [ $(( 13 + 200 + 80 )) -le 400 ]; then
+  pass "gd_apt_out_tail H7: gd_apt_skip_field yields '${_h7_f}' (apt=none for no/forged/bare cause); all ${_h7_n} rehearsal T5/S1/T17/S2 arm_skip sites open with it within 200 literal bytes, so it survives the runner's cut -b1-400"
+else fail "gd_apt_out_tail H7: skip cause not first" "field=[$_h7_f] none=[$_h7_none] evil=[$_h7_evil] bare=[$_h7_bare] sites=$_h7_n (want >=9) note-assignments=$_h7_note (want 1) offenders:${_h7_bad:- none}"; fi
 
 # ── Derived assembly row ─────────────────────────────────────────────────────────────────
 # For each consumer suite (comment-stripped, continuation-joined): every `docker run` site is either mounted
@@ -407,9 +761,59 @@ if [ -z "$_asm" ] && [ "$_tot" -eq "$_exp_tot" ] && [ "$_unm" -eq "$_exp_unm" ];
   pass "A10: assembly (derived) — each apt-bearing docker run is armed just before it, mounts the exact state token, sources the lib and calls the helper with a pass-through rc; no raw apt (${_exp_tot} mounted sites + ${_exp_unm} declared unmounted, ${#SPECS[@]} suites, census clean)"
 else fail "A10: assembly drift" "${_asm:-ok} total-helper-calls=$_tot (want $_exp_tot) unmounted=$_unm (want $_exp_unm). Legend: docker=docker run sites, mounted=sites carrying -v \"\$GD_APT_STATE:/work/apt\", calls=gd_apt_install_bounded calls (each needs '|| exit \$?' and a preceding '. /work/apt/apt-bounded.sh || exit 97'), arms=gd_apt_state_arm lines (exactly 'gd_apt_state_arm \"\$<var>/aptstate\" \"\$APT_BUDGET_S\" || { ...; exit 2; }', directly before a MOUNTED docker run), raw-apt must be 0. Keep APT_BUDGET_S plus the container's non-apt time under the site's host timeout and the suite bound."; fi
 
+# A10b — the EXCERPT side of the assembly: A10 proves every apt-bearing docker run goes through the helper; this proves every
+# consumer reads that container's capture back through gd_apt_out_tail and not through a raw `tail`, which would show the unscrubbed
+# stdout above the cause line and drop the cause when the capture is long. Derived from the same SPECS list (a new consumer is
+# covered by its SPECS line): for each suite (comment-stripped) (a) the `gd_apt_out_tail "` call sites number at least its mounted
+# docker sites, and (b) the capture each mounted site redirects into (`> "<path>" 2>&1`, first one after the mount token) is never
+# the operand of a raw `tail -...`. The capture path is derived from the text, and a mounted site with no derivable capture is itself a
+# finding (so the check cannot go vacuous by a changed redirect spelling).
+row
+_a10b=""
+for spec in "${SPECS[@]}"; do
+  IFS="$TAB" read -r f _wu sv want_mounted <<<"$spec"
+  [ -f "$f" ] || { _a10b="${_a10b} $(basename "$f"):[missing]"; continue; }
+  u="$(_strip "$f")"
+  ncall=$(printf '%s\n' "$u" | grep -cE 'gd_apt_out_tail "' || true)
+  caps="$(printf '%s\n' "$u" | awk -v mnt="$MNT_LIT" '
+    index($0, mnt) { pend = 1; line = substr($0, index($0, mnt)) }
+    pend { if (!line) line = $0
+           if (match(line, />[ \t]*"[^"]+"[ \t]*2>&1/)) { m = substr(line, RSTART, RLENGTH); sub(/^>[ \t]*"/, "", m); sub(/"[ \t]*2>&1$/, "", m); print m; pend = 0 }
+           line = "" }')"
+  ncap=$(printf '%s\n' "$caps" | grep -c . || true)
+  raw=""
+  while IFS= read -r cp; do
+    [ -n "$cp" ] || continue
+    # a raw tail READS the capture: `tail -...` is in the same simple command (no | ; & between) as the path. `sed ... "$cp" | tail -1`
+    # tails sed's output, and `grep ... "$cp" | tail -1` tails grep's, neither is a raw tail of the capture.
+    while IFS= read -r ln; do
+      seg="${ln%%"$cp"*}"; seg="${seg##*[|;&]}"
+      # tail or head as the command that READS the capture (any argument shape: `tail -n 5 f`, `tail -5 f`, bare `tail f`, `head -c N f`), or
+      # `cat <capture> | tail|head ...` (cat's output is the capture itself).
+      after="${ln#*"$cp"}"; after="${after#\"}"
+      if [[ "$seg" =~ (^|[^A-Za-z0-9_])(tail|head)[[:space:]] ]] \
+         || { [[ "$seg" =~ (^|[^A-Za-z0-9_])cat[[:space:]]+([^[:space:]|;&]+[[:space:]]+)*\"?$ ]] && [[ "$after" =~ ^[[:space:]]*\|[[:space:]]*(tail|head)([[:space:]]|$) ]]; }; then
+        raw="${raw} {${cp}: ${ln:0:90}}"; fi
+    done < <(printf '%s\n' "$u" | grep -F -- "$cp" || true)
+  done <<< "$caps"
+  if [ "$ncall" -lt "$((10#$want_mounted))" ] || [ "$ncap" -lt "$((10#$want_mounted))" ] || [ -n "$raw" ]; then
+    _a10b="${_a10b} $(basename "$f"):[gd_apt_out_tail call sites=$ncall (want >= $want_mounted) derived captures=$ncap (want >= $want_mounted) raw-tail-of-apt-capture:${raw:- none}]"
+  fi
+done
+if [ -z "$_a10b" ]; then
+  pass "A10b: assembly (derived) — in all ${#SPECS[@]} consumer suites every apt-bearing container's capture is read back through gd_apt_out_tail (at least one call per mounted site) and never through a raw tail"
+else fail "A10b: raw tail of an apt capture, or no gd_apt_out_tail call" "${_a10b}. A raw tail shows unscrubbed container stdout and drops the cause line; use gd_apt_out_tail <capture> <n> (lib/apt-bounded.sh)."; fi
+
 # ── FLOOR + LEDGER (ADR-193: printf + exit inside the block, never through pass()/fail()) ──
-if [ "$checked" -lt 19 ]; then
-  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 19 — rows were deleted or the suite exited early.\n' "$checked" >&2
+# Two statements, both loud: the first is the floor shape scripts/guard-vacuity-floor.test.sh mutation-tests (a literal threshold
+# adjacent to the `if`, `-lt`, reported by printf + exit 1); the second makes the count EXACT, so an added-but-unregistered row is a
+# finding as well as a deleted one. Move BOTH numbers together with the row count.
+if [ "$checked" -lt 36 ]; then
+  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 36 — rows were deleted or the suite exited early.\n' "$checked" >&2
+  exit 1
+fi
+if [ "$checked" -gt 36 ]; then
+  printf 'FAIL ANTI-VACUITY: %s rows ran, expected exactly 36 — rows were added without moving this count.\n' "$checked" >&2
   exit 1
 fi
 if [ "$((passes + fails))" -ne "$checked" ]; then

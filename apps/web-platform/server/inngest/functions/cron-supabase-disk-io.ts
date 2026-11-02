@@ -386,14 +386,12 @@ export const cronSupabaseDiskIo = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      // 6-hourly: frequent enough for early warning on a budget that depletes over
+      // hours-to-days, infrequent enough to add negligible IO (one read-only RPC).
+      { cron: "0 */6 * * *" },
+      { event: "cron/supabase-disk-io.manual-trigger" },
+    ],
   },
-  [
-    // 6-hourly: frequent enough for early warning on a budget that depletes over
-    // hours-to-days, infrequent enough to add negligible IO (one read-only RPC).
-    { cron: "0 */6 * * *" },
-    { event: "cron/supabase-disk-io.manual-trigger" },
-  ],
-  cronSupabaseDiskIoHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronSupabaseDiskIoHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

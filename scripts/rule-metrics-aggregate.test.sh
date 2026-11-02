@@ -963,7 +963,7 @@ t27_novel_unprefixed_hook_id_needs_no_exemption
 # exists) reports nearly every rule unused. Uses a real git worktree because the
 # resolution path under test is `git rev-parse --git-common-dir`.
 t30_incidents_merged_across_worktree_and_shared() {
-  command -v git >/dev/null 2>&1 || { echo "FAIL: T30 needs git — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+  command -v git >/dev/null 2>&1 || { echo "FAIL: T30 needs git — the central-change pin cannot be skipped (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
   local base shared wt
   base=$(mktemp -d); shared="$base/shared"; wt="$base/wt"
   mkdir -p "$shared"
@@ -971,13 +971,13 @@ t30_incidents_merged_across_worktree_and_shared() {
   git -C "$shared" config user.email t@t.t; git -C "$shared" config user.name t
   echo seed > "$shared/seed.txt"; git -C "$shared" add -A >/dev/null
   git -C "$shared" commit -qm seed >/dev/null
-  git -C "$shared" worktree add -q -b t30branch "$wt" >/dev/null 2>&1 || { echo "FAIL: T30 worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+  git -C "$shared" worktree add -q -b t30branch "$wt" >/dev/null 2>&1 || { echo "FAIL: T30 worktree add failed — the central-change pin cannot be skipped (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
 
   # A SECOND worktree, so the enumeration below is exercised against more than one
   # member. With a single sibling, a loop that stops after the first is
   # indistinguishable from a correct one.
   local sib="$base/sib"
-  git -C "$shared" worktree add -q -b t30sibling "$sib" >/dev/null 2>&1 || { echo "FAIL: T30 sibling worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
+  git -C "$shared" worktree add -q -b t30sibling "$sib" >/dev/null 2>&1 || { echo "FAIL: T30 sibling worktree add failed — the central-change pin cannot be skipped (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
   mkdir -p "$sib/.claude"
 
   # The script resolves REPO_ROOT as SCRIPT_DIR/.., so it must live in the worktree.

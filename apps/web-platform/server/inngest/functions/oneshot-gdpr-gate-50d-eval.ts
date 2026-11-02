@@ -399,9 +399,7 @@ export const oneshotGdprGate50dEval = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "oneshot/gdpr-gate-50d-eval.fire" },
   },
-  { event: "oneshot/gdpr-gate-50d-eval.fire" },
-  oneshotGdprGate50dEvalHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  oneshotGdprGate50dEvalHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

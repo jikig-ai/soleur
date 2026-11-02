@@ -23,6 +23,9 @@ import { uploadPendingFiles } from "@/lib/upload-attachments";
 import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
+import type { RefusalContext } from "@/components/chat/refused-send-notice";
+import { ApprovalRequestCard } from "@/components/chat/approval-request-card";
+import { hasNewerPendingRequest } from "@/lib/approval-card-state";
 import { StatusIndicator } from "@/components/chat/status-indicator";
 import { AutoRunChip } from "@/components/chat/auto-run-chip";
 import { AutonomousDisclosureBanner } from "@/components/chat/autonomous-disclosure-banner";
@@ -38,6 +41,7 @@ import { TaskCompletedCard } from "@/components/chat/task-completed-card";
 import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { isAuthModeErrorCode } from "@/lib/types";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
@@ -57,6 +61,32 @@ export type ChatSurfaceVariant = "full" | "sidebar";
  *  notice. State 4 is a derived render affordance, not a reducer phase. */
 const RESUMED_NOTICE_MS = 4000;
 
+/** Card title, the oauth-scheme action relabel, and the credential noun for a
+ *  chat error. The oauth scheme names a "token"; everything else a "key". */
+function credentialCardCopy(e: {
+  code: string;
+  credentialScheme?: string;
+}): { title: string; actionLabel?: string; noun: "token" | "key" } {
+  const oauth = e.code === "key_invalid" && e.credentialScheme === "oauth_token";
+  if (oauth) return { title: "Claude Sign-in Failed", actionLabel: "Update token", noun: "token" };
+  switch (e.code) {
+    case "key_invalid":
+      return { title: "Invalid API Key", noun: "key" };
+    case "byok_key_missing":
+      return { title: "API Key Required", noun: "key" };
+    case "rate_limited":
+      return { title: "Rate Limited", noun: "key" };
+    case "subscription_limit":
+      return { title: "Subscription Limit Reached", noun: "key" };
+    // #11599 — the Settings control's own term. Not a credential block (`noun` is read only when `credentialBlocked`).
+    case "auth_mode_unresolved":
+    case "auth_mode_unavailable":
+      return { title: "Authentication Mode Unavailable", noun: "key" };
+    default:
+      return { title: "Connection Error", noun: "key" };
+  }
+}
+
 /**
  * Stage 4 review F6: typed render helper for `<InteractivePromptCard>`.
  * Replaces the prior `payload={msg.promptPayload as any}` /
@@ -67,7 +97,9 @@ const RESUMED_NOTICE_MS = 4000;
  */
 function renderInteractivePromptCard(
   msg: ChatInteractivePromptMessage,
-  onRespond: (response: InteractivePromptResponsePayload) => void,
+  onRespond: (response: InteractivePromptResponsePayload) => boolean,
+  refusal: RefusalContext,
+  resetKey: number,
 ): React.ReactNode {
   switch (msg.promptKind) {
     case "ask_user":
@@ -80,6 +112,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "plan_preview":
@@ -92,6 +126,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "diff":
@@ -104,6 +140,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "bash_approval":
@@ -116,6 +154,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "todo_write":
@@ -128,6 +168,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     case "notebook_edit":
@@ -140,6 +182,8 @@ function renderInteractivePromptCard(
           resolved={msg.resolved}
           selectedResponse={msg.selectedResponse}
           onRespond={onRespond}
+          refusal={refusal}
+          resetKey={resetKey}
         />
       );
     default: {
@@ -227,6 +271,7 @@ export function ChatSurface({
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendApprovalDecide,
     sendAutonomousDisclosureResponse,
     sendInteractivePromptResponse,
     resolveInteractivePrompt,
@@ -235,6 +280,9 @@ export function ChatSurface({
     disconnectReason,
     lastError,
     reconnect,
+    credentialBlocked,
+    rebindConversationId,
+    rebindRefused,
     routeSource,
     activeLeaderIds,
     usageData,
@@ -290,10 +338,54 @@ export function ChatSurface({
   const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
   const prevSessionTimeoutRef = useRef(false);
 
+  // Refusal-line lifecycle: the gate / disclosure / prompt cards clear their
+  // "Couldn't send" line when this epoch changes, i.e. when the connection
+  // becomes sendable again (status back to "connected", or the credential block
+  // lifting) or the user hits Reconnect. A line must not outlive its condition.
+  const [refusalEpoch, setRefusalEpoch] = useState(0);
+  const prevSendableRef = useRef(status === "connected" && !credentialBlocked);
+  useEffect(() => {
+    const sendable = status === "connected" && !credentialBlocked;
+    if (sendable && !prevSendableRef.current) setRefusalEpoch((e) => e + 1);
+    prevSendableRef.current = sendable;
+  }, [status, credentialBlocked]);
+
   const activeErrorKey = useMemo(
     () => (lastError ? `${lastError.code}::${lastError.message}` : null),
     [lastError],
   );
+
+  // #11525 - `credentialBlocked` is the hook's single derived flag
+  // (`isCredentialErrorCode(lastError.code)`), never re-derived here.
+  // Dismissing the card does NOT unblock.
+  // No error => the default copy ("key" noun); only read while an error shows.
+  const cardCopy = credentialCardCopy(lastError ?? { code: "" });
+  const credentialNoun = cardCopy.noun;
+  // Why a refused card response was refused: a credential failure killed the run
+  // that raised the question (fix the key, Reconnect, re-send) vs a plain
+  // connection drop (the card is still live).
+  const refusal: RefusalContext = credentialBlocked
+    ? { reason: "credential", noun: credentialNoun }
+    : { reason: "connection" };
+
+  // Reconnect from a credential card/helper AND the session-start timeout card:
+  // re-run the start/resume effect on the fresh socket (it resumes the captured
+  // conversation, or starts one). Resetting `sessionStarted` is what lets a
+  // non-refusal resume failure retry the captured id; the bare hook `reconnect`
+  // would leave the effect gated off. Never auto-resends the unanswered message.
+  // On a UUID surface a refused rebind retries the resume (bounded by the hook's
+  // one-shot arm) rather than starting a session.
+  const onSessionReconnect = () => {
+    setSessionStarted(false);
+    // Re-arm the session-start timeout card: both flags were set-only, so the
+    // card would stick during the retry and never re-show after a dismiss. The
+    // `sessionStarted` false -> true cycle restarts the 10s timer.
+    setSessionStartTimeout(false);
+    setSessionTimeoutDismissed(false);
+    // The user acted on the recovery path: drop stale refusal lines now.
+    setRefusalEpoch((e) => e + 1);
+    reconnect();
+  };
 
   // Edge-triggered: re-show the timeout card when sessionStartTimeout flips false -> true.
   useEffect(() => {
@@ -365,17 +457,30 @@ export function ChatSurface({
   }, [scrollToLatest]);
 
   const handleReviewGateResponse = useCallback(
-    (gateId: string, selection: string) => {
-      sendReviewGateResponse(gateId, selection);
+    (gateId: string, selection: string): boolean => {
+      // A dropped send (`false`) leaves the card actionable (the card shows the
+      // refusal line): no notification prompt either.
+      if (sendReviewGateResponse(gateId, selection) === false) return false;
       setShowNotificationPrompt(true);
+      return true;
     },
     [sendReviewGateResponse],
   );
 
-  const handleAutonomousDisclosureResponse = useCallback(
-    (gateId: string, selection: string) => {
-      sendAutonomousDisclosureResponse(gateId, selection);
+  // #4672 — the Owner's decision on a durable approval card. False = nothing was sent (socket not open): the card shows
+  // a static error. Never an optimistic state: the card settles only from the server's approval_status reply.
+  const handleApprovalDecide = useCallback(
+    (approvalId: string, decision: "approve" | "deny"): boolean => {
+      const sent = sendApprovalDecide(approvalId, decision);
+      if (sent) setShowNotificationPrompt(true);
+      return sent;
     },
+    [sendApprovalDecide],
+  );
+
+  const handleAutonomousDisclosureResponse = useCallback(
+    (gateId: string, selection: string): boolean =>
+      sendAutonomousDisclosureResponse(gateId, selection),
     [sendAutonomousDisclosureResponse],
   );
 
@@ -393,16 +498,19 @@ export function ChatSurface({
       promptId: string,
       conversationIdArg: string,
       response: InteractivePromptResponsePayload,
-    ) => {
+    ): boolean => {
       // Send the wire frame.
-      sendInteractivePromptResponse({
+      const sent = sendInteractivePromptResponse({
         type: "interactive_prompt_response",
         promptId,
         conversationId: conversationIdArg,
         ...response,
       });
+      // A dropped send (`false`) leaves the card actionable (it shows the refusal line).
+      if (sent === false) return false;
       // Optimistically mark the local card as resolved.
       resolveInteractivePrompt(promptId, conversationIdArg, response.response);
+      return true;
     },
     [sendInteractivePromptResponse, resolveInteractivePrompt],
   );
@@ -457,7 +565,11 @@ export function ChatSurface({
     if (status !== "connected" || sessionStarted || contextPending) return;
 
     if (conversationId === "new") {
-      if (resumeByContextPath) {
+      if (rebindConversationId) {
+        // #11525 - re-bind the same conversation after a credential Reconnect
+        // (no duplicate conversation). Truthiness guard, never `!== null`.
+        resumeSession(rebindConversationId);
+      } else if (resumeByContextPath) {
         startSession({
           leaderId: leaderId ?? undefined,
           context: initialContext,
@@ -471,7 +583,13 @@ export function ChatSurface({
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath, contextPending, rebindConversationId]);
+
+  // #11525 - the server refused the rebind resume: the hook dropped the id, so
+  // re-running the effect above takes the `startSession` branch (one-shot).
+  useEffect(() => {
+    if (rebindRefused) setSessionStarted(false);
+  }, [rebindRefused]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {
@@ -590,6 +708,14 @@ export function ChatSurface({
   const unmountedRef = useRef(false);
   const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
   const [firstRunBusy, setFirstRunBusy] = useState(false);
+  // A final first-run refusal puts the typed text back in the composer (the
+  // `?msg=` param is already stripped); ChatInput applies it once via
+  // `restoredDraft` (appended to any draft already there, never overwriting it).
+  // Between a NON-final refusal and Reconnect the message exists only in
+  // `firstRun.current.msg` (the re-arm), by design; it is restored only here.
+  const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+  // Attachments cannot be restored: say so when a final refusal dropped them.
+  const [attachmentsDropped, setAttachmentsDropped] = useState(false);
   const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
   liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
@@ -619,6 +745,11 @@ export function ChatSurface({
       getLive: () => liveRef.current,
       upload: uploadPendingFiles,
       send: sendMessage,
+      onFinalRefusal: (text, droppedAttachments) => {
+        if (unmountedRef.current) return;
+        if (text) setRestoredDraft(text);
+        if (droppedAttachments > 0) setAttachmentsDropped(true);
+      },
       final: fr.retries >= MAX_FIRST_RUN_RETRIES,
     })
       .then(({ retry }) => {
@@ -716,8 +847,13 @@ export function ChatSurface({
   const awaitingUserInput = messages.some(
     (m, i) =>
       i > lastUserIdx &&
-      (m.type === "review_gate" || m.type === "autonomous_disclosure") &&
-      !m.resolved,
+      (((m.type === "review_gate" || m.type === "autonomous_disclosure") &&
+        !m.resolved) ||
+        // #4672 — a durable approval card the agent is still waiting on also dark-launches the spinner. Once the agent
+        // stopped waiting (timeout deny) it is working again, so only a LIVE wait counts.
+        (m.type === "approval_request" &&
+          m.status === "pending" &&
+          m.agentWaiting)),
   );
 
   // #9515 — the consolidated working box: liveNarration renders INSIDE the
@@ -834,14 +970,17 @@ export function ChatSurface({
         ? "error"
         : null;
 
-  function handleSend(message: string, attachments?: AttachmentRef[]) {
-    if (status !== "connected") return;
+  // Returns `false` when the message was NOT accepted so the composer keeps the
+  // draft. Refuses BEFORE `onBeforeSend` so analytics never counts a refused send.
+  function handleSend(message: string, attachments?: AttachmentRef[]): boolean {
+    if (status !== "connected" || credentialBlocked) return false;
     onBeforeSend?.(message);
-    if (attachments && attachments.length > 0) {
-      sendMessage(message, attachments);
-    } else {
-      sendMessage(message);
-    }
+    const sent =
+      attachments && attachments.length > 0
+        ? sendMessage(message, attachments)
+        : sendMessage(message);
+    if (sent !== false) setAttachmentsDropped(false);
+    return sent;
   }
 
   const isFull = variant === "full";
@@ -1002,23 +1141,38 @@ export function ChatSurface({
               <DelegationErrorCard errorCode={lastError.code} message={lastError.message} />
             ) : (
               <ErrorCard
-                title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : lastError.code === "subscription_limit" ? "Subscription Limit Reached" : "Connection Error"}
+                title={cardCopy.title}
                 message={lastError.message}
-                onRetry={lastError.code !== "key_invalid" && lastError.code !== "subscription_limit" ? reconnect : undefined}
+                onRetry={
+                  credentialBlocked
+                    ? onSessionReconnect
+                    : lastError.code !== "subscription_limit" &&
+                        // #11599 — Reconnect does not resend and the socket stays up: no retry on either card.
+                        !isAuthModeErrorCode(lastError.code)
+                      ? reconnect
+                      : undefined
+                }
                 retryLabel="Reconnect"
-                action={lastError.action}
+                action={
+                  lastError.action && cardCopy.actionLabel
+                    ? { ...lastError.action, label: cardCopy.actionLabel }
+                    : lastError.action
+                }
+                // Settings opens in a new tab for the credential cards so this
+                // chat (draft, transcript, helper line) survives the trip.
+                newTab={credentialBlocked}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}
               />
             )}
           </div>
         )}
 
-        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && (
+        {sessionStartTimeout && !sessionConfirmed && !sessionTimeoutDismissed && !credentialBlocked && (
           <div className={`mb-4 ${widthWrapper}`}>
             <ErrorCard
               title="Session Failed to Start"
               message="The server did not confirm the session within 10 seconds. Please try again."
-              onRetry={reconnect}
+              onRetry={onSessionReconnect}
               retryLabel="Reconnect"
               onDismiss={() => setSessionTimeoutDismissed(true)}
             />
@@ -1036,7 +1190,7 @@ export function ChatSurface({
         <div className={`min-w-0 space-y-4 ${widthWrapper}`}>
           {(() => {
             const seenSoFar = new Set<string>();
-            return messages.map((msg) => {
+            return messages.map((msg, idx) => {
               const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
               if (msg.leaderId) seenSoFar.add(msg.leaderId);
 
@@ -1076,6 +1230,7 @@ export function ChatSurface({
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
+                      unanswered={msg.unanswered}
                     />
                   );
                   break;
@@ -1091,6 +1246,8 @@ export function ChatSurface({
                       resolved={msg.resolved}
                       selectedOption={msg.selectedOption}
                       gateError={msg.gateError}
+                      refusal={refusal}
+                      resetKey={refusalEpoch}
                       onSelect={handleReviewGateResponse}
                     />
                   );
@@ -1101,6 +1258,8 @@ export function ChatSurface({
                       gateId={msg.gateId}
                       existingWorkspace={msg.existingWorkspace}
                       resolved={msg.resolved}
+                      refusal={refusal}
+                      resetKey={refusalEpoch}
                       onRespond={handleAutonomousDisclosureResponse}
                     />
                   );
@@ -1125,6 +1284,8 @@ export function ChatSurface({
                       msg.conversationId,
                       response,
                     ),
+                    refusal,
+                    refusalEpoch,
                   );
                   break;
                 }
@@ -1182,6 +1343,30 @@ export function ChatSurface({
                         {CONTEXT_RESET_COPY[msg.reason]}
                       </p>
                     </div>
+                  );
+                  break;
+                case "approval_request":
+                  // #4672 — durable, action-bound approval card. The view is server-built from the hashed canonical
+                  // action; this surface renders it and sends the Owner's decision, nothing else.
+                  body = (
+                    <ApprovalRequestCard
+                      approvalId={msg.approvalId}
+                      view={msg.view}
+                      status={msg.status}
+                      expiresAt={msg.expiresAt}
+                      requestCount={msg.requestCount}
+                      viewerRole={msg.viewerRole}
+                      agentWaiting={msg.agentWaiting}
+                      decideOutcome={msg.decideOutcome}
+                      approvalUnusable={msg.approvalUnusable}
+                      newerRequestExists={hasNewerPendingRequest(messages, idx)}
+                      decidedLabel={
+                        msg.decideOutcome === "decided" || msg.decideOutcome === "unchanged"
+                          ? "by you"
+                          : undefined
+                      }
+                      onDecide={(decision) => handleApprovalDecide(msg.approvalId, decision)}
+                    />
                   );
                   break;
                 case "debug_event":
@@ -1369,13 +1554,15 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected" || firstRunBusy}
+            disabled={status !== "connected" || firstRunBusy || credentialBlocked}
             workflowEnded={workflowEnded}
             placeholder={
-              status === "connected"
-                ? (placeholder ??
-                    "Follow up or ask another question... Type @ to switch leader")
-                : "Reconnecting..."
+              credentialBlocked
+                ? `Update your ${credentialNoun} in Settings, then reconnect`
+                : status === "connected"
+                  ? (placeholder ??
+                      "Follow up or ask another question... Type @ to switch leader")
+                  : "Reconnecting..."
             }
             insertRef={insertRef}
             quoteRef={quoteRef}
@@ -1395,10 +1582,41 @@ export function ChatSurface({
                 ? qParam || undefined
                 : undefined
             }
+            restoredDraft={restoredDraft ?? undefined}
             streamState={streamState}
             onStop={abort}
             repoSetupState={repoSetupState}
           />
+          {/* Always mounted so the live region is announced when its content
+              appears (a region inserted together with its text is often missed). */}
+          <div role="status" aria-live="polite" data-testid="first-run-restore-status">
+            {attachmentsDropped && (
+              <p className="mt-2 px-1 text-xs text-soleur-text-secondary">
+                Your attachments weren&apos;t sent - attach them again.
+              </p>
+            )}
+          </div>
+          <div role="status" aria-live="polite" data-testid="credential-helper-status">
+            {credentialBlocked && (
+              // Always-visible recovery path (survives a dismissed card): the
+              // wording covers "I already saved it in Settings"; Reconnect
+              // re-binds the session. No visibilitychange/focus hint exists.
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-soleur-text-secondary">
+                <span>
+                  {`Saved your ${credentialNoun} in Settings? Select Reconnect to continue.`}
+                </span>
+                <Button
+                  variant="ghost"
+                  type="button"
+                  data-testid="credential-helper-reconnect"
+                  onClick={onSessionReconnect}
+                  className="px-2 py-1 text-xs"
+                >
+                  Reconnect
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (
           <div className="mt-1 px-1 text-xs text-soleur-text-muted">

@@ -174,6 +174,14 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-merge-queue-stall-dispatch")).toBe(false);
   });
 
+  // #4672 (ADR-309): cron-approval-expiry is a flag-independent 5-minute sweep of durable approval requests (one RPC,
+  // generic notifications, no git, no PR). Never Tier-2 deferred: a deferred tick is a missed expiry, and the dark-deploy
+  // lifecycle marker proves the cron is alive. Asserted here so the sibling-set sweep sees this dependent when
+  // EXPECTED_CRON_FUNCTIONS grows.
+  it("approval-expiry (#4672, flag-independent sweep) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-approval-expiry")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS

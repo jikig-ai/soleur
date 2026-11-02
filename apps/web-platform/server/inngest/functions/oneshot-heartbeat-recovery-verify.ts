@@ -234,9 +234,7 @@ export const oneshotHeartbeatRecoveryVerify = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "oneshot/heartbeat-recovery-verify.fire" },
   },
-  { event: "oneshot/heartbeat-recovery-verify.fire" },
-  oneshotHeartbeatRecoveryVerifyHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  oneshotHeartbeatRecoveryVerifyHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

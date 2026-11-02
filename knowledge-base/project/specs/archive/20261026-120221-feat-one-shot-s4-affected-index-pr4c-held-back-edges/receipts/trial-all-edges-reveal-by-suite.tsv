@@ -1,0 +1,34 @@
+# Trial on a detached origin/main (81192540bf): the 104 live PR4c candidate edges (worklist minus kept-for-census and already-undrained) declared at once, no accept rows, one 'ratchet --base origin/main --report' run (rc=1 reason=new-pair live=2000 baseline=1629; 475 new-pair, 104 stale-line = the declared edges' pairs; wall 192 s).
+# Columns: suite<TAB>edges<TAB>new_pairs<TAB>new_code_pairs<TAB>cumulative_new_pairs<TAB>cumulative_edges
+plugins/soleur/test/gdpr-gate-self-test.test.sh	1	1	0	1	1
+.claude/hooks/hook-input-contract.test.sh	1	2	0	3	2
+scripts/followthroughs/ccla-representative-icla-7922	1	2	1	5	3
+scripts/git-data-reboot-evidence-landed-8210	1	2	0	7	4
+tests/scripts/betterstack-roundtrip-latency	1	2	2	9	5
+tests/scripts/zot-log-channel-probe	1	2	1	11	6
+apps/cla-evidence/test/ccla-add.test.sh	1	3	0	14	7
+plugins/soleur/test/hook-input-classification-mutation.test.sh	1	3	0	17	8
+.claude/hooks/rule-incident-marker-capture.test.sh	1	4	0	21	9
+plugins/soleur/test/net-issue-flow.test.sh	1	4	0	25	10
+scripts/followthrough-varq-ban	2	4	1	29	12
+tests/scripts/no-tofu-ssh-mutation	1	4	2	33	13
+plugins/soleur/scripts/precommit-guard.test.sh	1	5	3	38	14
+tests/scripts/git-data-rung2-evidence-capture	2	5	3	43	16
+tests/scripts/inngest-host-dark-gate	1	5	4	48	17
+plugins/soleur/test/required-checks-canonical-parity.test.sh	1	6	3	54	18
+scripts/ci-push-dedupe	2	6	4	60	20
+scripts/tmpfs-guard	1	6	6	66	21
+.claude/hooks/ship-kb-archive-gate.test.sh	1	8	7	74	22
+plugins/soleur/test/fanout-suite-scope.test.sh	1	9	9	83	23
+plugins/soleur/skills/incident/test/redact-sentinel.test.sh	1	10	1	93	24
+scripts/compound-promote	1	12	1	105	25
+plugins/soleur/test/boundary-prefix.test.sh	5	13	6	118	30
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	1	14	5	132	31
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	3	15	10	147	34
+tests/scripts/scratch-residue	9	16	4	163	43
+plugins/soleur	5	17	6	180	48
+scripts/followthroughs/t5-skip-persistence-bound-7510	1	18	17	198	49
+scripts/battery-tag-authorship	5	29	23	227	54
+scripts/betterstack-emitter-read	18	29	14	256	72
+.claude/hooks/grep-q-pipe-guard.test.sh	31	68	35	324	103
+tests/scripts/git-data-birth-readiness-gate	1	151	144	475	104

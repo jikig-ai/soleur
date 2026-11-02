@@ -129,10 +129,28 @@ esac
 #     touching the root-owned pre-receive (measured: `core.hooksPath=/nonexistent` → push
 #     accepted, no hook run). `git -c` is the one config scope nothing under the repo can
 #     override, so the verb is exec'd through it. Applied to both verbs for uniformity. ---
+# --- (#8211 fix-forward 2) receive.shallowUpdate rides the SAME `-c` scope for the same
+#     reason: a repo-local `receive.shallowUpdate` is git-writable, so the flag is pinned
+#     on the command line where nothing under the repo can drop it. It is receive-pack-
+#     only because shallow updates are a receive-side concern — a push from a `--depth 1`
+#     workspace clone (ensure-workspace-repo.ts always clones shallow) makes the server's
+#     .git/shallow gain roots, which the stock config rejects (`shallow update not
+#     allowed`, the 2026-10-27 R3 re-run). upload-pack ignores the flag, and the ruling
+#     keeps the read argv byte-identical. ---
 if [ "${GIT_DATA_TRANSPORT_EXEC_DRYRUN:-0}" = "1" ]; then
-  echo "DRYRUN-EXEC git -c core.hooksPath=${HOOKS_DIR} ${verb#git-} ${repo_real}"
+  if [ "$verb" = "git-receive-pack" ]; then
+    echo "DRYRUN-EXEC git -c core.hooksPath=${HOOKS_DIR} -c receive.shallowUpdate=true receive-pack ${repo_real}"
+  else
+    echo "DRYRUN-EXEC git -c core.hooksPath=${HOOKS_DIR} ${verb#git-} ${repo_real}"
+  fi
   exit 0
 fi
 
 # --- Exec the real server verb against the CANONICALIZED path -----------------
+# The generic line below is byte-identical to the pre-change form: the production
+# fence probe (git-data-cutover.sh pin_ex) exact-matches it on the live host, so it
+# stays verbatim while receive-pack alone gains the shallow-acceptance flag.
+if [ "$verb" = "git-receive-pack" ]; then
+  exec git -c "core.hooksPath=${HOOKS_DIR}" -c receive.shallowUpdate=true receive-pack "$repo_real"
+fi
 exec git -c "core.hooksPath=${HOOKS_DIR}" "${verb#git-}" "$repo_real"

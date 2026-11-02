@@ -87,6 +87,15 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - auth: bot
 - gotchas: needs a seeded inbound email — with no fixture the only reachable state is the 404, not the detail surface
 
+## `/dashboard/approvals/[id]`
+
+- route: `/dashboard/approvals/[id]`
+- entry: deep link from an approval push or email, or the inbox row of an `approval_required` item
+- selectors: `data-testid="approval-request-card"` (the card), `data-testid="approval-badge"`, `data-testid="approval-expiry"`, `data-testid="approval-bound-block"` (the exact bound action)
+- expects: an Owner of the request's workspace sees the stored action and the Approve/Deny (or Revoke) controls; a signed-out visitor is redirected to `/login?redirectTo=...`; a non-Owner, an unknown id and a malformed id all end in the same 404
+- auth: bot
+- gotchas: needs a seeded `approval_request` row, which exists only while the `approval-queue` flag has been on for the workspace (the page itself renders regardless of the flag); with no fixture the only reachable state is the 404
+
 ## `/dashboard/kb`
 
 - route: `/dashboard/kb`
@@ -221,6 +230,15 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - expects: scope-grant settings render — OAuth/agent scope grants with revoke affordances
 - auth: bot
 - gotchas: revoking a grant has downstream agent effects (agent-runner scope checks) — assert the grant row state, not just the click
+
+## `/dashboard/settings/scope-grants/egress-audit`
+
+- route: `/dashboard/settings/scope-grants/egress-audit`
+- entry: `View egress audit log` link on the Agent web access card at `/dashboard/settings/scope-grants`
+- selectors: `table` with `Host` / `Outcome` / `Requests (minimum)` / `Last seen` column headers, `nav` labelled `Filter by outcome`
+- expects: last 30 days of agent outbound hosts for the current workspace (counts are minimums, outcomes Allowed / Blocked / Other); an unavailable read renders an error state, never an empty log
+- auth: bot
+- gotchas: read-only; collection is off for external organisations until the #11237 gates clear, so the log may be legitimately empty; relative times only (no absolute timestamps in the DOM)
 
 ## `/dashboard/settings/services`
 

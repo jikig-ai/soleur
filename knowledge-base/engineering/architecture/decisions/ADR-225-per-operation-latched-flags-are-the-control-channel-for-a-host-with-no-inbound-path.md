@@ -110,7 +110,7 @@ at 18:59:58.
    read failure, with a `::warning::` naming the class: token unresolved, HTTP 401/403, 429, 5xx,
    any other HTTP status or none, transport fault, no server by that name, several servers or an
    undecodable reply, out-of-bounds `created`, and a local row-filter fault.
-4. **The read prefers the Tier-A token** (`HCLOUD_TOKEN_READONLY`, ADR-241 D4) and falls back to the
+4. [Superseded 2026-10-23, see Amendment below] **The read prefers the Tier-A token** (`HCLOUD_TOKEN_READONLY`, ADR-241 D4) and falls back to the
    read/write `HCLOUD_TOKEN` whenever that read returns nothing. Today that fallback is the live path:
    `prd_terraform` holds only `HCLOUD_TOKEN` (measured 2026-09-24), so this change ADDS three
    operations using the credential ADR-241 is retiring, until the read-only token is minted
@@ -135,6 +135,18 @@ whenever `api.hetzner.cloud` or the HCLOUD token in `prd_terraform` is unavailab
 is a recovery path, so a Hetzner-side outage now delays a LUKS rollback until the API answers. This is
 the cost the default carries, recorded in DC-1 of the change's decision challenges: a refusal a
 re-dispatch clears, against a write that could otherwise land on a server nobody has heard from.
+
+#### Amendment — 2026-10-23: the generation-anchor read has no fallback
+
+Item 4's text of the 2026-09-24 Amendment above is unchanged apart from the bracketed pointer to this
+Amendment added to its first line (a true record of what was measured then). It is superseded: the
+generation-anchor read uses `HCLOUD_TOKEN_READONLY` alone (ADR-241 D4). The fallback to the read/write
+`HCLOUD_TOKEN` was the live path from 2026-09-24 until operator steps O5 and O10 landed; it was removed
+once O10 was measured done (names-only listing of `soleur/prd_terraform`, 2026-10-20; the O5 write-probe
+was last recorded 2026-09-29 and not re-run) under #10664 Site C. An absent, empty or unusable read-only
+token is `unreadable` with one
+warning naming `HCLOUD_TOKEN_READONLY`. The mask, stdin and no-response-byte rules of item 4 are
+unchanged. The scan that keeps a fallback from returning is described in ADR-241's 2026-10-23 entry.
 
 ### 5. The effect is confirmed from the host's telemetry, within a window anchored at the write
 

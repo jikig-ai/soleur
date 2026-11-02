@@ -20,6 +20,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${PG_TMP:-}" ]] || rm -rf "$PG_TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -163,7 +169,6 @@ rm -f /tmp/bp-failsoft.$$
 # scripts/lib/ the fragment's home instead of .claude/hooks/lib/.
 GUARD="$SCRIPTS_DIR/precommit-guard.sh"
 PG_TMP="$(mktemp -d)"; assert_fixture_dir "$PG_TMP"
-trap 'rm -rf "$PG_TMP"' EXIT
 ( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" \
   && git_fixture_env "$PG_TMP" || exit 1
   git -C "$PG_TMP" init -q -b main && git -C "$PG_TMP" commit -q --allow-empty -m init ) || exit 2
@@ -203,7 +208,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 
 # Justified exemptions — file:line with a reason. Each entry must still exist on
 # disk AND the exemption is positional (a moved line re-enters the census).
-#   brand-hex-commit-gate.sh:119, git-commit-secret-scan.sh:113,
+#   brand-hex-commit-gate.sh:131, git-commit-secret-scan.sh:254,
 #   guardrails.sh:231 — bare-[[:space:]] in the boundary alternation already
 #     matches `rtk git …` / `rtk rm …` via the space.
 #   guardrails.sh:705 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
@@ -213,7 +218,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 #     class; `rtk git --no-verify` already matches via the space, pre-fragment.
 #   incidents.test.sh:228/234/240 — test-internal assertion literals inside
 #     strip_command_bodies cases (fixture text, not a gate pattern).
-#   pre-closing-technical-fork-gate.test.sh:666 — a stderr-line regex
+#   pre-closing-technical-fork-gate.test.sh:869 — a stderr-line regex
 #     `(^|: )line [0-9]+:`; `rm ` inside `arm ` trips candidacy — not a
 #     command boundary.
 #   resolve-regenerable-conflicts.test.sh:719 — `_PUSH_RE` `[^-[:alnum:]]`
@@ -230,8 +235,8 @@ echo "-- consumption census (derived site set, not a member list) --"
 #   delegation-verify.test.sh:1298 — a mutation-kill row: the mutant replacement text for CMDPOS_RE
 #     and the `gh workflow run` command it is run against, both test data not a gate pattern.
 EXEMPTIONS=(
-  ".claude/hooks/brand-hex-commit-gate.sh:119"
-  ".claude/hooks/git-commit-secret-scan.sh:113"
+  ".claude/hooks/brand-hex-commit-gate.sh:131"
+  ".claude/hooks/git-commit-secret-scan.sh:254"
   ".claude/hooks/guardrails.sh:231"
   ".claude/hooks/guardrails.sh:705"
   ".claude/hooks/lib/incidents.sh:305"
@@ -239,7 +244,7 @@ EXEMPTIONS=(
   ".claude/hooks/lib/incidents.sh:316"
   ".claude/hooks/lib/incidents.sh:321"
   ".claude/hooks/incidents.test.sh:228"
-  ".claude/hooks/pre-closing-technical-fork-gate.test.sh:666"
+  ".claude/hooks/pre-closing-technical-fork-gate.test.sh:869"
   ".claude/hooks/incidents.test.sh:234"
   ".claude/hooks/incidents.test.sh:240"
   "plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:719"

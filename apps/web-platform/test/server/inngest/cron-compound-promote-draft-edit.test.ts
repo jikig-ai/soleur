@@ -26,15 +26,17 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 import { reportSilentFallback } from "@/server/observability";
 import {
+  AGENTS_EDIT_LINE_MAX_CHARS,
   DRAFT_EDIT_MAX_TOKENS,
   DRAFT_EDIT_TIMEOUT_MS,
+  EDIT_LINE_TARGET_CHARS,
   EDIT_OUTPUT_SCHEMA,
   CREDENTIAL_RE,
   EDIT_TARGET_MAX_BYTES,
   PII_REGEX,
   PROMOTION_QUORUM,
+  SKILL_EDIT_LINE_MAX_CHARS,
   agentsPointerNote,
-  skillConflictDiffBody,
   buildAdditiveEditDiff,
   checkDiffPaths,
   draftAdditiveEdit,
@@ -357,7 +359,9 @@ describe("buildAdditiveEditDiff -- the chokepoint that authors proposed_diff_uni
       ["a zero-width space", ["a\u200bb"], "charset"],
       ["a tag-block character", ["a" + String.fromCodePoint(0xe0041) + "b"], "charset"],
       ["a bidi override", ["a\u202eb"], "charset"],
-      ["a line over 500 characters", ["a".repeat(501)], "too-long"],
+      // The per-target length caps (AGENTS 600, SKILL.md 1000) have their own boundary rows in
+      // the "edit line caps" describe below; a SKILL.md target here pins the SKILL cap.
+      [`a SKILL.md line over ${SKILL_EDIT_LINE_MAX_CHARS} characters`, ["a".repeat(SKILL_EDIT_LINE_MAX_CHARS + 1)], "too-long"],
       ["21 lines", Array.from({ length: 21 }, (_, i) => `- line ${i}`), "too-many"],
       ["an AWS-key-shaped string", ["- key " + "AKIA" + "ABCDEFGHIJKLMNOP"], "credential"],
       ["a Stripe-key-shaped string", ["- key " + "sk_" + "live_" + "a".repeat(24)], "credential"],
@@ -368,8 +372,8 @@ describe("buildAdditiveEditDiff -- the chokepoint that authors proposed_diff_uni
       expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause });
     });
 
-    it("the boundary passes: 20 lines of 500 characters each", async () => {
-      const lines = Array.from({ length: 20 }, () => "b".repeat(500));
+    it("the boundary passes: 20 SKILL.md lines of the SKILL cap each", async () => {
+      const lines = Array.from({ length: 20 }, () => "b".repeat(SKILL_EDIT_LINE_MAX_CHARS));
       const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: lines });
       expect(r.ok).toBe(true);
     });
@@ -869,27 +873,6 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     });
   });
 
-  describe("skillConflictDiffBody: the comment fence cannot be closed by the diff", () => {
-    it("is longer than any backtick run in the diff, so a context line cannot close it", () => {
-      const diff = ["diff --git a/x b/x", "@@ -1 +1,2 @@", " ```", "+@someone hi", ""].join("\n");
-      const body = skillConflictDiffBody(diff);
-      const lines = body.split("\n");
-      const open = /^(`+)diff$/.exec(lines[0]);
-      expect(open).not.toBeNull();
-      const n = open![1].length;
-      expect(n).toBeGreaterThanOrEqual(4);
-      const closeRe = new RegExp("^ {0,3}`{" + n + ",}\\s*$");
-      const inner = lines.slice(1, -1);
-      expect(inner.some((l) => closeRe.test(l))).toBe(false);
-      expect(closeRe.test(lines[lines.length - 1])).toBe(true);
-    });
-    it("redacts the diff entirely when a PII pattern is present", () => {
-      const body = skillConflictDiffBody("+" + "AK" + "IA" + "ABCDEFGHIJKLMNOP");
-      expect(body).toContain("redacted");
-      expect(body).not.toContain("AKIA");
-    });
-  });
-
   describe("derivation faults are reported with their cause and exit code", () => {
     it("a git that cannot run is edit-derive-failed/git-exit with the exit code in extra", async () => {
       const savedPath = process.env.PATH;
@@ -950,5 +933,171 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
     expect(prompt).toMatch(/exactly one \[id: \.\.\.\] per line/);
     expect(prompt).toMatch(/no mention of any hr- or wg-/);
     expect(prompt).toMatch(/enforcement tags/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Edit line caps (#10552): one hard cap per target, the AGENTS cap pinned to the corpus lint.
+// ---------------------------------------------------------------------------------------------
+
+/** The corpus lint's per-rule cap, read from its source: anchored, exactly one assignment. */
+function extractPerRuleCap(src: string): number {
+  const hits = [...src.matchAll(/^PER_RULE_CAP[ \t]*=[ \t]*(\d+)[ \t]*(?:#.*)?$/gm)];
+  if (hits.length !== 1) {
+    throw new Error(`expected exactly one PER_RULE_CAP assignment, found ${hits.length}`);
+  }
+  return Number(hits[0][1]);
+}
+
+/** An AGENTS.rules.md-shaped bullet of EXACTLY `len` characters, with a unique id per index. */
+function ruleOfLength(len: number, i: number): string {
+  const tail = ` [id: cq-cap-probe-${String(i).padStart(2, "0")}]`;
+  const line = `- ${"x".repeat(len - 2 - tail.length)}${tail}`;
+  if (line.length !== len) throw new Error(`fixture is ${line.length} characters, wanted ${len}`);
+  return line;
+}
+
+describe("edit line caps: per-target hard cap, pinned to the corpus lint", () => {
+  const ANCHOR = "- Keep it small [id: cq-keep-small]. Because.";
+
+  describe("the pin: AGENTS_EDIT_LINE_MAX_CHARS equals the lint's PER_RULE_CAP", () => {
+    it("reads the lint constant from the committed source (a missing file is a hard failure)", () => {
+      const src = readFileSync(new URL("../../../../../scripts/lint-agents-rule-budget.py", import.meta.url), "utf8");
+      expect(AGENTS_EDIT_LINE_MAX_CHARS).toBe(extractPerRuleCap(src));
+    });
+
+    it("the extractor tolerates spacing and a trailing comment", () => {
+      expect(extractPerRuleCap("PER_RULE_CAP=600  # note\n")).toBe(600);
+      expect(extractPerRuleCap("x = 1\nPER_RULE_CAP   =   601\n")).toBe(601);
+    });
+
+    it("the extractor fails loudly on zero, two, or an f-string-only mention", () => {
+      expect(() => extractPerRuleCap("")).toThrow(/found 0/);
+      expect(() => extractPerRuleCap('print(f"cap {PER_RULE_CAP}")\n')).toThrow(/found 0/);
+      expect(() => extractPerRuleCap("PER_RULE_CAP = 600\nPER_RULE_CAP = 700\n")).toThrow(/found 2/);
+      expect(() => extractPerRuleCap("B_ALWAYS_WARN = 44000\n")).toThrow(/found 0/);
+    });
+
+    it("the soft target stays below both hard caps and the SKILL cap is not below the AGENTS cap", () => {
+      expect(EDIT_LINE_TARGET_CHARS).toBeLessThan(AGENTS_EDIT_LINE_MAX_CHARS);
+      expect(SKILL_EDIT_LINE_MAX_CHARS).toBeGreaterThanOrEqual(AGENTS_EDIT_LINE_MAX_CHARS);
+    });
+  });
+
+  describe("AGENTS.rules.md boundary", () => {
+    it(`20 rule lines of exactly ${AGENTS_EDIT_LINE_MAX_CHARS} characters are accepted`, async () => {
+      const lines = Array.from({ length: 20 }, (_, i) => ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, i));
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r.ok).toBe(true);
+    });
+
+    it("one character more is refused as edit-invalid/too-long, even after a compliant first line", async () => {
+      const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1)];
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap line at position %i of 20 is refused (every line is checked)", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => ruleOfLength(i === at ? AGENTS_EDIT_LINE_MAX_CHARS + 1 : AGENTS_EDIT_LINE_MAX_CHARS, i));
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("an over-cap line in the MIDDLE of three is refused (every line is checked, not the first or last)", async () => {
+      const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 2)];
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("a 597-character rule line is NOT refused by the old 500-character cap (the #10552 defect)", async () => {
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: [ruleOfLength(597, 0)] });
+      expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("SKILL.md boundary is its own cap, not the AGENTS one", () => {
+    it("the SKILL.md cap is exactly 1000: a 1000-character line is accepted and a 1001-character line refused (literals)", async () => {
+      expect(SKILL_EDIT_LINE_MAX_CHARS).toBe(1000);
+      const accepted = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1000)] });
+      expect(accepted.ok).toBe(true);
+      const refused = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1001)] });
+      expect(refused).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap SKILL.md line at position %i of 20 is refused", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => "e".repeat(i === at ? 1001 : 1000));
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("an over-cap SKILL.md line in the MIDDLE of three is refused", async () => {
+      const ok = "c".repeat(SKILL_EDIT_LINE_MAX_CHARS);
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [ok, ok + "c", ok] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it(`a ${AGENTS_EDIT_LINE_MAX_CHARS + 1}-character SKILL.md line is accepted`, async () => {
+      const r = await derive(SKILL_ALPHA, {
+        insert_after_line: "## Steps",
+        new_lines: ["c".repeat(AGENTS_EDIT_LINE_MAX_CHARS + 1)],
+      });
+      expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("chars equal bytes because the printable-ASCII screen runs first", () => {
+    it.each([
+      ["AGENTS.rules.md", AGENTS, ANCHOR, AGENTS_EDIT_LINE_MAX_CHARS],
+      ["SKILL.md", SKILL_ALPHA, "## Steps", SKILL_EDIT_LINE_MAX_CHARS],
+    ])("a two-byte-character line that fits the cap in characters but not in bytes is refused as charset (%s)", async (_l, path, anchor, cap) => {
+      // Half the cap plus one is under the character cap and OVER it in UTF-8 bytes.
+      const r = await derive(path, { insert_after_line: anchor, new_lines: [String.fromCharCode(0xe9).repeat(Math.floor(cap / 2) + 1)] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "charset" });
+    });
+  });
+
+  describe("the prompt states the numbers the validator enforces", () => {
+    const letter = (i: number) => String.fromCharCode(97 + i);
+    const learningPath = (i: number) => `knowledge-base/project/learnings/${letter(i)}.md`;
+    const summaries = new Map<string, string>(
+      Array.from({ length: PROMOTION_QUORUM }, (_, i) => [learningPath(i), `SUMMARY-${i}`]),
+    );
+    const promptFor = async (targetPath: string): Promise<string> => {
+      const post = vi.fn(async (..._a: unknown[]) => ({ text: "{}", stopReason: "end_turn" }));
+      await draftAdditiveEdit({
+        cluster: {
+          target_path: targetPath,
+          rationale: "r",
+          source_learnings: Array.from({ length: PROMOTION_QUORUM }, (_, i) => learningPath(i)),
+        },
+        repoRoot,
+        apiKey: "test-key",
+        runId: "RUN-CAP",
+        corpusSummaries: summaries,
+        headroomBytes: 1234,
+        post,
+      } as unknown as Parameters<typeof draftAdditiveEdit>[0]);
+      return (post.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content;
+    };
+
+    it("AGENTS.rules.md: hard cap from the constant, soft target from the constant", async () => {
+      const prompt = await promptFor(AGENTS);
+      expect(prompt).toContain(`at most ${AGENTS_EDIT_LINE_MAX_CHARS} characters`);
+      expect(prompt).toContain(`aim for ${EDIT_LINE_TARGET_CHARS} or fewer`);
+      expect(prompt).not.toContain(`at most ${SKILL_EDIT_LINE_MAX_CHARS} characters`);
+    });
+
+    it("SKILL.md: its own hard cap, never the AGENTS one", async () => {
+      const prompt = await promptFor(SKILL_ALPHA);
+      expect(prompt).toContain(`at most ${SKILL_EDIT_LINE_MAX_CHARS} characters`);
+      expect(prompt).toContain(`aim for ${EDIT_LINE_TARGET_CHARS} or fewer`);
+      expect(prompt).not.toContain(`at most ${AGENTS_EDIT_LINE_MAX_CHARS} characters`);
+    });
+
+    it("both prompts say a longer line refuses the whole edit", async () => {
+      for (const target of [AGENTS, SKILL_ALPHA]) {
+        expect(await promptFor(target)).toMatch(/a line over the hard cap refuses the whole edit/);
+      }
+    });
   });
 });

@@ -13,6 +13,7 @@ amended_by:
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
   - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
   - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
+  - "#10198 (2026-10-23) — decision 28: the root-anchored `glob:` grammar lands — a `/`-free head mints a real narrow edge over dir-less diff lines, the bash classifier is shared (`_affected_glob_split`), and the th8 row becomes a per-member coverage census; see ## Amendment — 2026-10-23 (#10198)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -747,7 +748,10 @@ root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather th
 root the corpus scan enumerates).
 
 27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
-    durable posture.** A dir-less corpus file is detected loudly — the th8 row in
+    durable posture.** *(Superseded in part by decision 28, 2026-10-23: the extension landed on
+    the evidence the deferral was waiting for — the grammar now has a root-anchored form and the
+    th8 row's question is coverage, not existence. The detect-first posture and the companion
+    hardening stand as decided.)* A dir-less corpus file is detected loudly — the th8 row in
     `scripts/test-all-affected.test.sh` re-derives the single-component complement of
     `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
     producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
@@ -768,3 +772,33 @@ root the corpus scan enumerates).
     `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
     `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
     over-report, the safe direction; those rows are not oracle disagreements.
+
+## Amendment — 2026-10-23 (#10198)
+
+Context: decision 27 deferred the root-anchored `glob:` grammar to #10198 on one trigger — a
+live dir-less corpus file the grammar could not express. The deferral was posture, not
+preference: extend on evidence, never for a member that might exist. This amendment lands the
+extension on the terms the deferral set.
+
+28. **The `glob:` grammar gains a root-anchored form, classified by a single shared helper.**
+    `scripts/lib/affected-glob.sh`'s `_affected_glob_split <payload>` is the ONE bash classifier
+    (literal | dir | root | malformed, `_AGS_WHY` reason tokens, `_AGS_HEAD`/`_AGS_TAIL` splits,
+    always rc 0 — malformed is data, not a failure arm): a `/`-free metachar-free head — empty
+    (`glob:*.test.sh`, `glob:**.test.sh`) or non-empty (`glob:x*.sh`) — is ROOT-ANCHORED and
+    mints `^glob:<pattern>` with no `-d` probe (the repo root is always present); a `/`-bearing
+    tail under that head is a new malformed shape (`root-tail-slash`) — a dir-less diff line
+    can never match it. The hit arm's root branch requires a dir-less line AND `[[ == ]]` on
+    the whole pattern — `*` crosses `/` in bash, so the `!= */*` conjunct is the load-bearing
+    narrowing. Every `glob:` shape site classifies through it (mint `_affected_add_edge`, hit
+    `_diff_edge_hit`, the lint-orphan census, the test-side `materialise()`); the Python
+    `edge_hit()`/`covers()` mirrors and the GLOBENT awk superset hold the same verdicts —
+    GLOBENT admits the root form and lets `glob:x*/y` stay semantic. Malformed shapes keep the
+    doctrine: mint/hit fail toward coverage, the census REDs statically, registration-only
+    admission can only widen. Missing-lib degrade is `_AFF_LIB_OK`-folded to `index-missing`
+    (select-all), with the hit arm carrying its own `declare -F || return 0` fail-wide guard
+    for the hand-placed `^glob:` channel outside the gate. The th8 dir-less corpus row becomes
+    a per-member COVERAGE census (`_th8_corpus_covered`: literal member, metachar-free glob
+    literal, or well-formed root glob under `[[ == ]]` with the dir-less conjunct) — a covered
+    member clears; an uncovered one REDs per suite. Decision 27's detect-first posture is
+    retained: the extension landed because the representable class exists, and the census keeps
+    a root-level file from ever being unedgeable silently again.

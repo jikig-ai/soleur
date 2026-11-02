@@ -8,16 +8,23 @@
  *      artifact_view_url + inngest.send called exactly once
  *   2. PR review pending (engineering.pr_review_pending) → inngest.send
  *      dispatch ordering (after writeActionSend, before archive)
- *   3. Inngest enqueue failure → 200 with degraded:"enqueue_failed";
- *      action_sends row stays committed; reportSilentFallback fires
- *   4. The route does NOT return 500 on enqueue failure (orphan-prevention)
+ *   3. Inngest enqueue exhausted → 503 enqueue_unavailable (#10543); the
+ *      action_sends row stays committed, the draft is NOT archived, and
+ *      reportSilentFallback fires once
+ *   4. A transient enqueue failure is retried with the SAME event id and
+ *      the route still answers 200
  *
  * A separate file from send-route.test.ts because the spawn dispatch is
  * a new surface — the existing matrix tests the pre-PR-A behavioral
  * contract; this file tests the additive contract.
  */
 
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+
+import {
+  createActionSendsStore,
+  type ActionSendsStore,
+} from "../../../helpers/action-sends-row-mock";
 
 const {
   mockGetUser,
@@ -28,6 +35,7 @@ const {
   mockValidateOrigin,
   mockInngestSend,
   mockReportSilentFallback,
+  mockWarnSilentFallback,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
@@ -40,6 +48,7 @@ const {
   })),
   mockInngestSend: vi.fn(),
   mockReportSilentFallback: vi.fn(),
+  mockWarnSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -67,7 +76,7 @@ vi.mock("@/server/action-sends/write-action-send", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: vi.fn(),
+  warnSilentFallback: mockWarnSilentFallback,
   hashUserId: vi.fn(() => "founder-hash-stub"),
 }));
 
@@ -95,6 +104,10 @@ vi.mock("@/server/templates/template-registry", () => ({
 
 vi.mock("@/server/templates/run-template-gate", () => ({
   runTemplateGate: vi.fn(async () => ({ kind: "allow" })),
+}));
+
+vi.mock("@/server/logger", () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -130,41 +143,28 @@ function ctx() {
 // Track the call order: writeActionSend → inngest.send → messages.update
 const callOrder: string[] = [];
 
-function setupMessageRow(
-  action_class: string,
-  source_ref: string,
-): void {
-  const row = {
-    id: MSG_ID,
-    user_id: FOUNDER_A,
-    action_class,
-    status: "draft",
-    draft_preview: "test draft preview",
-    owning_domain: "engineering",
-    template_id: "default_legacy",
-    source_ref,
-  };
+let store: ActionSendsStore;
 
-  const messageMaybeSingle = vi.fn(async () => ({ data: row, error: null }));
-  const messageEq2 = vi.fn(() => ({ maybeSingle: messageMaybeSingle }));
-  const messageEq1 = vi.fn(() => ({ eq: messageEq2 }));
-  const messageSelect = vi.fn(() => ({ eq: messageEq1 }));
-
-  // messages.update — track ordering
-  const updEq2 = vi.fn(async () => {
-    callOrder.push("messages-archive");
-    return { error: null };
+function setupMessageRow(action_class: string, source_ref: string): void {
+  store = createActionSendsStore({
+    message: {
+      id: MSG_ID,
+      user_id: FOUNDER_A,
+      action_class,
+      status: "draft",
+      draft_preview: "test draft preview",
+      owning_domain: "engineering",
+      template_id: "default_legacy",
+      source_ref,
+    },
+    onEvent: (e) => callOrder.push(e),
   });
-  const updEq1 = vi.fn(() => ({ eq: updEq2 }));
-  const messageUpdate = vi.fn(() => ({ eq: updEq1 }));
-
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "messages") {
-      return { select: messageSelect, update: messageUpdate };
-    }
-    return {};
-  });
+  mockFrom.mockImplementation((table: string) => store.from(table));
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -228,6 +228,9 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
       data: Record<string, unknown>;
     };
     expect(sent.name).toBe("agent.spawn.requested");
+    // #10543: the event id derives from the action_sends row so a retry and a
+    // founder re-click replay dedup on the same Inngest event.
+    expect((sent as { id?: string }).id).toBe(`agent-spawn-${AS_ID}`);
     expect(sent.data).toMatchObject({
       founderId: FOUNDER_A,
       messageId: MSG_ID,
@@ -265,7 +268,7 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
     ]);
   });
 
-  test("(3) inngest.send throws → 200 with degraded:'enqueue_failed'; reportSilentFallback fires", async () => {
+  test("(3) inngest.send exhausted (non-transient) → 503 enqueue_unavailable, draft NOT archived, one Sentry mirror", async () => {
     setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
     mockInngestSend.mockImplementationOnce(async () => {
@@ -274,41 +277,95 @@ describe("POST /api/dashboard/today/[id]/send — spawn dispatch (PR-A)", () => 
     });
 
     const res = await POST(makeRequest({}), ctx());
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      action_send_id?: string;
-      degraded?: string;
-    };
-    // The action_sends row IS the durable artifact — it stays committed.
-    expect(json.action_send_id).toBe(AS_ID);
-    expect(json.degraded).toBe("enqueue_failed");
-
-    // archive still runs (action_sends row exists; archiving the message
-    // matches the row's WORM-committed reality).
-    expect(callOrder).toEqual([
-      "writeActionSend",
-      "inngest.send-throw",
-      "messages-archive",
-    ]);
-
-    // Sentry mirror fired for the enqueue failure.
-    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-    const [, ctx0] = mockReportSilentFallback.mock.calls[0];
-    expect(ctx0).toMatchObject({
-      feature: "spawn-agent",
-      op: "inngest-enqueue",
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(await res.json()).toStrictEqual({
+      error: "enqueue_unavailable",
+      action_send_id: AS_ID,
+      retryable: true,
     });
+
+    // The action_sends row IS the durable artifact and stays committed, but
+    // the draft must stay visible: NO messages-archive.
+    expect(callOrder).toEqual(["writeActionSend", "inngest.send-throw"]);
+    expect(store.messageStatus()).toBe("draft");
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    const [first, opts] = mockReportSilentFallback.mock.calls[0];
+    // null first argument: the pino mirror keeps the feature/op tags (#10542).
+    expect(first).toBeNull();
+    expect(opts).toMatchObject({ feature: "spawn-agent", op: "inngest-enqueue" });
+    expect(opts.extra).toMatchObject({ replay: false, transient: false });
   });
 
-  test("(4) inngest.send throws → route does NOT return 500 (orphan-prevention)", async () => {
+  test("(3b) transient exhaustion → 503 with extra.transient === true", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockInngestSend.mockRejectedValue(new TypeError("fetch failed"));
+
+    const pending = POST(makeRequest({}), ctx());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const res = await pending;
+
+    expect(res.status).toBe(503);
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+    expect(store.messageStatus()).toBe("draft");
+    const [, opts] = mockReportSilentFallback.mock.calls[0];
+    expect(opts.extra).toMatchObject({ replay: false, transient: true });
+  });
+
+  test("(4) a transient enqueue failure is retried with the SAME event id and the route still answers 200", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
     setupMessageRow("triage.p0p1_issue", "issue-acme:repo:42");
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
-    mockInngestSend.mockRejectedValueOnce(new Error("substrate down"));
+    mockInngestSend
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({ ids: ["evt-2"] });
+
+    const pending = POST(makeRequest({}), ctx());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const res = await pending;
+
+    expect(res.status).toBe(200);
+    expect(store.messageStatus()).toBe("archived");
+    expect(store.archiveCount()).toBe(1);
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    const ids = mockInngestSend.mock.calls.map(
+      (c) => (c[0] as { id: string }).id,
+    );
+    expect(ids).toEqual([`agent-spawn-${AS_ID}`, `agent-spawn-${AS_ID}`]);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("(5) the archive update filters status = 'draft'", async () => {
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
 
     const res = await POST(makeRequest({}), ctx());
-    // Critical: action_sends row is already written. A 500 would suggest
-    // retry to the operator and create orphan rows on every retry.
-    expect(res.status).not.toBe(500);
     expect(res.status).toBe(200);
+    expect(store.archiveFilters[0]).toContainEqual(["status", "draft"]);
+  });
+
+  test("(6) Sentry extra key set on the exhausted enqueue is identifiers-only (no draft text, hash or error message)", async () => {
+    setupMessageRow("engineering.pr_review_pending", "pr-acme:repo:7");
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockInngestSend.mockRejectedValueOnce(new Error("secret-bearing message"));
+
+    await POST(makeRequest({}), ctx());
+
+    const [, opts] = mockReportSilentFallback.mock.calls[0];
+    expect(Object.keys(opts.extra as Record<string, unknown>).sort()).toEqual(
+      [
+        "actionSendId",
+        "errorName",
+        "messageId",
+        "replay",
+        "transient",
+        "userId",
+      ].sort(),
+    );
+    expect(JSON.stringify(opts)).not.toContain("secret-bearing message");
+    expect(JSON.stringify(opts)).not.toContain("test draft preview");
   });
 });

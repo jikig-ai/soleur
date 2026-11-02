@@ -97,7 +97,11 @@ jobs:
     # same required-reviewer gate. That approval IS the prod-write ack
     # (hr-menu-option-ack-not-prod-write-auth); omitting it here would have let a flag that starts
     # a production scheduler be dispatched with no second pair of eyes.
-    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover') && 'inngest-cutover' || '' }}
+    # #9755: op=backup writes a prod artifact (a Hetzner `create_image` server snapshot of the
+    # whole root disk) with a READ/WRITE Hetzner token — the same prod-write class as arm, so it
+    # takes the same required-reviewer gate. Its credential is delivered by the Tier-B loader
+    # step below (the ADR-241 O10 mechanism), bound to this environment.
+    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover' || inputs.op == 'backup') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -119,30 +123,57 @@ jobs:
       # SHA-pinned.
       - name: Checkout (REQUIRED by all ops — provides scripts/cutover-inngest.sh)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # Doppler CLI is needed by op=backup (reads HCLOUD_TOKEN from the prd_terraform-scoped
-      # DOPPLER_TOKEN) and op=arm/op=rollback (source read-through + arm-token writes +
+      # Doppler CLI is needed by op=arm/op=rollback (source read-through + arm-token writes +
       # betterstack-query.sh cred injection); installing it is harmless for the webhook
-      # ops. SHA-pinned, matching web-platform-release.yml.
+      # ops. op=backup's Hetzner token no longer comes from prd_terraform — it arrives via the
+      # Tier-B loader step below (#9755). SHA-pinned, matching web-platform-release.yml.
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      # #9755: op=backup's Hetzner snapshot credential comes from Tier B (the ADR-241 O10
+      # mechanism): the environment-scoped DOPPLER_TOKEN_INFRA_PRIVILEGED, present on
+      # inngest-cutover since runbook step O3. The `if:` confines the whole-project export to
+      # backup dispatches; the conditional `with:` mirrors the arm-token injection idiom and
+      # gives the op-set parity check a uniform extraction anchor. No `doppler-token-legacy`
+      # input is passed: a missing environment secret is the loader's verdict=no_credential_source refusal, never a
+      # silent Tier-A fallback (the git-data-cutover.yml::wipe precedent for a
+      # must-never-fall-back op).
+      - name: Load Tier-B infra credentials (op=backup only)
+        if: inputs.op == 'backup'
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ (inputs.op == 'backup') && secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED || '' }}
+      # #6369 — the read/write token for the arm-flip writes to the ISOLATED soleur-inngest/prd
+      # (op=arm writes INNGEST_POSTGRES_URI/INNGEST_CUTOVER_FLIP=armed; op=rollback writes
+      # INNGEST_CUTOVER_FLIP=rollback; op=resume/op=reflush/op=luks-cutover write the same
+      # config). It is a REPO secret, so GitHub resolves it on EVERY dispatch — including the
+      # `|| ''` unbound one — and the Tier-B census's `''`-arm clause bans an UNCONDITIONAL
+      # `secrets.` reference to it on a `''`-armed job: the conditional-expression mask this
+      # used to carry was correct behaviour but statically unverifiable. The `if:` is now the
+      # delivery gate the census CAN see (security F2/C5); the `&& secrets … || ''`
+      # expression stays as the op-set parity anchor and a second mask. $GITHUB_ENV carries
+      # the value into the run step below — a step-env var cannot be `if:`-scoped per key,
+      # so the token cannot ride the run step's own env: block. On every other dispatch this
+      # step is SKIPPED and the var stays unset: the script refuses an empty token exactly
+      # as it did under the mask.
+      # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
+      # which holds the run for the required-reviewer approval before any step (incl. this write)
+      # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
+      - name: Export Inngest arm token (gated ops only)
+        if: inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover'
+        env:
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
+        run: echo "DOPPLER_TOKEN_INNGEST_ARM=$DOPPLER_TOKEN_INNGEST_ARM" >> "$GITHUB_ENV"
       - name: Run cutover host op via webhook
         env:
           OP: ${{ inputs.op }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN; op=arm/op=rollback read the
-          # source values read-through + betterstack-query.sh creds). Same secret as
-          # apply-web-platform-infra.yml's read steps — NOT DOPPLER_TOKEN_WRITE.
+          # prd_terraform READ-only (op=arm/op=rollback read the source values read-through +
+          # betterstack-query.sh creds; op=backup's Hetzner token arrives via the Tier-B loader
+          # above, #9755). Same secret as apply-web-platform-infra.yml's read steps — NOT
+          # DOPPLER_TOKEN_WRITE.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # #6369 — the read/write token for the arm-flip writes to the ISOLATED soleur-inngest/prd
-          # (op=arm writes INNGEST_POSTGRES_URI/INNGEST_HEARTBEAT_URL/INNGEST_CUTOVER_FLIP=armed;
-          # op=rollback writes INNGEST_CUTOVER_FLIP=rollback). A conditional expression injects it
-          # EMPTY for every other dispatch — a bash comment cannot scope a step-env var (security F2/C5).
-          # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
-          # which holds the run for the required-reviewer approval before any step (incl. this write)
-          # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.

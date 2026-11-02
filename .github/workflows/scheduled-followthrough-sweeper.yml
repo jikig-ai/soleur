@@ -52,14 +52,25 @@ permissions:
   # verdict) through `gh api`; under the explicit-permissions rule (#8450) an unlisted scope is `none` and 403s.
   # Retire this line with the probe.
   checks: read
+  # (#10865) the observation-window probe reads the `s4-drain` label list through the mixed issues endpoint, which GitHub
+  # filters to issues when the token has no pull-requests scope; without this line the restart floor silently stays at the
+  # PR3a merge (both 2026-11-01 outputs printed floor=pr3a). Read only; the token reaches only probes declaring secrets=GH_TOKEN, and every such probe now holds this scope.
+  # Retire this line with the probe.
+  pull-requests: read
 
 jobs:
   sweep:
     runs-on: ubuntu-24.04
-    # 10 -> 15. `fetch-depth: 0` below costs a measured +20-60s against a worst
+    # 10 -> 15 -> 30. `fetch-depth: 0` below costs a measured +20-60s against a worst
     # recent run of 3m51s; raising the ceiling in the same edit keeps the change
     # from surfacing later as an unexplained timeout.
-    timeout-minutes: 15
+    # 15 -> 30 (#11215, CTO ruling 2026-10-29): runs 40776246270, 40702857885 and
+    # 40587723911 were cancelled at the 15m ceiling because four slow probes
+    # (ci-draft-light-soak-9728, pr-battery-gate-saving-9323, ci-push-dedupe-soak-9512,
+    # bearer-curl-s4-first-runs-9905) take 1.5-5 min each. Individual probes are now
+    # capped at FT_PROBE_TIMEOUT (300s, scripts/sweep-followthroughs.sh); this job
+    # ceiling must stay well above 300s x the number of slow probes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -122,7 +133,8 @@ jobs:
           # A directive that names a secret absent from this block is commented on
           # by the sweeper and reds the run; that is the intended reading, not noise.
           SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
-          # #5875 canary-promotion-5875.sh — GETs /hooks/deploy-status (HMAC + CF-Access).
+          # #6178 inngest-soak-6178.sh and #10548 sdk-bash-smoke-verdict-10548.sh — GET /hooks/deploy-status
+          # (HMAC + CF-Access). The probes of four closed trackers were retired by G1 PR-4a (#10937; history in git).
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -160,6 +172,15 @@ jobs:
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # #6027 ga-lb-pool-soak-6027.sh — Cloudflare account-scoped reads for the
+          # GA LB pool-health leg (GET /accounts/{id}/load_balancers/pools[/health];
+          # values mirrored from Doppler soleur/prd_terraform). These GH secrets do
+          # not exist yet: the binding is the correct wiring — until the operator
+          # creates them, `${{ secrets.X }}` resolves to "" and Guard 3 comments
+          # REQUIRED SECRET MISSING + reds the run (the intended reading, #7946),
+          # rather than the probe running and TRANSIENTing.
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh

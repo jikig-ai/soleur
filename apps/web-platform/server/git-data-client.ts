@@ -34,6 +34,7 @@ import {
 } from "@/server/observability";
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
 import { gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { readGitDataKeyEnv } from "@/server/git-data-key";
 // Pure transport helpers (call-time only) from the WRITE-side module. The two
 // modules reference each other exclusively inside async function bodies (this
 // file → gitDataRemoteUrl/assertSafeWorkspaceId; the write module →
@@ -170,6 +171,29 @@ export async function authorizeGitDataAccess(params: {
 }
 
 /**
+ * The refspecs of the overlay fetch, in ONE place so the real-git tests import the production
+ * strings instead of keeping private copies.
+ *
+ * `negativeRescue` (#11704, CTO F13) is a NEGATIVE refspec: the overlay's rescue heads
+ * (`soleur-store-tip-<sha12>`, one more per distinct skipped store tip) are never overlaid, and
+ * fetching all of them at every graft would grow this 60 s fetch without bound. Excluding them is
+ * NOT a prune: nothing in the store is deleted (a prune here would delete store-only branches). The
+ * heads themselves still accumulate in the store (one per distinct skipped store tip); a host-side
+ * reaper is deferred and tracked (#11725), so "bounded by the existing gc" does not hold.
+ * `soleur-store-tip-` is a RESERVED branch prefix: a user branch with that name is excluded from the
+ * overlay too (and is pushed as a rescue head).
+ * REQUIRES git >= 2.29 (negative refspecs). The node:22-slim Debian git is 2.39, which has them, but
+ * the container's git version was NOT measured.
+ */
+export function gitDataFetchRefspecs(worktreeId: string): { heads: string; negativeRescue: string; tags: string } {
+  return {
+    heads: `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
+    negativeRescue: `^refs/soleur/worktrees/${worktreeId}/heads/soleur-store-tip-*`,
+    tags: `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
+  };
+}
+
+/**
  * Authorized fetch of a workspace's per-user worktree namespace from the shared
  * git-data store into `destPath`'s local `refs/heads/*` (the reverse of the
  * git-data-replication.ts write refspec: the write pushes local `refs/heads/*` →
@@ -212,7 +236,7 @@ export async function fetchFromGitData(params: {
     );
   }
 
-  const transportKey = process.env.GIT_TRANSPORT_SSH_PRIVATE_KEY?.trim();
+  const transportKey = readGitDataKeyEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY");
   if (!transportKey) {
     throw new Error(
       "git-data: GIT_TRANSPORT_SSH_PRIVATE_KEY is unset — cannot fetch from the " +
@@ -244,12 +268,22 @@ export async function fetchFromGitData(params: {
   // The fence, not ref ancestry, is the ordering authority — symmetric to the write's
   // `--force`. Cross-user visibility is a separate explicit fetch of the peer namespace
   // (ADR-068 D0-ref), not this call.
+  const fetchRefspecs = gitDataFetchRefspecs(worktreeId);
   await gitWithPrivateKeyAuth(
     [
       "fetch",
+      // (#8211 fix-forward 2) The workspace clone is always `--depth 1`, and the
+      // store itself is shallow once it accepts shallow pushes
+      // (receive.shallowUpdate): a pack cut at the store's boundary carries
+      // objects that need new shallow roots, which `git fetch` refuses by
+      // default (`shallow roots are not allowed to be updated` — quietly, with
+      // no ref landed). `--update-shallow` updates .git/shallow and accepts such
+      // refs; on a non-shallow or boundary-agnostic fetch it is inert.
+      "--update-shallow",
       remoteUrl,
-      `+refs/soleur/worktrees/${worktreeId}/heads/*:refs/remotes/git-data/*`,
-      `+refs/soleur/worktrees/${worktreeId}/tags/*:refs/tags/*`,
+      fetchRefspecs.heads,
+      fetchRefspecs.negativeRescue,
+      fetchRefspecs.tags,
     ],
     transportKey,
     hostKeyPin,

@@ -110,3 +110,7 @@ gate.
 - A `refresh-gh-actions-cidrs.sh` helper. Same reason.
 - Read-only standing tokens. Read access is generated ad-hoc via the Cloudflare
   dashboard at retrieval time (see Phase 7 runbook).
+
+## PR plan matrix
+
+This root carries `.pr-plan-skip` (#10715): `iam.tf`'s `cloudflare_api_token_permission_groups` data source can never plan green under the Tier-A PR credential, so detect-changes drops it from the `plan` matrix; `validate` still runs. If a future root reads an out-of-scope data source, add the same non-empty sentinel naming why and the re-enable path.

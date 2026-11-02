@@ -1012,14 +1012,12 @@ export const cronGithubAppDriftGuard = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 * * * *" },
+      { event: "cron/github-app-drift-guard.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 * * * *" },
-    { event: "cron/github-app-drift-guard.manual-trigger" },
-  ],
-  cronGithubAppDriftGuardHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronGithubAppDriftGuardHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // Test surface — exported only for vitest. Pruned (P2.6) to the 4 constants

@@ -387,6 +387,19 @@ jobs:
         working-directory: apps/web-platform
         run: bash scripts/lint-migration-fk-preconditions.sh --from-pr-diff
 
+      # Api-role grant lint (ADR-303 — the SUBORDINATE static tier of the
+      # two-tier table-grant guard; the rls-authz-fuzz grant gate is the
+      # authoritative tier). Post-2026-10-30, Supabase no longer auto-grants
+      # Data API access to new public tables (changelog 45329): every
+      # diff-touched migration creating a public relation must carry an
+      # in-file api-role GRANT or a soleur:no-data-api sentinel — same
+      # early/no-DB slot as the FK lint so an ungranted create short-circuits
+      # before the costly dev apply. Detection runs on noise-stripped SQL via
+      # a Node/bun/tsx helper (ambient node only — this step precedes setup).
+      - name: Lint migration api-role grants
+        working-directory: apps/web-platform
+        run: bash scripts/lint-migration-api-grants.sh --from-pr-diff
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:

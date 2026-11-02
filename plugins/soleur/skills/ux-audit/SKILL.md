@@ -69,7 +69,7 @@ Read [route-list.yaml](./references/route-list.yaml). Each route has `{path, aut
 ### 2. Global-cap check
 
 ```bash
-OPEN_COUNT=$(gh issue list --label ux-audit --state open --json number --jq 'length')
+OPEN_COUNT=$(gh issue list --label ux-audit --state open --limit 100 --json number --jq 'length')
 if [ "$OPEN_COUNT" -ge 20 ]; then
   echo "::warning::Global ux-audit cap reached ($OPEN_COUNT open). Refusing to file new issues."
   exit 0

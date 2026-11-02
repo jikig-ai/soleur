@@ -117,9 +117,9 @@ JSON
 printf '{"status":"ahead"}' > "$D/compare-cccccccccccccccccccccccccccccccccccccccc.json"
 printf '{"status":"ahead"}' > "$D/compare-dddddddddddddddddddddddddddddddddddddddd.json"
 printf '{"status":"ahead"}' > "$D/compare-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.json"
-printf '{"jobs":[{"id":5001,"name":"health-check"}]}' > "$D/jobs-901.json"
-printf '{"jobs":[{"id":5002,"name":"health-check"}]}' > "$D/jobs-902.json"
-printf '{"jobs":[{"id":5003,"name":"health-check"}]}' > "$D/jobs-903.json"
+printf '{"jobs":[{"id":5001,"name":"test-scripts (3/8)"},{"id":5009,"name":"report"}]}' > "$D/jobs-901.json"
+printf '{"jobs":[{"id":5002,"name":"test-webplat (1/2)"}]}' > "$D/jobs-902.json"
+printf '{"jobs":[{"id":5003,"name":"test-bun"}]}' > "$D/jobs-903.json"
 # Timestamp-prefixed wire shape, INCLUDING the ANSI-wrapped echo of the
 # monitor's own verdict-classifier source — the exact line that a bare-phrase
 # grep would misread as a watchdog fire.
@@ -143,8 +143,11 @@ cat > "$D/runs.json" <<'JSON'
 JSON
 printf '{"status":"ahead"}' > "$D/compare-cccccccccccccccccccccccccccccccccccccccc.json"
 printf '{"status":"ahead"}' > "$D/compare-dddddddddddddddddddddddddddddddddddddddd.json"
-printf '{"jobs":[{"id":5010,"name":"health-check"}]}' > "$D/jobs-910.json"
-printf '{"jobs":[{"id":5011,"name":"health-check"}]}' > "$D/jobs-911.json"
+printf '{"jobs":[{"id":5012,"name":"test-scripts (1/8)"},{"id":5010,"name":"test-scripts (4/8)"}]}' > "$D/jobs-910.json"
+printf '{"jobs":[{"id":5011,"name":"test-infra"}]}' > "$D/jobs-911.json"
+# Two legs on run 910: the FIRST leg (5012) is clean, the SECOND (5010)
+# carries the reap — the probe must union leg logs, not stop at leg one.
+printf '%s --- scripts/first-leg-suite ---\n%s === 12/12 suites passed ===\n' "$TS" "$TS" > "$D/log-5012.txt"
 # Emitted shape only — no === terminal (a reaped runner may never reach the
 # epilogue). The ANSI echo line proves the emitted-form grep, not the bare
 # phrase, is what counts dirty.
@@ -194,8 +197,8 @@ cat > "$D/runs.json" <<'JSON'
 JSON
 printf '{"status":"ahead"}' > "$D/compare-cccccccccccccccccccccccccccccccccccccccc.json"
 printf '{"status":"ahead"}' > "$D/compare-dddddddddddddddddddddddddddddddddddddddd.json"
-printf '{"jobs":[{"id":5030,"name":"health-check"}]}' > "$D/jobs-930.json"
-printf '{"jobs":[{"id":5031,"name":"health-check"}]}' > "$D/jobs-931.json"
+printf '{"jobs":[{"id":5030,"name":"test-scripts (2/8)"}]}' > "$D/jobs-930.json"
+printf '{"jobs":[{"id":5031,"name":"test-scripts-heavy (1/3)"}]}' > "$D/jobs-931.json"
 printf '%s Run npm ci --ignore-scripts\n%s added 900 packages in 40s\n%s ##[error]The operation was canceled.\n' "$TS" "$TS" "$TS" > "$D/log-5030.txt"
 printf '%s checkout\n%s ##[error]The operation was canceled.\n' "$TS" "$TS" > "$D/log-5031.txt"
 OUT="$(run_probe "$D")"; RC=$?
@@ -211,7 +214,7 @@ cat > "$D/runs.json" <<'JSON'
 ]}
 JSON
 printf '{"status":"ahead"}' > "$D/compare-cccccccccccccccccccccccccccccccccccccccc.json"
-printf '{"jobs":[{"id":5040,"name":"health-check"}]}' > "$D/jobs-940.json"
+printf '{"jobs":[{"id":5040,"name":"test-infra"}]}' > "$D/jobs-940.json"
 printf '%s --- scripts/some-suite ---\n%s === 12/12 suites passed ===\n' "$TS" "$TS" > "$D/log-5040.txt"
 OUT="$(run_probe "$D")"; RC=$?
 check "one clean qualifying run -> NOT YET (needs 2 consecutive)" 2 "$RC" "$OUT"
@@ -265,7 +268,7 @@ cat > "$D/runs.json" <<'JSON'
 ]}
 JSON
 printf '{"status":"ahead"}' > "$D/compare-cccccccccccccccccccccccccccccccccccccccc.json"
-printf '{"jobs":[{"id":5070,"name":"health-check"}]}' > "$D/jobs-970.json"
+printf '{"jobs":[{"id":5070,"name":"test-webplat (2/2)"}]}' > "$D/jobs-970.json"
 printf '%s --- scripts/some-suite ---\n' "$TS" > "$D/log-5070.txt"
 printf '%s ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' "$TS" >> "$D/log-5070.txt"
 OUT="$(run_probe "$D")"; RC=$?

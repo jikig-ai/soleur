@@ -1647,7 +1647,7 @@ describe("emitTerminal must CALL the logger method, not extract it", () => {
 });
 
 describe("#6698 routine_runs projection", () => {
-  it("sets ok/errorSummary so runLogMiddleware can distinguish outcomes", async () => {
+  it("sets ok/errorSummary so RunLogMiddleware can distinguish outcomes", async () => {
     // run-log.ts projects EXACTLY { ok?, errorSummary? } off the return value.
     // Without them every outcome — a probe that never attempted the fix, and
     // the deliberately-paging dns_propagation_failed — writes an identical

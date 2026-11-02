@@ -103,7 +103,7 @@ PY
 
 # Every check context required by any ACTIVE ruleset, with the ruleset that requires it.
 required_contexts() {
-  gh api "repos/$REPO/rulesets" --jq '.[] | select(.enforcement=="active") | .id' 2>/dev/null |
+  gh api --paginate "repos/$REPO/rulesets" --jq '.[] | select(.enforcement=="active") | .id' 2>/dev/null |
   while read -r rid; do
     [[ -n "$rid" ]] || continue
     gh api "repos/$REPO/rulesets/$rid" --jq \
@@ -176,7 +176,7 @@ if [[ "$MODE" == "surface" ]]; then
   [[ $found -gt 0 ]] || echo "  (none — no required check is currently produced by a pull_request_target workflow)"
   echo
   echo "Bypass actors (the sanctioned exit; verify one exists BEFORE assuming it does):"
-  gh api "repos/$REPO/rulesets" --jq '.[] | select(.enforcement=="active") | .id' 2>/dev/null |
+  gh api --paginate "repos/$REPO/rulesets" --jq '.[] | select(.enforcement=="active") | .id' 2>/dev/null |
     while read -r rid; do
       # `join(", ") // "NONE"` does NOT work here: join on an empty array yields "", and ""
       # is truthy to jq's `//`, so a ruleset with NO bypass actor rendered as a blank line.

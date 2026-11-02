@@ -13,6 +13,7 @@
 
 import { execFileSync } from "child_process";
 
+import { COMMIT_SHA_RE } from "./approval/canonical";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
@@ -39,6 +40,23 @@ export interface PushBranchOptions {
   branch: string;
   force: boolean;
   defaultBranch?: string;
+  /**
+   * The exact commit the workspace Owner approved (#4672 execution grant). When set, that commit (not whatever HEAD is
+   * at execution time) is pushed: a commit sha content-addresses its whole history, so a HEAD that moved during the
+   * approval wait cannot change what lands on the remote. Absent = legacy `HEAD` (approval flow never ran).
+   */
+  commitSha?: string;
+}
+
+/**
+ * The commit the Owner approved cannot be pushed (not a full sha, or not in the workspace repository). Typed so the tool
+ * handler reports it as an `approval-grant-refused` (reason `commit_unavailable`) and returns the terminal refusal.
+ */
+export class ApprovedCommitUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApprovedCommitUnavailableError";
+  }
 }
 
 export interface PushResult {
@@ -74,13 +92,13 @@ export function rejectProtectedBranch(
 // ---------------------------------------------------------------------------
 
 /**
- * Push the current workspace HEAD to a feature branch on the remote.
+ * Push the current workspace HEAD (or, with `commitSha`, the approved commit) to a feature branch on the remote.
  *
  * The gating (review gate) is handled by canUseTool — this function
  * only executes after the founder has approved.
  */
 export async function pushBranch(options: PushBranchOptions): Promise<PushResult> {
-  const { installationId, owner, repo, workspacePath, branch, force, defaultBranch } = options;
+  const { installationId, owner, repo, workspacePath, branch, force, defaultBranch, commitSha } = options;
 
   // 1. Reject force-push unconditionally
   if (force) {
@@ -95,6 +113,18 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
 
   // 3. Reject pushes to protected branches (main, master, default)
   rejectProtectedBranch(branch, defaultBranch);
+
+  // 3b. A pinned commit must be a full sha that exists in the workspace repository.
+  if (commitSha !== undefined) {
+    if (!COMMIT_SHA_RE.test(commitSha)) {
+      throw new ApprovedCommitUnavailableError("Approved commit is not a valid full commit sha");
+    }
+    try {
+      execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });
+    } catch {
+      throw new ApprovedCommitUnavailableError("Approved commit is not present in the workspace repository");
+    }
+  }
 
   // 4. Set git author to Soleur Agent identity
   try {
@@ -114,7 +144,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   try {
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
     await gitWithInstallationAuth(
-      ["push", repoUrl, `HEAD:refs/heads/${branch}`],
+      ["push", repoUrl, `${commitSha ?? "HEAD"}:refs/heads/${branch}`],
       installationId,
       { cwd: workspacePath, timeout: 120_000 },
     );

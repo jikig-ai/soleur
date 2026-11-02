@@ -460,6 +460,15 @@ LEAKY
   rm -rf -- "$probe_root"
 fi
 
+# CHARACTERIZATION: the /events/ read stays a field=count() aggregate -- the basis of the
+# ordering-pin exemption (lint-followthrough-varq-ban.sh rule 6). A row-select rewrite
+# loses the exemption and owes `sort=` or `start=`+`end=`.
+if grep -qE "data-urlencode 'field=count\(\)'" "$PROBE_SRC"; then
+  pass "the /events/ call still carries field=count() -- the rule-6 aggregate exemption basis"
+else
+  fail "the /events/ call no longer carries field=count() -- now a row select, owes an ordering bound (rule 6)"
+fi
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "All fixtures passed."

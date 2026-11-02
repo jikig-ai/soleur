@@ -14,6 +14,12 @@ SUT="$REPO_ROOT/plugins/soleur/hooks/ext-filter-detect.sh"
 HOOKS_JSON="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
 DISPOSITIONS="$REPO_ROOT/.claude/hooks/devin-dispositions.tsv"
 
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${SANDBOX:-}" ]] || rm -rf "$SANDBOX"' EXIT INT TERM HUP
 source "$DIR/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
 
@@ -21,7 +27,6 @@ command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required by this suite" >&
 
 SANDBOX="$(mktemp -d -t extfd.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert_fixture_dir "$SANDBOX"
-trap 'rm -rf "$SANDBOX"' EXIT INT TERM HUP
 
 BIN="$SANDBOX/bin"; HOME_DIR="$SANDBOX/home"; CWD_DIR="$SANDBOX/cwd"
 mkdir -p "$BIN" "$HOME_DIR/.claude" "$CWD_DIR/.claude" || exit 2

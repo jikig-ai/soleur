@@ -17,6 +17,7 @@ disposition: "Lapses on any later byte change to the DPD, its Eleventy mirror or
 scope: "the wording in this PR only. NOT a finding that the residue exists, how much there is, that it is gone, or what Hetzner keeps after a volume is destroyed. Does not discharge the 2026-10-24 CLO re-ruling."
 re_evaluation_triggers: "(1) the merge falls on or after 2026-10-22 (the as-of date October 20, 2026 serves a merge on 2026-10-20 or 2026-10-21 UTC; refresh the as-of date from fresh plain reads in the DPD canonical and mirror, the register (f) marker and the DPD pin; no T&C change); (2) the merge falls on or after 2026-11-12 (the published latest intended date has passed; back to the CLO); (3) GIT_DATA_STORE_ENABLED or the cutover stamp is set, or any wipe, wipe_finish or snapshot_clear run exists, before merge; (4) 2026-10-24 CLO re-ruling; (5) any measurement of the residue or of Hetzner snapshot retention."
 re_attested: "2026-10-20, APPROVED WITH EXACT EDITS, applied; see the Re-attestation addendum 2026-10-20 at the end of this file"
+refreshed_by: "2026-10-29-clo-attestation-11195-dpd-10-3b-refresh.md"
 ---
 
 # CLO attestation: interim DPD 10.3(b) and T&C 14.1b wording
@@ -43,12 +44,14 @@ SIGNED-OFF on a byte-match to the review-round texts. The published DPD 10.3(b) 
 
 ## The 12 November 2026 date
 
+> **[Superseded 2026-10-29 (#11195, Ref), as to the as-of date of October 19, 2026 and the intended destruction date of November 12, 2026: the earlier volume was deleted at the Hetzner Cloud API on 2026-10-27, and the DPD-refresh pull request replaces the published sentences. See `2026-10-29-clo-attestation-11195-dpd-10-3b-refresh.md`. Ruled by CLO agent, 2026-10-29.]**
+
 The brief's fragment said "scheduled for destruction by 12 November 2026". The published text says that, as of October 19, 2026, the earlier volume has not been destroyed and that we intend to destroy it no later than November 12, 2026. Repo evidence re-checked on 2026-10-19: the outer-date constant in `apps/web-platform/infra/git-data-cutover.sh`, ADR-239 Amendment 2026-10-12 ("at the latest"), the ledger `expires_on` for `hcloud_volume.git_data`; `git-data-cutover.yml` is `workflow_dispatch` only, with no schedule. No wipe, wipe_finish or snapshot_clear run exists. Nothing is scheduled, so "scheduled" is not used, and "retired" is not used either (no evidence row: the volume is still attached).
 
 ## Conditions
 
 - C1 (superseded by the review-round rulings B2 and B5): the derived "before 2026-10-23" date is marked in ADR-239, attestation 9066 and the register end marker.
-- C2: if the merge falls on or after 2026-10-22, repeat the three plain reads and refresh the as-of date in the DPD canonical bullet and Last Updated entry, the DPD mirror body bullet, body Last Updated entry and hero, the register (f) marker as-of literal and read date, the DPD pin in `legal-doc-shas.ts`, and the DPD row date in `compliance-posture.md`. No T&C change. A merge on or after 2026-11-12 returns to the CLO.
+- C2 **[Superseded 2026-10-29 (#11195, Ref): the as-of refresh and the 2026-11-12 lapse trigger are retired by the DPD-refresh pull request, because the published text no longer carries an as-of date; see `2026-10-29-clo-attestation-11195-dpd-10-3b-refresh.md`.]**: if the merge falls on or after 2026-10-22, repeat the three plain reads and refresh the as-of date in the DPD canonical bullet and Last Updated entry, the DPD mirror body bullet, body Last Updated entry and hero, the register (f) marker as-of literal and read date, the DPD pin in `legal-doc-shas.ts`, and the DPD row date in `compliance-posture.md`. No T&C change. A merge on or after 2026-11-12 returns to the CLO.
 - C3: merging is the owner's production-mutating authorisation (the TC_VERSION bump forces every existing user to re-accept the Terms and closes live sessions). No agent marks the PR ready, enqueues it or merges it. The Delete Account dialog, Privacy Policy, GDPR Policy, the agent tool `account_delete_initiate` and the login erasure-pending notice follow-ups stay outside this PR (see the posture row).
 
 ## Open items (named, not discharged)

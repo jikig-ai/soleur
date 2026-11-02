@@ -558,3 +558,135 @@ event for the deploy signal; the refusal would fail the whole push apply, so it 
   predicate against fixture rows in the real `raw` shape, censuses every logtail alert's `-target=` lines, and carries mutation rows.
 - **Wake path.** Email on the free tier; the Slack wake of ADR-260 is not verified for Logs alerts (recorded in the runbook).
   Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` and `canary-probe-set.md`.
+
+## Amendment — 2026-10-29 (#11526): the dual-channel predicate convention
+
+Not a new alert — a new predicate shape on an existing one, and the convention it establishes for
+the alert family. `logtail_exploration_alert.inngest_luks_wrong_volume` now counts rows on BOTH
+delivery channels the dedicated Inngest host's probe can take: leg A is the journald path
+(`SYSLOG_IDENTIFIER='inngest-server-probe'` + the position-1 marker, unchanged conjuncts), leg B
+is the curl-direct phone-home fallback that fires only while Vector is down — identified by
+envelope-field equality (`shipper='cloud-init-phone-home'` + `stage='inngest-server-probe-vector-down'`)
+with the probe fields read out of `detail`, never `marker` or `message` (the fallback envelope's
+`marker` is always `SOLEUR_INNGEST_BOOT_STAGE` and its `message` is marker-prefixed).
+
+**The convention:** an alert that consumes a dual-channel emitter's rows must enumerate EVERY
+channel the emitter can take — journald AND the curl-direct phone-home — and must pin row
+identity on the markerless channel's envelope fields (`shipper`+`stage` equality, the
+`inngest-tls-soak-10136.sh` contract), because the channel exists precisely when journald-only
+signals are dark and `on_missing_data = "treat_as_zero"` would read the empty set as health.
+CTO ruling T1 (ACCEPT, `decision-challenges.md` for branch
+`feat-one-shot-11526-vector-down-fallback`) recorded the dissent correction that ships in the
+`.tf` comment: the jq-failure fallback payload carries no `shipper`, so it is silently uncounted
+— leg B's fail-loud property holds only for rows carrying the `shipper`+`stage` identity with
+`detail` absent. The self-attested `dt` edge is recorded as residual.
+
+This is the pattern #11527 applies to `inngest_luks_key_probe_fail` (a sibling dual-channel
+emitter — its marker already names a curl-direct phone-home copy) and #11528 pins in the guard
+family. Both are deliberately out of scope here.
+
+Two recorded refinements (post-panel, 2026-10-29):
+
+- **Marker override is the enumerated alternative.** Where a fallback caller already passes its
+  marker as the phone-home arg-3 override (as `inngest-cutover-flip.sh` does for
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`, so the fallback `message` itself begins with the marker), the
+  position-1 anchor reads BOTH channels with no second OR leg — emitter-side override, not
+  envelope-field identity, is the mechanism there. Envelope-field legs are the convention for a
+  fallback that cannot or must not override `marker` (this probe re-purposing
+  `SOLEUR_INNGEST_BOOT_STAGE`, ~15 call sites, was rejected at plan).
+- **No per-run dedup.** The two channels are mutually exclusive per ROW (no envelope carries both
+  `SYSLOG_IDENTIFIER` and `shipper`), but one probe RUN during `activating`/flap can land a row in
+  each — Vector's journald cursor ships the journald copy late on recovery. `value` can read 2 for
+  one wrong-volume event; harmless under `operator = "higher_than", value = 0`, but a future
+  sibling alert with a `>1` threshold inherits the inflation — record the threshold assumption
+  when copying this convention.
+
+- **Enforcement.** `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` derives
+  the stage needle from the emit site in `inngest-bootstrap.sh` (a coordinated rename that misses
+  the `.tf` goes red), carries per-leg presence rows (`message`-anchored on leg A,
+  `detail`-anchored on leg B — a shared substring is permitted duplication, never ambiguity) and
+  mutation rows for each leg-B conjunct plus deletion of the whole `OR (…)` arm.
+- **Verification.** Pre-merge live-probe controls A–E per the #8874 precedent — population,
+  fallback census by `stage`, quiet control with the live alias, positive control with a wrong
+  alias, and synthetic-raw leg-B evaluations — recorded in the `.tf` LIVE-PROBED comment.
+- **Apply path.** Unchanged: merge-triggered `apply-web-platform-infra.yml` updates the stored
+  exploration SQL in place (`Ref #11526`, never `Closes` — the merge-triggered apply is part of
+  the remediation; the issue closes after the apply lands).
+
+## Amendment — 2026-10-30 (#11631): once-a-day absence alarms leave the native logs alerts
+
+A dated amendment. The text above is unchanged; where it conflicts with this section, this section wins.
+
+**Finding.** `luks_monitor_host_timer_dark` (`soleur-luks-monitor-host-timer-dark-prd`, `query_period`
+97200) and `claude_cost_capture_dark` (`soleur-claude-cost-capture-dark-prd`, `query_period` 86400) wait
+for a row that arrives once a day (luks) or a few times a day (cost: Phase 0 measured n=4 qualifying rows in
+24 h). The live luks incident (1023423999, #11048) read `Current value: 0` through 33 nights of passing rows, so
+the luks alert could not see its own row. That 33-nights fact is luks-only; the cost alert (incident
+1020832712, #11049) shares the class (a native alert with `query_period` 86400) but its blindness was not
+measured. The reading that Better Stack evaluates a native logs alert over the hot window only is INFERRED, not
+proven; the design below does not depend on it. The sibling `claude_cost_daily_burn` (86400 s) may share the
+same blind spot; that is UNMEASURED and out of scope here.
+
+**Decision.** A once-a-day absence alarm is not a native logs alert above the 900 s ceiling. Such
+dead-mans are Better Stack heartbeats (`betteruptime_heartbeat`) fed by a scheduled GitHub workflow that
+reads the Logs archive itself (`remote()` UNION `s3Cluster`) and beats only when a qualifying row exists
+inside the old alert's window. With no qualifying row it withholds the beat, so the heartbeat times out and
+pages; it never beats `/fail`.
+
+- **Both alerts are retired.** Their `logtail_exploration` and `logtail_exploration_alert` resources
+  are deleted. Successors: `betteruptime_heartbeat.luks_monitor_host_timer`
+  (`soleur-luks-monitor-host-timer-prd`, period 3600, grace 7200, window 97200 s) and
+  `betteruptime_heartbeat.claude_cost_capture` (`soleur-claude-cost-capture-prd`, period 3600, grace 7200,
+  window 86400 s), both born `paused = true` behind `ignore_changes = [paused]`. Feeder:
+  `scripts/deadman-heartbeat-feeder.sh`, run hourly by `scheduled-deadman-heartbeat-feeder.yml` (ADR-248
+  amendment of the same date). The historical ADR-117 and ADR-119 mentions of the retired alert stay as
+  written; read them as naming the predecessor of these heartbeats.
+- **Count.** The Terraform-managed native logs alerts go from 19 to **17** (`CENSUS_FLOOR_ALERTS` and
+  `CENSUS_FLOOR_EXPLORATIONS` follow).
+- **Ceiling sentinel.** `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh` fails if any
+  `logtail_exploration_alert` is created with `query_period` above 900, and allowlists only the two live
+  legacy alerts that predate it (`claude_cost_daily_burn`, `inngest_luks_wrong_volume`).
+- **Superseded by name.** The 2026-09-27 (#8706) claim that `query_period = 97200` was "measured, not
+  clamped" stays true of what the API stored, but it is no longer evidence that the alert evaluated over
+  that window, and the alert is gone. The 2026-09-23 (#8611) `claude_cost_capture_dark` absence-alarm
+  paragraph is superseded: the cost-marker dead-man is now `betteruptime_heartbeat.claude_cost_capture`.
+- **Preserved.** The 2026-10-12 standing rule (absence alerts on multiplexed sources count emitting hosts,
+  never rows) still holds: the luks predicate keeps `host_name = 'soleur-web-platform'`, now inside the
+  feeder.
+
+**Alternatives considered, both rejected.** A host-side ping needs a `user_data` change, which is a host
+replace, and the shared `workspaces_luks` heartbeat cannot tell the host timer from the verify workflow's
+second pusher. An hourly host row with a logs alert of 900 s or less is also a host change, and
+cost-capture has no hourly cadence.
+
+**Consequences.**
+
+- **Until armed there is NO paging dead-man for luks or cost.** The merge-triggered apply destroys the old
+  alerts and creates the heartbeats paused; a paused heartbeat pages nothing. The window is closed only by the
+  owner's arm (runbook `workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`), which is why the
+  feeder reports `qualifying_row_heartbeat_paused` (UNARMED) every hour in the meantime.
+- **Detection latency is measured from the last qualifying row: window W plus 2 to 3 h** (page threshold =
+  period 3600 + grace 7200 = 10800 s after the last beat). The last beat falls in the final hour of the window that opens on the last qualifying row
+  (`(t0 + W - 1 h, t0 + W]`), so the page arrives `W + 2 h` to `W + 3 h` after that row: luks (W = 97200 s,
+  27 h) about 29 to 30 h; cost (W = 86400 s, 24 h) about 26 to 27 h. Fine for a nightly dead-man.
+- **Archive ingestion lag is MEASURED, not unmeasured: 66 minutes** (Phase 0.2, `phase0-measurements.md`: archive
+  newest 3957 s to 3968 s old, with no gap between the archive and the hot arm). The lever that absorbs it is
+  the WINDOW SLACK, not the grace: the luks window (27 h) exceeds the legitimate gap between nightly rows
+  (24.5 h) by 2.5 h, which is more than the lag. The grace (7200 s) governs only the dispatch cadence
+  (beat-to-beat spacing), so widening it would slow detection without adding lag tolerance. The cost window's
+  slack was not measured per gap (n=4 in 24 h is a mean gap near 6 h, which the 24 h window covers several
+  times over).
+- **Zero-withhold is the permitted direction (ADR-197).** ADR-197 says a zero from a log surface is not evidence
+  of absence. The feeder never reads a zero as healthy: `n = 0` withholds the beat (a fail-loud page), so a
+  truncated or lagging answer produces a false page, never a false "healthy". The coverage and instrumentation
+  assertions ADR-197 asks for are carried for luks as counts-only diagnostics (`any_rows`, `fail_rows`) on the
+  withhold line. Known limits: the cost target has NO `any_rows` positive control, and its predicate keeps the
+  beat when EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, so a RED row can mask a dead
+  marker path. Both are accepted and recorded, not fixed here.
+- **Feeder-substrate false page, bounded.** The feeder runs on a GitHub Actions runner started by the watchdog
+  dispatch clock (ADR-248 amendment). One lost slot gives about 9718 s between beats against the 10800 s
+  threshold (Phase 0.4: 3680 + 3600 + 2438), so it does not page a healthy host. TWO lost slots (a GitHub or
+  GitHub App token outage that also defeats the `schedule:` fallback) give about 13300 s (3680 + 2 x 3600 +
+  2438 = 13318) and WILL false-page both heartbeats. Runbook step 0 is to check the feeder before the host.
+- The heartbeats are armed by the owner, not by CI. Runbooks:
+  `workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706` and `betterstack-log-query.md`.

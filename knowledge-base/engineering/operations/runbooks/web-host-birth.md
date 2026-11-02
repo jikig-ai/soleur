@@ -230,6 +230,11 @@ key.
 
 - **Boot telemetry:** the run's own step summary carries the fresh-host Sentry trail. Expect
   `cloud_init_complete` as the last-reached stage; a `fatal` names where the boot died.
+- **First-deploy verification:** the standing `follow-through`-labeled tracker
+  (probe `scripts/followthroughs/web-first-deploy-10585.sh`, enrolled by #10585 — locate via
+  `gh issue list -l follow-through`) asserts this host's FIRST deploy lands a
+  Deploy-succeeded-class journald row within 2 days of this boot — a deploy that never lands
+  surfaces there as ACTION REQUIRED.
 - **Serving** (only for a host that is in the serving path):
   `curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health` returns 200.
 - **No page is not proof of health.** `betteruptime_monitor.app` probes the `app.soleur.ai`

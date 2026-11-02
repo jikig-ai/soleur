@@ -2,11 +2,13 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "fs";
-import { join, resolve } from "path";
-import { execFileSync } from "child_process";
+import { basename, join, resolve } from "path";
+import { execFile, execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
 import {
   gitWithInstallationAuth,
@@ -16,9 +18,25 @@ import {
 } from "./git-auth";
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
-import { reportSilentFallback } from "./observability";
+import { hashUserId, reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
+import {
+  WorkspaceReapError,
+  WorkspaceReapInProgressError,
+  type ReapFailure,
+  type ReapFailureKind,
+  type ReapFailureRoot,
+} from "./workspace-reap-error";
+
+import { assertWorkspaceNotBeingReaped, beginReapChild, runExclusiveReap } from "./workspace-reap-guard";
+
+export { WorkspaceReapError, WorkspaceReapInProgressError };
+export type { ReapFailure, ReapFailureKind, ReapFailureRoot };
+import {
+  workspaceReapRoots,
+  type ReapRootLabel,
+} from "./workspace-resolver";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -107,7 +125,11 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
+  // Lowercase AFTER the case-insensitive shape check: the filesystem is case-sensitive, and
+  // delete reaps the lowercase path, so every entry point must build the same one.
+  // Refuse while a reap of this id is still running (its async rm would delete the new tree).
+  assertWorkspaceNotBeingReaped(workspaceId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId.toLowerCase());
 
   // 1. Create workspace root (skip if exists)
   ensureDir(workspacePath);
@@ -169,7 +191,8 @@ export async function provisionWorkspaceWithRepo(
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
 
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
+  assertWorkspaceNotBeingReaped(workspaceId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId.toLowerCase());
 
   // 1. Pre-fetch the installation token so token-generation failures surface
   //    with a distinct "Token generation failed: …" message. The result is
@@ -186,6 +209,8 @@ export async function provisionWorkspaceWithRepo(
   //    "git.github.com hiccup" — a degraded GitHub API does NOT block the
   //    clone. Parallelizing with `removeWorkspaceDir` (disk I/O) removes
   //    the ~150-400ms preflight from the happy-path critical path.
+  // A reap may have started during the token await above; re-check before ANY removal or clone.
+  assertWorkspaceNotBeingReaped(workspaceId);
   const parsed = parseGithubRepoUrl(repoUrl);
   const [access] = await Promise.all([
     parsed
@@ -208,6 +233,9 @@ export async function provisionWorkspaceWithRepo(
       "The Soleur GitHub App no longer has access to this repository. Reinstall the app, then try again.",
     );
   }
+
+  // ...and again after the preflight await: the clone must never start into a tree being reaped.
+  assertWorkspaceNotBeingReaped(workspaceId);
 
   // 3. Clone the repository (shallow for speed). `gitWithInstallationAuth`
   //    uses GIT_ASKPASS + GIT_TERMINAL_PROMPT=0 so the token never appears
@@ -268,11 +296,28 @@ export async function provisionWorkspaceWithRepo(
   return workspacePath;
 }
 
+/** Pause before the final re-verification, so a straggling writer's file is caught. */
+export const REAP_RECHECK_DELAY_MS = 250;
+
 /**
- * Deletes a workspace directory.
+ * Deletes a workspace's directories (Art. 17 erasure of the local working tree).
  *
- * Used during account deletion (GDPR Art. 17) to remove all local files.
- * Uses execFileSync to avoid shell injection via the workspace identifier.
+ * Reaps `<root>/<workspaceId>` under every root from {@link workspaceReapRoots}:
+ * `WORKSPACES_ROOT` FIRST, then `WORKTREE_ROOT` (raw and flag-independent, so the
+ * live clone with the git-data split on AND a tree left behind after a rollback are
+ * both erased, #8211). Roots resolve per root: a bad or unresolvable root is
+ * recorded as a `resolver` failure and never skips the other. Each root's
+ * `<id>.orphaned-<ms timestamp>` siblings (left by a PROVISION-time move-aside,
+ * which ignores the outcome; nothing sweeps a `WORKTREE_ROOT` orphan) are reaped
+ * too, matched strictly on the exact validated id. Every target is attempted;
+ * failures are thrown together as one {@link WorkspaceReapError} after the loop.
+ *
+ * "Erased" is decided by the tree being GONE, not by the original path being
+ * absent: a move-aside (`removeWorkspaceDir` phase 3) counts as a FAILURE, the
+ * path is re-checked after a short delay, and a symlink at the path is unlinked,
+ * never followed. Uses execFileSync to avoid shell injection via the workspace
+ * identifier; the id is lowercased before any path is built (the UUID check is
+ * case-insensitive, the filesystem is not).
  *
  * @param workspaceId Workspace UUID. For solo account deletion this equals
  *   `user.id` per the N2 invariant; the caller (account-delete.ts) passes
@@ -285,12 +330,304 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
+  const id = workspaceId.toLowerCase();
+  // ONE reap per id at a time, registered synchronously (before the first await) so a provision
+  // that arrives a tick later already sees it. A concurrent delete for the same id joins this
+  // promise instead of racing its move-aside; the registration is released in `finally`.
+  return runExclusiveReap(id, () => reapWorkspace(id));
+}
 
-  if (existsSync(workspacePath)) {
-    removeWorkspaceDir(workspacePath);
-    log.info({ workspaceId }, "Workspace deleted");
+/** Overall budget for one deleteWorkspace, across all roots and orphans. */
+export const REAP_DEADLINE_MS = 5 * 60_000;
+
+async function reapWorkspace(id: string): Promise<void> {
+  const idHash = hashUserId(id);
+  const deadline = Date.now() + REAP_DEADLINE_MS;
+
+  const failures: ReapFailure[] = [];
+  const errors: Error[] = [];
+  const fail = (
+    root: ReapFailureRoot,
+    kind: ReapFailureKind,
+    err?: unknown,
+    label?: ReapRootLabel,
+  ) => {
+    const code =
+      err && typeof (err as NodeJS.ErrnoException).code === "string"
+        ? (err as NodeJS.ErrnoException).code
+        : undefined;
+    failures.push({ root, kind, ...(code ? { code } : {}), ...(label ? { label } : {}) });
+    // Path-free summary: the raw error's message embeds `<root>/<uuid>`, so the raw error
+    // is never logged or forwarded.
+    const summary = Object.assign(
+      new Error(
+        `reap ${label ?? root} ${kind}${code ? ` (${code})` : err instanceof Error ? ` (${err.name})` : ""}`,
+      ),
+      code ? { code } : {},
+    );
+    errors.push(summary);
+    log.error({ workspaceIdHash: idHash, root, label, kind, code }, "Workspace root reap failed");
+  };
+
+  // Roots resolve PER ROOT (see workspaceReapRoots): WORKSPACES_ROOT comes first and a
+  // fault on one root is recorded without skipping the other. Nothing is resolved against
+  // the cwd: a relative root is a fault, not a path.
+  let roots: { label: ReapRootLabel; root: string }[] = [];
+  let resolverFaults = 0;
+  try {
+    const resolved = workspaceReapRoots();
+    roots = resolved.roots;
+    for (const f of resolved.faults) {
+      resolverFaults += 1;
+      fail("resolver", "error", f.err, f.label);
+    }
+  } catch (err) {
+    resolverFaults += 1;
+    fail("resolver", "error", err);
   }
+
+  // Each unit is one path to erase: the tree itself, plus any `<id>.orphaned-<ts>` sibling a
+  // PROVISION-time move-aside left behind (that caller ignores the outcome, and nothing sweeps
+  // a WORKTREE_ROOT orphan). Orphans are listed BEFORE the tree is touched, so the orphan this
+  // very call may create stays a reported failure rather than being retried silently.
+  const units: { label: ReapRootLabel; root: string; path: string }[] = [];
+  for (const { label, root } of roots) {
+    try {
+      for (const name of readdirSync(root)) {
+        if (isOrphanOf(id, name)) units.push({ label, root, path: join(root, name) });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") fail(label, "error", err);
+    }
+    units.push({ label, root, path: join(root, id) });
+  }
+
+  // Each reap child holds the id until its callback fires, past the hard stop and past this reap
+  // settling; the ceiling drops a never-exiting child's hold with one hashed breadcrumb.
+  const childHold: ChildHold = {
+    begin: () =>
+      beginReapChild(id, () =>
+        log.warn(
+          { workspaceIdHash: idHash },
+          "An abandoned reap child is still running at the hold ceiling; releasing the workspace id",
+        ),
+      ),
+  };
+
+  const removed: typeof units = [];
+  for (const t of units) {
+    if (Date.now() >= deadline) {
+      // Out of budget: record the unit as a timeout instead of starting another child.
+      log.warn({ workspaceIdHash: idHash, root: t.label }, "Reap deadline exceeded; skipping remaining targets");
+      fail(t.label, "timeout");
+      continue;
+    }
+    try {
+      const existed = lstatOrNull(t.path) !== null;
+      const outcome = await removeWorkspaceDirAsync(t.path, [t.root], childHold);
+      if (outcome === "moved-aside") {
+        fail(t.label, "moved-aside");
+      } else if (lstatOrNull(t.path)) {
+        // Verify, don't assume: lstat (never follows a link) must now report ENOENT.
+        fail(t.label, "survived");
+      } else if (existed) {
+        removed.push(t);
+        log.info({ workspaceIdHash: idHash, root: t.label }, "Workspace deleted");
+      }
+    } catch (err) {
+      fail(t.label, err instanceof RemoveTimeoutError ? "timeout" : "error", err);
+    }
+  }
+
+  if (removed.length > 0) {
+    await new Promise<void>((r) => setTimeout(r, REAP_RECHECK_DELAY_MS));
+    for (const t of removed) {
+      try {
+        if (lstatOrNull(t.path)) fail(t.label, "recreated");
+      } catch (err) {
+        fail(t.label, "error", err);
+      }
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new WorkspaceReapError(failures, errors, units.length + resolverFaults);
+  }
+}
+
+/**
+ * Strictly `<id>.orphaned-<digits>`: the exact (already validated, lowercased) id, the
+ * literal `.orphaned-`, and a millisecond timestamp (`Date.now()`) and nothing else. Never
+ * a broader glob: another tenant's orphan, `<id>x`, or a doubly-orphaned name must not match.
+ */
+function isOrphanOf(id: string, name: string): boolean {
+  const prefix = `${id}.orphaned-`;
+  return name.startsWith(prefix) && /^\d{10,16}$/.test(name.slice(prefix.length));
+}
+
+function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/**
+ * Log fields for a workspace path: the leaf is a workspace UUID (= a user id for
+ * solo workspaces), and these logs reach Sentry through the pino mirror, so the
+ * raw path never travels, only the hashed leaf.
+ */
+function pathFields(workspacePath: string): { workspaceIdHash: string } {
+  return { workspaceIdHash: hashUserId(basename(workspacePath)) };
+}
+
+/** What {@link removeWorkspaceDir} did to the path. */
+export type RemoveOutcome = "removed" | "unlinked" | "absent" | "moved-aside";
+
+/** Per-child time limits for the ASYNC reap (the sync path has none, unchanged). */
+export const REAP_CMD_TIMEOUT_MS = {
+  rm: 60_000,
+  chmod: 30_000,
+  find: 60_000,
+  rmdir: 10_000,
+  mv: 10_000,
+} as const;
+
+/** A removal child process was killed at its time limit (async path only). */
+export class RemoveTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  constructor(cmd: string) {
+    super(`Workspace cleanup timed out in ${cmd}`);
+    this.name = "RemoveTimeoutError";
+  }
+}
+
+// The command-runner seam shared by the sync and async removers. The phase LOGIC lives once
+// in `removeSteps`; a runner only executes one command and reports whether it succeeded, so
+// the two entry points cannot drift apart.
+interface RemoveStep {
+  cmd: keyof typeof REAP_CMD_TIMEOUT_MS;
+  args: string[];
+  /** The guard-resolved path this step works on (for the hashed breadcrumb only). */
+  target: string;
+}
+type RemoveStepResult = { ok: true } | { ok: false; timedOut: boolean; code?: string };
+
+function* removeSteps(
+  workspacePath: string,
+  allowedRoots: string[],
+): Generator<RemoveStep, RemoveOutcome, RemoveStepResult> {
+  const resolved = resolve(workspacePath);
+  const allowed = allowedRoots.some((r) => {
+    // A "/" root can never match: resolve("/") + "/" is "//", which no resolved path starts with.
+    const root = resolve(r);
+    return resolved !== root && resolved.startsWith(root + "/");
+  });
+  if (!allowed) {
+    throw new Error("Refusing to remove path outside workspace root");
+  }
+
+  // lstat (not existsSync): existsSync follows links, so a dangling link looks
+  // absent, and a link to a directory would be treated as the directory itself.
+  // From here on use the GUARD-RESOLVED path, not the caller's string: it is absolute and
+  // normalized, so no command can read it as an option, and what was authorised is what is run.
+  // Where the command supports it, `--` also ends option parsing before the path (GNU
+  // coreutils on node:22-slim: rm, chmod, rmdir, mv). `find` takes the absolute path as its
+  // starting point ahead of the expression, which cannot be mistaken for an option either.
+  if (lstatOrNull(resolved)?.isSymbolicLink()) {
+    unlinkSync(resolved);
+    return "unlinked";
+  }
+
+  if (!existsSync(resolved)) return "absent";
+
+  const run = function* (step: RemoveStep): Generator<RemoveStep, RemoveStepResult, RemoveStepResult> {
+    const r = yield step;
+    if (!r.ok && r.timedOut) throw new RemoveTimeoutError(step.cmd);
+    return r;
+  };
+
+  // Phase 1: Direct removal (works when all files owned by current user)
+  if ((yield* run({ cmd: "rm", args: ["-rf", "--", resolved], target: resolved })).ok) return "removed";
+  log.warn({ ...pathFields(resolved) }, "Direct rm -rf failed, attempting partial cleanup");
+
+  // Phase 2: Fix permission bits on user-owned files, then delete individually.
+  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own; it may fail on
+  // root-owned files -- continue to find -delete. find -delete continues past root-owned
+  // files instead of aborting; its aggregate exit code is ignored.
+  yield* run({ cmd: "chmod", args: ["-R", "u+rwX", "--", resolved], target: resolved });
+  yield* run({ cmd: "find", args: [resolved, "-mindepth", "1", "-delete"], target: resolved });
+
+  // Check if workspace dir is now empty (else: directory not empty -- root-owned files remain)
+  if ((yield* run({ cmd: "rmdir", args: ["--", resolved], target: resolved })).ok) return "removed";
+
+  // Phase 3: Move aside so provisioning can proceed.
+  // mv (rename) operates on the parent directory's inode, not the contents,
+  // so it succeeds even when the directory contains root-owned files.
+  const orphanedPath = resolved + `.orphaned-${Date.now()}`;
+  const mv = yield* run({ cmd: "mv", args: ["--", resolved, orphanedPath], target: resolved });
+  if (mv.ok) {
+    log.warn(
+      { ...pathFields(resolved), orphanedAt: orphanedPath.slice(resolved.length) },
+      "Workspace contained undeletable files; moved aside for background cleanup",
+    );
+    return "moved-aside";
+  }
+  log.error(
+    { ...pathFields(resolved), errCode: mv.code },
+    "Workspace cleanup failed: cannot move aside",
+  );
+  throw new Error("Workspace cleanup failed \u2014 please try again or contact support");
+}
+
+function runStepSync(step: RemoveStep): RemoveStepResult {
+  try {
+    execFileSync(step.cmd, step.args, { stdio: "pipe" });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, timedOut: false, code: (err as NodeJS.ErrnoException)?.code };
+  }
+}
+
+/**
+ * Extra time past a child's own limit before the caller stops WAITING for it. A child stuck in
+ * uninterruptible I/O ignores SIGKILL, so the per-child `timeout` alone can leave the await
+ * pending forever; this hard stop records a timeout and moves on.
+ */
+export const REAP_HARD_STOP_GRACE_MS = 5_000;
+
+/** Lets the async remover tell the per-id guard a child is alive (see workspace-reap-guard.ts). */
+export interface ChildHold {
+  begin: () => () => void;
+}
+
+function runStepAsync(step: RemoveStep, hold?: ChildHold): Promise<RemoveStepResult> {
+  return new Promise((resolveStep) => {
+    // The hold lasts until the child's callback ACTUALLY fires, not until the hard stop: an
+    // abandoned child may still be running its rm (see workspace-reap-guard.ts).
+    const releaseHold = hold?.begin();
+    const hardStop = setTimeout(() => {
+      log.warn(
+        { ...pathFields(step.target), cmd: step.cmd, hardStop: true },
+        "Reap child did not exit after its time limit; abandoning it",
+      );
+      resolveStep({ ok: false, timedOut: true });
+    }, REAP_CMD_TIMEOUT_MS[step.cmd] + REAP_HARD_STOP_GRACE_MS);
+    execFile(
+      step.cmd,
+      step.args,
+      { timeout: REAP_CMD_TIMEOUT_MS[step.cmd], killSignal: "SIGKILL" },
+      (err) => {
+        clearTimeout(hardStop);
+        releaseHold?.();
+        if (!err) return resolveStep({ ok: true });
+        const e = err as NodeJS.ErrnoException & { killed?: boolean };
+        resolveStep({ ok: false, timedOut: e.killed === true, code: e.code ? String(e.code) : undefined });
+      },
+    );
+  });
 }
 
 /**
@@ -300,69 +637,49 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  * Phase 1: Direct rm -rf (fast path for user-owned files).
  * Phase 2: chmod to fix restrictive permission bits, then find -delete
  *          which continues past individual permission errors.
+ * Phase 3: move the tree aside (`<path>.orphaned-<ts>`) when files remain.
  *
- * Throws with manual cleanup instructions if the directory cannot be
- * fully removed (e.g., root-owned files that require sudo).
+ * Throws if the directory cannot be fully removed AND cannot be moved aside.
+ *
+ * `allowedRoots` is the set of roots the path must be a strict child of; it
+ * DEFAULTS to the single workspaces root, so existing callers keep the exact
+ * guard. A `/` root never matches. A symlink at the path is unlinked, never
+ * followed.
+ *
+ * Returns what happened. `"moved-aside"` means the tree was only RENAMED to
+ * `<path>.orphaned-<ts>` (undeletable files remain on disk): the path is free for
+ * re-provisioning, which is all the provision caller needs and why it ignores the
+ * return, but it is NOT an erasure, so `deleteWorkspace` treats it as a failure.
+ *
+ * SYNCHRONOUS: it blocks the event loop for the length of the removal. Only the
+ * provision callers use it; the erasure path uses {@link removeWorkspaceDirAsync}.
  */
-export function removeWorkspaceDir(workspacePath: string): void {
-  const root = resolve(getWorkspacesRoot());
-  const resolved = resolve(workspacePath);
-  if (resolved === root || !resolved.startsWith(root + "/")) {
-    throw new Error("Refusing to remove path outside workspace root");
-  }
+export function removeWorkspaceDir(
+  workspacePath: string,
+  allowedRoots: string[] = [getWorkspacesRoot()],
+): RemoveOutcome {
+  const gen = removeSteps(workspacePath, allowedRoots);
+  let next = gen.next();
+  while (!next.done) next = gen.next(runStepSync(next.value));
+  return next.value;
+}
 
-  if (!existsSync(workspacePath)) return;
-
-  // Phase 1: Direct removal (works when all files owned by current user)
-  try {
-    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
-    return;
-  } catch {
-    log.warn({ workspacePath }, "Direct rm -rf failed, attempting partial cleanup");
-  }
-
-  // Phase 2: Fix permission bits on user-owned files, then delete individually.
-  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own.
-  // find -delete continues past root-owned files instead of aborting.
-  try {
-    execFileSync("chmod", ["-R", "u+rwX", workspacePath], { stdio: "pipe" });
-  } catch {
-    // chmod may fail on root-owned files -- continue to find -delete
-  }
-
-  try {
-    execFileSync("find", [workspacePath, "-mindepth", "1", "-delete"], {
-      stdio: "pipe",
-    });
-  } catch {
-    // find -delete continues past individual errors; ignore aggregate exit code
-  }
-
-  // Check if workspace dir is now empty
-  try {
-    execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
-    return; // fully cleaned
-  } catch {
-    // Directory not empty -- root-owned files remain
-  }
-
-  // Phase 3: Move aside so provisioning can proceed.
-  // mv (rename) operates on the parent directory's inode, not the contents,
-  // so it succeeds even when the directory contains root-owned files.
-  const orphanedPath = workspacePath + `.orphaned-${Date.now()}`;
-  try {
-    execFileSync("mv", [workspacePath, orphanedPath], { stdio: "pipe" });
-    log.warn(
-      { workspacePath, orphanedPath },
-      "Workspace contained undeletable files; moved aside for background cleanup",
-    );
-    return;
-  } catch (err) {
-    log.error({ workspacePath, err }, "Workspace cleanup failed: cannot move aside");
-    throw new Error(
-      "Workspace cleanup failed \u2014 please try again or contact support",
-    );
-  }
+/**
+ * Same phases, guards, allowed-roots, symlink handling and {@link RemoveOutcome}s as
+ * {@link removeWorkspaceDir} (one shared step generator), but every child process runs
+ * through async `execFile` with a per-command time limit ({@link REAP_CMD_TIMEOUT_MS}),
+ * so a node_modules-heavy tree does not block the event loop and a wedged `rm` cannot hang
+ * the caller: a timeout rejects with {@link RemoveTimeoutError}.
+ */
+export async function removeWorkspaceDirAsync(
+  workspacePath: string,
+  allowedRoots: string[] = [getWorkspacesRoot()],
+  hold?: ChildHold,
+): Promise<RemoveOutcome> {
+  const gen = removeSteps(workspacePath, allowedRoots);
+  let next = gen.next();
+  while (!next.done) next = gen.next(await runStepAsync(next.value, hold));
+  return next.value;
 }
 
 /**

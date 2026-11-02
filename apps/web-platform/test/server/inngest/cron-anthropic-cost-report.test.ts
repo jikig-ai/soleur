@@ -54,10 +54,26 @@ import {
   priorUtcDay,
 } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { AnthropicApiError } from "@/server/inngest/functions/_cron-shared";
+import { StepError } from "inngest";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
-// A step that just runs the callback (no memoization needed for the unit).
-const step = { run: async <T>(_name: string, cb: () => Promise<T>) => cb() };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The inline `step` this replaced ran the callback
+// in-process, so a non-final step failure reached the catch as a LIVE error —
+// in production the SDK ends the request and retries the step instead.
+// `maxAttempts` is the step's attempt budget: the classified 401/403 verdicts
+// are RETURNED (not thrown) so they run once; the transient-throw tests pick
+// their own budget per case.
+function runHandler(opts: { maxAttempts?: number } = {}) {
+  return runLikeInngest(
+    ({ step, attempt, maxAttempts }) =>
+      cronAnthropicCostReportHandler({ step, logger, attempt, maxAttempts }),
+    { maxAttempts: opts.maxAttempts ?? 1 },
+  );
+}
 
 const ORIGINAL_KEY = process.env.ANTHROPIC_ADMIN_KEY;
 beforeEach(() => {
@@ -168,8 +184,9 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
     // keeps this sample off the floor/ceil-equivalent midnight boundary.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-04T06:17:00Z"));
-    const res = await cronAnthropicCostReportHandler({ step, logger });
-    expect(res).toEqual({ ok: true, status: "key-missing" });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({ ok: true, status: "key-missing" });
     expect(dailyMarkerSpy).toHaveBeenCalledTimes(1);
     expect(dailyMarkerSpy.mock.calls[0][0]).toMatchObject({
       status: "key-missing",
@@ -206,8 +223,9 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
 
   it("401 → RED heartbeat, no daily marker, classified fatal", async () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(401, "bad key"));
-    const res = await cronAnthropicCostReportHandler({ step, logger });
-    expect(res).toEqual({ ok: false, status: "error" });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({ ok: false, status: "error" });
     expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
@@ -224,8 +242,9 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
 
   it("403 → RED heartbeat (classified fatal), still at ERROR severity", async () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(403, "forbidden"));
-    const res = await cronAnthropicCostReportHandler({ step, logger });
-    expect(res).toEqual({ ok: false, status: "error" });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({ ok: false, status: "error" });
     expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
@@ -237,24 +256,29 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
     expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
-  it("429 on a NON-final attempt → rethrows for Inngest retry (no heartbeat)", async () => {
+  // A 429 thrown inside the step callback is invisible to handler code on every
+  // non-final attempt — the SDK retries the step. With maxAttempts=2 the cb runs
+  // twice, then the catch sees the rebuilt StepError on the FUNCTION's first
+  // attempt (isFinalAttempt false) and rethrows for a function-level retry.
+  it("429 on every step attempt → the rebuilt StepError rethrows for retry (no heartbeat)", async () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(429, "rate limited"));
-    await expect(
-      cronAnthropicCostReportHandler({ step, logger, attempt: 0, maxAttempts: 2 }),
-    ).rejects.toBeInstanceOf(AnthropicApiError);
+    const out = await runHandler({ maxAttempts: 2 });
+    expect(out.outcome).toBe("threw");
+    // The error that crossed the boundary is the SDK's rebuild — a StepError,
+    // never the live AnthropicApiError the in-process mock handed the catch.
+    expect(out.error).toBeInstanceOf(StepError);
+    expect(out.error).not.toBeInstanceOf(AnthropicApiError);
+    // Both endpoints ran on both step attempts (Promise.all pairs them).
+    expect(getAdminReportSpy).toHaveBeenCalledTimes(4);
     expect(heartbeatSpy).not.toHaveBeenCalled();
     expect(dailyMarkerSpy).not.toHaveBeenCalled();
   });
 
-  it("429 on the FINAL attempt → RED heartbeat (retries exhausted)", async () => {
+  it("429 with retries exhausted → RED heartbeat", async () => {
     getAdminReportSpy.mockRejectedValue(new AnthropicApiError(429, "rate limited"));
-    const res = await cronAnthropicCostReportHandler({
-      step,
-      logger,
-      attempt: 1,
-      maxAttempts: 2,
-    });
-    expect(res).toEqual({ ok: false, status: "error" });
+    const out = await runHandler({ maxAttempts: 1 });
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({ ok: false, status: "error" });
     expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({ ok: false }),
@@ -285,8 +309,9 @@ describe("cronAnthropicCostReportHandler (AC6)", () => {
         };
       },
     );
-    const res = await cronAnthropicCostReportHandler({ step, logger });
-    expect(res).toEqual({ ok: true, status: "ok" });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    expect(out.value).toEqual({ ok: true, status: "ok" });
     expect(getAdminReportSpy).toHaveBeenCalledTimes(2);
     expect(heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatSpy).toHaveBeenCalledWith(

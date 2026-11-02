@@ -1,0 +1,4 @@
+suite	declared real-read file	parent_edge	commits_90d	index_entries_before
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/commit-target-roots.sh	.claude/hooks/git-commit-secret-scan.sh	2	1
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/technical-fork-cues.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	3	0
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/pre-closing-technical-fork-gate.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	2	0

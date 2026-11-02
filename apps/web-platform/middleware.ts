@@ -9,6 +9,7 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
+import { safeReturnTo } from "@/lib/safe-return-to";
 // Edge middleware cannot import `@/server/observability` (pulls `node:crypto`
 // + `pino`, breaks edge bundle). Use the lib/ edge-safe variant instead;
 // see `lib/auth/validate-origin.ts:3-7` for the documented constraint.
@@ -191,6 +192,10 @@ const NON_DOCUMENT_DESTS = new Set([
   "worker",
   "sharedworker",
 ]);
+
+// #4672 — the away-user approval landing path (/dashboard/approvals/<uuid>), the one dashboard path whose signed-out
+// redirect carries a return target.
+const APPROVAL_LANDING_PATH_RE = /^\/dashboard\/approvals\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -704,6 +709,13 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!user) {
+    // #4672 — a signed-out tap on an approval push lands on sign-in and comes back to the same request after sign-in and
+    // MFA. Only the exact approval landing path is carried (UUID-shaped, then re-validated by safeReturnTo, which the
+    // login form applies again); every other path keeps the bare /login redirect it always had.
+    if (APPROVAL_LANDING_PATH_RE.test(pathname)) {
+      const returnTo = safeReturnTo(pathname);
+      if (returnTo) return redirectWithCookies("/login", new URLSearchParams({ redirectTo: returnTo }));
+    }
     return redirectWithCookies("/login");
   }
 

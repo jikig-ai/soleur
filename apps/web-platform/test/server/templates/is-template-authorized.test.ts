@@ -35,6 +35,8 @@ interface MockOpts {
     revoked_at: string | null;
   } | null;
   sendsCount?: number;
+  /** What the DB returns once `.neq("id", <row>)` excludes the replayed row (default: same as sendsCount). */
+  sendsCountExcludingRow?: number;
   taError?: Error | null;
   countError?: Error | null;
   rpcError?: Error | null;
@@ -44,6 +46,7 @@ function makeMockClient(opts: MockOpts = {}) {
   const {
     taRow = null,
     sendsCount = 0,
+    sendsCountExcludingRow,
     taError = null,
     countError = null,
     rpcError = null,
@@ -69,7 +72,19 @@ function makeMockClient(opts: MockOpts = {}) {
       resolve: (value: { count: number; error: Error | null }) => unknown,
     ) => Promise.resolve(resolve({ count: sendsCount, error: countError })),
   };
-  const sendsEq2 = vi.fn(() => sendsThenable);
+  // #10543: a replay passes excludeActionSendId, which adds `.neq("id", <row id>)` to the count.
+  const sendsNeq = vi.fn(() => ({
+    then: (
+      resolve: (value: { count: number; error: Error | null }) => unknown,
+    ) =>
+      Promise.resolve(
+        resolve({
+          count: sendsCountExcludingRow ?? sendsCount,
+          error: countError,
+        }),
+      ),
+  }));
+  const sendsEq2 = vi.fn(() => ({ ...sendsThenable, neq: sendsNeq }));
   const sendsEq1 = vi.fn(() => ({ eq: sendsEq2 }));
   const sendsSelect = vi.fn(() => ({ eq: sendsEq1 }));
 
@@ -84,7 +99,7 @@ function makeMockClient(opts: MockOpts = {}) {
   });
 
   const client = { from, rpc: rpcSpy };
-  return { client, rpcSpy, taSelect, sendsSelect };
+  return { client, rpcSpy, taSelect, sendsSelect, sendsNeq };
 }
 
 describe("isTemplateAuthorized", () => {
@@ -267,5 +282,65 @@ describe("isTemplateAuthorized", () => {
     await vi.waitFor(() => {
       expect(rpcSpy).toHaveBeenCalled();
     });
+  });
+  // #10543 — a replay must not count its own already-written row against the quota.
+  test("(g) replay at the quota boundary: excludeActionSendId drops the replayed row from the count → authorized, no auto-revoke", async () => {
+    const { client, rpcSpy, sendsNeq } = makeMockClient({
+      taRow: {
+        id: ROW_ID,
+        expires_at: "2026-08-19T12:00:00Z",
+        max_sends: 100,
+        revoked_at: null,
+      },
+      sendsCount: 100, // includes the replayed row
+      sendsCountExcludingRow: 99,
+    });
+
+    const result = await isTemplateAuthorized(
+      client as never,
+      FOUNDER_A,
+      TEMPLATE_HASH,
+      GRANT_ID,
+      "44444444-4444-4444-aaaa-444444444444",
+    );
+
+    expect(result).toEqual({
+      status: "authorized",
+      rowId: ROW_ID,
+      sendsUsed: 99,
+    });
+    expect(sendsNeq).toHaveBeenCalledWith(
+      "id",
+      "44444444-4444-4444-aaaa-444444444444",
+    );
+    expect(rpcSpy).not.toHaveBeenCalled();
+  });
+
+  test("(h) a FRESH send at the same boundary is still denied (the exclusion is replay-only)", async () => {
+    const { client, rpcSpy, sendsNeq } = makeMockClient({
+      taRow: {
+        id: ROW_ID,
+        expires_at: "2026-08-19T12:00:00Z",
+        max_sends: 100,
+        revoked_at: null,
+      },
+      sendsCount: 100,
+      sendsCountExcludingRow: 99,
+    });
+
+    const result = await isTemplateAuthorized(
+      client as never,
+      FOUNDER_A,
+      TEMPLATE_HASH,
+      GRANT_ID,
+    );
+
+    expect(result).toEqual({
+      status: "denied",
+      reason: "template_quota_exhausted",
+    });
+    expect(sendsNeq).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rpcSpy).toHaveBeenCalled();
   });
 });

@@ -742,12 +742,12 @@ export const cronOauthProbe = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 * * * *" },
+      { event: "cron/oauth-probe.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 * * * *" },
-    { event: "cron/oauth-probe.manual-trigger" },
-  ],
-  cronOauthProbeHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronOauthProbeHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // Test surface — exported only for vitest. Not part of the runtime API.

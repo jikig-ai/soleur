@@ -670,10 +670,10 @@ export const cronContentGenerator = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 10 * * 2,4" },
+      { event: "cron/content-generator.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 10 * * 2,4" },
-    { event: "cron/content-generator.manual-trigger" },
-  ],
-  cronContentGeneratorHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronContentGeneratorHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

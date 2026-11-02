@@ -17,8 +17,15 @@ import { TodayCard } from "@/components/dashboard/today-card";
 // DOM contract (`data-testid` + label text) per
 // 2026-05-06-test-public-dom-contract-not-setstate-side-effects.md.
 
-const { createClientMock } = vi.hoisted(() => ({
+const { createClientMock, mutateSpy } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
+  mutateSpy: vi.fn(),
+}));
+
+// The card drops the in-memory Today list after a Discard / Dismiss / Send 200 and after a "forbidden" 403 (ADR-067, #11572 D15).
+vi.mock("swr", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("swr")>()),
+  useSWRConfig: () => ({ mutate: mutateSpy }),
 }));
 
 vi.mock("@/lib/supabase/client", () => ({
@@ -55,6 +62,7 @@ let nextResponse: MockResponse = { status: 200, body: {} };
 
 beforeEach(() => {
   createClientMock.mockReset();
+  mutateSpy.mockReset();
   createClientMock.mockImplementation(buildNoOpSupabaseClient);
   globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -190,16 +198,13 @@ describe("GitHubCard onClick (PR-A)", () => {
     });
   });
 
-  it("200 with degraded:'enqueue_failed' → 'Acknowledged (queued)' pill", async () => {
+  it("503 enqueue_unavailable (#10543) → in-place error copy, no acknowledged pill, card not archived, Send re-enabled", async () => {
     nextResponse = {
-      status: 200,
+      status: 503,
       body: {
-        id: "as-1",
-        action_class: "engineering.pr_review_pending",
-        tier: "draft_one_click",
+        error: "enqueue_unavailable",
         action_send_id: "as-1",
-        artifact_view_url: "https://github.com/acme/repo/pull/7",
-        degraded: "enqueue_failed",
+        retryable: true,
       },
     };
 
@@ -218,11 +223,17 @@ describe("GitHubCard onClick (PR-A)", () => {
     await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
 
     await waitFor(() => {
-      const pill = screen.getByTestId("acknowledged-pill");
-      expect(pill).toBeInTheDocument();
-      expect(pill.getAttribute("data-pill-state")).toBe("queued");
-      expect(pill.textContent).toMatch(/Acknowledged \(queued/);
+      expect(
+        screen.getByText(/Your approval is saved.*Try again in a moment/),
+      ).toBeInTheDocument();
     });
+    // The draft is still a draft: no pill, no LeaderLoopStatus, and the
+    // Send control is usable again so the founder can retry.
+    expect(screen.queryByTestId("acknowledged-pill")).toBeNull();
+    expect(screen.queryByTestId("leader-loop-status")).toBeNull();
+    expect(
+      screen.getByLabelText(/Let CTO spawn a PR-review agent/),
+    ).not.toBeDisabled();
   });
 });
 
@@ -307,5 +318,341 @@ describe("KbDriftCard onClick (PR-A)", () => {
     const btn = screen.getByLabelText(/Let CTO spawn a PR-review agent/);
     expect(btn).not.toBeDisabled();
     expect(btn.getAttribute("aria-disabled")).not.toBe("true");
+  });
+});
+
+describe("StripeCard Edit refusal copy (#11486)", () => {
+  const APPROVED_COPY =
+    "You already approved this draft, so it can't be edited. Send it to go ahead.";
+
+  const ORIGINAL_PROMPT = window.prompt;
+
+  async function editTo(next: string) {
+    // happy-dom ships no window.prompt, so assign rather than spy.
+    window.prompt = vi.fn(() => next);
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Edit draft/));
+  }
+
+  afterEach(() => {
+    window.prompt = ORIGINAL_PROMPT;
+  });
+
+  it("409 draft_already_approved explains the approval and the next step instead of a bare status", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(APPROVED_COPY);
+    });
+    expect(screen.queryByText(/Edit failed/)).toBeNull();
+  });
+
+  it("a 409 with another body keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: { error: "something_else" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 409 whose body is not JSON keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: {} };
+    globalThis.fetch = vi.fn(
+      async () => new Response("<html>gateway</html>", { status: 409 }),
+    ) as unknown as typeof fetch;
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 500 carrying the same error code is still a bare status (the 409 guard is load-bearing)", async () => {
+    nextResponse = { status: 500, body: { error: "draft_already_approved" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (500)");
+    });
+  });
+
+  it("a 409 whose body is JSON null keeps 'Edit failed (409)'", async () => {
+    nextResponse = { status: 409, body: {} };
+    globalThis.fetch = vi.fn(
+      async () => new Response("null", { status: 409 }),
+    ) as unknown as typeof fetch;
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (409)");
+    });
+  });
+
+  it("a 500 keeps 'Edit failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    await editTo("Edited body");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Edit failed (500)");
+    });
+  });
+});
+
+// #11572 item 7: the three DENY_REASON_COPY strings promise nothing (a second
+// Send returns the same 403 until #11630), so pin them verbatim per reason.
+describe("DENY_REASON_COPY 403 strings (#11572)", () => {
+  const CASES: Array<[string, string]> = [
+    [
+      "template_revoked",
+      "This template was revoked, so this draft can't be sent.",
+    ],
+    [
+      "template_expired",
+      "This template's 90-day authorization expired, so this draft can't be sent.",
+    ],
+    [
+      "template_quota_exhausted",
+      "You've sent 100 messages with this template, so this draft can't be sent.",
+    ],
+  ];
+
+  it.each(CASES)("403 %s renders the button-neutral line", async (reason, copy) => {
+    nextResponse = {
+      status: 403,
+      body: { error: "template_denied", deny_reason: reason },
+    };
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Send draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(copy);
+    });
+    expect(screen.queryByText(/Click Send again/)).toBeNull();
+  });
+});
+
+// #11572 (D15): after the messages UPDATE policy a second Discard or a
+// non-author click matches zero rows and answers 403; say so instead of a
+// bare status. Other statuses keep the generic `... failed (NNN)` fallback.
+describe("403 'already handled' copy for Discard, Edit and Dismiss (D15)", () => {
+  const HANDLED_COPY =
+    "This draft was already handled, or it isn't yours to change. Refresh to update this card.";
+  const ORIGINAL_PROMPT = window.prompt;
+
+  afterEach(() => {
+    window.prompt = ORIGINAL_PROMPT;
+  });
+
+  function renderStripe() {
+    render(
+      <TodayCard
+        id="msg-1"
+        source="stripe"
+        sourceRef={null}
+        owningDomain="cfo"
+        draftPreview="Hello founder"
+        urgency="normal"
+      />,
+    );
+  }
+
+  it("Discard 403 shows the already-handled line and restores the card", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Discard failed/)).toBeNull();
+    expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
+  });
+
+  it("Discard 403 whose body is the CSRF 'Forbidden' keeps the bare status (not 'already handled')", async () => {
+    nextResponse = { status: 403, body: { error: "Forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("Discard failed (403)");
+    });
+    expect(screen.queryByText(/already handled/)).toBeNull();
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("Discard 409 draft_already_approved says to Send, not to retry the Discard", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "You already approved this draft, so it can't be discarded. Send it to go ahead.",
+      );
+    });
+    expect(screen.getByTestId("draft-preview-body")).toBeInTheDocument();
+  });
+
+  // The optimistic drop: SWR's mutate(key, fn, { revalidate: true }) with fn filtering the acted-on id out of the cached list.
+  function expectDrop(id: string) {
+    expect(mutateSpy).toHaveBeenCalledTimes(1);
+    const [key, fn, opts] = mutateSpy.mock.calls[0];
+    expect(key).toEqual(["/api/dashboard/today"]);
+    expect(opts).toEqual({ revalidate: true });
+    expect(typeof fn).toBe("function");
+    expect(fn([{ id }, { id: "other" }])).toEqual([{ id: "other" }]);
+    expect(fn(undefined)).toBeUndefined();
+  }
+
+  it("Discard 200 drops the card from the cached Today list and revalidates", async () => {
+    nextResponse = { status: 200, body: { id: "msg-1", status: "archived" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expectDrop("msg-1");
+  });
+
+  it("Stripe Send 200 drops its own card (it unmounts itself), unlike the GitHub and kb-drift cards", async () => {
+    nextResponse = { status: 200, body: {} };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Send draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expectDrop("msg-1");
+  });
+
+  it("GitHub Send 200 keeps the card mounted AND does not touch the Today list (the run panel must survive)", async () => {
+    nextResponse = { status: 200, body: { id: "as-1", action_class: "engineering.pr_review_pending", tier: "draft_one_click", action_send_id: "as-1", artifact_view_url: "https://github.com/acme/repo/pull/7" } };
+    render(
+      <TodayCard id="msg-9" source="github" sourceRef="pr-acme:repo:7" owningDomain="engineering" draftPreview="fix: leak" urgency="normal" />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Let CTO spawn a PR-review agent/));
+    await waitFor(() => expect(screen.getByTestId("leader-loop-status")).toBeInTheDocument());
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("kb-drift digest Dismiss 200 drops the card; Dismiss 403 forbidden only revalidates", async () => {
+    nextResponse = { status: 200, body: {} };
+    const digest = (
+      <TodayCard id="msg-3" source="kb-drift" sourceRef="digest-2026-10-30" owningDomain="knowledge" draftPreview="3 findings" urgency="normal" />
+    );
+    const { unmount } = render(digest);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    expectDrop("msg-3");
+    unmount();
+    mutateSpy.mockReset();
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    render(digest);
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]));
+  });
+
+  it("kb-drift digest Dismiss 409 draft_already_approved does not tell the user to Send", async () => {
+    nextResponse = { status: 409, body: { error: "draft_already_approved" } };
+    render(
+      <TodayCard id="msg-3" source="kb-drift" sourceRef="digest-2026-10-30" owningDomain="knowledge" draftPreview="3 findings" urgency="normal" />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("You already approved this item, so it can't be dismissed.");
+    });
+    expect(screen.queryByText(/Send it to go ahead/)).toBeNull();
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("Discard 403 forbidden also refreshes the list so the stale card goes away", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]));
+  });
+
+  it("Discard 500 keeps 'Discard failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Discard draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Discard failed (500)",
+      );
+    });
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("Edit 403 shows the already-handled line", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    window.prompt = vi.fn(() => "Edited body");
+    renderStripe();
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Edit draft/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Edit failed/)).toBeNull();
+    // The card cannot act any more, so the stale list is revalidated (no id: Edit never removes the card itself).
+    expect(mutateSpy).toHaveBeenCalledWith(["/api/dashboard/today"]);
+  });
+
+  it("kb-drift digest Dismiss 403 shows the already-handled line", async () => {
+    nextResponse = { status: 403, body: { error: "forbidden" } };
+    render(
+      <TodayCard
+        id="msg-3"
+        source="kb-drift"
+        sourceRef="digest-2026-10-30"
+        owningDomain="knowledge"
+        draftPreview="3 findings"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(HANDLED_COPY);
+    });
+    expect(screen.queryByText(/Dismiss failed/)).toBeNull();
+  });
+
+  it("kb-drift digest Dismiss 500 keeps 'Dismiss failed (500)'", async () => {
+    nextResponse = { status: 500, body: { error: "internal_error" } };
+    render(
+      <TodayCard
+        id="msg-3"
+        source="kb-drift"
+        sourceRef="digest-2026-10-30"
+        owningDomain="knowledge"
+        draftPreview="3 findings"
+        urgency="normal"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/Dismiss digest/));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Dismiss failed (500)",
+      );
+    });
   });
 });

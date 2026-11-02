@@ -1,0 +1,3 @@
+suite	entries	duration_ms	src	existing_hits	glob_hits	total_hits	incremental_hits	units	runner_changed	not_evaluable	empty	deleted_path_units	rate_conservative	rate_excluded	ci_seconds_added	drained_pairs	tree_files	tree_missing	verdict	reason
+.claude/hooks/grep-q-pipe-guard.test.sh	0	6081	measured	159	0	159	0	200	40	0	1	3	200/200	159/159	0	0	-	-	always_on	over-25-percent
+SOLEUR_PR_AFFECTED_GLOB_RATE base=6512cf3ee554 date=2026-10-26T18:06:27Z units=200 attributable=159 runner_changed=40 not_evaluable=0 empty=1 deleted_path_units=3 suites=1 glob=0 always_on=1 baselined=0 spot_check=0 spot_compared=0

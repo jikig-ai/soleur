@@ -1273,7 +1273,7 @@ pty_drive() {
   local cmd
   printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
   # A person's own terminal: no agent-harness variable (the suite itself may run under one).
-  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u OPENCODE script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
   return "${PIPESTATUS[1]}"
 }
 # The same pty, but INSIDE an agent harness: what an agent that allocates a pseudo-terminal
@@ -1282,7 +1282,14 @@ pty_drive_agent() {
   local answer="$1" ledger="$2"; shift 2
   local cmd
   printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
-  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env -u OPENCODE CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  return "${PIPESTATUS[1]}"
+}
+pty_drive_opencode() {
+  local answer="$1" ledger="$2"; shift 2
+  local cmd
+  printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT OPENCODE=1 script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
   return "${PIPESTATUS[1]}"
 }
 
@@ -1329,6 +1336,10 @@ gagent_check() { # <lib>
   out="$(pty_drive_agent $'yes\n' "$ledger" "$lib" soleur_op_ack_or_die "Type yes: ")"; rc=$?
   if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED' <<<"$out"; then
     echo "gagent: a piped yes through a pty INSIDE an agent harness exited ${rc} (expected 64 + INPUT_REQUIRED): ${out}"; v=1
+  fi
+  out="$(pty_drive_opencode $'yes\n' "$ledger" "$lib" soleur_op_ack_or_die "Type yes: ")"; rc=$?
+  if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED' <<<"$out"; then
+    echo "gagent: a piped yes through a pty INSIDE an OpenCode harness exited ${rc} (expected 64 + INPUT_REQUIRED): ${out}"; v=1
   fi
   out="$(pty_drive $'yes\n' "$ledger" "$lib" soleur_op_ack_or_die "Type yes: ")"; rc=$?
   if [[ "$rc" -ne 0 ]]; then
@@ -2338,7 +2349,7 @@ g11_pty() {
   while [[ "${1:-}" != "--" ]]; do envs[${#envs[@]}]="$1"; shift; done
   shift
   printf -v cmd '%q ' bash "$G11_DIR/driver.sh" "$@"
-  printf 'yes\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT "PATH=${G11_ROOT}/bin:${PATH}" "G11_LIB=$lib" "G11_SCRIPT=$G11_SCRIPT" "${envs[@]+"${envs[@]}"}" \
+  printf 'yes\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u OPENCODE "PATH=${G11_ROOT}/bin:${PATH}" "G11_LIB=$lib" "G11_SCRIPT=$G11_SCRIPT" "${envs[@]+"${envs[@]}"}" \
     timeout 20 script -qec "$cmd" /dev/null > "$G11_ROOT/pty.out" 2>&1
   G11_RC=${PIPESTATUS[1]}   # (read here, not inside a $(...): a capture loses PIPESTATUS)
   G11_OUT="$(tr -d '\r' < "$G11_ROOT/pty.out")"
@@ -2479,6 +2490,9 @@ g11_check() {
   g11_world n1 || return 1
   g11_pty "$lib" CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=cli -- "${argv[@]}"
   g11_expect "N pty yes inside an agent harness" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
+  g11_world n1b || return 1
+  g11_pty "$lib" OPENCODE=1 -- "${argv[@]}"
+  g11_expect "N pty yes inside OpenCode harness" 75 'SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED' 0
   g11_world n2 || return 1
   g11_pty "$lib" -- "${argv[@]}"
   g11_expect "N control: pty yes outside any harness" 0 'GATE_PASSED' 1
@@ -2615,6 +2629,10 @@ PERL
 g11_mutant "m14 a pty yes inside an agent harness is accepted" 'N pty yes inside an agent harness' <<'PERL'
 s{if \[\[ -t 0 && -t 1 \]\] && ! soleur_op_in_agent_harness; then}{if [[ -t 0 && -t 1 ]]; then}
 PERL
+g11_mutant "m14b a pty yes inside OpenCode harness is accepted" 'N pty yes inside OpenCode harness' <<'PERL'
+s{ \|\| -n "\$\{OPENCODE:-\}"}{}
+PERL
+assert_red gagent_check "m14b gagent_check catches OPENCODE stripped from soleur_op_in_agent_harness" "$SB/mut/g11-m14b-a-pty-yes-inside-OpenCode-harness-is-accepted.sh"
 g11_mutant "m15 the script bytes are not in the approval" 'K script edited' <<'PERL'
 s{    printf 'content=%s\\n' "\$content"\n}{}
 PERL
@@ -2643,7 +2661,7 @@ PERL
 # an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
 # measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=208
+FLOOR=211
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"

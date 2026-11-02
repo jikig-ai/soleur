@@ -42,6 +42,7 @@ import {
   cronInngestConfigDrift,
   cronInngestConfigDriftHandler,
 } from "@/server/inngest/functions/cron-inngest-config-drift";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 const SUT_SOURCE = readFileSync(
   resolve(
@@ -51,12 +52,19 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
-function makeStep() {
-  return {
-    run: async <T>(_name: string, cb: () => Promise<T>): Promise<T> => cb(),
-  };
-}
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The inline `makeStep` this replaced ran the
+// callback in-process and hid both (the #8717/#8726 defect class).
+// maxAttempts: 1 — a throwing dispatch callback is final on its first attempt,
+// so the failure tests keep their single-call shape.
+function runHandler() {
+  return runLikeInngest(({ step }) => cronInngestConfigDriftHandler({ step, logger }), {
+    maxAttempts: 1,
+  });
+}
 
 describe("cronInngestConfigDrift — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -131,10 +139,9 @@ describe("cronInngestConfigDriftHandler — dispatch behavior", () => {
   });
 
   it("mints a token and POSTs the workflow_dispatch with ref=main, then returns ok", async () => {
-    const result = await cronInngestConfigDriftHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     expect(h.requestSpy).toHaveBeenCalledTimes(1);
     const [endpoint, params] = h.requestSpy.mock.calls[0];
@@ -157,10 +164,9 @@ describe("cronInngestConfigDriftHandler — dispatch behavior", () => {
       new Error("fake-installation-token leaked 403"),
     );
 
-    const result = await cronInngestConfigDriftHandler({
-      step: makeStep(),
-      logger,
-    });
+    const out = await runHandler();
+    expect(out.outcome).toBe("returned");
+    const result = out.value;
 
     expect(result).toEqual({ ok: false });
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);

@@ -1,0 +1,12 @@
+This root is excluded from the infra-validation `plan` matrix (#10715).
+
+`iam.tf` carries `data "cloudflare_api_token_permission_groups" "all" {}`, and
+`terraform plan` reads data sources even under `-refresh=false`. The plan job
+runs on `pull_request` under the Tier-A bounded-substitute credential set
+(ADR-241), whose Cloudflare token cannot list API Token Permission Groups — the
+leg can only ever fail 401/9109.
+
+To re-enable plan coverage for this root: grant the plan credential
+`API Token Permission Groups:Read`, then delete this file. `validate` (fmt /
+`terraform validate` / root test hook) still runs on every change — it consumes
+`directories`, which this sentinel does not filter.

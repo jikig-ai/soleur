@@ -245,9 +245,7 @@ export const oneshotRecheck4217Calibration = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: { event: "oneshot/recheck-4217-calibration.fire" },
   },
-  { event: "oneshot/recheck-4217-calibration.fire" },
-  oneshotRecheck4217CalibrationHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  oneshotRecheck4217CalibrationHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

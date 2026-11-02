@@ -1,0 +1,19 @@
+[
+  { "name": "git-worktree", "description": "This skill should be used when managing Git worktrees for isolated parallel development, covering creating, listing, switching and cleaning up worktrees.", "disableModelInvocation": false },
+  { "name": "pencil-setup", "description": "This skill should be used when design-tool MCP tools are unavailable, detecting the Pencil desktop app or an IDE extension and registering its MCP server.", "disableModelInvocation": false },
+  { "name": "plan", "description": "This skill should be used when turning a feature description into a structured project plan.", "disableModelInvocation": false },
+  { "name": "work", "description": "This skill should be used when executing a work plan efficiently while maintaining quality and finishing the feature.", "disableModelInvocation": false },
+  { "name": "review", "description": "This skill should be used when running exhaustive multi-agent code review on a branch before it merges.", "disableModelInvocation": false },
+  { "name": "ship", "description": "This skill should be used when preparing a feature for deployment: commit artifacts, update docs, capture learnings and open the pull request.", "disableModelInvocation": false },
+  { "name": "brainstorm", "description": "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation.", "disableModelInvocation": false },
+  { "name": "compound", "description": "This skill should be used when documenting a recently solved problem so the team's knowledge compounds.", "disableModelInvocation": false },
+  { "name": "kb-search", "description": "This skill should be used when searching the knowledge base for files matching keywords or frontmatter facets.", "disableModelInvocation": false },
+  { "name": "deploy", "description": "This skill should be used when deploying containerized applications to remote servers, building images, pushing to a registry and verifying health.", "disableModelInvocation": false },
+  { "name": "agent-browser", "description": "This skill should be used when automating browser interactions: navigation, form filling, screenshots and data scraping.", "disableModelInvocation": false },
+  { "name": "rclone", "description": "This skill should be used when uploading, syncing or managing files across cloud storage providers.", "disableModelInvocation": false },
+  { "name": "docs-site", "description": "This skill should be used when scaffolding a Markdown-based Eleventy documentation site with layouts and deployment workflow.", "disableModelInvocation": false },
+  { "name": "seo-aeo", "description": "This skill should be used when auditing, fixing or validating search and answer-engine optimization for documentation sites.", "disableModelInvocation": false },
+  { "name": "gemini-imagegen", "description": "This skill should be used when generating or editing images through an image generation API.", "disableModelInvocation": false },
+  { "name": "schedule", "description": "This skill should be used when creating, listing or deleting scheduled agent tasks through cron workflows.", "disableModelInvocation": false },
+  { "name": "go", "description": "This skill should be used when classifying intent and routing to the right workflow.", "disableModelInvocation": true }
+]

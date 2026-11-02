@@ -68,7 +68,7 @@ SENTRY_API="https://sentry.io/api/0"
 # feature/op are the tags workspaces-luks-emit.sh sets; statsPeriod=7d rolling window.
 QUERY='feature:"workspaces-luks" op:"workspaces-luks-drift"'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
-URL="${SENTRY_API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${SOAK_DAYS}d&per_page=10&field=title&field=timestamp"
+URL="${SENTRY_API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${SOAK_DAYS}d&per_page=10&field=title&field=timestamp&sort=-timestamp"
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' -H "Accept: application/json" --config - "$URL" \
   < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN"))
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')

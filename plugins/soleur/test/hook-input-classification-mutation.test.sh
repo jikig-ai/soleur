@@ -62,9 +62,9 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-command -v jq      >/dev/null 2>&1 || { echo "SKIP: jq missing — battery cannot run";      exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing — battery cannot run"; exit 0; }
-command -v git     >/dev/null 2>&1 || { echo "SKIP: git missing — cannot build the sandbox"; exit 0; }
+command -v jq      >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
+command -v git     >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 # P1b (#7708): `mktemp -d` inherits TMPDIR, and a RELATIVE TMPDIR yields a relative
 # root — after which the `rm -rf` below resolves against whatever directory the trap

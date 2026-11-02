@@ -13,10 +13,11 @@
 #   cluster's learning summaries to Anthropic. At most WEEK_CAP_DEFAULT = 2
 #   clusters per attempt. The PII pre-pass applies to the summaries, not to
 #   the target file or to the model's output on the draft-PR path. For a
-#   skill target, a skill-conflict comment can post the model-derived diff
-#   on an unrelated open PR (full PII pattern applied, no human gate).
-# - Opens public draft PRs whose bodies quote source-learning paths and the
-#   proposed diff. PR bodies are world-readable on the public repo.
+#   skill target, the loop refuses the cluster when an open PR changes the
+#   same file; it posts no comment on any PR.
+# - Opens public draft PRs whose bodies name the source-learning paths and
+#   the proposed rule slugs; the proposed diff is the PR's committed change.
+#   PR bodies and diffs are world-readable on the public repo.
 # - Kill switch: set `enabled: false` and commit; next cron tick exits no-op.
 #
 # Flipping to true requires a committed PR that operators can review. The

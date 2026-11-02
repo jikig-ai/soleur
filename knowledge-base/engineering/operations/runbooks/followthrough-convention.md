@@ -19,6 +19,7 @@ verification passes — no human revisit required.
    - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
    - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - **Per-probe wall-clock cap (#11215).** The sweeper runs every probe under `timeout -k 10 $FT_PROBE_TIMEOUT` (default **300 s**). A probe that outlives it is killed with its whole process group, logged as `<script> TIMED OUT after <N>s (rc 124 -> 3, CANNOT ESTABLISH)`, and rendered as CANNOT ESTABLISH (exit 3) on the tracker. A probe that routinely needs more than a few minutes is a defect in the probe (bound its own reads), not a reason to raise the cap; the job ceiling (`timeout-minutes` in `scheduled-followthrough-sweeper.yml`) must stay above the cap times the number of slow probes.
    - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - **A registered sub-vocabulary inside the TRANSIENT bucket, for NOTIFY-ONLY probes.** Some
@@ -56,6 +57,7 @@ verification passes — no human revisit required.
    - **Never name the retired Sentry credential.** The sweeper's Sentry read is `SENTRY_ACTIONS_RO_TOKEN` (the org-level read-only `actions-read-prd` integration, ADR-031, repo secret only). The canonical vendor env-var name it replaced is banned anywhere under `scripts/followthroughs/` — any file at any depth, executable line or comment (one recursive literal grep; a superstring counts) — because a workstation `doppler run -c prd_terraform` binds a *personal*, human-account-scoped token under it (#7797, #7946). Enforced as **rule 2** of `scripts/lint-followthrough-varq-ban.sh` (the executable form of this census); rotation: `sentry-actions-ro-token-rotation.md`.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
    - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.
+   - **Pin an ordering on every Sentry `/events/` coverage argument.** `sort` is an optional request param — `get_orderby` returns `None` when it is absent, so there is no ORDER BY guarantee and "newest-first" is observed behavior, not contract. A `statsPeriod=…&per_page=N` read that argues "the newest N rows provably cover the window" is unsound unless it pins `&sort=-timestamp` or bounds the window with `start=`/`end=` — and the bound must sit on the same logical line as the `/events/` literal (a bound on a separate statement is invisible to the lint). A `field=<name>()` aggregate select is exempt. Enforced as **rule 6** of `scripts/lint-followthrough-varq-ban.sh` — an unbound `/events/` call fails CI, so a dropped param reddens the harness. **Why:** CTO ruling on PR #11543; see `knowledge-base/project/learnings/2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md` (its census of unpinned sibling probes was closed by #11553).
 3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
 4. **Add the directive** to the issue body:
 
@@ -121,6 +123,7 @@ instead of rotting open. Each trigger shape maps 1:1 to an exit-code probe:
 | **Event-grep** — `Re-evaluate when <pattern> matches in <corpus>` | filing date | `GH_TOKEN` (gh corpus) | corpus probe nonempty ? `exit 0` : `exit 2` — e.g. `gh run list --workflow X --status success --created ">=<cutoff>" --json conclusion \| jq -e 'length >= 1' >/dev/null && exit 0 \|\| exit 2` |
 | **Counter** — `Re-evaluate when <counter> exceeds <threshold>` | filing date | `GH_TOKEN` (gh/API counter) | `[[ "$count" -ge "$threshold" ]] && exit 0 \|\| exit 2` where `$count` comes from `gh`/SQL/grep |
 | **Soak** — `<signal> stays at ~0 for N days post-deploy` (often gating an ADR `adopting → accepted` flip) | `<deploy>+Nd` (UTC; gates the first check to after the soak window) | `SENTRY_ACTIONS_RO_TOKEN` (Sentry-rate soaks; the org-level read-only `actions-read-prd` integration, ADR-031) | rate==0 over a window pinned strictly after deploy ? `exit 0` : `exit 1` — mirror [`reconcile-ff-only-sentry-4977.sh`](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh) / [`ac8-founder-ambiguous-soak-5673.sh`](../../../../scripts/followthroughs/ac8-founder-ambiguous-soak-5673.sh) (`start=` pins the window past deploy so pre-deploy events don't contaminate the verdict). Enforced at ship time by the **Soak-Gated Follow-Through Enrollment Gate** (ship/SKILL.md Phase 5.5) — a soak declared in PR/plan prose blocks PR-ready until its tracker is enrolled here. |
+| **Post-deploy incident soak** — alert channels stay clean for Nh after a merge/deploy (generic; epic #10390, ADR-298) | `<deploy>+Nh` (UTC; for THIS script `earliest` is the soak END — it derives `deploy_ts` as `earliest − window`, so `earliest=<deploy>+Nh` both gates the first sweep and pins the window) | `GH_TOKEN,BETTERSTACK_API_TOKEN` (gh reads the `ci/` issue family — `secrets=GH_TOKEN` is MANDATORY for any gh-using probe even though the soak files nothing; `BETTERSTACK_API_TOKEN` is the account-wide uptime-API read already bound in the sweeper env) | zero new Better Stack incidents AND zero new `ci/`-labeled issues in `[deploy_ts, deploy_ts+Nh]` → `exit 0`, else `exit 1`; every read failure → CANNOT ESTABLISH; a `paused`/`pending` member is tolerated but cannot establish liveness alone (zero armed members → CANNOT ESTABLISH, the 2026-07-24 learning). Use [`post-deploy-incident-soak.sh`](../../../../scripts/followthroughs/post-deploy-incident-soak.sh) verbatim — it is generic (no pinned issue number); enroll it per merge on the merge's tracker. |
 
 **A probe's required inputs must be derivable or forwardable under `env -i`.** The sweeper forwards only `PATH` and the `secrets=` names that are also bound in the workflow `env:`. A required variable that is neither (an author-set deploy floor, a date) is `unset` in CI: the probe exits "cannot establish" on every sweep and never reaches its escalation. Derive the value from the checkout (the sweeper uses `fetch-depth: 0`, e.g. the committer time of the commit that added the probe) and keep the variable only as an optional override. #10552.
 
@@ -313,11 +316,62 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   detector" for ~7 dormant weeks). When closing such a tracker, land the standing vehicle in the
   same or a linked PR and correct the probe header's enrollment claim.
 
+## Sharp edges for `gh run view --log` probes
+
+- **GitHub drops step-name attribution ~2-3 weeks after a job completes**: every
+  log line returns under field 2 `UNKNOWN STEP` while the content survives.
+  A probe anchoring on the step-name column (`index($2, step)`) reads a proven
+  trail as zero-line and takes its own tripwire on every aged job in its
+  window (#11600). The countermeasure — proven in
+  `git-data-boot-poll-8178.sh` (#8262) and adapted in
+  `web-first-deploy-10585.sh` (#11603), `web-fresh-boot-zot-8651.sh` and
+  `git-data-rehearsal-evidence.sh` (#11607): strip CR + the UTF-8 BOM globally
+  (`${log//.../}` or `sed 's/\xef\xbb\xbf//g'` — exact three-byte sequence, one
+  mark per section; NEVER `tr -d`, which deletes the bytes independently and
+  corrupts other UTF-8), then slice the step's output region on the runner's
+  `##[group]Run` headers, first header stamped at or after the step's
+  `started_at` from the jobs API, next header or EOF closing the region. Feed
+  the region through the same emitted-vs-echoed filter as the named path, and
+  evaluate any zero-parseable tripwire AFTER recovery — an empty region, no
+  `started_at`, or a region with no trail-pattern lines is the same CANNOT
+  ESTABLISH. Two spelling/scope variants to check before copying: `gh run view
+  --json jobs` embeds camelCase `startedAt` (the 10585 probe's REST
+  `gh api …/jobs` reads snake_case `started_at`), and a WHOLE-RUN log
+  (`gh run view <id> --log`, not `--job`) carries every job's sections in one
+  stream — `git-data-rehearsal-evidence.sh` pre-filters the slice by field-1
+  job name so a sibling job's `##[group]Run` header cannot open the wrong
+  region, and re-attributes each region line as `<job>\t<step>\t<ts>
+  <content>` so the SAME anchored awk re-reads it (one parse grammar, no
+  second copy).
+- **`awk -v` binds its operand by POSITION in `var=value` form — `-v name
+  "$val"` (two argv entries) is not `-v name="$val"`.** Split, the name trips
+  gawk's `var=value` validation while the value falls into the program-text
+  position and nothing is written; under `2>/dev/null` plus an output-emptiness
+  check the crash lands on the helper's DESIGNED "unrecoverable" code and is
+  indistinguishable from it (#11607 — `step_region` in
+  `git-data-rehearsal-evidence.sh`, caught only by a fixture whose expected
+  outcome was a SUCCESSFUL recovery). See
+  `knowledge-base/project/learnings/2026-11-01-a-two-word-awk-v-mapped-the-helpers-crash-onto-its-designed-failure-code.md`.
+
 ## What the sweeper does NOT cover
 
 - **One-shot scheduling**: every sweep checks every open follow-through. If you want a script to run exactly once at a specific timestamp, that's a regular scheduled workflow, not a follow-through.
 - **Inline scripts**: scripts must be committed. We considered allowing inline shell in directives and rejected it for security.
 - **Multi-step verification**: each script is one binary pass/fail. For verifications that span multiple days with different criteria, file multiple follow-through issues that block each other.
+
+## A probe that closes its tracker over a time window (#10972, 2026-10-26)
+
+A probe whose exit 0 closes the issue after a window of recurring check-ins must prove the property it names, not a count that usually implies it.
+
+- **Cover slots, not rows.** "One ok per 12-hour slot" is a claim about distinct slots: bucket each row by its own timestamp and require every bucket. A row count is satisfied by a duplicate or manual re-dispatch standing in for a slot that never ran.
+- **Allowlist statuses, never denylist.** An unrecognised status word is exit 3 (cannot establish), printed from a closed token set so response text never reaches the public comment.
+- **Pin the window and the clock in the probe.** The sweeper re-reads and honours an edited `earliest=`, so the probe refuses to judge before its own pinned window end. Validate the clock and bounds as `^[1-9][0-9]{0,15}$` (a leading zero is octal in bash arithmetic and falls through to PASS).
+- **Judge one JSON document** (`jq -s`, exactly one array), cap the reply (`--max-filesize` plus `--max-time`), and never echo the body.
+- Reference implementation and its mutation-proven suite: `scripts/followthroughs/git-data-rehearsal-evidence.test.sh` (the retired `orphan-sweeps-relook-10972` pair, deleted by the #6590 PR-B prune, was the prior reference — see git history for its curl-shim clock-injection pattern).
+
+## Retiring a probe
+
+- **Deleting a probe script leaves live GitHub state behind.** The sweeper re-scans CLOSED `follow-through` issues for 14 days, so a closed *promotion* tracker (not just the tracker the probe is named for) whose directive names the deleted script logs a `missing in repo HEAD` ERROR on every daily sweep until the window lapses. Before merging a deletion, `gh issue list --state closed --label follow-through -L 200 --search "closed:>=<14 days ago>" --json number,body` and `grep` the directive for the script name; after merge, remove the `follow-through` label from any hit (reversible, closed body untouched). Found on G1 PR-4a, where the plan checked the named tracker (#2640) and missed its promotion tracker (#9888).
 
 ## Operator reference
 

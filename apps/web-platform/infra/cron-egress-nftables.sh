@@ -255,6 +255,13 @@ add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8288 accept commen
 # Inngest host until the soak proves no caller dials it); this is the verified-TLS path NODE_EXTRA_CA_CERTS uses after the flip.
 # Not the egress gateway's `dport 8443` accept below (a different daddr).
 add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8443 accept comment "soleur-egress: dedicated inngest host tls (#10136)"
+# #8211: the git-data transport. The app container's `git fetch/push ssh://git@<git-data>/repositories/<id>.git` (git-data-client.ts,
+# git-data-replication.ts via git-auth.ts) dials the git-data host's sshd; without this accept the default drop below swallowed it (the
+# host's own web-git-data-probe uses host OUTPUT, never this chain, so it stayed green while the container hung). One address, one port:
+# 10.0.1.20 = git-data.tf:120 local.git_data_private_ip (bash literal like the Inngest host above, NOT injected from the Terraform local;
+# network.tf assigns it to the NIC and Doppler GIT_DATA_SSH_HOST publishes it; cron-egress-nftables.test.sh pins the parity, so if that
+# IP changes the suite goes red until this rule follows it).
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
 $GW_ACCEPT_LINE

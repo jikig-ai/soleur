@@ -256,6 +256,12 @@ cat > "$FAKE_DIR/gh" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' CALL "$@" >> "$FAKE_DIR/calls"
 case "$1 $2" in
+  "api --paginate")
+    # The enumeration bound (PR #11782) lands `--paginate` ahead of the
+    # endpoint token — the arm matches on it and the endpoint moves to $3.
+    [[ "${3:-}" == "repos/{owner}/{repo}/milestones?state=all&per_page=100" && "${4:-}" == "--jq" && -n "${5:-}" && $# -eq 5 ]] || { echo "FAKE_GH_UNEXPECTED $*" >&2; exit 97; }
+    if [[ "${FAKE_GH_MS:-ok}" == "err" ]]; then echo 'HTTP 403: API rate limit exceeded' >&2; exit 1; fi
+    exec jq -c "$5" "$FAKE_MS" ;;
   "api repos/{owner}/{repo}/milestones?state=all&per_page=100")
     [[ "${3:-}" == "--jq" && -n "${4:-}" && $# -eq 4 ]] || { echo "FAKE_GH_UNEXPECTED $*" >&2; exit 97; }
     if [[ "${FAKE_GH_MS:-ok}" == "err" ]]; then echo 'HTTP 403: API rate limit exceeded' >&2; exit 1; fi

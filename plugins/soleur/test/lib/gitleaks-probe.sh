@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Shared gitleaks runnability probe + per-arm skip contract for TEST SUITES.
 #
-# SCOPE IS DELIBERATE — test suites only. The two production consumers are NOT
-# here and should not be: `.claude/hooks/git-commit-secret-scan.sh` carries a
-# 124/137 retry ladder that exists nowhere else, and
+# SCOPE IS DELIBERATE — test suites only. The three production consumers are NOT
+# here and should not be: `.claude/hooks/git-commit-secret-scan.sh` and
+# `plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh` each carry their own
+# 124/137 retry ladder and colour pins (keep them in sync by hand), and
 # `plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh` just exits 2 with no
 # skip semantics at all. Those are three different FAILURE POLICIES, and a helper
 # spanning all three would generalise over the one part that actually differs.

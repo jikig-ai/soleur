@@ -28,7 +28,7 @@ jobs:
         run: |
           set -uo pipefail
           echo "Fetching open code scanning alerts..."
-          ALERTS=$(gh api repos/${GH_REPO}/code-scanning/alerts?state=open --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | {number, rule_id: .rule.id, rule_desc: .rule.description, severity: .rule.security_severity_level, tool: .tool.name, file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line, message: .most_recent_instance.message.text, html_url: .html_url, ref: .most_recent_instance.ref}' 2>&1) || true
+          ALERTS=$(gh api --paginate repos/${GH_REPO}/code-scanning/alerts?state=open --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | {number, rule_id: .rule.id, rule_desc: .rule.description, severity: .rule.security_severity_level, tool: .tool.name, file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line, message: .most_recent_instance.message.text, html_url: .html_url, ref: .most_recent_instance.ref}' 2>&1) || true
 
           if [ -z "$ALERTS" ]; then
             echo "No open critical/high severity alerts found."
@@ -54,9 +54,13 @@ jobs:
             ALERT_REF=$(echo "$alert" | jq -r '.ref')
 
             SEARCH_QUERY="sec: CodeQL alert #${ALERT_NUMBER} repo:${GH_REPO} is:issue is:open"
-            EXISTING=$(gh search issues "$SEARCH_QUERY" --json number --jq 'length' 2>/dev/null || echo "0")
+            # Existence drill, not a page count (#8593): 'length' counts the
+            # (default-capped) page, so a real issue evicted from the page
+            # reads 0 and gets re-filed as a duplicate. `.[0].number // empty`
+            # answers "does ≥1 exist", safe at any page size.
+            EXISTING=$(gh search issues "$SEARCH_QUERY" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)
 
-            if [ "$EXISTING" -gt 0 ]; then
+            if [ -n "$EXISTING" ]; then
               echo "Issue already exists for CodeQL alert #${ALERT_NUMBER} — skipping"
               SKIPPED=$((SKIPPED + 1))
               continue

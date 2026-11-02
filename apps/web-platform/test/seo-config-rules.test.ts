@@ -75,7 +75,7 @@ const CANONICAL_EXPRESSION = '(http.host in {"soleur.ai" "www.soleur.ai"})';
  * out of the config would have DELETED it from production rather than left it
  * alone, dropping app.soleur.ai to the zone-level SSL mode. See #6767.
  */
-const ADOPTED_SSL_EXPRESSION = '(http.host eq "app.soleur.ai")';
+const ADOPTED_SSL_EXPRESSION = '(http.host in {"app.soleur.ai" "lb-staging.soleur.ai"})';
 const ADOPTED_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
 const ADOPTED_SSL_REF = "dcb85b75bc3c4f4aa2a8c13a080bf854";
 

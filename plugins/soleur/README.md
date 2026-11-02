@@ -25,13 +25,14 @@ claude plugin install soleur@soleur-marketplace
 
 **OpenCode:**
 
-From the repository root (this needs `bun`), install Soleur into your OpenCode config directory, then start a session. Keep this checkout where it is — the installed config points at it for skills, routing rules, and the guard scripts:
+Install Soleur into your OpenCode config directory via npm (this needs `bun` on `PATH`), then start a session:
 
 ```bash
-bun plugins/soleur/scripts/install-opencode-adapter.ts
+npx @soleur/opencode install
+# or: bunx @soleur/opencode install
 ```
 
-Verify the install with `bun plugins/soleur/scripts/install-opencode-adapter.ts --check` — it prints `opencode-install ok` when the generated tree matches. Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](opencode/INSTRUCTIONS.md).
+Verify the install with `npx @soleur/opencode install --check` — it prints `opencode-install ok` when the vendored payload in `~/.config/opencode/soleur/` matches. (From a local checkout of this repository, you can also run `bun plugins/soleur/scripts/install-opencode-adapter.ts` and keep the checkout in place.) Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](opencode/INSTRUCTIONS.md).
 
 ## The Soleur Workflow
 
@@ -97,7 +98,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 4 |
-| Skills | 104 |
+| Skills | 105 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -331,6 +332,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `registry-breakglass-mirror` | Mirror GHCR images into zot datacenter-side when the registry tunnel bridge is down (break-glass only) |
 | `resolve-parallel` | Resolve TODO comments in parallel |
 | `resolve-pr-parallel` | Resolve PR comments in parallel |
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |

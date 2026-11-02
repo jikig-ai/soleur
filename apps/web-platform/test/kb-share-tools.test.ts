@@ -38,6 +38,7 @@ const REVOKE_PURGE_FAILED_MESSAGE =
   "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds";
 
 import { buildKbShareTools } from "@/server/kb-share-tools";
+import { ExecutionGrants } from "@/server/approval/grants";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: "text"; text: string }>;
@@ -60,6 +61,8 @@ const baseDeps = {
   userId: "user-1",
   kbRoot: "/workspace/knowledge-base",
   baseUrl: "https://app.soleur.ai",
+  // Required: a never-enforcing instance reproduces the legacy (no approval flow) behaviour.
+  grants: new ExecutionGrants(),
 };
 
 beforeEach(() => {

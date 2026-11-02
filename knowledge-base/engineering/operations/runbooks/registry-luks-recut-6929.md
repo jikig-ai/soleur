@@ -144,8 +144,8 @@ remedy was the dispatch you were already running.
 What still covers each half: the **Cloudflare Access edge** credential survives the destroy and is
 graded pre-destroy by A4, which ABORTS on a measured dead count. The **htpasswd** credential does
 not survive the destroy, and is exercised post-destroy by `registry_store_restore` against the host
-it actually applies to — with a non-retryable exit `5` that names rotation as the remedy (see the
-restore exit-code table below).
+it actually applies to — with a non-retryable exit `5` that routes to the measure-first section
+and says not to rotate first (see the restore exit-code table below).
 
 ---
 
@@ -340,10 +340,15 @@ gate, because it gets read as evidence.
    half, which it deliberately cannot see (reading Doppler is what this change removed from the
    gate).
 
-2. **Both Hetzner probes return the shape the gate parses.**
+2. **Both Hetzner probes return the shape the gate parses.** The read/write `HCLOUD_TOKEN` was
+   evicted from `prd_terraform` at ADR-241 O10 — a `doppler secrets get` of it resolves empty.
+   These probes are GETs, so the Read-permission `HCLOUD_TOKEN_READONLY` (still in
+   `prd_terraform`) is the credential; the read/write name is Tier-B only, delivered to
+   workflows through the `infra-credentials` loader on a Tier-B environment (see
+   `inngest-server.md` step 0.5 / `infra-credential-tiers-8209.md`).
 
    ```bash
-   HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
+   HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)
    curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
      'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq '.volumes[0].id'
    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HCLOUD_TOKEN" \
@@ -405,10 +410,15 @@ One command. (Do **not** look for this in a drift run's logs — it is not there
 captures its plan into a variable, so the `Refreshing state... [id=...]` line never reaches the log.)
 
 ```bash
-HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
+HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)
 curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
   'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
 ```
+
+The lookup is a GET, so the Read-permission `HCLOUD_TOKEN_READONLY` is sufficient. The read/write
+`HCLOUD_TOKEN` was evicted from `prd_terraform` at ADR-241 O10 (a `doppler secrets get` of it
+resolves empty) and reaches workflows only through the `infra-credentials` loader on a Tier-B
+environment — see `inngest-server.md` step 0.5 / `infra-credential-tiers-8209.md`.
 
 ## Step 2 — Fire it
 
@@ -464,7 +474,8 @@ and they need different fixes:
   while the store is empty or partial — a partial store is **worse than an empty one**, because tag
   lookups succeed for some refs and fail for others, so the symptom presents as a confusing
   per-image outage rather than an obvious total one. Look at the `registry_store_restore` job, map
-  its exit code in the table below, then **re-run that job** (the engine is resumable).
+  its exit code in the table below, then follow its row (the engine is resumable and the job itself
+  retries only exit 3; exits 1 and 4 are not retryable, exit 5 only after its measure-first reading, and exit 6 is not retried by the job but is safe to re-run by hand — see their rows).
 
 - **It refused the volume.** Recoverable — *after a successful recut* the volume is encrypted, so
   `registry-host-replace` is the right tool for this. (It was **not** available before the first
@@ -481,19 +492,22 @@ doppler run -p soleur -c prd_terraform -- \
 
 #### Restore exit codes — one operator action each
 
-`scripts/registry-restore-from-ghcr.sh` enumerates every failure it can have. Six codes consumed
-as a single boolean would be a contract nobody can act on, so each maps to exactly one action.
+`scripts/registry-restore-from-ghcr.sh` exits with the codes below. Its own header table lists
+exit 1 (input or manifest faults), as do the restore step's annotation and the row below. Codes
+consumed as a single boolean would be a contract nobody can act on, so each maps to exactly one
+action.
 The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 
 | Code | Meaning | What to do |
 |---|---|---|
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
-| `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. A message beginning *the crane login command for ghcr.io ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); it is not a statement about the images. |
-| `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
-| `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
-| `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. A message beginning *the crane login command for the sink ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); read the quoted crane line before rotating anything. |
-| `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. **This arm proved that claim on 2026-08-09**: the first live A2 rehearsal exited 6 on `gzip: invalid header`, which was a *validator* false positive over a buildx attestation manifest and not a store problem at all. It is now classified (exit 4), so a fresh exit 6 is again a genuinely unenumerated shape — treat it as a defect to file, not a store to distrust. |
-| `78` | **Traced invocation only** — the engine was run under `bash -x` (or `SHELLOPTS=xtrace`) with a registry credential in the environment and refused before any network call, so the token never reaches the engine's own trace (a parent shell's trace is outside this guard). | Nothing was written. Remove the trace (`-x`, `SHELLOPTS`, `BASH_ENV`) and re-run. The diagnosis channel is the per-entry `::error::` lines and the quoted crane stderr, not a trace; a trace needs a hand-edited copy with a throwaway token. The apply workflow's restore step has no arm for 78, so it lands in the loud unenumerated-exit arm after the engine's own `[FATAL]` line: ignore that arm's "defect" wording for 78. |
+| `1` | **Input or manifest fault** — the engine refused its arguments or the pin manifest (floor, entries, zero or duplicated required pairs, an unreadable or unparseable file) **before any network call**. A correct refusal, not an engine defect. | This attempt wrote nothing; the store is unchanged by this step. **Re-running the job fails identically** — it re-downloads the same `registry-restore-pins` artifact. The restore step passes fixed arguments, so check the manifest. The traceable route to an exit 1 here is the resume arm: it skips the rehearsal verdict step, so the engine never ran on this manifest in this run, and the gate's own manifest check only asserts that `.entries` is an array carrying at least the resolved entry count (it does not apply the engine's required-disposition, distinct repo:tag or floor checks). Read the engine's own `::error::` line in the job log (`gh run view <run-id> --log-failed`; no SSH) and fix the cause it names. Do not file it as an engine defect; the one case worth filing is an engine line naming a check the rehearsal gate accepted on the same manifest, because that is the gate and the engine disagreeing. There is no restore-only dispatch; a new `registry-luks-recut` with the NEW volume id (Steps 1 and 2 above) re-derives and re-rehearses the manifest before destroying anything, but that path is unmeasured for this failure. At the rehearsal (D10 A2) the same code aborts with nothing destroyed: re-run the dispatch, and if it recurs read the engine's message. |
+| `2` | **Source unavailable** — GHCR could not be read. | Treat the store as unverified: exit 2 can fire after earlier entries were copied (while resolving a later entry's source, or reading a signature). Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. A message beginning *the crane login command for ghcr.io ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); it is not a statement about the images. Once the cause is cleared (GHCR readable, `packages: read` granted), re-run the job; the engine is resumable. |
+| `3` | **Sink unavailable** — the registry did not accept or serve a request; earlier entries may already be copied, so the store may be partly refilled. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
+| `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. NOT retryable; read the per-entry lines. A digest, blob or signature failure means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. SHAPE failures reproduce identically; capture the per-entry line and file it. At the image read-back and the signature read/copy sites, exit 4 is a measured absence only: a read or copy fault there that the engine cannot classify, or classifies as corruption or layer format, exits **6**, not 4 (see that row). |
+| `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not retryable as-is.** | Retrying unchanged only burns the window; re-run only after the measure-first reading below says the credential was not the cause. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. A message beginning *the crane login command for the sink ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); read the quoted crane line before rotating anything. |
+| `6` | **Could not classify** — a failure shape the engine does not recognise, including a failure to read an image back or to read or copy its signature whose crane error matches no known shape, or whose class (corruption, layer format) those sites treat as unverified rather than absent (the message says `class: …`). | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. A re-run is safe and resumable (crane skips blobs the sink already holds), but the job does not retry 6 itself: after reading the stderr, re-run the job by hand. The store stays unverified until a pass ends in exit 0. An unrecognised crane error is worth filing if it recurs. **This arm has been wrong before**: on 2026-08-09 the first live A2 rehearsal exited 6 on `gzip: invalid header`, a *validator* false positive over a buildx attestation manifest, not a store problem. That shape is now classified, so read the stderr and re-run before drawing any conclusion about the store. For `class: CONTENTMISMATCH` or `class: LAYERFORMAT`, run the discriminating `crane validate --remote` from row 4 against GHCR first. |
+| `78` | **Traced invocation only** — the engine was run under `bash -x` (or `SHELLOPTS=xtrace`) with a registry credential in the environment and refused before any network call, so the token never reaches the engine's own trace (a parent shell's trace is outside this guard). | Nothing was written. Remove the trace (`-x`, `SHELLOPTS`, `BASH_ENV`) and re-run. The diagnosis channel is the per-entry `::error::` lines and the quoted crane stderr, not a trace; a trace needs a hand-edited copy with a throwaway token. The apply workflow's restore step and the gate's A2 abort both name 78 as a traced invocation, after the engine's own `[FATAL]` line. |
 
 > #### ENGINE-CAPABILITY refusals inside exit 4 (added #7410)
 >
@@ -522,8 +536,8 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 **Read this before touching Doppler.** The obvious move — rotate `ZOT_PUSH_*` — is the one that can
 make this permanent. `/etc/zot/htpasswd` is baked **once, at boot**, from the Doppler tokens
 (`cloud-init-registry.yml` §2g). A rotation therefore leaves the running host authenticating
-against a value no client still presents: it converts a possibly-transient rejection into a
-guaranteed one, until the host is replaced again. Hand-editing Doppler does **not** re-bake a
+against a value no client still presents: it makes the rejection permanent, until the
+host is replaced again. Hand-editing Doppler does **not** re-bake a
 running host — and note the exit-5 message names `soleur/prd` while the host bakes from the
 isolated `soleur-registry/prd`.
 
@@ -580,8 +594,8 @@ What the window costs while it is open:
   `registry_store_restore` job instead — that is the signal.
 - **Rollback narrows.** The restore carries only the **required** pin set, so immediately
   afterwards there is no older image in the store to roll back to, even though `ci-deploy.sh`
-  treats rollback to an older image as a supported path. Re-run the restore with a wider set if
-  you need one. Nothing goes red for this — it degrades on the *success* path.
+  treats rollback to an older image as a supported path. The restore job has no wider-set input;
+  a wider set is a separate change. Nothing goes red for this — it degrades on the *success* path.
 
 **How long is it open?** Not measured. The per-pass wall-clock for the full pin set on a
 GitHub-hosted runner is an open residual (ADR-169), so the bound is *structural* — an explicit job
@@ -589,10 +603,17 @@ timeout plus a resumable engine — not numeric. Do not quote a duration that no
 
 ### If the restore job fails
 
-Read its `::error::`; it names one operator action per exit code (table above). Then **re-run that
-job**. The engine is resumable by contract: a second pass over an already-restored target is a
-clean no-op, so a partial or timed-out restore is recovered by re-running rather than by repairing
-state.
+Read its `::error::`; it names one operator action per exit code (table above). Then act on that
+row: re-run only where it allows (exits 1 and 4 are not retryable; exit 5 only after its measure-first reading; exit 6 is not retried by the job, but a hand re-run is safe once the crane stderr has been read). The engine is resumable by
+contract: a second pass over an already-restored target is a clean no-op, so a timed-out restore,
+or a partial after exit 2, 3 or 6, is recovered by re-running rather than by repairing state; a
+partial after exit 1 or 4 is not, and exit 5's row says when it is. After exit 6 the store stays
+unverified until a pass ends in exit 0.
+
+A re-run depends on the `registry-restore-pins` artifact still existing: the rehearsal step uploads it
+with a 7-day retention and the restore job downloads it. What the restore does once that artifact
+has expired is **unmeasured** (the reading from the workflow is that the download step fails before
+any engine call), and this runbook gives no recovery procedure for it. Tracked in #11818.
 
 > **Do NOT reach for `gh workflow run web-platform-release.yml -f bump_type=patch`.** Older
 > revisions of this runbook and of the dispatch summary told you to end the window that way. That

@@ -1,0 +1,121 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override (ADR-248, eligibility clause 1 — the scheduling-substrate watcher): this mirror reads
+# Better Stack's OPEN incidents (the vendor alerting substrate the Inngest fleet's own outages
+# page through) and files/dedupes/auto-resolves [ci/betterstack-incident] GitHub issues — the
+# channel that provably reached the operator during the 2026-10-22 Inngest host replace, when
+# the heartbeat incidents' only delivery was an unwatched email inbox (free tier, policy_id
+# null). It must NOT be scheduled by Inngest: the incidents it mirrors include Inngest's own
+# outages, so an Inngest-scheduled mirror goes dark exactly when the incidents it exists to
+# mirror are firing (ADR-033 anti-circularity).
+# Triggers: the web watchdog clock is primary (WATCHDOG_DISPATCH_TABLE, 15-min slots),
+# `schedule:` is the fallback; keep workflow_dispatch and the concurrency group
+# (cancel-in-progress: false) and no other trigger (sentry-monitor-iac-parity.test.ts).
+# A Sentry `error` check-in means the mirror could not read or could not file — fail-loud, never
+# a silent green (the defect class this mirror exists to close). permissions are contents:read
+# + issues:write only; the Better Stack token is the repo's READ-ONLY secret and reaches curl on
+# stdin config, never argv.
+
+name: "Scheduled: Better Stack Incident Mirror"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-betterstack-incident-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Mirror open Better Stack incidents to GitHub issues
+        id: mirror
+        env:
+          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete
+          # anything. It can still read heartbeat ping URLs (a beat capability), so the
+          # script projects incident objects — never prints them raw.
+          BETTERSTACK_API_TOKEN_READONLY: ${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-probe-heartbeat.yml)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The mirror's exit status is DATA, not a job failure. `|| rc=$?` IS THE CAPTURE:
+          # this step has no `shell:` key, so Actions runs it under `bash -e {0}`, and
+          # `set -uo pipefail` above does NOT clear -e; a bare `out="$(...)"; rc=$?` would
+          # abort the step at the assignment, before the outputs below are written.
+          rc=0
+          out="$(bash scripts/betterstack-incident-mirror.sh 2>&1)" || rc=$?
+
+          # Keep ONLY the mirror's own marker lines. The raw blob is never echoed: a line
+          # that begins with two colons would run as a workflow command, and a blob-wide
+          # strip would fuse lines. Every surviving line is stripped of control characters
+          # before it is printed.
+          verdict=""
+          while IFS= read -r line; do
+            case "$line" in
+              "betterstack-incident-mirror: "*|"CANNOT MIRROR: "*)
+                safe="$(strip_log_injection "$line")"
+                printf '%s\n' "$safe"
+                case "$safe" in
+                  "betterstack-incident-mirror: verdict="*)
+                    v="${safe#betterstack-incident-mirror: verdict=}"
+                    verdict="${v%% *}" ;;
+                esac ;;
+            esac
+          done <<<"$out"
+          # A run that died before it could print a marker (script missing, parse error)
+          # would otherwise leave no cause anywhere: name that state, with a class and a
+          # length, never raw bytes.
+          if [ -z "$verdict" ]; then
+            verdict="no_marker"
+            printf 'betterstack-incident-mirror: verdict=no_marker rc=%s out_bytes=%s\n' "$rc" "${#out}"
+          fi
+          verdict="$(printf '%s' "$verdict" | tr -c 'a-z_' '?' | head -c 40)"
+
+          {
+            echo "exit_code=${rc}"
+            echo "verdict=${verdict}"
+          } >> "$GITHUB_OUTPUT"
+
+          case "$rc" in
+            0) case "$verdict" in
+                 mirrored|no_incidents) echo "::notice::betterstack incident mirror: ${verdict}" ;;
+                 *) echo "::error::betterstack incident mirror exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
+               esac ;;
+            3) echo "::error::betterstack incident mirror could not READ its inputs (${verdict}); nothing was mirrored — a dark mirror is the failure this workflow exists to report." ;;
+            4) echo "::error::betterstack incident mirror could not FILE (${verdict}): a gh write failed mid-run." ;;
+            *) echo "::error::betterstack incident mirror returned unexpected status ${rc} (${verdict}) — the mirror is dark regardless of which guard tripped." ;;
+          esac
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-betterstack-incident-mirror
+          # ok ONLY when the mirror exited 0 AND named a deciding verdict (#7242): exit_code
+          # alone cannot tell "the mirror decided this" from "the mirror aborted and left
+          # this behind". Anything else, including a step that wrote no outputs, checks in
+          # `error`.
+          status: ${{ (steps.mirror.outputs.exit_code == '0' && (steps.mirror.outputs.verdict == 'mirrored' || steps.mirror.outputs.verdict == 'no_incidents')) && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

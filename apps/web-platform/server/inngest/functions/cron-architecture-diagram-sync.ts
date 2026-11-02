@@ -629,12 +629,10 @@ export const cronArchitectureDiagramSync = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 2 * * 0" },
+      { event: "cron/architecture-diagram-sync.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 2 * * 0" },
-    { event: "cron/architecture-diagram-sync.manual-trigger" },
-  ],
-  cronArchitectureDiagramSyncHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronArchitectureDiagramSyncHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

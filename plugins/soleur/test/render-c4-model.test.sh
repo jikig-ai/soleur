@@ -209,8 +209,8 @@ for _ext in likec4 like-c4; do
 done
 
 if ! command -v npx >/dev/null 2>&1; then
-  echo "SKIP: npx not on PATH — the likec4 rows below were NOT run (cases_run=$CASES_RUN)"
-  exit 0
+  echo "UNRESOLVED: npx missing — the likec4 rows below were NOT run (cases_run=$CASES_RUN before the arm); install npx"
+  exit 3
 fi
 
 # ── AC5: spec + views + generated-components, and NO model.c4 ──────────────────────────────

@@ -4,6 +4,7 @@
 #   ci-head-verdict.sh verdict <pr> [--repo OWNER/REPO]
 #   ci-head-verdict.sh wait-ready-run <pr> --before-count K [--timeout SEC] [--repo OWNER/REPO]
 #   ci-head-verdict.sh ready-count <pr> [--repo OWNER/REPO]
+#   ci-head-verdict.sh required <pr> [--repo OWNER/REPO]
 #
 # WHY. With CI_DRAFT_LIGHT on, a draft PR's `test` context is RED BY DESIGN ("draft: full battery owed at ready",
 # Option R). A reader that sees that red row on a PR that has since been marked ready misreads it as a failure
@@ -41,8 +42,20 @@
 #      no kept run -> no-run
 #   5. (a conflicting PR, mergeable_state dirty, with no run stays no-run reason=conflicting: GitHub builds no merge ref
 #      for it, so no run can ever appear and an undo/ready would not help)
-#      pending-full and no-run become `stalled` once more than N=120 minutes have passed since T (above the declared
-#      73-minute path plus a ~14-minute p90 queue wait; a run still in flight at N is not a healthy slow run)
+#      pending-full and no-run become `stalled` once more than N=120 minutes have passed since the LATER of T and A (above
+#      the declared 73-minute path plus a ~14-minute p90 queue wait; a run still in flight at N is not a healthy slow run).
+#      A is where the head first appeared in CI, because a head pushed long after T must not read stalled at once (the
+#      consumers answer stalled with `gh pr ready --undo` and a ready, which would cancel a healthy fresh run): when a run is
+#      kept, A is that run's own created_at (no extra read); when none is, A is the earliest check suite's created_at at the
+#      head (the server-assigned moment CI first saw it), read only when T alone already says stalled. An A at or before T
+#      leaves the clock at T, as before A existed.
+#      A failed read, a suite for another head, or an EMPTY suite list is `state=error` (reasons api-error and
+#      no-check-suites), never a fallback to T. The empty list means CI never saw this head (nothing ran on it): do not
+#      fix-loop; the recovery is the stalled one, `gh pr ready --undo` then ready under a user token. The consumers drop
+#      stderr and keep their own reading on state=error, so the reason is on the marker line, not in a message.
+#      Residuals, accepted: a manual re-run of an old run keeps its original created_at and does not restart the clock; a
+#      force-push back to a sha pushed earlier, or a sha also pushed on another branch, reuses that sha's old suites (A is
+#      old, so the clock falls back to T); a head with no kept run AND no visible suite reads state=error, not stalled.
 # `run=` is the DECIDING run: a reader judging `test` must use that run's rows. A newer `test` row that belongs to a
 # different run (a manual re-run of a pre-T run) is stale; the row's run id is the `/actions/runs/<id>/` segment of
 # its details_url. Every time comes from the SERVER (the PR read's Date header, the timeline, the runs API), never
@@ -66,6 +79,55 @@
 # TEST SEAMS: CI_HEAD_VERDICT_NOW (ISO-8601 UTC, replaces the server clock), CI_HEAD_VERDICT_POLL_SECONDS (default 10,
 # the sleep between wait polls; the poll BUDGET is always counted in 10-second units).
 #
+# `required` is the read-only required-context SET check. Issue #9927 is the operator-directed carrier issue for the deferred hold;
+# wiring `required` into a consumer is tracked in #11544, so today it is run by hand (skills/ship/references/ready-run-wait.md).
+# A green `verdict` plus an armed auto-merge does not prove the set: `verdict` reads only the `test` row of ci.yml pull_request runs, so a
+# context owned by another workflow that never reported (its pull_request_target run was cancelled during a push) is invisible, and the
+# PR sits un-enqueued. `required` reads the PR head over REST, runs `admin-merge-ready.sh <pr> <head-sha> --base <PR base>` WITHOUT
+# `--wait` (read-only: that script never merges in any form), parses its marker and prints ONE new marker as the last stdout line:
+#   SOLEUR_CI_REQUIRED_SET state=<complete|absent|pending|failed|error> pr=<N> sha=<H|-> required=<n|-> reason=<token> absent=<json|-> pending=<json|-> failed=<json|->
+# The arrays are compact JSON and come last (context names hold spaces, parentheses, # and :). The `verdict` state set above is NOT
+# touched and no ruleset logic lives here: the required set is resolved once, by admin-merge-ready.sh. Exit 0 for any decided state
+# (complete, absent, pending, failed), 3 for state=error, 2 for usage. CALLERS MUST READ THE MARKER, NOT THE EXIT CODE: absent, pending
+# and failed all exit 0, so an `&&` chain reads them as success. On state=error every unknown scalar and all three arrays print `-`
+# (never `unknown` or `[]`: an error must not borrow the success vocabulary), and `sha=-` until the PR head is read.
+# PRECONDITION (the caller's, NOT enforced here): call `required` on a ready PR whose `verdict` is full-decided. A draft PR has `test` failed
+# by design (`verdict` answers n/a), and an ABSENT `test` with no run ever created gets only `RECOVERY no cancelled run at this head`.
+#   complete   the child exited 0 with verdict ready and reason all-green, its marker is the ONLY and the LAST stdout line naming OUR pr,
+#              head sha and base branch, required is a positive integer and all three arrays parse as empty JSON arrays of strings. It means
+#              "the required set is present and green at this head", NOT "mergeable" (strict up-to-date policy, behind, conflicts and draft
+#              are not read; a required context that concluded skipped or neutral counts as green, as GitHub counts it) and NOT provenance:
+#              a check run named like a required context is the known limit (b) stated in admin-merge-ready.sh.
+#   absent / pending / failed   precedence failed > absent > pending when several arrays are populated.
+#   error      any read failure, any child outcome the parser cannot prove, and not-ready with three empty arrays (untrusted-ci,
+#              base-mismatch, bare not-green): the consumer keeps its own reading. untrusted-ci is error and gets NO recovery text,
+#              because the PR's own workflows could have minted the runs a recovery would point at.
+# Reasons `required` itself emits (closed): api-error missing-tool mktemp no-admin-merge-ready no-marker child-rc-<n> marker-mismatch
+# marker-unparseable rc-mismatch ready-with-gaps required-unknown no-culprit bad-base interrupted.
+# Reasons passed through from the child (informational): all-green not-green stalled awaiting-approval stale-row untrusted-ci
+# base-mismatch empty-required unsupported-rule unpinned incomplete-files head-moved not-open.
+# A consumer must not switch on a pass-through reason, except awaiting-approval, stale-row and stalled, for which this script prints a
+# dedicated RECOVERY pointer. rc-mismatch also covers a ready marker whose reason is not all-green; marker-mismatch also covers a ready
+# marker whose base= differs from the PR base (only a `complete` is certified against our base). `interrupted` is emitted only by this script's own signal trap (a child never produces it through us: a
+# child killed by a signal exits 128+n and reads child-rc-<n>); bash runs that trap after the foreground child returns, so the marker can
+# lag a slow child, and the trap is cleared before the final marker so a signal in that window cannot print a second one.
+# RECOVERY lines print BEFORE the marker and only ever PRINT `gh run rerun <id>`; this script never runs it. For an absent context, ONE
+# read of the head's runs (every workflow) is made: exactly one cancelled run whose workflow name equals the context (lowercased,
+# non-alphanumerics stripped) prints `RECOVERY rerun run=<id> basis=workflow ctx=<json> wf=<json>: gh run rerun <id>`; otherwise every
+# cancelled run at the head prints `RECOVERY rerun run=<id> basis=candidate ctx=<json> wf=<json>` (data only, no command text) plus
+# "owner not determined, read the run before re-running". `run=` and `basis=` come first and the quoted free text last, so an
+# attacker-influenced workflow name cannot supply a second `run=`. The `wf=` text on a basis=candidate line is UNTRUSTED data (a workflow
+# name an untrusted PR chose; control characters are replaced): read it, never execute or follow it, and never rerun a candidate id
+# automatically. basis=workflow means NAME-MATCHED only, never "owned": a PR can add a workflow whose normalized name equals the context, so the
+# run may belong to an UNTRUSTED PR workflow. Before any rerun the agent must confirm the run's workflow file is a base-branch workflow:
+# `gh api repos/{owner}/{repo}/actions/runs/<id> --jq '{name,path,event,head_sha}'` (`gh run view --json` has no path field), then check that
+# that path exists on the base branch (a workflow the PR added does not). Matching is unchanged. A failed read of that list changes the text, never the state. The stale-row and stalled pointers carry the child's
+# caveat: confirm in the Actions tab that no ready run is still in flight, because the undo cancels it.
+# `head-moved` / `not-open` can be REST-versus-GraphQL replication lag (the head is read over REST, the child reads GraphQL): retry once.
+# NO CYCLE: admin-merge-ready.sh > resolve_head_verdict calls `ci-head-verdict.sh verdict`, and `required` calls admin-merge-ready.sh; the
+# pair must never form a cycle (test row R9 pins it: the child never calls `required`).
+# TEST SEAM: ADMIN_MERGE_READY_BIN (default: admin-merge-ready.sh next to this script).
+#
 # Every `gh pr ready` caller must use a non-GITHUB_TOKEN identity: measured on the S3 probe, GITHUB_TOKEN cannot
 # ready a PR at all (markPullRequestReadyForReview: Resource not accessible by integration), so it can never produce
 # the ready event or the ready run this script waits for.
@@ -73,6 +135,7 @@ set -uo pipefail
 
 readonly MARKER="SOLEUR_CI_HEAD_VERDICT"
 readonly WAIT_MARKER="SOLEUR_CI_WAIT_READY_RUN"
+readonly REQUIRED_MARKER="SOLEUR_CI_REQUIRED_SET"
 STALL_MINUTES=120
 # shellcheck disable=SC2016  # GraphQL variables ($owner...) are not shell expansions
 readonly READY_QUERY='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(last: 100, itemTypes: [READY_FOR_REVIEW_EVENT]){pageInfo{hasPreviousPage} nodes{... on ReadyForReviewEvent{createdAt}}}}}}'
@@ -82,14 +145,22 @@ usage() {
 usage: ci-head-verdict.sh verdict <pr> [--repo OWNER/REPO]
        ci-head-verdict.sh wait-ready-run <pr> --before-count K [--timeout SEC] [--repo OWNER/REPO]
        ci-head-verdict.sh ready-count <pr> [--repo OWNER/REPO]
+       ci-head-verdict.sh required <pr> [--repo OWNER/REPO]
 
 verdict: last stdout line
   SOLEUR_CI_HEAD_VERDICT state=<n/a|full-decided|pending-full|no-run|stalled|awaiting-approval> pr=<N> sha=<H> run=<id|none> reason=<token>
-  (exit 3: state=error, outside that set)
+  (exit 3: state=error, outside that set; reason api-error = retry, no-check-suites = CI never saw this head)
+  stalled = pending-full or no-run for more than 120 minutes since the later of the ready event and the head's first
+  appearance in CI (the kept run's created_at, else the earliest check suite; a conflicting PR stays no-run); the full rule is in this script's header
 wait-ready-run: last stdout line
   SOLEUR_CI_WAIT_READY_RUN result=<ok|fail> pr=<N> sha=<H|unknown> run=<id|none> reason=<run-created|not-applicable|no-ready-event|no-run|awaiting-approval|api-error>
 exit 0 ok | 1 wait failed (do NOT arm auto-merge) | 2 usage | 3 gh/jq/API error (ready state unknown: re-run verdict)
 arm order: K=$(ready-count PR) && gh pr ready PR && wait-ready-run PR --before-count "$K"; arm only on exit 0
+required: read-only required-context set check (runs admin-merge-ready.sh without --wait); last stdout line
+  SOLEUR_CI_REQUIRED_SET state=<complete|absent|pending|failed|error> pr=<N> sha=<H|-> required=<n|-> reason=<token> absent=<json|-> pending=<json|-> failed=<json|->
+  exit 0 for any decided state (READ THE MARKER, not the exit code) | 2 usage | 3 state=error (unknown scalars and arrays print -)
+  RECOVERY lines before the marker print `gh run rerun <id>` hints for a cancelled owner run; they are never executed
+  basis=workflow is name-matched only (the run may belong to an untrusted PR workflow): confirm its workflow path is a base-branch workflow first
 EOF
 }
 
@@ -98,9 +169,13 @@ usage_error() { echo "ci-head-verdict: $1" >&2; usage >&2; exit 2; }
 # ── args ──────────────────────────────────────────────────────────────────────────────────────
 if [[ "${1-}" == "--help" || "${1-}" == "-h" ]]; then usage; exit 0; fi
 CMD="${1-}"
-case "$CMD" in verdict|wait-ready-run|ready-count) shift ;; *) usage_error "unknown or missing subcommand '${CMD}'" ;; esac
+case "$CMD" in verdict|wait-ready-run|ready-count|required) shift ;; *) usage_error "unknown or missing subcommand '${CMD}'" ;; esac
 PR="${1-}"
-[[ "$PR" =~ ^[0-9]+$ ]] || usage_error "<pr> must be a number"
+# An EXPLICIT digit class, not [0-9]: in a UTF-8 locale a range matches digit-like non-ASCII characters (U+0663), and a failed `10#` expansion
+# aborts only its own command list, so the argument would stay un-normalized. The command substitution turns that failure into exit 2.
+[[ "$PR" =~ ^[0123456789]{1,15}$ ]] || usage_error "<pr> must be a number of at most 15 digits"
+# decimal: `required 007` must equal the child's pr=7, and a leading 0 must never read as octal
+PR="$( { printf '%s' "$((10#$PR))"; } 2>/dev/null )" || usage_error "<pr> is not a plain decimal number"
 shift
 BEFORE=""; TIMEOUT=300
 while (( $# > 0 )); do
@@ -123,6 +198,13 @@ POLL_SECONDS="${CI_HEAD_VERDICT_POLL_SECONDS:-10}"
 [[ "$POLL_SECONDS" =~ ^[0-9]+$ ]] || usage_error "CI_HEAD_VERDICT_POLL_SECONDS must be ^[0-9]+\$"
 
 SHA_OUT="unknown"
+# req_marker <state> <reason> <required|-> <absent|-> <pending|-> <failed|->: the ONE printf of the `required` marker. Every marker goes
+# through it (decided states from cmd_required, state=error through fail_api), so the field order exists once.
+req_marker() {
+  local sha="$SHA_OUT"
+  [[ "$sha" == unknown ]] && sha="-"
+  printf '%s state=%s pr=%s sha=%s required=%s reason=%s absent=%s pending=%s failed=%s\n' "$REQUIRED_MARKER" "$1" "$PR" "$sha" "$3" "$2" "$4" "$5" "$6"
+}
 # fail_api <message> [reason]: a read the resolver could not make. `verdict` prints a marker whose state is `error` (NOT a
 # member of the closed set: a reader that whitelists the six states then keeps its own reading, so a real red `test`
 # is never softened by an API hiccup) and exits 3; ready-count prints no number.
@@ -133,6 +215,8 @@ fail_api() {
     printf '%s state=error pr=%s sha=%s run=none reason=%s\n' "$MARKER" "$PR" "$SHA_OUT" "$reason"
   elif [[ "$CMD" == wait-ready-run ]]; then
     printf '%s result=fail pr=%s sha=unknown run=none reason=api-error\n' "$WAIT_MARKER" "$PR"
+  elif [[ "$CMD" == required ]]; then
+    req_marker error "$reason" - - - -
   fi
   exit 3
 }
@@ -145,7 +229,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 ERRMSG=""
 # ── reads. Each returns 0 on a parsed answer, 1 with ERRMSG set otherwise. ─────────────────────
-PR_DRAFT=""; PR_SHA=""; PR_MSTATE=""; SERVER_DATE=""
+PR_DRAFT=""; PR_SHA=""; PR_MSTATE=""; SERVER_DATE=""; PR_BASE=""
 read_pr() {
   gh api -i "repos/{owner}/{repo}/pulls/$PR" > "$WORK/pr.http" 2> "$WORK/err" \
     || { ERRMSG="reading PR $PR failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
@@ -156,6 +240,9 @@ read_pr() {
   PR_DRAFT="$(jq -r '.draft' "$WORK/pr.json")"
   PR_SHA="$(jq -r '.head.sha' "$WORK/pr.json")"
   PR_MSTATE="$(jq -r '(.mergeable_state // "") | if type == "string" then . else "" end' "$WORK/pr.json")"
+  # Non-fatal on purpose: only `required` uses the base, and it validates the empty result itself (bad-base), so a malformed base object
+  # must not turn `verdict` or `wait-ready-run` into a read failure they never had.
+  PR_BASE="$(jq -r '(.base.ref // "") | if type == "string" then . else "" end' "$WORK/pr.json" 2>/dev/null)" || PR_BASE=""
 }
 
 READY_COUNT=0; READY_T=""; READY_TRUNC="false"
@@ -187,7 +274,7 @@ read_test_row() {
 
 # The newest ci.yml pull_request run at <sha> created at or after <floor-epoch>: RUN_ID / RUN_STATUS / RUN_CONCLUSION
 # (RUN_ID empty when none). Looked up by head_sha, never through a run's pull_requests[].
-RUN_ID=""; RUN_STATUS=""; RUN_CONCLUSION=""
+RUN_ID=""; RUN_STATUS=""; RUN_CONCLUSION=""; RUN_EPOCH=""
 read_newest_run() { # <sha> <floor-epoch>
   gh api --paginate --slurp "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$1&per_page=100" > "$WORK/runs.json" 2> "$WORK/err" \
     || { ERRMSG="listing ci.yml runs at $1 failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
@@ -202,6 +289,30 @@ read_newest_run() { # <sha> <floor-epoch>
   [[ -z "$RUN_ID" || "$RUN_ID" =~ ^[0-9]+$ ]] || { ERRMSG="non-numeric run id in the ci.yml run list at $1"; return 1; }
   RUN_STATUS="$(jq -r '.status // ""' "$WORK/newest.json")"
   RUN_CONCLUSION="$(jq -r '.conclusion // ""' "$WORK/newest.json")"
+  RUN_EPOCH="$(jq -r 'if .ts == null then "" else (.ts | tostring) end' "$WORK/newest.json")"
+}
+
+# The earliest check suite at <sha>: ANCHOR_EPOCH (epoch seconds), the server-assigned moment CI first saw this head. A
+# failed or malformed read, a suite for another head, or an empty list returns 1 with ERRMSG set and ANCHOR_REASON naming the
+# cause; the caller turns that into state=error and never falls back to a guess.
+ANCHOR_EPOCH=""; ANCHOR_REASON="api-error"
+read_head_anchor() { # <sha>
+  local out
+  gh api --paginate --slurp "repos/{owner}/{repo}/commits/$1/check-suites?per_page=100" > "$WORK/suites.json" 2> "$WORK/err" \
+    || { ERRMSG="reading check suites at $1 failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
+  jq -e --arg h "$1" 'type == "array" and all(.[]; type == "object" and (.check_suites | type) == "array"
+                        and all(.check_suites[]; type == "object" and .head_sha == $h and (.created_at | type) == "string"))' \
+    "$WORK/suites.json" >/dev/null 2>&1 || { ERRMSG="unparseable check-suites response at $1"; return 1; }
+  # `min` of an empty array is null with exit 0, which bash arithmetic would read as 0: the empty list is its own answer.
+  out="$(jq -r '[.[].check_suites[] | .created_at | fromdateiso8601] | if length == 0 then "none" else (min | tostring) end' "$WORK/suites.json" 2>/dev/null)" \
+    || { ERRMSG="unparseable created_at in the check-suites response at $1"; return 1; }
+  if [[ "$out" == none ]]; then
+    ANCHOR_REASON="no-check-suites"
+    ERRMSG="no check suites visible at $1; cannot place the stall clock (CI never saw this head: recover as for stalled, gh pr ready --undo then ready under a user token)"
+    return 1
+  fi
+  [[ "$out" =~ ^[0-9]+$ ]] || { ERRMSG="unusable created_at in the check-suites response at $1"; return 1; }
+  ANCHOR_EPOCH="$out"
 }
 
 # Does this repo carry the mechanism? True when the DEFAULT branch's ci.yml has a `draft-light` job. APPLICABLE is
@@ -259,7 +370,7 @@ emit() { # <state> <run|""> <reason>
 
 # ── verdict ───────────────────────────────────────────────────────────────────────────────────
 cmd_verdict() {
-  local t_epoch st rs
+  local t_epoch st rs anchor_epoch
   read_pr || fail_api "$ERRMSG"
   SHA_OUT="$PR_SHA"
   NOW_EPOCH=$(server_now) || fail_api "no usable server time (Date header absent or unparseable)" no-server-time
@@ -286,7 +397,17 @@ cmd_verdict() {
   # the conflict's doing, not a lost ready run, and `stalled` would advise an undo/ready that cannot help: it stays no-run.
   if [[ "$st" == no-run && "$rs" == no-run-after-ready && "$PR_MSTATE" == dirty ]]; then rs="conflicting"
   elif [[ "$st" == pending-full || "$st" == no-run ]] && (( NOW_EPOCH - t_epoch > STALL_MINUTES * 60 )); then
-    st=stalled; rs="undecided-after-${STALL_MINUTES}m"
+    # T alone says stalled; the clock rule (anchor A, residuals, error semantics) is defined once, in the header. The suite
+    # read is lazy (only here) and a failed or empty one is state=error, never a fallback to T.
+    if [[ -n "$RUN_ID" ]]; then
+      anchor_epoch="$RUN_EPOCH"
+    else
+      read_head_anchor "$PR_SHA" || fail_api "$ERRMSG" "$ANCHOR_REASON"
+      anchor_epoch="$ANCHOR_EPOCH"
+    fi
+    if (( NOW_EPOCH - anchor_epoch > STALL_MINUTES * 60 )); then
+      st=stalled; rs="undecided-after-${STALL_MINUTES}m"
+    fi
   fi
   emit "$st" "$RUN_ID" "$rs"
 }
@@ -356,8 +477,177 @@ cmd_wait() {
   exit 1
 }
 
+# ── required ──────────────────────────────────────────────────────────────────────────────────
+# amr_parse <stdout-file>: the child's marker, accepted only when it is the ONLY marker-prefixed line, the LAST stdout line, and starts
+# with the strict ordered prefix. Sets AM_VERDICT AM_BASE AM_REASON AM_REQ AM_NA AM_NP AM_NF and AM_JA AM_JP AM_JF (compact JSON), or returns 1
+# with AM_ERR naming the cause. A forged marker line (a context name with a newline) makes TWO prefixed lines, which is never accepted.
+AM_ERR=""; AM_VERDICT=""; AM_BASE=""; AM_REASON=""; AM_REQ=0; AM_NA=0; AM_NP=0; AM_NF=0; AM_JA=""; AM_JP=""; AM_JF=""
+amr_arr_ok() { # exactly ONE JSON value, an array of strings free of control characters (`[] ["x"]` is two values and fails)
+  # Rejected code points: C0 (< 32), DEL, C1 (U+0080-U+009F), the line/paragraph separators U+2028 U+2029 (none of which `@json` escapes) and the bidi /
+  # invisible format characters U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+2066-U+2069, U+FEFF and the Unicode tag characters U+E0000-U+E007F.
+  # These ranges ARE the contract, not Unicode's full Bidi_Control or Cf set: U+061C, U+206A-U+206F, U+00AD, U+180E and U+E0100-U+E01EF pass through.
+  printf '%s' "$1" | jq -es 'length == 1 and (.[0] | type == "array")
+                              and all(.[0][]; type == "string" and ((explode | any(. < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233
+                                                 or (. >= 8203 and . <= 8207) or (. >= 8234 and . <= 8238)
+                                                 or (. >= 8288 and . <= 8292) or (. >= 8294 and . <= 8297)
+                                                 or . == 65279 or (. >= 917504 and . <= 917631))) | not))' >/dev/null 2>&1
+}
+amr_parse() {
+  local f="$1" n line tail a rest p fl re
+  n="$(grep -c '^SOLEUR_ADMIN_MERGE_READY ' "$f")"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  (( n >= 1 )) || { AM_ERR=no-marker; return 1; }
+  (( n == 1 )) || { AM_ERR=marker-unparseable; return 1; }
+  line="$(tail -n 1 "$f")"
+  re='^SOLEUR_ADMIN_MERGE_READY verdict=([a-z-]+) pr=([0-9]+) sha=([0-9a-f]{40}) base=([^ ]+) reason=([a-z][a-z0-9-]*) required=([0123456789]{1,9}) absent=(.*)$'
+  [[ "$line" =~ $re ]] || { AM_ERR=marker-unparseable; return 1; }
+  AM_VERDICT="${BASH_REMATCH[1]}"; AM_BASE="${BASH_REMATCH[4]}"; AM_REASON="${BASH_REMATCH[5]}"; AM_REQ=$((10#${BASH_REMATCH[6]})); tail="${BASH_REMATCH[7]}"
+  [[ "${BASH_REMATCH[2]}" == "$PR" && "${BASH_REMATCH[3]}" == "$PR_SHA" ]] || { AM_ERR=marker-mismatch; return 1; }
+  [[ "$tail" == *' pending='* && "$tail" == *' failed='* ]] || { AM_ERR=marker-unparseable; return 1; }
+  a="${tail%% pending=*}"; rest="${tail#*' pending='}"; p="${rest%' failed='*}"; fl="${rest##*' failed='}"
+  [[ "$a pending=$p failed=$fl" == "$tail" ]] || { AM_ERR=marker-unparseable; return 1; }
+  if ! { amr_arr_ok "$a" && amr_arr_ok "$p" && amr_arr_ok "$fl"; }; then AM_ERR=marker-unparseable; return 1; fi
+  AM_NA="$(printf '%s' "$a" | jq -rs '.[0] | length')"; AM_NP="$(printf '%s' "$p" | jq -rs '.[0] | length')"; AM_NF="$(printf '%s' "$fl" | jq -rs '.[0] | length')"
+  AM_JA="$(printf '%s' "$a" | jq -cs '.[0]')"; AM_JP="$(printf '%s' "$p" | jq -cs '.[0]')"; AM_JF="$(printf '%s' "$fl" | jq -cs '.[0]')"
+  [[ "$AM_NA" =~ ^[0-9]+$ && "$AM_NP" =~ ^[0-9]+$ && "$AM_NF" =~ ^[0-9]+$ ]] || { AM_ERR=marker-unparseable; return 1; }
+  (( AM_NA + AM_NP + AM_NF <= AM_REQ )) || { AM_ERR=marker-unparseable; return 1; }
+}
+
+# classify_required <child-rc> <stdout-file>: sets CL_STATE (complete|absent|pending|failed|error) and CL_REASON. The first match decides.
+CL_STATE="error"; CL_REASON=""
+classify_required() {
+  local rc="$1"
+  CL_STATE=error; CL_REASON=""
+  case "$rc" in 0|1|3|4) : ;; *) CL_REASON="child-rc-$rc"; return 0 ;; esac
+  amr_parse "$2" || { CL_REASON="$AM_ERR"; return 0; }
+  case "$rc:$AM_VERDICT" in 0:ready|1:not-ready|3:error|4:stale) : ;; *) CL_REASON="rc-mismatch"; return 0 ;; esac
+  case "$rc" in 3|4) CL_REASON="$AM_REASON"; return 0 ;; esac
+  if (( rc == 0 )); then
+    # A ready marker with any reason but all-green is not the plain ready path this subcommand can vouch for.
+    [[ "$AM_REASON" == all-green ]] || { CL_REASON="rc-mismatch"; return 0; }
+    # Only a `complete` is certified against OUR base: an error marker may legitimately print base=? (the child could not read the PR).
+    [[ "$AM_BASE" == "$PR_BASE" ]] || { CL_REASON="marker-mismatch"; return 0; }
+    if (( AM_REQ > 0 )); then
+      if (( AM_NA == 0 && AM_NP == 0 && AM_NF == 0 )); then CL_STATE=complete; CL_REASON="$AM_REASON"
+      else CL_REASON=ready-with-gaps; fi
+    else
+      CL_REASON=required-unknown
+    fi
+    return 0
+  fi
+  # rc 1, not-ready. Three empty arrays (untrusted-ci, base-mismatch, bare not-green) are checked BEFORE required: on untrusted-ci and
+  # base-mismatch the real child returns before classifying and prints required=0, which must not shadow its own reason.
+  if (( AM_NA + AM_NP + AM_NF == 0 )); then
+    CL_REASON="$AM_REASON"; [[ "$AM_REASON" == not-green ]] && CL_REASON=no-culprit
+    return 0
+  fi
+  # Invariant (amr_parse: arrays total <= required): required=0 here would mean three empty arrays, which returned above.
+  CL_REASON="$AM_REASON"
+  if (( AM_NF > 0 )); then CL_STATE=failed
+  elif (( AM_NA > 0 )); then CL_STATE=absent
+  else CL_STATE=pending; fi
+}
+
+# JQ_DEFS: the ONE definition of the two jq helpers both recovery programs use, so they cannot drift. norm is the context-to-workflow
+# match key (lowercased, non-alphanumerics stripped); clean replaces every code point amr_arr_ok rejects (C0, DEL, C1, U+2028, U+2029, the bidi /
+# invisible format characters and the tag characters) with a space, in text that came from an untrusted workflow name. The two lists are spelled twice on
+# purpose (amr_arr_ok rejects, clean replaces); the suite pins each range in BOTH (rows R15 and R16). The synthetic-`test` special case in recover_required has the same sibling rule in
+# admin-merge-ready.sh > soften_test_row().
+readonly JQ_DEFS='def norm: ascii_downcase | gsub("[^a-z0-9]"; "");
+  def clean: explode | map(if . < 32 or . == 127 or (. >= 128 and . <= 159) or . == 8232 or . == 8233
+      or (. >= 8203 and . <= 8207) or (. >= 8234 and . <= 8238)
+      or (. >= 8288 and . <= 8292) or (. >= 8294 and . <= 8297)
+      or . == 65279 or (. >= 917504 and . <= 917631) then 32 else . end) | implode;
+  '
+
+# try_read_cancelled: ONE read of the head's runs (every workflow) -> $WORK/cancelled.json, the cancelled runs newest first. It never fails:
+# it signals through CANCELLED_OK, 0 when the list cannot be read or parsed (the recovery text degrades; the state never changes).
+CANCELLED_OK=0
+try_read_cancelled() {
+  CANCELLED_OK=0
+  gh api --paginate --slurp "repos/{owner}/{repo}/actions/runs?head_sha=$PR_SHA&per_page=100" > "$WORK/aruns.json" 2> "$WORK/err" </dev/null || return 0
+  jq -e 'type == "array" and all(.[]; type == "object" and (.workflow_runs | type) == "array")' "$WORK/aruns.json" >/dev/null 2>&1 || return 0
+  # The run id becomes command text on a basis=workflow line, so it must be a plain decimal of at most 15 digits (no 1e19, no sign, no ';').
+  jq -c --arg h "$PR_SHA" "$JQ_DEFS"'[ .[] | .workflow_runs[]?
+        | select(.head_sha == $h and .conclusion == "cancelled" and (.id | type) == "number" and .id > 0 and .id == (.id | floor)
+                 and (.id | tostring | test("^[0-9]{1,15}$"))) ]
+      | sort_by(.id) | reverse
+      | map({id: (.id | tostring), wf: ((.name // "") | tostring | clean | .[0:80]), n: ((.name // "") | tostring | norm)})' \
+    "$WORK/aruns.json" > "$WORK/cancelled.json" 2>/dev/null || return 0
+  CANCELLED_OK=1
+}
+
+# recover_required: RECOVERY lines on stdout, BEFORE the marker. Diagnostics only: nothing here changes CL_STATE, and nothing is run.
+recover_required() {
+  local ctx ctxj res id wfj need=0
+  case "$CL_STATE" in
+    failed)
+      if [[ "$CL_REASON" == stale-row ]]; then
+        printf 'RECOVERY pointer reason=stale-row ctx="test": see skills/ship/references/ready-run-wait.md (confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n'
+      else
+        printf 'RECOVERY pointer failed=%s: read the failing checks with gh pr checks %s\n' "$AM_JF" "$PR"
+      fi ;;
+    pending)
+      if [[ "$CL_REASON" == awaiting-approval ]]; then
+        printf 'RECOVERY pointer reason=awaiting-approval ctx="test": see skills/ship/references/ready-run-wait.md (a maintainer must approve the fork workflow run)\n'
+      else
+        printf 'RECOVERY pointer pending=%s: wait, then read the checks with gh pr checks %s\n' "$AM_JP" "$PR"
+      fi ;;
+    absent)
+      # `test` with reason stalled is the synthetic row of the draft run (soften_test_row): a cancelled-run hunt would name the wrong run.
+      jq -e --arg r "$CL_REASON" 'any(.[]; . != "test" or $r != "stalled")' <<<"$AM_JA" >/dev/null 2>&1 && need=1
+      (( need == 1 )) && try_read_cancelled
+      while IFS= read -r ctx; do
+        ctxj="$(jq -cn --arg c "$ctx" '$c')"
+        if [[ "$ctx" == test && "$CL_REASON" == stalled ]]; then
+          printf 'RECOVERY pointer reason=stalled ctx=%s: see skills/ship/references/ready-run-wait.md (confirm in the Actions tab that no ready run is still in flight, the undo cancels it; then gh pr ready --undo, then gh pr ready, with a user token)\n' "$ctxj"
+          continue
+        fi
+        if (( CANCELLED_OK == 0 )); then
+          printf 'RECOVERY owner not determined (read failed) ctx=%s\n' "$ctxj"
+          continue
+        fi
+        res="$(jq -r --arg c "$ctx" "$JQ_DEFS"'($c | norm) as $k
+                | [ .[] | select($k != "" and .n == $k) ]
+                | if length == 1 then "W \(.[0].id) \(.[0].wf | @json)" else "N" end' "$WORK/cancelled.json")"
+        if [[ "$res" == W\ * ]]; then
+          id="${res#W }"; wfj="${id#* }"; id="${id%% *}"
+          printf 'RECOVERY rerun run=%s basis=workflow ctx=%s wf=%s: gh run rerun %s\n' "$id" "$ctxj" "$wfj" "$id"
+        elif [[ "$(jq -r 'length' "$WORK/cancelled.json")" == 0 ]]; then
+          printf 'RECOVERY no cancelled run at this head ctx=%s\n' "$ctxj"
+        else
+          while IFS=$'\t' read -r id wfj; do
+            printf 'RECOVERY rerun run=%s basis=candidate ctx=%s wf=%s\n' "$id" "$ctxj" "$wfj"
+          done < <(jq -r '.[] | "\(.id)\t\(.wf | @json)"' "$WORK/cancelled.json")
+          printf 'RECOVERY owner not determined, read the run before re-running ctx=%s\n' "$ctxj"
+        fi
+      done < <(jq -r '.[]' <<<"$AM_JA") ;;
+  esac
+}
+
+cmd_required() {
+  local bin rc
+  trap 'fail_api "interrupted" interrupted' INT TERM HUP
+  read_pr || fail_api "$ERRMSG"
+  SHA_OUT="$PR_SHA"
+  [[ "$PR_BASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail_api "the PR base branch is empty or not a plain branch name" bad-base
+  bin="${ADMIN_MERGE_READY_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/admin-merge-ready.sh}"
+  [[ -r "$bin" ]] || fail_api "admin-merge-ready.sh is not readable at '$bin'" no-admin-merge-ready
+  # Read-only form: no --wait. Its stderr goes to a file, never to stdout; its stdout is read only through amr_parse.
+  bash "$bin" "$PR" "$PR_SHA" --base "$PR_BASE" > "$WORK/amr.out" 2> "$WORK/amr.err" </dev/null
+  rc=$?
+  classify_required "$rc" "$WORK/amr.out"
+  [[ "$CL_STATE" != error ]] || { trap - INT TERM HUP; fail_api "admin-merge-ready.sh gave no provable answer (exit $rc): $(head -c 200 "$WORK/amr.err" | tr '\n' ' ')" "$CL_REASON"; }
+  recover_required
+  # The marker is the last thing printed: a signal after this point must not print a second one.
+  trap - INT TERM HUP
+  req_marker "$CL_STATE" "$CL_REASON" "$AM_REQ" "$AM_JA" "$AM_JP" "$AM_JF"
+  exit 0
+}
+
 case "$CMD" in
   verdict)        cmd_verdict ;;
+  required)       cmd_required ;;
   ready-count)    cmd_ready_count ;;
   wait-ready-run) cmd_wait ;;
 esac

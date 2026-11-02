@@ -115,3 +115,5 @@ Reviewed artifacts: the memo, the posture file, the PA-31 note, the vendor point
 The memo keeps its DRAFT banners and its `draft-requires-counsel-review` status. This is a CLO-agent attestation under the Soleur-as-tenant-zero v1 posture; professional legal review remains pending and no external counsel has signed. The operator retains an optional veto. Discharge here means the record is accurate and candid about what is and is not established; it is not a finding that the processing has a lawful basis for the two limbs named in C1 and C2.
 
 DISPOSITION: DISCHARGED
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the Method and findings above that cite `skillConflictDiffBody` and the skill-conflict comment path describe the pre-merge loop. On the merge of PR #11157 the loop no longer posts that comment (the guard reads open PRs' changed files and records a refusal instead); the dated text above is unchanged. The comment already posted on PR #10812 is not removed by the merge. See the 2026-10-26 addendum in `knowledge-base/legal/audits/2026-10-20-dpia-reeval-compound-promote-2720.md`.

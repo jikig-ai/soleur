@@ -27,7 +27,12 @@ import {
   sendCompliantOutbound,
   type SendCompliantOutboundArgs,
 } from "@/server/email-triage/outbound";
-import { recipientHash } from "@/server/email-triage/outbound-compliance";
+import {
+  recipientHash,
+  EMAIL_BODY_MAX,
+  EMAIL_RAW_ADDR_MAX,
+  EMAIL_SUBJECT_MAX,
+} from "@/server/email-triage/outbound-compliance";
 import { untrustedRowsResponse as sharedUntrustedRowsResponse } from "@/server/untrusted-content";
 
 function sha256(s: string): string {
@@ -283,7 +288,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
     // operator sees the exact recipient + body and approves before the handler
     // runs. The handlers route through the compliance chokepoint
     // (server/email-triage/outbound.ts), which enforces C1–C5 + header guard +
-    // recipient allow-list + body-hash match + suppression recheck before any
+    // recipient allow-list + body-hash integrity check + suppression recheck before any
     // Resend send, and records the WORM outbound_sends audit row.
     // ───────────────────────────────────────────────────────────────────
     tool(
@@ -298,10 +303,11 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "body text; you cannot send to a suppressed recipient. Returns " +
         "{ resendId, outboundSendId } on success.",
       {
-        to: z.string().min(3),
-        subject: z.string().min(1),
-        body: z.string().min(1),
-        replyTo: z.string().optional(),
+        to: z.string().min(3).max(EMAIL_RAW_ADDR_MAX),
+        subject: z.string().min(1).max(EMAIL_SUBJECT_MAX),
+        // The review card shows the ENTIRE body, so the schema and the card share one hard cap (EMAIL_BODY_MAX, outbound-compliance.ts).
+        body: z.string().min(1).max(EMAIL_BODY_MAX),
+        replyTo: z.string().max(EMAIL_RAW_ADDR_MAX).optional(),
         ...COMPLIANCE_FIELDS,
       },
       async (args) => {
@@ -319,7 +325,8 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
             optOut: args.optOut,
             ftcDisclosure: args.ftcDisclosure,
             art14: args.art14,
-            // The operator approved THIS body at the gate; bind the send to it.
+            // Handler-local integrity hash of the body AS SENT (recomputed in the chokepoint). It is NOT a binding to what the
+            // review card showed: that binding is canUseTool returning allow(toolInput), the same object this handler receives.
             approvedBodySha256: sha256(args.body),
           });
           return textResponse(result);
@@ -355,8 +362,8 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "{ resendId, outboundSendId }.",
       {
         messageId: z.string().uuid(),
-        subject: z.string().min(1),
-        body: z.string().min(1),
+        subject: z.string().min(1).max(EMAIL_SUBJECT_MAX),
+        body: z.string().min(1).max(EMAIL_BODY_MAX),
         ...COMPLIANCE_FIELDS,
       },
       async (args) => {
@@ -394,6 +401,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
             optOut: args.optOut,
             ftcDisclosure: args.ftcDisclosure,
             art14: args.art14,
+            // Handler-local integrity hash of the body as sent, not a binding to the card (see email_send).
             approvedBodySha256: sha256(args.body),
           });
           return textResponse(result);
@@ -434,7 +442,7 @@ export function buildEmailTriageTools(opts: BuildEmailTriageToolsOpts) {
         "there is no un-suppress tool. The recipient address is hashed before " +
         "storage (never persisted in plaintext). Returns { id }.",
       {
-        recipient: z.string().min(3),
+        recipient: z.string().min(3).max(EMAIL_RAW_ADDR_MAX),
         reason: z.enum(["opt_out", "decline", "bounce", "manual"]),
       },
       async (args) => {

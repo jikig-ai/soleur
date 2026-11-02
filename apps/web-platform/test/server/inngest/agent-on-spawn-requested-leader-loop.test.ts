@@ -166,8 +166,12 @@ vi.mock("@/server/github/app-client", () => ({
 // Observability — Sentry mirror.
 // Paged dead-letter reasons use reportSilentFallback (error level); the rest use
 // warnSilentFallback (warning level) — #8719.
-const reportSilentFallbackSpy = vi.fn();
-const warnSilentFallbackSpy = vi.fn();
+// Hoisted: the leader-prompts import graph reaches @/server/observability at module
+// load (via untrusted-content), so the factory runs before a plain const initialises.
+const { reportSilentFallbackSpy, warnSilentFallbackSpy } = vi.hoisted(() => ({
+  reportSilentFallbackSpy: vi.fn(),
+  warnSilentFallbackSpy: vi.fn(),
+}));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,

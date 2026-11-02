@@ -19,6 +19,12 @@
 # arm is itself vacuous. H2: passes + fails == rows executed, and the row count is an exact literal beside
 # its use, reported by printf + exit 1 (never through ok()/bad()).
 #
+# WHY NOT scripts/lib/mutation-harness.sh. That lib's caller contract is followthrough-specific (the FT_INNER / FT_SUT /
+# FT_REPO inner-run protocol, a `# [mut:NAME]` tagged probe, rc 1 + named `FAIL:` line crediting). This suite shares
+# apps/web-platform/infra/lib/mutation-scorer.sh instead, under its own exit-2 protocol, and keeps its own
+# instrument_selftest below. Unifying the scorer protocols is tracked in #11628 item B, to be re-evaluated when a third
+# suite needs the harness.
+#
 # Run: bash apps/web-platform/infra/docker-run-tuple.test.sh   (unprivileged, no docker, python3 only).
 
 set -uo pipefail

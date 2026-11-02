@@ -154,8 +154,8 @@ permissions:
 
 env:
   INFRA_DIR: apps/web-platform/infra
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
   # web-1 private IP — single source for BOTH the bridge `server-ip` (NAT redirect
   # scope) and the probe `WEB_HOST` (dial target); they MUST match.
   WEB_HOST_PRIVATE_IP: "10.0.1.10"
@@ -311,7 +311,7 @@ jobs:
           # future producer/consumer drift of exactly this kind.
           is_probe_integrity() {
             case "${1:-}" in
-              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed|covered_inode_peek_failed)
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed|covered_inode_peek_failed|escrow_check_failed)
                 return 0 ;;
             esac
             return 1

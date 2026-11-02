@@ -42,21 +42,31 @@ vi.mock("@octokit/core", () => ({
 }));
 
 import { slaIssueProcessHandler } from "@/server/inngest/functions/sla-issue-process";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 const DAY = 86_400_000;
 const NOW = "2026-07-22T00:00:00Z";
 const nowMs = Date.parse(NOW);
 const daysAgo = (n: number) => new Date(nowMs - n * DAY).toISOString();
 
-const fakeStep = { run: async <T>(_name: string, cb: () => Promise<T>): Promise<T> => cb() };
 const fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The inline `fakeStep` this replaced ran the
+// callback in-process and hid both (the #8717/#8726 defect class).
 async function run(issueNumber: number, listedUpdatedAt: string) {
-  return slaIssueProcessHandler({
-    event: { data: { issueNumber, listedUpdatedAt, runStartedAt: NOW } },
-    step: fakeStep as never,
-    logger: fakeLogger as never,
-  } as never);
+  const out = await runLikeInngest(
+    ({ step }) =>
+      slaIssueProcessHandler({
+        event: { data: { issueNumber, listedUpdatedAt, runStartedAt: NOW } },
+        step,
+        logger: fakeLogger,
+      } as never),
+    { maxAttempts: 1 },
+  );
+  expect(out.outcome).toBe("returned");
+  return out.value;
 }
 
 const mutations = () => state.calls.filter((c) => c.route.startsWith("POST") || c.route.startsWith("PATCH"));

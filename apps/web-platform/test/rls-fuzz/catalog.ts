@@ -146,6 +146,52 @@ export interface SecDefFn {
   args: string;
 }
 
+export interface ApiRelation {
+  relname: string;
+  /** 'r' table | 'v' view | 'm' matview | 'p' partitioned parent | 'f' foreign | 'S' sequence */
+  relkind: "r" | "v" | "m" | "p" | "f" | "S";
+}
+
+/**
+ * The api-role grant surface (ADR-303): every `public`-schema relation the
+ * Data API can expose — tables, views, materialized views, partitioned PARENTS
+ * ('p') and foreign tables ('f'); PostgREST serves all five relkinds, so a 'p'
+ * or 'f' member would otherwise escape the authoritative gate entirely.
+ * Partition CHILDREN (relispartition) are excluded: they carry no independent
+ * ACL — a child's privilege resolves through its partitioned parent, which is
+ * itself enumerated here. Live-catalog enumeration, same contract as every
+ * enumerator here: a new public relation shows up automatically and the grant
+ * registry (table-grants.ts) must classify it or the parity gate reds.
+ */
+export async function publicApiRelations(sql: Sql): Promise<ApiRelation[]> {
+  return withTransientRetry(() => sql<ApiRelation[]>`
+    select c.relname, c.relkind
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'v', 'm', 'p', 'f')
+      and not c.relispartition
+    order by c.relname`);
+}
+
+/**
+ * Every `public`-schema sequence (relkind S). Post-flip, a sequence created
+ * without explicit grants loses USAGE for the api roles — serial/identity
+ * inserts via the Data API fail even when the table itself is granted (the
+ * lint's sequence arm is the PR-time pre-filter; this is the live enumerator
+ * the grant gate runs against). Returns the same {@link ApiRelation} shape as
+ * {@link publicApiRelations} so both enumerators are consumed identically.
+ */
+export async function publicApiSequences(sql: Sql): Promise<ApiRelation[]> {
+  return withTransientRetry(() => sql<ApiRelation[]>`
+    select c.relname, c.relkind
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'S'
+    order by c.relname`);
+}
+
 /**
  * The RPC bypass set (AC8): every `SECURITY DEFINER` function in `public` that
  * `authenticated` may EXECUTE. A definer fn that trusts a caller-supplied

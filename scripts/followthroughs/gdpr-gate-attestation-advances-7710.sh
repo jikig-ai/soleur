@@ -63,7 +63,7 @@ command -v gh >/dev/null 2>&1 || { echo "TRANSIENT: gh CLI not on PATH" >&2; exi
 SINCE=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) \
   || { echo "TRANSIENT: could not compute window" >&2; exit 2; }
 
-COMMITS=$(gh api \
+COMMITS=$(gh api --paginate \
   "repos/${REPO}/commits?path=${NOTICE_PATH}&since=${SINCE}&per_page=100" \
   --jq '[.[] | {sha: .sha, author: (.author.login // "unknown"), msg: (.commit.message | split("\n")[0])}]' \
   2>/dev/null) || { echo "TRANSIENT: gh api call failed" >&2; exit 2; }

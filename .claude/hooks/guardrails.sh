@@ -635,7 +635,7 @@ fi
 _fs_items=(); _fs_cause=""
 if command -v perl >/dev/null 2>&1 && [[ -r "$_FS_PL" ]]; then
   while IFS= read -r -d '' _fs_x; do _fs_items+=("$_fs_x"); done \
-    < <(_fs_rc=0; printf '%s' "$COMMAND" | perl "$_FS_PL" 2>/dev/null || _fs_rc=$?; printf 'RC\0%s\0' "$_fs_rc")
+    < <(_fs_rc=0; printf '%s' "$COMMAND" 2>/dev/null | perl "$_FS_PL" 2>/dev/null || _fs_rc=$?; printf 'RC\0%s\0' "$_fs_rc")
 else
   _fs_cause="noperl"
 fi

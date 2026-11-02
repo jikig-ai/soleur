@@ -1272,10 +1272,20 @@ const TRANSIENT_ANTHROPIC_CAUSES: readonly string[] = [
   "anthropic_timeout",
 ] as const satisfies readonly FailureReason[];
 
-// `ByokLeaseError.cause` values (server/byok-lease.ts).
-const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(
-  ["fetch_failed", "decrypt_failed", "escape", "subscription_limit"] as const satisfies readonly ByokLeaseError["cause"][],
-);
+// `ByokLeaseError.cause` values (server/byok-lease.ts). `oauth_unusable` is defensive exhaustiveness: this path leases through
+// `getRestApiKey()` only, which never reads the operator subscription row, so the cause cannot reach it today.
+// Exhaustive by construction (#11599): a `Record` keyed on every `ByokLease` cause fails `tsc` when a cause is added
+// without a decision here, where `satisfies` on an array only checks membership.
+const BYOK_LEASE_CAUSE_MAP: Record<ByokLeaseError["cause"], true> = {
+  fetch_failed: true,
+  decrypt_failed: true,
+  escape: true,
+  subscription_limit: true,
+  oauth_unusable: true,
+  auth_mode_unresolved: true,
+  auth_mode_unavailable: true,
+};
+const BYOK_LEASE_CAUSES: ReadonlySet<string> = new Set(Object.keys(BYOK_LEASE_CAUSE_MAP));
 
 // Tags a retryable LIVE error inside `turn-${n}-claude` with its FailureReason,
 // while `status` and the SDK class are still readable: it returns a fresh Error
@@ -1342,24 +1352,10 @@ async function persistFailure(
   },
 ): Promise<{ acknowledged: false; failureReason: string }> {
   const { actionSendId, reason, err } = args;
-  // Message path with a `reason` tag, so sentry_alert.spawn_agent_dead_letter
-  // can match it (#8719); never throws (server/spawn-dead-letter.ts).
-  reportSpawnDeadLetter({
-    reason,
-    actionClass: args.actionClass,
-    err,
-    extra: {
-      ...args.extra,
-      founderId: args.founderId,
-      messageId: args.messageId,
-      sourceRef: args.sourceRef,
-      actionSendId,
-    },
-  });
 
-  // Single notification site (AC3), BEFORE the action_sends UPDATE — mirroring
-  // the Sentry-mirror-first ordering above. Wrapped in its OWN memoized
-  // step.run so Inngest fires it EXACTLY ONCE across function replays/retries
+  // Single notification site (AC3), BEFORE the action_sends UPDATE. Wrapped in
+  // its OWN memoized step.run so Inngest fires it EXACTLY ONCE across function
+  // replays/retries
   // (a raw side-effect here re-executes on every replay → duplicate founder
   // pages) AND awaits completion so the push/email isn't torn down at a later
   // step boundary. `notifyOfflineUser` never throws (it mirrors its own send
@@ -1402,6 +1398,25 @@ async function persistFailure(
       err: persistErr,
     });
   }
+
+  // After the memoized steps, so a replay never re-reports — the file's own
+  // settle-side convention (#8841); a notify-cost-breaker step exhaustion
+  // propagates to onFailure→settle, which reports that run's dead-letter via
+  // the settle path (lifecycle `failed`). Message path with a `reason` tag, so
+  // sentry_alert.spawn_agent_dead_letter can match it (#8719); never throws
+  // (server/spawn-dead-letter.ts).
+  reportSpawnDeadLetter({
+    reason,
+    actionClass: args.actionClass,
+    err,
+    extra: {
+      ...args.extra,
+      founderId: args.founderId,
+      messageId: args.messageId,
+      sourceRef: args.sourceRef,
+      actionSendId,
+    },
+  });
   return { acknowledged: false, failureReason: reason };
 }
 
@@ -1733,17 +1748,17 @@ export const agentOnSpawnSettle = inngest.createFunction(
     retries: 3,
     // Both payloads carry the ORPHANED run's id; one settle per run.
     idempotency: "event.data.run_id",
+    triggers: [
+      {
+        event: CANCELLED_EVENT,
+        // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
+        // from the client id, which the SDK prefixes onto every function id.
+        if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
+      },
+      { event: ORPHANED_EVENT },
+    ],
   } as unknown as Parameters<typeof inngest.createFunction>[0],
-  [
-    {
-      event: CANCELLED_EVENT,
-      // Literal `==`, so it never matches the SDK's own `…-failure` id. Built
-      // from the client id, which the SDK prefixes onto every function id.
-      if: `event.data.function_id == '${inngest.id}-${REQUESTED_FUNCTION_ID}'`,
-    },
-    { event: ORPHANED_EVENT },
-  ] as unknown as Parameters<typeof inngest.createFunction>[1],
-  agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  agentOnSpawnSettleHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // --- end lifecycle settle ---
@@ -1759,11 +1774,7 @@ export const agentOnSpawnRequested = inngest.createFunction(
     // #8803: a run that fails past its retries is forwarded to
     // agent-on-spawn-settle; a timeout or cancel reaches it directly.
     onFailure: agentOnSpawnRequestedOnFailure,
+    triggers: { event: "agent.spawn.requested" },
   } as unknown as Parameters<typeof inngest.createFunction>[0],
-  { event: "agent.spawn.requested" } as unknown as Parameters<
-    typeof inngest.createFunction
-  >[1],
-  agentOnSpawnRequestedHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  agentOnSpawnRequestedHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

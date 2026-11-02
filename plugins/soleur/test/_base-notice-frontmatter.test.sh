@@ -17,12 +17,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/test-helpers.sh"
-
-REPO_ROOT="$SCRIPT_DIR/../../.."
-PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
-LIVE_NOTICE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE"
-FIXTURES_DIR="$SCRIPT_DIR/fixtures/vendor-drift"
 
 # ONE owning trap for every tempfile and tempdir this suite allocates (ADR-129,
 # enforced by `scripts/lint-trap-tempfile-ownership.py`). This suite allocates
@@ -36,8 +30,24 @@ FIXTURES_DIR="$SCRIPT_DIR/fixtures/vendor-drift"
 # SUBSHELL, so every append mutated a copy and the parent array stayed empty
 # while the trap read as correct. That linter caught it; the note is kept so the
 # next reader does not reintroduce the tidier form.
+#
+# Installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `${arr[@]+"${arr[@]}"}` expansion (not `[@]:-`) is the empty-safe form: it
+# expands to ZERO words on an unset/empty array, so `rm -rf` runs with no
+# operands and exits 0 rather than failing on `rm -rf ""` — which matters now
+# that the trap can fire during the source itself (the git-location tripwire's
+# exit 97 must not be masked by a trap error).
 _TMP_OWNED=()
-trap 'rm -rf "${_TMP_OWNED[@]:-}"' EXIT INT TERM
+trap 'rm -rf ${_TMP_OWNED[@]+"${_TMP_OWNED[@]}"}' EXIT INT TERM
+
+source "$SCRIPT_DIR/test-helpers.sh"
+
+REPO_ROOT="$SCRIPT_DIR/../../.."
+PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+LIVE_NOTICE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE"
+FIXTURES_DIR="$SCRIPT_DIR/fixtures/vendor-drift"
 
 echo "=== notice-frontmatter tests ==="
 echo ""

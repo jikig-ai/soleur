@@ -1,0 +1,47 @@
+# PR4c handoff to PR5 (#10861): the 43 deferred-sweep pairs stay baselined and untouched. NOT YET MEASURED: PR5 measures duration (scripts/suite-durations.tsv) and the 200-PR selection replay per glob at its own work time on current origin/main. No duration or replay number is stored here.
+# CTO ruling (decision-challenges.md row 7, 2026-10-26): out of PR4c and PR4d; PR5 owns the policy execution and both measurements; no pair is globbed or added to ALWAYS_ON_SUITES unless both measurements were taken in PR5 and meet the thresholds below, otherwise it stays baselined for an explicit PR5 call.
+# Policy text (PR4b row 6, verbatim): Ruled by CTO agent, 2026-10-25: policy recorded now for a later PR to execute, per whole-tree or glob reader: (1) a `glob:` edge if the suite's duration in `scripts/suite-durations.tsv` is 60 s or less and a replay over the last 200 merged PRs selects it in at most 25% of them; (2) `ALWAYS_ON_SUITES` if the glob selects it more often and the suite takes 30 s or less; (3) otherwise the pair stays baselined until a PR5 decision. Accept-with-reason is NEVER used for a real whole-tree reader, only for mentions. The later PR must bring two measurements: per-suite duration from `suite-durations.tsv` and the 200-PR selection-size replay per glob.
+suite	path
+.claude/hooks/grep-q-pipe-guard.test.sh	.github/scripts/validate-infra-templates.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	.github/scripts/vinngest-digest-freshness.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/betterstack-ingest-probe.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/ensure-doppler.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/anthropic-admin-key-6297.test.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/cwv-field-rum-9178.test.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/git-data-rehearsal-evidence.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/git-data-rehearsal-evidence.test.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/inngest-provision-unit-8562.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/send-failed-alert-probe-8097.test.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/web2-luks-live-6931.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/inngest-link-flip.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/kb-drift-walker.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/probe-github-app-mint.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/registry-restore-from-ghcr.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/sentry-alert-reference-gate.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/supabase-advisor-scan.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/supabase-logs-query.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/verify-agent-security-slice1.sh
+plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh
+plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh
+plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh
+plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh
+plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh
+plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh
+plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs
+plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs
+plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts
+plugins/soleur	scripts/betterstack-query.sh
+plugins/soleur	scripts/check-web-host-escrow-config.sh
+plugins/soleur	scripts/ensure-kb-index.sh
+plugins/soleur	scripts/lint-agents-rule-budget.py
+plugins/soleur	scripts/lint-workflows.sh
+plugins/soleur	scripts/prod-version-drift-b9-probe.sh
+plugins/soleur	scripts/web-host-escrow-preflight.sh
+tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh
+tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh
+tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh
+tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh
+tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh

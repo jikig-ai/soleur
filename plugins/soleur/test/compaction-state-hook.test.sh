@@ -37,6 +37,12 @@ SUT="$REPO_ROOT/plugins/soleur/hooks/compaction-state.sh"
 # -euo pipefail, so the +e below restores this suite's accumulate-then-exit
 # contract.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${SANDBOX:-}" ]] || rm -rf "$SANDBOX"' EXIT INT TERM HUP
 source "$DIR/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
 
@@ -44,7 +50,6 @@ command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required by this suite" >&
 
 SANDBOX="$(mktemp -d -t compstate.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert_fixture_dir "$SANDBOX"
-trap 'rm -rf "$SANDBOX"' EXIT INT TERM HUP
 
 # Ledger isolation. The hook keys its ledger off TMPDIR, so pointing TMPDIR at
 # the sandbox is what keeps this suite from reading -- or writing -- the

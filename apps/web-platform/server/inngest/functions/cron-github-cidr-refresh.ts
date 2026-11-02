@@ -6,7 +6,8 @@
 // /32 LB pool; when the committed list goes stale a cron fire lands on an
 // uncovered IP, the container egress firewall default-drops it, and the GitHub
 // call (hence the Sentry heartbeat) never happens — a silent missed check-in
-// (the failure mode behind Sentry incident 5516336, #5281/#5285).
+// (the failure mode behind Sentry incident 5516336, #5281/#5285; the monitor
+// itself was destroyed by the #6590 PR-B prune — void-posts by design, spec NG4).
 //
 // Mechanism: clone the repo, fetch /meta via Octokit, run the COMMITTED generator
 // apps/web-platform/infra/scripts/gen-github-egress-cidr.sh (the single source of
@@ -341,12 +342,10 @@ export const cronGithubCidrRefresh = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "41 6 * * *" },
+      { event: "cron/github-cidr-refresh.manual-trigger" },
+    ],
   },
-  [
-    { cron: "41 6 * * *" },
-    { event: "cron/github-cidr-refresh.manual-trigger" },
-  ],
-  cronGithubCidrRefreshHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronGithubCidrRefreshHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

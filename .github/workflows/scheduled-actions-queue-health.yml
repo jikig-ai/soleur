@@ -133,7 +133,7 @@ jobs:
           # duplicate is recoverable, a missed filing is not; the self-close
           # sweep drains dupes by label).
           GH_LIST_ERR="$(mktemp)"
-          if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+          if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 100 \
             --label "ci/actions-queue-health" --json number,title 2>"$GH_LIST_ERR")"; then
             echo "::error::dedupe query failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$GH_LIST_ERR" | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
@@ -189,7 +189,7 @@ jobs:
           # Same repipe as the under-assignment step above: `gh --jq` does not
           # forward `--arg` (#9533), so the title match runs in a standalone jq.
           GH_LIST_ERR="$(mktemp)"
-          if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+          if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 100 \
             --label "ci/actions-queue-health" --json number,title 2>"$GH_LIST_ERR")"; then
             echo "::error::dedupe query failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$GH_LIST_ERR" | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
@@ -225,7 +225,7 @@ jobs:
           # cap-hit audible; any remainder drains on subsequent sweeps.
           # Label-scoped primary list (the search index lags minutes; every
           # issue this file files carries the ci/actions-queue-health label).
-          matches="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+          matches="$(gh issue list --repo "$GH_REPO" --state open -L 100 \
               --label 'ci/actions-queue-health' \
               --json number --jq '.[].number' 2>/dev/null || true)"
           if [ "$(printf '%s\n' "$matches" | grep -c .)" -ge 50 ]; then

@@ -61,6 +61,19 @@ const HIJACK_TARGETS: HijackTarget[] = [
     },
   },
   {
+    // Migration 181 (#11569). The hijack (SET workspace_id = wsB) is denied by the column privilege (42501) before WITH
+    // CHECK runs; the WITH CHECK status clause is exercised by messages-owner-draft-update.tenant-isolation.test.ts.
+    table: "messages",
+    posCol: "draft_preview",
+    seed: async (b, c) => {
+      const [{ id }] = await b`insert into messages
+        (workspace_id, template_id, user_id, status, source, owning_domain, draft_preview, tier)
+        values (${c.wsA}, 'work', ${c.userA}, 'draft', 'rls-fuzz', 'engineering', 'rls-fuzz-hijack', 'external_low_stakes')
+        returning id`;
+      return idLoc(id);
+    },
+  },
+  {
     table: "push_subscriptions",
     posCol: "endpoint",
     seed: async (b, c) => {

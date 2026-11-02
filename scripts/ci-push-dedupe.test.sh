@@ -115,7 +115,7 @@ PRSEL_IF="$PRSEL_EV && $PRSEL_VAR"
 AGG_DIGEST="461f40243a0399f27826d0abe6e12db5c129b4a51809dd22b6e1db0714223394"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+UNGATED_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

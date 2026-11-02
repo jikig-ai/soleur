@@ -425,7 +425,7 @@ fi
 # ROW 1b — THE LEGACY ARM MUST SUPPLY HCLOUD_TOKEN, not merely decline.
 #
 # Several Tier-B steps read `$HCLOUD_TOKEN` from the JOB environment rather than from
-# inside a `doppler run` wrapper (the stock-preflight gates, the drift orphan sweep, the
+# inside a `doppler run` wrapper (the stock-preflight gates, the
 # rung-2 hard reset, the root-key fingerprint attestation). Their own inline reads were
 # removed because census row G1g forbids reading a Tier-B name from `prd_terraform`
 # outside this action — so if the legacy arm exports nothing, every one of them aborts
@@ -984,7 +984,7 @@ fi
 # already asserts `PASSES == 1` at that point and aborts otherwise.
 # 117 -> 118 (review, 2026-10-22): row1c asserts the arm read only through modelled argv (the stub's refusals are logged as MISS).
 # 78 -> 117 (#9927 item 8b): the rewritten legacy-arm rows (1c, 1d, 1f), the new rows 1h and 1i, the two Guard 1 mutants and the
-# site B block (the consumer-guard rows live in token-drift-workflow-causes.test.sh, R7). Measured: 117 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
+# site B block (the consumer-guard rows live in token-drift-workflow-causes.test.sh, R6). Measured: 117 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
 SELFTEST_PASSES=1
 MIN_ASSERTIONS=118
 REAL=$((PASSES - SELFTEST_PASSES))

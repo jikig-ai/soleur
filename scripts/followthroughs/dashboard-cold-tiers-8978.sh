@@ -54,7 +54,7 @@ API="https://sentry.io/api/0"
 # any hit is a regression signal, not noise.
 QUERY='transaction:"GET /dashboard" transaction.duration:>15000'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
-URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&field=transaction.duration"
+URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&field=transaction.duration&sort=-timestamp"
 
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Accept: application/json" \

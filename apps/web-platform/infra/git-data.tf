@@ -20,8 +20,11 @@
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
-# that PRESERVES BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) and
-# the LUKS passphrase by OMISSION. It is a maintenance-window dispatch, not a per-PR apply;
+# that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
+# The replace, rotate and create gates no longer demand the retired plaintext addresses (#11194,
+# ADR-239 Amendment 2026-10-28), and each route refuses through a plaintext-id interlock while the
+# module call below passes a non-empty git_data_volume_id (ADR-239 Amendment 2026-10-26, item 4). It
+# is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
@@ -383,7 +386,7 @@ module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
   host_name               = "soleur-git-data"
-  git_data_volume_id      = hcloud_volume.git_data.id
+  git_data_volume_id      = ""
   git_data_luks_volume_id = hcloud_volume.git_data_luks.id
   doppler_token           = doppler_service_token.git_data.key
   # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
@@ -531,29 +534,14 @@ resource "hcloud_server" "git_data" {
   }
 }
 
-# --- Bare-repo block volume --------------------------------------------------
-# The bare repos AND the per-(workspace,worktree) fence sidecar/lock live here —
-# never tmpfs (a reboot resetting the fence max to 0 would let a stale writer
-# win). Shape mirrors hcloud_volume.workspaces (server.tf:926-940).
-resource "hcloud_volume" "git_data" {
-  name     = "soleur-git-data-store"
-  size     = var.git_data_volume_size
-  location = var.location
-  format   = "ext4"
-
-  labels = {
-    app = "soleur-web-platform"
-  }
-}
-
-# (#8211) automount = false, matching rung2-rehearsal/rehearsal.tf and the provider default (so
-# the plan shows no change). Since #8211 nothing mounts this plaintext volume after boot: the
-# bootstrap only mounts it read-only, briefly, to prove it holds no repository.
-resource "hcloud_volume_attachment" "git_data" {
-  volume_id = hcloud_volume.git_data.id
-  server_id = hcloud_server.git_data.id
-  automount = false
-}
+# --- Retired plaintext bare-repo block volume --------------------------------
+# hcloud_volume.git_data (name soleur-git-data-store, id 106867358) and its attachment were
+# declared here until the plaintext volume was retired (ADR-239 Amendment 2026-10-26, Option B).
+# The device was deleted at the provider API on 2026-10-27 by a reviewer-gated Terraform destroy
+# (run 40478209838); the state no longer holds either address. The record of the run, its read-back
+# and the claim limit are in the runbook section "Plaintext-volume destroy (Option B, #8211 / #6897)"
+# and in ADR-239 Amendment 2026-10-27. The LUKS store is hcloud_volume.git_data_luks
+# (git-data-luks.tf).
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------
 # ZERO inbound rules = deny-all on the PUBLIC interface (P1). Hetzner firewalls

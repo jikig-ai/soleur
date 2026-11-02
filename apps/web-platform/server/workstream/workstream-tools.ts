@@ -22,6 +22,7 @@ import {
   updateWorkstreamIssueFields,
   updateWorkstreamIssueTitle,
 } from "@/server/workstream/mutate-workstream-issue";
+import { untrustedRowsResponse } from "@/server/untrusted-content";
 
 interface BuildWorkstreamToolsOpts {
   /** The operator the agent acts for (parity with the routines builder). */
@@ -112,7 +113,8 @@ export function buildWorkstreamTools(opts: BuildWorkstreamToolsOpts) {
             // no second repo-URL read, and meta can never diverge from issues.
             const ctx = await resolveBoardReadContext(userId);
             const issues = await collectWorkstreamIssues(ctx);
-            return textResponse({ issues, board: ctx.board });
+            // Issue titles and descriptions are third-party GitHub text: frame them.
+            return untrustedRowsResponse("github", { issues, board: ctx.board });
           } catch (err) {
             return textResponse(
               {

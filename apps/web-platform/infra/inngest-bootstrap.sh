@@ -5,7 +5,7 @@
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
 #   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
 #     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
-#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
+#     vector.service; stages the flip units from the image's /tmp payload (the LUKS cutover trio was retired, #10112).
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
 #   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
@@ -81,6 +81,10 @@ esac
 readonly INSTALL_PATH="/usr/local/bin/inngest"
 readonly VERSION_FILE="/var/lib/inngest/version"
 readonly UNIT_FILE="/etc/systemd/system/inngest-server.service"
+# #11103: the resolve-after-refusal launcher the unit's ExecStart names. Named -launch (NOT
+# -start): `inngest-server-start-REFUSED` is a live phone-home marker string below and a
+# substring-colliding name would poison every grep anchor that reads it.
+readonly LAUNCH_SCRIPT="/usr/local/bin/inngest-server-launch.sh"
 readonly HEARTBEAT_UNIT="/etc/systemd/system/inngest-heartbeat.service"
 readonly HEARTBEAT_TIMER="/etc/systemd/system/inngest-heartbeat.timer"
 readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
@@ -183,6 +187,14 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 # also `sensitive = true` in the TF output.
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
+# Refuse to run under tracing (#7797, #10363): this body expands the heartbeat URL whose path is
+# the credential, and `sh -x`/`set -x` would print it to stderr, which journald ships off-box. The
+# guard tests the STATE ($-), works in dash (this script's interpreter), and stays above every
+# expansion below. The message must stay value-free AND name-free: inngest.test.sh bans any
+# logger/echo/printf line naming INNGEST_HEARTBEAT_URL.
+case $- in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
 #
 # LOG_TAG is a REAL assignment, never an inline tag literal in the logger call: the drift
@@ -1502,7 +1514,6 @@ fi
 # gate silently fell through to DEDICATED_FLIP=0.) This runs BEFORE the inngest-server unit
 # write + restart below so the ExecStartPre guard script exists on disk first.
 DEDICATED_FLIP=0
-DEDICATED_LUKS_CUTOVER=0
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   if [[ -f /tmp/inngest-cutover-flip.sh && -f /tmp/inngest-server-flip-guard.sh \
         && -f /tmp/inngest-cutover-flip.service && -f /tmp/inngest-cutover-flip.timer ]]; then
@@ -1522,27 +1533,9 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   else
     log "warn: cutover flip assets not staged at /tmp/inngest-cutover-flip.* (pre-#6178 image or undelivered assets); skipping flip install"
   fi
-  # LUKS blue-green cutover trio (#6894) — dedicated host only, delivered like the flip trio.
-  # FAIL-CLOSED, deliberately NOT a mirror of the flip's skip arm above: a skipped install yields a
-  # host that boots healthy with a flag nothing polls, so op=luks-cutover "succeeds" while the host
-  # never moves. A missing trio therefore emits install_missing under the unit's own tag (shipped by
-  # Vector, the only off-box read of this host) and the timer is NOT enabled. It does not abort the
-  # bootstrap: the scheduler this host exists to run must still come up.
-  if [[ -f /tmp/inngest-luks-cutover.sh && -f /tmp/inngest-luks-cutover.service && -f /tmp/inngest-luks-cutover.timer ]]; then
-    log "installing LUKS cutover trio (#6894)"
-    install -m 0755 /tmp/inngest-luks-cutover.sh /usr/local/bin/inngest-luks-cutover.sh
-    install -m 0644 /tmp/inngest-luks-cutover.service /etc/systemd/system/inngest-luks-cutover.service
-    install -m 0644 /tmp/inngest-luks-cutover.timer /etc/systemd/system/inngest-luks-cutover.timer
-    DEDICATED_LUKS_CUTOVER=1
-  else
-    log "ERROR: LUKS cutover assets not staged at /tmp/inngest-luks-cutover.{sh,service,timer}; the cutover timer will NOT be enabled (install_missing, #6894)"
-    logger -t inngest-luks-cutover '{"marker":"SOLEUR_INNGEST_LUKS_CUTOVER","exit_code":1,"reason":"install_missing","flag":"unknown","detail":"the cutover trio was not staged to /tmp by cloud-init; the timer is not enabled","guard":"6894"}' 2>/dev/null || true
-    # AND the Vector-independent path. This is a BOOT-time failure, which is exactly the case where
-    # the journald->Vector leg may not exist yet: Vector is installed later in this same script, and
-    # its own install is non-fatal. A marker that depends on the shipper to report that delivery
-    # failed is the shape that hid #6178 for a whole cutover attempt.
-    /usr/local/bin/inngest-boot-phone-home.sh luks-cutover-install-MISSING "the cutover trio was not staged to /tmp; inngest-luks-cutover.timer is NOT enabled (#6894)" 2>/dev/null || true
-  fi
+  # The LUKS blue-green cutover trio (inngest-luks-cutover.{sh,service,timer}, #6894) is retired from
+  # the image (#10112): this script neither installs nor looks for it, so a host staged by an older
+  # cloud-init that still names it logs nothing and enables nothing.
 fi
 
 # Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
@@ -1574,7 +1567,7 @@ fi
 # interval — without a restart. This is what lets the #4650 watchdog demote its
 # restart-on-first-tick to a guarded backstop (#4652).
 # #5159: re-planning via this poll REQUIRES the SDK to register the canonical
-# PUBLIC serve URL (serveHost pinned in app/api/inngest/route.ts) — a
+# PUBLIC serve URL (serveOrigin pinned in app/api/inngest/route.ts) — a
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
 # planned. Without that pin, neither this poll nor the loopback re-register PUT
 # re-plans crons after a restart (the 2026-06-11 cron-deplan incident).
@@ -1584,17 +1577,20 @@ fi
 # Phase-0 spike (runbook § Durable backend) proved Postgres-ALONE loses armed
 # future-ts reminders on a host re-provision; durable external Redis is what survives.
 #
-# Secrets delivery (#5560): inngest reads INNGEST_POSTGRES_URI, INNGEST_REDIS_URI,
+# Secrets delivery (#5560, #11103): inngest reads INNGEST_POSTGRES_URI, INNGEST_REDIS_URI,
 # INNGEST_SIGNING_KEY, and INNGEST_EVENT_KEY from the ENVIRONMENT (self-hosting
 # docs). We rely on that — NO secret is passed on the `inngest start` argv, because
 # argv is world-readable via /proc/<pid>/cmdline (mode 0444); the inherited env is
 # owner-only (/proc/<pid>/environ, mode 0400). The `doppler run --config prd`
 # wrapper injects INNGEST_POSTGRES_URI / INNGEST_SIGNING_KEY / INNGEST_EVENT_KEY by
 # name; INNGEST_REDIS_URI is constructed in @@BACKEND_ENV@@ from INNGEST_REDIS_PASSWORD
-# (Doppler holds only the password). The signing key is re-exported with the
-# `signkey-prod-` prefix stripped (the self-hosted server wants the bare hex; the
-# SDK side keeps the prefixed form in its own scope). This avoids the #4116
-# EnvironmentFile-empty trap (env stays inside the doppler-run scope, not a file).
+# (Doppler holds only the password) — inside the launch script below, AFTER its
+# unconditional xtrace refusal, so a traced launch exits before the value can print
+# (the #11103 inner-`bash -c` leak: xtrace prints commands POST-expansion to stderr,
+# and journald ships this unit to Better Stack at any priority). The signing key is
+# re-exported with the `signkey-prod-` prefix stripped (the self-hosted server wants
+# the bare hex; the SDK side keeps the prefixed form in its own scope). This avoids
+# the #4116 EnvironmentFile-empty trap (env stays inside the doppler-run scope, not a file).
 #
 # Postgres pool footprint (#6258 — supersedes the #5558 "cap 10 holds total under 15"
 # invariant, which was FALSE): `inngest start` opens SEPARATE Postgres pools per
@@ -1629,13 +1625,14 @@ fi
 # of real SQLite state. The drift-guard catches a RENAME, not a prefix-promotion (#5560).
 # Inngest FAILS CLOSED on an unreachable/empty backend (verdict 0.3) —
 # #5547 Gap 2: rather than configure the durable backend unconditionally (which
-# crash-loops when Redis is unprovisioned), the ExecStart below carries literal
-# @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels substituted (just after the heredoc)
-# with the durable fragments ONLY when REDIS_READY=1 (Redis verifiably active), else
-# the fail-safe form (unset INNGEST_POSTGRES_URI + empty flags) → a SQLite-only
-# ExecStart that keeps inngest-server available.
-# --sqlite-dir stays in the shared prefix (load-bearing in the SQLite form,
-# vestigial-but-harmless in the durable form).
+# crash-loops when Redis is unprovisioned), the unit + launch script below carry
+# literal @@BACKEND_ENV@@ (script) + @@BACKEND_FLAGS@@ (unit argv) sentinels
+# substituted (just after the heredocs) with the durable fragments ONLY when
+# REDIS_READY=1 (Redis verifiably active), else the fail-safe form
+# (unset INNGEST_POSTGRES_URI + empty flags) → a SQLite-only launch that keeps
+# inngest-server available.
+# --sqlite-dir stays in the shared prefix inside the launch script (load-bearing
+# in the SQLite form, vestigial-but-harmless in the durable form).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
 Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
@@ -1672,7 +1669,17 @@ EnvironmentFile=/etc/default/inngest-server
 # inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
 # without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
-ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
+# #11103: the ExecStart expands NOTHING — no inner `bash -c`, no $ of any spelling. The old
+# shape ran `bash -c 'export INNGEST_SIGNING_KEY="$${...#signkey-prod-}"; @@BACKEND_ENV@@exec
+# inngest start …'`, and a traced launch (SHELLOPTS=xtrace / BASH_ENV / bash -x) printed the
+# resolved signing key AND the durable arm's redis password to stderr — journald ships this
+# unit to Better Stack at ANY priority (vector.toml Source 1 include_units). The launch
+# script resolves the credentials AFTER its unconditional xtrace refusal (the #10637 shape).
+# @@BACKEND_FLAGS@@ stays on the unit argv: `--postgres-max-open-conns` in the durable arm is
+# the non-secret detection sentinel read by `systemctl show -p ExecStart` (ci-deploy.sh,
+# inngest-inventory.sh, inngest-wiped-volume-verify.sh, the cloud-init latch) — moving it into
+# the script would falsify all four.
+ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/local/bin/inngest-server-launch.sh @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@
 Restart=on-failure
 RestartSec=5
 User=deploy
@@ -1694,6 +1701,40 @@ TimeoutStopSec=180
 WantedBy=multi-user.target
 UNITEOF
 
+# #11103: the resolve-after-refusal launcher — RECONCILE-ALWAYS, outside the
+# SKIP_BINARY_INSTALL guard (same masking class as the unit write above). The unit's
+# ExecStart runs this under `doppler run`; it expands nothing, so a traced launch
+# (SHELLOPTS=xtrace / BASH_ENV / bash -x) prints the resolved credentials to stderr and
+# journald ships them off-box (vector.toml Source 1 admits inngest-server.service at any
+# priority). Order is load-bearing: the unconditional xtrace refusal runs BEFORE any
+# expansion; set -u makes an absent signing key fail the launch loudly; the
+# @@BACKEND_ENV@@ sentinel is substituted into THIS script (the durable arm's
+# INNGEST_REDIS_URI export and the fail-safe `unset INNGEST_POSTGRES_URI`), and the
+# non-secret flag tail rides the unit's argv into "$@" so the durable sentinel still
+# shows in `systemctl show -p ExecStart`.
+cat > "$LAUNCH_SCRIPT" <<'SERVERLAUNCHEOF'
+#!/bin/sh
+# inngest-server-launch.sh (#11103) — the ExecStart half of the inner-`bash -c` credential
+# fix. The unit expands NOTHING; this script resolves the doppler-injected credentials
+# below, AFTER an unconditional xtrace refusal.
+#
+# Refuse to run under tracing FIRST (the #7797/#10363 shape): the exports below resolve
+# INNGEST_SIGNING_KEY and (durable arm) INNGEST_REDIS_PASSWORD, and a traced launch would
+# print the resolved values to stderr, which journald ships off-box. Unconditional on
+# purpose, tests the STATE ($-), works in bash and dash, and stays above every expansion.
+# The message must stay value-free.
+case $- in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles live credentials and -x would print them (see #11103)\n' >&2; exit 78 ;;
+esac
+# Fail loud on an absent signing key rather than crash-loop inngest on a bad one.
+set -u
+# Strip the SDK-side `signkey-prod-` prefix: `inngest start` wants the bare 64-hex (the
+# app container keeps the prefixed form in its own scope — both are the same HMAC seed).
+export INNGEST_SIGNING_KEY="${INNGEST_SIGNING_KEY#signkey-prod-}"
+@@BACKEND_ENV@@
+exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest "$@"
+SERVERLAUNCHEOF
+
 # #5547 Gap 2 + #5560: substitute the @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels
 # based on Redis readiness. Secrets are delivered via the ENVIRONMENT (BACKEND_ENV),
 # never argv (#5560) — BACKEND_FLAGS carries only NON-SECRET pool-sizing flags: the
@@ -1709,15 +1750,17 @@ UNITEOF
 #                   LOAD-BEARING, #5560); empty flags; inngest stays available on SQLite
 #                   rather than crash-looping. verify_inngest_health then SKIPs the durable
 #                   gate (sentinel absent) and a rollback deploy succeeds.
-# --sqlite-dir stays in the SHARED prefix above (load-bearing in the SQLite form,
-# vestigial-but-harmless in the durable form). Use bash parameter expansion (NOT sed):
-# the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
-# sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
-# stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
-# injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
-# payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
-# child and stays the MainPID itself (signal-forwarding supervisor), which is why
-# /proc/<MainPID>/exe resolves to doppler, not inngest.
+# --sqlite-dir stays in the SHARED prefix inside the launch script (load-bearing in the
+# SQLite form, vestigial-but-harmless in the durable form). Use bash parameter expansion
+# (NOT sed): the fragments contain `/`, `&`, and the literal `${...}` expansion, all of
+# which sed's replacement string would mangle. #11103 changed WHERE the env fragment
+# lands: @@BACKEND_ENV@@ is now substituted into the LAUNCH SCRIPT (a .sh), so the
+# durable fragment is SINGLE-$ — `${INNGEST_REDIS_PASSWORD}` expands at launch time
+# below the xtrace refusal; the old `$${...}` spelling was the systemd escape and in a
+# .sh it would expand as the PID, not the credential. NOTE the `exec` inside the launch
+# script still does NOT make inngest the unit's main PID — `doppler run` forks the
+# script's shell child and stays the MainPID itself (signal-forwarding supervisor),
+# which is why /proc/<MainPID>/exe resolves to doppler, not inngest.
 # #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
 # the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
 # every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
@@ -1755,7 +1798,10 @@ if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
   # pointed at a closed loopback port), not a diagnosis of an observed failure.
   log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. --sdk-url is pointed at a closed loopback port so the host adopts NO registry and cannot double-fire prod crons. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
 elif [[ "$REDIS_READY" == "1" ]]; then
-  BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
+  # SINGLE-$ (#11103): this fragment lands in the launch SCRIPT, not the unit — $$ there
+  # is the PID, not a systemd escape. The expansion still evaluates at launch time
+  # (below the script's xtrace refusal), inside the doppler run scope.
+  BACKEND_ENV='export INNGEST_REDIS_URI="redis://:${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
   BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'
   log "inngest-server ExecStart: durable backend (env-delivered URIs; bounded per-pool footprint open=5/idle=2/idle-time=1min; --postgres-max-open-conns sentinel FIRST) #6258"
 else
@@ -1764,7 +1810,13 @@ else
   log "inngest-server ExecStart: SQLite-only fail-safe (INNGEST_DURABLE_DEGRADED — Redis not ready)"
 fi
 unit_content="$(cat "$UNIT_FILE")"
-unit_content="${unit_content//@@BACKEND_ENV@@/$BACKEND_ENV}"
+# #11103: @@BACKEND_ENV@@'s only consumer moved from the unit to the launch script — the
+# env exports/unset must evaluate inside it (after its xtrace refusal), where the unit's
+# expansion-free ExecStart cannot carry them.
+launch_content="$(cat "$LAUNCH_SCRIPT")"
+launch_content="${launch_content//@@BACKEND_ENV@@/$BACKEND_ENV}"
+printf '%s\n' "$launch_content" > "$LAUNCH_SCRIPT"
+chmod 0755 "$LAUNCH_SCRIPT"
 unit_content="${unit_content//@@BACKEND_FLAGS@@/$BACKEND_FLAGS}"
 # #6178: wire the arm-atomicity ExecStartPre guard ONLY when the flip trio installed
 # (DEDICATED_FLIP=1 ⟹ DOPPLER_PROJECT=soleur-inngest AND the guard script is on disk).
@@ -1840,6 +1892,71 @@ systemctl restart inngest-heartbeat.service || log "warn: heartbeat oneshot non-
 systemctl enable --now inngest-server-probe.timer
 systemctl start inngest-server-probe.service || log "warn: server-probe oneshot non-zero (timer will retry hourly)"
 
+# #5150: 7-day status-gated trace retention. Dedicated host only. A host that has not
+# been replaced onto an image carrying these assets is not yet pruning. Missing assets
+# log and skip; they do not fail bootstrap. The timer is enabled only after psql is
+# present and --ensure-indexes succeeds. enable --now applies to the TIMER. The oneshot
+# is not started here, and Persistent=false so a fresh boot does not catch up.
+if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
+  if [[ -f /tmp/inngest-trace-retention.sh \
+        && -f /tmp/inngest-trace-retention.sql \
+        && -f /tmp/inngest-trace-retention.sqlite.sql ]]; then
+    install -d -o deploy -g deploy -m 0750 /var/lib/inngest
+    install -d -m 0755 /usr/local/lib/soleur/inngest-trace-retention
+    install -m 0755 /tmp/inngest-trace-retention.sh /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh
+    install -m 0644 /tmp/inngest-trace-retention.sql /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sql
+    install -m 0644 /tmp/inngest-trace-retention.sqlite.sql /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sqlite.sql
+    cat > /etc/systemd/system/inngest-trace-retention.service <<'RETENTIONUNITEOF'
+[Unit]
+Description=Expire finished Inngest trace and log history after 7 days (#5150)
+ConditionPathExists=/etc/default/inngest-server
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+PrivateTmp=true
+EnvironmentFile=/etc/default/inngest-server
+ExecStart=/usr/bin/flock -n /run/lock/inngest-trace-retention.lock @@DOPPLER_BIN@@ run --config @@DOPPLER_CONFIG@@ -- /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh
+RETENTIONUNITEOF
+    cat > /etc/systemd/system/inngest-trace-retention.timer <<'RETENTIONTIMEREOF'
+[Unit]
+Description=Daily Inngest trace retention (#5150)
+
+[Timer]
+OnCalendar=daily
+Persistent=false
+RandomizedDelaySec=30min
+AccuracySec=15min
+
+[Install]
+WantedBy=timers.target
+RETENTIONTIMEREOF
+    sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@DOPPLER_CONFIG@@|${DOPPLER_CONFIG}|" /etc/systemd/system/inngest-trace-retention.service
+    if ! command -v psql >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -y || log "warn: apt-get update failed; trace retention timer stays disabled (#5150)"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client || log "warn: postgresql-client install failed; trace retention timer stays disabled (#5150)"
+    fi
+    if ! command -v psql >/dev/null 2>&1 || [[ -z "${DOPPLER_BIN}" ]]; then
+      log "warn: trace retention timer not enabled (psql or doppler missing) (#5150)"
+    elif (
+      set -a
+      # The token stays in this subshell. doppler run injects the database URI into the child.
+      . /etc/default/inngest-server
+      set +a
+      exec "$DOPPLER_BIN" run --config "$DOPPLER_CONFIG" -- /usr/local/lib/soleur/inngest-trace-retention/inngest-trace-retention.sh --ensure-indexes
+    ); then
+      systemctl daemon-reload
+      systemctl enable --now inngest-trace-retention.timer || log "warn: trace retention timer enable failed (#5150)"
+      log "trace retention timer enabled (#5150)"
+    else
+      log "warn: trace retention indexes were not ensured; timer not enabled (#5150)"
+    fi
+  else
+    log "warn: trace retention assets not staged at /tmp; timer not installed (#5150)"
+  fi
+fi
+
 # #6178: enable the cutover flip poll timer (dedicated host only; daemon-reload above
 # already picked up the new units). It SHIPS ENABLED and is NEVER disabled for the host's
 # whole life (P0-1) — the FSM flag on soleur-inngest/prd is the sole gate, and keeping the
@@ -1847,12 +1964,6 @@ systemctl start inngest-server-probe.service || log "warn: server-probe oneshot 
 if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
   systemctl enable --now inngest-cutover-flip.timer
   log "cutover flip poll timer enabled (#6178)"
-fi
-# #6894: the LUKS cutover poll. Its flag is unset on every host until op=luks-cutover, and unset is
-# a no-op, so enabling it is inert until an operator arms it.
-if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
-  systemctl enable --now inngest-luks-cutover.timer
-  log "LUKS cutover poll timer enabled (#6894)"
 fi
 
 # In-place upgrade completion marker. Logged even when the restart above was refused

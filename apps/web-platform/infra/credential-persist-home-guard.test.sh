@@ -614,6 +614,10 @@ def classify(u):
     if '/usr/bin/stunnel4' in e:        # #10136 Inngest link TLS terminator: its ExecStartPre=+ fetch runs
         return 'tls-terminator'         # `doppler secrets get` (a read) as root outside the sandbox; no login,
                                         # no docker/doppler credential write to any home
+    if 'redis-server' in e:             # #11103: inngest-redis ExecStart is the bare daemon — the
+        return 'redis-daemon'           # `doppler run` token read moved into the ExecStartPre acl
+                                        # writer (aclfile instead of argv injection); the daemon
+                                        # itself persists no credential to any home
     return 'unknown'                    # fail-closed: new unit must be classified
 
 def map_scripts(u, root):

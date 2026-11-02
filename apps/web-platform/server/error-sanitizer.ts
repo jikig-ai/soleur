@@ -26,7 +26,7 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
   [ERR_NO_ACTIVE_SESSION]:
     "No active session. Please start a new conversation.",
   [ERR_REVIEW_GATE_NOT_FOUND]:
-    "This review prompt has already been answered.",
+    "This prompt is no longer waiting for an answer. If it expired, nothing was done.",
   [ERR_CONVERSATION_NOT_FOUND]:
     "Conversation not found. Please start a new session.",
   [ERR_REVIEW_GATE_TIMED_OUT]:

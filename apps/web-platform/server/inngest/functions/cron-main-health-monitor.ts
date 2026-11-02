@@ -113,12 +113,10 @@ export const cronMainHealthMonitor = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 */6 * * *" },
+      { event: "cron/main-health-monitor.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 */6 * * *" },
-    { event: "cron/main-health-monitor.manual-trigger" },
-  ],
-  cronMainHealthMonitorHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronMainHealthMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

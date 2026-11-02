@@ -257,7 +257,7 @@ else
 fi
 
 n_target=$(grep -cE '^[[:space:]]*-target=' <<<"$PLAN_BODY")
-if [[ "$n_target" -eq 1 ]] && grep -qxE '              -target=terraform_data\.journald_persistent( \\)?' <<<"$PLAN_BODY"; then
+if [[ "$n_target" -eq 1 ]] && grep -qxE '              -target=terraform_data\.journald_persistent( 2>&1 \| tf_redact_random_ids)?( \\)?' <<<"$PLAN_BODY"; then
   _report "M6c the plan carries exactly one -target=, and it is terraform_data.journald_persistent" ok
 else
   _report "M6c the plan carries exactly one -target=terraform_data.journald_persistent" fail "found ${n_target} -target= flag(s); a widened request enlarges the closure the gate must then refuse"
@@ -273,7 +273,7 @@ fi
 # THE row F10/AC13 turn on: the apply must consume the SAVED plan positionally. An
 # `apply -target=…` here would re-plan — the gate would have graded a document the apply
 # never reads, and the ci_ssh_private_key baked at plan time would be discarded.
-if grep -qxE '            terraform apply -no-color -input=false -auto-approve tfplan' <<<"$APPLY_BODY"; then
+if grep -qxE '            terraform apply -no-color -input=false -auto-approve tfplan( 2>&1 \| tf_redact_random_ids)?' <<<"$APPLY_BODY"; then
   _report "M6c the apply consumes the SAVED tfplan positionally (AC13)" ok
 else
   _report "M6c the apply consumes the SAVED tfplan positionally (AC13)" fail "no anchored 'terraform apply -no-color -input=false -auto-approve tfplan' line — a re-plan dissolves the chokepoint"

@@ -13,7 +13,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/emit-decision.sh"
 
 # trap BEFORE sourcing test-helpers.sh so the helpers' composed EXIT trap
-# (<prior>; _soleur_sb_cleanup) stacks on ours instead of being clobbered by it.
+# (_soleur_sb_cleanup; <prior>) stacks on ours instead of being clobbered by it.
 TMP="$(mktemp -d -t emitdec.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 

@@ -56,10 +56,35 @@ Live standing alarms over this source:
   read back `paused=false` on 2026-09-21. No `-var` flag and no tfvars entry is involved. The watched alias is built from
   `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
-  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
+  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (mutation rows).
   Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
   `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row
   whose `SYSLOG_IDENTIFIER` is `inngest-server-probe` (the event log on that host quotes probe lines, #8846).
+  Since #11526 the predicate is dual-channel: while Vector is down the probe POSTs the identical
+  field row curl-direct to this same source under `.shipper == "cloud-init-phone-home"` +
+  `.stage == "inngest-server-probe-vector-down"` with the fields in `.detail` (the
+  `inngest-tls-soak-10136.sh` envelope contract), and a second OR leg admits those rows — so a
+  Vector outage no longer blinds the alert. Readback for fallback rows selects on the decoded
+  envelope's `.shipper`/`.stage` equality, never a `message` substring. A page whose fallback row
+  carries an EMPTY `.detail` is the fail-loud schema-drop arm — decode it as a degraded emitter
+  (or, on the web host which has no LUKS volume, a degraded emit) rather than a mount regression.
+- **`logtail_exploration_alert.inngest_luks_key_probe_fail`** (#9927 item 2, evaluated every 300 s over a
+  900 s window) — `soleur-inngest-luks-key-probe-fail-prd`. Pages (email and push; `push = true` in the `.tf` is the source of truth and the apply read-back is the live proof). History, dated: it first shipped as "push once the apply accepts it", with a revert to `push = false` if refused; the apply accepted it (push run 40744937376 planned and created the alert with `push = true`; push run 40782617701 refreshed it and reported "No changes"). Pages on a `verdict=fail_*` row of
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE` from the probe's pinned emitters: the key the dedicated Inngest host holds no longer opens the volume's LUKS2
+  header, or is absent. `indeterminate` never pages. Auto-resolve: the incident resolves on time alone, about 4500 to 4800 s after the last failing row; no later row is needed, so a silent probe also resolves it, and resolution is therefore not evidence of recovery (only a `verdict=ok` row is). While the probe keeps failing it stays open; a `fail,indeterminate,fail` sequence can resolve and re-page once. The arithmetic is recorded once, in the `AUTO-RESOLVE WINDOW` comment above the alert in the `.tf`. Merged but inert until the owner delivers the signed
+  bundle that carries the probe (#11266); the absence (dead-man) alert is a follow-up. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh`. Runbook:
+  [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) "Key-continuity probe (#9927 item 2)".
+  Since #11527 the predicate is pinned to the probe's two real emitters (ADR-218 dual-channel convention):
+  leg A the journald row `SYSLOG_IDENTIFIER='inngest-cutover-flip'` with `verdict=fail_` on `message`; leg B the
+  phone-home envelope `shipper='cloud-init-phone-home'` + `stage='luks-key-probe'` with `verdict=fail_` on
+  `detail` (or an empty `detail`, the fail-loud schema-drop arm). The position-1 marker anchor is shared —
+  the phone-home message begins with the marker — so marker-quoting rows under a foreign emitter never count.
+  Readback: `--grep SOLEUR_INNGEST_LUKS_KEY_PROBE` (decode with the `betterstack-query.sh` header's `jq`),
+  then per row check `.shipper`/`.stage` on the phone-home envelope and decode `.detail` for the field row —
+  an empty `.detail` under that identity is itself a counted failure (position('')=0 never satisfies the field
+  check, so the `detail=''` disjunct is what carries it), not a healthy skip.
 - **Anthropic spend, three alerts** (#8611 / ADR-243; drift guard
   `apps/web-platform/test/infra/inngest-step-524-alert.test.sh`). All three are aggregates only,
   so the email names the condition, never a row:
@@ -94,9 +119,11 @@ Live standing alarms over this source:
     3. The Sentry ops that say what the single-flight guard did (feature `cron-claude-eval`):
        `claude-eval-singleflight-join` — a retry reached the live child (or its settled result),
        one marker, **the guard worked**; `claude-eval-singleflight-no-runid` — a spawn had no
-       well-formed run id, **the guard was bypassed**, investigate. Feature `inngest-serve`, op
-       `inngest-stream-consumer-cancel` — a step stream's consumer disconnected (one event per drop;
-       its tags name the function, step and whether the request was signed).
+       well-formed run id, **the guard was bypassed**, investigate.
+       (Retired, #8628 / PR #11381: feature `inngest-serve` op `inngest-stream-consumer-cancel`
+       used to fire on a step stream's consumer disconnect — its only emitter was
+       `stream-detach.ts`, deleted by the inngest@4 upgrade. Drops are now detected server-side
+       via the `inngest_step_524` needle above.)
   - **`logtail_exploration_alert.claude_cost_daily_burn`** (hourly, trailing 24 h) —
     `soleur-claude-cost-daily-burn-prd`. Pages when the cron `SOLEUR_CLAUDE_COST` markers' summed
     `cost_usd` exceeds **$25** (`local.claude_cost_daily_burn_usd`; recalibration on #8613). The sum
@@ -106,25 +133,47 @@ Live standing alarms over this source:
     [Querying Anthropic cost markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily).
     A single source far above its `--max-budget-usd` cap (`server/inngest/cron-budgets.ts`), or two
     markers per run `id` (the query under the 524 alert above), is the lead.
-  - **`logtail_exploration_alert.claude_cost_capture_dark`** (hourly, trailing 24 h) —
-    `soleur-claude-cost-capture-dark-prd`. Pages when 24 h holds no cron cost marker with a
-    non-null `cost_usd` AND no credit-probe RED row (`op=anthropic-credit-exhausted` /
-    `anthropic-key-invalid`). The marker path is broken (the emitter, Vector, or the field moved
-    again), so the burn alert above is blind. An out-of-credit day stays quiet: that page is the
-    `anthropic-credit-exhausted` Sentry issue alert (the credit probe's own cron monitor is
-    routed since #8630 but muted, #8704).
-- **`logtail_exploration_alert.luks_monitor_host_timer_dark`** (#8706, hourly over a trailing 27 h
-  window, `lower_than 1`, missing data counts as zero) — `soleur-luks-monitor-host-timer-dark-prd`.
-  Pages (team email) when no `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` carries
-  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own
-  nightly LUKS probe has not reported a PASSING run. It is host-scoped to web-1: web-2
-  (`soleur-web-2`) ships to the same source. The daily `workspaces-luks-verify.yml` rows never carry
-  that unit, so they cannot mask it. A host run that fails an assert, or a Vector or Logs-source
-  outage, also trips it. Defined in
-  `apps/web-platform/infra/betterstack-logs-alerts.tf`; the unit it watches is delivered by
-  `terraform_data.luks_monitor_install` (`workspaces-luks.tf`); self-health via the `logs_alert` arm
-  of `reconcile-live-heartbeats.ts`. Runbook and no-SSH decode:
+  - **`logtail_exploration_alert.claude_cost_capture_dark` — RETIRED (#11631).** Its successor is the Better
+    Stack heartbeat `soleur-claude-cost-capture-prd` (`betteruptime_heartbeat.claude_cost_capture`, period
+    3600 s, grace 7200 s, born paused, armed 2026-10-31 (#11631)). It shares the luks alert's class (a native alert with `query_period` 86400 s) but its marker
+    is not strictly once a day: it fires a few times a day (Phase 0 measured n=4 qualifying rows in 24 h), so
+    the 33-nights `Current value: 0` finding below is luks-specific (#11048), not measured for cost (#11049).
+    The sibling burn alert `claude_cost_daily_burn` (86400 s) may share the hot-window blind spot; that is
+    UNMEASURED. The native alert could not be trusted to see its row, so
+    `scripts/deadman-heartbeat-feeder.sh claude-cost-capture` (hourly, via
+    `scheduled-deadman-heartbeat-feeder.yml`) reads the archive (`remote()` UNION `s3Cluster`) and beats the
+    heartbeat only if the trailing 24 h holds a cron cost marker with a non-null `cost_usd` OR a credit-probe
+    RED row (`op=anthropic-credit-exhausted` / `anthropic-key-invalid`). No qualifying row means no beat and the
+    heartbeat pages: the marker path is broken (the emitter, Vector, or the field moved again), so the burn
+    alert above is blind. An out-of-credit day stays quiet: that page is the `anthropic-credit-exhausted`
+    Sentry issue alert. **Step 0 on a page:** check the Sentry monitor `scheduled-deadman-heartbeat-feeder`
+    and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml` before suspecting the emitter (a
+    dark watchdog clock false-pages this heartbeat), then
+    `gh run view <id> --log | grep 'deadman-feeder: target=claude-cost-capture'` (verdict dictionary:
+    [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706)).
+    On `no_qualifying_row` the next action is the [Querying Anthropic cost
+    markers](#querying-anthropic-cost-markers-soleur_claude_cost--_daily) section below: query the raw markers
+    to see whether the emitter, Vector or the field moved. This target has no `any_rows` positive control, and
+    its predicate keeps the beat if EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, a
+    known weak limit: a credit-probe RED row inside the window keeps the beat and can mask a dead marker path.
+- **`logtail_exploration_alert.luks_monitor_host_timer_dark` — RETIRED (#11631).** Its successor is the
+  Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`
+  (`betteruptime_heartbeat.luks_monitor_host_timer`, period 3600 s, grace 7200 s, born paused, armed 2026-10-31 (#11631)). The retired alert read `Current
+  value: 0` through 33 nights of passing once-a-day rows (incident 1023423999, #11048). The feeder
+  `scripts/deadman-heartbeat-feeder.sh luks-monitor-host-timer` beats it hourly only if the archive holds, in
+  the trailing 27 h (97200 s), a `luks-monitor` row reading `OK: /mnt/data is LUKS-backed` with
+  `_SYSTEMD_UNIT=luks-monitor.service` and `host_name = 'soleur-web-platform'`, i.e. web-1's own nightly LUKS
+  probe passed. It is host-scoped to web-1: web-2 (`soleur-web-2`) ships to the same source. The daily
+  `workspaces-luks-verify.yml` rows never carry that unit, so they cannot mask it. A host run that fails an
+  assert, or a Vector or Logs-source outage, also withholds the beat. **Step 0 on a page:** check the Sentry
+  monitor `scheduled-deadman-heartbeat-feeder` and `gh run list -a --workflow scheduled-deadman-heartbeat-feeder.yml`
+  first. The unit it watches is delivered by `terraform_data.luks_monitor_install` (`workspaces-luks.tf`).
+  Runbook and no-SSH decode:
   [`workspaces-luks-cutover-6604.md`](./workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706).
+  No NEW native logs alert may use a `query_period` above 900 s (sentinel
+  `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh`; the live legacy alerts
+  `claude_cost_daily_burn` and `inngest_luks_wrong_volume` predate it and are allowlisted).
+  Arming runbook: [Arming the dead-man heartbeats](./workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631).
 - **`logtail_exploration_alert.workspaces_luks_deadman_fired`** (#9045, `higher_than 0`, missing
   data counts as zero): `soleur-workspaces-luks-deadman-fired-prd`. It pages (team email) on any
   `luks-monitor` row from `host_name = 'soleur-web-platform'` whose message starts with
@@ -299,6 +348,29 @@ Live standing alarms over this source:
   affected credential FIRST, counts-only (never echo the value). Runbook:
   [`registry-zot-credential-shape-10321.md`](./registry-zot-credential-shape-10321.md).
 
+- **`logtail_exploration_alert.web_nic_guard_unpinned_url`** (#9639 F8, `higher_than 0` over 300 s,
+  checked every 60 s, missing data counts as zero): `soleur-web-nic-guard-unpinned-url-prd`. Pages
+  on ANY `SYSLOG_IDENTIFIER='web-nic-guard'` row whose message contains `unpinned_url` — the
+  private-NIC guard's refusal to POST the Better Stack token to an unpinned ingest URL. The
+  refusal also withholds the `web_nic_guard` liveness beat, so a page can coincide with that
+  beat's lapse on a healthy host. No host conjunct: the guard runs on web-1 and is baked for
+  web-2-class hosts. Runbook:
+  [`web-nic-guard-unpinned-url-alert.md`](./web-nic-guard-unpinned-url-alert.md).
+
+- **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
+  checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
+  Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
+  and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
+  row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
+  rows, including `unexpected-exit(...)`); the doppler error lines under the same tag carry a string
+  `message` and do not count. So it sees a unit that fails BEFORE the script's first emit (a revoked or
+  invalid flip token) and does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
+  emails during an owner-authorized host replace (expected; it clears at the first row after boot).
+  To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
+  with `--limit 500` (about 160 string rows per hour share the tag, so the default 100 can crowd the object rows out), as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
+  (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section
+  "Flip-token split".
+
 - **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
   checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
   (team email on the free tier) when a registry-plane row shipped to this source carries a FIRST `clientIP`
@@ -350,6 +422,19 @@ Do NOT conclude "I can't verify from here" and stop. This mistake has now happen
 twice (the note below, and #5934); the script's error message itself now spells out
 the correct invocation. See hard rule `hr-verify-repo-capability-claim-before-assert`
 — a fail-safe/degraded probe output is *inconclusive*, never proof of a capability gap.
+
+## Exit 3 from the 11211 dispatch-recovery probe (not a Better Stack read)
+
+`scripts/followthroughs/dispatch-recovery-sweeper-11211.sh` reads Sentry and the Supabase Management API, never Better Stack; it is listed here because it is the sibling of the Better Stack follow-through probes in `scheduled-followthrough-sweeper.yml`. Its exit 3 (CANNOT ESTABLISH) repeats in every daily sweeper comment and is never a verdict. The comment carries a fixed reason; the credentials are GitHub repository secrets, not Doppler (`SENTRY_ACTIONS_RO_TOKEN` is deliberately not mirrored to Doppler, per the workflow comment; `SUPABASE_ACCESS_TOKEN` is bound the same way). Map of the reason:
+
+| Reason in the comment | Meaning | Action |
+| --- | --- | --- |
+| `<NAME> unusable` | The secret is unset, empty or has a character outside the token allowlist. | Re-set the repository secret named in the reason. |
+| `Sentry read failed (http=401)` or `(http=403)`, or the same for Supabase | The token was rejected: revoked, expired, or without the read scope. | Re-mint the token with read-only scope and update the repository secret. |
+| `... (http=000)` | No HTTP answer: DNS or connect failure, or the probe's `--max-time 30` expired. | Usually transient; it repeats daily, so act only if it persists. |
+| `... (http=429)` | Rate limited by the vendor. | Transient; the next daily sweep retries. |
+| `... (http=5xx)` | Vendor error. | Transient; check the vendor status page if it persists. |
+| `... unparseable`, `the query is not a single SELECT` | The response shape changed, or the pinned query was edited. | Read the probe header and its suite; a code fix, not a credential fix. |
 
 ## Why this exists (the three-token trap)
 
@@ -576,7 +661,7 @@ means "the deny channel went dark", not "no denials").
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(.component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
 ```
 
 Three caveats before reading a zero as clean:
@@ -643,10 +728,30 @@ complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
 row carries `component: "compound-promote"` (emitter:
 `server/compound-promote-marker.ts`, PR #8344).
 
+Further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
+the scheduled row's field set is unchanged, so their absence is the normal shape for
+`trigger: "cron"`: `input_source` (`patterns`; never emitted on the corpus arm), `patterns_open` (count of open
+pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
+row), `ledger_suppressed` (clusters dropped because the same recomputed hash was already
+proposed, each also a `ledger-suppressed` entry in `refusals[]` / `refusal_detail[]`),
+`ledger_prs_scanned` (the raw GitHub search hit count, before title and author filtering)
+and `ledger_title_skipped` (bot-authored search items skipped because the title did not
+match the anchored promote-cluster title pattern; warn-level, does not fail by itself, but if
+every bot PR was retitled the read fails `drift`; a human-retitled PR stops suppressing). The
+early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source` (and the boolean `create_requested`, below). Every one
+is a number or a closed enum (`create_requested` is a boolean). The ledger read has a usable ceiling of 999 search hits (10 pages of
+100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
+after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
+a static `error_message` and an `error_class` that is `StepError` in the SDK's shape (an exhausted `step.run` reaches the handler as `StepError`, and a production bundle may minify class names, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
+`rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`, `transport`) are the Sentry `cause`
+tag on op `ledger-read-failed`. How to read
+them: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The `input`
+option and the patterns-path marker fields".
+
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
-  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
               | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
               | [$r.dt, .trigger, .status, (.corpus_count//"-"), (.clusters_proposed//"-"),
                  (.clusters_opened//"-"), ((.refusals//[])|join(",")),
@@ -658,6 +763,60 @@ doppler run -p soleur -c prd_terraform -- \
                           + ":hunk=\(if .diff_hunk == null then "-" else .diff_hunk end)")
                     | join(" | "))] | @tsv'
 ```
+
+The six patterns-path fields are top-level keys of the decoded `.message` object, so they need no
+extra decoding. Copy-paste recipe (rows from a manual `input:"patterns"` run only; a row with
+`-` in every column on a manual trigger means the option did not reach the handler, or the run was a manual corpus run):
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
+              | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote" and .trigger == "manual")
+              | [$r.dt, .status, (.input_source//"-"), (.patterns_open//"-"), (.ledger_read//"-"),
+                 (.ledger_suppressed//"-"), (.ledger_prs_scanned//"-"), (.ledger_title_skipped//"-"),
+                 (.error_class//"-")] | @tsv'
+```
+
+The gated new-skill create arm (#10550, dark-launched, ADR-092 create-only amendment) adds closed fields. On a
+manual `patterns` row `create_requested` (boolean) records whether the event carried `allow_create === true`, also on
+the early `disabled`, `deduped` and `week-cap-reached` rows; the scheduled row and a manual corpus row carry none of
+the create fields. When the arm ran the row also carries `create_arm` (`ran`, emitted ONLY then), `kind` (`create`),
+`create_outcome` (`no_action` | `refused` | `opened`) and, as the case needs, `create_no_action_reason`
+(`no-pattern-qualifies` | `all-owned` | `other`), `create_offered` (an integer count of the candidate patterns the arm would send to the
+model; whenever a call was made it is the number offered, on a pre-call refusal it is the candidate count and no call was
+spent, on a pre-call `no_action` it is `0`; absent on a `week-cap` or `index-empty` refusal, on `model-invalid/internal` (a step
+defect, Sentry op `create-propose-internal`) and on a row whose memoized step output predates the field), `create_refusal_class` (one of `week-cap`, `create-open`,
+`index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
+`stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
+`create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
+`create_max`, `create_bytes` (input-size), `create_path_index`, `create_file_index`, `create_missing_tools`,
+`create_exit` (a gate script's exit code, or the exit status of a failed git call in the persist step), `create_changed_count`, and `create_pr` (the draft PR number). A refused
+create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its class is the field above) and is
+mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
+(`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
+`create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
+create arm". To read a `no_action` row against a `refused`
+one, see the subsection "Reading a live-fire row" in that section. Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
+`patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
+              | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote" and .trigger == "manual" and .create_requested != null)
+              | [$r.dt, .status, (.create_requested|tostring), (.create_arm//"-"), (.create_outcome//"-"),
+                 (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
+                 (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
+                 (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-"), (.create_offered//"-")] | @tsv'
+```
+
+A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated
+week cap ends `week-cap-reached`; `empty-corpus`, `deduped` and `disabled` are early exits too, and `anthropic-truncated`
+means the edit clustering answer was truncated, which skips the arm on that path). A `create_requested` of `false` on a row you expected to create means the
+`allow_create` event field did not reach the handler as the boolean `true`.
 
 Reading it:
 
@@ -671,7 +830,8 @@ Reading it:
   cluster was refused" — the two states #8281 was filed to distinguish. The
   refusal enums name the gate: `diff-structural-op` / `diff-path-refused` (the
   allowlist), `corpus-shrink-refused` (the post-apply floor),
-  `skill-conflict-guard`, `byte-budget-overflow`, `not-committed-*`.
+  `skill-conflict-guard`, `skill-conflict-guard-unverifiable`, `byte-budget-overflow`,
+  `not-committed-*`.
   `refusal_detail[].cluster_hash` recurring week over week is a cluster the
   proposer keeps producing and the gates keep refusing.
 - **`diff-underivable` is no longer an emitted value (#8427).** It was ONE
@@ -714,6 +874,9 @@ Reading it:
   | reason | what actually happened | probe class |
   |---|---|---|
   | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
+  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` (one less on an `allow_create` run) before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
+  | `cluster-duplicate` | patterns arm only: a second cluster with the same source set in one run | N |
+  | `create-refused` | create arm only (manual `patterns` + `allow_create`): a gate refused the one create; the closed `class` and `detail` are the marker fields `create_refusal_class` and `create_detail`, not part of this enum. Written once per refused create, no `refusal_detail` entry (no `diff_*` shape) | N |
 
   `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
   for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint
@@ -812,7 +975,7 @@ canary container's rows are not shipped (Vector matches the prod container name 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
 ```
 
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
@@ -833,7 +996,7 @@ exists to stop and the follow-through for #8076 grades it from GitHub.
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_RUN_REPORT_SWEEP \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(type == "object" and .SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
 ```
 
 Rows before 2026-09-19 (PR #8344) decode to a STRING `.message`; the

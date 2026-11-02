@@ -680,10 +680,10 @@ export const cronSeoAeoAudit = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 11 * * 1" },
+      { event: "cron/seo-aeo-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 11 * * 1" },
-    { event: "cron/seo-aeo-audit.manual-trigger" },
-  ],
-  cronSeoAeoAuditHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronSeoAeoAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

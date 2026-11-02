@@ -24,7 +24,7 @@ pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 [[ -r "$SUT" ]] || { echo "  FAIL: SUT not readable at $SUT"; echo "=== Results: 0/1 passed, 1 failed ==="; exit 1; }  # before the trap is installed
-command -v python3 >/dev/null || { echo "  SKIP: python3 unavailable — the lint did NOT run."; echo "=== Results: 0/0 passed, 0 failed (DECLINED: no python3) ==="; exit 0; }
+command -v python3 >/dev/null || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
 # PyYAML is a hard requirement, not a decline: the paired `-live` arm imports it unguarded, so
 # a green SKIP here would sit beside an ImportError there reported as a FINDING (rc 1). The
 # `test-scripts` shard is documented as bash + python3; mirror digest-oracle-guard.test.sh.

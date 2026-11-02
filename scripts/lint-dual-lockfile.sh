@@ -2,8 +2,10 @@
 # Guard 1 — the npm lockfile is the single lockfile of record.
 #
 # Property (deliberately an EXISTENCE property, not a co-location one):
-#   (a) no tracked `bun.lock` / `bun.lockb` exists anywhere in the repository, and
-#   (b) no tracked `bunfig.toml` declares an `[install]` section.
+#   (a) no tracked `bun.lock` / `bun.lockb` exists anywhere in the repository,
+#   (b) no tracked `bunfig.toml` declares an `[install]` section, and
+#   (c) no tracked non-npm lockfile name (`yarn.lock`, `pnpm-lock.yaml`,
+#   `npm-shrinkwrap.json` — the last supersedes package-lock.json for `npm ci`).
 #
 # Why existence rather than "no directory carries both": bun stays installed as the test
 # runner, so a habitual `bun install` silently recreates `bun.lock` and a routine commit
@@ -24,9 +26,11 @@
 # ADR-191. Registered in scripts/test-all.sh via lint-dual-lockfile.test.sh.
 set -euo pipefail
 
-# Verified 2026-08-16: root, apps/web-platform,
-# plugins/soleur/skills/pencil-setup/scripts, spike.
-MIN_PACKAGE_LOCK_DIRS=4
+# Verified 2026-10-26: root, apps/web-platform, plugins/soleur/skills/pencil-setup/scripts,
+# plugins/soleur/skills/pencil-setup/scripts/pen-cli (the pinned headless engine's lockfile pair,
+# #11156), spike. The pen-cli prefix has no .npmrc supply-chain floor by design (ADR-191
+# addendum): its single dependency is pinned exactly and installed with `npm ci --ignore-scripts`.
+MIN_PACKAGE_LOCK_DIRS=5
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -45,12 +49,18 @@ fi
 
 bun_locks=()
 bunfigs=()
+other_locks=()
 pkg_lock_dirs=()
 for f in "${tracked[@]}"; do
   case "$f" in
     bun.lock | */bun.lock | bun.lockb | */bun.lockb) bun_locks+=("$f") ;;
     bunfig.toml | */bunfig.toml | bunfig.local.toml | */bunfig.local.toml) bunfigs+=("$f") ;;
     package-lock.json | */package-lock.json) pkg_lock_dirs+=("$(dirname "$f")") ;;
+    # Non-npm lockfile names are invisible to the drain guard (which reads
+    # package-lock.json only) and to clause (a). npm-shrinkwrap.json is the sharpest:
+    # `npm ci` prefers it OVER package-lock.json, so one would govern installs while
+    # every guard reads a stale file. Flagged by review #11823.
+    yarn.lock | */yarn.lock | pnpm-lock.yaml | */pnpm-lock.yaml | npm-shrinkwrap.json | */npm-shrinkwrap.json) other_locks+=("$f") ;;
   esac
 done
 
@@ -63,6 +73,13 @@ fi
 if [[ ${#bun_locks[@]} -gt 0 ]]; then
   for f in "${bun_locks[@]}"; do
     fail "tracked bun lockfile: ${f}. npm is the single lockfile of record (ADR-191); delete it and install with 'npm ci --ignore-scripts'. Leaving it re-creates the dual-lockfile split that makes every Dependabot PR born red (#7084)."
+  done
+fi
+
+# --- Clause (c): no non-npm lockfile names. ---
+if [[ ${#other_locks[@]} -gt 0 ]]; then
+  for f in "${other_locks[@]}"; do
+    fail "tracked non-npm lockfile: ${f}. package-lock.json is the single lockfile of record (ADR-191); npm-shrinkwrap.json in particular would supersede it for 'npm ci' while the drain guard keeps reading package-lock.json."
   done
 fi
 
@@ -81,7 +98,7 @@ for f in ${bunfigs[@]+"${bunfigs[@]}"}; do
   fi
 done
 
-echo "lint-dual-lockfile: scanned ${#tracked[@]} tracked files; ${#pkg_lock_dirs[@]} package-lock.json director(ies) (floor ${MIN_PACKAGE_LOCK_DIRS}); ${#bunfigs[@]} bunfig.toml; ${#bun_locks[@]} bun lockfile(s)."
+echo "lint-dual-lockfile: scanned ${#tracked[@]} tracked files; ${#pkg_lock_dirs[@]} package-lock.json director(ies) (floor ${MIN_PACKAGE_LOCK_DIRS}); ${#bunfigs[@]} bunfig.toml; ${#bun_locks[@]} bun lockfile(s); ${#other_locks[@]} other lockfile(s)."
 
 if [[ $failures -gt 0 ]]; then
   echo "::error::lint-dual-lockfile: ${failures} violation(s)." >&2

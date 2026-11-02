@@ -1,0 +1,107 @@
+# suite	F	outcome in PR4b	reason	note	commits_90d_F at PR4b (copied from the archived PR4b edges-decisions.tsv, non-declare rows; 106 rows, 105 still baselined)
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/scripts/delegation-verify.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/boundary-prefix.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ci-pr-affected-preactivation.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm-mutations.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/destructive-command-guard-hook.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/flag-detach-shared.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/flag-org-scoping-pr2.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/hold-gate-eval.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/inngest-config-bundle-mirror.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-9321-stages.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-ack-guard.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-agent-runnable.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ship-followthrough-directive.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		14
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/sole-copy-drift-check.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/technical-ruling-gate.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/actions-queue-health.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/ci-demand-census.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/web2-luks-live-6931.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/inngest-probe-heartbeat-feeder.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/lint-dual-lockfile.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/marketplace-drift-check.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/ship-incident-pir-gate-mutation.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/sweep-followthroughs.sh	out-of-slice	ascending-reveal cut at cumulative 130		10
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/test-content-publisher.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/test-jaccard-duplicates.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/grep-q-pipe-guard.test.sh	scripts/watch-registration-narrowing-9564.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+plugins/soleur	.claude/hooks/prod-write-defer-gate.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+plugins/soleur	.claude/hooks/ship-soak-followthrough-gate.sh	out-of-slice	ascending-reveal cut at cumulative 130		6
+plugins/soleur	apps/web-platform/infra/push-infra-config.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+plugins/soleur	apps/web-platform/lib/types.ts	out-of-slice	ascending-reveal cut at cumulative 130		5
+plugins/soleur	tests/scripts/test-infra-privileged-tier-census.sh	out-of-slice	ascending-reveal cut at cumulative 130		19
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	held-unsure	recorder-unreliable		9
+scripts/betterstack-emitter-read	scripts/check-deploy-script-parity.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+scripts/betterstack-emitter-read	scripts/cutover-inngest.sh	out-of-slice	ascending-reveal cut at cumulative 130		31
+scripts/betterstack-emitter-read	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rehearsal-evidence.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rung2-evidence-capture.sh	out-of-slice	ascending-reveal cut at cumulative 130		15
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-soak-6178.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-clientip-alert-7530.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-htpasswd-stdin-10119.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-luks-live-8386.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+scripts/betterstack-emitter-read	scripts/followthroughs/send-failed-alert-probe-8097.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+scripts/betterstack-emitter-read	scripts/followthroughs/workspaces-luks-soak-6604.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+scripts/betterstack-emitter-read	scripts/followthroughs/zot-log-channel-7440.sh	out-of-slice	ascending-reveal cut at cumulative 130		7
+scripts/betterstack-emitter-read	scripts/followthroughs/zot-soak-6122.sh	out-of-slice	ascending-reveal cut at cumulative 130		10
+scripts/betterstack-emitter-read	scripts/inngest-probe-heartbeat-feeder.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+scripts/betterstack-emitter-read	scripts/probe-inngest-524-count.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+scripts/betterstack-emitter-read	scripts/registry-replace-preflight.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+scripts/betterstack-emitter-read	scripts/zot-restart-loop-alarm.sh	out-of-slice	ascending-reveal cut at cumulative 130		7
+tests/scripts/scratch-residue	.claude/hooks/brand-hex-commit-gate.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+tests/scripts/scratch-residue	.claude/hooks/phase-surface-hint.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+tests/scripts/scratch-residue	.claude/hooks/security_reminder_hook.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+tests/scripts/scratch-residue	.claude/hooks/ship-unpushed-commits-gate.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		8
+tests/scripts/scratch-residue	.claude/hooks/skill-context-queries.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+tests/scripts/scratch-residue	.github/scripts/bump-inngest-bootstrap-pin.sh	out-of-slice	ascending-reveal cut at cumulative 130		7
+tests/scripts/scratch-residue	scripts/dogfood/grok-gpu-bootstrap.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+tests/scripts/scratch-residue	scripts/lint-agents-rule-budget.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+tests/scripts/scratch-residue	scripts/review-reminder-liveness.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-private-nic-8539.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+.claude/hooks/hook-input-contract.test.sh	scripts/rule-metrics-aggregate.sh	held-hot	held-hot		10
+.claude/hooks/rule-incident-marker-capture.test.sh	scripts/rule-metrics-aggregate.sh	held-hot	held-hot		10
+.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/pre-merge-rebase.sh	held-hot	held-hot		14
+apps/cla-evidence/test/ccla-add.test.sh	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts	held-unsure	recorder-unreliable		1
+plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/guardrails.sh	held-hot	held-hot		13
+plugins/soleur/skills/incident/test/redact-sentinel.test.sh	apps/web-platform/test/plugin-root-anchoring.test.ts	held-unsure	recorder-unreliable		11
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/brand-hex-commit-gate.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/git-commit-secret-scan.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/guardrails.sh	out-of-slice	ascending-reveal cut at cumulative 130		13
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/incidents.sh	out-of-slice	ascending-reveal cut at cumulative 130		4
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		3
+plugins/soleur/test/gdpr-gate-self-test.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts	held-unsure	declared-F-never-opened		4
+plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh	held-unsure	bulk-reader		10
+plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh	held-hot	rule-metrics-aggregate.sh hot with accept rows		10
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/affected-tests.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	out-of-slice	ascending-reveal cut at cumulative 130		9
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js	out-of-slice	ascending-reveal cut at cumulative 130		6
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh	held-brittle	held-brittle		4
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	tests/scripts/test-audit-ruleset-bypass.sh	out-of-slice	ascending-reveal cut at cumulative 130		7
+scripts/battery-tag-authorship	.github/scripts/test/test-vinngest-digest-freshness.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+scripts/battery-tag-authorship	apps/web-platform/infra/run-registered-suites.sh	out-of-slice	ascending-reveal cut at cumulative 130		31
+scripts/battery-tag-authorship	scripts/battery-ref-guard.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		2
+scripts/battery-tag-authorship	scripts/lib/repo-write-boundary.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		5
+scripts/battery-tag-authorship	tests/scripts/test-plan-gate-preamble.sh	out-of-slice	ascending-reveal cut at cumulative 130		1
+scripts/ci-push-dedupe	plugins/soleur/test/ci-e2e-skip-anchors.test.sh	held-brittle	held-brittle		8
+scripts/ci-push-dedupe	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	held-brittle	held-brittle		9
+scripts/compound-promote	scripts/learning-retrieval-bench.sh	held-brittle	held-brittle		9
+scripts/followthrough-varq-ban	scripts/betterstack-query.sh	held-unsure	declared-F-never-opened		9
+scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh	held-unsure	declared-F-never-opened		10
+scripts/followthroughs/ccla-representative-icla-7922	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts	held-unsure	recorder-unreliable		2
+scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh	out-of-slice	ascending-reveal cut at cumulative 130		31
+scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh	held-hot	held-hot		17
+scripts/tmpfs-guard	plugins/soleur/scripts/lib/tmp-classify.sh	held-unsure	recorder-unreliable		5
+tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	held-hot	chain: real read betterstack-query.sh (9 commits) reveals mentions on a hot file		4
+tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	out-of-slice	ascending-reveal cut at cumulative 130		51
+tests/scripts/git-data-rung2-evidence-capture	scripts/betterstack-query.sh	held-unsure	recorder-unreliable		9
+tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh	held-unsure	recorder-unreliable		15
+tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh	held-hot	held-hot		31
+tests/scripts/no-tofu-ssh-mutation	apps/web-platform/infra/infra-config-gate.test.sh	held-unsure	bulk-reader		7
+tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh	held-unsure	declared-F-never-opened		9
+tests/scripts/inngest-host-dark-gate	scripts/lib/inngest-probe-row.sh	kept-for-census	-	-	1
+scripts/inngest-probe-heartbeat-feeder	scripts/lib/inngest-probe-row.sh	already-undrained	-	-	1

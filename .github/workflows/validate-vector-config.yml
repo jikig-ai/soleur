@@ -20,6 +20,11 @@ on:
       - "apps/web-platform/infra/vector.tf"
       - "apps/web-platform/infra/vector-egress-rollup.test.toml"
       - "scripts/vector-egress-rollup.test.sh"
+      - "apps/web-platform/infra/vector-terminator-filter.test.toml"
+      - "scripts/vector-terminator-filter.test.sh"
+      # The terminator filter suite reads the stunnel config in this file (no debug and no output key), and
+      # the unit's definition names the journal identity the vector.toml unit lists must keep matching.
+      - "apps/web-platform/infra/cloud-init-inngest.yml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -34,6 +39,11 @@ on:
       - "apps/web-platform/infra/vector.tf"
       - "apps/web-platform/infra/vector-egress-rollup.test.toml"
       - "scripts/vector-egress-rollup.test.sh"
+      - "apps/web-platform/infra/vector-terminator-filter.test.toml"
+      - "scripts/vector-terminator-filter.test.sh"
+      # The terminator filter suite reads the stunnel config in this file (no debug and no output key), and
+      # the unit's definition names the journal identity the vector.toml unit lists must keep matching.
+      - "apps/web-platform/infra/cloud-init-inngest.yml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -80,7 +90,9 @@ jobs:
     # always() + `!= 'true'` reads the skip as "" and runs (#8919).
     if: always() && needs.detect-duplicate.outputs.duplicate != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # 8, not 5: a past run took 284 s against the old 300 s limit, and the terminator-filter suite (a Vector test
+    # plus its mutation rows) and the admission suite's mutation rows add to a cold-cache run.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -168,8 +180,8 @@ jobs:
         run: |
           set -euo pipefail
           f=apps/web-platform/infra/vector.toml
-          grep -qE '^collectors = \["cpu", "memory", "disk", "filesystem", "load"\]$' "$f" \
-            || { echo "FAIL: trimmed collectors list missing/drifted in $f (quota guard, #5110)"; exit 1; }
+          grep -qE '^collectors = \["memory", "filesystem"\]$' "$f" \
+            || { echo "FAIL: trimmed collectors list missing/drifted in $f (quota guard, #5110 — trimmed to [memory, filesystem] at 900s in #7577)"; exit 1; }
           grep -qE '^mountpoints\.includes = \[' "$f" \
             || { echo "FAIL: mountpoints.includes (plural, array) missing in $f — a misspelling is a silent no-op in vector validate (quota guard, #5110)"; exit 1; }
 
@@ -192,6 +204,18 @@ jobs:
           VECTOR_BIN: vector
           REQUIRE_VECTOR_TEST: "1"
         run: bash scripts/vector-egress-rollup.test.sh
+
+      # The TLS terminator's journal filter (inngest_terminator_filter). `vector validate --no-environment`
+      # accepted a version of this condition that did not compile; only `vector test` caught it, so this is
+      # the proof the filter behaves, and it is blocking. REQUIRE_VECTOR_TEST turns a missing binary into a
+      # failure instead of a skip. The suite also runs its Guard 2 mutation rows over copies of vector.toml.
+      - name: Terminator journal filter unit tests (BLOCKING)
+        env:
+          BETTERSTACK_LOGS_TOKEN: fixture-only-do-not-use-in-prod
+          SENTRY_USERID_PEPPER: fixture-only-do-not-use-in-prod
+          VECTOR_BIN: vector
+          REQUIRE_VECTOR_TEST: "1"
+        run: bash scripts/vector-terminator-filter.test.sh
 
       # Better Stack source ID + cluster appear in vector.toml (load-bearing)
       # AND in 4 disclosure surfaces (legal corpus). Drift between them goes

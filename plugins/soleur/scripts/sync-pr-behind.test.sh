@@ -133,6 +133,16 @@ if [[ "$1 $2" != "pr view" ]]; then
 fi
 # The standalone loop first checks the PR's head branch (kind=wrong_branch, exit 12).
 # Answer it with the fixture branch; it is not a state read, so it is not counted.
+# The head read is request-shaped: a plain `--json headRefName` gets the bare head; a read that also asks for baseRefName
+# (`--json headRefName,baseRefName --jq <program>`) gets the raw JSON, run through the --jq the SUT passed (the PR's base is `main`).
+hj=""; hq=""; hp=""
+for a in "$@"; do
+  case "$hp" in --json) hj="$a" ;; --jq) hq="$a" ;; esac
+  hp="$a"
+done
+case "$hj" in
+  headRefName,baseRefName) printf '%s' '{"headRefName":"feature","baseRefName":"main"}' | jq -r "$hq"; exit $? ;;
+esac
 for a in "$@"; do [[ "$a" == "headRefName" ]] && { echo "feature"; exit 0; }; done
 for a in "$@"; do [[ "$a" == "state,mergeStateStatus" ]] && found=1; done
 if [[ -z "${found:-}" ]]; then

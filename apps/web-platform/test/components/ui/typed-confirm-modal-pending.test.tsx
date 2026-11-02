@@ -279,7 +279,15 @@ describe("useActionSend + TypedConfirmModal — pending episode", () => {
       ),
     );
     await act(async () => {
-      first.resolve(resp(409, { error: "hash_mismatch" }));
+      // The server's real draft-changed answer on the confirm path (#10543:
+      // an unknown 409 code now reads "Send failed (409)"; this one carries
+      // the fresh hash the retry must echo).
+      first.resolve(
+        resp(409, {
+          error: "requires_confirmation",
+          expected_draft_preview_hash: "hash-2",
+        }),
+      );
     });
 
     const alert = await screen.findByRole("alert");
@@ -288,7 +296,8 @@ describe("useActionSend + TypedConfirmModal — pending episode", () => {
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
-    // Retry from the same open modal: fresh pending episode, same fetch body.
+    // Retry from the same open modal: fresh pending episode; the body echoes
+    // the FRESH hash the 409 returned, not the stale one.
     const second = deferred<Response>();
     fetchMock.mockReturnValueOnce(second.promise);
     fireEvent.click(screen.getByTestId("typed-confirm-submit"));
@@ -301,7 +310,7 @@ describe("useActionSend + TypedConfirmModal — pending episode", () => {
     const body = JSON.parse(
       (fetchMock.mock.calls[2][1] as RequestInit).body as string,
     );
-    expect(body.expected_draft_preview_hash).toBe("hash-1");
+    expect(body.expected_draft_preview_hash).toBe("hash-2");
     expect(body.typed_value).toBe("SEND");
     await act(async () => {
       second.resolve(resp(200, {}));

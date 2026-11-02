@@ -30,6 +30,8 @@ export interface RpcCtx extends Ctx {
   inboxA: string;
   /** An A-owned email_triage_item (wsA-owner-gated; set_email_triage_status target). */
   emailTriageA: string;
+  /** A pending A-workspace approval_request (decide_approval target; mig 180). */
+  approvalA: string;
   /** An A-owned scope_grant (authorize_template p_grant_id cross-founder-ref target). */
   scopeGrantA: string;
 }
@@ -51,6 +53,8 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   get_workspace_bash_autonomous: (c) => `select get_workspace_bash_autonomous('${c.wsA}')`,
   get_workspace_debug_mode: (c) => `select get_workspace_debug_mode('${c.wsA}')`,
   get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
+  // Member-only egress audit summary (mig 177, #9545 PR2): the in-body membership check raises 42501 for tenant B.
+  get_egress_audit_summary: (c) => `select get_egress_audit_summary('${c.wsA}', 200, null)`,
   resolve_workspace_installation_id: (c) => `select resolve_workspace_installation_id('${c.wsA}')`,
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
@@ -84,6 +88,10 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   // Atomic contact-PII read + Art.5(2) audit (mig 127); ownership-guarded → a
   // non-owner reading another founder's contact PII must be denied (42501).
   crm_get_contact_detail: (c) => `select crm_get_contact_detail('${c.contactA}')`,
+  // Owner-only decision (mig 180, #4672) on a REAL pending request of workspace A: tenant B is not an Owner of wsA,
+  // so the in-body owner check raises 42501 (the same error as for a missing id: no existence oracle). The check runs
+  // before the row lock and before any status branch, so it also guards the Owner revoke (deny on an approved row).
+  decide_approval: (c) => `select decide_approval('${c.approvalA}','approve')`,
   set_inbox_item_state: (c) => `select set_inbox_item_state('${c.inboxA}','archived')`,
   // workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111) on a REAL
   // A-owned triage item → a non-owner tenant-B caller raises 42501 "not authorized"
@@ -106,6 +114,9 @@ export const EXCLUDED: Record<string, string> = {
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",
   is_jti_denied_from_jwt: "reads the caller's own request.jwt.claims jti; no tenancy param",
+  users_own_github_username: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_kb_sync_history: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_health_snapshot: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
   set_current_organization_id: "sets the CALLER's own current-org session pointer (user_session_state for auth.uid())",
   append_kb_sync_row: "appends to the caller's own kb-sync log; p_row is the caller's payload, no A-addressable id",
   // global (non-workspace) namespace: recipient-hash suppression is cross-tenant BY DESIGN (a shared send-dedup ledger)

@@ -366,7 +366,9 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
 // none conditional or non-blocking. Parsed per job, so moving an install between jobs changes the answer
 // (a file-wide count would not), and an `if: false` step is not mistaken for an install.
 const CI_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
-const MONITOR_LIKEC4_JOBS = ["health-check"];
+// Post-#9410 the monitor is sharded into ci.yml's leg topology; its likec4
+// hosts are the same two legs that render or freshness-check C4.
+const MONITOR_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
 function checkLikec4InstallJobs(src: string, name: string, expected: string[]): string[] {
   type S = { run?: unknown; if?: unknown; "continue-on-error"?: unknown };
   let doc: { jobs?: Record<string, { steps?: S[]; if?: unknown; "continue-on-error"?: unknown }> };
@@ -469,12 +471,18 @@ describe("likec4 CLI / client-renderer version parity", () => {
     // NB it must write the LITERAL: this regex requires a digit after `likec4@`,
     // so a `"likec4@${LIKEC4_VERSION}"` form would be silently invisible here.
     const monitor = readRepo(".github/workflows/main-health-monitor.yml");
+    // Post-#9410 the monitor carries one install per leg job that needs the
+    // binary (test-webplat renders; test-scripts freshness-checks) — the same
+    // multi-site shape ci.yml already has. The pin equality below is the real
+    // invariant: every site must resolve the Dockerfile's version.
     const monitorVersions = installVersions(monitor);
     expect(
-      monitorVersions,
+      monitorVersions.length,
       "main-health-monitor.yml must install a pinned `likec4@<version>`",
-    ).toHaveLength(1);
-    expect(monitorVersions[0]).toBe(cliVersion);
+    ).toBeGreaterThan(0);
+    for (const v of monitorVersions) {
+      expect(v).toBe(cliVersion);
+    }
 
     // No surface may regress to a floating tag.
     expect(script).not.toMatch(/likec4@latest/);
@@ -1062,9 +1070,9 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
   it("a continuation-split install in the wrong job is still an install; the monitor is checked the same way", () => {
     const split = "      - name: i\n        run: |\n          npm install -g likec4@1.50.0 \\\n            --before=2026-09-28 --ignore-scripts\n";
     expect(checkCiLikec4Jobs(ci({ heavy: split })).join("\n")).toMatch(/found \[test-scripts,test-scripts-heavy,test-webplat\]/);
-    const mon = (extra = ""): string => `jobs:\n  health-check:\n    steps:\n      - name: i\n${extra ? `        ${extra}\n` : ""}        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
+    const mon = (extra = ""): string => `jobs:\n  test-scripts:\n    steps:\n      - name: i\n${extra ? `        ${extra}\n` : ""}        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n  test-webplat:\n    steps:\n      - run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n`;
     expect(checkLikec4InstallJobs(mon(), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS)).toEqual([]);
-    expect(checkLikec4InstallJobs(mon("if: false"), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/main-health-monitor\.yml: the likec4 install step in health-check must not be conditional/);
-    expect(checkLikec4InstallJobs("jobs:\n  health-check:\n    steps: []\n", "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/found \[\]/);
+    expect(checkLikec4InstallJobs(mon("if: false"), "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/main-health-monitor\.yml: the likec4 install step in test-scripts must not be conditional/);
+    expect(checkLikec4InstallJobs("jobs:\n  test-scripts:\n    steps: []\n", "main-health-monitor.yml", MONITOR_LIKEC4_JOBS).join("\n")).toMatch(/found \[\]/);
   });
 });

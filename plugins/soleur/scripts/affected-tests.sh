@@ -29,8 +29,9 @@
 # Exit contract — produced ONLY by finish() in lib/affected-tests/common.sh,
 # the single exit site for the whole gate:
 #   0  every selected test passed, OR NO_TESTS_AFFECTED for an all-inert diff
-#   1  a selected test failed, or the delegated runner was signal-killed (rc 3
-#      maps to 1 reason=runner-signal); a failure seen before budget expiry
+#   1  a selected test failed, the delegated runner was signal-killed (rc 3
+#      maps to 1 reason=runner-signal), or the content-trigger command failed
+#      (reason=content-trigger-failed); a failure seen before budget expiry
 #      wins over deferral
 #   4  AFFECTED_GATE_REFUSED — no-stack, bad-config key=<k>,
 #      vacuous-test-command, no-base-ref, not-a-repo (--self-check outside a
@@ -71,6 +72,22 @@
 #                           must be a positive integer
 #   max_workers    number   overrides the width formula; positive integer
 #   budget_ci      boolean  forces CI-deferral eligibility without a workflow
+#   content_trigger_pattern / content_trigger_paths / content_trigger_command
+#                  string / string[] / string   ALL THREE or none (a partial or
+#                           empty group → rc 4 bad-config naming the key, as do a
+#                           match-everything glob, a glob that can never match
+#                           (`./x/*`, `/x/*`, `x/`) and a vacuous command). When a
+#                           diff ADDS a line (tracked) or holds a line (untracked)
+#                           containing the fixed string in a file under the globs,
+#                           a passing run — selected, inert, or a gate-side
+#                           escalation to full — ALSO runs the command (via
+#                           `bash -c`, same trust as test_command). An operator's
+#                           own --full, test_command and --explain never run it.
+#                           A scan that cannot decide runs it; a failing primary
+#                           skips it. The marker gains a trailing
+#                           `content_trigger=<clear|ran|failed|deferred|skipped|
+#                           scan-error>`; --explain prints `CONTENT_TRIGGER
+#                           armed=1 state=…`. Lib: content-trigger.sh
 #
 # Base-ref order (adapter arm only — a delegated runner resolves its own):
 # --base > @{upstream} > origin/HEAD > origin/main >
@@ -118,6 +135,8 @@ source "$GATE_DIR/lib/affected-tests/js.sh"
 source "$GATE_DIR/lib/affected-tests/python.sh"
 # shellcheck source=plugins/soleur/scripts/lib/affected-tests/go.sh
 source "$GATE_DIR/lib/affected-tests/go.sh"
+# shellcheck source=plugins/soleur/scripts/lib/affected-tests/content-trigger.sh
+source "$GATE_DIR/lib/affected-tests/content-trigger.sh"
 
 # Scratch files (config dump, changed-set census, adapter logs) are registered
 # in AFFECTED_SCRATCH by affected_mktemp — remove them on every exit shape,
@@ -161,6 +180,10 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+# The operator's own --full, captured before any arm can escalate ARG_FULL: the
+# content trigger skips only an explicit --full, never a gate-side escalation.
+ARG_FULL_REQUESTED=$ARG_FULL
 
 # --- repository root ------------------------------------------------------------
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -213,6 +236,22 @@ affected_detect_ci() {
   return 1
 }
 
+# --- glob matcher ---------------------------------------------------------------------
+# A pattern containing `/` matches the whole path; `**/` also matches zero
+# directories (its `**/` prefix is stripped for the second try). A bare
+# pattern matches the basename. Defined before the config block: the
+# match-everything probes and the content trigger both call it.
+affected_glob_match() {
+  local p="$1" pat="$2" alt
+  if [[ "$pat" == */* ]]; then
+    [[ "$p" == $pat ]] && return 0
+    alt="${pat//\*\//}"
+    [[ "$alt" != "$pat" && "$p" == $alt ]] && return 0
+    return 1
+  fi
+  [[ "${p##*/}" == $pat ]]
+}
+
 # --- config: .soleur-test-gate.json ------------------------------------------------
 CFG_TEST_COMMAND=""
 CFG_BUDGET_SECONDS=900     # default, unmeasured
@@ -222,6 +261,10 @@ CFG_GLOBAL_SET=0
 CFG_INERT_SET=0
 CFG_GLOBAL_PATHS=()
 CFG_INERT_PATHS=()
+# Content trigger (lib content-trigger.sh): three flat keys, all or none. Values
+# land directly in AFFECTED_CT_PATTERN/_PATHS/_COMMAND; this flag records that any
+# of the three appeared, so a partial group is refused rather than silently ignored.
+CFG_CT_SET=0
 
 # Dump the JSON object as NUL-separated KEY\0TYPE\0VALUE\0 triples on stdout —
 # array elements arrive as one `elem:<type>` record each, an empty array as a
@@ -300,6 +343,10 @@ JSEOF
   return 2
 }
 
+# Refusal of a content-trigger key: names the offending key (a missing key and an empty one
+# are the same refusal).
+_affected_ct_bad() { finish 4 none "bad-config key=$1" config "$CI_NAME" - - -; }
+
 # Load and validate. Fail-closed everywhere: malformed, unknown key, or wrong
 # type → rc 4 reason=bad-config key=<k>; a vacuous test_command →
 # reason=vacuous-test-command.
@@ -346,11 +393,61 @@ affected_load_config() {
       budget_ci)
         [[ "$t" == boolean ]] || { badkey="$k"; break; }
         CFG_BUDGET_CI="$v" ;;
+      content_trigger_pattern)
+        [[ "$t" == string ]] || { badkey="$k"; break; }
+        CFG_CT_SET=1
+        AFFECTED_CT_PATTERN="$v" ;;
+      content_trigger_command)
+        [[ "$t" == string ]] || { badkey="$k"; break; }
+        CFG_CT_SET=1
+        AFFECTED_CT_COMMAND="$v" ;;
+      content_trigger_paths)
+        if [[ "$t" == array ]]; then
+          CFG_CT_SET=1
+        elif [[ "$t" == elem:string ]]; then
+          CFG_CT_SET=1
+          AFFECTED_CT_PATHS+=("$v")
+        else
+          badkey="$k"; break
+        fi ;;
       *) badkey="$k"; break ;;
     esac
   done <"$tmp"
   if [[ -n "$badkey" ]]; then
     finish 4 none "bad-config key=$(affected_marker_field "$badkey")" config "$CI_NAME" - - -
+  fi
+
+  # Content trigger: all three keys or none, each refused naming ITS key (a missing
+  # key and an empty one are the same refusal). A half-declared trigger that silently
+  # never fires is exactly the failure it exists to prevent.
+  if (( CFG_CT_SET )); then
+    if [[ -z "$AFFECTED_CT_PATTERN" || "$AFFECTED_CT_PATTERN" == *$'\n'* ]]; then
+      _affected_ct_bad content_trigger_pattern
+    fi
+    ((${#AFFECTED_CT_PATHS[@]} > 0)) || _affected_ct_bad content_trigger_paths
+    local _ct_g _ct_probe
+    for _ct_g in "${AFFECTED_CT_PATHS[@]}"; do
+      # Refused: empty, multi-line or whitespace-bearing globs; shapes that can never match
+      # a repo-relative path in `[[ == ]]` (leading `./`, `/` or `!`, trailing `/`, `//`, a
+      # `.`/`..` segment, `{a,b}` which is not expanded); and a match-everything glob (the
+      # scan would be unbounded and the command near-permanent, as for inert_paths): any
+      # glob that matches one of a handful of improbable probe paths.
+      if [[ -z "$_ct_g" || "$_ct_g" == *$'\n'* || "$_ct_g" == *[[:space:]]* \
+            || "$_ct_g" == ./* || "$_ct_g" == /* || "$_ct_g" == '!'* || "$_ct_g" == */ \
+            || "$_ct_g" == *//* || "$_ct_g" == */./* || "$_ct_g" == . || "$_ct_g" == */. \
+            || "$_ct_g" == *..* || "$_ct_g" == *[{}]* ]]; then
+        _affected_ct_bad content_trigger_paths
+      fi
+      for _ct_probe in "zz9q8/probe.nonexistent" "a" ".hidden" "x/y.z" "Q9"; do
+        if affected_glob_match "$_ct_probe" "$_ct_g"; then _affected_ct_bad content_trigger_paths; fi
+      done
+    done
+    # A vacuous command (`true`, `cmd || true`) would certify nothing: same denylist
+    # as test_command, but the refusal names THIS key.
+    if [[ -z "$AFFECTED_CT_COMMAND" ]] || _affected_cmd_vacuous "$AFFECTED_CT_COMMAND"; then
+      _affected_ct_bad content_trigger_command
+    fi
+    AFFECTED_CT_ARMED=1
   fi
 
   if [[ -n "$CFG_TEST_COMMAND" ]]; then
@@ -470,6 +567,7 @@ if [[ -n "$RUNNER" ]]; then
     # the operator (it can cost real time), so explain reports the delegation.
     echo "SELECTION mode=delegated runner=$RUNNER flag=$_flag"
     echo "runner owns selection — inspect with: bash $RUNNER --print-selection"
+    (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
     finish 0 explain delegated runner "$CI_NAME" - - -
   fi
   if [[ "$CI_NAME" != none ]]; then
@@ -480,6 +578,9 @@ if [[ -n "$RUNNER" ]]; then
   fi
   rc=0
   affected_bound bash "$RUNNER" "$_flag" || rc=$?
+  # A delegated verdict is eligible for the content trigger unless the operator
+  # passed --full; finish() runs it only when this run passed.
+  (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
   # Delegated-runner rc mapping: 4 (REFUSED — nothing ran) → 4
   # reason=runner-refused; 3 (UNRESOLVED — killed/declined suites) → 1
   # reason=runner-signal; 2 (usage) → 4 runner-refused; the rest pass through
@@ -589,20 +690,8 @@ while IFS= read -r _p; do
 done <"$CHANGED_TMP"
 
 # --- classifiers ---------------------------------------------------------------------
-# A pattern containing `/` matches the whole path; `**/` also matches zero
-# directories (its `**/` prefix is stripped for the second try). A bare
-# pattern matches the basename.
-affected_glob_match() {
-  local p="$1" pat="$2" alt
-  if [[ "$pat" == */* ]]; then
-    [[ "$p" == $pat ]] && return 0
-    alt="${pat//\*\//}"
-    [[ "$alt" != "$pat" && "$p" == $alt ]] && return 0
-    return 1
-  fi
-  [[ "${p##*/}" == $pat ]]
-}
-
+# (affected_glob_match is defined above the config block: config validation and
+# the content trigger need it before this point.)
 GLOBAL_PATHS_BUILTIN=(
   # manifests + lockfiles (any depth — a monorepo's nested manifests count too)
   package.json package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
@@ -698,6 +787,13 @@ if (( ALL_INERT )) && (( ${#AFFECTED_CHANGED[@]} > 0 )) && (( ARG_FULL == 0 )) &
   (( ARG_EXPLAIN )) && echo "SELECTION mode=none reason=inert inert_rule=$(affected_marker_field "$INERT_RULE")"
   # UNIT NOTE: on this path of= counts CHANGED files (all inert), not the
   # repo test-file census other paths emit — units differ by design here.
+  AFFECTED_CT_ELIGIBLE=1   # under --explain the hook only reports; it runs nothing
+  # The inert exit precedes the budget arming below: arm it here so the content-trigger
+  # command is bounded (and deferred to CI at expiry) like every other post-primary run.
+  if [[ "$CI_NAME" != none ]]; then
+    AFFECTED_BUDGET_ACTIVE=1
+    AFFECTED_DEADLINE=$(( $(affected_now) + CFG_BUDGET_SECONDS ))
+  fi
   finish 0 none inert - "$CI_NAME" 0 "${#AFFECTED_CHANGED[@]}" "${#AFFECTED_CHANGED[@]}"
 fi
 
@@ -714,6 +810,7 @@ fi
 
 if (( ARG_EXPLAIN )); then
   echo "SELECTION mode=${MODE} reason=${REASON} global_hit=$(affected_marker_field "${GLOBAL_HIT:--}") ci=${CI_NAME}"
+  (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
   finish 0 explain "$REASON" - "$CI_NAME" - - -
 fi
 
@@ -899,6 +996,10 @@ if (( GATE_ESCALATED_FULL )) && [[ "$OUT_MODE" == selected ]]; then
   OUT_MODE=full
   [[ "$REASON" == ok ]] && REASON=no-selector
 fi
+# Eligible unless the operator passed --full. A gate-side escalation to full
+# (global paths, empty diff, degraded census, no selector) is still eligible: the
+# stack adapter's full run never runs the repo-declared command.
+(( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
 case "$WORST" in
   0) finish 0 "$OUT_MODE" "$REASON" "${STACKS:--}" "$CI_NAME" "$OUT_RAN" "$OUT_OF" "$SKIP_SUM" ;;
   4) finish 4 "$OUT_MODE" "${AGG_REASON:-failed}" "${STACKS:--}" "$CI_NAME" \

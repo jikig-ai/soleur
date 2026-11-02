@@ -144,6 +144,15 @@ const HEADER_INJECTION_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 // a refuse-to-send guard). Rejects spaces, control chars, and missing parts.
 const ADDR_SPEC_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
 
+// Outbound-email input caps (#11303). ONE source for the review card (tool-tiers.ts), the zod schemas
+// (email-triage-tools.ts) and their tests: the card shows the ENTIRE body, so the schema and the card share the hard cap.
+/** Longest raw recipient string accepted: the RFC 5321 mailbox figure, 64 (local part) + 1 ("@") + 255 (domain). */
+export const EMAIL_RAW_ADDR_MAX = 320;
+/** Longest bare address (RFC 5321 forward-path). */
+export const EMAIL_ADDR_MAX = 254;
+export const EMAIL_SUBJECT_MAX = 200;
+export const EMAIL_BODY_MAX = 4000;
+
 // Extracts the bare addr-spec from a "Display Name <addr@host>" or bare form.
 export function extractAddrSpec(field: string): string {
   const angle = field.match(/<([^>]*)>/);

@@ -366,9 +366,12 @@ table, so the mapping cannot silently desync from `server.tf`):
 | `ghcr-carve-header-absent` / `ghcr-carve-live-set` / `ghcr-frontend-reachable` | the GHCR carve is missing from the file, present in the live set, or a carved frontend accepted a connection | decode and repair in [GHCR carve (#9275)](#ghcr-carve-9275) |
 | `dedicated-inngest-8288-accept` | the dedicated Inngest host egress rule (`ip daddr 10.0.1.40 tcp dport 8288 accept`, #6178 / ADR-100 cutover) is absent from `SOLEUR-EGRESS` — post-cutover this default-drops every `inngest.send()` container→`10.0.1.40:8288` POST (missed reminders/crons) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8288 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf:33` `inngest_private_ip` |
 | `dedicated-inngest-8443-accept` | the dedicated Inngest host's TLS egress rule (`ip daddr 10.0.1.40 tcp dport 8443 accept`, #10136) is absent from `SOLEUR-EGRESS` — once the Inngest link flag flips, every container→`10.0.1.40:8443` handshake is default-dropped (the egress gateway's own `dport 8443` accept is another daddr and does not count) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8443 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf` `inngest_private_ip` |
+| `dedicated-git-data-22-accept` | the git-data transport's egress rule (`ip daddr 10.0.1.20 tcp dport 22 accept`, #8211) is absent from `SOLEUR-EGRESS`, or is listed after the terminal default drop — the rule text is what this sentinel checks, not that a container can reach the host. Diagnosis (CTO, 2026-10-24, about 90% confidence): with `GIT_DATA_STORE_ENABLED=true` the container's `git fetch`/`git push` over `ssh://git@10.0.1.20/...` was default-dropped here and hung until its timeout, while the host's own `web-git-data-probe` (host OUTPUT, never this chain) stayed green | confirm `cron-egress-nftables.sh` still carries the `10.0.1.20 tcp dport 22 accept` rule ahead of the default drop and the firewall service restarted; the IP is pinned to `git-data.tf` `local.git_data_private_ip` (parity pinned by `cron-egress-nftables.test.sh`) |
 
-The fix lands via the existing `apply-web-platform-infra.yml` on merge (the
-resource is tainted and re-fires; no manual apply). **Do NOT make the apply
+The fix lands via the existing `apply-web-platform-infra.yml` on merge for web-1
+(the resource is tainted and re-fires; no manual apply) and via
+`apply-deploy-pipeline-fix.yml` (`terraform_data.deploy_pipeline_fix_web2`) for
+web-2. **Do NOT make the apply
 pass by making an assertion non-fatal or relaxing a containment invariant** — a
 green check over a broken firewall is worse than a red one at this threshold.
 

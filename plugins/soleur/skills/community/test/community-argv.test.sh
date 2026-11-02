@@ -119,14 +119,9 @@ fi
 # python3: ONLY the test uses it (the independent RFC 5849 percent-encoder of the OAuth oracle); the
 # scripts under test never do, and the hosted runner image has none.
 for dep in jq openssl python3; do
-  if ! command -v "$dep" >/dev/null 2>&1; then
-    if [[ -n "${CI:-}" ]]; then
-      echo "FAIL: $dep is required in CI but not found" >&2
-      exit 1
-    fi
-    echo "SKIP: $dep not installed"
-    exit 0
-  fi
+  # #8773: a missing tool is UNRESOLVED (exit 3) in every environment — honest
+  # both locally and under CI, so the old local-SKIP/CI-FAIL split is gone.
+  command -v "$dep" >/dev/null 2>&1 || { echo "UNRESOLVED: $dep missing — this suite asserted nothing; install $dep"; exit 3; }
 done
 
 SANDBOX="$(mktemp -d -t community-argv.XXXXXXXX)" || { echo "FAIL: mktemp" >&2; exit 1; }

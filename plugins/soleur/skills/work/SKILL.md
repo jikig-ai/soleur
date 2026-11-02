@@ -349,11 +349,11 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 2: Execute
 
-**Output discipline (all tiers).** Long execution phases blow the response-token ceiling and truncate mid-pipeline, losing the thread. Keep inline output bounded: when a command's output is large (full diffs, build logs, test dumps), write it to a file and reference the path rather than pasting it — never echo a diff over ~200 lines inline (`d="$(mktemp -d -t soleur-run.$$.XXXXXXXX)/d"; git diff > "$d"; echo "DIFF=$d"` then summarize, citing the path). After each task or logical unit, emit a one-line `## Work Phase <N> complete` checkpoint marker so an interrupted run has a clear resume point. This complements hard rule `hr-never-run-commands-with-unbounded-output` (which forbids unbounded *commands*); this is about bounding your own *narration* of them.
+**Output discipline (all tiers).** Long execution phases blow the response-token ceiling and truncate mid-pipeline, losing the thread. Keep inline output bounded: when a command's output is large (full diffs, build logs, test dumps), write it to a file and reference the path rather than pasting it — never echo a diff over ~200 lines inline (`d="$(mktemp -d -t soleur-run.$$.XXXXXXXX)/d"; git diff > "$d"; echo "DIFF=$d"` then summarize, citing the path). After each task or logical unit, emit a one-line `## Work Phase <N> complete` checkpoint marker so an interrupted run has a clear resume point. This bounds your *narration* of commands; `hr-never-run-commands-with-unbounded-output` bounds the commands.
 
 1. **Execution Mode Selection** (HARD GATE — must complete before executing ANY task)
 
-   **Do NOT execute any task before completing this analysis.** Analyze independence first, select the execution tier, then begin. Starting sequential execution "because the first tasks feel simple" is a workflow violation — it forfeits parallelization savings on the remaining tasks.
+   **Analyze independence first, select the tier, then begin** — sequential-by-default because "the first tasks feel simple" forfeits the remaining tasks' parallelization savings.
 
    Before starting the sequential task loop, check for parallelization opportunities:
 
@@ -365,7 +365,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - If yes (pipeline mode): auto-select Tier 0 without prompting
    - If declined or ineligible: fall through to Step 1 below
 
-   **Read `plugins/soleur/skills/work/references/work-lifecycle-parallel.md` now** for the full Tier 0 protocol (offer/auto-select, generate contract, spawn 2 agents, collect/commit, test-fix-loop, docs). If Tier 0 executes, proceed directly to Phase 3 after completing Step 06 of the protocol. If declined, fall through to Step 1.
+   **Read `plugins/soleur/skills/work/references/work-lifecycle-parallel.md` now** for the Tier 0 protocol; on execute go to Phase 3 after its Step 06, on decline fall through to Step 1.
 
    ---
 
@@ -373,16 +373,20 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Standing constraint for EVERY tier — a spawned agent never runs the FULL gate.**
    Spawned agents run only the suites targeting the files they were given — mechanically,
-   either scoped form works: `test-all.sh --affected` (the #8322 declared-edge gate) or
-   `TEST_GROUP=affected bash scripts/test-all.sh` (the #8591 heuristic selector). Both register
-   every suite and decline those the diff cannot reach, both are exempt from both refusal arms,
-   so the spawn prompt needs no hand-derived suite list. What a spawned agent must not run is a
+   `test-all.sh --affected` (the #8322 declared-edge gate); the compat spelling
+   `TEST_GROUP=affected bash scripts/test-all.sh` also survives as a deprecated
+   ALIAS of the same axis (#8621 — the #8591 heuristic selector was folded after
+   its decline set missed 49-355 suites per diff against the declared index).
+   Both are exempt from both refusal arms, so the spawn prompt needs no hand-derived
+   suite list. What a spawned agent must not run is a
    full-gate-shaped invocation: `test-all.sh --full`,
    `apps/web-platform/infra/run-registered-suites.sh`, or any other full-battery runner —
    concurrent full-gate runs inflate each other's timings and corrupt the measurement. Measured
    2026-08-11 — three agents running lints and suites at once turned an 860 s battery into 1675 s,
    and that 1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate
-   ONCE, after collecting fan-out work. Two mechanical backstops exist, and neither depends on an
+   ONCE, after collecting fan-out work — the bounded default `bash scripts/test-all.sh` (bare
+   resolves `--affected`), previewed by `bash scripts/test-all.sh --print-selection` and
+   reported with the `selected N of M`. Two mechanical backstops exist, and neither depends on an
    agent volunteering anything: a `--full` or degraded-full [scripts/test-all.sh](../../../../scripts/test-all.sh)
    exits 4 when it MEASURES a sibling full-gate run already in flight (#7553), and `tc_acquire`'s
    advisory lock (ADR-133) serialises whatever gets past that. **`SOLEUR_SUBAGENT=1` is a convention
@@ -409,21 +413,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Tier A: Agent Teams** (highest capability, ~7x token cost)
 
-   **Read `plugins/soleur/skills/work/references/work-agent-teams.md` now** for the full Agent Teams protocol (offer, activate, spawn teammates, monitor/commit/shutdown). If declined or failed, fall through to Tier B.
+   **Read `plugins/soleur/skills/work/references/work-agent-teams.md` now** for the Agent Teams protocol; on decline or failure fall through to Tier B.
 
    ---
 
    **Tier B: Subagent Fan-Out** (fire-and-gather, moderate cost)
 
-   **Read `plugins/soleur/skills/work/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined **or failed**, fall through to Tier C.
+   **Read `plugins/soleur/skills/work/references/work-subagent-fanout.md` now** for the Subagent Fan-Out protocol; on decline **or failure** fall through to Tier C.
 
    The `or failed` is load-bearing and was missing: Tier 0 and Tier A both read "If
-   declined **or failed**, fall through", so a spawn FAILURE at those tiers has a defined
-   next step. Tier B said only "If declined" — leaving a spawn failure (agent tool
-   withheld, `529 Overloaded`, headless run with no agent surface) with no prescribed
-   behavior at the LAST tier that can degrade. Tier C is always available because it is
-   sequential execution in the main context, so the fall-through costs nothing and closes
-   the gap. When it fires, say so: "Tier B fan-out unavailable (<reason>) — executing
+   declined **or failed**, fall through", so a spawn FAILURE has a defined next step.
+   Tier B said only "If declined" — leaving a spawn failure (agent tool withheld, `529
+   Overloaded`, headless run with no agent surface) undefined at the LAST tier that can
+   degrade. When it fires, say so: "Tier B fan-out unavailable (<reason>) — executing
    sequentially" rather than silently running Tier C as though it were the chosen tier.
 
    ---
@@ -434,15 +436,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 2. **Task Execution Loop**
 
-   **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, spawn the `soleur:product:design:ux-design-lead` agent with the artifact paths and ask it to produce an **implementation brief** (see soleur:product:design:ux-design-lead "Wireframe-to-Implementation Handoff" workflow). The brief is a structured description of every section, its content, and its layout — this becomes the binding input for all UI tasks. Do not write any markup until the brief is received.
+   **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, spawn the `soleur:product:design:ux-design-lead` agent with the artifact paths for an **implementation brief** (its "Wireframe-to-Implementation Handoff" workflow) — the binding input for all UI tasks. Do not write markup before it arrives.
 
-   **UX artifact commit checkpoint (after Design Artifact Gate):** After the implementation brief is received, commit before proceeding to UI tasks:
-
-   1. Run `git status --short` to discover the implementation brief and any generated design files
-   2. Stage output files: `git add <discovered files>`
-   3. Commit: `git commit -m "wip: UX implementation brief for <feature-name>"`
-
-   This checkpoint ensures the implementation brief survives session crashes.
+   **UX artifact commit checkpoint (after Design Artifact Gate):** commit the brief and any generated design files (`git add` them, `git commit -m "wip: UX implementation brief for <feature-name>"`) so it survives session crashes.
 
    For each task in priority order:
 
@@ -1046,7 +1042,7 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
 
-   A second, heuristic scoped selector also exists (#8591): `TEST_GROUP=affected bash scripts/test-all.sh` — chokepoint declines on argv paths, content references, stems, and an always-run census backstop, with no declared index to maintain. It is the substitute both rc=4 refusals prescribe; an undeterminable diff runs everything. `TEST_GROUP=affected --affected` refuses rc=2. Both are scoped evidence, not the ship gate.
+   A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected bash scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
 
    **`TEST_GROUP=<g>` remains as an explicit cross-cut, not the default.** `TEST_GROUP=bun|scripts|scripts-heavy|webplat|infra bash scripts/test-all.sh` restricts the run to that group's registrations under the same affected-selection rules — a non-`all` ask force-selects its group. Use it to re-run one shard in isolation; it is no longer how the Phase 2 exit picks coverage — the affected index derives a finer set.
 
@@ -1054,7 +1050,7 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    **The full battery is not the gate here — CI owns it, and `soleur:ship` Phase 4 runs the same affected gate.** The MERGE gate is CI's required `test` context, which still runs the FULL battery on the PR head (bar ADR-262's PR-gated five); no local run is the merge gate, and calling one that is the over-claim that would license a future PR to shard it. This ordering is [ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md); do not re-add a full local run at this position without reading it.
 
-   **A run's summary is not a completeness claim — read the BREAKDOWN line.** Since ADR-181 a suite may DECLINE (relevance-gated), and since #8322 it may also be `not-affected` (selection-gated); both are counted in the denominator, so `N/N` is not the ordinary local green spelling: a healthy affected run commonly reads `N-k/N`. A shard narrows coverage a second way the runner does NOT announce (the coverage NOTE exists for `infra` only). **State which mode and which shards ran when you report the gate green** — an affected run is the diff's coverage, not the battery's. This is the definite-article trap #6969 named, one level down: a green `test-all.sh` was read as the exit gate for a diff half of which it never executed.
+   **A run's summary is not a completeness claim — read the BREAKDOWN line.** Since ADR-181 a suite may DECLINE (relevance-gated), and since #8322 it may also be `not-affected` (selection-gated); both are counted in the denominator, so `N/N` is not the ordinary local green spelling: a healthy affected run commonly reads `N-k/N`. A shard narrows coverage a second way the runner does NOT announce (the coverage NOTE exists for `infra` only). **State which mode and which shards ran when you report the gate green** — an affected run is the diff's coverage, not the battery's. This is the definite-article trap #6969 named, one level down: a green `test-all.sh` was read as the exit gate for a diff half of which it never executed. And never write "all covering suites ran" without the `--print-selection` output AND the run's per-suite result list — compare the two; a hand-picked list omits the meta-guards that react to file SHAPE (`guard-vacuity-floor`, `test-all-weight-drift`), which is exactly what reddened on #10322.
 
    **Ask before you launch: `bash scripts/test-all.sh --capacity`.** It answers "can this box
    absorb another full gate?" in **~3 s** (measured p50, 16 cores / ~640 pids — it walks `/proc`
@@ -1133,7 +1129,7 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    **The lead still owns this gate's verdict — but rc=4 no longer polices delegation.** Since #8322 an `--affected` run is exempt from BOTH refusal arms — that exemption is the point of the mode, so a spawned agent CAN run the affected gate. `rc=4` on an affected run now means one of two things, and both are yours to read: the run DEGRADED to full (`AFFECTED_FALLBACK reason=…` in the log — undecidable diff, missing index, runner/index touched, FORCE_ALL, or an `enumerate-unavailable` nested-enumerate failure, whose stderr the runner echoes) and then tripped `SOLEUR_SUBAGENT=1` or a measured sibling full-gate run (#7553), each overridden by `SOLEUR_ALLOW_FULL_GATE=1`; or selection produced nothing / a gutted index (the `zero-selected`/`below-floor` refusals — fix the index, do not force past them). An explicit `--full` keeps the original refusals unconditionally. `rc=4` is its own outcome: not a reap, not a pass.
 
-   **A REFUSED gate also owes the repo-global RATCHETS — `TEST_GROUP=affected` reaches them mechanically; hand selection still cannot.** A ratchet counts a property across the whole tree and REFERENCES NOTHING, so every file- or token-derived query returns it zero times by construction. The `affected` selector closes that with a census backstop: any registered suite file that enumerates repository state (git ls-files, tree globbing, `rglob`/`os.walk`/`readdir` corpus scans, baseline ratchets, `origin/main` comparisons) always runs, because a path match cannot prove a repo-wide subject unaffected. When you select suites BY HAND instead — the substitute recipes below — the blind spot returns in full: **select ratchets by SHAPE, not by name prefix.** The reachable set has TWO halves and a name filter finds neither. (a) Every [scripts/test-all.sh](../../../../scripts/test-all.sh) `run_suite` row whose invocation carries NO path argument — `grep -nE 'run_suite "[^"]+" (bash|python3|bun|npx) [^ ]+$' scripts/test-all.sh` (221 rows; the `lint-*-live` prefix filter returns 19). (b) Every suite registered by a GLOB rather than a row: the `SUITE_GLOBS` array near the top of that file auto-registers `plugins/soleur/test/*.test.sh` and six sibling globs, so those suites have NO `run_suite` line to grep and recipe (a) cannot see them — measured, it misses `fixture-relative-assert`, `fixture-dir-operand-assert` and `preflight-check10-suite-integrity`, three of the six that actually reddened. Expand the globs (`eval ls <glob>`) and run the census-shaped ones. Then run whatever FEEDS a baseline file (`ls scripts/*.baseline.txt plugins/soleur/test/*.baseline.txt`): a baseline is a ratchet whose name says nothing.
+   **A REFUSED gate also owes the repo-global RATCHETS — `TEST_GROUP=affected` reaches them mechanically; hand selection still cannot.** A ratchet counts a property across the whole tree and REFERENCES NOTHING, so every file- or token-derived query returns it zero times by construction. The `affected` selector closes that with a floor: every registered suite in `ALWAYS_ON_SUITES` runs on any selection (a static corpus-walk census lint enforces membership), and an unclassified suite selects anyway — a path match alone never proves a repo-wide subject unaffected. When you select suites BY HAND instead — the substitute recipes below — the blind spot returns in full: **select ratchets by SHAPE, not by name prefix.** The reachable set has TWO halves and a name filter finds neither. (a) Every [scripts/test-all.sh](../../../../scripts/test-all.sh) `run_suite` row whose invocation carries NO path argument — `grep -nE 'run_suite "[^"]+" (bash|python3|bun|npx) [^ ]+$' scripts/test-all.sh` (221 rows; the `lint-*-live` prefix filter returns 19). (b) Every suite registered by a GLOB rather than a row: the `SUITE_GLOBS` array near the top of that file auto-registers `plugins/soleur/test/*.test.sh` and six sibling globs, so those suites have NO `run_suite` line to grep and recipe (a) cannot see them — measured, it misses `fixture-relative-assert`, `fixture-dir-operand-assert` and `preflight-check10-suite-integrity`, three of the six that actually reddened. Expand the globs (`eval ls <glob>`) and run the census-shaped ones. Then run whatever FEEDS a baseline file (`ls scripts/*.baseline.txt plugins/soleur/test/*.baseline.txt`): a baseline is a ratchet whose name says nothing.
 
    **When a ratchet fires, the edit that satisfies it can move a DIFFERENT one — re-measure both.** Ratchets read overlapping properties of the same bytes, so the second break is caused by the first fix and arrives with no diff of its own. **Why:** #8392/PR #8394 twice over. (i) A REFUSED gate's substitute set (seven consumer suites + the vocabulary sweep + four targeted shell suites) was fully green while `lint-shell-capture-exit-live` was RED on two lines the same session had just written. (ii) The CI round after that shipped SIX red suites, and only two carried `lint` in their name: `guard-vacuity-floor` (a new floor whose threshold was declared with the other constants, so the mutant died unbound under `set -u` and scored as a construction failure — the threshold has to sit on the line IMMEDIATELY above its `if`), `lint-trap-tempfile-ownership`, a `bun` backtick-reference census, a `credentials_required` corpus baseline, and two `fixture-*-assert` censuses. Then the trap that fixed `lint-trap-tempfile-ownership` — giving `mktemp -d` a destination under an owned root — cost the call its absoluteness proof and moved `fixture-relative-assert` from 3 to 20 sites; redirecting `TMPDIR` at the owned root instead keeps the binding byte-identical and owns the same directories.
 
@@ -1426,6 +1422,8 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
 ## Common Pitfalls to Avoid
 
 - When changing harness-owned commands, test commands extracted from the actual harness registries across supported repository layouts; a copied helper test alone does not verify registration wiring.
+
+- **Run `git ls-files` ratchets after `git add`** (#11207).
 
 - **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
 

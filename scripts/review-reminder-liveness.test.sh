@@ -21,7 +21,7 @@ PASS=0; FAIL=0; TOTAL=0
 pass() { echo "PASS: $1"; PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); }
 fail() { echo "FAIL: $1"; echo "  detail: ${2:-}"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); }
 
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
 
 # Extract the "Scan for due reviews" step's run: script from the workflow.
 SCRIPT=$(python3 - "$WF" <<'PY'

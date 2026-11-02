@@ -1,0 +1,4 @@
+WARNING: Bun 1.4.4 installed, expected 1.4.2 (from .bun-version)
+Run: bun upgrade
+AFFECTED_DERIVE_CACHE	state=on	hits=660	misses=4	derived=6
+[affected] MODE=affected selected=120 not-affected=550 of 670 runnable registrations

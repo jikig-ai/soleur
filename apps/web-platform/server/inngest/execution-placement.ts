@@ -73,6 +73,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
+  "cron-approval-expiry": {
+    placement: "portable",
+    reason: "host-free: one database RPC plus generic web push and email; touches no filesystem, clone or child process",
+  },
   "cron-architecture-diagram-sync": {
     placement: "host-affine",
     reason: "spawnClaudeEval in an ephemeral clone (process-local single-flight, ADR-243 §2)",

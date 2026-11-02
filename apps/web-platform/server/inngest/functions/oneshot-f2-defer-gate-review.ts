@@ -250,9 +250,7 @@ export const oneshotF2DeferGateReview = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: { event: "oneshot/f2-defer-gate-review.fire" },
   },
-  { event: "oneshot/f2-defer-gate-review.fire" },
-  oneshotF2DeferGateReviewHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  oneshotF2DeferGateReviewHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -1714,8 +1714,8 @@ gh() {
           # way the real call is: raw JSON through the handed --jq. MOCK_ARMED / MOCK_MSS drive it like the fence's own reads.
           armed="${MOCK_ARMED:-true}"
           case "$armed" in
-            true)  data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":{"enabledAt":"2026-10-07T00:00:00Z"}}' ;;
-            false) data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":null}' ;;
+            true)  data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":{"enabledAt":"2026-10-07T00:00:00Z"},"baseRefName":"main"}' ;;
+            false) data='{"state":"OPEN","mergeStateStatus":"'"${MOCK_MSS:-BEHIND}"'","autoMergeRequest":null,"baseRefName":"main"}' ;;
             *) echo "gh: HTTP 502 from fixture (pr view snapshot)" >&2; return 1 ;;
           esac
           jq -r "$(_q_jqx "$@")" <<<"$data" ;;

@@ -123,9 +123,11 @@ describe("removeWorkspaceDir", () => {
     // Verify all phases attempted in order before falling back to mv
     expect(calls).toEqual(["rm", "chmod", "find", "rmdir", "mv"]);
     // Verify mv destination uses the .orphaned- suffix pattern
-    expect(mvArgs).toHaveLength(2);
-    expect(mvArgs[0]).toBe(TEST_ROOT + "/test-cleanup");
-    expect(mvArgs[1]).toMatch(/\.orphaned-\d+$/);
+    // `--` ends option parsing before the (guard-resolved) path (#8211 hardening).
+    expect(mvArgs).toHaveLength(3);
+    expect(mvArgs[0]).toBe("--");
+    expect(mvArgs[1]).toBe(TEST_ROOT + "/test-cleanup");
+    expect(mvArgs[2]).toMatch(/\.orphaned-\d+$/);
   });
 
   test("throws user-friendly error (no sudo) when all phases including mv fail", async () => {

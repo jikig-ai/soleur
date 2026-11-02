@@ -60,6 +60,7 @@ import {
   type QueryFactoryArgs,
   type DispatchArgs,
   type DispatchEvents,
+  type CloseQueryReason,
   type WorkflowEnd,
 } from "./soleur-go-runner";
 import { readCcCostCaps, readCcManagedWarnCap } from "./cc-cost-caps";
@@ -175,7 +176,11 @@ import {
   resolveWorktreeId,
   type WorktreeLeaseHandle,
 } from "./worktree-write-lease";
-import { ERR_ATTACHMENT_NOT_FOUND, ERR_WORKTREE_LEASE_UNAVAILABLE } from "./error-messages";
+import {
+  ERR_ATTACHMENT_NOT_FOUND,
+  ERR_CONVERSATION_NOT_FOUND,
+  ERR_WORKTREE_LEASE_UNAVAILABLE,
+} from "./error-messages";
 // ADR-044 PR-1 — dispatch-boundary not-ready states (transient db-error +
 // member-reset-to-empty-solo switcher). Distinct from RepoNotReadyError
 // (cloning/error). repo-readiness.ts stays a pure repo_status predicate.
@@ -222,6 +227,11 @@ import {
   MissingByokKeyError,
   reportMissingByokKey,
 } from "./byok-lease";
+import {
+  authFailureFrameFromLeaseError,
+  isLeaseRefusalReported,
+  isOauthUnusableLeaseError,
+} from "./agent-auth-user-message";
 // BYOK Delegations PR-A (#4232): see note at agent-runner.ts.
 import { resolveKeyOwnerThenLease } from "./byok-resolver";
 import {
@@ -240,6 +250,15 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import {
+  NOOP_AGENT_AUTH_PROBE,
+  createAgentAuthFailureProbe,
+  warnAgentAuthProbeUnavailable,
+  tapAgentAuthFailure,
+  type AgentAuthFailureProbe,
+} from "./agent-auth-failure";
+import { makeAuthModeResolver } from "./agent-auth-mode";
+import { makeConversationAuthModeResolver } from "./engine-binding-auth-mode";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
@@ -260,6 +279,7 @@ import {
 import {
   createCanUseTool,
   type CanUseToolDeps,
+  type StatusGuard,
 } from "./permission-callback";
 import { abortableReviewGate, type AgentSession } from "./review-gate";
 import { sendToClient as defaultSendToClient } from "./ws-handler";
@@ -283,6 +303,7 @@ const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 // pino + supabase service client into the browser bundle.
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { isApprovalRequiredTool } from "./approval/tools";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -291,17 +312,20 @@ import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 /**
  * Read CC_MCP_ALLOWLIST and return the cc-router's mcpServers config (#2909).
  *
- * Phase 1 deny-by-default scaffolding (this PR): returns `{}` for empty /
- * unset / whitespace-only env. Throws plain Error if any short-name in the
- * env resolves to a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
- * tools — cross-tenant credentials by construction). Phase 1 does NOT yet
- * build a populated `soleur_platform` server even when valid non-denylist
- * names are present — promotion is Phase 2 (#3722).
+ * Phase 1 deny-by-default scaffolding: returns `{}` for empty / unset /
+ * whitespace-only env. Throws a plain Error if any short-name in the env
+ * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
+ * tools — cross-tenant credentials by construction), or (b) an
+ * approval-required tool (`isApprovalRequiredTool`; ADR-309: the cc runner has
+ * no approval wiring, so a promoted approval tool would run on the legacy
+ * in-memory gate and skip the queue). Phase 1 does NOT yet build a populated
+ * `soleur_platform` server even when valid names are present — promotion is
+ * Phase 2 (#3722).
  *
- * Denylist-check-first ordering is pinned: a mixed env value like
+ * Denylist-check-first ordering is pinned per name: a mixed env value like
  * `"foo,plausible_create_site"` throws with the Plausible name in the
  * message regardless of position. Future unknown-name validation (Phase 2)
- * will fail-closed AFTER the denylist check.
+ * will fail-closed AFTER both checks.
  *
  * Exported for unit testability (`test/cc-mcp-tier-allowlist.test.ts`).
  *
@@ -321,6 +345,13 @@ export function readCcMcpAllowlist(
     if (CC_ROUTER_TIER3_DENYLIST.has(fqn)) {
       throw new Error(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
+      );
+    }
+    // #4672 — the cc runner has no approval wiring, so a promoted approval tool would run on the legacy in-memory gate
+    // and silently skip the queue. Refuse it here (static message; the short name is the only env echo).
+    if (isApprovalRequiredTool(fqn)) {
+      throw new Error(
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-309)`,
       );
     }
   }
@@ -509,10 +540,13 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
 const WEB_EGRESS_PROMPT_ADDENDUM =
   "## Web access enabled for this session\n" +
   "Your workspace owner enabled Agent web access. `WebFetch` is available " +
-  "and reaches the public internet through a dedicated, audited gateway — " +
+  "and reaches the public internet through a dedicated egress gateway — " +
   "HTTPS only; destinations that resolve to private/link-local/metadata " +
-  "ranges are refused, and every decision is logged with workspace " +
-  "attribution. Sandboxed commands run without stored credentials: in-sandbox " +
+  "ranges are refused. Requests through this gateway may be recorded on a " +
+  "best-effort basis; do not tell the user that any specific request was or " +
+  "was not logged, and point them to Settings > Scope Grants > View egress " +
+  "audit log to see what was recorded. Sandboxed commands run without stored " +
+  "credentials: in-sandbox " +
   "`gh` and git network operations will fail at AUTH (not network) — do not " +
   "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
   "proxy/connection error mid-session, report it rather than retrying in a " +
@@ -1513,7 +1547,7 @@ async function replicateAndReleaseCcWorktreeLease(
     // swallow so a replication failure never wedges the lease release below.
   } finally {
     if (opts?.skipRelease) {
-      // #9538 — the stale-resume arm detaches instead of releasing: the
+      // #9538 — the stale-resume arm (and #11086's auth-failed arm) detaches instead of releasing: the
       // recovery retry re-acquires same-host keep-gen, so a deferred
       // release would tombstone (`heartbeat_at = '-infinity'`) the row
       // out from under the fresh handle (migration-116 release matches
@@ -1759,7 +1793,7 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected" | "stale-resume";
+  reason?: CloseQueryReason;
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
   // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
@@ -1780,7 +1814,7 @@ export function handleCcCloseQuery({
   // released. The push-options ride the git-data push ONLY (never the in-sandbox
   // agent's GitHub origin push).
   void replicateAndReleaseCcWorktreeLease(userId, conversationId, {
-    skipRelease: reason === "stale-resume",
+    skipRelease: reason === "stale-resume" || reason === "auth-failed",
   });
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
@@ -1902,8 +1936,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `AgentCredential | Promise<AgentCredential>` union does not surface
     // awkwardly through `Promise.all`'s array element inference.
     // `buildAgentQueryOptions.credential` consumes the unwrapped value.
-    // Agent-SDK consumer: prefers the operator subscription oauth_token
-    // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
+    // Agent-SDK consumer: the conversation binding's auth mode (#11591) decides:
+    // the operator subscription oauth_token only for `managed` (when
+    // enabled+permitted), `api-key` always the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
     // feat-cc-cap-raise-resume (#9565) closure-capture: publish the
@@ -2947,7 +2982,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // The closure shape `(convId, status) => Promise<void>` is preserved
     // so `permission-callback.ts`'s 6 deps-injected call sites get
     // transitive R8 coverage with zero churn at the deps interface.
-    updateConversationStatus: async (convId: string, status: string) => {
+    updateConversationStatus: async (
+      convId: string,
+      status: string,
+      // #11303 — optional compare-and-set from the gate lifecycle: the write lands only when the CURRENT status is in
+      // this set. A 0-rows outcome is the success case, so a guarded write is silent by design (`expectMatch` off).
+      guard?: StatusGuard,
+    ) => {
       // Runtime guard: protect against deps-injected callers passing a
       // status literal not in Conversation["status"]. The wrapper would
       // otherwise hand an invalid enum to Postgres which rejects the write
@@ -2987,10 +3028,11 @@ export const realSdkQueryFactory: QueryFactory = async (
           feature: "cc-dispatcher",
           op: "updateConversationStatus",
           extra: { status },
-          // Status transitions drive permission-callback waiting_for_user
-          // events; a 0-rows write would emit a prompt for a deleted/
-          // archived row that the UI no longer shows.
-          expectMatch: true,
+          // An UNGUARDED status transition drives permission-callback waiting_for_user events, so a 0-rows write (a
+          // deleted/archived row) is mirrored to Sentry via expectMatch. A GUARDED write (the gate hold/restore
+          // compare-and-set) legitimately matches 0 rows when the status already moved on; that is silent by design.
+          expectMatch: !guard,
+          ...(guard ? { onlyIfStatusIn: guard.onlyIfStatusIn } : {}),
         },
       );
     },
@@ -3130,9 +3172,28 @@ export const realSdkQueryFactory: QueryFactory = async (
     // (`sessionHasEgress` is the same predicate buildAgentEnv uses).
     const sandboxUnixDeny = sessionHasEgress(ghToken, webEgress) ? false : await resolveSandboxUnixDeny();
 
-    return sdkQuery({
+    // Agent auth-failure diagnostic (agent-auth-failure.ts): reports ONE routed event when the CLI replies that it has no
+    // usable credential although one was leased. This sits INSIDE the factory's try, whose catch mirrors a `sandbox
+    // sdk-startup` event, so the probe is individually guarded (a throw falls back to a probe that observes nothing) and
+    // `bindOptions` / `tapAgentAuthFailure` never throw by construction: a defect in the diagnostic can neither break a
+    // dispatch nor be misreported as a sandbox failure. `bindOptions` is an identity wrapper around the FINAL options
+    // (after the seccomp recorder) and must stay INSIDE the `sdkQuery({...})` literal (agent-sandbox-seccomp-selector.test.ts A6a).
+    let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
+    try {
+      authProbe = createAgentAuthFailureProbe({
+        runner: "cc-soleur-go",
+        credentialScheme: credential.scheme,
+        dedupeToken: args.userId,
+        resolveAuthMode: makeAuthModeResolver(args.userId, args.conversationId),
+      });
+    } catch {
+      // Not rethrown (see above); the constant warn keeps a broken diagnostic visible.
+      warnAgentAuthProbeUnavailable();
+    }
+
+    return tapAgentAuthFailure(sdkQuery({
       prompt: args.prompt,
-      options: recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
+      options: authProbe.bindOptions(recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
         sandboxUnixDeny,
         // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
         // file-tool containment target the corpus root), the user's workspace for
@@ -3271,8 +3332,8 @@ export const realSdkQueryFactory: QueryFactory = async (
         // as a separate matcher-less PreToolUse entry (full-surface capture).
         // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
         toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
-      })),
-    });
+      }))),
+    }), authProbe);
   } catch (err) {
     // #5274 PR B — release the write-lease if it was acquired just above before
     // `sdkQuery` threw. Without this, the lease's only release path
@@ -3339,7 +3400,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     }
     throw err;
   }
-  }); // end runWithByokLease
+  },
+    { resolveAuthMode: makeConversationAuthModeResolver(args.userId, args.conversationId) },
+  ); // end runWithByokLease
 };
 
 let _runner: SoleurGoRunner | null = null;
@@ -3760,6 +3823,20 @@ async function reportDispatchSoleurGoError(
       },
       "repo-readiness gate: blocked dispatch (repo not ready)",
     );
+  } else if (isLeaseRefusalReported(err)) {
+    // #11086/#11599 — the lease already reported its own closed-class event (feature byok-lease); a second mirror would
+    // double the Sentry count for one failed turn. The unusable-token refusal logs at INFO; an unresolved authentication mode
+    // logs at WARN (no `err`, so no second error-tracker event) because INFO never leaves the host and this line is the
+    // only one that carries the conversation.
+    const oauthUnusable = isOauthUnusableLeaseError(err);
+    const gateFields = {
+      feature: "cc-dispatcher",
+      op: oauthUnusable ? "oauth-credential-unusable-gate" : "auth-mode-unresolved-gate",
+      userIdHash: hashUserId(ctx.userId),
+      conversationId: ctx.conversationId,
+    };
+    if (oauthUnusable) log.info(gateFields, "lease refused a stored credential the CLI cannot use");
+    else log.warn(gateFields, "lease refused: the conversation's authentication mode could not be resolved");
   } else if (err instanceof WorkspaceNotReadyError) {
     // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
     // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
@@ -3824,9 +3901,10 @@ async function reportDispatchSoleurGoError(
   } else if (err instanceof MissingByokKeyError) {
     // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
     // key. Info-level breadcrumb captures workspace context;
-    // `byok_key_missing` errorCode tells the client to render the
-    // configure-banner linking to /dashboard/settings/byok rather
-    // than the key-invalid prompt.
+    // `byok_key_missing` errorCode tells the client to enter the same
+    // credential-blocked state as `key_invalid` (lib/ws-client.ts
+    // `credentialBlocked`: card linking to /dashboard/settings, composer
+    // disabled until Reconnect).
     reportMissingByokKey(err);
     ctx.sendToClient(ctx.userId, {
       type: "error",
@@ -3840,6 +3918,19 @@ async function reportDispatchSoleurGoError(
       message: "Your API key is invalid — set up a fresh key to continue.",
       errorCode: "key_invalid",
     });
+  } else if (isLeaseRefusalReported(err)) {
+    // #11086/#11599 — a lease refusal precedes any stream, so there is no `stream_end` to wait for: send the recovery frame now.
+    // MUST sit above the generic `else` so it neither clears a resumable `session_id` nor re-mirrors.
+    // Sent for every persona: unlike the mid-stream path there is no friendly bubble to protect, and the support client falls
+    // back to its canned text on an error frame either way.
+    const leaseFrame = authFailureFrameFromLeaseError(err);
+    // Same predicate family as the guard above, so null is unreachable; if the two ever diverge, never fall back to the
+    // operator-only sign-in copy for an unknown cause.
+    ctx.sendToClient(ctx.userId, leaseFrame ?? { type: "error", message: "Something went wrong. Please try again." });
+    // An `auth-failed` close detached (not released) the worktree lease for the immediate re-acquire, and the credential
+    // lease refused before the factory's own cleanup could run: drop the kept in-memory record. The detached handle's row is
+    // not tombstoned (release is a no-op after detach) and expires on its own within 240 s. No-op when none is held.
+    void releaseCcWorktreeLease(ctx.userId, ctx.conversationId).catch(() => {});
   } else if (err instanceof RepoNotReadyError) {
     // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
     // user-facing message (and `repo_setup_failed` errorCode on the error
@@ -3984,7 +4075,7 @@ async function dispatchSoleurGoInner(
     },
   );
   if (!ownership.ok) {
-    throw new Error("Conversation not found");
+    throw new Error(ERR_CONVERSATION_NOT_FOUND);
   }
 
   // #3254 — persist a `messages` row for every cc turn so
@@ -4789,7 +4880,7 @@ async function dispatchSoleurGoInner(
         });
       }
     },
-    onTextTurnEnd: () => {
+    onTextTurnEnd: (turn) => {
       // #3603 W2 + W4 — `consumeForComplete` returns `null` if the turn was
       // already persisted via the abort path (silent no-op so a late
       // `onTextTurnEnd` cannot double-write or overwrite the aborted row).
@@ -4813,7 +4904,8 @@ async function dispatchSoleurGoInner(
       // mirrors :3712). Shared helper so the two lineages cannot drift. Guarded
       // on workspacePath: an unresolved workspace can't attribute a workspace-
       // grain row, so skip the nudge rather than emit an unscoped one.
-      if (workspacePath) {
+      // #11086 — a turn that ended in a terminal sign-in failure is not a completion: no "finished" push or inbox card.
+      if (workspacePath && !turn?.authFailure) {
         void notifyTaskCompleted({
           userId,
           conversationId,
@@ -4840,6 +4932,15 @@ async function dispatchSoleurGoInner(
         type: "stream_end",
         leaderId: CC_ROUTER_LEADER_ID,
       });
+    },
+    // #11086 — the runner fires this AFTER onTextTurnEnd (so after the `stream_end` above) for a terminal CLI auth failure
+    // it rewrote to friendly copy. `key_invalid` makes the client stop reconnecting and offer the Settings action; the frame
+    // is built server-side from the closed match kind x scheme, never from raw CLI text.
+    onAgentAuthFailure: (frame) => {
+      // The support persona's SSE client treats any `error` frame as a canned-fallback trigger and would replace the friendly
+      // bubble; its surface keeps the friendly bubble only (the Settings recovery card is a Command Center affordance).
+      if (args.persona === "support") return;
+      sendToClient(userId, frame);
     },
     onWorkflowDetected: (_workflow) => {
       // Stage 3 emits a dedicated `workflow_started` WS event; for now
