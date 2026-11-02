@@ -45,3 +45,18 @@ deepen-plan → technical-ruling gate → soleur:work → review → fix-round �
   15-minute deploy-script-tests-fixed ceiling is not approached — no timeout bump.
 - Acceptance: no env -u in infra-validation.yml; run lines plain `run: bash`;
   registry-clientip byte-identical; fixture parity suite 71/71 green.
+
+## Ship-phase state (2026-11-02)
+
+- Review seats: DHH SHIP-WITH-FIXES (P1 fixture-dir asserts + egress pin parity — fixed),
+  Simplicity SHIP-WITH-FIXES (dead line_in, RB axis, -target scope — fixed),
+  Kieran SHIP (P2/P3 nits only; <<[-]SQL awk portability + param() gap comment applied).
+- Post-review row counts: store 55 (32P/23M), zot 53 (32P/21M), deadman 57 (29P/28M),
+  egress 83 (54P/29M). All green. Meta-guard 25/25: covered 387, fires 370, deferred 47,
+  all four PROMOTED entries FIRES.
+- compound-learnings.md committed (phantom heredoc spans, standalone-fi, _eff floor form,
+  backtick labels, row-count derivation, param() gap, emitter-FATAL-vs-RED).
+- PR #11849: marked READY, title set, summary+changelog+test-plan in body.
+- Awaiting required checks; a background poll watches for resolution before merge.
+  NOTE: enqueuePullRequest landmine — wait for the `test` aggregator to be created on the
+  head; do not re-arm blindly.
