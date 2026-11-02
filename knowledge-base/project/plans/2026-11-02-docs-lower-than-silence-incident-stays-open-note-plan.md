@@ -13,6 +13,36 @@ detail_level: minimal
 
 Lane note: no spec.md exists for this branch, so `lane:` defaulted to `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Method:** the halt gates (Phases 4.6 to 4.13) were run mechanically against this file, and the load-bearing claims were
+re-measured against the tree. The 40-agent research fan-out was not run: the change is one sentence in three places, there
+is no external API, library or UI to research, and every residual risk is a guard-anchor question that a grep answers.
+
+### Key Improvements
+
+1. Measured the pristine baseline: the flip suite passes `41 passed, 0 failed` in about 4 s on `origin/main`, so Phase 3 is
+   cheap and a red suite after the edit is attributable to the edit.
+2. Measured the three single-occurrence anchors on `origin/main` (each file-wide count is 1): `inngest_cutover_flip_silent_sql = <<-SQL`,
+   `inngest_luks_key_probe_runbook_url =`, `EXPECTED during an owner-authorized inngest-host-replace`. Phase 2 now forbids
+   reproducing them and lists the same constraint for two more file-wide counters found in this pass (below).
+3. Found two further file-wide counters the first draft did not name: `egress-gw-alert.test.sh` counts `<name>_sql = <<-SQL` openers and
+   `resource "<type>" "<name>"` headers file-wide ("decoy copies count", a `#`-wrapped copy still counts), and
+   `logs-alert-query-period-ceiling.test.sh` counts `resource "logtail_exploration_alert" `. The new comment therefore carries
+   no `resource "` text and no `<<-SQL` text.
+4. Confirmed the insertion point: the `WINDOW.` comment paragraph ends on the line directly above `locals {` (no blank line between),
+   so the new paragraph keeps that adjacency; no blank line is added or removed.
+5. Confirmed the discoverability command passes the probe-verb gate (`probe-verb-gate.sh` exit 0) and finishes well inside 15 s.
+
+### New Considerations Discovered
+
+- The `.tf` extension triggers Phase 4.10 literally; the plan adds a short `## Encryption Posture` section stating that no store
+  or connection is introduced (plan Phase 2.11 would skip it silently; the section makes the deepen gate pass without ambiguity).
+- The mirror workflow closes a mirror issue with "resolved upstream" when the incident leaves Better Stack's open list, so the
+  manual resolve test, once the owner authorizes it, closes #11047 / #11869 as a side effect. Neither PR text nor commit may
+  pre-empt that with a closing keyword (already an Acceptance Criterion).
+
 ## Overview
 
 Docs-only follow-up on #11820 (mirror issue #11869), ruled by the CTO agent on 2026-11-02: leave the
@@ -148,6 +178,9 @@ Rules for the inserted text (each is a guard-safety constraint):
   index of the heredoc opener, and the flip (A11) and luks-key-probe (`old = ...`) mutation anchors require exactly one occurrence
   in the whole file. The comment mentions `egress_gw_probe_fail` and `egress_gw_probe_silent` only as bare names, which no
   guard counts.
+- Do not write `resource "` followed by a type, or `<<-SQL`, anywhere in the comment: `egress-gw-alert.test.sh` counts openers and
+  resource headers file-wide and counts a `#`-wrapped copy ("decoy copies count"), and `logs-alert-query-period-ceiling.test.sh`
+  counts `resource "logtail_exploration_alert" `.
 - Do not put the note inside any `resource` or `locals` body.
 
 Comment-only proof (run, do not eyeball):
@@ -258,13 +291,26 @@ discoverability_test:
   expected_output: Open does not mean currently silent
 ```
 
+## Encryption Posture
+
+This plan introduces no persistent store and no cross-component connection. The `.tf` file is edited only in comment lines, so no
+resource, volume, bucket, queue, log sink, or network edge is created or changed.
+
+```yaml
+at_rest: []          # no store introduced; the existing Better Stack source and its posture are untouched
+in_transit: []       # no connection introduced; the read-only query script already pins its host allowlist
+```
+
+No `exception` block applies (no plaintext exception, no certificate verification switched off).
+
 ## Test Scenarios
 
-1. Pristine-tree control: every Phase 3 suite passes on `origin/main` before the edit (their own `[FATAL] instrument control` row does this per suite).
+1. Pristine-tree control: every Phase 3 suite passes on `origin/main` before the edit (their own `[FATAL] instrument control` row does this per suite). Measured in the deepen pass: the flip suite runs `41 passed, 0 failed` in about 4 s.
 2. After the edit: the same suites pass; the comment-only diff filter prints nothing; `terraform fmt -check` exits 0.
 3. Presence: `grep -c` of the verbatim sentence returns 2 in the runbook (one per entry) and the `.tf` carries it across two comment lines.
-4. Anchors: `grep -c 'inngest_cutover_flip_silent_sql = <<-SQL'`, `grep -c 'inngest_luks_key_probe_runbook_url ='` and
-   `grep -c 'EXPECTED during an owner-authorized inngest-host-replace'` return the same counts before and after the edit.
+4. Anchors: `grep -cF` of `inngest_cutover_flip_silent_sql = <<-SQL`, `inngest_luks_key_probe_runbook_url =` and
+   `EXPECTED during an owner-authorized inngest-host-replace` each return 1 (measured on `origin/main`) before and after the edit;
+   `grep -c 'resource "logtail_exploration_alert" '` and `grep -c '<<-SQL'` return the same counts before and after.
 
 ## Acceptance Criteria
 
@@ -292,8 +338,8 @@ discoverability_test:
 
 No cross-domain implications detected - infrastructure and runbook documentation change. The engineering decision was
 already ruled by the CTO agent (recorded in `decision-challenges.md`); no UI surface, no regulated-data surface, no new
-store or connection, no architectural decision (no ADR or C4 change), no new guard. Encryption posture, GDPR, and
-Guard Contract gates skip silently.
+store or connection, no architectural decision (no ADR or C4 change), no new guard. GDPR and Guard Contract gates skip
+silently; the Encryption Posture section above states the absence explicitly because the edited file ends in `.tf`.
 
 ## Sharp Edges
 

@@ -13,7 +13,7 @@ Branch: feat-one-shot-silent-incident-docs-note | Refs: #11820, #11869 (never a 
 
 - 2.1 Add the `INCIDENT LIFECYCLE` comment paragraph (note plus dated evidence lines) after the `WINDOW.` paragraph, before `locals {`, in `apps/web-platform/infra/betterstack-logs-alerts.tf`.
 - 2.2 Run the comment-only diff filter (prints nothing) and `terraform fmt -check`.
-- 2.3 Confirm the three single-occurrence anchor counts (`inngest_cutover_flip_silent_sql = <<-SQL`, `inngest_luks_key_probe_runbook_url =`, `EXPECTED during an owner-authorized inngest-host-replace`) are unchanged from `origin/main`.
+- 2.3 Confirm the file-wide counts are unchanged from `origin/main`: `inngest_cutover_flip_silent_sql = <<-SQL`, `inngest_luks_key_probe_runbook_url =` and `EXPECTED during an owner-authorized inngest-host-replace` (each 1), plus `<<-SQL` and `resource "logtail_exploration_alert" ` (the comment must contain neither).
 
 ## Phase 3: Verification
 
