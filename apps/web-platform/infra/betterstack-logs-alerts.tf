@@ -2039,3 +2039,120 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ---------------------------------------------------------------------------------------------
+# inngest_cutover_flip_silent — the flip unit stopped writing its JSON liveness row (#11820).
+#
+# After the flip-token split the cutover-flip unit runs `doppler run` under its OWN read/write
+# Doppler token (ADR-282 addendum "2026-11-01 (#9927 item 4, the flip-token build record)"), so a
+# revoked, rotated-alone or invalid flip token fails the unit BEFORE any script code runs, on every
+# 30 s timer start. The throttled `noop-*` row (one per CUTOVER_NOOP_THROTTLE_S = 300 s, journald
+# tag `inngest-cutover-flip`) then stops arriving as a JSON row. One silence alert covers the three
+# failure arms that share that cause (the unit not reaching the script's first emit):
+#   1. the unit stalled or failing at the Doppler CLI, before or after `done` (after `done`,
+#      rollback is dead with no other alert: the only alert on this tag is the key-probe one, and
+#      it fires from inside the script, which never starts);
+#   2. the boot-time flip-file write abort in the cloud-init runcmd list, which stops runcmd with
+#      no push signal;
+#   3. the LUKS key-continuity probe going silent (`luks_key_probe_tick` is called only from the
+#      unit's terminal arms, so any flip-token defect silences it).
+#
+# THE DISCRIMINATOR IS THE JSON TYPE OF `message`, NOT A STRING PATTERN (CTO ruling, 2026-11-02;
+# measured with betterstack-query.sh, never the row content): every `emit_state` row of the script
+# (the throttled noop heartbeat AND the FSM transition rows such as `flushed-resume-no-reflush`,
+# `rolled-back` and `unexpected-exit(from=...)`) carries an OBJECT-typed `message` (about 12 per
+# hour at rest); the doppler `Using DOPPLER_...` lines under the same tag carry a STRING `message`
+# (about 160 per hour), so a bare tag count would stay green while the unit fails. CTO measurement
+# 2026-11-02: 1,891 object rows over the prior 7 days and no gap over 900 s.
+#
+# WHAT IT DOES NOT SEE. A failure that REACHES `emit_state` (for example a flip token that
+# authenticates but is read-only, so the Doppler write is refused on a pending transition) emits an
+# object row via the ERR trap (`unexpected-exit(...)` is unthrottled), so this alert stays green on
+# it; the runbook's post-resume row check (step 5 of the first-replace steps) and the replace gate's
+# access pin cover that case, NOT the `noop-done` check before `op=resume` (which proves only the
+# Doppler read). It is also a LIVENESS signal, not an authenticated one: any process on the host
+# that logs a JSON object under this tag holds it green.
+# `JSONExtractString(raw,'message')` returns '' for the object rows, which is why the sibling
+# alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
+# Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file; it
+# was verified through the query API only, so if the alert evaluator rejects it the per-merge
+# apply fails and the fix is a revert.
+#
+# THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
+# `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
+# first `noop-*` row after the new host boots. That is expected; it clears on its own. A logs query
+# cannot express the suppression, which stays open on #11820 (a heartbeat beaten by a scheduled
+# workflow, so the suppression lives in the workflow, not in the query). Email
+# only, like egress_gw_probe_silent: push, call and sms stay off and critical_alert stays false.
+#
+# WINDOW. The emitter writes at most one noop row per 300 s, so a 900 s query window holds about
+# three rows; the alert pages only when none arrived (value lower_than 1, treat_as_zero so a fully
+# dark window reads 0). The 900 s window is the ceiling every alert created since 2026-10-01 stays
+# within; a longer window was refused by the Better Stack API.
+locals {
+  # One aggregate over the whole window, `dt` as the time column (the sibling silence alert's
+  # shape), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.
+  inngest_cutover_flip_silent_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('inngest-cutover-flip')
+      AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'
+      AND JSONType(raw, 'message') = 'Object'
+  SQL
+
+  inngest_cutover_flip_silent_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#flip-token-split-adr-282-addendum-2026-10-30-9927-item-4"
+}
+
+resource "logtail_exploration" "inngest_cutover_flip_silent" {
+  name      = "soleur-inngest-cutover-flip-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.inngest_cutover_flip_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
+  exploration_id = logtail_exploration.inngest_cutover_flip_silent.id
+  name           = "soleur-inngest-cutover-flip-silent-prd"
+
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No JSON inngest-cutover-flip row arrived from the production Inngest host in 15+ min. The flip unit is not running to completion: a revoked, rotated-alone or invalid flip Doppler token fails it before the script starts, the boot-time flip-file write may have aborted, or Vector stopped shipping the tag. The LUKS key-continuity probe is silent with it. EXPECTED during an owner-authorized inngest-host-replace (the host is dark until the first noop row after boot), and then it clears on its own. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  metadata = {
+    runbook = local.inngest_cutover_flip_silent_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
