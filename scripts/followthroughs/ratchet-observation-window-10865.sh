@@ -23,7 +23,7 @@
 #       pair) is NOT green and does NOT restart the window, bot PR or not;
 #   (d) job wall time (completed_at - started_at) over EVERY unit that ran and is not an incident, red and timed-out units included (a ceiling must see the
 #       tail): p95 (nearest rank) at most P95_MAX (240) s and the maximum at most MAX_MAX (285) s. These two ceilings are PROVISIONAL: first ruled 210/270 s when the
-#       only prior figure was a local mean of 203 s, re-ruled 240/285 s by the CTO agent on 2026-11-02 from the whole post-PR5 population (372 jobs, p95 218 s, max 284 s; runbook observation log); the CTO agent re-rules them again (a dated row with the measured
+#       only prior figure was a local mean of 203 s, re-ruled 240/285 s by the CTO agent on 2026-11-02 from the post-PR5 job population (series: the runbook observation log); the CTO agent re-rules them again (a dated row with the measured
 #       series and a change of these two constants, nothing else) at the close of the window or at the 30-day trigger, whichever is first;
 #   (e) composition among the green pull_request units: one docs-only PR (every file a knowledge-base markdown file or a root markdown file), one
 #       DRAFT PR (read from the issue timeline: draft at the unit's own time), and one bot PR (a user of type Bot) when one occurs; when none

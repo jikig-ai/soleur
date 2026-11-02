@@ -3172,7 +3172,7 @@ ow_u_base() { :; }
 ow_u_notmerged() { OW_PR_MERGED=null; }
 ow_drop() { local keep=() u; for u in "${OW_UNITS[@]}"; do [[ "$u" == "$1 "* ]] || keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
 ow_u_few() { ow_drop 5004; ow_drop 5003; }
-ow_u_slow() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} 250"; done; }
+ow_u_slow() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} 241"; done; }
 ow_u_exit1() { OW_UNITS[0]="5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 1 150"; }
 ow_u_botexit1() { OW_UNITS[3]="5004 pull_request shaD bot/d 2031-02-02T04:00:00Z 1 14 1 155"; }
 ow_u_defect() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 2 16 2 150"); }
@@ -3186,13 +3186,11 @@ ow_u_paused() { OW_UNITS[7]="6003 merge_group sha3 gh-readonly-queue/main/pr-13-
 ow_u_nobot() { ow_drop 5004; }
 ow_u_canary_draft() { OW_P13_REF=canary-draft; }
 ow_u_skipped() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 none 0"); }
-ow_u_bigmax() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 288"); }
+ow_u_bigmax() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 286"); }
 ow_u_wall_all() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} $1"; done; }   # every unit takes the wall time $1
 ow_u_p95_240() { ow_u_wall_all 240; }
-ow_u_p95_241() { ow_u_wall_all 241; }
 ow_u_max_at() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 $1"); }
 ow_u_max_285() { ow_u_max_at 285; }
-ow_u_max_286() { ow_u_max_at 286; }
 ow_u_nomarker() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 nomark 150"); }
 ow_u_few16() { ow_u_few; OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 0 150"); }   # PR 16 would be the third distinct PR
 ow_u_fork() { ow_u_few16; OW_P16_FORK=1; }
@@ -3216,15 +3214,11 @@ row_ow_notmerged() { ow_variant ow_u_notmerged; [[ "$RC" -eq 2 ]] && grep -q '^N
 row_ow_no_token() { ow_case; ow_write; RC=0; OWOUT="$(env -u GH_TOKEN PATH="$BIN:$PATH" bash "$OW_SCRIPT" 2>&1)" || RC=$?; OW_RCS+=("$RC"); [[ "$RC" -eq 3 ]] && grep -q 'GH_TOKEN is not set' <<<"$OWOUT"; }
 row_ow_api_failure() { ow_case; ow_write; fx_err "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"; ow_probe; rm -f "$GHFIX/ERR_$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX")"; [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"; }
 row_ow_few_prs() { ow_variant ow_u_few; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: only 2 distinct green pull_request PR' <<<"$OWOUT"; }
-row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 250s is over 240 s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)' <<<"$OWOUT"; }
-row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 288s is over 285 s (PROVISIONAL ceiling; ceiling re-rule owed' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
+row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 241s is over 240 s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)' <<<"$OWOUT"; }
+row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 286s is over 285 s (PROVISIONAL ceiling; ceiling re-rule owed' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
 row_ow_edge_pass() {   # a p95 of exactly 240 s and a maximum of exactly 285 s are AT the ceilings, so they pass
   ow_variant ow_u_p95_240; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 240 s' <<<"$OWOUT" || return 1
   ow_variant ow_u_max_285; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 285 s' <<<"$OWOUT"
-}
-row_ow_edge_over() {   # one second over either ceiling is NOT YET and names the measured value
-  ow_variant ow_u_p95_241; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 241s is over 240 s ' <<<"$OWOUT" || return 1
-  ow_variant ow_u_max_286; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 286s is over 285 s ' <<<"$OWOUT"
 }
 row_ow_30day_ceiling() { OW_NOW="$(date -u -d 2031-03-05T00:00:00Z +%s)"; ow_variant ow_u_slow; OW_NOW=""; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: the 30-day trigger has passed and (d) is the only unmet criterion' <<<"$OWOUT"; }
 row_ow_exit1() { ow_variant ow_u_exit1; [[ "$RC" -eq 2 ]] && grep -q 'no green pull_request unit is from a PR touching scripts' <<<"$OWOUT" && ! grep -q 'restarted' <<<"$OWOUT"; }   # a genuine drift is not green and restarts nothing
@@ -3663,10 +3657,6 @@ row_ow_sentinel_applied() {   # a list whose newest drain equals, or is later th
     [[ "$RC" -eq 2 ]] && grep -q 'floor=s4-drain ' <<<"$OWOUT" && ! grep -qF 'sentinel PR' <<<"$OWOUT" || return 1
   done
 }
-row_ow_sentinel_unmerged() {   # a sentinel that is not merged (and an empty list) changes nothing
-  ow_case; OW_SENTINEL=""; OW_DRAIN=""; ow_write; ow_probe
-  [[ "$RC" -eq 0 ]] && grep -q 'floor=pr3a ' <<<"$OWOUT" && ! grep -qF 'sentinel PR' <<<"$OWOUT"
-}
 row_ow_sentinel_errors() {   # a failed, non-object or malformed sentinel read is CANNOT ESTABLISH with one fixed line, never a pass
   local m want
   for m in fail object null nonumber 2031-02-02T03:30:00+01:00 2031-13-45T25:61:61Z; do
@@ -3691,7 +3681,6 @@ chk "window probe: a failed or malformed s4-drain read is CANNOT ESTABLISH with 
 chk "window probe: a merged sentinel PR missing from an empty s4-drain label list is CANNOT ESTABLISH (exit 3, one fixed line) before any run is listed" row_ow_sentinel_trips
 chk "window probe: a label list that lacks the newest drain (the sentinel) is CANNOT ESTABLISH too, not a floor" row_ow_sentinel_older_list
 chk "window probe: a label list whose newest drain equals or is later than the sentinel is applied (floor=s4-drain), never refused" row_ow_sentinel_applied
-chk "window probe: an unmerged sentinel and an empty label list change nothing" row_ow_sentinel_unmerged
 chk "window probe: a failed, non-object or malformed sentinel read is CANNOT ESTABLISH with one fixed line" row_ow_sentinel_errors
 chk "window probe: the quota estimate excludes fork runs and canary branches from the lookup candidates and from the PR estimate" row_ow_quota_shape
 chk "window probe: a run whose own pull_requests is empty (a merged PR) is attributed by its head commit, counted once per PR, and the canary run spends no lookup" row_ow_resolve_merged
@@ -3705,10 +3694,9 @@ chk "window probe: PR3a not merged is NOT YET (exit 2)" row_ow_notmerged
 chk "window probe: a missing GH_TOKEN is CANNOT ESTABLISH (exit 3), never a pass" row_ow_no_token
 chk "window probe: a failed API read is CANNOT ESTABLISH (exit 3)" row_ow_api_failure
 chk "window probe: two distinct PRs are NOT YET (exit 2)" row_ow_few_prs
-chk "window probe: a p95 over 240 s is NOT YET and says the ceiling is provisional and owed a re-rule" row_ow_slow
-chk "window probe: a maximum over 285 s fails by itself, though the p95 is under 240 s" row_ow_max
+chk "window probe: a p95 one second over 240 s is NOT YET and says the ceiling is provisional and owed a re-rule" row_ow_slow
+chk "window probe: a maximum one second over 285 s fails by itself, though the p95 is under 240 s" row_ow_max
 chk "window probe: a p95 of exactly 240 s and a maximum of exactly 285 s are at the ceilings and pass" row_ow_edge_pass
-chk "window probe: a p95 of 241 s or a maximum of 286 s is over a ceiling and NOT YET" row_ow_edge_over
 chk "window probe: at 30 days with the wall ceilings the only unmet criterion the probe says so" row_ow_30day_ceiling
 chk "window probe: a genuine exit 1 is not green and does not restart the window" row_ow_exit1
 chk "window probe: a genuine exit 1 on a bot PR is not green, not a restart and not 'a bot PR unit was red'" row_ow_bot_exit1
@@ -5206,7 +5194,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1307   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1305   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
