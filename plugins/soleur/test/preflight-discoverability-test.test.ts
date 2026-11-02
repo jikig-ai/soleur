@@ -3113,8 +3113,8 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the probe reads the live CF pool-health API + the Better Stack incidents stream; neither
   // has an unauthenticated substitute. Genuine.
   // #6027 AC4 (2026-11-02): +1 (92 -> 93) for `2026-11-02-fix-lb-health-alert-new-health-plan.md`.
-  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
-  // (a `>-` fold). TRUTH: the probe reads the Cloudflare `alerting/v3/policies` list via
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the Cloudflare `alerting/v3/policies` list via
   // CF_API_TOKEN/CF_ACCOUNT_ID (Doppler soleur/prd_terraform) to verify the web_lb_health policy
   // exists enabled. NO SUBSTITUTE: the CF alerting API has no unauthenticated read surface. Genuine.
   const BASELINE_DECLARED_PROBES = 93;

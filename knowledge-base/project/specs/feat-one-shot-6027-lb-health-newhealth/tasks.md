@@ -31,3 +31,10 @@ Branch: `feat-one-shot-6027-lb-health-newhealth`
   `cf_lb_gate_ga_pool_update`, apply exits green, and `GET
   /accounts/{id}/alerting/v3/policies` shows `GA LB pool health (app.soleur.ai)` `enabled=true`
   (epic #6027 AC4). Automation: not feasible — the dispatch IS the per-command authorization.
+- [ ] 3.2 Post-dispatch, read the policy's `mechanisms.email[0].id` and confirm it equals the
+  destination `var.cf_notification_email` resolves to (the channel `uptime-alerts.tf` policies
+  share). Delivery e2e is scoped out — it cannot be verified without downing an origin.
+- [ ] 3.3 The longer-window soak is owned by the committed probe
+  `scripts/followthroughs/ga-lb-pool-soak-6027.sh` under `scheduled-followthrough-sweeper.yml`;
+  its tracker directive (`earliest=<flip+7d>`) enrolls at the #6027 window flip (predecessor
+  plan F4), not in this PR.

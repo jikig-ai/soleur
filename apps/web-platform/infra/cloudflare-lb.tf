@@ -101,8 +101,8 @@ resource "cloudflare_notification_policy" "web_lb_health" {
     pool_id      = [cloudflare_load_balancer_pool.web_1.id]
     event_source = ["pool", "origin"]
     # new_health is ["Unhealthy"] only — the documented vocabulary for
-    # load_balancing_health_alert is {Unhealthy, Healthy} (verified against the
-    # CF API after Error 17108 rejected the shipped "Down" on run 41504420340).
+    # load_balancing_health_alert is {Unhealthy, Healthy} (CF docs; the shipped
+    # "Down" was API-rejected with Error 17108 on run 41504420340).
     # A "Healthy" (recovery) page is deliberately out of scope: flap-vs-sustained
     # recovery paging was never verified — a follow-up may add it after
     # verification.

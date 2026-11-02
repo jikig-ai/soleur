@@ -138,7 +138,7 @@ completes AC4 — `cf_lb_gate_ga_pool_update` explicitly admits remnant `{policy
 
 ## Files to Edit
 
-- `apps/web-platform/infra/cloudflare-lb.tf` — filters block (lines 103-107): `new_health = ["Down"]` → `new_health = ["Unhealthy"]`, and rewrite the adjacent comment to state the verified vocabulary (`Unhealthy`/`Healthy`) and why recovery paging stays out of scope.
+- `apps/web-platform/infra/cloudflare-lb.tf` — `cloudflare_notification_policy.web_lb_health` `filters` block: `new_health = ["Down"]` → `new_health = ["Unhealthy"]`, and rewrite the adjacent comment to state the verified vocabulary (`Unhealthy`/`Healthy`) and why recovery paging stays out of scope.
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` — bump `BASELINE_DECLARED_PROBES` 92 → 93 and append the PLACEMENT/TRUTH/NO SUBSTITUTE comment entry for this plan's `credentials_required` declaration (the corpus-ratchet contract, enforced by test G1; see Research Insights → Repo mechanics).
 
 ## Files to Create
@@ -173,6 +173,11 @@ completes AC4 — `cf_lb_gate_ga_pool_update` explicitly admits remnant `{policy
   the gate admits that remnant shape; the apply creates the policy. **This is an
   operator-authorized production write riding the workflow's per-command go-ahead model — the
   plan changes no authorization semantics.**
+  - *Delivery-path note:* `enabled=true` proves existence, not deliverability. Post-dispatch,
+    read the policy's `mechanisms.email[0].id` and confirm it equals the destination
+    `var.cf_notification_email` resolves to — the same channel every existing alert policy in
+    `uptime-alerts.tf` already uses. True end-to-end delivery (a real page on a real origin-down)
+    is scoped out: it cannot be verified without downing an origin.
   - *Automation: not feasible because the dispatch **is** the authorization — `cf-lb-overlay.yml`'s
     header fixes a per-command operator go-ahead for every production write, so baking the
     dispatch into `ship`/merge automation would silently change the authorization model this
