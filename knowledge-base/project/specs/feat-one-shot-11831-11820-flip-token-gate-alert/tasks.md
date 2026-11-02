@@ -6,10 +6,11 @@ Plan: knowledge-base/project/plans/2026-11-02-infra-pin-token-access-and-flip-un
 - 1.1 Add `tok_obj` helper to tests/scripts/test-inngest-host-replace-gate.sh; give every creating token row its `after.access`
 - 1.2 Add RED rows: flip create `read`; flip delete+create `read`; boot delete+create `read/write`; `after` absent; `access` absent; must-PASS rows (other replace order, no-op boot token without `after`)
 - 1.3 Implement `doppler_token_access_wrong` in tests/scripts/lib/inngest-host-replace-gate.sh (jq counter, numeric assert, echo line, PASS conjunct, reason chain, header comment, ABORT text)
-- 1.4 Add mutation rows M3/M4 (copy of gate), harness row (suite pass-count floor)
+- 1.4 Add mutation rows M3/M5 (copy of gate), harness row (suite anti-vacuity floor)
 - 1.5 Run the gate suite and shellcheck
 
 ## Phase 2 — silence alert (#11820), tests first
+- 2.0 Read apps/web-platform/infra/inngest-cutover-flip.sh first (needle, throttle, max observed gap)
 - 2.1 Create apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh (RED), pinned to the real emitter in apps/web-platform/infra/inngest-cutover-flip.sh
 - 2.2 Add local SQL, exploration and alert to apps/web-platform/infra/betterstack-logs-alerts.tf
 - 2.3 Add the two -target lines to .github/workflows/apply-web-platform-infra.yml

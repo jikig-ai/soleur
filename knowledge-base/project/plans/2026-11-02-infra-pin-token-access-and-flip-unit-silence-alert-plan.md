@@ -65,13 +65,12 @@ Two open code-review issues name `.github/workflows/infra-validation.yml`: #8735
 - `tests/scripts/test-inngest-host-replace-gate.sh` — `tok_obj` helper; `after.access` on every creating token row; new rows for both wrong-access shapes, a missing-access row, no-op rows, and mutation rows.
 - `apps/web-platform/infra/betterstack-logs-alerts.tf` — local `inngest_cutover_flip_silent_sql`, `logtail_exploration.inngest_cutover_flip_silent`, `logtail_exploration_alert.inngest_cutover_flip_silent`, with a comment block naming what it covers, what it does not, and the expected firing during an owner-authorized replace.
 - `.github/workflows/apply-web-platform-infra.yml` — two `-target` lines beside the `web_nic_guard_unpinned_url` pair.
-- `.github/workflows/infra-validation.yml` — blocking step for the new alert test, beside the `web-nic-guard-unpinned-url-alert` step, plus the runbook path in `pull_request` paths if the sibling pattern has one.
+- `.github/workflows/infra-validation.yml` — blocking step for the new alert test, beside the `web-nic-guard-unpinned-url-alert` step, plus `knowledge-base/engineering/operations/runbooks/inngest-server.md` and the new test file in `pull_request` paths (the sibling adds its runbook there).
 - `apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh` — exploration count anchor `17` becomes `18` (grep for the anchor; do not trust the line number).
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — "Flip-token split" first-replace step 1 sentence (the gate now pins `access`), the "What an agent may verify" bullet (3), and one line that the new alert emails during an authorized replace and clears at the first post-boot `noop-*` row.
 - `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` — standing-alarms table bullet for the new alert.
-- `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` — append-only addendum line: the gate pin and the silence alert shipped (no `## Decision` edit).
-- `knowledge-base/engineering/architecture/decisions/ADR-218*` — one line in the alert list (locate the file by `ls`; it is the Better Stack alerting ADR named in `egress_gw_probe_silent`'s comment).
-- `scripts/ci-pr-affected-audit.accept.tsv` — the accept row for the known `affected-index-ratchet` finding (anchor `ef13fc106737/1`, ref `plugins/soleur/test/terraform-target-parity.test.ts:5876`) per the owner's instruction; copy the exact column shape from a neighbouring row.
+- `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` — one append-only addendum line: the gate pin and the silence alert shipped (no `## Decision` edit). The separate ADR-218 alert-list line is cut (plan review, taste: a second doc for the same fact).
+- `scripts/ci-pr-affected-audit.accept.tsv` — the accept row for the known `affected-index-ratchet` finding (anchor `ef13fc106737/1`), per the owner's resume brief of 2026-11-02; cite the finding by its content anchor in the row's reason text, not by the test file's line number, and copy the exact column shape from a neighbouring row.
 
 ## Files to Create
 
@@ -80,19 +79,20 @@ Two open code-review issues name `.github/workflows/infra-validation.yml`: #8735
 ## Implementation Phases
 
 ### Phase 1 — gate pin (#11831), tests first
-1. In `test-inngest-host-replace-gate.sh` add `tok_obj <addr> <actions> <access>` and re-point every row whose token action includes `create` at it with the correct access (T1, T1d, T1e, T1n, T1o, T1o2, T1o3 and any other created-token row found by `grep -n "doppler_service_token" tests/scripts/test-inngest-host-replace-gate.sh`). Run the suite: all prior rows still PASS.
-2. Add the new rows RED first: flip `create` with `read` aborts; flip `delete,create` with `read` aborts; boot `delete,create` with `read/write` aborts; flip with `after` absent aborts; flip with `access` absent aborts; boot `create` with `read` passes; flip `create` with `read/write` passes; a no-op boot token with NO `after` passes (P3). Each abort row asserts `reason=doppler_token_access`.
-3. Implement the counter in the gate, in the same jq object as `doppler_token_touched`; add it to `plan_gate_assert_numeric`, the `echo` counter line, the PASS conjunction, and the reason chain directly after `doppler_token_touched`. Fail closed: `(.change.after.access? // "") != $want`.
+1. In `test-inngest-host-replace-gate.sh` add `tok_obj <addr> <actions> <access>` and re-point every row whose token action includes `create` at it with the correct access. Redefining the shared constants `TOKEN_REPLACE`, `FLIP_CREATE` and `FLIP_REPLACE` fixes T1, T1b, T1d, T1e and T1h at once; then handle the inline rows (T1n, T1o, T1o2, T1o3 and any other found by `grep -n "doppler_service_token" tests/scripts/test-inngest-host-replace-gate.sh`). Add a second helper `expect_access_abort` (the existing `expect_token_abort` hard-codes `reason=doppler_token_touched`). Run the suite: all prior rows still PASS.
+2. Add the new rows RED first: flip `create` with `read` aborts; flip `delete,create` with `read` aborts; boot `delete,create` with `read/write` aborts; flip with `after` absent aborts; flip with `access` absent aborts; boot `create` with `read` passes; flip `create` with `read/write` passes; a no-op boot token with NO `after` passes (P3). Each abort row asserts `reason=doppler_token_access`. Add a wiring twin of the existing `T1r` row asserting the new counter appears inside the `plan_gate_assert_numeric` call.
+3. Implement the counter in the gate, in the same jq object as `doppler_token_touched`; add the `local` name (gate line 100 declaration), a `dta=$(echo "$counts" | jq -r '.doppler_token_access_wrong')` line, the `plan_gate_assert_numeric` argument, the `echo` counter line, the PASS conjunction, and the reason chain directly after `doppler_token_touched`. Fail closed: `(.change.after.access? // "") != $want`.
 4. Run the whole gate suite, `shellcheck`, and the grep for every other consumer of the counter line (`doppler_token_touched` appears only in the gate, its test, the runbook and ADR-282, so no parser consumes the echoed line).
 
 ### Phase 2 — silence alert (#11820), tests first
-1. Create the new alert test against the not-yet-existing resources (RED).
-2. Add the SQL local, exploration and alert to `betterstack-logs-alerts.tf`, then the two `-target` lines, the infra-validation step, the count anchor bump, and the docs lines. Run `betterstack-alert-structure.test.sh`, `logs-alert-query-period-ceiling.test.sh`, `betterstack-send-failed-alert-mutation.test.sh`, `terraform fmt -check` and `terraform validate` where available, and fix what reds (the structure test may classify alerts; follow its pattern).
-3. Read the emitting script (`apps/web-platform/infra/inngest-cutover-flip.sh`) so the test pins the real `noop-*` JSON emitter and the throttle period, not a retyped needle.
+0. FIRST read the emitting script (`apps/web-platform/infra/inngest-cutover-flip.sh`) so the test pins the real `noop-*` JSON emitter and its throttle period, not a retyped needle, and so the 900 s window is checked against the real cadence. Record in the alert's comment block the maximum gap the read-only query shows (`scripts/betterstack-query.sh` through Doppler `prd_terraform`, never printing row content) next to the 900 s window, so the headroom is visible.
+1. Create the new alert test against the not-yet-existing resources (RED). Keep its mutation rows to what the sibling tests do (predicate, `-target` presence, runbook and standing-alarms presence); the structure and ceiling suites already cover the channel settings.
+2. Add the SQL local, exploration and alert to `betterstack-logs-alerts.tf`, then the two `-target` lines (inside the contiguous logtail block, after the `web_nic_guard_unpinned_url` pair and before the `random_password.inngest_redis_luks` line), the infra-validation step, the count anchor bump, and the docs lines. The exploration must use the exact `    values        = [local.vector_prd_source_id]` form the count anchor matches, or the count stays at 17. Update the stale comment above the `== 17` anchor (the word, the number and the contributor list) in the same edit. Run `betterstack-alert-structure.test.sh`, `logs-alert-query-period-ceiling.test.sh`, `betterstack-send-failed-alert-mutation.test.sh`, `terraform fmt -check` and `terraform validate` where available, and fix what reds (the structure test may classify alerts; follow its pattern).
+3. `JSONType` is the first use in this repo (every sibling uses `JSONExtractString`). The CTO ruling keeps it; the PR body states the blast radius: an evaluator rejection fails the per-merge apply until the change is reverted.
 
 ### Phase 3 — docs, ratchets, accept row
 1. Runbook, ADR addendum, log-query bullet, accept row.
-2. Run the repo-global ratchets a file-selected run cannot see: `grep-q-pipe-guard`, `PJ_TRIPLES` (311 on main; this PR adds no `grep -q` pipeline rows, so it should not move; if it does, read the value from the file at commit time), suite-shard-legs parity, fixture-relative-assert, capture lint. `BASELINE_DECLARED_PROBES` (91 on main; open PR #11766 also bumps it): this PR declares no probe, so it must not touch it; if a ratchet says otherwise, rebase and read the file value.
+2. Run the repo-global ratchets a file-selected run cannot see: `grep-q-pipe-guard`, `PJ_TRIPLES` (this PR adds no `grep -q` pipeline rows, so it should not move; if it does, read the value from the file at commit time), suite-shard-legs parity, fixture-relative-assert, capture lint. `BASELINE_DECLARED_PROBES`: this PR declares no probe, so it must not touch it; if a ratchet says otherwise, rebase and read the file value.
 
 ## Guard Contract
 
@@ -109,12 +109,12 @@ Two open code-review issues name `.github/workflows/infra-validation.yml`: #8735
 | M1 | Flip token planned `create` with `access: "read"` | gate ABORT `reason=doppler_token_access` |
 | M2 | Boot token planned `["delete","create"]` with `access: "read/write"` | ABORT `reason=doppler_token_access` |
 | M3 | Remove the new conjunct from the PASS condition in a COPY of the gate | the M1 plan wrongly passes, so the suite's mutation row reds |
-| M4 | Drop `doppler_token_access_wrong` from the `plan_gate_assert_numeric` list in a COPY | a mutation row reds (the counter would be unchecked as numeric) |
-| M5 | Flip token planned `create` with `after` absent entirely | ABORT (fail closed) |
-| M6 | Add a second wrong token after a compliant first (boot `read` OK, then flip `read`) | ABORT; a counter that stops at the first member would pass |
-| M7 | Change the counter's selector to a substring match (`inngest_flip_x` lookalike with `read`) | the existing lookalike row `T1f` still reds on `inngest_out_of_scope_changes`; no new row needed |
+| M4 | Flip token planned `create` with `after` absent entirely | ABORT (fail closed) |
+| M5 | Make the access mapping wrong for the flip address in a COPY (expected `read` instead of `read/write`) | the canonical flip-token PASS rows red |
 
-**Harness rows.** (a) Edit the SUITE, not the gate: delete the `read/write` PASS row for the flip token in a copy of the test and assert the suite's own pass-count floor reds. (b) Must-PASS inputs that are NOT the canonical: a flip token `["create","delete"]` with `read/write` (the other replace order), and a boot token that is `no-op` with no `after` at all.
+The address-to-access mapping in the gate must sit on a line the existing T1h `sed '/"doppler_service_token\.inngest_flip"/d'` cannot match (select the flip token with `endswith("_flip")` or equivalent, never a second quoted literal of the full address), or T1h would abort on a jq parse error and pass for the wrong reason.
+
+**Harness rows.** (a) Edit the SUITE, not the gate: delete the `read/write` PASS row for the flip token in a copy of the test and assert the suite's own anti-vacuity pass-count floor (the literal expected count near the end of `test-inngest-host-replace-gate.sh`) reds; the floor's literal moves with this change and is part of the diff. (b) Must-PASS inputs that are NOT the canonical: a flip token `["create","delete"]` with `read/write` (the other replace order), and a boot token that is `no-op` with no `after` at all.
 
 **Anchor.** The expected strings live in the gate and in `inngest-host.tf` (lines `access = "read"` and `access = "read/write"`); a diff that edits both would agree with itself. The independent anchor is the runbook's owner pre-go read of the two literals at the dispatch SHA, which stays in step 1 as a cross-check, and the ADR-282 build record, which names the access of each token.
 
@@ -174,11 +174,11 @@ discoverability_test:
 
 - [ ] AC1: Gate aborts with `reason=doppler_token_access` for flip-token create with `read`, boot-token replace with `read/write`, and a created token with no `after.access`. Pointer: `tests/scripts/lib/inngest-host-replace-gate.sh` (counter beside `doppler_token_touched`), `tests/scripts/test-inngest-host-replace-gate.sh`.
 - [ ] AC2: Gate still passes the existing shapes (first replace, flip rotation, no-op boot token without `after`).
-- [ ] AC3: `bash tests/scripts/test-inngest-host-replace-gate.sh` and `shellcheck` on both files are green; the mutation rows M3 and M4 go RED when applied to copies.
+- [ ] AC3: `bash tests/scripts/test-inngest-host-replace-gate.sh` and `shellcheck` on both files are green; the mutation rows M3 and M5 go RED when applied to copies, and T1h still fails for the intended reason (the mutation lands on the `def allow` line only).
 - [ ] AC4: `logtail_exploration.inngest_cutover_flip_silent` and its alert exist with the CTO-ruled settings; both `-target` lines are in `apply-web-platform-infra.yml` (`betterstack-logs-alerts.tf`, `apply-web-platform-infra.yml`).
 - [ ] AC5: The new alert test, `betterstack-alert-structure.test.sh`, `logs-alert-query-period-ceiling.test.sh` and `betterstack-send-failed-alert-mutation.test.sh` (count 18) are green, and `infra-validation.yml` runs the new test in a blocking step.
 - [ ] AC6: Runbook step 1 and bullet (3) no longer say the gate does not read `.after`; the replace-window email expectation is stated once in the runbook and once in the alert's `incident_cause`.
-- [ ] AC7: ADR-282 gains an append-only addendum line (0 removed lines in its diff); ADR-218's alert list and `betterstack-log-query.md` name the alert.
+- [ ] AC7: ADR-282 gains one append-only addendum line (0 removed lines in its diff); `betterstack-log-query.md` names the alert.
 - [ ] AC8: The repo-global ratchets (grep-q-pipe-guard, PJ_TRIPLES, suite-shard-legs parity, fixture-relative-assert, capture lint) are green before the first push; `affected-index-ratchet` has the accept row.
 - [ ] AC9: PR body says `Closes #11831` and `Ref #11820`, names what remains for #11820 (replace-window suppression via the #11266 feeder dead-man), and states that the alert will email during an owner-authorized replace and that a rejected `JSONType` query would fail the per-merge apply and be reverted.
 - [ ] AC10: No change to `user_data`, `cloud-init*.yml` or `inngest-host.tf`; `inngest-userdata-budget.sh --cap-only` is untouched and green.
