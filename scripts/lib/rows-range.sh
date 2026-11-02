@@ -87,8 +87,12 @@ rows_parse_args() {
   _site_seq=0
   EXECUTED=0
   _ROWS_MARK=()
-  if [[ -z "${DECLARED_TOTAL:-}" || ! "$DECLARED_TOTAL" =~ ^[0123456789]+$ \
-        || "$DECLARED_TOTAL" -lt 1 ]]; then
+  if [[ -z "${DECLARED_TOTAL:-}" || ! "$DECLARED_TOTAL" =~ ^[0123456789]+$ ]]; then
+    echo "ERROR(harness): a positive-integer DECLARED_TOTAL must be declared before rows_parse_args runs — each battery pins its own declared count; the lib only reads it" >&2
+    exit 2
+  fi
+  DECLARED_TOTAL=$((10#$DECLARED_TOTAL))   # 10# pins decimal: a 0N declaration is octal-ambiguous to arithmetic, which would silently skip the gate
+  if (( DECLARED_TOTAL < 1 )); then
     echo "ERROR(harness): a positive-integer DECLARED_TOTAL must be declared before rows_parse_args runs — each battery pins its own declared count; the lib only reads it" >&2
     exit 2
   fi
@@ -128,6 +132,11 @@ rows_parse_args() {
 in_range() {
   local _ord="${1-}"
   _site_seq=$(( _site_seq + 1 ))
+  if [[ -n "$_ord" && ! "$_ord" =~ ^[0123456789]+$ ]]; then
+    echo "FATAL(harness): in_range ordinal '${_ord}' is not a non-negative integer — the ordinal form pins a gated site to its declared position" >&2
+    exit 2
+  fi
+  [[ -n "$_ord" ]] && _ord=$((10#${_ord}))
   if [[ -n "$_ord" ]] && (( _ord != _site_seq )); then
     echo "FATAL(harness): row ${_ord} reached the range gate as site ${_site_seq} — a duplicated or reordered call site would silently re-map the registered ranges" >&2
     exit 2
@@ -167,7 +176,9 @@ rows_gate_floor() {
     exit 2
   fi
   # S4 — per-block declared case floors. ROWS_COUNT_VAR names the counter
-  # in_range snapshots; ROWS_BLOCK_CASES carries one declared minimum per
+  # in_range snapshots — its ticks MUST live inside the dispatched blocks
+  # (an unconditional tick lands in the next block's delta and can mask a
+  # hollow); ROWS_BLOCK_CASES carries one declared minimum per
   # gated ordinal. Only DISPATCHED blocks are floored: a skipped block's
   # zero delta is legitimate on the other arms.
   if [[ -n "${ROWS_COUNT_VAR:-}" ]]; then

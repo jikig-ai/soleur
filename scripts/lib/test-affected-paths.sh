@@ -554,6 +554,32 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/server/permission-callback.ts"
   "infra/github/ruleset-ci-required.tf"
   "knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md"
+  "apps/web-platform/lib/safety/redaction-allowlist.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/lib/support-handoff.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/lib/types.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/agent-env.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/agent-runner-query-options.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/agent-runner-sandbox-config.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/gate-flow.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/gate-types.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/tools.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/destroy-ask-classifier.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/destroy-ask-lane.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/logger.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/notifications.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/observability.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/permission-callback-bash-batch.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/permission-log.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/review-gate.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/safe-bash.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/sandbox-hook.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/sandbox.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/support-directive.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/support-escalation.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/tool-path-checker.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/tool-pattern-checker.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/tool-tiers.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/workspace-mode.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"

@@ -1209,7 +1209,7 @@ def main():
             "--registered-file is empty/mispathed)")
     dropped = sorted(set(measured) - registered)
     for label in dropped:
-        print(f"WARN: dropping timed-but-unregistered label {label!r}",
+        print(f"WARN: dropping priced-but-unregistered label {label!r}",
               file=sys.stderr)
         del measured[label]
     dropped_floor = sorted(floor_inputs - registered)
