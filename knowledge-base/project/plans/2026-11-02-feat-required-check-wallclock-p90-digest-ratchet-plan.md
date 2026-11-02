@@ -230,16 +230,16 @@ No C4 impact. Checked against `model.c4`/`views.c4`/`spec.c4`: (a) external huma
 
 ### Pre-merge (PR)
 
-- [ ] `scripts/watch-wallclock-p90-11774.sh --dry-run` prints per-(check, surface) p50/p90 latency + duration rows over `scripts/required-checks.txt`-derived population and posts nothing
-- [ ] Bound breach exits 1 and the composed comment names every offending (check, surface); zero qualifying samples exits 0 with a no-data report; gh API failure exits 3
-- [ ] Bounds live in `scripts/required-check-wallclock-bounds.tsv`; a required context without a bound row is a finding
-- [ ] `operator-digest` SKILL.md documents §6 with aggregate-only rendering and the L1 source list covers the tracker read; workflow asset prompt updated
-- [ ] `bash scripts/watch-wallclock-p90-11774.test.sh` passes, registered in `scripts/test-all.sh`, with `suite-durations.tsv` + `suite-shard-legs.tsv` rows
-- [ ] `.github/workflows/wallclock-p90-watch.yml` is default-branch-guarded, least-privilege, and supports `dry_run` dispatch
-- [ ] Aggregate-only invariant: no per-PR or per-actor field anywhere in report/digest (ADR-057)
-- [ ] Runbook documents the watch, its retirement set, and the bound-seeding method
-- [ ] Malformed bounds TSV row (unparseable number / wrong column count) → cannot-establish, never a silent skip of that row
-- [ ] Tracker find-or-file + sentinel dedupe proven in-suite: second identical flagged set → no repost, body still rewritten; duplicate same-title trackers → ::warning:: + lowest number wins; tracker never auto-closed
+- [x] `scripts/watch-wallclock-p90-11774.sh --dry-run` prints per-(check, surface) p50/p90 latency + duration rows over `scripts/required-checks.txt`-derived population and posts nothing
+- [x] Bound breach exits 1 and the composed comment names every offending (check, surface); zero qualifying samples exits 0 with a no-data report; gh API failure exits 3
+- [x] Bounds live in `scripts/required-check-wallclock-bounds.tsv`; a required context without a bound row is a finding
+- [x] `operator-digest` SKILL.md documents §6 with aggregate-only rendering and the L1 source list covers the tracker read; workflow asset prompt updated
+- [x] `bash scripts/watch-wallclock-p90-11774.test.sh` passes, registered in `scripts/test-all.sh`, with `suite-durations.tsv` + `suite-shard-legs.tsv` rows
+- [x] `.github/workflows/wallclock-p90-watch.yml` is default-branch-guarded, least-privilege, and supports `dry_run` dispatch
+- [x] Aggregate-only invariant: no per-PR or per-actor field anywhere in report/digest (ADR-057)
+- [x] Runbook documents the watch, its retirement set, and the bound-seeding method
+- [x] Malformed bounds TSV row (unparseable number / wrong column count) → cannot-establish, never a silent skip of that row
+- [x] Tracker find-or-file + sentinel dedupe proven in-suite: second identical flagged set → no repost, body still rewritten; duplicate same-title trackers → ::warning:: + lowest number wins; tracker never auto-closed
 
 ### Post-merge (operator)
 
