@@ -453,8 +453,8 @@ s = s.replace(old, " OR\n          match(JSONExtractString(raw, \x27message\x27)
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
-PRESENCE_ROWS=29
-MUT_ROWS=23
+PRESENCE_ROWS=32
+MUT_ROWS=20
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
