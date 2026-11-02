@@ -66,7 +66,7 @@ MO=$(fx_minimal mono); put "$MO/apps/web/package.json" '{"dependencies":{"next":
 check "monorepo: nested Next.js package without a gate is a DEBT-05 gap" test "$(fact "$SCRATCH/mo.tsv" DEBT-05)" = gap
 put "$MO/apps/web/.dependency-cruiser.cjs" 'module.exports = {}'; commit_all "$MO"; scan_to "$MO" "$SCRATCH/mo2.tsv"
 check "monorepo: a nested dependency-cruiser config clears DEBT-05" test "$(fact "$SCRATCH/mo2.tsv" DEBT-05)" = ok
-OG=$(fx_minimal orig); put "$OG/.claude/hooks/git-commit-secret-scan.sh" '#!/bin/sh'; commit_all "$OG"; scan_to "$OG" "$SCRATCH/og.tsv"
+OG=$(fx_minimal orig); put "$OG/.claude/hooks/git-commit-secret-""scan.sh" '#!/bin/sh'; commit_all "$OG"; scan_to "$OG" "$SCRATCH/og.tsv"
 check "original-form guard (the source repo's own hook) counts as present, still advisory/unverified" grep -qE '^BASE-secret-scan	ok	original form present, advisory/unverified' "$SCRATCH/og.tsv"
 
 # --- Review fixes (PR #11867): what SEC-01/SEC-02 cover, what the model may read, input hardening. ---
@@ -97,7 +97,7 @@ X=$(fx_minimal xdash); put "$X/-n.js" '// TODO a'; commit_all "$X"; scan_to "$X"
 check "a file name starting with '-' does not zero a grep batch (DEBT-01 counts it)" grep -qE '^DEBT-01	ok	1 markers' "$SCRATCH/xd.tsv"
 X=$(fx_minimal xsub); scan_to "$X/src" "$SCRATCH/xr.tsv"
 check "a subdirectory target resolves to the repository root" grep -qx 'README.md' "$SCRATCH/xr.tsv.files"
-check "scan records the stack in the facts header" bash -c 'head -n 1 "$1" | grep -qx "# stack=node"' _ "$SCRATCH/xr.tsv"
+check "scan records the stack in the facts header" bash -c 'x=$(head -n 1 "$1"); grep -qx "# stack=node" <<<"$x"' _ "$SCRATCH/xr.tsv"
 check "the run marker reports ok= and not-assessed= so a quiet run is distinguishable from a clean one" grep -qE 'ok=[0-9]+ not-assessed=[0-9]+' "$SCRATCH/xr.tsv.stdout"
 # Boundaries of the count-based detectors (a population of one cannot tell 'any' from 'all').
 mk_debt() { local d i; d=$(fx_minimal "$1"); : > "$d/src/debt.js"; for i in $(seq 1 "$2"); do printf '// TODO %s\n' "$i" >> "$d/src/debt.js"; done; commit_all "$d"; printf '%s' "$d"; }

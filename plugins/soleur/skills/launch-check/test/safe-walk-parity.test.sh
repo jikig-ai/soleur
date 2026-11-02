@@ -10,10 +10,10 @@ n=$(printf '%s\n' "$pats" | grep -c .)
 check "extractor finds code-to-prd's patterns (anti-vacuity: >= 6)" test "$n" -ge 6
 body=$(awk '/^lc__safe_path_case\(\) \{/ {f=1} f {print} f && /^\}/ {exit}' "$SW")
 check "extractor finds the case body (anti-vacuity)" test -n "$body"
-miss=0; while IFS= read -r p; do [ -z "$p" ] && continue; printf '%s' "$body" | grep -qF -- "$p" || { fail "safe_path lacks code-to-prd pattern: $p"; miss=1; }; done <<<"$pats"
+miss=0; while IFS= read -r p; do [ -z "$p" ] && continue; grep -qF -- "$p" <<<"$body" || { fail "safe_path lacks code-to-prd pattern: $p"; miss=1; }; done <<<"$pats"
 [ "$miss" = 0 ] && pass "safe_path contains every code-to-prd pattern"
 for p in '*.tfstate' '*.tfvars' '*.sql' '*.csv' '*.sqlite' 'fixtures/*'; do
-  check "launch-check addition present: $p" bash -c 'printf "%s" "$1" | grep -qF -- "$2"' _ "$body" "$p"
+  check "launch-check addition present: $p" bash -c 'grep -qF -- "$2" <<<"$1"' _ "$body" "$p"
 done
 # shellcheck source=/dev/null
 source "$SW"

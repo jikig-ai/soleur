@@ -29,8 +29,8 @@ check "no checks.tsv row duplicates a derived guard (double count)" bash -c '! g
 check "baseline.sh does not hard-code a guard name" bash -c '! grep -nE "secret-scan|commit-on-main|block-stash|orphan-test" "$1" | grep -v "^[0-9]*:[[:space:]]*#"' _ "$SKILL/scripts/lib/baseline.sh"
 
 # Label and retirement tables stay inside the vocabulary the renderer counts, and a retired id is never reused.
-check "baseline-domains.tsv uses only known domains and severities" bash -c '! awk -F"\t" "!/^#/ && \$1 != \"name\" && \$1 != \"\" && (\$2 !~ /^(security|tests-ci|tech-debt|reliability-ops)\$/ || \$3 !~ /^(critical|high|medium|low)\$/)" "$1" | grep -q .' _ "$SKILL/references/baseline-domains.tsv"
-check "no catalog id appears in retired-checks.tsv (a retired id cannot come back with a stale acceptance)" bash -c 'ids=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$1"); ret=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$2"); [ -z "$ret" ] || ! printf "%s\n" $ids | grep -qxFf <(printf "%s\n" $ret)' _ "$SKILL/references/checks.tsv" "$SKILL/references/retired-checks.tsv"
+check "baseline-domains.tsv uses only known domains and severities" bash -c 'x=$(awk -F"\t" "!/^#/ && \$1 != \"name\" && \$1 != \"\" && (\$2 !~ /^(security|tests-ci|tech-debt|reliability-ops)\$/ || \$3 !~ /^(critical|high|medium|low)\$/)" "$1"); [ -z "$x" ]' _ "$SKILL/references/baseline-domains.tsv"
+check "no catalog id appears in retired-checks.tsv (a retired id cannot come back with a stale acceptance)" bash -c 'ids=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$1"); ret=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$2"); [ -z "$ret" ] || { x=$(printf "%s\n" $ids | grep -xFf <(printf "%s\n" $ret) || true); [ -z "$x" ]; }' _ "$SKILL/references/checks.tsv" "$SKILL/references/retired-checks.tsv"
 G2="$SCRATCH/badlabel"; mkdir -p "$G2"
 printf 'name\ttier\temits\nx-guard\tv1\tfile.txt\n' > "$G2/g.tsv"
 LAUNCH_CHECK_GUARDS_TSV="$G2/g.tsv" lc scan --target "$H" --facts "$SCRATCH/gl.tsv" > "$SCRATCH/gl.out" 2>&1; rc=$?

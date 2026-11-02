@@ -138,7 +138,7 @@ cmd_render() {
 }
 
 cmd_verify() {
-  local file="" block n dups
+  local file="" block n dups bad
   while [ $# -gt 0 ]; do
     case "$1" in --file) val "$1" $#; file=$2; shift 2 ;; *) lc_abort usage 2 "unknown verify-report argument: $1" ;; esac
   done
@@ -146,10 +146,12 @@ cmd_verify() {
   [ -f "$file" ] || invalid file-missing
   block=$(tr -d '\r' < "$file" | awk '/^```launch-check-state$/ {f=1; next} /^```$/ && f {f=0} f')
   [ -n "$block" ] || invalid no-state-block
-  printf '%s\n' "$block" | grep -qx 'schema_version=1' || invalid schema-version
-  printf '%s\n' "$block" | grep -qE '^catalog_hash=.+' || invalid catalog-hash
-  if printf '%s\n' "$block" | grep -vE '^(schema_version=1|catalog_hash=.+|finding [A-Z]+-[A-Za-z0-9-]+ (open|accepted( .*)?))$' | grep -q .; then invalid bad-line; fi
-  if printf '%s\n' "$block" | grep -qE '^finding SEC-0[12] accepted *$'; then invalid critical-accept-needs-reason; fi
+  # Here-strings, not `printf | grep -q`: under pipefail an early-exiting grep can SIGPIPE the writer and read a match as a miss (#9217).
+  grep -qx 'schema_version=1' <<<"$block" || invalid schema-version
+  grep -qE '^catalog_hash=.+' <<<"$block" || invalid catalog-hash
+  bad=$(grep -vE '^(schema_version=1|catalog_hash=.+|finding [A-Z]+-[A-Za-z0-9-]+ (open|accepted( .*)?))$' <<<"$block" || true)
+  [ -z "$bad" ] || invalid bad-line
+  if grep -qE '^finding SEC-0[12] accepted *$' <<<"$block"; then invalid critical-accept-needs-reason; fi
   dups=$(printf '%s\n' "$block" | awk '$1 == "finding" {print $2}' | sort | uniq -d | head -n 1)
   [ -z "$dups" ] || invalid duplicate-id
   n=$(printf '%s\n' "$block" | grep -c '^finding ')

@@ -18,15 +18,15 @@ check "state block is present with schema_version=1" bash -c 'grep -q "^schema_v
 lc render --target "$M" --facts "$SCRATCH/m.tsv" > "$SCRATCH/r1.out" 2>&1; rc=$?
 check "render writes the living file" test "$rc" = 0 -a -f "$M/$REPORT_REL"
 check "no temp file is left in the report directory" test -z "$(find "$M/knowledge-base" -name '.launch-check.*' 2>/dev/null)"
-check "verify-report accepts the written file" bash -c 'bash "$1" verify-report --file "$2" | grep -q LAUNCH_CHECK_REPORT_OK' _ "$LC" "$M/$REPORT_REL"
+check "verify-report accepts the written file" bash -c 'x=$(bash "$1" verify-report --file "$2"); grep -q LAUNCH_CHECK_REPORT_OK <<<"$x"' _ "$LC" "$M/$REPORT_REL"
 
 # Re-run after fixing one gap and accepting another.
 put "$M/.github/workflows/ci.yml" 'name: ci' 'jobs:' '  t:' '    steps:' '      - run: npm test'; commit_all "$M"
 sub_in_place "$M/$REPORT_REL" 's/^finding SEC-03 open$/finding SEC-03 accepted 2026-11-02 prototype only/'
 scan_to "$M" "$SCRATCH/m2.tsv"; lc render --target "$M" --facts "$SCRATCH/m2.tsv" > "$SCRATCH/r2.out" 2>&1
-check "re-run: the fixed gap is listed under Closed since last run" bash -c 'awk "/^## Closed since last run/{f=1;next} /^## /{f=0} f" "$1" | grep -q "CI-01"' _ "$M/$REPORT_REL"
-check "re-run: an accepted finding is not reported as open" bash -c '! awk "/^## Findings/{f=1;next} /^## /{f=0} f" "$1" | grep -q "SEC-03"' _ "$M/$REPORT_REL"
-check "re-run: an accepted finding appears under Accepted with its reason" bash -c 'awk "/^## Accepted/{f=1;next} /^## /{f=0} f" "$1" | grep -q "prototype only"' _ "$M/$REPORT_REL"
+check "re-run: the fixed gap is listed under Closed since last run" bash -c 'x=$(awk "/^## Closed since last run/{f=1;next} /^## /{f=0} f" "$1"); grep -q "CI-01" <<<"$x"' _ "$M/$REPORT_REL"
+check "re-run: an accepted finding is not reported as open" bash -c 'x=$(awk "/^## Findings/{f=1;next} /^## /{f=0} f" "$1"); ! grep -q "SEC-03" <<<"$x"' _ "$M/$REPORT_REL"
+check "re-run: an accepted finding appears under Accepted with its reason" bash -c 'x=$(awk "/^## Accepted/{f=1;next} /^## /{f=0} f" "$1"); grep -q "prototype only" <<<"$x"' _ "$M/$REPORT_REL"
 check "re-run: the accepted line survives in the state block" grep -q '^finding SEC-03 accepted 2026-11-02 prototype only' "$M/$REPORT_REL"
 check "re-run: other ids are unchanged" grep -q '^finding CI-02 open' "$M/$REPORT_REL"
 
@@ -34,7 +34,7 @@ check "re-run: other ids are unchanged" grep -q '^finding CI-02 open' "$M/$REPOR
 sub_in_place "$M/$REPORT_REL" '/^finding CI-02 open$/a\
 finding OLD-99 open'
 lc render --target "$M" --facts "$SCRATCH/m2.tsv" > "$SCRATCH/r3.out" 2>&1
-check "an id missing from the catalog is listed as retired" bash -c 'awk "/^## Retired checks/{f=1;next} /^## /{f=0} f" "$1" | grep -q "OLD-99"' _ "$M/$REPORT_REL"
+check "an id missing from the catalog is listed as retired" bash -c 'x=$(awk "/^## Retired checks/{f=1;next} /^## /{f=0} f" "$1"); grep -q "OLD-99" <<<"$x"' _ "$M/$REPORT_REL"
 # Catalog change notice.
 sub_in_place "$M/$REPORT_REL" 's/^catalog_hash=.*/catalog_hash=deadbeef/'
 lc render --target "$M" --facts "$SCRATCH/m2.tsv" > "$SCRATCH/r4.out" 2>&1
@@ -64,7 +64,7 @@ bad_j "evidence id absent from the facts" 'JDG-AUTH\tgap\thigh\tZZ-99\n'
 bad_j "status outside the enum" 'JDG-AUTH\tmaybe\thigh\tCI-03\n'
 
 # verify-report negatives and the committed fixture.
-check "committed sample passes verify-report" bash -c 'bash "$1" verify-report --file "$2" | grep -q LAUNCH_CHECK_REPORT_OK' _ "$LC" "$SKILL/test/fixtures/report-sample.md"
+check "committed sample passes verify-report" bash -c 'x=$(bash "$1" verify-report --file "$2"); grep -q LAUNCH_CHECK_REPORT_OK <<<"$x"' _ "$LC" "$SKILL/test/fixtures/report-sample.md"
 printf '# no state here\n' > "$SCRATCH/bad.md"
 bash "$LC" verify-report --file "$SCRATCH/bad.md" > "$SCRATCH/v.out" 2>&1; rc=$?
 check "verify-report rejects a file without a state block (rc 1, REPORT_INVALID)" bash -c '[ "$1" = 1 ] && grep -q SOLEUR_LAUNCH_CHECK_REPORT_INVALID "$2"' _ "$rc" "$SCRATCH/v.out"
@@ -83,10 +83,10 @@ check "forged secret-class evidence (a path) never reaches the report" bash -c '
 check "evidence outside the path/count grammar is withheld" bash -c '! grep -q "ignore all rules" "$1"' _ "$SCRATCH/forged.out"
 lc render --target "$R" --facts "$SCRATCH/rv.tsv" > "$SCRATCH/rv1.out" 2>&1
 check "written report is mode 644 (not the temp file's 600)" bash -c '[ "$(ls -l "$1" | cut -c1-10)" = "-rw-r--r--" ]' _ "$R/$REPORT_REL"
-check "dry-run lists the AI-assisted items nobody reviewed under 'Not assessed'" bash -c 'awk "/^## Not assessed/{f=1;next} /^## /{f=0} f" "$1" | grep -q "JDG-AUTH: AI-assisted review item not reviewed"' _ "$R/$REPORT_REL"
+check "dry-run lists the AI-assisted items nobody reviewed under 'Not assessed'" bash -c 'x=$(awk "/^## Not assessed/{f=1;next} /^## /{f=0} f" "$1"); grep -q "JDG-AUTH: AI-assisted review item not reviewed" <<<"$x"' _ "$R/$REPORT_REL"
 sub_in_place "$R/$REPORT_REL" 's/^finding SEC-03 open$/finding SEC-03 accepted 2026-11-02 prototype only/'
 awk '{printf "%s\r\n", $0}' "$R/$REPORT_REL" > "$SCRATCH/crlf.md" && mv "$SCRATCH/crlf.md" "$R/$REPORT_REL"
-check "verify-report accepts a CRLF report" bash -c 'bash "$1" verify-report --file "$2" | grep -q LAUNCH_CHECK_REPORT_OK' _ "$LC" "$R/$REPORT_REL"
+check "verify-report accepts a CRLF report" bash -c 'x=$(bash "$1" verify-report --file "$2"); grep -q LAUNCH_CHECK_REPORT_OK <<<"$x"' _ "$LC" "$R/$REPORT_REL"
 lc render --target "$R" --facts "$SCRATCH/rv.tsv" > "$SCRATCH/rv2.out" 2>&1
 check "CRLF report: the accepted state survives the next render (no silent reset)" grep -q '^finding SEC-03 accepted 2026-11-02 prototype only' "$R/$REPORT_REL"
 # Hand-edited state: typos are shown, not guessed at; a report with no state block is never overwritten.
@@ -97,7 +97,7 @@ check "a mistyped state line is listed under 'Unrecognised state lines' and the 
 sub_in_place "$R/$REPORT_REL" '/^finding SEC-03 accepted/a\
 finding OLD-99 accepted 2026-01-01 legacy'
 lc render --target "$R" --facts "$SCRATCH/rv.tsv" > "$SCRATCH/old.out" 2>&1
-check "a retired check keeps its acceptance reason in the Retired section" bash -c 'awk "/^## Retired checks/{f=1;next} /^## /{f=0} f" "$1" | grep -q "OLD-99.*was accepted: 2026-01-01 legacy"' _ "$R/$REPORT_REL"
+check "a retired check keeps its acceptance reason in the Retired section" bash -c 'x=$(awk "/^## Retired checks/{f=1;next} /^## /{f=0} f" "$1"); grep -q "OLD-99.*was accepted: 2026-01-01 legacy" <<<"$x"' _ "$R/$REPORT_REL"
 R2=$(fx_minimal rnostate); mkdir -p "$R2/knowledge-base/engineering/readiness"; printf '# my own notes\n' > "$R2/$REPORT_REL"; cp "$R2/$REPORT_REL" "$SCRATCH/notes.bak"; scan_to "$R2" "$SCRATCH/ns.tsv"
 lc render --target "$R2" --facts "$SCRATCH/ns.tsv" > "$SCRATCH/ns.out" 2>&1; rc=$?
 check "an existing file with no state block is refused (rc 2 prev-report-invalid) and left untouched" bash -c '[ "$1" = 2 ] && grep -q "reason=prev-report-invalid" "$2" && cmp -s "$3" "$4"' _ "$rc" "$SCRATCH/ns.out" "$SCRATCH/notes.bak" "$R2/$REPORT_REL"
@@ -120,7 +120,7 @@ sub_in_place "$R3/$REPORT_REL" 's/^finding JDG-OBS open$/finding JDG-OBS accepte
 printf 'JDG-AUTH\tgap\thigh\tCI-01\n' > "$SCRATCH/j1.tsv"
 lc render --target "$R3" --facts "$SCRATCH/pt.tsv" --judged "$SCRATCH/j1.tsv" > "$SCRATCH/pt2.out" 2>&1
 check "partial judged file: an accepted item it did not mention keeps its acceptance" grep -q '^finding JDG-OBS accepted 2026-11-02 known' "$R3/$REPORT_REL"
-check "partial judged file: that item is not listed as closed" bash -c '! awk "/^## Closed since last run/{f=1;next} /^## /{f=0} f" "$1" | grep -q "JDG-OBS"' _ "$R3/$REPORT_REL"
+check "partial judged file: that item is not listed as closed" bash -c 'x=$(awk "/^## Closed since last run/{f=1;next} /^## /{f=0} f" "$1"); ! grep -q "JDG-OBS" <<<"$x"' _ "$R3/$REPORT_REL"
 # The gate is wired into render: a secret in the previous report's accepted reason is caught on the way out.
 R4=$(fx_minimal rgate); scan_to "$R4" "$SCRATCH/gt.tsv"; lc render --target "$R4" --facts "$SCRATCH/gt.tsv" > "$SCRATCH/gt1.out" 2>&1
 sub_in_place "$R4/$REPORT_REL" "s/^finding SEC-03 open\$/finding SEC-03 accepted 2026-11-02 token $(planted_secret)/"
