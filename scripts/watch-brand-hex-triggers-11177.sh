@@ -143,9 +143,9 @@ while IFS= read -r -d '' _kv; do
   esac
 done < <(env -0)
 # `env -0` is GNU. The loop's exit status is not observable here (no errexit), so a non-GNU env would leave
-# the numbered GIT_CONFIG_KEY_n/VALUE_n variables set and silently reach every git call. env always lists at
-# least PATH, so zero records means the scrub list could not be built: exit 3 before any git call or post.
-[[ "$_envn" -gt 0 ]] || { echo "::error::env -0 produced no output (a non-GNU env?); cannot scrub GIT_CONFIG_KEY_n/VALUE_n from git calls" >&2; exit 3; }
+# the numbered GIT_CONFIG_KEY_n/VALUE_n variables set and silently reach every git call. bash always exports
+# at least PWD, SHLVL and _, so zero records means `env -0` produced nothing and the scrub list could not be built: exit 3 before any git call or post.
+[[ "$_envn" -gt 0 ]] || { echo "::error::env -0 produced no output (a non-GNU env?); cannot scrub GIT_CONFIG_KEY_n/VALUE_n from git calls; nothing was posted, run on a runner with GNU env" >&2; exit 3; }
 gitx() { env "${GIT_UNSET[@]}" git "$@"; }
 
 REPO_ROOT=""; WT=""; EMPTY=""
@@ -280,7 +280,7 @@ t2_flush() {
 # the suite's parity row can follow it. The window is anchored at the tracker's creation date and never slides,
 # and `git log --no-renames --name-only` lists a renamed or deleted path again, so a header-shaped path in the
 # window cannot be cleared by editing it. The NUL-safe parser follow-up is #11864.
-T2_STREAM_HINT="re-run once to rule out a history change during the run; if it fails identically, a commit in the window touches a path named like a commit header, renaming or deleting that path does not clear it, trigger 1 is held on every run, and the only exits are closing #11177 or fixing the parser (#11864); see RED RUN in code-quality-followups-watch.yml"
+T2_STREAM_HINT="re-run once to rule out a transient failure; if it fails identically, a commit in the window touches a path named like a commit header, renaming or deleting that path does not clear it, trigger 1 is held on every run, and the only exits are closing #11177 once its retirement criteria are met or fixing the parser (#11864); never edit or forge a sentinel to get past it; see RED RUN in code-quality-followups-watch.yml"
 # t2_collect: newest-first first-parent commits in the window that touch the path classes, at most
 # CAP of them (CAND_MORE=1 when more existed), from ONE git log pass parsed here.
 t2_collect() {

@@ -605,7 +605,9 @@ chk_forged_header() { # a tracked path named like a commit header (control char 
   # a real follow-up number, never a placeholder; a pointer to the workflow note).
   local hl; hl="$(grep -m1 'does not match the first-parent list' <<<"$ERR" || true)"
   need '[[ "$hl" == *"re-run"* && "$hl" == *"does not clear"* && "$hl" == *"trigger 1"* && "$hl" == *"RED RUN"* ]]' || return 1
-  need 'grep -qE "#[0-9]{4,}" <<<"$hl"' || return 1
+  # the follow-up number is a real issue other than the tracker itself (#11177 also appears on this line)
+  need '[[ -n "$(grep -oE "#[0-9]{4,}" <<<"$hl" | grep -vxF "#11177" | head -1)" ]]' || return 1
+  need '[[ "$hl" == *"never edit or forge a sentinel"* && "$hl" == *"retirement criteria"* ]]' || return 1
 }
 REAL_ENV="$(command -v env)"; [[ "$REAL_ENV" == /* ]] || fatal "env is not an absolute path"
 # envshim MODE: install an `env` shim in $MOCKD/shim that serves `env -0` three ways and otherwise execs the
@@ -1143,7 +1145,9 @@ if [[ -s "$SUT" ]]; then
 WN_ERR_HTTP=""' 'WN_ERR_HTTP=""'
   mutation_row "G1-r2" "tracker state check removed: a CLOSED tracker is commented on" chk_closed \
     sut '[[ "$WN_STATE" != "OPEN" ]]' 'false'
-  ENVCHK='[[ "$_envn" -gt 0 ]] || { echo "::error::env -0 produced no output (a non-GNU env?); cannot scrub GIT_CONFIG_KEY_n/VALUE_n from git calls" >&2; exit 3; }'
+  # read the check line from the SUT itself (a retyped copy drifts with every wording fix); it must be exactly one line
+  ENVCHK="$(grep -F '[[ "$_envn" -gt 0 ]] ||' "$SUT")"
+  [[ -n "$ENVCHK" && "$ENVCHK" != *$'\n'* ]] || fatal "expected exactly one env -0 emptiness check line in the SUT"
   mutation_row "G3-env-del" "the env -0 emptiness check is deleted" chk_envfail_a \
     sut "$ENVCHK"$'\n' ''
   mutation_row "G3-env-order" "the env -0 check runs after the first git call instead of before any" chk_envfail_a \
@@ -1282,7 +1286,7 @@ fi
 # T2_STREAM_HINT= definition, a non-empty upper-case pointer token, a workflow file that exists, a paragraph
 # (heading line through the next bare `#` line) that carries the clauses, and a real follow-up number.
 wf_hint_parity() { # SUTFILE WFFILE (sets DIAG)
-  local s="$1" w="$2" n line tok para
+  local s="$1" w="$2" n line tok para fu
   [[ -f "$s" ]] || { DIAG="parity: SUT file missing"; return 1; }
   [[ -f "$w" ]] || { DIAG="parity: workflow file missing"; return 1; }
   n="$(grep -c '^T2_STREAM_HINT=' "$s" || true)"
@@ -1290,11 +1294,12 @@ wf_hint_parity() { # SUTFILE WFFILE (sets DIAG)
   line="$(grep -m1 '^T2_STREAM_HINT=' "$s")"
   tok="$(sed -nE 's/.* see ([A-Z ]+) in code-quality-followups-watch\.yml.*/\1/p' <<<"$line")"
   [[ -n "$tok" && "$tok" =~ ^[A-Z\ ]+$ ]] || { DIAG="parity: no usable pointer token in the hint"; return 1; }
-  grep -qE '#[0-9]{4,}' <<<"$line" || { DIAG="parity: the hint carries no follow-up issue number"; return 1; }
+  fu="$(grep -oE '#[0-9]{4,}' <<<"$line" | grep -vxF '#11177' | head -1 || true)"
+  [[ -n "$fu" ]] || { DIAG="parity: the hint carries no follow-up issue number besides the tracker"; return 1; }
   para="$(awk -v t="# $tok:" 'index($0, t) == 1 { f = 1; print; next } f { if ($0 == "#") exit; print }' "$w")"
   [[ -n "$para" ]] || { DIAG="parity: no '# $tok:' paragraph in the workflow"; return 1; }
-  [[ "$para" == *"trigger 1"* && "$para" == *"does not clear"* ]] || { DIAG="parity: the '$tok' paragraph lost its clauses"; return 1; }
-  grep -qE '#[0-9]{4,}' <<<"$para" || { DIAG="parity: the '$tok' paragraph carries no follow-up issue number"; return 1; }
+  [[ "$para" == *"trigger 1"* && "$para" == *"does not clear"* && "$para" == *"Never edit or forge a sentinel"* ]] || { DIAG="parity: the '$tok' paragraph lost its clauses"; return 1; }
+  grep -qF -- "$fu" <<<"$para" || { DIAG="parity: the '$tok' paragraph does not carry the hint's follow-up number $fu"; return 1; }
   return 0
 }
 # par_row ID DESC TARGET(sut|wf) SED-EXPR: a mutated copy of one side must break the parity.
@@ -1321,6 +1326,8 @@ if wf_hint_parity "$SUT" "$PD/absent.yml"; then fail "G4 parity: an absent workf
 par_row "G4-par-head" "the workflow loses its RED RUN heading" wf '/^# RED RUN:/d'
 par_row "G4-par-body" "the workflow keeps the heading but guts the paragraph clauses" wf '/^# RED RUN:/,/^#$/{s/trigger 1/trigger one/g;s/does not clear/may clear/g}'
 par_row "G4-par-token" "the SUT pointer token disagrees with the workflow heading" sut 's/ see RED RUN in / see GREEN RUN in /'
+par_row "G4-par-num" "the workflow paragraph names a placeholder instead of the hint's follow-up number" wf '/^# RED RUN:/,/^#$/s/#11864/#TBD/g'
+par_row "G4-par-never" "the workflow paragraph drops the prohibition on touching a sentinel" wf '/^# RED RUN:/,/^#$/s/Never edit or forge a sentinel/Edit a sentinel/'
 
 # Exit-gate check (behavioural): this same suite, re-run with ONE injected failing SCENARIO (it goes
 # through scenario(), so a disarmed scenario() is caught too), must exit EXACTLY 1. An `exit 0`
@@ -1336,7 +1343,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY above the
 # `if`, not with the other constants: guard-vacuity-floor builds its mutant by slicing the floor
 # block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=172
+MIN_ASSERTIONS=174
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

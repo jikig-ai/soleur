@@ -239,7 +239,7 @@ floor_ok() { grep -q '^issue view ' "$1/calls" && grep -q '^issue comment ' "$1/
 # to reach `gh` or `git` through a variable or an escape (`"$GH" issue ...`, `${GH:-gh}`, `GH=gh`, `B=gh`, `BIN=$(command -v gh)`,
 # `"${BIN}" issue ...`, and for git `"$GIT" push`, `GIT=git`, `g=git; $g push`, `\git fetch`, `'git' fetch`, `command -v git`),
 # because a name-based scan cannot see them.
-CENSUS_EGRESS_RE='(^|[^[:alnum:]_.-])(curl|wget)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])nc[[:space:]]|git[[:space:]]+push|HTTP::Tiny|LWP|IO::Socket|Net::[A-Z]|/dev/(tcp|udp)/|\$\{?GH([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GH=|\$\{?GIT([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GIT=|(command[[:space:]]+-v|which|type[[:space:]]+-p)[[:space:]]+g(h|it)([^[:alnum:]_-]|$)'
+CENSUS_EGRESS_RE='(^|[^[:alnum:]_.-])(curl|wget)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])nc[[:space:]]|git[[:space:]]+push|HTTP::Tiny|LWP|IO::Socket|Net::[A-Z]|/dev/(tcp|udp)/|\$\{?GH([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GH=|\$\{?GIT([^[:alnum:]_]|$)|(^|[^[:alnum:]_])GIT=|(command[[:space:]]+-[pvV]+|which|whereis|type[[:space:]]+-[pPa]+|hash[[:space:]]+-t)[[:space:]]+g(h|it)([^[:alnum:]_-]|$)'
 # `VAR=gh`, `VAR=/usr/bin/gh`, `VAR="gh"`, and the same for git (a plain assignment of the tool name; `out="$(gh ...)"` is a call, scanned as one;
 # `GIT_UNSET=(`, `GIT_CONFIG_*` and `x=gitlab` stay clean).
 CENSUS_ASSIGN_GH_RE="(^|[^[:alnum:]_])[A-Za-z_][A-Za-z0-9_]*=[\"']?([^[:space:]\"'\$]*/)?g(h|it)([\"'[:space:];|&)]|\$)"
@@ -262,8 +262,13 @@ sub plumb_ok {
   }
   if ($sub eq 'worktree') {
     return 0 unless is_rr($c->[0]);
-    if (($a[0] // '') eq 'add') { return ((grep { $_ eq '--detach' } @a) && !(grep { /^-[bB]/ } @a)) ? 1 : 0; }
-    if (($a[0] // '') eq 'remove') { return (@a == 3 && $a[1] eq '--force' && $a[2] !~ /^-/) ? 1 : 0; }
+    # `add` is pinned to the whole shape the script uses (an optional -q, an optional --no-checkout, --detach, the $WT path, one commit word), so a
+    # bundled short flag (-fB), a `--` and a foreign path all fail; `remove` is pinned to `--force "$WT"`.
+    if (($a[0] // '') eq 'add') {
+      my $j = join(' ', @a[1 .. $#a]);
+      return ($j =~ /^(?:-q )?(?:--no-checkout )?--detach "?\$\{?WT\}?"? [^\s-]\S*$/) ? 1 : 0;
+    }
+    if (($a[0] // '') eq 'remove') { return (@a == 3 && $a[1] eq '--force' && is_wt($a[2])) ? 1 : 0; }
   }
   return 0;
 }
@@ -279,7 +284,7 @@ while (my $l = <STDIN>) {
         my $x = shift @w;
         if ($x eq '-C') { push @cd, (shift @w // ''); next; }
         if ($x eq '-c') { $cfg = 1; shift @w; next; }
-        if ($x =~ /^--(?:git-dir|work-tree)(=|$)/) { $cfg = 1; shift @w if $1 eq ''; next; }
+        if ($x =~ /^--(?:git-dir|work-tree|config-env)(=|$)/) { $cfg = 1; shift @w if $1 eq ''; next; }
         if ($x =~ /^--(?:namespace|exec-path|super-prefix)$/) { shift @w; next; }
         next if $x =~ /^-/;
         $sub = $x; last;
@@ -305,7 +310,7 @@ PERL
 # The comment-stripped text of one file. `for x in LIST;` is dropped only for a plain word list: a list
 # holding a command substitution keeps it (only the `for x in ` prefix goes), so `for t in $(gh ...)` is scanned.
 census_text() {
-  grep -vE '^[[:space:]]*#' "$1" | sed -E 's/for [A-Za-z_]+ in (([^;$`]|\$[^(])*);//g; s/for [A-Za-z_]+ in //g'
+  grep -vE '^[[:space:]]*#' "$1" | sed ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ta}' | sed -E 's/for [A-Za-z_]+ in (([^;$`]|\$[^(])*);//g; s/for [A-Za-z_]+ in //g'
 }
 census_check_call() {
   local c="$1" t
@@ -727,7 +732,7 @@ done
 # value is git) and `grep -q "git push" f` (the broad `git push` egress regex).
 P11177_NAME=watch-brand-hex-triggers-11177.sh
 P11177_SRC="$SCRIPT_DIR/$P11177_NAME"
-[[ -s "$P11177_SRC" ]] || fatal "the 11177 script is missing: $P11177_SRC"
+[[ -s "$P11177_SRC" ]] || fatal "the 11177 script is missing: $P11177_SRC (retiring #11177? see RETIREMENT in .github/workflows/code-quality-followups-watch.yml)"
 cen_probe() { # BASENAME TEXT -> census count ("" = the default probe basename, probe.sh)
   if [[ -z "$1" ]]; then probe_census "$2"; else probe_census_as "$1" "$2"; fi
 }
@@ -758,11 +763,14 @@ for probe in 'gitx -C "$WT" -C "$WT" read-tree HEAD' 'gitx -C "$WT" -c core.x=1 
   'gitx -C "$WT" update-ref refs/heads/x HEAD' 'gitx -C "$WT" worktree prune' 'gitx -C "$REPO_ROOT" worktree add -B main p HEAD' 'gitx -C "$REPO_ROOT" worktree add --detach -B main p HEAD' 'gitx -C "$REPO_ROOT" worktree add --detach -b x p HEAD' \
   'gitx -C "$REPO_ROOT" worktree add -q p HEAD' \
   'gitx -C "$WT" worktree add --detach p HEAD' 'gitx -C "$REPO_ROOT" update-ref --no-deref HEAD x' 'gitx -C "$REPO_ROOT" read-tree HEAD' 'gitx read-tree HEAD' \
-  'gitx -C "$REPO_ROOT" reset --hard' 'gitx -C "$WT" reset --mixed -q HEAD' 'gitx -C "$REPO_ROOT" worktree remove "$WT"' 'gitx -C "$REPO_ROOT" worktree remove --force "$WT" extra'; do
+  'gitx -C "$REPO_ROOT" reset --hard' 'gitx -C "$WT" reset --mixed -q HEAD' 'gitx -C "$REPO_ROOT" worktree remove "$WT"' 'gitx -C "$REPO_ROOT" worktree remove --force "$WT" extra' \
+  'gitx -C "$REPO_ROOT" worktree add -fB main -- --detach p HEAD' 'gitx -C "$REPO_ROOT" worktree add --detach /tmp/x HEAD' 'gitx -C "$REPO_ROOT" worktree remove --force .worktrees/other' \
+  'gitx -C "$REPO_ROOT" worktree remove --force "$REPO_ROOT"' 'gitx -C "$REPO_ROOT" worktree remove --foo "$WT"' 'gitx -C "$WT" update-ref refs/heads/main HEAD x' \
+  'gitx -C "$WT" update-ref --no-deref refs/heads/main x' 'gitx -C "$WT" --config-env=core.fsmonitor=V read-tree HEAD'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census_as "$P11177_NAME" "$probe")" -ge 1 ]] || { cbad=$((cbad + 1)); echo "  census let through (11177 name): $probe"; }
 done
-[[ "$cbad" -eq 0 ]] && pass "G1n-3 T1: under the 11177 basename each tightened pin has a forbidden shape that trips on it alone (a second -C, -c, --git-dir, --work-tree, update-ref -d / extra words / a ref after HEAD, worktree prune / -B / no --detach, the wrong -C directory, reset) ($cprobe probes)" || fail "G1n-3 T1 11177 pins: $cbad of $cprobe let through"
+[[ "$cbad" -eq 0 ]] && pass "G1n-3 T1: under the 11177 basename each tightened pin has a forbidden shape (several probes trip more than one pin; a second -C, -c, --git-dir, --work-tree, update-ref -d / extra words / a ref after HEAD, worktree prune / -B / no --detach, the wrong -C directory, reset) ($cprobe probes)" || fail "G1n-3 T1 11177 pins: $cbad of $cprobe let through"
 
 # T2: the exact shapes the 11177 script uses stay clean under its own basename (including a ${WT}/$WT spelling and the git spelling).
 gsp=git
@@ -784,7 +792,8 @@ done
 # probes (exactly ONE new clause flags each, so a clause cannot hide behind another) and regression probes.
 cbad=0; cprobe=0
 for probe in '\git fetch origin' "'git' fetch" '"git" fetch' 'g=git; $g push' 'GIT=git; "$GIT" push' 'G=$(command -v git)' 'git_bin=git' \
-  'GIT=$(pick_tool)' 'echo hi; "$GIT" fetch' 'type -p git' '\git push origin HEAD' '/usr/bin/git fetch' '${GIT:-git} push' 'which git' 'command git fetch'; do
+  'GIT=$(pick_tool)' 'echo hi; "$GIT" fetch' 'type -p git' '\git push origin HEAD' '/usr/bin/git fetch' '${GIT:-git} push' 'which git' 'command git fetch' \
+  'type -P git' 'whereis git' 'command -V git' $'gitx -C \\\n"$WT" update-ref -d refs/heads/main'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census "$probe")" -ge 1 ]] || { cbad=$((cbad + 1)); echo "  census let through: $probe"; }
 done
