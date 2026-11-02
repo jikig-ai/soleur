@@ -11,6 +11,47 @@ requires_cpo_signoff: true
 
 # compliance: establish Art. 15/17 reach of the Inngest Postgres run-history store and amend the five PA (f) rows + DPD §2.3(o)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Sections enhanced:** 4 (Phase 1 ruling brief, Phase 3 amendment phase, new
+`## Encryption Posture`, AC9 rule-id correction)
+**Research agents used:** none spawnable on this harness — all deepen passes
+ran inline sequential (`Reviewed-Coverage: sequential-fallback` disclosure);
+the external-source pass ran via direct web search (EDPB CEF erasure report).
+
+### Key Improvements
+
+1. **Binding-ruling brief strengthened:** Phase 1 now enumerates, per
+   disposition option, the fact that would disqualify it (EDPB caution +
+   unbounded in-flight exclusion + possibly-not-live timer, against "the
+   bound discharges erasure"; no user-indexed column + open identifier
+   census + unnameable third-party population, against "per-subject
+   mechanism required").
+2. **Falsified-negatives sweep added to Phase 3:** the determination
+   performs the verification the corpus calls not-yet-done, so every
+   paraphrase of the undetermined state is swept — not only the clause's
+   own vocabulary (PR #10337 class).
+3. **Encryption Posture emitted:** the Phase 4.10 trigger fires on the
+   conditional new cross-component connection; the section records the
+   existing `supabase.inngest` ledger row and the branch-activation
+   obligation.
+
+### New Considerations Discovered
+
+- Rule-id citation corrected: AC9 now cites
+  `wg-when-deferring-a-capability-create-a` (verified in `AGENTS.rules.md`).
+- §4.5 network-outage trigger matched only the literal `SSH` inside the
+  git-data erasure mechanism description — no network-connectivity symptom
+  is addressed by this plan, so the checklist does not apply (recorded in
+  lieu of a `## Hypotheses` section).
+- Halt-gate record: 4.6 pass, 4.7 pass (probe `CORPUS-OK`), 4.8 pass
+  (no PAT shape), 4.9 skip (no UI surface), 4.10 pass (section added),
+  4.11 skip (no guard deliverable — AC greps are verification commands,
+  not new controls), 4.12 pass (one live Scope Check, all rows justified),
+  4.13 skip (no new autonomous-task surface in the definite diff — the
+  Phase 5 conditional branch re-derives it), 4.55 skip (docs-class diff).
+
 ## Overview
 
 Issue #10848 is the compliance half of the Inngest run-history finding: the
@@ -311,6 +352,39 @@ discoverability_test:
   expected_output: CORPUS-OK
 ```
 
+## Encryption Posture
+
+The definite diff introduces no persistent store and no new cross-component
+connection. The dedicated Postgres store under discussion —
+`supabase.inngest` — is already a first-class row in
+`scripts/encryption-posture-ledger.json` (verified `git grep`); this plan
+changes what is RECORDED about the store's erasure/access reach, not its
+encryption surface, so no ledger row changes.
+
+```yaml
+at_rest:
+  - store: supabase.inngest
+    mechanism: provider-managed:Supabase disk encryption at rest (existing ledger row — unchanged by this diff)
+    evidence: scripts/encryption-posture-ledger.json row "supabase.inngest"
+    defends_against: physical disk exfiltration of the Supabase-managed volume
+    does_not_defend: a leaked project credential; an authenticated query path — this plan's subject is reach (who can select/delete), not at-rest cipher
+    disclosed_as: dedicated Supabase Postgres project, eu-west-1 (Ireland) — DPD §2.3(o), §4.2 row
+    live_verification: provider attestation — unchanged
+in_transit:
+  - connection: none added by the definite diff (docs/register/audit only)
+    tls: n/a — no new connection
+    cert_verification: n/a
+    does_not_defend: n/a
+    disclosed_as: n/a
+```
+
+**Conditional (ruling-gated):** if Phase 5 activates branch B1 or B2, the new
+edge it creates (app→Inngest-Postgres credential, or a host-read manifest
+channel) is a new cross-component connection and the full `at_rest` /
+`in_transit` block is emitted for it BEFORE its first code diff, per plan
+Phase 2.11 — flagged here so the branch cannot activate silently under this
+section.
+
 ## GDPR Gate (Phase 2.7 record)
 
 **This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
@@ -513,7 +587,7 @@ CLO ruling); `disposition: DISCHARGED` or the PR halts on the named blocker.
 - [ ] AC9: If the ruling selected branch ≠ B4, the implementation
   sub-plan's gate deliverables (IaC / ADR + C4 / observability / encryption
   posture) exist before its first code diff, AND either land in this PR
-  with their own ACs or are tracked as a `wg-when-deferring` issue with the
+  with their own ACs or are tracked as a `wg-when-deferring-a-capability-create-a` issue with the
   ruling's re-evaluation criteria — recorded either way.
 - [ ] AC10: The diff touches only files enumerated in `## Files to Edit` /
   `## Files to Create` (incl. spec-dir + audit artifacts) unless the ruling
