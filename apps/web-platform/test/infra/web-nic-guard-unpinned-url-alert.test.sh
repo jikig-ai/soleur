@@ -144,7 +144,7 @@ done
 # The refusal line is `echo "[nic] unpinned_url: refusing to send the Better Stack token to an
 # unpinned destination — …"` on stderr in the unpinned arm. The needle the alert matches is the
 # `unpinned_url` literal INSIDE that line; a reworded emitter (or a reworded .tf) reds below.
-EMIT_LINE="$(grep -nE 'unpinned_url' "$EM" | grep 'echo' | head -1)"
+EMIT_LINE="$(grep -nE 'unpinned_url' "$EM" | grep 'echo' | grep -vE '^[0-9]+:[[:space:]]*#' | head -1)"
 EMIT_NEEDLE="$(sed -n 's/.*\[nic\] \([a-z_]*\):.*/\1/p' <<< "$EMIT_LINE" | head -1)"
 if [ -n "$EMIT_LINE" ] && [ "$EMIT_NEEDLE" = "unpinned_url" ]; then
   ok "web-private-nic-guard.sh emits exactly the '[nic] unpinned_url:' refusal line; needle captured from it"
@@ -483,6 +483,13 @@ s = s[:i] + "/*\n  web_nic_guard_unpinned_url_sql = <<\x2dSQL\n  SELECT legit\n 
     'i = s.index(SQLLOC)
 s = s[:i] + "  # web_nic_guard_unpinned_url_sql = <<\x2dSQL\n" + s[i:]' \
     "decoy local exists"
+  # EM dead-text row: a #-commented copy of the live refusal echo must NOT satisfy the needle —
+  # the selector above filters `^[0-9]+:[[:space:]]*#` lines, so a silenced emitter reads as absent.
+  mutate_red "the live refusal echo is commented out (dead-text disarm of the emitter needle)" EM \
+    'hits = [l for l in s.splitlines(keepends=True) if "unpinned_url" in l and "echo" in l and not l.lstrip().startswith("#")]
+assert hits, "no live echo needle line"
+s = "".join("# " + l if l in hits else l for l in s.splitlines(keepends=True))' \
+    "no longer emits a '[nic] unpinned_url:' refusal line"
   mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
     "decoy exists"
@@ -529,7 +536,7 @@ fi
 # Instrument failures exit 2 (the MUT_ROWS_RUN conservation ledger); floor/ledger trips exit 1 —
 # the battery grades an inner rc 1 as a CAUGHT mutation.
 PRESENCE_ROWS=35
-MUT_ROWS=19
+MUT_ROWS=20
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

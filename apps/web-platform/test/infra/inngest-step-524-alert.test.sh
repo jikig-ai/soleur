@@ -126,6 +126,11 @@ marker_ts = open(sys.argv[3], encoding="utf-8").read()
 substrate_ts = open(sys.argv[4], encoding="utf-8").read()
 probe_ts = open(sys.argv[5], encoding="utf-8").read()
 vector = open(sys.argv[6], encoding="utf-8").read()
+# The push-triggered MAIN plan only: first `terraform plan -no-color` to its `rc=$?`. The workflow
+# has ~15 plan regions whose -target lists never run on a push to main — the allowlist rows read
+# THIS region, not the whole file (sibling-parity; security P2).
+_mp = re.search(r"^[ \t]*terraform plan -no-color.*?(?:^[ \t]*rc=\$\?|\Z)", wf, re.S | re.M)
+main_plan = _mp.group(0) if _mp else ""
 out = []
 def check(cond, msg): out.append(("OK " if cond else "FAIL ") + msg)
 
@@ -194,8 +199,8 @@ for n in names:
           f"{n}: 'paused' occurs exactly once in the alert block (a commented or duplicated decoy counts)")
     check(param(alr, "on_missing_data", '"treat_as_zero"'),
           f"{n}: on_missing_data is treat_as_zero")
-    check(re.search(r'^\s*-target=logtail_exploration\.' + n + r' \\$', wf, re.M) is not None
-          and re.search(r'^\s*-target=logtail_exploration_alert\.' + n + r' \\$', wf, re.M) is not None,
+    check(re.search(r'^\s*-target=logtail_exploration\.' + n + r' \\$', main_plan, re.M) is not None
+          and re.search(r'^\s*-target=logtail_exploration_alert\.' + n + r' \\$', main_plan, re.M) is not None,
           f"{n}: exploration AND alert are in the apply -target= allowlist")
     if n in CANON:
         check(re.sub(r"\s+", " ", sql or "").strip() == CANON[n],
