@@ -288,6 +288,9 @@ on:
       # (#9639 F8) The nic-guard unpinned_url alert drift guard asserts the runbook its
       # incident link resolves to exists; a rename/delete must run the guard.
       - "knowledge-base/engineering/operations/runbooks/web-nic-guard-unpinned-url-alert.md"
+      # (#11820) The cutover-flip silence alert's incident link resolves to this runbook's
+      # "Flip-token split" section; its drift guard asserts the section names the alert.
+      - "knowledge-base/engineering/operations/runbooks/inngest-server.md"
       # (#4699) cloud-init-inngest-bootstrap.test.sh's AC6d block asserts the scheduled
       # published-digest reconciler's wiring — the workflow is dispatched and drives the
       # script, the checkout carries full history + tags, the GHCR login is present, and
@@ -984,6 +987,12 @@ jobs:
       # lines, the runbook + standing-alarms row, this suite's own dispatch, and the mutation rows.
       - name: Run web NIC guard unpinned ingest URL refusal alert drift guard (#9639)
         run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh
+
+      # (#11820) The cutover-flip silence alert: the JSON-object discriminator and host pin compared
+      # whole, the window against the emitter's throttle, both -target lines, the runbook and
+      # standing-alarms rows, this suite's own dispatch, and its mutation rows.
+      - name: Run Inngest cutover-flip silence alert drift guard (#11820)
+        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh
 
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and

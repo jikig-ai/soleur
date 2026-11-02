@@ -392,3 +392,4 @@ tests/scripts/lint-rule-bodies	.claude/rule-weakening-acks.txt	260888cc7de7	1	fa
 tests/scripts/lint-rule-bodies	AGENTS.md	9d9f104d281c	1	false-positive: JSDoc/comment: scripts/_agents_md_sections.py:9: prose inside a docstring or comment; not a read
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	8c59fe5445e7	1	false-positive: message: scripts/lint-rule-bodies.py:349: an error message string; the suite never reads the named script through it
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	d96ff524fb10	1	false-positive: JSDoc/comment: scripts/lint-rule-bodies.py:127: prose inside a docstring or comment; not a read
+plugins/soleur	apps/web-platform/infra/inngest-userdata-budget.sh	ef13fc106737	1	false-positive: the line is a string literal the parity suite matches against the replace workflow text (the cap-only step line); the suite never reads or executes this script

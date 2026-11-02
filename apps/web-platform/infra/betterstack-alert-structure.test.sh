@@ -95,8 +95,8 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-CENSUS_FLOOR_ALERTS=17
-CENSUS_FLOOR_EXPLORATIONS=17
+CENSUS_FLOOR_ALERTS=18
+CENSUS_FLOOR_EXPLORATIONS=18
 GUARD_CENSUS_FLOOR=15
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
