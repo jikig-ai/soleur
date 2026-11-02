@@ -550,6 +550,8 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
 
    **Filing-gate exit selection:** when the feature's deliverable is itself plugin verification machinery (gates, banners, ledgers, parity work), the issue-filing gate classifies it as machinery — the `User-Impact:`/`Fix-Size:` exit is refused even when correctly formatted; file with `--label meta/machinery` directly. Reserve the `User-Impact:` exit for features whose surface a user actually receives. See `knowledge-base/project/learnings/documentation-gaps/devin-cloud-plugin-surface-matrix-SoleurPlugin-20260914.md`.
 
+   **A brand-new feature with no code yet cannot satisfy the `Fix-Size:` exit** — `0 lines / 0 files` is inside the inline threshold and the gate refuses it as "fix inline". Do not retry with another size. Skip the tracking issue at brainstorm time, note the draft PR as the tracker in the brainstorm's Open Questions, and file the issue at plan time once the feature is sized and placed in a roadmap phase (`wg-every-feature-listed-in-a-roadmap-phase` then mandates it via `Mandated-By:`). See `knowledge-base/project/learnings/workflow-issues/2026-11-02-brainstorm-new-feature-issue-gate-needs-measurable-size.md`.
+
 3. **Update existing issue with artifact links** (if using existing issue):
 
    Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts (or "Bundled scoping") section with links to the brainstorm document, spec file, branch name, and draft PR. Then update with `gh issue edit <number> --body-file -` reading stdin. For bundles, loop over every referenced issue and append the same note to each.
