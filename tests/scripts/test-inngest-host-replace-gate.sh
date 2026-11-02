@@ -134,8 +134,11 @@ if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT/inngest-host-replace-g
   fail "T1h: HARNESS ABORT — the mutation did not land (the gate does not name doppler_service_token.inngest_flip)"
 else
   write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
-  if ( source "$MUT/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+  _t1h_rc=0; _t1h_out="$( source "$MUT/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" 2>&1 )" || _t1h_rc=$?
+  if [[ "$_t1h_rc" -eq 0 ]]; then
     fail "T1h: with the address removed from def allow, the T1d plan must ABORT (the allow-set entry is what admits it)"
+  elif [[ "$_t1h_out" != *"reason=inngest_out_of_scope_changes"* ]]; then
+    fail "T1h: the T1d plan aborted for the wrong reason with the address removed (want inngest_out_of_scope_changes): ${_t1h_out}"
   else
     pass
   fi
@@ -243,9 +246,9 @@ expect_token_pass   "T1ag: both tokens compliant (the real first-replace shape)"
 
 # T1ah: the token addresses are named ONCE (the `tokens` map). A third address added to a hand-copied list
 # elsewhere in the gate would be admitted without being judged; pin that the code names exactly the two.
-_tok_code_lines="$(grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | grep -c 'doppler_service_token\.')"
-if [[ "$_tok_code_lines" -eq 2 ]]; then pass
-else fail "T1ah: the gate's code names doppler_service_token addresses on ${_tok_code_lines} lines, expected exactly the 2 map entries (a hand-copied list would disarm the access pin for a new address)"; fi
+_tok_code_addrs="$(grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | grep -o 'doppler_service_token\.[A-Za-z0-9_]*' | wc -l | tr -d '[:space:]')"
+if [[ "$_tok_code_addrs" -eq 2 ]]; then pass
+else fail "T1ah: the gate's code names ${_tok_code_addrs} doppler_service_token address occurrences, expected exactly the 2 entries of the tokens map (a copy of an address in another list, e.g. allow[], would admit it without judging its access)"; fi
 
 # --- Test 1r3: the access counter's WIRING, the twin of T1r: it must be a member of the
 #     plan_gate_assert_numeric call, or an uncomputed counter is the empty string and [[ "" -eq 0 ]] is TRUE. ---
@@ -564,8 +567,9 @@ fi
 # floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
 # floor that depends on the thing it guards is not a floor.
 #
-# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
-# suite on every legitimately-added assertion and train people to bump it unread.
+# A FLOOR set to the CURRENT count (raised in the same edit that adds an assertion): a floor, not
+# equality, so a legitimately-added assertion does not redden the suite, but with no slack so a
+# deleted assertion does.
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 84 ]]; then
   fails=$((fails + 1))

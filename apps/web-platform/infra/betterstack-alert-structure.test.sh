@@ -16,7 +16,7 @@
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
 #         the enumerator's sed cannot see, `resource"logtail_exploration_alert" "x" {`, reds as un-enumerated),
-#         and at least 15 alert guards under apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
+#         and at least 17 alert guards under apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
 #   5-7   closed attribute set: top-level keys of each alert equal REQUIRED_ATTRS + OPTIONAL_ATTRS, plus
 #         exactly one `escalation_target` block. No family-wide attribute VALUE pins: the per-alert guards
 #         own `push`, `call`, the windows and the SQL.

@@ -364,10 +364,10 @@ Live standing alarms over this source:
   row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
   rows, including `unexpected-exit(...)`); the doppler error lines under the same tag carry a string
   `message` and do not count. So it sees a unit that fails BEFORE the script's first emit (a revoked or
-  invalid flip token) and does not see a unit that starts and then fails inside the script. It also
+  invalid flip token) and does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
   emails during an owner-authorized host replace (expected; it clears at the first row after boot).
   To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
-  as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
+  with `--limit 500` (about 160 string rows per hour share the tag, so the default 100 can crowd the object rows out), as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
   (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section
   "Flip-token split".
 

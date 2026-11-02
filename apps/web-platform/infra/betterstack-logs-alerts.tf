@@ -2065,12 +2065,13 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # (about 160 per hour), so a bare tag count would stay green while the unit fails. CTO measurement
 # 2026-11-02: 1,891 object rows over the prior 7 days and no gap over 900 s.
 #
-# WHAT IT DOES NOT SEE. A unit that STARTS and then fails inside the script (a flip token that
-# authenticates but is read-only, so the Doppler write is refused) still emits object rows every
-# tick (`unexpected-exit(...)` is unthrottled), so this alert stays green on that failure; the
-# runbook's `noop-done` check before `op=resume` and the replace gate's access pin cover it. It is
-# also a LIVENESS signal, not an authenticated one: any process on the host that logs a JSON object
-# under this tag holds it green.
+# WHAT IT DOES NOT SEE. A failure that REACHES `emit_state` (for example a flip token that
+# authenticates but is read-only, so the Doppler write is refused on a pending transition) emits an
+# object row via the ERR trap (`unexpected-exit(...)` is unthrottled), so this alert stays green on
+# it; the runbook's post-resume row check (step 5 of the first-replace steps) and the replace gate's
+# access pin cover that case, NOT the `noop-done` check before `op=resume` (which proves only the
+# Doppler read). It is also a LIVENESS signal, not an authenticated one: any process on the host
+# that logs a JSON object under this tag holds it green.
 # `JSONExtractString(raw,'message')` returns '' for the object rows, which is why the sibling
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
 # Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file; it
