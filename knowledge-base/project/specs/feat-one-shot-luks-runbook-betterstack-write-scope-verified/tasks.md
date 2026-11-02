@@ -6,7 +6,7 @@ Issue ref: #11869 | PR: #11926 (draft, reuse)
 ## Phase 1 - Edit
 
 - 1.1 Read `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md` section 5 (anchor on the text `The write token's scope for this endpoint is UNVERIFIED`).
-- 1.2 Replace the span through `has not been exercised from this repo.` with the verified-on-2026-11-02 note (HTTP 200, `resolved_at` 2026-11-02T22:32:29Z, evidence: the 22:32 UTC comment on #11869, plus the one-line "verified scope is not authorization" sentence).
+- 1.2 Replace the span through `has not been exercised from this repo.` with the verified-on-2026-11-02 note (HTTP 200 on incident `1045365287`, not one of the two named in the paragraph; `resolved_at` 2026-11-02T22:32:29Z; evidence: the "Manual resolve done" comment on #11869, 22:32 UTC; plus the one-line "verified scope is not authorization" sentence).
 - 1.3 Leave the 401/403 stop rule, the resolve script block and every other runbook byte unchanged.
 
 ## Phase 2 - Verify

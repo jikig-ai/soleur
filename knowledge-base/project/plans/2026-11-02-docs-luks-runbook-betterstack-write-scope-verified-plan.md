@@ -52,7 +52,7 @@ Replace the stale sentence with a verified-on-2026-11-02 note citing that commen
 
 Replace, inside the existing paragraph, the span from `**The write token's scope for this endpoint is UNVERIFIED**` through `has not been exercised from this repo.` with this note (wording may be re-flowed to the 120-column wrap of the surrounding paragraph):
 
-> **The write token's scope for this endpoint is verified (2026-11-02):** `BETTERSTACK_API_TOKEN`'s write scope was exercised on `POST /api/v2/incidents/<id>/resolve` (HTTP 200 on incident `1045365287`, not one of the two above; `resolved_at` 2026-11-02T22:32:29Z; evidence: the "Manual resolve done" comment on #11869, 22:32 UTC). Verified scope is not authorization: the production-write rule in this heading still applies to every run.
+> **The write token's scope for this endpoint is verified (2026-11-02)**: `BETTERSTACK_API_TOKEN`'s write scope was exercised on `POST /api/v2/incidents/<id>/resolve` (HTTP 200 on incident `1045365287`, not one of the two above; `resolved_at` 2026-11-02T22:32:29Z; evidence: the "Manual resolve done" comment on #11869, 22:32 UTC). Verified scope is not authorization: the production-write rule in this heading still applies to every run.
 
 *Review amendment (2026-11-02, round 1):* all four seats found the first draft ("works on ... HTTP 200, `resolved_at` ...") ambiguous, because the paragraph names incidents `1023423999` and `1020832712` and the verified call ran on a different one (`1045365287`). The applied text names the incident and says "was exercised on" (one observed call), not "works on".
 

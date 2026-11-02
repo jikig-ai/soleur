@@ -1125,9 +1125,8 @@ this endpoint is verified (2026-11-02)**: `BETTERSTACK_API_TOKEN`'s write scope 
 `POST /api/v2/incidents/<id>/resolve` (HTTP 200 on incident `1045365287`, not one of the two above; `resolved_at`
 2026-11-02T22:32:29Z; evidence: the "Manual resolve done" comment on #11869, 22:32 UTC). Verified scope is not
 authorization: the production-write rule in this heading still applies to every run. If the API answers 401 or 403,
-stop, record the status code on #11631,
-and do not retry with a different token without a fresh authorization. Paste the helpers block at the top and run
-`TARGET=<target> bash resolve-incident.sh`.
+stop, record the status code on #11631, and do not retry with a different token without a fresh authorization.
+Paste the helpers block at the top and run `TARGET=<target> bash resolve-incident.sh`.
 
 ```bash
 # --- paste the helpers block here ---
