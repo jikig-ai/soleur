@@ -15,6 +15,20 @@ brand_survival_threshold: aggregate pattern
 
 # infra: pin token access in the Inngest replace gate and alert when the flip unit goes silent
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Method:** the halting gates (4.6-4.13) were run against this plan, and its claims were checked against `origin/main` by the plan-review panel (three reviewers) and the CTO ruling. The wider all-agent fan-out was deliberately not run: the change is one jq counter, one email-only alert and their tests.
+
+### Key Improvements
+1. Scope Check section added (the pipeline halt requires it).
+2. Observability probe replaced by a fast repo-local `grep -c` (the first draft named a whole test suite, which preflight Check 10 would kill at its 15-second cap).
+3. Plan-review findings applied (trimmed matrix, T1h collision guard, helper and constant notes, emitter-first ordering).
+
+### New Considerations Discovered
+- `JSONType` is the first use in this repo; an evaluator rejection fails the per-merge apply until reverted (disclosed in the PR body).
+- Gate-test row T1h deletes lines by a quoted-address pattern; the new counter must not put the same literal on its own line.
+
 ## Overview
 
 Two deferred follow-ups of the flip-token split, shipped as one change at the owner's instruction (Batch A of the CTO ruling of 2026-11-02: neither touches `user_data`, so neither forces a host replace).
@@ -166,9 +180,46 @@ logs:
   where: Better Stack source soleur-vector-prd, SYSLOG_IDENTIFIER inngest-cutover-flip
   retention: the source's configured retention
 discoverability_test:
-  command: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh
-  expected_output: "0 failed"
+  command: grep -c 'resource "logtail_exploration_alert" "inngest_cutover_flip_silent"' apps/web-platform/infra/betterstack-logs-alerts.tf
+  expected_output: "1"
 ```
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "let's do them both in one PR" [brief] | One branch and PR for both issues (Overview) | mapped |
+| 2 | "Pin the token `access` level in the replace gate (`tests/scripts/lib/inngest-host-replace-gate.sh`): `.change.after.access == \"read/write\"` for `doppler_service_token.inngest_flip` and `== \"read\"` for `doppler_service_token.inngest`, on any plan that creates the token" [issue #11831] | Phase 1; Guard 1; gate and gate-test Files to Edit | mapped |
+| 3 | "It needs `after.access` added to every synthetic token row in `tests/scripts/test-inngest-host-replace-gate.sh` (the existing rows use an empty `after`) plus rows for both wrong-access shapes" [issue #11831] | Phase 1 steps 1-2 | mapped |
+| 4 | "the runbook step 1 sentence that tells the owner to check the access lines updated to say the gate also does" [issue #11831] | Files to Edit: inngest-server.md; AC6 | mapped |
+| 5 | "A `logtail_exploration_alert` modelled on `egress_gw_probe_silent` in `apps/web-platform/infra/betterstack-logs-alerts.tf` (check 300 s, query period 900 s, treat-as-zero) that pages when no JSON `inngest-cutover-flip` row arrives in the window." [issue #11820] | Phase 2; Files to Edit: betterstack-logs-alerts.tf | mapped |
+| 6 | "It needs a replace-window suppression (the host is legitimately dark during an `inngest-host-replace`), which a logs query cannot express by itself." [issue #11820] | Cut List (CTO ruling: stays with the #11266 feeder dead-man; the PR says `Ref #11820`) | descoped — justification: Ruled by CTO agent, 2026-11-02: a logs query cannot express suppression, so it belongs to the dead-man work |
+| 7 | "The fix is an accept row in scripts/ci-pr-affected-audit.accept.tsv. It was deliberately left out of #11815." [brief] | Files to Edit: ci-pr-affected-audit.accept.tsv; AC8 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| tests/scripts/lib/inngest-host-replace-gate.sh | asks 2 | asked |
+| tests/scripts/test-inngest-host-replace-gate.sh | asks 3 | asked |
+| apps/web-platform/infra/betterstack-logs-alerts.tf | asks 5 | asked |
+| .github/workflows/apply-web-platform-infra.yml (two -target lines) | asks 5 | inferred — justification: the per-merge apply only creates resources named in its explicit -target list, so without it the alert never exists (the #11820 text says the same) |
+| apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh and the infra-validation.yml step | asks 5 | inferred — justification: the 15 sibling alerts each carry a drift guard, and the structure suite fails an alert that has none wired as a blocking step |
+| betterstack-send-failed-alert-mutation.test.sh count anchor 17 to 18 | asks 5 | inferred — justification: the exact exploration count anchor reds as soon as an exploration is added |
+| inngest-server.md runbook edits | asks 4 | asked |
+| betterstack-log-query.md standing-alarms bullet | asks 5 | inferred — justification: the sibling guard checks that the standing-alarms table names each alert, so the doc rots otherwise |
+| ADR-282 append-only addendum line | asks 2, 5 | inferred — justification: ADR-282 records the flip-token build and names the pin as deferred work, so the record would contradict itself |
+| scripts/ci-pr-affected-audit.accept.tsv | asks 7 | asked |
+| Guard 1 mutation and harness rows | asks 2 | inferred — justification: plan Phase 2.12 requires a mutation matrix for any guard deliverable |
+
+### Split Assessment
+
+- Subsystems touched: 4 — tests/scripts, apps/web-platform/infra and test, .github/workflows, knowledge-base
+- Planned files: 13 | Estimated changed lines: about 450
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — the owner asked for one PR; the 4-root count is met only by docs and workflow wiring that ship with their mechanisms, and files and lines are well under their thresholds.
 
 ## Acceptance Criteria
 
@@ -182,6 +233,10 @@ discoverability_test:
 - [ ] AC8: The repo-global ratchets (grep-q-pipe-guard, PJ_TRIPLES, suite-shard-legs parity, fixture-relative-assert, capture lint) are green before the first push; `affected-index-ratchet` has the accept row.
 - [ ] AC9: PR body says `Closes #11831` and `Ref #11820`, names what remains for #11820 (replace-window suppression via the #11266 feeder dead-man), and states that the alert will email during an owner-authorized replace and that a rejected `JSONType` query would fail the per-merge apply and be reverted.
 - [ ] AC10: No change to `user_data`, `cloud-init*.yml` or `inngest-host.tf`; `inngest-userdata-budget.sh --cap-only` is untouched and green.
+
+## Encryption Posture
+
+No persistent store and no new cross-component connection is introduced: the alert reads an existing Better Stack source through the existing provider credentials, and the gate reads plan JSON. Nothing to declare under `at_rest` or `in_transit`; the `.tf` edit adds an exploration and an alert resource only.
 
 ## Domain Review
 
