@@ -1,0 +1,99 @@
+name: wallclock-p90 watch
+
+# Weekly required-check wall-clock p50/p90 probe + regression ratchet (#11774,
+# epic #11556 Lever E item 1). Samples the last ~30 completed+success ci.yml
+# runs per surface (pull_request + merge_group), measures per-required-check
+# latency (check.completed_at - run.created_at = queue + runner + execution)
+# via one commits/{sha}/check-runs call per run, and RATCHETS the committed
+# bounds in scripts/required-check-wallclock-bounds.tsv: a p90 above
+# bound x (1+margin), an unbound required context, or a required context that
+# measured nothing on a live surface exits 1 — the run goes RED and the
+# offenders are named. Unlike the advisory shard-balance-watch this watch IS a
+# ratchet, but it is still not a required check: it gates nothing but its own
+# scheduled run.
+#
+# Report home: ONE watch-owned standing tracker issue
+#   `ci-wallclock-p90: required-check wall-clock report`
+# whose body the watch rewrites in place every run with the full
+# check x surface table — it is the standing report the weekly operator
+# digest's checks-pipeline section reads (aggregate-only, ADR-057). The
+# tracker NEVER auto-closes (the deliberate divergence from
+# shard-balance-watch, whose tracker resolves: this one is a standing report,
+# not an episode tracker).
+#
+# WHY a dedicated workflow and not a follow-through sweeper tracker: the
+# sweeper comments on every non-pass verdict with no per-verdict dedup; a
+# recurring monitor would comment every sweep. Placement follows ADR-033
+# (repo-scoped GitHub Actions, default token only: Actions/check-run reads +
+# issue writes on its own tracker; no app secrets, no Sentry). Siblings
+# carrying the same shape: shard-balance-watch, registration-narrowing-watch,
+# code-quality-followups-watch.
+#
+# DEFAULT BRANCH ONLY: dispatch from any other ref is skipped — the probe reads
+# the checked-out HEAD's committed required-checks.txt + bounds TSV and must
+# never act on a PR's state.
+#
+# DEDUPE: the sentinel `<!-- wallclock-p90-watch:v1 drift=<sha1-of-set> -->`
+# suppresses reposts of an unchanged flagged set (the body rewrite is
+# idempotent); concurrency.group only serializes overlapping runs — the
+# sentinel is the work-level dedupe.
+#
+# SELF-DISABLE / RESIDUAL RISK: a silently dropped scheduled run has no
+# dead-man alarm (documented residual, shared with the sibling watches) — a
+# missing weekly run is visible in `gh run list --workflow
+# wallclock-p90-watch.yml --event schedule`. A green run that silently skipped
+# measurement is the banned state: probe-health failures exit 3 (cannot-
+# establish), never a quiet all-clear.
+#
+# RETIREMENT: when the #11556 epic's 20/15-minute goals are verified held (or
+# the instrument is superseded), delete in one PR:
+#   - .github/workflows/wallclock-p90-watch.yml (this file)
+#   - scripts/watch-wallclock-p90-11774.sh and scripts/watch-wallclock-p90-11774.test.sh
+#   - scripts/required-check-wallclock-bounds.tsv
+#   - the run_suite line for that suite in scripts/test-all.sh
+#   - its rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
+#   - the watcher section + measured-history entry in
+#     knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+#   - the §6 "Your checks pipeline" section in
+#     plugins/soleur/skills/operator-digest/SKILL.md (and the six->five wording
+#     in assets/operator-digest.workflow.yml)
+#
+# To check manually: gh workflow run wallclock-p90-watch.yml -f dry_run=true
+# (prints the would-be table/comments and posts nothing).
+
+on:
+  schedule:
+    - cron: '7 10 * * 6' # Saturdays 10:07 UTC (staggered from the Mon 09:17 trio + Tue 09:41 sibling)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the would-be table/comments; post nothing'
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: wallclock-p90-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read   # gh run list + commits/{sha}/check-runs read the Actions API (the token 403s without it)
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Sample required-check wall-clock timings and manage the standing tracker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/watch-wallclock-p90-11774.sh ${{ inputs.dry_run && '--dry-run' || '' }}
