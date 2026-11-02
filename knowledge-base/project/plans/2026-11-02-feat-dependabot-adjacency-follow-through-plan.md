@@ -11,6 +11,25 @@ lane: cross-domain
 
 # chore(deps): dependabot backlog adjacency follow-through
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Sections enhanced:** Files to Edit, Implementation Phases, Acceptance Criteria
+**Research agents used:** in-process equivalents only — this run had no Task/agent-spawn tool, so the deepen fan-outs (skill-discovery, per-section research, review panel) were executed as sequential in-process verification: live `npm view`/`gh api`/`gh issue` calls, `lint-guard-contract.py`, the sharp-edges catalogue pass, and source reads of every implicated guard/test file.
+
+### Key Improvements (folded in by the deepen pass)
+
+1. `plugins/soleur/test/npm-publish-oidc.test.sh` added to PR-2 — its `npm11-step` probe regexes `npm@\^11` literally and its m4/m11 mutation variants name the string; repinning `npm@^11` without generalizing the probe would ship a RED suite.
+2. `apps/web-platform/test/repo-wide-suites.ts` added to PR-2 — the new pin-table suite reads repo-root files and must register in `REPO_WIDE_SUITES` or `repo-wide-containment.test.ts` REDs.
+3. AC6's floating-pin sweep regex verified live against the tree (matches exactly the five floating sites, no exact pin).
+4. `cron-ux-audit.ts:343` identified as a THIRD `@playwright/mcp` resolution site (inline `"@playwright/mcp@0.0.75"`), making the 0.0.78/0.0.75 divergence structural (dev-proxy vs prod-cron), each pin carrying its own dated live measurement — recorded as a pending technical ruling instead of an uninformed sync.
+
+### New Considerations Discovered
+
+- Adding a `package-lock.json` under `packages/opencode-plugin/` would trip `assert-dependabot-drain.py`'s uncensused-lockfile census — declared-range evaluation chosen instead.
+- `yaml: ^2.8.3` sits exactly at GHSA-48c2-rrv3-qjmp's first-patched version — a boundary case the pin-table's declared-range evaluation must treat as pass (minimum == floor).
+- `technical-ruling-gate.sh --branch` flags surviving `pending - assumed` rows; the rows in `decision-challenges.md` are the sanctioned pre-CTO form (no Agent tool available in this run) and resolve at work/ship time when a fuller agent can spawn the ruling seats.
+
 ## Overview
 
 Follow-through on the merged medium/low Dependabot batch (PR #11823, merged as
