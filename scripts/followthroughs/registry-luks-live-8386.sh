@@ -47,8 +47,8 @@
 # single-tenant source (the BS_GIT_DATA_SOURCE_ID pattern) — named in the deferral issue.
 #
 # NO GitHub Actions QUERY, and this is a capability fact rather than a preference.
-# scheduled-followthrough-sweeper.yml declares `permissions: contents: read` + `issues: write`,
-# so an Actions-runs query 403s under the token this probe inherits. An earlier draft split the
+# scheduled-followthrough-sweeper.yml declared only `permissions: contents: read` + `issues: write` when this probe was
+# written (it has since gained actions/checks/pull-requests: read), so an Actions-runs query 403ed under the token this probe inherits. An earlier draft split the
 # undelivered verdict three ways on the dispatcher's run history; that arm is DELETED rather
 # than degraded, and V2's message carries the re-fire command and the apply-file byte count
 # instead. This probe's only external read is scripts/betterstack-query.sh.
