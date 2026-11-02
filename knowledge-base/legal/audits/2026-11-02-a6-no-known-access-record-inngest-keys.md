@@ -53,8 +53,12 @@ re-assesses on 2026-11-08 if the remaining rotations are not recorded complete i
 
 ## Owner confirmation
 
-Pending, by the owner's own statement: "I know of no access to, or use of, the exposed Inngest keys by
-anyone other than Jikigai." Until the owner states this, the S6-A6-DONE line is not posted.
+Typed by the owner (Jean Deruelle, owner) in the Claude Code session on 2026-11-02 and quoted verbatim:
+
+> I know of no access to, or use of, the exposed Inngest keys by anyone other than Jikigai
+
+The agent that filed this record did not write the sentence and does not vouch for what the owner knows.
+The S6-A6-DONE line is posted on #10136 once this record is merged and linked from #10382 and #10136.
 
 ## CLO attestation
 
