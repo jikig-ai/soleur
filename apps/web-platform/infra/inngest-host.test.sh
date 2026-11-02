@@ -86,7 +86,8 @@ FLIP_NAME="$(tok_attr inngest_flip name)"
   && [[ "$(tok_attr inngest_flip config)" == "$(tok_attr inngest config)" && -n "$(tok_attr inngest_flip config)" ]] \
   && pass || fail "doppler_service_token.inngest_flip must name the same project and config as doppler_service_token.inngest"
 # The templatefile map hands the flip key to the template as its own variable.
-grep -vE '^[[:space:]]*#' "$HOST_TF" | grep -qE 'doppler_flip_token[[:space:]]*=[[:space:]]*doppler_service_token\.inngest_flip\.key' \
+HOST_TF_CODE="$(grep -vE '^[[:space:]]*#' "$HOST_TF" || true)"
+grep -qE 'doppler_flip_token[[:space:]]*=[[:space:]]*doppler_service_token\.inngest_flip\.key' <<<"$HOST_TF_CODE" \
   && pass || fail "the templatefile map must pass doppler_flip_token = doppler_service_token.inngest_flip.key"
 # Cross-check: the flip script's flag_set genuinely writes under the AMBIENT env (the flip unit's
 # drop-in makes the ambient DOPPLER_TOKEN the flip token; inngest-flip-token.test.sh section R

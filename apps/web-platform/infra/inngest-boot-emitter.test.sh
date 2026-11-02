@@ -735,7 +735,7 @@ EPH
   printf 'DOPPLER_TOKEN=dp.st.prd.%s\n' "$FLIP_BODY" > "$FLIP_FX/flip.env"
   printf 'HOME=/root\nDOPPLER_TOKEN=dp.st.prd.%s\nDOPPLER_CONFIG=prd\n' "$BOOT_BODY" > "$FLIP_FX/doppler.env"
   printf '#!/bin/sh\nprintf %%s "$DOPPLER_TOKEN" > "%s/doppler-saw-token"\nprintf "{}"\n' "$FLIP_FX" > "$FLIP_FX/bin/doppler"
-  printf '#!/bin/sh\nexit 0\n' > "$FLIP_FX/bin/jq"
+  printf '#!/bin/sh\n%s\n%s\n' 'cat >/dev/null' 'exit 0' > "$FLIP_FX/bin/jq"
   chmod +x "$FLIP_FX/bin/doppler" "$FLIP_FX/bin/jq"
   # rewrite_redact <src> <out>: point both hard-coded paths at fixtures
   rewrite_redact() {

@@ -186,7 +186,8 @@ fi
 #     [[ "" -eq 0 ]] is TRUE, so a jq that stops emitting it would let a token update through.
 #     (a) source pin on the assert call; (b) behavioural twin of C16: with the counter emptied the gate
 #     must ABORT naming it, on an otherwise COMPLIANT plan (so nothing else can be the aborting counter). ---
-if grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | tr '\n' ' ' | grep -q 'plan_gate_assert_numeric[^;]*"doppler_token_touched=\${dtt}"'; then
+GATE_CODE_ONE_LINE="$(grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | tr '\n' ' ')"
+if grep -q 'plan_gate_assert_numeric[^;]*"doppler_token_touched=\${dtt}"' <<<"$GATE_CODE_ONE_LINE"; then
   pass
 else
   fail "T1r: doppler_token_touched is not a member of the plan_gate_assert_numeric call (an uncomputed counter would coerce to zero)"
