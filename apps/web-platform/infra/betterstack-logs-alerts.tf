@@ -2089,6 +2089,19 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # three rows; the alert pages only when none arrived (value lower_than 1, treat_as_zero so a fully
 # dark window reads 0). The 900 s window is the ceiling every alert created since 2026-10-01 stays
 # within; a longer window was refused by the Better Stack API.
+#
+# INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
+# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
+# this alert and for egress_gw_probe_silent carry the same three sentences, each followed by a per-alert resolve rule;
+# edit the two bullets and this comment together.
+# Observed 2026-11-02, re-read with betterstack-query.sh (read only): incident 1031046761 (egress_gw_probe_silent, whose
+# SQL has no JSONType, so this is not a JSONType artefact) is Started and unresolved since 2026-10-12 while probe rows
+# keep arriving (22 in the last hour). Incident 1045365287 (this alert) started at 14:00Z, so it was only hours old at
+# writing, and was still open with object rows arriving about one per 5 min (11 in the last hour). Since the mirror
+# began (first mirror issue 2026-10-25), no `lower_than` incident has resolved while its alert was live: the only two
+# closures (#11048, #11049) came minutes after their alerts were deleted (#11631). The `higher_than` twin
+# egress_gw_probe_fail closed its mirror issue in about 30 minutes. The mechanism is not established. CTO ruling
+# 2026-11-02: leave the alert as it is.
 locals {
   # One aggregate over the whole window, `dt` as the time column (the sibling silence alert's
   # shape), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.

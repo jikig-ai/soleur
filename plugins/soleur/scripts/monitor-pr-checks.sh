@@ -71,7 +71,10 @@
 # auto-merge-off verdicts below (which tell the caller to sync, wait on protection, or merge by hand) would
 # be wrong or dangerous for it — a push dequeues it. Those arms (and every --heartbeat-every'th poll, so a PR that
 # reads CLEAN + armed is covered too) first read the queue through `sync-pr-behind.sh <pr> --queue-state` (the
-# one shared read). The read is TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
+# one shared read). The read runs BEFORE the emission, because a queued PR's REST autoMergeRequest is null
+# (#11789: the queue owns the merge) and a bare `automerge=false` on the poll line would false-report
+# "disarmed": while the PR is queued that field is emitted as `automerge=false(queued)` instead. The read is
+# TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
 # line and keeps watching. `LEFT THE MERGE QUEUE UNMERGED` (exit 1) needs a POSITIVE not-queued read of an OPEN
 # PR from a measured poll, and either a `dequeued` verdict (a removal event newer than the last re-arm / push,
 # or seen queued earlier) or a queued sighting of this watch followed by auto-merge off (confirmed by ONE re-read
@@ -317,13 +320,44 @@ while :; do
   waiting=$(jq -r '[.[]|select(.bucket=="pending")|.name]|join(",")' <<<"$checks" 2>/dev/null | cut -c1-90)
   red=$(jq -r '[.[]|select(.bucket=="fail" or .bucket=="cancel")|"\(.bucket):\(.name)"]|join(" ")' <<<"$checks" 2>/dev/null | cut -c1-160)
 
+  # ── THE QUEUE READ, before the emission (#9454, #11789). A QUEUED PR can read BEHIND, BLOCKED, or
+  # auto-merge-off while perfectly healthy, and its autoMergeRequest reads null on the REST view — the
+  # queue owns the merge — so a bare `automerge=false` would false-report "disarmed". The read runs here,
+  # ahead of the emission, so that field can be annotated; the settled verdicts below consume the same
+  # result. Same gate as before: only a settled poll (checks exist, none pending) of an OPEN PR in a
+  # queued-shaped state pays for the read, plus every --heartbeat-every'th poll so a CLEAN + armed PR is
+  # covered; a failed read is UNKNOWN (2), never a verdict.
+  queued=0; qread=2
+  if [[ "$state" == "OPEN" && "$tot" -gt 0 && "$pend" -eq 0 \
+        && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
+             || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
+    in_queue; qread=$?
+    # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
+    # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
+    # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
+    # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
+    if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
+      in_queue; qread=$?
+    fi
+  fi
+  if [[ "$qread" == "0" ]]; then
+    queued=1
+  elif [[ "$qread" == "2" && "$queue_seen" == "1" ]]; then
+    queued=1   # UNKNOWN read after a queued sighting: hold that verdict quietly, never guess a dequeue
+  fi
+  # The REST automerge bit is a lie for a queued PR (#11789): autoMergeRequest is null because the queue
+  # owns the merge. Annotate it — like `test(ready run <state>)` above — so the line never renders
+  # "disarmed" for the one PR whose merge is most certainly armed.
+  am_disp="$automerge"
+  [[ "$queued" == "1" && "$automerge" == "false" ]] && am_disp="false(queued)"
+
   # ── THE EMISSION DECISION, before any terminal branch. Emit when the observable state CHANGED,
   # and otherwise every HEARTBEAT_EVERY polls so a long quiet stretch still proves liveness. The
   # first poll always emits (prev is empty), so the operator sees a baseline immediately.
   # `waiting` and `red` are IN the signature: a re-run that swaps which check is pending, or a
   # different check failing at the same count, changes nothing numeric but changes what the
   # operator is waiting on. probe_ok is in it so repeated outages are not collapsed.
-  sig="${probe_ok}|${failed_probe}|${state}|${mergestate}|${automerge}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
+  sig="${probe_ok}|${failed_probe}|${state}|${mergestate}|${am_disp}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
   if [[ "$sig" != "${prev_sig:-}" ]]; then
     why=""
   elif [[ $(( n % HEARTBEAT_EVERY )) -eq 0 ]]; then
@@ -341,7 +375,7 @@ while :; do
         # unknown" here would discard data we hold and hide a merge/disarm/DIRTY transition for the
         # whole outage.
         printf '[%s|%s|automerge=%s] check counts UNAVAILABLE — `gh pr checks` failed (poll %s/%s)%s%s\n' \
-          "$state" "$mergestate" "$automerge" "$n" "$MAX_POLLS" \
+          "$state" "$mergestate" "$am_disp" "$n" "$MAX_POLLS" \
           "${checks_fail_err:+ · checks: }${checks_fail_err}" "$why"
       else
         printf '[gh probe FAILED: %s — state unknown] (poll %s/%s)%s%s%s\n' \
@@ -351,7 +385,7 @@ while :; do
       fi
     else
       printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s skipped · (poll %s/%s)%s%s%s\n' \
-        "$state" "$mergestate" "$automerge" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
+        "$state" "$mergestate" "$am_disp" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
         " · $skip" "$n" "$MAX_POLLS" \
         "${waiting:+ → }" "$waiting" "$why"
     fi
@@ -422,24 +456,8 @@ while :; do
     fi
     # Merge queue (#9454): BEHIND, BLOCKED and an unarmed auto-merge are what a QUEUED PR can look like,
     # and each verdict below is wrong for it (syncing or merging by hand dequeues it / skips the
-    # merge_group run). Read the queue only for those states; a healthy CLEAN + armed PR costs no call.
-    queued=0; qread=2
-    if [[ "$state" == "OPEN" && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
-          || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
-      in_queue; qread=$?
-      # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
-      # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
-      # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
-      # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
-      if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
-        in_queue; qread=$?
-      fi
-    fi
-    if [[ "$qread" == "0" ]]; then
-      queued=1
-    elif [[ "$qread" == "2" && "$queue_seen" == "1" ]]; then
-      queued=1   # UNKNOWN read after a queued sighting: hold that verdict quietly, never guess a dequeue
-    fi
+    # merge_group run). The queue read ran before the emission above (same gate); a healthy CLEAN + armed
+    # PR costs no call.
     if [[ "$queued" == "1" ]]; then
       if [[ "$qread" == "0" && "$queue_seen" != "1" ]]; then
         printf 'IN MERGE QUEUE — PR #%s is queued (mergeState=%s): checks are green and the queue merges it. Do NOT sync, update-branch, push or --admin it (a push dequeues it); watching for MERGED or removal from the queue.\n' "$PR" "$mergestate"
