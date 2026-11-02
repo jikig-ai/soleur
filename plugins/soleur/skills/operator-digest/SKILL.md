@@ -259,9 +259,13 @@ pipeline data" every week:
 
 ```bash
 gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 \
-  --json number,title,body,updatedAt --limit 50
-# keep the issue whose title is exactly "ci-wallclock-p90: required-check wall-clock report";
-# its body is the report
+  --json number,title,body,updatedAt,author --limit 50
+# keep ONLY issues authored by github-actions — the watch owns its tracker; a
+# same-label issue filed by anyone else is not the watch's report. Among
+# those, keep the issue whose title is exactly
+# "ci-wallclock-p90: required-check wall-clock report"; if duplicate labeled
+# watch-authored trackers exist, take the LOWEST issue number. Its body is
+# the report.
 ```
 
 **Staleness.** The watch rewrites the body every Friday before this digest runs, so both the
@@ -276,8 +280,15 @@ table into consequence language: "Your checks ran at about their usual speed thi
 in the merge queue" / "the pipeline watchdog flagged <check> — it drifted past its committed
 bound and a red weekly run names it." **Never** emit per-PR or per-run rows, run ids, commit
 SHAs, or any actor attribution — the body is already aggregate; your job is the plain-language
-read of it. If the issue list read FAILED, or no issue carries the exact title, emit the
-labelled fallback — never a quiet "checks are fine" off a failed read.
+read of it. When you read the body, ignore the trailing
+`<!-- wallclock-p90-watch:v1 drift=… -->` sentinel comment — it is the watch's dedupe machinery,
+not report content; never surface it in the digest.
+
+**Read failure vs. no match.** If the `gh issue list` call itself FAILED (non-zero exit), emit
+the ⚠️ read-failure warning line from the contract above — a failed read is NOT "no pipeline
+data," and never a quiet "checks are fine." Only if the call SUCCEEDED but no
+github-actions-authored issue carries the exact title, emit the §6 fallback "No pipeline
+timing data this week."
 
 ## Deterministic fallback (never blank)
 
