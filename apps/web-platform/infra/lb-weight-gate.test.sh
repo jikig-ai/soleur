@@ -303,30 +303,205 @@ assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (li
 assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2\"" server.tf \
   'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
 
-# C.3 — no cloudflare_load_balancer pools web-2 at weight>0 (pre-flip). With the LB now
-#       landed (Phase 6 overlay-add, ADR-068 §(b)), the assertion tightens to: no pool origin
-#       references web-2 and no LB default_pool_ids includes a web-2 pool. web-2 stays
-#       structurally absent until the cutover soak marker (GIT_DATA_LUKS_CUTOVER_AT) is satisfied.
-# Glob $SCRIPT_DIR explicitly (terraform-cwd class). Fail-closed: zero .tf files = FAIL.
-web2_pool_hits=0; tf_seen=0
+# C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence;
+#       pairing/anchoring hardened PR #11766). With web-2 pooled as a drained member
+#       (ADR-068 §(b) — weight 0, health-checked, zero traffic until the #6027 window
+#       flip), the assertion is BLOCK-SCOPE over the .tf files that declare a
+#       cloudflare_load_balancer* resource:
+#         * every `origins {}` block that points at web-2 — by `name = "web-2"` OR by
+#           an `hcloud_server.web["web-2"]` reference ANYWHERE in the block (so a
+#           renamed origin cannot dodge the pin) — must carry `weight = 0` where the
+#           0 is RIGHT-ANCHORED (space/#/EOL after it — `weight = 0.5` must not
+#           satisfy a prefix match);
+#         * outside `origins {}` blocks, an `hcloud_server.web["web-2"]` reference
+#           ANYWHERE on a line (attribute-assigned, not line-anchored) or a line-
+#           anchored `name = "web-2"` is a STRAY — a web-2 pool/record smuggle is
+#           not a drained origin.
+#       What it pins, stated precisely (the earlier comment overstated it): it does
+#       NOT match label references like `default_pool_ids` entries — those name
+#       `cloudflare_load_balancer_pool.<label>` resources, not `hcloud_server.web`.
+#       It pins the ORIGIN-SIDE shape: web-2 can only be reached as a weight-0
+#       origin of a declared pool, never via a stray web-2-addressed construct.
+#       The weight pairing is awk-ranged over the `origins {}` block — never a
+#       bare line-grep, which a dropped `weight` term would satisfy silently.
+#       Glob $SCRIPT_DIR explicitly (terraform-cwd class). Fail-closed: zero .tf
+#       files = FAIL.
+# c3_scan_file <file> -> "<bad_blocks> <w2_blocks> <stray>" — ONE helper so the
+# synthetic fixtures below grade the SHIPPED logic, not a copy of it.
+c3_scan_file() {
+  local f="$1" bad=0 blocks=0 stray
+  while IFS='|' read -r has_w2 has_w0; do
+    [[ "$has_w2" == "1" ]] || continue
+    blocks=$((blocks + 1))
+    [[ "$has_w0" == "1" ]] || bad=$((bad + 1))
+  done < <(awk '
+    # Open of an origins block: the OPEN LINE itself is inspected too — a
+    # single-line `origins { name = "web-2" }` used to scan 0 0 0 (invisible to
+    # both the block census and the stray census). Braces are a DEPTH counter,
+    # not a boolean: a nested `header {}` must not close the scan early and
+    # misattribute the lines after it. The `next` here keeps a nested `origins`
+    # line inside a block on the depth>0 path (it deepens, never re-opens).
+    depth == 0 && /^[[:space:]]*origins[[:space:]]*\{/ {
+      w2 = ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) ? 1 : 0
+      # weight on the open line can only sit INLINE (after `origins {`), so the
+      # right-anchored-0 pattern is applied unanchored here; inside-line weight
+      # stays line-anchored below.
+      w0 = ($0 ~ /weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) ? 1 : 0
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
+    # A `}`-led line is a close, not content — a trailing comment cannot
+    # mint an origin member (same rule the boolean scan enforced).
+    depth > 0 && /^[[:space:]]*\}/ {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
+    depth > 0 {
+      if ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) w2 = 1
+      if ($0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) w0 = 1
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      if (depth <= 0) printf "%s|%s\n", w2, w0
+      next
+    }
+  ' "$f")
+  stray=$(awk '
+    # Same depth discipline: "outside" is depth==0 AND not an origins open line;
+    # an origins block closes only when its OWN depth returns to 0.
+    depth == 0 && /^[[:space:]]*origins[[:space:]]*\{/ {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      next
+    }
+    depth > 0 {
+      line = $0
+      depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
+      next
+    }
+    ($0 ~ /hcloud_server\.web\["web-2"\]/ || $0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"web-2"/) { n++ }
+    END { print n+0 }
+  ' "$f")
+  printf '%s %s %s\n' "$bad" "$blocks" "$stray"
+}
+web2_bad_blocks=0; web2_blocks=0; web2_stray=0; tf_seen=0
 for f in "$SCRIPT_DIR"/*.tf; do
   [[ -f "$f" ]] || continue
   tf_seen=$((tf_seen + 1))
-  # Only flag files that actually declare an LB AND address web-2 as an origin/pool.
-  if grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f"; then
-    if grep -qE 'hcloud_server\.web\["web-2"\]|name[[:space:]]*=[[:space:]]*"web-2"' "$f"; then
-      web2_pool_hits=$((web2_pool_hits + 1))
-    fi
-  fi
+  grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f" || continue
+  read -r f_bad f_blocks f_stray < <(c3_scan_file "$f")
+  web2_bad_blocks=$((web2_bad_blocks + f_bad))
+  web2_blocks=$((web2_blocks + f_blocks))
+  web2_stray=$((web2_stray + f_stray))
 done
 TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no .tf files found under $SCRIPT_DIR (fail-closed — dir moved?)"
-elif [[ "$web2_pool_hits" -eq 0 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: no LB .tf references web-2 (web-2 structurally absent pre-flip)"
+elif [[ "$web2_blocks" -lt 1 ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 — the drained member is missing (or a resource label was renamed; assertions must not vacuously pass)"
+elif [[ "$web2_bad_blocks" -gt 0 || "$web2_stray" -gt 0 ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_bad_blocks web-2 origins block(s) without 'weight = 0' + $web2_stray stray web-2 reference(s) outside origins blocks — web-2 must stay a drained member pre-flip"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_pool_hits LB .tf file(s) reference web-2 — keep web-2 out of default_pool_ids pre-flip"
+  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: $web2_blocks web-2 origins block(s) at weight = 0, no stray web-2 references — drained member holds"
 fi
+
+# C.3-fixtures — synthetic .tf driving the SHIPPED c3_scan_file (PR #11766 review:
+# the `weight = 0.5` prefix-match bypass and the renamed-origin escape were both
+# measured green). Assert on the helper's <bad blocks stray> triple.
+C3_TMP="$(mktemp -d)"
+c3_fixture() { # $1=name $2=hcl -> runs c3_scan_file, echoes the triple into C3_OUT
+  printf '%s\n' "$2" > "$C3_TMP/$1.tf"
+  C3_OUT="$(c3_scan_file "$C3_TMP/$1.tf")"
+}
+assert_c3() { # $1=desc $2=expected "<bad> <blocks> <stray>"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$C3_OUT" == "$2" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 — expected '$2', got '$C3_OUT'"
+  fi
+}
+c3_fixture good 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 0
+  }
+}'
+assert_c3 "C.3-fixture: well-formed drained member (weight = 0) scans clean" "0 1 0"
+c3_fixture half 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 0.5
+  }
+}'
+assert_c3 "C.3-fixture: weight = 0.5 is NOT drained (right-anchored 0) → red" "1 1 0"
+c3_fixture renamed 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "standby"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+    weight  = 1
+  }
+}'
+assert_c3 "C.3-fixture: renamed origin still resolving web-2 IP pairs by address → red" "1 1 0"
+c3_fixture missing 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    address = hcloud_server.web["web-2"].ipv4_address
+    enabled = true
+  }
+}'
+assert_c3 "C.3-fixture: web-2 origins block with no weight term → red" "1 1 0"
+c3_fixture stray 'resource "cloudflare_load_balancer" "app" {
+  zone_id          = var.cf_zone_id
+  fallback_pool_id = hcloud_server.web["web-2"].ipv4_address
+}'
+assert_c3 "C.3-fixture: hcloud_server.web[\"web-2\"] attribute-assigned outside origins → stray" "0 0 1"
+# Single-line blocks: the open line's own content must be scanned — a one-line
+# origins block used to read as 0 0 0 (invisible to BOTH censuses).
+c3_fixture oneline 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" }
+}'
+assert_c3 "C.3-fixture: single-line web-2 origins block without weight → red" "1 1 0"
+c3_fixture oneline_ok 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" weight = 0 }
+}'
+assert_c3 "C.3-fixture: single-line drained member scans clean" "0 1 0"
+c3_fixture oneline_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" weight = 1 }
+}'
+assert_c3 "C.3-fixture: single-line hot web-2 member → red" "1 1 0"
+# Nested blocks must not close the origins scan early: a `header {}` inside
+# origins used to end the block at its own `}`, orphaning every line after it
+# (weight unscanned, name misattributed to the stray census).
+c3_fixture nested 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    check_response {
+      header { name = "x" }
+    }
+    name    = "web-2"
+    weight  = 0
+  }
+}'
+assert_c3 "C.3-fixture: nested block does not close the origins scan early" "0 1 0"
+c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    check_response {
+      header { name = "x" }
+    }
+    name    = "web-2"
+    weight  = 1
+  }
+}'
+assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
+rm -rf "$C3_TMP"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
 MIN_CASES=72

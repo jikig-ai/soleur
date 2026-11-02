@@ -3108,7 +3108,11 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // healthy host older than 72 h returns nothing (the instance-id keyed recipe in runbooks/inngest-server.md is the precise read).
   // NO SUBSTITUTE: the row exists only in the stored log stream and Better Stack has no unauthenticated reader; the plan's
   // `credentials_required` line names the BETTERSTACK_QUERY_* secrets. Genuine.
-  // #9826 slice 2a (2026-11-02): +1 (91 -> 92) for `2026-11-02-feat-image-cve-scan-2a-record-v2-report-only-gate-plan.md`.
+  // #6027 (2026-11-01): +1 (91 -> 92) for `2026-11-01-feat-web2-pool-spread-ga-lb-plan.md` — the ga-lb-pool-soak follow-through probe.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the live CF pool-health API + the Better Stack incidents stream; neither
+  // has an unauthenticated substitute. Genuine.
+  // #9826 slice 2a (2026-11-02): +1 (92 -> 93, rebased over #6027 at ship) for `2026-11-02-feat-image-cve-scan-2a-record-v2-report-only-gate-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 2d --raw-only --grep SOLEUR_IMAGE_CVE_VERDICT --limit 20 | jq -R ...`, a
   // structural decode that selects only decoded rows whose message IS the marker) reads
@@ -3116,7 +3120,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // completed non-push release-workflow run; a row does not imply a deploy). NO SUBSTITUTE:
   // the row is private BY DESIGN (public repository, so the job log carries counts only) and lands only in the Logs warehouse, which has
   // no unauthenticated read path; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
-  const BASELINE_DECLARED_PROBES = 92;
+  const BASELINE_DECLARED_PROBES = 93;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
