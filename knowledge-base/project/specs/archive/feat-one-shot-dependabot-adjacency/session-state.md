@@ -19,3 +19,18 @@ None blocking. Limitations, disclosed in the plan's Enhancement Summary and Doma
 
 ### Technical-ruling gate
 - cto_spawns=1 (batched: all 5 pending rows ruled by `soleur:engineering:cto`, 2026-11-02; gate re-run PASS)
+
+## Resume-2 additions (2026-11-02 ~21:35Z, head 24258c5d73)
+
+Merge-watch outcome: PR never enqueued (~3.5h armed/green) — root cause was RED required `test` check, not queue latency.
+
+Fixes landed in 24258c5d73:
+- `e1f48b1b37` merge origin/main (resolves BEHIND + affected-index-ratchet stale-accept advisory)
+- `24258c5d73` react-dom ^19.1.0→19.3.0 in apps/web-platform (likec4 1.60 hoisted react@19.3.0; 141 component-suite fails fixed — verified: webplat 2/2 went 0/9-unit-context to 8/9)
+
+REMAINING RED (current head):
+1. `test-webplat (2/2)` unit `test/c4-theme.test.ts` (5 fails): likec4 1.60 surface drift — `expected '@mantine/core 8.3.15' to be '9.7.1'` (likec4/diagram now resolves Mantine 9; app pins 8.3.15), plus logo/DOM-hook assertions broken by 1.60 internals (dist/_chunks→dist/chunks). NOT trivial: bumping Mantine 8→9 is its own blast radius; scoping likec4 to a second Mantine context is the alternative — CTO ruling needed (fix-forward vs revert likec4 to 1.50).
+2. `plugins/soleur/test/c4-model-freshness.test.sh` STALE — PROVEN GATE DEFECT under likec4 1.60: relation IDs are derived from the absolute workspace path (same .c4 bytes rendered at 3 different local paths give 203/203 different relation IDs; elements are stable). Committed file is byte-verified fresh w.r.t. merge-ref sources (merge-ref vs worktree checksums identical). A locally-rendered file can NEVER match CI's /home/runner/work/soleur/soleur render. Fix belongs in the canonicalizer/test (re-key relations by content hash + rewrite view edge refs) OR render in CI; reverting to likec4 1.50 also sidesteps it.
+3. `tenant-integration` + `tenant-integration-required` fail 15m24s — UNEXAMINED; log shows FAIL_ON_DRIFT:false migration-drift probe region; likely merge-introduced drift or unrelated flake — read job 125534395038 next session.
+
+Watcher/poll state: Phase-7 poll armed in bg shell; watcher agent loop killed by self after reporting exit-2 (its probe-error heuristic was buggy — real fails are genuine).
