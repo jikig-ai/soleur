@@ -5465,6 +5465,12 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Slice 2a (#9826): triage (hermetic, stub query script), public-claim guard (state test over public
+  # surfaces); scripts/*.test.sh is not in SUITE_GLOBS, so each is registered explicitly.
+  run_suite "scripts/image-cve-db-pin" bash scripts/image-cve-db-pin.test.sh
+  run_suite "scripts/image-cve-verdict" bash scripts/image-cve-verdict.test.sh
+  run_suite "scripts/image-cve-triage" bash scripts/image-cve-triage.test.sh
+  run_suite "scripts/image-cve-public-claim-guard" bash scripts/image-cve-public-claim-guard.test.sh
   # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
   # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
