@@ -1,4 +1,4 @@
-# generated: 2026-08-03T08:35:38Z
+# generated: 2026-11-02T09:05:23Z
 # command: doppler configs -p soleur --json | python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' | sort
 #
 # The live config names of the Doppler `soleur` project, measured by probe G of the #7159 plan
@@ -116,6 +116,11 @@
 # are the ONLY thing that makes a REDUCTION visible" — true when written, false since #7234's F4b,
 # and the sentence that made the round trip look unpreventable rather than merely unprevented.
 # See ADR-164, "Known limitations" (amended), and ADR-168.
+#
+# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: 16 configs exist. This list stays the 13 below on
+# purpose (CTO ruling 2026-11-02): it is the for_each key set that mints one read token per name, so adding a name is
+# a credential-minting change. prd_git_data, prd_workspaces_luks_marker and prd_workspaces_luks_web are Terraform-declared
+# and deliberately not listed here; the PR that mints their tokens raises this list and DOPPLER_CONFIGS_FLOOR together.
 ci
 cli
 cli_ops
