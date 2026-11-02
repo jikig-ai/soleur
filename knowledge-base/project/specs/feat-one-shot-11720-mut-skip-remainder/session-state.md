@@ -14,7 +14,7 @@ None — planning ran inline (Devin depth-1: child skills' fan-outs originate at
 - Floor trips exit 1 (verdict-class), instrument failures exit 2 — deadman converted
 - Per-file IV axes added so seam checks are mutation-pinnable; excluded literal set = each suite's axis names (REGSTORE_/REGCREDSHAPE_ lack _GUARD_)
 - deadman conjunct-set canon preserves order-insensitivity; QP/CK exact pins
-- egress-gw already floor-bearing (pass -lt 30) → promotion moves deferred→covered; meta-guard edit at :1089 live PROMOTED_FILES site only + grounds comment + MIN_FIRING_SUITES 61→62; counters diff: n_deferred 47→46, n_fires +1, n_def_construct −3, n_def_fires +3, n_covered +1
+- egress-gw already floor-bearing (pass -lt 30) → promotion moves deferred→covered; meta-guard edit at :1089 live PROMOTED_FILES site only + grounds comments + MIN_FIRING_SUITES 61→65 (ALL FOUR promoted per CTO ruling A); counters diff: deferred 47→43, def_fires 31→30, def_construct 16→13, covered 383→387, fires 366→370
 - Epic #10390: delegation valid to 2026-11-20, no delegated acts due (CTO Own-the-epic run); holds in plan ## Operator Holds + decision-challenges.md; cto_spawns=1
 
 ### Components Invoked

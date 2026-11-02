@@ -14,8 +14,8 @@ Plan: knowledge-base/project/plans/2026-11-02-chore-mut-skip-guard-remainder-pla
 
 ## Phase 3 — egress-gw + meta-guard promotion
 - [ ] 3.1 Full port; remove pass -lt 30 floor → derived _floor; IV) arms in both mutate case tables; DENY_SQL/SILENT_SQL/FAIL_SQL region anchors
-- [ ] 3.2 scripts/guard-vacuity-floor.test.sh: PROMOTED_FILES entry at :1089 site (escaped dots) + grounds comment + MIN_FIRING_SUITES 61→62
-- [ ] 3.3 Run meta-guard: exit 0; counters diff n_deferred 47→46, n_fires +1, n_def_construct −3, n_def_fires +3, n_covered +1
+- [ ] 3.2 scripts/guard-vacuity-floor.test.sh: PROMOTED_FILES entries for all four ported files at live :1089 site (escaped dots) + grounds comments + MIN_FIRING_SUITES 61→65
+- [ ] 3.3 Run meta-guard: exit 0; counters diff deferred 47→43, def_fires 31→30, def_construct 16→13, covered 383→387, fires 366→370
 
 ## Phase 4 — rebaseline + measure
 - [ ] 4.1 All four suites + MUT_SKIP inner runs green; registry-clientip byte-identical (AC5)
