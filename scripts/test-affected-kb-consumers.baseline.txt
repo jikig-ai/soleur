@@ -200,7 +200,6 @@ scripts/guard-vacuity-floor	knowledge-base/legal/audits
 scripts/guard-vacuity-floor	knowledge-base/legal/audits/2026-10-31-clo-ruling-10455-census-method.md
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
-scripts/image-cve-triage	knowledge-base/engineering/architecture/decisions/ADR-281-image-cve-scan-advisory-first-promoted-on-measured-fp-criterion.md
 scripts/inngest-probe-heartbeat-feeder	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base

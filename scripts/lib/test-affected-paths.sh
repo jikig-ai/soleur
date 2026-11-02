@@ -142,6 +142,9 @@ ALWAYS_ON_SUITES=(
   # public app pages) for image-scan claims, so any edit to those surfaces can trip it — repo-global by
   # construction, and a cheap grep, so always-on rather than a hand-listed edge set.
   "scripts/image-cve-public-claim-guard"
+  # #9826 slice 2a: the verdict consumer sweep reads every tracked script, workflow and composite action (a poller of the
+  # verdict marker can live anywhere), so it is repo-global; it is its own small suite so the ~75 s verdict suite stays edge-selected.
+  "scripts/image-cve-verdict-consumers"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"

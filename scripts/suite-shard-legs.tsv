@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1223
-# generated-at=2026-11-02T11:52:06Z
+# generated-at=2026-11-02T13:37:36Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -432,6 +432,7 @@ scripts/image-cve-scan	3
 scripts/image-cve-scan-window-9826	1
 scripts/image-cve-triage	5
 scripts/image-cve-verdict	6
+scripts/image-cve-verdict-consumers	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	1
 scripts/infra-drift-autoclose	8

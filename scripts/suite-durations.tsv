@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1223
-# generated-at=2026-11-02T11:52:06Z
+# generated-at=2026-11-02T13:37:36Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -430,6 +430,7 @@ scripts/image-cve-scan	3823	measured
 scripts/image-cve-scan-window-9826	3457	measured
 scripts/image-cve-triage	1223	floor
 scripts/image-cve-verdict	1223	floor
+scripts/image-cve-verdict-consumers	1223	floor
 scripts/infra-config-red-alert	768	measured
 scripts/infra-credentials-loader	1742	measured
 scripts/infra-drift-autoclose	10115	measured

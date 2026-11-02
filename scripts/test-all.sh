@@ -5469,6 +5469,7 @@ if want_scripts; then
   # surfaces); scripts/*.test.sh is not in SUITE_GLOBS, so each is registered explicitly.
   run_suite "scripts/image-cve-db-pin" bash scripts/image-cve-db-pin.test.sh
   run_suite "scripts/image-cve-verdict" bash scripts/image-cve-verdict.test.sh
+  run_suite "scripts/image-cve-verdict-consumers" bash scripts/image-cve-verdict-consumers.test.sh
   run_suite "scripts/image-cve-triage" bash scripts/image-cve-triage.test.sh
   run_suite "scripts/image-cve-public-claim-guard" bash scripts/image-cve-public-claim-guard.test.sh
   # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
