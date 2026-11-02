@@ -408,6 +408,24 @@ printf 'test\t600\t600\te2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BN
 run
 [[ "$RC" -eq 3 && "$(ncalls 'issue create')" -eq 0 ]] \
   && pass "T5b wrong column count -> exit 3" || fail "T5b (rc=$RC)"
+printf 'test\t600\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\ntest\t900\t900\t0.30\n' > "$BND"
+run
+[[ "$RC" -eq 3 && "$ERR" == *"duplicate"* && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "T5c duplicate bounds row -> exit 3" || fail "T5c (rc=$RC)"
+printf 'test\t600\t600\t9999\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
+run
+[[ "$RC" -eq 3 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "T5d margin >= 2 (vacuous bound) -> exit 3" || fail "T5d (rc=$RC)"
+printf 'test\t600\t600\t0.30\t\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
+run
+[[ "$RC" -eq 3 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "T5e trailing-empty 5th column -> exit 3" || fail "T5e (rc=$RC)"
+printf '# fixture bounds\ntest\t600\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
+mkscene; seed_green_scene
+printf '  test\t600\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
+run
+[[ "$RC" -eq 0 ]] \
+  && pass "T5f leading-whitespace bound key trims before matching" || fail "T5f (rc=$RC)"
 printf '# fixture bounds\ntest\t600\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
 
 # ---- T6: same-sha suites resolve to the SAMPLED run's check suite ------------
@@ -448,6 +466,13 @@ mkscene; seed_green_scene
     WATCH_REQUIRED="$REQ" WATCH_BOUNDS="$BND" bash -x "$SUT" ) >/dev/null 2>"$MOCKD/stderr"; RC=$?
 ERR="$(cat "$MOCKD/stderr")"
 [[ "$RC" -eq 78 && "$ERR" == *"xtrace"* ]] && pass "T8d bash -x refused with exit 78" || fail "T8d (rc=$RC)"
+mkscene
+( cd "$REPO_ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" GH_REPO=jikig-ai/soleur \
+    WATCH_SAMPLE='10; rm -rf /' WATCH_REQUIRED="$REQ" WATCH_BOUNDS="$BND" \
+    bash "$SUT" ) >/dev/null 2>"$MOCKD/stderr"; RC=$?
+ERR="$(cat "$MOCKD/stderr")"
+[[ "$RC" -eq 2 && "$ERR" == *"invalid WATCH_SAMPLE"* && ! -s "$MOCKD/calls" ]] \
+  && pass "T8e non-numeric WATCH_SAMPLE -> exit 2, no arithmetic, no gh call" || fail "T8e (rc=$RC)"
 
 # ---- T9: --dry-run prints the table, posts nothing ----------------------------
 mkscene; seed_green_scene

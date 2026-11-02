@@ -88,6 +88,8 @@ esac
 TRACKER_TITLE='ci-wallclock-p90: required-check wall-clock report'
 SENTINEL_PREFIX='<!-- wallclock-p90-watch:v1 '
 SAMPLE="${WATCH_SAMPLE:-30}"
+[[ "$SAMPLE" =~ ^[0-9]+$ && "$SAMPLE" -gt 0 ]] || {
+  echo "::error::invalid WATCH_SAMPLE='$SAMPLE' (positive integer required)" >&2; exit 2; }
 REQ_FILE="${WATCH_REQUIRED:-scripts/required-checks.txt}"
 BOUNDS="${WATCH_BOUNDS:-scripts/required-check-wallclock-bounds.tsv}"
 GOAL_PR_S=1200   # epic #11556: pull_request p90 <= 20 min
@@ -121,13 +123,31 @@ echo "required-check population: ${#REQNAMES[@]} names (derived from $REQ_FILE)"
 
 # ---- (0b) bounds table -------------------------------------------------------
 [[ -f "$BOUNDS" ]] || { echo "::error::bounds TSV missing: $BOUNDS" >&2; exit 3; }
-declare -A BPR BMQ BM
-while IFS=$'\t' read -r bn f1 f2 f3 f4; do
-  [[ -z "${bn//[[:space:]]/}" || "$bn" == \#* ]] && continue
-  if [[ -n "${f4:-}" || -z "${f1:-}" || -z "${f2:-}" || -z "${f3:-}" ]]; then
+# Initialized-empty so ${#BPR[@]} / "${!BPR[@]}" stay set-u-safe on the
+# zero-row path (a declared-but-never-assigned assoc is still unbound).
+declare -A BPR=() BMQ=() BM=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Column count is counted on the RAW line: read collapses trailing
+  # delimiters, so a 5th EMPTY column is invisible to the split itself
+  # (NF includes it; a "test 600 600 0.30 <TAB>" row must fail, not pass).
+  nf="$(awk -F'\t' '{print NF}' <<<"$line")"
+  # Only 4 fields are bound; on a >4-column row f3 catches the remainder and
+  # the NF check below rejects the row before any field is consumed.
+  IFS=$'\t' read -r bn f1 f2 f3 <<<"$line"
+  # Trim leading/trailing whitespace off the key before the blank/comment
+  # tests — mirrors the required-checks population parser above.
+  bn="${bn#"${bn%%[![:space:]]*}"}"; bn="${bn%"${bn##*[![:space:]]}"}"
+  [[ -z "$bn" || "$bn" == \#* ]] && continue
+  if [[ "$nf" -ne 4 || -z "${f1:-}" || -z "${f2:-}" || -z "${f3:-}" ]]; then
     echo "::error::malformed bounds row (needs exactly 4 columns): $bn" >&2; exit 3; fi
+  if [[ -n "${BPR[$bn]+x}" ]]; then
+    echo "::error::duplicate bounds row for '$bn'" >&2; exit 3; fi
   if [[ ! "$f1" =~ ^[0-9]+$ || ! "$f2" =~ ^[0-9]+$ || ! "$f3" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     echo "::error::malformed bounds row (unparsable number): $bn" >&2; exit 3; fi
+  # margin must be < 2: a margin >= 2 makes bound x (1+margin) vacuously
+  # permissive — the breach arm can never fire on it.
+  awk -v m="$f3" 'BEGIN{exit !(m < 2)}' || {
+    echo "::error::malformed bounds row (margin $f3 >= 2 — a vacuous bound): $bn" >&2; exit 3; }
   BPR["$bn"]=$f1; BMQ["$bn"]=$f2; BM["$bn"]=$f3
 done < "$BOUNDS"
 for bn in "${!BPR[@]}"; do
@@ -181,7 +201,6 @@ for ev in pull_request merge_group; do
     if printf '%s' "$checks" | jq -sr \
         --argjson req "$(cat "$WORK/reqnames.json")" \
         --argjson suite "${csid:-0}" --arg ev "$ev" --arg c0 "$created" '
-      def abs: if . < 0 then -. else . end;
       ([.[].check_runs[]?]) as $all
       | ($c0 | fromdateiso8601) as $t0
       | $req[] as $name
@@ -191,7 +210,7 @@ for ev in pull_request merge_group; do
       | ([ $cand[] | select(.check_suite.id == $suite) ]) as $own
       | (if ($own | length) > 0 then $own[0]
          elif ($cand | length) > 0
-           then ($cand | min_by(((.started_at | fromdateiso8601) - $t0) | abs))
+           then ($cand | min_by(((.started_at | fromdateiso8601) - $t0) | fabs))
          else null end) as $p
       | select($p != null)
       | "\($name)\t\($ev)\t\((($p.completed_at | fromdateiso8601) - $t0) | floor)\t\((($p.completed_at | fromdateiso8601) - ($p.started_at | fromdateiso8601)) | floor)"
