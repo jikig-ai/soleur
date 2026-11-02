@@ -138,6 +138,10 @@ ALWAYS_ON_SUITES=(
   # construction (git ls-files + per-file comment-stripped invocation discovery).
   "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
+  # #9826 slice 2a: the public-claim guard greps every public-copy surface (docs, legal, README, site data,
+  # public app pages) for image-scan claims, so any edit to those surfaces can trip it — repo-global by
+  # construction, and a cheap grep, so always-on rather than a hand-listed edge set.
+  "scripts/image-cve-public-claim-guard"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
