@@ -2048,7 +2048,7 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # revoked, rotated-alone or invalid flip token fails the unit BEFORE any script code runs, on every
 # 30 s timer start. The throttled `noop-*` row (one per CUTOVER_NOOP_THROTTLE_S = 300 s, journald
 # tag `inngest-cutover-flip`) then stops arriving as a JSON row. One silence alert covers the three
-# failure arms that share that cause:
+# failure arms that share that cause (the unit not reaching the script's first emit):
 #   1. the unit stalled or failing at the Doppler CLI, before or after `done` (after `done`,
 #      rollback is dead with no other alert: the only alert on this tag is the key-probe one, and
 #      it fires from inside the script, which never starts);
@@ -2058,9 +2058,19 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 #      unit's terminal arms, so any flip-token defect silences it).
 #
 # THE DISCRIMINATOR IS THE JSON TYPE OF `message`, NOT A STRING PATTERN (CTO ruling, 2026-11-02;
-# measured with betterstack-query.sh, never the row content): flip rows carry an OBJECT-typed
-# `message` (about 12 per hour); the doppler `Using DOPPLER_...` lines under the same tag carry a
-# STRING `message` (about 160 per hour), so a bare tag count would stay green while the unit fails.
+# measured with betterstack-query.sh, never the row content): every `emit_state` row of the script
+# (the throttled noop heartbeat AND the FSM transition rows such as `flushed-resume-no-reflush`,
+# `rolled-back` and `unexpected-exit(from=...)`) carries an OBJECT-typed `message` (about 12 per
+# hour at rest); the doppler `Using DOPPLER_...` lines under the same tag carry a STRING `message`
+# (about 160 per hour), so a bare tag count would stay green while the unit fails. CTO measurement
+# 2026-11-02: 1,891 object rows over the prior 7 days and no gap over 900 s.
+#
+# WHAT IT DOES NOT SEE. A unit that STARTS and then fails inside the script (a flip token that
+# authenticates but is read-only, so the Doppler write is refused) still emits object rows every
+# tick (`unexpected-exit(...)` is unthrottled), so this alert stays green on that failure; the
+# runbook's `noop-done` check before `op=resume` and the replace gate's access pin cover it. It is
+# also a LIVENESS signal, not an authenticated one: any process on the host that logs a JSON object
+# under this tag holds it green.
 # `JSONExtractString(raw,'message')` returns '' for the object rows, which is why the sibling
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
 # Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file; it
@@ -2070,7 +2080,8 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
 # `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
 # first `noop-*` row after the new host boots. That is expected; it clears on its own. A logs query
-# cannot express the suppression, which belongs to the heartbeat feeder dead-man (#11266). Email
+# cannot express the suppression, which stays open on #11820 (a heartbeat beaten by a scheduled
+# workflow, so the suppression lives in the workflow, not in the query). Email
 # only, like egress_gw_probe_silent: push, call and sms stay off and critical_alert stays false.
 #
 # WINDOW. The emitter writes at most one noop row per 300 s, so a 900 s query window holds about

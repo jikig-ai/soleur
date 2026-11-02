@@ -25,7 +25,7 @@
 #   * Both resources are in the apply workflow's MAIN plan -target= allowlist (terraform-target-parity
 #     covers terraform_data only, so this guard is the only enforcement for logtail resources).
 #   * The incident text says the alert is EXPECTED during an owner-authorized replace (no suppression
-#     is built; it belongs to #11266), the runbook section names the alert, the standing-alarms table
+#     is built; it stays open on #11820), the runbook section names the alert, the standing-alarms table
 #     names it, and infra-validation.yml runs this guard in a blocking step.
 #
 # WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (created by the merge apply), that
@@ -46,6 +46,7 @@ EM="${FLIPSILENT_GUARD_EM:-$REPO/apps/web-platform/infra/inngest-cutover-flip.sh
 RB="${FLIPSILENT_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/inngest-server.md}"
 LQ="${FLIPSILENT_GUARD_LQ:-$REPO/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md}"
 IV="${FLIPSILENT_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
+BS="${FLIPSILENT_GUARD_BS:-$REPO/apps/web-platform/infra/inngest-bootstrap.sh}"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -63,7 +64,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$EM"; assert_fixture_dir "$RB"; assert_fixture_dir "$LQ"; assert_fixture_dir "$IV"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$EM"; assert_fixture_dir "$RB"; assert_fixture_dir "$LQ"; assert_fixture_dir "$IV"; assert_fixture_dir "$BS"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -73,7 +74,7 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
-for f in "$TF" "$WF" "$EM" "$RB" "$LQ" "$IV"; do
+for f in "$TF" "$WF" "$EM" "$RB" "$LQ" "$IV" "$BS"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -102,6 +103,14 @@ if [ "$EMIT_TAG" = "inngest-cutover-flip" ]; then
   ok "inngest-cutover-flip.sh logs under readonly LOG_TAG=inngest-cutover-flip; the tag is captured from it"
 else
   no "inngest-cutover-flip.sh no longer defines readonly LOG_TAG=inngest-cutover-flip (got '${EMIT_TAG:-<none>}') — the alert would silently stop matching"
+fi
+# The host_name the alert pins is the literal the bootstrap renders into Vector's @@HOST_NAME@@ sentinel for
+# the inngest host: read it from there, so a host rename that leaves the .tf behind reds here.
+BS_HOST="$(sed -n "s/^[[:space:]]*sed -i 's|@@HOST_NAME@@|\([^|]*\)|g'.*/\1/p" "$BS" | head -1)"
+if [ -n "$BS_HOST" ] && grep -qF "JSONExtractString(raw, 'host_name') = '${BS_HOST}'" <<< "$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g')"; then
+  ok "the alert pins host_name = '${BS_HOST}', the literal inngest-bootstrap.sh renders into Vector's @@HOST_NAME@@"
+else
+  no "the alert's host_name pin does not match the inngest host literal inngest-bootstrap.sh renders (got '${BS_HOST:-<none>}')"
 fi
 THROTTLE="$(sed -n 's/^NOOP_THROTTLE_S="\${CUTOVER_NOOP_THROTTLE_S:-\([0-9][0-9]*\)}".*/\1/p' "$EM" | head -1)"
 if [ -n "$THROTTLE" ]; then
@@ -241,8 +250,8 @@ fi
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=28
-MUT_ROWS_EXPECTED=6
+PRESENCE_ROWS=29
+MUT_ROWS_EXPECTED=12
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -256,13 +265,17 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|IV> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
+  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|IV|EM|RB|LQ|BS> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
     local want="$1" label="$2" which="$3" expect="$4" prog="$5" src copy rc=0
     local ilog="$MUT_DIR/inner.log"
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
       IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
+      EM) src="$EM"; copy="$MUT_DIR/inngest-cutover-flip.sh" ;;
+      RB) src="$RB"; copy="$MUT_DIR/inngest-server.md" ;;
+      LQ) src="$LQ"; copy="$MUT_DIR/betterstack-log-query.md" ;;
+      BS) src="$BS"; copy="$MUT_DIR/inngest-bootstrap.sh" ;;
       *) printf '[FATAL] mutate: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate: cp %s failed\n' "$src" >&2; exit 2; }
@@ -325,6 +338,40 @@ s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]'
     'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        continue-on-error: true\n" + old)'
+  # A7 — the emitter is retagged while the .tf is untouched (the alert would silently stop matching).
+  mutate RED "A7 the emitter's LOG_TAG is retagged (the .tf tag is read from it)" EM \
+    "inngest-cutover-flip.sh no longer defines readonly LOG_TAG" \
+    'old = "readonly LOG_TAG=\"inngest-cutover-flip\""
+assert s.count(old) == 1
+s = s.replace(old, "readonly LOG_TAG=\"inngest-cutover-flop\"")'
+  # A8 — the emitter's noop throttle grows past a third of the window (one late row would page).
+  mutate RED "A8 the noop throttle default grows to 600 s (the 900 s window no longer holds three intervals)" EM \
+    "the query window (900 s) is shorter than three of the emitter" \
+    'old = "NOOP_THROTTLE_S=\"${CUTOVER_NOOP_THROTTLE_S:-300}\""
+assert s.count(old) == 1
+s = s.replace(old, "NOOP_THROTTLE_S=\"${CUTOVER_NOOP_THROTTLE_S:-600}\"")'
+  # A9 — the runbook stops naming the alert.
+  mutate RED "A9 the runbook no longer names the alert" RB \
+    "the runbook no longer names inngest_cutover_flip_silent" \
+    'assert "inngest_cutover_flip_silent" in s
+s = s.replace("inngest_cutover_flip_silent", "inngest_cutover_flip_gone")'
+  # A10 — the standing-alarms row disappears from the log-query runbook.
+  mutate RED "A10 the standing-alarms row is removed" LQ \
+    "the standing-alarms row in betterstack-log-query.md is missing" \
+    'assert "logtail_exploration_alert.inngest_cutover_flip_silent" in s
+s = s.replace("logtail_exploration_alert.inngest_cutover_flip_silent", "logtail_exploration_alert.inngest_cutover_flip_gone")'
+  # A11 — the incident text stops warning that the alert fires during a replace.
+  mutate RED "A11 the incident text no longer says the alert is expected during a replace" TF \
+    "the incident text no longer says the alert fires during an owner-authorized replace" \
+    'old = "EXPECTED during an owner-authorized inngest-host-replace"
+assert s.count(old) == 1
+s = s.replace(old, "possible during a host change")'
+  # A12 — the host literal in the bootstrap changes while the .tf pin is untouched.
+  mutate RED "A12 the inngest host literal in inngest-bootstrap.sh changes (the .tf pin is read against it)" BS \
+    "the alert's host_name pin does not match the inngest host literal" \
+    'old = "sed -i \x27s|@@HOST_NAME@@|soleur-inngest-prd|g\x27"
+assert s.count(old) == 1
+s = s.replace(old, "sed -i \x27s|@@HOST_NAME@@|soleur-inngest-prod|g\x27")'
   # Must-PASS: layout is not part of the contract (the resource flattens the predicate with
   # replace(…, "/\\s+/", " ")).
   mutate PASS "A6 every heredoc line is re-indented far deeper (layout is not part of the contract)" TF \

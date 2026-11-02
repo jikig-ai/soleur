@@ -360,11 +360,16 @@ Live standing alarms over this source:
 - **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
-  and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. The flip
-  unit's JSON `noop-*` liveness row is the only object-typed one; the doppler error lines under the
-  same tag carry a string `message` and do not count. It also emails during an owner-authorized host
-  replace (expected; it clears at the first row after boot). Runbook:
-  [`inngest-server.md`](./inngest-server.md) section "Flip-token split".
+  and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
+  row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
+  rows, including `unexpected-exit(...)`); the doppler error lines under the same tag carry a string
+  `message` and do not count. So it sees a unit that fails BEFORE the script's first emit (a revoked or
+  invalid flip token) and does not see a unit that starts and then fails inside the script. It also
+  emails during an owner-authorized host replace (expected; it clears at the first row after boot).
+  To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
+  as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
+  (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section
+  "Flip-token split".
 
 - **`logtail_exploration_alert.registry_clientip_not_rfc1918`** (#7530, `higher_than 0` over 900 s,
   checked every 300 s, missing data counts as zero): `soleur-registry-clientip-not-rfc1918-prd`. Emails
