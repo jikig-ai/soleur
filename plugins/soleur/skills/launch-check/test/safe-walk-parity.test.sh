@@ -42,4 +42,10 @@ check "SEC-02 predicate spares templates and public keys" bash -c 'source "$1"; 
 # Source scan: file CONTENT is read only inside lc_grep_files (checks.sh).
 bad=$(awk '/^lc_grep_files\(\) \{/ {f=1} !f && /(cat|head|tail|grep|sed|awk)[^|]*"\$TARGET/ && !/^[[:space:]]*#/ && !/git -C/ && !/\/dev\/null/ {print FILENAME":"NR": "$0} f && /^\}/ {f=0}' "$SKILL/scripts/lib/checks.sh")
 check "no detector reads repo files outside lc_grep_files" test -z "$bad"
-finish 76
+
+# The gitleaks pin is the one code-to-prd documents (a drifted pin would let the two skills accept different scanners).
+c2p_pin=$(sed -n 's/.*pins gitleaks \([0-9][0-9.]*\).*/\1/p' "$C2P" | head -n 1)
+lc_pin=$(sed -n 's/^LC_GITLEAKS_PIN=\([0-9][0-9.]*\).*/\1/p' "$SKILL/scripts/lib/redact-gate.sh" | head -n 1)
+check "code-to-prd's pin was extracted (anti-vacuity)" test -n "$c2p_pin"
+check "launch-check pins the same gitleaks version as code-to-prd" test "$lc_pin" = "$c2p_pin"
+finish 78

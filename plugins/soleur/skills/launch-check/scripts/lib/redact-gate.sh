@@ -4,11 +4,19 @@
 # LAUNCH_CHECK_REDACT_SENTINEL, LAUNCH_CHECK_GITLEAKS. Optional LC_DEST_ROOT: the write must stay inside it.
 source "$SKILL_DIR/scripts/lib/common.sh"
 
+# The version CI pins and code-to-prd documents (parity-tested against code-to-prd.sh, so the two cannot drift apart).
+LC_GITLEAKS_PIN=8.24.2
+
 # lc_preflight_scanners: the redaction layers must be runnable before anything is read or written.
+# Resolvable is not runnable: an unpinned version-manager shim satisfies `command -v` and fails on every call, so the
+# binary is probed by running it (bounded when the host has a timeout command; stock macOS has neither).
 lc_preflight_scanners() {
-  local gl; gl=$(lc_seam LAUNCH_CHECK_GITLEAKS gitleaks)
-  command -v "$gl" >/dev/null 2>&1 || lc_abort scanner-missing 2 "install gitleaks (macOS: brew install gitleaks; Linux: your package manager or mise use gitleaks)"
-  "$gl" version >/dev/null 2>&1 || lc_abort scanner-failed 2 "gitleaks is on PATH but not runnable"
+  local gl bound=""
+  gl=$(lc_seam LAUNCH_CHECK_GITLEAKS gitleaks)
+  command -v "$gl" >/dev/null 2>&1 || lc_abort scanner-missing 2 "install gitleaks $LC_GITLEAKS_PIN (macOS: brew install gitleaks; Linux: your package manager, or mise use gitleaks@$LC_GITLEAKS_PIN)"
+  if command -v timeout >/dev/null 2>&1; then bound="timeout 10"; elif command -v gtimeout >/dev/null 2>&1; then bound="gtimeout 10"; fi
+  # shellcheck disable=SC2086  # $bound is deliberately split into command and argument
+  $bound "$gl" version >/dev/null 2>&1 || lc_abort scanner-failed 2 "gitleaks is on PATH but not runnable; CI pins $LC_GITLEAKS_PIN"
 }
 
 # lc_emit_checked <src-file> <dest-path> <dry-run 0|1>: scan the exact bytes, then write them or write nothing.

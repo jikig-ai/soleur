@@ -47,4 +47,8 @@ lc_build_catalog() {
   base=$(lc_baseline_rows) || rc=$?
   if [ "$rc" -ne 0 ]; then printf '%s\n' "$base"; exit "$rc"; fi
   printf '%s\n' "$base" >> "$1"
+  # Enum cells (checks.tsv and the derived baseline rows alike): a typo in a domain or severity would silently fall out
+  # of the Summary counts and sort as low.
+  bad=$(awk -F'\t' '$2 !~ /^(security|tests-ci|tech-debt|reliability-ops)$/ { print $1 ": domain " $2 } $6 !~ /^(critical|high|medium|low)$/ { print $1 ": severity " $6 } $4 !~ /^(presence|detector|judged|guard)$/ { print $1 ": kind " $4 } $7 !~ /^(any|node)$/ { print $1 ": stacks " $7 }' "$1")
+  [ -z "$bad" ] || lc_abort catalog-malformed 2 "$(printf '%s' "$bad" | head -n 1)"
 }

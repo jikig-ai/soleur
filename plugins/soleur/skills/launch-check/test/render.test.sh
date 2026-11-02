@@ -140,4 +140,8 @@ check "LAUNCH_CHECK_HEADLESS=1: render (write) is refused too" test "$rc" = 2
 R5=$(fx_minimal rsym); mkdir -p "$SCRATCH/outside"; ln -s "$SCRATCH/outside" "$R5/knowledge-base"; scan_to "$R5" "$SCRATCH/sy.tsv"
 lc render --target "$R5" --facts "$SCRATCH/sy.tsv" > "$SCRATCH/sy.out" 2>&1; rc=$?
 check "symlinked knowledge-base/: rc 2 write-failed and nothing lands outside the repository" bash -c '[ "$1" = 2 ] && grep -q "reason=write-failed" "$2" && [ -z "$(ls -A "$3")" ]' _ "$rc" "$SCRATCH/sy.out" "$SCRATCH/outside"
-finish 50
+
+printf '```launch-check-state\nschema_version=1\ncatalog_hash=x\nfinding SEC-01 accepted\n```\n' > "$SCRATCH/crit.md"
+bash "$LC" verify-report --file "$SCRATCH/crit.md" > "$SCRATCH/crit.out" 2>&1; rc=$?
+check "verify-report: accepting a critical secret finding needs a date and a reason" bash -c '[ "$1" = 1 ] && grep -q "reason=critical-accept-needs-reason" "$2"' _ "$rc" "$SCRATCH/crit.out"
+finish 51

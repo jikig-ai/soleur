@@ -27,4 +27,18 @@ LAUNCH_CHECK_GUARDS_TSV="$SCRATCH/plus.tsv" lc scan --target "$H" --facts "$SCRA
 check "a second v1 row appended after a compliant first is emitted too" bash -c 'grep -q "^BASE-guard-x" "$1" && grep -q "^BASE-secret-scan" "$1"' _ "$SCRATCH/p.tsv"
 check "no checks.tsv row duplicates a derived guard (double count)" bash -c '! grep -q "^BASE-" "$1"' _ "$SKILL/references/checks.tsv"
 check "baseline.sh does not hard-code a guard name" bash -c '! grep -nE "secret-scan|commit-on-main|block-stash|orphan-test" "$1" | grep -v "^[0-9]*:[[:space:]]*#"' _ "$SKILL/scripts/lib/baseline.sh"
-finish 11
+
+# Label and retirement tables stay inside the vocabulary the renderer counts, and a retired id is never reused.
+check "baseline-domains.tsv uses only known domains and severities" bash -c '! awk -F"\t" "!/^#/ && \$1 != \"name\" && \$1 != \"\" && (\$2 !~ /^(security|tests-ci|tech-debt|reliability-ops)\$/ || \$3 !~ /^(critical|high|medium|low)\$/)" "$1" | grep -q .' _ "$SKILL/references/baseline-domains.tsv"
+check "no catalog id appears in retired-checks.tsv (a retired id cannot come back with a stale acceptance)" bash -c 'ids=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$1"); ret=$(awk -F"\t" "!/^#/ && \$1 != \"id\" && \$1 != \"\" {print \$1}" "$2"); [ -z "$ret" ] || ! printf "%s\n" $ids | grep -qxFf <(printf "%s\n" $ret)' _ "$SKILL/references/checks.tsv" "$SKILL/references/retired-checks.tsv"
+G2="$SCRATCH/badlabel"; mkdir -p "$G2"
+printf 'name\ttier\temits\nx-guard\tv1\tfile.txt\n' > "$G2/g.tsv"
+LAUNCH_CHECK_GUARDS_TSV="$G2/g.tsv" lc scan --target "$H" --facts "$SCRATCH/gl.tsv" > "$SCRATCH/gl.out" 2>&1; rc=$?
+check "a one-guard manifest derives exactly one BASE- check" bash -c '[ "$1" = 0 ] && grep -q "^BASE-x-guard" "$2"' _ "$rc" "$SCRATCH/gl.tsv"
+printf 'name\ttier\ntier-less\tv1\n' > "$G2/h.tsv"
+LAUNCH_CHECK_GUARDS_TSV="$G2/h.tsv" lc scan --target "$H" --facts "$SCRATCH/gh.tsv" > "$SCRATCH/gh.out" 2>&1; rc=$?
+check "a manifest header that lost the emits column is malformed (not merely empty)" bash -c '[ "$1" = 2 ] && grep -q "reason=baseline-source-malformed" "$2"' _ "$rc" "$SCRATCH/gh.out"
+printf 'name\ttier\temits\nbad_name\tv1\tfile.txt\n' > "$G2/i.tsv"
+LAUNCH_CHECK_GUARDS_TSV="$G2/i.tsv" lc scan --target "$H" --facts "$SCRATCH/gi.tsv" > "$SCRATCH/gi.out" 2>&1; rc=$?
+check "a guard name outside [A-Za-z0-9-] is refused (its BASE- id would fail verify-report)" bash -c '[ "$1" = 2 ] && grep -q "reason=baseline-source-malformed" "$2"' _ "$rc" "$SCRATCH/gi.out"
+finish 16

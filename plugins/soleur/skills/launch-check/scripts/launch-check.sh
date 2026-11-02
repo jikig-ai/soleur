@@ -149,6 +149,7 @@ cmd_verify() {
   printf '%s\n' "$block" | grep -qx 'schema_version=1' || invalid schema-version
   printf '%s\n' "$block" | grep -qE '^catalog_hash=.+' || invalid catalog-hash
   if printf '%s\n' "$block" | grep -vE '^(schema_version=1|catalog_hash=.+|finding [A-Z]+-[A-Za-z0-9-]+ (open|accepted( .*)?))$' | grep -q .; then invalid bad-line; fi
+  if printf '%s\n' "$block" | grep -qE '^finding SEC-0[12] accepted *$'; then invalid critical-accept-needs-reason; fi
   dups=$(printf '%s\n' "$block" | awk '$1 == "finding" {print $2}' | sort | uniq -d | head -n 1)
   [ -z "$dups" ] || invalid duplicate-id
   n=$(printf '%s\n' "$block" | grep -c '^finding ')
