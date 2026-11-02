@@ -1617,8 +1617,6 @@ Commit pre-review inline fixes (anti-slop scanner corrections, lint fixes, class
 
 - **A sibling SESSION — not just a spawned seat — can own commits on your branch; stage only the paths your phase owns.** Before committing run `git log origin/<branch>..HEAD` and `git status --short`, treat foreign commits/dirty paths as the sibling's, stage by explicit pathspec (never `git add -A`); file findings that must touch a sibling-dirty file on the sibling's issue instead. **Why:** #10404/PR #10744 — a parallel session authored `96b243a740` mid-branch; the fix commit staged only owned paths, the sibling-dirty residual went to #10759. See `knowledge-base/project/learnings/2026-10-21-sibling-session-owned-commits-on-my-branch.md`.
 
-- **A negated call to a shell function through `bash -c` is a test that cannot fail.** `check "denied: $x" bash -c '! fn "$1"' _ "$x"` runs `fn` in a child shell that does not have it (unexported function): the child exits 127 and `!` turns that into a pass, so the whole "denied" family stays green with the function deleted or inverted. Require the assertion to call the function in-process (a `not() { ! "$@"; }` wrapper) plus a positive control that the same call really denies one path. **Why:** #11867 launch-check -- 15 never-read-list assertions could not fail until the pattern seat ran the suite and counted the "command not found" lines. See `knowledge-base/project/learnings/2026-11-02-a-scanner-that-trusted-its-own-inputs-and-tests-that-could-not-fail.md`.
-
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.

@@ -15,7 +15,7 @@ The gate's three exits assume a defect, a machinery finding, or a rule-mandated 
 ## Session Errors
 
 1. **Ran condensed equivalents of the go gate scripts instead of the three verbatim fences.** Recovery: none needed, all probes passed. Prevention: one-off; the equivalents covered the same checks, but quote the fences when the harness is unfamiliar.
-2. **Issue-filing gate refused the feature tracking issue twice.** Recovery: dropped the issue, used the draft PR as tracker. Prevention: the bullet added to `plugins/soleur/skills/brainstorm/SKILL.md` Phase 3.6 step 2.
+2. **Issue-filing gate refused the feature tracking issue twice.** Recovery: dropped the issue, used the draft PR as tracker. Prevention: a brand-new feature with no code yet cannot satisfy the `Fix-Size:` exit (`0 lines / 0 files` is inside the inline threshold); skip the tracking issue at brainstorm time, note the draft PR as the tracker, and file the issue at plan time once the feature is sized and placed in a roadmap phase. (A skill bullet was drafted and dropped: `brainstorm/SKILL.md` is exactly at its lifecycle byte ceiling, `scripts/lint-skill-body-budget.py`, so this learning is the record.)
 3. **Stop hook flagged a closing sentence promising a next action.** Recovery: did the action (asked the scoping question). Prevention: one-off.
 4. **Skill-description budget probe printed no headroom number** (grep for "word|budget" matched only the pass count). Recovery: left the headroom measurement to plan time. Prevention: one-off; measure through `discoverSkills()` when a new skill is named.
 
