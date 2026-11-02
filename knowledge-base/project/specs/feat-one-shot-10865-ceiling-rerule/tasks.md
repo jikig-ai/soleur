@@ -12,7 +12,7 @@ Rules: `Ref` only, never `Closes`. No baseline edit, no live probe run, no post 
 
 - 1.1 `P95_MAX=210` to `240`, `MAX_MAX=270` to `285` (anchor `^P95_MAX=` / `^MAX_MAX=`, keep the trailing comment); touch nothing else numeric.
 - 1.2 Header criterion (d): 240/285, keep the phrase `ceilings are PROVISIONAL`, cite the 2026-11-02 re-rule; failure strings and PASS echo byte-identical.
-- 1.3 Add `DRAIN_SENTINEL=11226` and the fail-closed sentinel block between the `drain_at` validation and the floor application (exit 3 with the one fixed `CANNOT ESTABLISH:` line).
+- 1.3 Add `DRAIN_SENTINEL=11226` and the fail-closed sentinel as function `drain_sentinel_check`, called once between the `drain_at` validation and the floor application (exit 3 with the one fixed `CANNOT ESTABLISH:` line).
 - 1.4 Header RESTART FLOOR clause: floor needs the token to see pull requests; guarded by the sentinel.
 
 ## Phase 2: Replay suite (`plugins/soleur/test/ci-pr-affected-replay.test.sh`)
@@ -22,9 +22,9 @@ Rules: `Ref` only, never `Closes`. No baseline edit, no live probe run, no post 
 - 2.3 `row_ow_timeout`: `over 270` to `over 285` (the consumer the brief omits).
 - 2.4 `row_ow_static`: `^P95_MAX=240 ` and `^MAX_MAX=285 `.
 - 2.5 Titles of the two `chk` lines (240 s / 285 s).
-- 2.6 `ow_case`/`ow_write`: stub `pulls/11226` (default `merged_at` null; `OW_SENTINEL` modes).
+- 2.6 `ow_case`/`ow_write`: stub `pulls/11226` (default `merged_at` null; `OW_SENTINEL` modes; without a default every existing OW row hits STUB-MISS).
 - 2.7 New rows: sentinel trips, older list, applied, unmerged, errors; register with `chk`.
-- 2.8 New mutants: sentinel-disarmed, -read-removed, -after-listing, -error-ignored, -timestamp-unvalidated; ceiling-p95-raised, ceiling-max-raised. Grep every `^ow_mutate` old string against the probe to prove each lands once.
+- 2.8 New mutants: sentinel-disarmed, -read-removed, -after-listing (call line becomes `trap 'drain_sentinel_check' EXIT`), -error-ignored, -timestamp-unvalidated; ceiling-p95-raised, ceiling-max-raised. Grep every `^ow_mutate` old string against the probe to prove each lands once.
 - 2.9 Confirm no text naming the sweeper workflow was added to this suite (would add a ratchet pair).
 
 ## Phase 3: Runbook (`knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`)

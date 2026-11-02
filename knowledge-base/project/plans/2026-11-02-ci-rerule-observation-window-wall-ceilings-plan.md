@@ -14,6 +14,24 @@ lane: cross-domain
 
 # ci: re-rule the observation-window probe wall-time ceilings and settle the s4-drain floor mismatch
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Method:** gate pass (User-Brand, Observability, PAT, Guard Contract lint, Scope Check, rule-ID and PR-number citation checks) plus targeted verification against the replay suite's stub harness and the probe source. No review fan-out was spawned: the plan is a two-constant re-rule plus one small guard, and the CTO has already ruled both forks.
+
+### Key Improvements
+
+1. The Observability `discoverability_test.command` is anchored (`grep -c "^  pull-requests: read" ...`): the planned workflow comment also contains the literal `pull-requests: read`, so an unanchored count would print 2 and fail Check 10's substring match against `1`.
+2. The reorder mutant for Guard 1 is specified concretely (see "Deepen findings" below) so the request-order assertion is proven to observe inside the window.
+3. The stub-harness facts the sentinel rows depend on are pinned (key shape, request-log order, no collision with the anchored `soleur_pulls_11$` row).
+4. A fail-closed side effect of the sentinel is now an explicit risk with its recovery.
+
+### New Considerations Discovered
+
+- The sentinel makes #11226's `s4-drain` label load-bearing: removing it would turn every sweep into exit 3 until the constant is changed.
+- Every PR/issue number the plan cites was resolved live (all as expected; see below).
+
+
 Ref #10865 (the soak tracker), Ref #10861 (S4 PR5), Ref #10448 (the S4 index-completion tracker). Every
 reference in the commit, the PR title and the PR body is `Ref`; none is `Closes`/`Fixes`/`Resolves`.
 
@@ -141,6 +159,25 @@ permission semantics; the sentinel is cheaper and cause-independent); (c) editin
 ceilings are no longer provisional (the brief fixes the failure text; the `ceilings are PROVISIONAL` pin
 stays satisfied; the wording decision belongs to the close-of-window ruling).
 
+### Deepen findings (2026-11-02)
+
+**Citations resolved live.** `gh pr view` / `gh issue view`: #11393 MERGED (probe merged-PR resolution and the s4-drain floor), #11767 MERGED (270 s wall deadline), #11226 MERGED (PR5), #11131 / #11109 / #10945 MERGED (the other three drain PRs the label list returns), #11781 MERGED and #11771 CLOSED (ratchet repair), #10949 OPEN (the drain-restart enforcement tracker, whose re-evaluation criterion the 2026-10-28 probe change already met), #8450 CLOSED (explicit-permissions rule cited in the workflow comment). Every learning file named in this plan exists under `knowledge-base/project/learnings/`. The plan cites no AGENTS.md rule ID (the rule-ID sweep printed nothing), so no retired-ID risk.
+
+**Gate results.** User-Brand section present with a threshold and a scope-out line; the Observability block has all five fields and a command whose first token (`grep`) is on the probe-verb allowlist and finishes well inside 15 s; the PAT-shape sweep found nothing (the plan names the `GITHUB_TOKEN` and `GH_TOKEN` env names only, which the patterns do not match); `scripts/lint-guard-contract.py` reports 3 guard entries; exactly one unfenced `## Scope Check`; no new `.tf`, UI, workflow file, store or connection, so Phases 4.9, 4.10 and 4.13 are skipped.
+
+**Stub-harness facts for Phase 2.7.** The suite's `gh` stub resolves a request through `keyof`, which rewrites every non-alphanumeric byte to `_`, and logs one `REQ <key>` line per request in order; an unknown request is `STUB-MISS` and exit 64, so `ow_write` MUST write a default `pulls/11226` fixture or every existing OW row would fail on the new read. The sentinel key ends `..._pulls_11226`; the only anchored pulls-key row (`soleur_pulls_11$`) does not collide. The runs listing is sequential in the main shell, so line order in `GHLOG` is deterministic and `grep -n` on it can assert "sentinel before the first `ci.yml` runs request" without a race.
+
+**Reorder mutant, concretely.** `ow_mutate` makes one replacement, so a literal "move the block" is not expressible. Define the check as a function (`drain_sentinel_check`) called once at the chokepoint, and mutate the call line into `trap 'drain_sentinel_check' EXIT`: the read then happens at process exit, after the whole listing. The exit-code rows can still pass (an `exit 3` in an EXIT trap overrides the status) while the request-order row goes RED, which is exactly the property a delete-only battery cannot see. The mutant replaces the probe's own `trap cleanup EXIT`, which only leaks the temp dir inside the mutant run.
+
+**Why a function and not inline.** A function gives the mutants (disarm, remove call, defer) one anchor each, and keeps the diff to the floor chokepoint to one call line.
+
+**Edge cases handled by the design.**
+
+- Sentinel unmerged or absent in the fixture world: `merged_at` null passes through (a fresh repo or a fork has no such PR; the production constant is #11226, which is merged).
+- Sentinel timestamp equal to the list maximum: applied, not tripped (`drain_epoch < s_epoch` is the trip condition).
+- HTTP 404/422 on `pulls/11226` (renumbered or deleted): `api` returns 44/45, and the design treats any non-zero as `fail_api` (exit 3), which is the stricter default the CTO ruled.
+- Deadline cut (rc 46) at this point is about 2 s into a 270 s budget; treated as a failed read rather than a silent skip.
+
 ## Technical Rulings Applied
 
 Persisted as rows of `| Item | Class | Ruling |` in
@@ -227,7 +264,7 @@ logs:
   where: GitHub Actions run log of the sweeper job and the tracker comment (last 4 KB of probe output)
   retention: GitHub Actions default log retention; comments are permanent
 discoverability_test:
-  command: grep -c "pull-requests: read" .github/workflows/scheduled-followthrough-sweeper.yml
+  command: grep -c "^  pull-requests: read" .github/workflows/scheduled-followthrough-sweeper.yml
   expected_output: 1
 ```
 
@@ -382,7 +419,7 @@ pin them, and the suite is run once at the end.
     2026-11-02 from the whole post-PR5 population (372 jobs, p95 218 s, max 284 s) and recorded on the
     runbook's observation log. Do not alter the failure strings (`(PROVISIONAL ceiling; ceiling re-rule owed: ...)`)
     or the PASS echo.
-1.3 Sentinel (Guard 1). Constant `DRAIN_SENTINEL=11226` near `PR3A=10851`, with a comment: PR5, carries label
+1.3 Sentinel (Guard 1), written as a function `drain_sentinel_check` called once at the chokepoint (one anchor per mutant; see Deepen findings). Constant `DRAIN_SENTINEL=11226` near `PR3A=10851`, with a comment: PR5, carries label
     `s4-drain`, merged 2026-10-26T21:59:35Z; an independent lower bound for the floor; retired with the probe.
     After the existing `drain_at` validation line and before `if [[ -n "$drain_at" ]]`:
     - `s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"`
@@ -422,7 +459,7 @@ Find every line by content anchor, then re-grep:
     (404/403/5xx/junk/object each exit 3 with one fixed line). Because the fixture world is 2031 and the
     sentinel's real timestamp is 2026, rows that need the sentinel merged set `OW_SENTINEL` to a 2031 stamp in
     the fixture and the probe reads the constant PR number only; the comparison is relative, so this is faithful.
-2.8 Mutants via `ow_mutate`: `sentinel-disarmed`, `sentinel-read-removed`, `sentinel-after-listing` (reorder),
+2.8 Mutants via `ow_mutate`: `sentinel-disarmed`, `sentinel-read-removed`, `sentinel-after-listing` (reorder: the call line becomes `trap 'drain_sentinel_check' EXIT`),
     `sentinel-error-ignored`, `sentinel-timestamp-unvalidated`, `ceiling-p95-raised`, `ceiling-max-raised`. Each
     `old` string must land exactly once; verify with a grep loop before the full run.
 2.9 Do NOT add any text naming `.github/workflows/scheduled-followthrough-sweeper.yml` to this suite (it would
@@ -573,6 +610,7 @@ Queried open `code-review` issues for every planned file path (`gh issue list --
 - **No new suite-to-path pair.** Adding a workflow path to the replay suite would add a ratchet pair; keep that pin in `scripts/sweep-followthroughs.test.sh`, and run the local ratchet before pushing. If a pair appears anyway, fix by removing the mention, never by editing the baseline or adding an accept row in this non-drain PR.
 - **The 237 s daily p95 on 2026-11-02 is within 3 s of the new 240 s p95 ceiling.** The ceiling is correct for the whole-population series (218 s) but a PASS-capable sweep that reads a drifted prefix could still print p95 over 240. That is the CTO's recheck trigger, written into the runbook row; it is not another re-rule.
 - **The floor cause is documented, not reproduced.** Say so in the PR body. If the first post-merge sweep prints exit 3 naming the sentinel, the permission scope did not take effect, and the sentinel did its job.
+- **The sentinel makes the `s4-drain` label on #11226 load-bearing.** If it were removed, every sweep would print exit 3 naming the sentinel until the constant is changed; that is the fail-closed direction and the message says where to look. Do not relabel PR5.
 - **The sentinel number is a hard-coded PR (#11226)** and is retired with the probe when #10865 closes (the probe's RETIREMENT header already says delete the file and its suite rows).
 - **A plan whose `## User-Brand Impact` is empty or placeholder text fails `deepen-plan` Phase 4.6**; this plan fills it (threshold `none` with the scope-out line).
 - **Do not use `git stash`** in this worktree; for the pre-change comparison use `git show origin/main:<path>` into the scratchpad.
