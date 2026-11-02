@@ -2652,7 +2652,7 @@
 "id": "zw4k7r"
 },
 "17q15nn": {
-"title": "image-cve-scan.yml pulls the DEPLOYED image by its :<sha> tag (packages: read, the job GITHUB_TOKEN; scanner registry source, no container runtime) to scan it — distinct from the publish and restore edges. Whether the job token can read the private package is verified by the first post-merge dispatch, not assumed",
+"title": "image-cve-scan.yml, and the report-only verdict workflow (image-cve-verdict.yml, slice 2a), pull the DEPLOYED image by its :<sha> tag (packages: read, the job GITHUB_TOKEN; scanner registry source, no container runtime) to scan it — distinct from the publish and restore edges. Whether the job token can read the private package is verified by the first post-merge dispatch, not assumed",
 "technology": "OCI registry pull (GITHUB_TOKEN)",
 "source": {
 "model": "github"
@@ -2663,7 +2663,7 @@
 "id": "17q15nn"
 },
 "zs2c58": {
-"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a deploy chain",
+"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a completed non-push release-workflow run (the sha it scans is the one /health serves, never the event's head sha)",
 "technology": "HTTPS GET /health",
 "source": {
 "model": "github"
@@ -2685,7 +2685,7 @@
 "id": "11ved1y"
 },
 "6z4z0p": {
-"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public); the v2 marker also carries the whole gating set's per-type and per-family group counts, and the report-only verdict workflow ships one SOLEUR_IMAGE_CVE_VERDICT row per deploy chain (would_block is measured, never enforced)",
+"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public); the v2 marker also carries the whole gating set's per-type and per-family group counts, and the report-only verdict workflow ships one SOLEUR_IMAGE_CVE_VERDICT row per completed non-push release-workflow run (a row does not imply a deploy; report-only, no job waits on it)",
 "technology": "HTTPS (Logs ingest, bearer token)",
 "source": {
 "model": "github"
