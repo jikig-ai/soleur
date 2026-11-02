@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1223
-# generated-at=2026-11-01T23:04:46Z
+# generated-at=2026-11-02T09:11:27Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -597,6 +597,7 @@ scripts/watch-lint-ratchet-reeval-10515	1
 scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	4
 scripts/watch-shard-balance-11564	3
+scripts/watch-wallclock-p90-11774	5
 scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
 scripts/web-first-deploy-10585	4
