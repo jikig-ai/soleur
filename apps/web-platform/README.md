@@ -1,6 +1,6 @@
 # Web Platform
 
-The Soleur Command Center — a Next.js 15 web app that hosts the chat router (`/soleur:go`), KB Concierge sidebar, and the Claude Agent SDK runners.
+The Soleur Command Center — a Next.js 16 web app that hosts the chat router (`/soleur:go`), KB Concierge sidebar, and the Claude Agent SDK runners.
 
 ## Requirements
 
