@@ -27,4 +27,4 @@ while IFS= read -r id; do
   { [ "$oks" = 1 ] && [ "$gaps" = 1 ]; } || { fail "check $id lacks a positive or a negative fixture (ok=$oks gap=$gaps)"; cov=1; }
 done < <(awk -F'\t' '!/^#/ && $1!="id" && $4!="judged" {print $1}' "$CAT")
 [ "$cov" = 0 ] && pass "every deterministic check has one positive and one negative fixture"
-finish 6
+finish 7

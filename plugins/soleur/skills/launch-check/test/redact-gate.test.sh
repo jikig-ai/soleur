@@ -9,6 +9,7 @@ clean="$SCRATCH/clean.md"; dirty="$SCRATCH/dirty.md"
 printf '# Report\n\nNothing secret here, path docs/secret-handling.md only.\n' > "$clean"
 printf '# Report\n\nContact: %s@%s.invalid\n' 'jane.roe' 'example' > "$dirty"
 run_gate() { # run_gate <gate-lib> <src> <dest>  -> rc
+  # shellcheck source=/dev/null
   ( set +e; export SKILL_DIR="$SKILL" PLUGIN_DIR="$PLUGIN"; source "$1"; lc_emit_checked "$2" "$3" 0 ) >"$SCRATCH/g.out" 2>&1
 }
 run_gate "$GATE" "$clean" "$SCRATCH/out/clean.md"; rc=$?
@@ -41,4 +42,32 @@ check "no direct redirect to the report path outside the gate" bash -c '! grep -
 printf '# Report\n\nclean\n' > "$SCRATCH/notplanted.md"
 run_gate "$GATE" "$SCRATCH/notplanted.md" "$SCRATCH/out7/n.md"; rc=$?
 check "harness row: replacing the plant with a clean string flips the verdict (suite can fail)" test "$rc" = 0
-finish 14
+
+# --- Review fixes (PR #11867) ---
+# The gitleaks layer alone (the sentinel is stubbed to pass): the redaction gate must catch a token-shaped value there.
+printf '# Report\n\nvalue: %s\n' "$(planted_secret)" > "$SCRATCH/gl.md"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SCRATCH/s0.sh"; chmod +x "$SCRATCH/s0.sh"
+( export LAUNCH_CHECK_REDACT_SENTINEL="$SCRATCH/s0.sh"; run_gate "$GATE" "$SCRATCH/gl.md" "$SCRATCH/out8/g.md" ); rc=$?
+check "gitleaks layer alone: rc 1 reason=redaction-hit layer=gitleaks, nothing written" bash -c '[ "$1" = 1 ] && grep -q "layer=gitleaks" "$2" && [ ! -e "$3" ]' _ "$rc" "$SCRATCH/g.out" "$SCRATCH/out8/g.md"
+check "the abort never echoes the token" bash -c '! grep -q "ghp_" "$1"' _ "$SCRATCH/g.out"
+# Seams are test-only: with LAUNCH_CHECK_TEST unset the overrides are ignored and the real layers run.
+( export LAUNCH_CHECK_TEST=0 LAUNCH_CHECK_REDACT_SENTINEL="$SCRATCH/s0.sh"; run_gate "$GATE" "$dirty" "$SCRATCH/out9/d.md" ); rc=$?
+check "production mode ignores a sentinel override: the planted value is still caught by the real sentinel" bash -c '[ "$1" = 1 ] && grep -q "layer=sentinel" "$2"' _ "$rc" "$SCRATCH/g.out"
+TRUE_BIN=$(command -v true)
+( export LAUNCH_CHECK_TEST=0 LAUNCH_CHECK_GITLEAKS="$TRUE_BIN"; run_gate "$GATE" "$SCRATCH/gl.md" "$SCRATCH/out10/g.md" ); rc=$?
+check "production mode ignores a scanner override: the token is still caught" test "$rc" = 1
+# No scratch directory or temp file is leaked on success or on abort, and no trap noise reaches stderr.
+mkdir -p "$SCRATCH/tmpd"
+( export TMPDIR="$SCRATCH/tmpd"; run_gate "$GATE" "$clean" "$SCRATCH/out11/c.md" ); rc=$?
+check "success: no lc-gate scratch directory is left behind and the trap prints nothing" bash -c '[ "$1" = 0 ] && [ -z "$(ls -A "$2")" ] && ! grep -q "parameter null" "$3"' _ "$rc" "$SCRATCH/tmpd" "$SCRATCH/g.out"
+( export TMPDIR="$SCRATCH/tmpd"; run_gate "$GATE" "$dirty" "$SCRATCH/out12/d.md" )
+check "abort: no scratch directory left behind either" test -z "$(ls -A "$SCRATCH/tmpd")"
+check "the report is written world-readable (644), not as the temp file's 600" bash -c '[ "$(ls -l "$1" | cut -c1-10)" = "-rw-r--r--" ]' _ "$SCRATCH/out/clean.md"
+# The write cannot leave the declared root through a symlinked directory.
+mkdir -p "$SCRATCH/root" "$SCRATCH/away"; ln -s "$SCRATCH/away" "$SCRATCH/root/kb"
+( export LC_DEST_ROOT="$SCRATCH/root"; run_gate "$GATE" "$clean" "$SCRATCH/root/kb/sub/r.md" ); rc=$?
+check "destination resolving outside LC_DEST_ROOT: rc 2 write-failed, nothing created outside" bash -c '[ "$1" = 2 ] && grep -q "reason=write-failed" "$2" && [ -z "$(ls -A "$3")" ]' _ "$rc" "$SCRATCH/g.out" "$SCRATCH/away"
+# Source scan: every use of the report path is a read or the single chokepoint call.
+stray=$(grep -n 'TARGET/\$REPORT_REL' "$SKILL/scripts/lib/render.sh" "$SKILL/scripts/launch-check.sh" | grep -vE 'lc_emit_checked|lc_prev_state|\[ -f|2>/dev/null' || true)
+check "no use of the report path other than a read or lc_emit_checked" test -z "$stray"
+finish 23

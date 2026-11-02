@@ -2,7 +2,7 @@
 # Deterministic checks. Contract with launch-check.sh: TARGET, WORK, STACK, FACTS_OUT are set;
 # $WORK/files lists the readable paths. Each check sets LC_STATUS (ok|gap|na|unsupported-stack) and
 # LC_EVIDENCE (a path:line, a count, or a fixed phrase: never file content, never a secret location).
-# File CONTENT is read in exactly one place, lc_grep_files.
+# File CONTENT is read by lc_grep_files (the model-visible checks) and by gitleaks over the HEAD snapshot (SEC-01).
 
 # shellcheck disable=SC2034  # read by launch-check.sh flag parsing and SEC-01/SEC-02
 LC_SHOW_SECRETS=0
@@ -27,9 +27,9 @@ lc_match_files() {
 # Prints the first "path:line" hit, or with "count" the total number of matches.
 lc_grep_files() {
   if [ "${3:-}" = count ]; then
-    tr '\n' '\0' < "$1" | (cd "$TARGET" && xargs -0 grep -IEo -e "$2" 2>/dev/null) | wc -l | tr -d ' '
+    tr '\n' '\0' < "$1" | (cd "$TARGET" && xargs -0 grep -IEo -e "$2" -- 2>/dev/null) | wc -l | tr -d ' '
   else
-    tr '\n' '\0' < "$1" | (cd "$TARGET" && xargs -0 grep -IHnE -m1 -e "$2" 2>/dev/null) | head -n 1 | awk -F: 'NF>=2 {print $1 ":" $2}'
+    tr '\n' '\0' < "$1" | (cd "$TARGET" && xargs -0 grep -IHnE -m1 -e "$2" -- 2>/dev/null) | head -n 1 | awk 'match($0, /:[0-9]+:/) { print substr($0, 1, RSTART + RLENGTH - 2) }'
   fi
 }
 
@@ -63,13 +63,24 @@ lc_check_guard() { # <semicolon-separated emitted paths> <semicolon-separated or
 }
 
 lc_detect_SEC_01() {
-  local gl=${LAUNCH_CHECK_GITLEAKS:-gitleaks} arch="$WORK/arch" rep="$WORK/gl.json" rc=0 n f
+  local gl arch="$WORK/arch" rep="$WORK/gl.json" idx="$WORK/head.index" rc=0 n tree_n arch_n
+  gl=$(lc_seam LAUNCH_CHECK_GITLEAKS gitleaks)
   if ! git -C "$TARGET" rev-parse --verify -q HEAD >/dev/null 2>&1; then LC_STATUS=na; LC_EVIDENCE="no commits yet"; return; fi
   mkdir -p "$arch"
-  git -C "$TARGET" archive --format=tar HEAD 2>/dev/null | tar -x -C "$arch" 2>/dev/null || true
+  # Materialise HEAD through a throwaway index. Unlike `git archive` this ignores `export-ignore` in the target's own
+  # .gitattributes, and every failure aborts: an empty tree must never read as "none found".
+  GIT_INDEX_FILE="$idx" git -C "$TARGET" read-tree HEAD >"$WORK/arch.err" 2>&1 \
+    || lc_abort scanner-failed 2 "snapshot-read-tree: $(head -c 160 "$WORK/arch.err" | tr '\n\t' '  ')"
+  GIT_INDEX_FILE="$idx" GIT_LFS_SKIP_SMUDGE=1 git -C "$TARGET" -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false \
+    checkout-index -a -f --prefix="$arch/" >>"$WORK/arch.err" 2>&1 \
+    || lc_abort scanner-failed 2 "snapshot-checkout: $(head -c 160 "$WORK/arch.err" | tr '\n\t' '  ')"
+  tree_n=$(git -C "$TARGET" ls-tree -r HEAD | awk '$2 == "blob"' | wc -l | tr -d ' ')
+  arch_n=$(find "$arch" \( -type f -o -type l \) | wc -l | tr -d ' ')
+  [ "$arch_n" -ge "$tree_n" ] || lc_abort scanner-failed 2 "snapshot-incomplete: $arch_n of $tree_n files extracted"
   find "$arch" -type l -exec rm -f {} + 2>/dev/null || true
-  while IFS= read -r f; do f=${f#./}; lc_safe_path "$f" || rm -f -- "${arch:?}/$f"; done < <(cd "$arch" && find . -type f)
-  "$gl" detect --source "$arch" --no-git --report-format json --report-path "$rep" --redact --exit-code 1 >/dev/null 2>"$WORK/gl.err" || rc=$?
+  # The repository being scanned must not be able to configure its own scan.
+  find "$arch" -type f \( -name '.gitleaks.toml' -o -name '.gitleaks.yml' -o -name '.gitleaksignore' \) -delete 2>/dev/null || true
+  env -u GITLEAKS_CONFIG -u GITLEAKS_CONFIG_TOML "$gl" detect --source "$arch" --no-git --report-format json --report-path "$rep" --redact --exit-code 1 >/dev/null 2>"$WORK/gl.err" || rc=$?
   if [ "$rc" -eq 0 ]; then LC_STATUS=ok; LC_EVIDENCE="none found"; return; fi
   if [ "$rc" -eq 1 ] && grep -q '"RuleID"' "$rep" 2>/dev/null; then
     n=$(grep -c '"RuleID"' "$rep")
@@ -82,21 +93,15 @@ lc_detect_SEC_01() {
     fi
     return
   fi
-  lc_abort scanner-failed 2 "gitleaks rc=$rc"
+  lc_abort scanner-failed 2 "gitleaks rc=$rc: $(head -c 160 "$WORK/gl.err" | tr '\n\t' '  ')"
 }
 
 lc_detect_SEC_02() {
   local n
-  n=$(git -C "$TARGET" ls-files | awk '
-    { b=$0; sub(".*/", "", b)
-      if (b ~ /\.(example|sample|template|dist|pub)$/) next
-      if (b ~ /^\.env($|\.)/ || b ~ /\.(key|p12|pfx|jks|tfvars)$/ || (b ~ /\.pem$/ && b ~ /(key|priv|secret)/) || b ~ /^(credentials|secrets)\./ || b ~ /^id_(rsa|dsa|ecdsa|ed25519)$/) c++ }
-    END { print c+0 }')
+  n=$(git -C "$TARGET" ls-files | lc_credential_paths | awk 'END { print NR }')
   if [ "$n" -gt 0 ]; then
     LC_STATUS=gap; LC_EVIDENCE="$n file(s); names withheld, run scan --show-secrets locally to see them"
-    if [ "$LC_SHOW_SECRETS" = 1 ]; then
-      git -C "$TARGET" ls-files | awk '{ b=$0; sub(".*/", "", b); if (b !~ /\.(example|sample|template|dist|pub)$/ && (b ~ /^\.env($|\.)/ || b ~ /\.(key|p12|pfx|jks|tfvars)$/ || (b ~ /\.pem$/ && b ~ /(key|priv|secret)/) || b ~ /^(credentials|secrets)\./ || b ~ /^id_(rsa|dsa|ecdsa|ed25519)$/)) print "secret-location: " $0 }'
-    fi
+    if [ "$LC_SHOW_SECRETS" = 1 ]; then git -C "$TARGET" ls-files | lc_credential_paths | sed 's/^/secret-location: /'; fi
   else
     LC_STATUS=ok; LC_EVIDENCE="none found"
   fi

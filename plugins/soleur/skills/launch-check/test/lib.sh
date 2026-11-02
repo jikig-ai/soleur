@@ -6,6 +6,10 @@ SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 LC="$SKILL/scripts/launch-check.sh"
 # shellcheck disable=SC2034
 PLUGIN="$(cd "$SKILL/../.." && pwd -P)"
+# Test seams (scanner, sentinel and manifest overrides) are honoured only under LAUNCH_CHECK_TEST=1; the suites
+# exercise real report writes, so the unattended-run switches are cleared (the headless suite sets them itself).
+export LAUNCH_CHECK_TEST=1
+unset CI LAUNCH_CHECK_HEADLESS
 SCRATCH="$(mktemp -d "${TMPDIR:-/var/tmp}/lc-test.XXXXXX")"
 trap 'rm -rf "${SCRATCH:?}"' EXIT
 passes=0; fails=0

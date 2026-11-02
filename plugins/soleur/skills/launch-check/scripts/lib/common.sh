@@ -9,5 +9,10 @@ lc_abort() {
   exit "${2:-2}"
 }
 
-# lc_scrub: one line, no tabs, no pipes that would split a markdown table cell.
+# lc_scrub: one line, no tabs or carriage returns (markdown-table pipes are escaped by the renderer).
 lc_scrub() { printf '%s' "$1" | tr '\t\n\r' '   '; }
+
+# lc_seam <VAR> <default>: the value of an environment override, honoured ONLY when LAUNCH_CHECK_TEST=1.
+# A production run never lets an inherited variable (a repo-controlled shell profile, direnv, an `env` block
+# in project settings) swap out the scanner, the redaction sentinel or the guard manifest.
+lc_seam() { local v="${!1:-}"; if [ "${LAUNCH_CHECK_TEST:-}" = 1 ] && [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi; }

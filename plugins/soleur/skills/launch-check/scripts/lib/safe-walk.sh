@@ -7,8 +7,29 @@ LC_EXCLUDED_COUNT=0
 LC_SYMLINK_COUNT=0
 
 # master.key is listed for parity with code-to-prd's is_excluded(); *.key already covers it.
-# shellcheck disable=SC2221,SC2222
+#
+# The list is matched case-insensitively (a case-insensitive macOS volume treats `.ENV` and `.env` as one file) and
+# also covers every credential-bearing name SEC-02 reports (lc_credential_paths below), so a file the scan calls a
+# credential is never offered to the AI-assisted review.
 lc_safe_path() {
+  local old=0 rc=0
+  shopt -q nocasematch && old=1
+  shopt -s nocasematch
+  lc__safe_path_case "$1" || rc=$?
+  [ "$old" = 1 ] || shopt -u nocasematch
+  return "$rc"
+}
+
+# lc_credential_paths: stdin paths -> those whose NAME marks a credential-bearing file (SEC-02). One definition,
+# shared by the count and by `scan --show-secrets`.
+lc_credential_paths() {
+  awk '{ p = tolower($0); b = p; sub(".*/", "", b)
+    if (b ~ /\.(example|sample|template|dist|pub)$/) next
+    if (b ~ /^\.env($|\.)/ || b ~ /\.env$/ || b == ".envrc" || b ~ /\.(key|p12|pfx|jks|keystore|ppk|tfvars)$/ || b ~ /\.tfstate(\.|$)/ || (b ~ /\.pem$/ && b ~ /(key|priv|secret)/) || b ~ /^(credentials|secrets)(\.|$)/ || b ~ /^id_(rsa|dsa|ecdsa|ed25519)/ || b ~ /^\.(npmrc|netrc|pypirc|htpasswd|git-credentials)$/ || b == ".dev.vars" || b == "kubeconfig" || p ~ /(^|\/)\.(aws|kube)\// || b ~ /service-account.*\.json$/) print $0 }'
+}
+
+# shellcheck disable=SC2221,SC2222
+lc__safe_path_case() {
   case "$1" in
     .env|.env.*|*/.env|*/.env.*) return 1 ;;
     secrets.*|*/secrets.*) return 1 ;;
@@ -19,6 +40,11 @@ lc_safe_path() {
     *.tfstate|*.tfstate.*|*.tfvars|*.tfvars.json) return 1 ;;
     *.sql|*.dump|*.csv|*.sqlite|*.sqlite3|*.db) return 1 ;;
     fixtures/*|*/fixtures/*|__fixtures__/*|*/__fixtures__/*|seeds/*|*/seeds/*) return 1 ;;
+    *.env|.envrc|*/.envrc|*.p12|*.pfx|*.jks|*.keystore|*.ppk) return 1 ;;
+    credentials|*/credentials|secrets|*/secrets|secrets/*|*/secrets/*) return 1 ;;
+    id_rsa*|*/id_rsa*|id_dsa*|*/id_dsa*|id_ecdsa*|*/id_ecdsa*|id_ed25519*|*/id_ed25519*) return 1 ;;
+    .npmrc|*/.npmrc|.netrc|*/.netrc|.pypirc|*/.pypirc|.htpasswd|*/.htpasswd|.git-credentials|*/.git-credentials) return 1 ;;
+    .dev.vars|*/.dev.vars|kubeconfig|*/kubeconfig|.kube/*|*/.kube/*|.aws/*|*/.aws/*|*service-account*.json) return 1 ;;
   esac
   return 0
 }
