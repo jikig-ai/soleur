@@ -113,7 +113,7 @@ Rules enforced by PreToolUse hooks are annotated with `[hook-enforced: <script>]
 soleur/
   apps/                     # Standalone applications
   plugins/soleur/           # The Claude Code plugin
-    agents/                 # AI agents by domain (67 agents)
+    agents/                 # AI agents by domain (60+ agents)
       engineering/          # review/, design/, discovery/, infra/, research/, workflow/
       finance/              # CFO, budget, revenue, reporting
       legal/                # CLO, compliance auditor, document generator

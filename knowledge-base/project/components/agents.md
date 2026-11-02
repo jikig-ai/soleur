@@ -52,7 +52,7 @@ graph LR
 3. Agent reads relevant files, analyzes, and returns findings
 4. Parent command consolidates results
 
-## Categories (67 agents across 8 departments, as of 2026-11-02)
+## Categories (60+ agents across 8 departments; 67 as of 2026-11-02)
 
 ### Engineering (31 agents)
 
