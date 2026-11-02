@@ -32,11 +32,16 @@
 #
 # Report home: ONE watch-owned standing tracker issue
 #   `ci-wallclock-p90: required-check wall-clock report`
-# find-or-file by exact title + bot author. The body is rewritten in place every
-# run with the full table — it is the standing report the weekly operator
-# digest's checks-pipeline section reads — and the tracker NEVER auto-closes
-# (the deliberate divergence from shard-balance-watch, whose tracker resolves:
-# this one is a standing report, not an episode tracker). Drift comments post
+# find-or-file by exact title + bot author. The tracker carries the
+# `ci/wallclock-p90` label — created idempotently, set at create time, and
+# re-added on every weekly body rewrite — because the operator digest's §6
+# read finds the tracker by that label (a raw recent-issues list would lose a
+# standing tracker below its --limit window within days on this repo). The
+# body is rewritten in place every run with the full table — the standing
+# report the weekly operator digest's checks-pipeline section reads — and the
+# tracker NEVER auto-closes (the deliberate divergence from shard-balance-watch,
+# whose tracker resolves: this one is a standing report, not an episode
+# tracker). Drift comments post
 # only when the flagged-set identity changes — sentinel
 # `<!-- wallclock-p90-watch:v1 drift=<sha1> -->` hashed over (type, check,
 # surface) triples, magnitude-free, so a persistent episode does not repost.
@@ -253,6 +258,9 @@ fline() {
 
 {
   printf '### wallclock-p90-watch: required-check wall-clock report\n\n'
+  # Staleness signal for the digest's §6 read: a dead watch leaves this line
+  # (and the issue's updatedAt) a full week+ stale.
+  printf 'Report refreshed: %s\n\n' "$(date -u +%FT%TZ)"
   printf 'Standing report for #11774 (epic #11556, Lever E). The weekly workflow\n'
   printf 'rewrites this body in place; a drift comment posts only when the\n'
   printf 'flagged-set sentinel hash changes. This tracker never auto-closes.\n\n'
@@ -359,16 +367,24 @@ if [[ -n "$tracker" ]]; then
     echo "::error::could not evaluate the sentinel state of #${tracker}" >&2; exit 3; }
 fi
 
+# The `ci/wallclock-p90` label is the digest §6 read's selector — create it
+# idempotently before the upsert so both the create and the re-add paths can
+# attach it (a repo-level label deletion self-heals on the next run).
+gh label create ci/wallclock-p90 -R "$GH_REPO" --color 0e8a16 \
+    --description "standing tracker for the wallclock-p90 weekly watch" >/dev/null 2>"$WORK/err" || true
+
 if [[ -z "$tracker" ]]; then
-  gh issue create -R "$GH_REPO" --title "$TRACKER_TITLE" \
+  gh issue create -R "$GH_REPO" --title "$TRACKER_TITLE" --label ci/wallclock-p90 \
       --body-file - <"$WORK/body.md" >"$WORK/created" 2>"$WORK/err" || {
     echo "::error::tracker create failed" >&2; exit 1; }
   echo "filed standing tracker: $(tail -1 "$WORK/created")"
   exit "$verdict"
 fi
 
-# The standing report: rewrite the body every run, whatever the verdict.
-gh issue edit "$tracker" -R "$GH_REPO" --body-file - <"$WORK/body.md" >/dev/null 2>"$WORK/err" || {
+# The standing report: rewrite the body every run, whatever the verdict. The
+# --add-label re-attaches the selector if a human stripped it (self-heal).
+gh issue edit "$tracker" -R "$GH_REPO" --add-label ci/wallclock-p90 \
+    --body-file - <"$WORK/body.md" >/dev/null 2>"$WORK/err" || {
   echo "::error::report-body rewrite on #${tracker} failed" >&2; exit 1; }
 echo "rewrote report body on tracker #${tracker}"
 

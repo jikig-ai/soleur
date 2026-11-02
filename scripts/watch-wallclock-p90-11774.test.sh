@@ -95,6 +95,10 @@ case "$1" in
       "create") printf '%s' "$piped" >> "$MOCKD/created"; printf 'https://example.invalid/i/505\n'; exit 0 ;;
       "edit") printf '%s' "$piped" >> "$MOCKD/edited"; exit 0 ;;
     esac ;;
+  "label")
+    case "$2" in
+      "create") exit 0 ;;
+    esac ;;
 esac
 echo "mock gh: unexpected call: $*" >&2; exit 64
 MOCK
@@ -329,6 +333,25 @@ run
    && "$(sentinel_of "$MOCKD/bodies")" != "drift=0000000000000000000000000000000000000001" ]] \
   && pass "T4 changed flagged set comments once with a new sentinel; body rewritten" || fail "T4"
 
+# ---- T13: ci/wallclock-p90 label contract — the digest §6 read's selector ----
+mkscene; seed_green_scene
+run
+[[ "$RC" -eq 0 \
+   && "$(grep -c '^label create ci/wallclock-p90 ' "$MOCKD/calls")" -eq 1 \
+   && "$(grep -c '^issue create .*--label ci/wallclock-p90' "$MOCKD/calls")" -eq 1 ]] \
+  && pass "T13a create path: label created idempotently + --label on the new tracker" \
+  || fail "T13a (rc=$RC)"
+[[ "$(cat "$MOCKD/created")" == *"Report refreshed: "* ]] \
+  && pass "T13c report body carries the 'Report refreshed' staleness line" || fail "T13c"
+# Tracker exists but its label was stripped -> the weekly body rewrite re-adds
+# it (the digest's label-scoped read must never lose the standing tracker).
+mkscene; seed_green_scene
+printf '[{"number":505,"title":"ci-wallclock-p90: required-check wall-clock report","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[]}' > "$MOCKD/issue.json"
+run
+[[ "$RC" -eq 0 && "$(grep -c '^issue edit 505 .*--add-label ci/wallclock-p90' "$MOCKD/calls")" -eq 1 ]] \
+  && pass "T13b stripped tracker label self-heals via edit --add-label" || fail "T13b (rc=$RC)"
+
 # ---- T5: malformed bounds rows -> cannot-establish, never silent skip --------
 mkscene; seed_green_scene
 printf 'test\tnonsense\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t600\t600\t0.30\n' > "$BND"
@@ -416,7 +439,7 @@ for d in "$ROOT"/mock*; do
   [[ -s "$d/calls" ]] || continue
   while IFS= read -r line; do
     case "$line" in
-      "run list "*|"api "*|"issue list "*|"issue view "*|"issue comment "*|"issue create "*|"issue edit "*) ;;
+      "run list "*|"api "*|"issue list "*|"issue view "*|"issue comment "*|"issue create "*|"issue edit "*|"label create "*) ;;
       *) bad=$((bad + 1)); echo "unexpected call: $line" ;;
     esac
   done < "$d/calls"

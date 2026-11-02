@@ -250,15 +250,25 @@ Source: the standing tracker issue `ci-wallclock-p90: required-check wall-clock 
 jikig-ai/soleur. The weekly wallclock-p90 watch rewrites its **body** with an aggregate table —
 per-required-check p50/p90 wall-clock over the last ~30 green CI runs on each of the pull-request
 and merge-queue surfaces — plus a findings list (bound breaches, unbound or unmeasured required
-checks). Find the issue by **exact title** from a recent-issues list (List API, **NOT `--search`** —
-the Search API returns empty cross-repo under the in-action App token, exactly as noted in §1; a
-false-empty would silently render "no pipeline data" every week):
+checks). Find the issue by its `ci/wallclock-p90` **label**, then match **exact title** — a raw
+recent-issues list would lose the standing tracker below its `--limit` window within days on this
+repo (the watch sets the label at create time and re-adds it on every weekly body rewrite, so a
+stripped label self-heals). List API, **NOT `--search`** — the Search API returns empty cross-repo
+under the in-action App token, exactly as noted in §1; a false-empty would silently render "no
+pipeline data" every week:
 
 ```bash
-gh issue list -R jikig-ai/soleur --state open --json number,title,body --limit 100
+gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 \
+  --json number,title,body,updatedAt --limit 50
 # keep the issue whose title is exactly "ci-wallclock-p90: required-check wall-clock report";
-# its body is the report (refreshed weekly — check the body's own refresh line for staleness)
+# its body is the report
 ```
+
+**Staleness.** The watch rewrites the body every Friday before this digest runs, so both the
+issue's `updatedAt` and the body's own `Report refreshed: <UTC ISO>` line advance weekly. If
+`updatedAt` is more than ~2 weeks old (or the refresh line disagrees), the watch is dead — say so
+explicitly ("the pipeline watchdog hasn't reported since <date>") rather than presenting last
+month's table as current.
 
 Render **aggregate-only** (L3 — same suppression contract as the velocity metrics). Translate the
 table into consequence language: "Your checks ran at about their usual speed this week" /
