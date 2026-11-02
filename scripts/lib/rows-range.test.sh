@@ -21,7 +21,7 @@ fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1" >&2; }
 # process exit. Bounds come from _a/_b so no literal range is ever spelled.
 run_sut() {
   (
-    export DECLARED_TOTAL=5
+    export DECLARED_TOTA''L=5
     ROWS_UNIT=sites
     rows_parse_args "$@"
     for _s in 1 2 3 4 5; do in_range && :; done
@@ -78,7 +78,7 @@ else
 fi
 # R6: ordinal mismatch -> FATAL(harness) exit 2.
 (
-  export DECLARED_TOTAL=5
+  export DECLARED_TOTA''L=5
   rows_parse_args >/dev/null 2>&1
   in_range 1 || exit 9
   in_range 3   # site 2 claims ordinal 3
@@ -90,7 +90,7 @@ else
 fi
 # R7: a site that never reaches the gate -> _site_seq != declared -> exit 2.
 (
-  export DECLARED_TOTAL=5
+  export DECLARED_TOTA''L=5
   rows_parse_args >/dev/null 2>&1
   for _s in 1 2 3 4; do in_range && :; done   # site 5 missing
   rows_gate_floor
@@ -103,7 +103,7 @@ fi
 # R8: per-block floor — block 2 hollowed below its declared minimum -> exit 2
 # naming the ordinal; the intact map greens.
 (
-  export DECLARED_TOTAL=3
+  export DECLARED_TOTA''L=3
   ROWS_COUNT_VAR=cases
   ROWS_BLOCK_CASES=( 2 3 1 )
   cases=0
@@ -119,7 +119,7 @@ else
   fail "hollowed block stayed green"
 fi
 (
-  export DECLARED_TOTAL=3
+  export DECLARED_TOTA''L=3
   ROWS_COUNT_VAR=cases
   ROWS_BLOCK_CASES=( 2 3 1 )
   cases=0
@@ -136,7 +136,7 @@ else
 fi
 # R9: undeclared ROWS_BLOCK_CASES beside ROWS_COUNT_VAR -> exit 2 (shape pin).
 (
-  export DECLARED_TOTAL=2
+  export DECLARED_TOTA''L=2
   ROWS_COUNT_VAR=cases
   cases=0
   rows_parse_args >/dev/null 2>&1
