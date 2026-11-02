@@ -135,6 +135,29 @@ records, not change surface).
   surface; the next tier (`single-user incident`) would require a user-visible artifact, which
   this diff cannot produce.
 
+## Observability
+
+```yaml
+liveness_signal:
+  what: affected-index-ratchet job marker `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass` — the check this edge feeds
+  cadence: per merge_group / pull_request run
+  alert_target: GitHub check annotation `::error title=affected-index-ratchet::` on the run (advisory, never blocking)
+  configured_in: .github/workflows/ci.yml:417
+error_reporting:
+  destination: GitHub Actions job log + step summary annotations
+  fail_loud: ratchet exit != 0 prints `new-pair`/`stale-*` rows with ref lines and remedies
+failure_modes:
+  - mode: the declared edge is removed or narrowed, or the suite gains an undeclared read of the lib
+    detection: ratchet exit=1 `new-pair` on the next run after the narrowing lands
+    alert_route: the affected-index-ratchet job annotation on that run
+logs:
+  where: GitHub Actions run log for job `affected-index-ratchet` (ci.yml:417-462) plus the RUNNER_TEMP report it summarizes
+  retention: GitHub Actions default log retention
+discoverability_test:
+  command: grep -c AFFECTED_SCRIPTS_INNGEST_A5_A6_OWNER_ASK_10136_PATHS scripts/lib/test-affected-paths.sh
+  expected_output: "1"
+```
+
 ## Scope Check
 
 ### Ask Mapping
@@ -255,3 +278,53 @@ None — `gh issue list --label code-review --state open` bodies contain no ment
    --paths=scripts/lib/trusted-verdict.sh` → `sel=1 edge:declared`; `lint-orphan-test-suites.sh` →
    exit 0; the suite `inngest-a5-a6-owner-ask-10136.test.sh` → exit 0; `git status` shows only the
    index file plus pipeline artifacts changed.
+
+## Enhancement Summary
+
+Deepened 2026-11-02 by `soleur:deepen-plan` (subagent harness — mechanical gates executed
+in-process; the per-section research/review agent fan-out of Phases 4–5 was unavailable in this
+harness because no Task/Agent tool is exposed; see `decision-challenges.md` and the pipeline
+session summary for the coverage disclosure).
+
+### Gate results
+
+- **4.6 User-Brand Impact halt:** PASS — section present, `none` threshold, no sensitive-path
+  match on `scripts/lib/test-affected-paths.sh` (checked against `SENSITIVE_PATH_RE`).
+- **4.7 Observability halt:** PASS after adding `## Observability` — detection fired (the
+  Files-to-Edit path is not docs-shaped); all 5 fields populated; `discoverability_test.command`
+  is `grep` (allowlisted verb), no shell-active bytes, literal `expected_output` `1`, well under
+  the 15 s cap.
+- **4.8 PAT-shaped variable halt:** PASS — regex sweep over the plan returned no hits.
+- **4.9 UI wireframe:** skip — no UI-surface file in Files to Create/Edit.
+- **4.10 Encryption Posture:** skip — no persistent store or new connection.
+- **4.11 Guard Contract:** skip — the deliverable declares data for an existing guard; it creates
+  no guard/gate/lint/anti-vacuity control.
+- **4.12 Scope Check halt:** PASS — exactly one unfenced `## Scope Check`; every ask mapped; the
+  single `inferred` item carries a justification.
+- **4.13 Task Design:** skip — no new autonomous-task surface.
+- **4.4 Precedent-diff:** skip — no pattern-bound behavior (no SECURITY DEFINER, atomic-write,
+  lock, RPC, or scheduled-job shape introduced).
+- **4.5 / 4.55 Network-outage / Downtime:** skip — no trigger patterns; the change is a
+  repo-local index declaration with no deploy surface.
+
+### Key Improvements
+
+- The brief's remedy was verified end-to-end, not trusted: applying the candidate array in a
+  detached scratch worktree returned `ratchet exit=0 reason=pass live=1510 baseline=1510` and a
+  `sel=1 edge:declared` selector row containing `^scripts/lib/trusted-verdict.sh`, with zero
+  revealed pairs — so no accept rows are needed and the ratchet greens on merge.
+- The declare-vs-accept disposition was settled by the drain rubric's own test (the suite execs
+  the real lib through the SUT probe at `.sh:177`), not by the boundary line being a fixture
+  write — matching the #11771→#11781 CTO precedent and the 2026-11-01/02 learnings.
+- The consumer of the new edge was named and quoted (`_affected_classify`,
+  `scripts/test-all.sh:3959-3965`; declared ∪ derived at :3968-3979), and the INDEX-UNBOUND →
+  full-battery consequence of editing an oracle input is recorded.
+
+### New Considerations Discovered
+
+- `scripts/lib/test-affected-paths.sh` is a ratchet oracle input: this PR's own
+  `--affected`/ratchet runs degrade to the full battery once (`INDEX-UNBOUND` on the added array
+  for a pre-existing label). Expected; documented in Context.
+- `decision-challenges.md` carries one `technical` row in `pending - assumed:` form — this
+  harness exposes no Agent tool to spawn `soleur:engineering:cto`. `technical-ruling-gate.sh`
+  flags it for the ship phase by design; the pipeline should resolve it before PR-ready.
