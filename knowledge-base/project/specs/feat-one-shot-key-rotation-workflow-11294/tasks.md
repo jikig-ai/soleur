@@ -14,41 +14,41 @@ Hard constraints for every task: no `rotate` dispatch by an agent, no production
 
 ## Phase 1 - RED: `apps/web-platform/infra/key-rotate-workflow.test.sh`
 
-- [ ] 1.1 Harness: instrument self-test, fixture dir guards, symlinked mutation-tree helper with landing checks (exactly-once anchor, `bash -n`, inside the function range), `scenario(script, workflow)` runner (real = stops, mutated copy = proceeds), literal oracles, single clock via `kr_now`, YAML parsed once to JSON, stubs built once
-- [ ] 1.2 Layer A static workflow rows (dispatch-only, groups, scoped terraform check with positive `setup-terraform` row, trio only in the redeploy step env, timeouts as literals)
-- [ ] 1.3 Layer B static script rows (type-checked symbols, top-level source, pre-source `^K[RK]_` refusal, no `set -e`, no `trap`, single `kr_tf` call site, 35-token set equality plus coverage table, no `inngest-key-rotate`/`converge` text in any stream/argv/issue, sha256 pin of sourced source text incl. callees, `kr_out` allowlist, credential-free `--print-contract` under `env -i`)
-- [ ] 1.4 Layer C behaviour rows (ref/actor/owner/approval rungs, ladder, all seven keys in plan, six in rotate, egress refusal, kb_drift boundary table, gate refusals with literal row counts, H1 absent paths and projection, post-state verdict precedence and the retry, redeploy failure after apply, `owner_step_pending`, notify decision table with `write_started`, `issue_unfiled`, temp dir removed) against faithful stubs (argv-derived plan actions, real doppler table format, `pending` statuses, issue body capture)
-- [ ] 1.5 No-stream test with control run and stream-count floor
-- [ ] 1.6 Layer D mutation rows for Guards 1-4 and harness rows
+- [x] 1.1 Harness: instrument self-test, fixture dir guards, symlinked mutation-tree helper with landing checks (exactly-once anchor, `bash -n`, inside the function range), `scenario(script, workflow)` runner (real = stops, mutated copy = proceeds), literal oracles, single clock via `kr_now`, YAML parsed once to JSON, stubs built once
+- [x] 1.2 Layer A static workflow rows (dispatch-only, groups, scoped terraform check with positive `setup-terraform` row, trio only in the redeploy step env, timeouts as literals)
+- [x] 1.3 Layer B static script rows (type-checked symbols, top-level source, pre-source `^K[RK]_` refusal, no `set -e`, no `trap`, single `kr_tf` call site, 35-token set equality plus coverage table, no `inngest-key-rotate`/`converge` text in any stream/argv/issue, sha256 pin of sourced source text incl. callees, `kr_out` allowlist, credential-free `--print-contract` under `env -i`)
+- [x] 1.4 Layer C behaviour rows (ref/actor/owner/approval rungs, ladder, all seven keys in plan, six in rotate, egress refusal, kb_drift boundary table, gate refusals with literal row counts, H1 absent paths and projection, post-state verdict precedence and the retry, redeploy failure after apply, `owner_step_pending`, notify decision table with `write_started`, `issue_unfiled`, temp dir removed) against faithful stubs (argv-derived plan actions, real doppler table format, `pending` statuses, issue body capture)
+- [x] 1.5 No-stream test with control run and stream-count floor
+- [x] 1.6 Layer D mutation rows for Guards 1-4 and harness rows
 
 ## Phase 2 - GREEN: `scripts/key-rotate.sh`
 
-- [ ] 2.1 Source `scripts/inngest-key-rotate.sh` at top level; type-checked symbol check (exit 78); wholesale `KR_GATE_TABLE`, `KR_INFLIGHT_WORKFLOWS`, `KR_VERDICT_TOKENS`; same-name redefinitions
-- [ ] 2.2 Gate table, `kk_gate`/`kk_gate_plan` (unioned want, `absent_all` flag), copy-state function (`present|absent|unknown`)
-- [ ] 2.3 `guard` and `precondition` subcommands (ref rung, redaction sanity step with `redaction_ok`, refusal ladder, owner allowlist, `approval_environment_missing`, kb_drift window, owner_step_open, lower-run-id rung)
-- [ ] 2.4 `apply` subcommand (re-checks, authorization_stale, pre-state, plan, five-field projection, gate, re-checks again, `write_started`, apply, post-state with retries, precedence)
-- [ ] 2.5 `redeploy` (three steps: re-checks, `track.sh`, verdict; `owner_step_pending`) and `notify` (the only issue filer; re-list check; close-on-`rotate_ok`)
-- [ ] 2.6 `--print-contract`; `shellcheck`
+- [x] 2.1 Source `scripts/inngest-key-rotate.sh` at top level; type-checked symbol check (exit 78); wholesale `KR_GATE_TABLE`, `KR_INFLIGHT_WORKFLOWS`, `KR_VERDICT_TOKENS`; same-name redefinitions
+- [x] 2.2 Gate table, `kk_gate`/`kk_gate_plan` (unioned want, `absent_all` flag), copy-state function (`present|absent|unknown`)
+- [x] 2.3 `guard` and `precondition` subcommands (ref rung, redaction sanity step with `redaction_ok`, refusal ladder, owner allowlist, `approval_environment_missing`, kb_drift window, owner_step_open, lower-run-id rung)
+- [x] 2.4 `apply` subcommand (re-checks, authorization_stale, pre-state, plan, five-field projection, gate, re-checks again, `write_started`, apply, post-state with retries, precedence)
+- [x] 2.5 `redeploy` (three steps: re-checks, `track.sh`, verdict; `owner_step_pending`) and `notify` (the only issue filer; re-list check; close-on-`rotate_ok`)
+- [x] 2.6 `--print-contract`; `shellcheck`
 
 ## Phase 3 - `.github/workflows/key-rotate.yml`
 
-- [ ] 3.1 Jobs guard / apply / redeploy / notify, groups (`inngest-key-rotate` dispatch, distinct push group, rotate-only Terraform group, `web-1-swap`), redaction sanity step in the guard job gating `apply` on `redaction_ok`, trio only in the `track.sh` step env with no `GH_TOKEN`, `issues: write` on notify only, timeouts from the budget table
-- [ ] 3.2 Header comment (dispatch-only, production act, confirm is a fat-finger guard, public repository)
+- [x] 3.1 Jobs guard / apply / redeploy / notify, groups (`inngest-key-rotate` dispatch, distinct push group, rotate-only Terraform group, `web-1-swap`), redaction sanity step in the guard job gating `apply` on `redaction_ok`, trio only in the `track.sh` step env with no `GH_TOKEN`, `issues: write` on notify only, timeouts from the budget table
+- [x] 3.2 Header comment (dispatch-only, production act, confirm is a fat-finger guard, public repository)
 
 ## Phase 4 - parity and registrations
 
-- [ ] 4.1 `plugins/soleur/test/terraform-target-parity.test.ts`: Guard 5 describe, `TEST_FLOOR`, ledger line
-- [ ] 4.2 `.github/workflows/infra-validation.yml` paths; `scripts/lib/test-affected-paths.sh` entries plus the reverse edge
-- [ ] 4.3 `apps/web-platform/infra/web-hosts-fanout-parity.test.sh` operand 8
-- [ ] 4.4 `knowledge-base/engineering/architecture/diagrams/model.c4` edge sentence; run the C4 tests
-- [ ] 4.5 Weight row for the new suite in `scripts/suite-durations.tsv`; run and register per output: tier census, trio census (red until PR-0), orphan-suite lint, guard-vacuity floor, grep-q pipe guard, fixture-relative baseline, pr-affected audit accept, shard tables, `infra-credential-tiers-8209.md`
+- [x] 4.1 `plugins/soleur/test/terraform-target-parity.test.ts`: Guard 5 describe, `TEST_FLOOR`, ledger line
+- [x] 4.2 `.github/workflows/infra-validation.yml` paths; `scripts/lib/test-affected-paths.sh` entries plus the reverse edge
+- [x] 4.3 `apps/web-platform/infra/web-hosts-fanout-parity.test.sh` operand 8
+- [x] 4.4 `knowledge-base/engineering/architecture/diagrams/model.c4` edge sentence; run the C4 tests
+- [x] 4.5 Weight row for the new suite in `scripts/suite-durations.tsv`; run and register per output: tier census, trio census (red until PR-0), orphan-suite lint, guard-vacuity floor, grep-q pipe guard, fixture-relative baseline, pr-affected audit accept, shard tables, `infra-credential-tiers-8209.md`
 
 ## Phase 5 - documentation and tracking
 
-- [ ] 5.1 `knowledge-base/engineering/operations/runbooks/key-rotation.md` (no SSH; Better Stack read-only probes for the gap windows; preconditions per key; no reminder arming or cohort tagging during a prd manual-trigger rotation); pointer line in `inngest-server.md`
-  - [ ] 5.1.1 Re-verify and, if stale, correct the owner-step command block of `github-app-provisioning.md` Step 4 against the current Doppler layout (`soleur-github-app` project) in this PR
-- [ ] 5.2 New ADR via `soleur:architecture create` (reserve the ordinal against a freshly fetched `origin/main`; provisional 314; sweep plan and tasks for the old number on any renumber) covering F1, F2, F9, G6/H2 and the F3 rationale; one pointer line and `related:` entry in ADR-307 (body unchanged)
-- [ ] 5.3 Create the `owner_step_pending` label; comment on #9294 (trio-consumer migration list)
+- [x] 5.1 `knowledge-base/engineering/operations/runbooks/key-rotation.md` (no SSH; Better Stack read-only probes for the gap windows; preconditions per key; no reminder arming or cohort tagging during a prd manual-trigger rotation); pointer line in `inngest-server.md`
+  - [x] 5.1.1 Re-verify and, if stale, correct the owner-step command block of `github-app-provisioning.md` Step 4 against the current Doppler layout (`soleur-github-app` project) in this PR
+- [x] 5.2 New ADR via `soleur:architecture create` (reserve the ordinal against a freshly fetched `origin/main`; provisional 314; sweep plan and tasks for the old number on any renumber) covering F1, F2, F9, G6/H2 and the F3 rationale; one pointer line and `related:` entry in ADR-307 (body unchanged)
+- [x] 5.3 Create the `owner_step_pending` label; comment on #9294 (trio-consumer migration list)
 
 ## Phase 6 - verification and PR
 
