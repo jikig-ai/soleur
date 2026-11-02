@@ -1153,7 +1153,9 @@ WN_ERR_HTTP=""' 'WN_ERR_HTTP=""'
   mutation_row "G3-env-order" "the env -0 check runs after the first git call instead of before any" chk_envfail_a \
     sut "$ENVCHK"$'\n' '' \
     sut 'wn_preflight || exit 3' "$ENVCHK"$'\n''wn_preflight || exit 3'
-  mutation_row "G3-env-arm" "only records matched by the GIT_CONFIG case arm are counted" chk_envfail_b \
+  # chk_envfail_c (one PATH= record, matched by no case arm) kills this on any host; chk_envfail_b (the real env) does not, because a
+  # runner that exports GIT_CONFIG_KEY_n / VALUE_n hands the mutant a matched record to count (CI did exactly that).
+  mutation_row "G3-env-arm" "only records matched by the GIT_CONFIG case arm are counted" chk_envfail_c \
     sut '  _envn=$((_envn + 1))
 ' '' \
     sut 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n") ;;' 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n"); _envn=$((_envn + 1)) ;;'
