@@ -59,18 +59,18 @@ run-history store + the five PA (f) / §2.3(o) amendments).
 
 ## Phase 6 — Gate suite + counsel-review attestation
 
-- [ ] 6.1 Run the five legal-corpus gates:
+- [x] 6.1 Run the five legal-corpus gates:
   `scripts/lint-legal-scope-block-placement.sh --base origin/main`,
   `scripts/lint-legal-mirror-drift-baseline.sh --base origin/main`,
   `apps/web-platform/scripts/check-tc-document-sha.sh`,
   `apps/web-platform/test/legal-doc-consistency.test.ts` +
   `legal-doc-shas-guard.test.ts`, `scripts/probe-legal-corpus-truth.sh`;
   plus the affected-suites runner.
-- [ ] 6.2 Produce `knowledge-base/legal/audits/2026-11-counsel-review-10848.md`
+- [x] 6.2 Produce `knowledge-base/legal/audits/2026-11-counsel-review-10848.md`
   (house shape; `disposition: DISCHARGED` or halt on the named blocker);
   waiver row in `scripts/lint-legal-registers.sh` only if it trips the
   producer pattern.
 
 ## Acceptance
 
-- [ ] AC1–AC11 in the plan file all verified.
+- [x] AC1–AC11 in the plan file all verified.
