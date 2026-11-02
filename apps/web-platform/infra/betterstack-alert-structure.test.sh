@@ -11,12 +11,12 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 17 alerts and 17 explorations, every enumerated header yields a block (a header
+#   1-4   census: at least 18 alerts and 18 explorations, every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
 #         the enumerator's sed cannot see, `resource"logtail_exploration_alert" "x" {`, reds as un-enumerated),
-#         and at least 15 alert guards under apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
+#         and at least 17 alert guards under apps/web-platform/test/infra. Rows 1-4 are all `--census-only` runs.
 #   5-7   closed attribute set: top-level keys of each alert equal REQUIRED_ATTRS + OPTIONAL_ATTRS, plus
 #         exactly one `escalation_target` block. No family-wide attribute VALUE pins: the per-alert guards
 #         own `push`, `call`, the windows and the SQL.
@@ -78,7 +78,7 @@
 # Usage: bash apps/web-platform/infra/betterstack-alert-structure.test.sh [--presence-only | --census-only]
 #   --presence-only skips the mutation battery (the inner runs use it).
 #   --census-only runs ONLY enumeration + the census floors (rows 1-4, a few seconds) and prints a final
-#   `N passed, 0 failed` line; it exits 1 when fewer than 17 alerts are enumerated. This is the cheap
+#   `N passed, 0 failed` line; it exits 1 when fewer than 18 alerts are enumerated. This is the cheap
 #   discoverability probe; --presence-only measured 12-19 s on a loaded host.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -95,9 +95,9 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-CENSUS_FLOOR_ALERTS=17
-CENSUS_FLOOR_EXPLORATIONS=17
-GUARD_CENSUS_FLOOR=15
+CENSUS_FLOOR_ALERTS=18
+CENSUS_FLOOR_EXPLORATIONS=18
+GUARD_CENSUS_FLOOR=17
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
 JOB_IF_ALLOWED="needs.detect-changes.outputs.pr_duplicate != 'true'"

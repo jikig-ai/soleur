@@ -1,7 +1,8 @@
 ---
 component: agents
-updated: 2026-03-03
+updated: 2026-11-02
 primary_location: plugins/soleur/agents/
+dependencies: []
 ---
 
 # Agents
@@ -51,9 +52,9 @@ graph LR
 3. Agent reads relevant files, analyzes, and returns findings
 4. Parent command consolidates results
 
-## Categories (60+ agents across 8 departments)
+## Categories (60+ agents across 8 departments; 67 as of 2026-11-02)
 
-### Engineering (27 agents)
+### Engineering (31 agents)
 
 #### CTO (1)
 
@@ -61,7 +62,7 @@ graph LR
 |-------|---------|
 | `cto` | Assess technical implications, flag architecture concerns during planning |
 
-#### Review (15)
+#### Review (17)
 
 Code review specialists that catch issues before PR:
 
@@ -76,12 +77,14 @@ Code review specialists that catch issues before PR:
 | `deployment-verification-agent` | Go/No-Go deployment checklists |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code with strict conventions |
+| `observability-coverage-reviewer` | Verify new error paths and failure modes are reachable from Sentry/Better Stack without SSH |
 | `legacy-code-expert` | Safely modify untested legacy code using Feathers' techniques |
 | `pattern-recognition-specialist` | Design patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerabilities |
 | `semgrep-sast` | Deterministic static analysis using semgrep rules |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties |
+| `user-impact-reviewer` | Enumerate user-facing failure modes against a plan's brand-survival threshold |
 
 #### Design (1)
 
@@ -96,11 +99,12 @@ Code review specialists that catch issues before PR:
 | `agent-finder` | Find community agents for missing tech stack coverage |
 | `functional-discovery` | Check if planned features already exist in registries |
 
-#### Infrastructure (2)
+#### Infrastructure (3)
 
 | Agent | Purpose |
 |-------|---------|
 | `infra-security` | Audit domain security, configure DNS/Cloudflare via MCP |
+| `platform-strategist` | Infrastructure and deployment strategy decisions before implementation |
 | `terraform-architect` | Generate and review Terraform configurations |
 
 #### Research (5)
@@ -119,6 +123,12 @@ Code review specialists that catch issues before PR:
 |-------|---------|
 | `pr-comment-resolver` | Address PR review comments |
 
+#### Prompt engineering (1)
+
+| Agent | Purpose |
+|-------|---------|
+| `prompt-engineer` | Author, optimize, and test prompts and agent/skill definitions |
+
 ### Finance (4 agents)
 
 | Agent | Purpose |
@@ -136,7 +146,7 @@ Code review specialists that catch issues before PR:
 | `legal-compliance-auditor` | Audit documents for compliance gaps and consistency |
 | `legal-document-generator` | Generate draft legal documents |
 
-### Marketing (11 agents)
+### Marketing (12 agents)
 
 | Agent | Purpose |
 |-------|---------|
@@ -145,6 +155,7 @@ Code review specialists that catch issues before PR:
 | `brand-architect` | Brand identity workshops, voice and tone, visual direction |
 | `conversion-optimizer` | Landing pages, signup flows, paywall optimization |
 | `copywriter` | Landing pages, email sequences, cold outreach, social content |
+| `fact-checker` | Verify claims, statistics, and quotes in drafts against cited sources |
 | `growth-strategist` | Content strategy, keyword research, content auditing |
 | `paid-media-strategist` | Google/Meta/LinkedIn campaign structure and targeting |
 | `pricing-strategist` | SaaS pricing, tier design, value metric selection |
@@ -152,7 +163,7 @@ Code review specialists that catch issues before PR:
 | `retention-strategist` | Churn prevention, payment recovery, referral programs |
 | `seo-aeo-analyst` | Technical SEO and AI Engine Optimization audits |
 
-### Operations (4 agents)
+### Operations (5 agents)
 
 | Agent | Purpose |
 |-------|---------|
@@ -160,6 +171,7 @@ Code review specialists that catch issues before PR:
 | `ops-advisor` | Track operational expenses, manage domains |
 | `ops-provisioner` | Set up SaaS accounts, configure tools |
 | `ops-research` | Research domains, hosting providers, cost optimization |
+| `service-automator` | Provision third-party services via API or MCP tools |
 
 ### Product (5 agents)
 
@@ -190,7 +202,7 @@ Code review specialists that catch issues before PR:
 
 ## Dependencies
 
-- **Internal**: None (agents are standalone)
+- **Internal**: None (agents are standalone; `dependencies: []`)
 - **External**: Claude Code Task tool, various CLI tools per agent
 
 ## Related Files

@@ -66,7 +66,8 @@
 
 ## Auto-inferred (unreviewed)
 
-> Rows proposed by `/soleur:sync domain-model` (operator-approved, not yet curated).
+> Rows proposed by `/soleur:sync domain-model` (operator-approved, or appended headlessly by `/soleur:sync all`; not yet curated).
+> Counts are what the static extractor sees. "0 RLS policies" does not mean unprotected: every listed table has RLS enabled, so 0 policies is deny-by-default for client roles. Dynamic SQL is not analyzed (see the drift report blind spots).
 > This section is **machine-appended** and is NEVER a source of truth. Promote a row
 > to a curated `## Business Rules` rule by a deliberate human edit: assign a `BR-*`
 > id, refine the statement, and keep the source anchor (the anchor is the dedup key,
@@ -74,6 +75,52 @@
 
 | Anchor | Candidate statement |
 |---|---|
+| 062_workspace_member_removals_and_remove_rpc_update.sql › workspace_member_removals.removals_select_for_members | Table workspace_member_removals carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 064_idempotent_recovery_guards.sql › workspace_member_attestations.attestations_select_for_members | Table workspace_member_attestations carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 063_workspace_member_actions.sql › workspace_member_actions.workspace_member_actions_pkey | Table workspace_member_actions carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 075_workspace_invitations.sql › workspace_invitations.invitations_select_for_invitee | Table workspace_invitations carries 2 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 162_workspace_egress_audit_rollup.sql › workspace_egress_audit_rollup.workspace_egress_audit_rollup_check | Table workspace_egress_audit_rollup carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 076_workspace_activity.sql › workspace_activity.workspace_activity_jti_not_denied | Table workspace_activity carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 176_users_restrictive_policy_subqueries.sql › users_own_github_username.statements | Extractor artifact: users_own_github_username is a SECURITY DEFINER function, not a table. The 3 RESTRICTIVE UPDATE policies in this migration are on public.users (they block direct client updates of github_username, kb_sync_history and health_snapshot) (auto-inferred, unreviewed). |
+| 059_workspace_keyed_rls_sweep.sql › user_concurrency_slots.user_concurrency_slots_workspace_member_select | Table user_concurrency_slots carries 1 RLS policy and 0 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 118_tool_attempts.sql › tool_attempts.tool_attempts_pkey | Table tool_attempts carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 043_tenant_deploy_audit.sql › tenant_deploy_audit.tenant_deploy_audit_check | Table tenant_deploy_audit carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 053_template_authorizations.sql › template_authorizations.template_authorizations_owner_select | Table template_authorizations carries 1 RLS policy and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 044_add_tc_acceptances_ledger.sql › tc_acceptances.tc_acceptances_check | Table tc_acceptances carries 0 RLS policies and 3 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 135_statutory_repin_send.sql › statutory_repin_send.statutory_repin_send_pkey | Table statutory_repin_send carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › scope_grants.scope_grants_workspace_member_select | Table scope_grants carries 1 RLS policy and 4 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 049_runtime_mint_intent.sql › runtime_mint_intent.runtime_mint_intent_pkey | Table runtime_mint_intent carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 107_routine_runs.sql › routine_runs.routine_runs_authenticated_select | Table routine_runs carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 120_routine_run_progress.sql › routine_run_progress.routine_run_progress_authenticated_select | Table routine_run_progress carries 1 RLS policy and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › push_subscriptions.push_subscriptions_workspace_member_delete | Table push_subscriptions carries 4 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 030_processed_stripe_events.sql › processed_stripe_events.processed_stripe_events_pkey | Table processed_stripe_events carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 102_email_triage_items.sql › processed_resend_events.processed_resend_events_check | Table processed_resend_events carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 052_multi_source_dedup.sql › processed_github_events.processed_github_events_check | Table processed_github_events carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 102_email_triage_items.sql › probe_tokens.probe_tokens_check | Table probe_tokens carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 144_pending_checkout_sessions.sql › pending_checkout_sessions.pending_checkout_sessions_pkey | Table pending_checkout_sessions carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 104_outbound_email.sql › outbound_sends.outbound_sends_owner_select | Table outbound_sends carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 037_audit_byok_use.sql › mint_rate_window.mint_rate_window_pkey | Table mint_rate_window carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › messages.messages_workspace_member_insert | Table messages carries 3 RLS policies and 5 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 019_chat_attachments.sql › message_attachments.Users can read own message attachments | Table message_attachments carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › kb_share_links.kb_share_links_workspace_member_all | Table kb_share_links carries 1 RLS policy and 0 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 077_kb_files_metadata.sql › kb_files.kb_files_jti_not_denied | Table kb_files carries 5 RLS policies and 3 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 126_beta_crm.sql › interview_notes.interview_notes_jti_not_denied | Table interview_notes carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 122_inbox_item.sql › inbox_item.inbox_item_owner_select | Table inbox_item carries 1 RLS policy and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 071_flag_flip_audit.sql › flag_flip_audit.flag_flip_audit_check | Table flag_flip_audit carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 111_email_triage_items_workspace_shared.sql › email_triage_items.email_triage_items_workspace_owner_select | Table email_triage_items carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 104_outbound_email.sql › email_suppression.email_suppression_owner_select | Table email_suppression carries 1 RLS policy and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 155_email_inbox_routes.sql › email_inbox_routes.email_inbox_routes_check | Table email_inbox_routes carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 037_audit_byok_use.sql › denied_jti.denied_jti_pkey | Table denied_jti carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 064_byok_delegations.sql › byok_delegations.byok_delegations_select_for_parties | Table byok_delegations carries 1 RLS policy and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 084_byok_delegation_withdrawals.sql › byok_delegation_withdrawals.byok_delegation_withdrawals_insert | Table byok_delegation_withdrawals carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 074_byok_delegation_acceptances.sql › byok_delegation_acceptances.byok_delegation_acceptances_insert | Table byok_delegation_acceptances carries 2 RLS policies and 3 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 126_beta_crm.sql › beta_contacts.beta_contacts_jti_not_denied | Table beta_contacts carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 126_beta_crm.sql › beta_contact_stage_transitions.beta_contact_stage_transitions_jti_not_denied | Table beta_contact_stage_transitions carries 2 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 127_beta_crm_access_log.sql › beta_contact_access_log.beta_contact_access_log_jti_not_denied | Table beta_contact_access_log carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › audit_github_token_use.audit_github_token_use_workspace_member_select | Table audit_github_token_use carries 1 RLS policy and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 059_workspace_keyed_rls_sweep.sql › audit_byok_use.audit_byok_use_workspace_member_select | Table audit_byok_use carries 1 RLS policy and 5 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 180_approval_request.sql › approval_request.approval_request_jti_not_denied | Table approval_request carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 051_action_class_widening_and_action_sends.sql › action_sends.action_sends_owner_insert | Table action_sends carries 2 RLS policies and 3 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
 
 ## How to maintain this register
 
