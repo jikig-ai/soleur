@@ -958,6 +958,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-redis-bootstrap.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  # #11848: cloud-init-user-data-size.test.ts reads and executes the real script via BUDGET_SH (join(INFRA, ...)); terraform-target-parity.test.ts only names it in a yaml-pin.
+  "apps/web-platform/infra/inngest-userdata-budget.sh"
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
   "apps/web-platform/lib/c4-canonical.mjs"
   "apps/web-platform/server/auto-sync-trigger.ts"

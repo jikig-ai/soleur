@@ -1,7 +1,8 @@
 ---
 component: skills
-updated: 2026-03-03
+updated: 2026-11-02
 primary_location: plugins/soleur/skills/
+dependencies: [agents, knowledge-base]
 ---
 
 # Skills
@@ -65,7 +66,7 @@ graph LR
 4. Claude's capabilities enhanced for the domain
 5. Higher quality output in that domain
 
-## Categories (60+ skills)
+## Categories (105 skills as of 2026-11-02; the tables below list a subset)
 
 ### Core Workflow (6)
 
@@ -200,6 +201,11 @@ The primary development lifecycle, invocable directly or via `/soleur:go`:
 | Skill | Purpose |
 |-------|---------|
 | `heal-skill` | Fix skill documentation issues discovered during execution |
+
+## Dependencies
+
+- **Internal**: [agents](agents.md) (skills spawn them), [knowledge-base](knowledge-base.md) (skills read and write it)
+- **External**: Claude Code Skill tool, GitHub CLI, various CLI tools per skill
 
 ## Conventions
 

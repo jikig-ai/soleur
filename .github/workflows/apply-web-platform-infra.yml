@@ -672,6 +672,8 @@ jobs:
               -target=logtail_exploration_alert.registry_zot_log_credential_shape \
               -target=logtail_exploration.web_nic_guard_unpinned_url \
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
+              -target=logtail_exploration.inngest_cutover_flip_silent \
+              -target=logtail_exploration_alert.inngest_cutover_flip_silent \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=tls_private_key.inngest_link \
@@ -3477,7 +3479,7 @@ jobs:
               echo "This dispatch stopped before the apply, so the existing store volume is untouched and no restore is needed or scheduled. Read the failing step above for the reason."
               exit 0
             fi
-            echo "### The store is EMPTY — the chained restore runs next"
+            echo "### The store may be EMPTY — the chained restore runs next"
             echo ""
             # DELIBERATELY NOT branched here. This step runs inside registry_luks_recut, which
             # the restore job `needs:` — so at this point the restore has not started and its
@@ -3490,15 +3492,15 @@ jobs:
             # emitted only inside the SUCCESS branch of a GHCR pull, and the host->GHCR
             # credential was revoked (#7071), so the signal is permanently dark. Telling an
             # operator to expect a page that cannot come is worse than saying nothing.
-            echo "The fresh volume is luksFormatted and empty, so no host can pull any image yet. The \`registry_store_restore\` job chained after this one re-materialises production's pinned image set from GHCR and verifies every reference's BLOBS, not just its manifest. **Read that job's summary for the outcome — this section cannot know it, because the restore has not run yet.**"
+            echo "If the store was rebuilt, the fresh volume is luksFormatted and empty, so no host can pull any image yet. The \`registry_store_restore\` job chained after this one re-materialises production's pinned image set from GHCR and verifies every reference's BLOBS, not just its manifest. **Read that job's summary for the outcome — this section cannot know it, because the restore has not run yet.**"
             echo ""
             # NOT `web-platform-release.yml -f bump_type=patch`. That pipeline was measured
             # failing 9 consecutive times as of 2026-08-05 — its zot-push half is precisely what
             # the recut exists to repair — so pointing the operator at it as the way to end an
             # empty-store window is an instruction that does not work.
-            echo "If the restore job fails, re-run it: the restore engine is resumable, so a partial pass is recovered by re-running rather than by repairing state. Its per-exit-code \`::error::\` maps to one operator action each in the runbook."
+            echo "If the restore job fails, follow the runbook row for its exit code: re-running is safe (the engine is resumable) but only some exits can be cleared by it."
             echo ""
-            echo "_This window is bounded by the chained restore rather than by the next release. Note that the restore carries only the \`required\` pin set, so immediately after a recut there is no older image in the store to roll back to; re-run the restore with a wider set if you need one._"
+            echo "_This window is bounded by the chained restore rather than by the next release. Note that the restore carries only the \`required\` pin set, so immediately after a recut there is no older image in the store to roll back to._"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
@@ -3594,7 +3596,7 @@ jobs:
           ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER -p soleur -c prd --plain) || ZOT_PUSH_USER=""
           ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN -p soleur -c prd --plain) || ZOT_PUSH_TOKEN=""
           if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
-            echo "::error::registry-store-restore ABORT: the sink credentials could not be read from Doppler (soleur/prd). The store is EMPTY and this job cannot refill it. Fix the credential and re-run this job — the restore engine is resumable."
+            echo "::error::registry-store-restore ABORT: the sink credentials could not be read from Doppler (soleur/prd). Nothing was written; the store is unchanged by this step. Fix the credential, then re-run this job."
             exit 1
           fi
           printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
@@ -3611,8 +3613,7 @@ jobs:
           # be able to fail on convergence timing, and a single-shot fail-loud step would report
           # a false "restore broken".
           #
-          # Only exit 3 retries. Every other code is a source, correctness, authorisation or invocation fault that a
-          # retry cannot clear — retrying them would only burn the window.
+          # Only exit 3 retries (policy); the loop does not retry the other codes.
           attempt=1
           max=6
           rc=0
@@ -3643,9 +3644,9 @@ jobs:
             4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy. NOT retryable: read the per-entry lines above." ;;
             # DO NOT reinstate "rotate ZOT_PUSH_*" here; see "Why the exit-5 annotation must not say rotate" in the
             # registry_store_restore section of the rationale runbook.
-            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first; this step did not measure which cause applies. If it says the sink login command failed locally, that points at runner tooling (crane version, DOCKER_CONFIG) and rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable, and retrying will not clear it. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating makes the rejection permanent until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
-            6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
-            78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is still EMPTY. Remove the trace (bash -x, an exported SHELLOPTS=xtrace, or a BASH_ENV file that sets -x); a re-run replays this same workflow file, so if the trace is in it, fix it in a new commit and dispatch a new run." ;;
+            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first; this step did not measure which cause applies. If it says the sink login command failed locally, that points at runner tooling (crane version, DOCKER_CONFIG) and rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating makes the rejection permanent until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
+            6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name; store UNVERIFIED, do not deploy until a re-run exits 0. Read the crane stderr in the per-entry line above, do not assume the images are absent, then re-run this job by hand: it does not retry 6. If 6 repeats, follow the runbook row for exit 6." ;;
+            78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is unchanged by this step. Remove the trace (bash -x, an exported SHELLOPTS=xtrace, or a BASH_ENV file that sets -x); a re-run replays this same workflow file, so if the trace is in it, fix it in a new commit and dispatch a new run." ;;
             *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code the restore engine emits is enumerated above, so a new one is a defect worth filing alongside the recovery; 126/127/137/143 are shell or runner codes (not found, not executable, killed, terminated), not engine codes." ;;
           esac
           exit "$rc"
