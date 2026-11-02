@@ -2089,6 +2089,14 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # three rows; the alert pages only when none arrived (value lower_than 1, treat_as_zero so a fully
 # dark window reads 0). The 900 s window is the ceiling every alert created since 2026-10-01 stays
 # within; a longer window was refused by the Better Stack API.
+#
+# INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
+# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
+# Observed 2026-11-02: incident 1045365287 (this alert) and incident 1031046761 (egress_gw_probe_silent, which has no
+# JSONType) are both Started and unresolved with healthy data, the second since 2026-10-12. No `lower_than` logs-alert
+# incident has auto-resolved in the mirror history (the mirror issues of the retired alerts closed only when the alerts
+# were retired), while the `higher_than` twin egress_gw_probe_fail closed its mirror issue in about 30 minutes. CTO ruling
+# 2026-11-02: leave the alert as it is.
 locals {
   # One aggregate over the whole window, `dt` as the time column (the sibling silence alert's
   # shape), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.

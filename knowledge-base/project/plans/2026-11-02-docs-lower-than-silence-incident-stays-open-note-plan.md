@@ -314,15 +314,15 @@ No `exception` block applies (no plaintext exception, no certificate verificatio
 
 ## Acceptance Criteria
 
-- [ ] The verbatim note (`A \`lower_than\` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with \`betterstack-query.sh\`, and resolve manually.`) appears once inside the `egress_gw_probe_silent` bullet and once inside the `inngest_cutover_flip_silent` bullet of `betterstack-log-query.md` (`grep -c 'Open does not mean currently silent' <file>` = 2).
-- [ ] The same note appears once in the comment block above the flip alert in `betterstack-logs-alerts.tf`, before `locals {` of `inngest_cutover_flip_silent_sql` (`grep -c 'Open does not mean currently silent' <file>` = 1).
-- [ ] Comment-only: the diff filter in Phase 2 prints nothing and `terraform fmt -check` exits 0.
+- [x] The verbatim note (`A \`lower_than\` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with \`betterstack-query.sh\`, and resolve manually.`) appears once inside the `egress_gw_probe_silent` bullet and once inside the `inngest_cutover_flip_silent` bullet of `betterstack-log-query.md` (`grep -c 'Open does not mean currently silent' <file>` = 2).
+- [x] The same note appears once in the comment block above the flip alert in `betterstack-logs-alerts.tf`, before `locals {` of `inngest_cutover_flip_silent_sql` (`grep -c 'Open does not mean currently silent' <file>` = 1).
+- [x] Comment-only: the diff filter in Phase 2 prints nothing and `terraform fmt -check` exits 0.
 - [ ] The PR's `plan` job comment shows no resource change for the web-platform root (`No changes` or `0 to add, 0 to change, 0 to destroy`).
-- [ ] All Phase 3 suites exit 0, including `inngest-cutover-flip-silent-alert.test.sh` and `inngest-luks-key-probe-alert.test.sh`.
+- [x] All Phase 3 suites exit 0, including `inngest-cutover-flip-silent-alert.test.sh` and `inngest-luks-key-probe-alert.test.sh`.
 - [ ] `git diff --name-only origin/main` lists only the runbook, the `.tf`, and files under `knowledge-base/project/{plans,specs}/`.
-- [ ] No Better Stack write was made: no incident resolved, no alert paused, no predicate, `query_period`, `operator`, `incident_cause` or other attribute edited.
+- [x] No Better Stack write was made: no incident resolved, no alert paused, no predicate, `query_period`, `operator`, `incident_cause` or other attribute edited.
 - [ ] PR body uses `Ref #11820` and `Ref #11869` (no closing keyword anywhere), cites the evidence, and lists the manual resolve test as pending the owner's per-command go-ahead.
-- [ ] `decision-challenges.md` carries a `## Decision Classes` table with the CTO row (`Ruled by CTO agent, 2026-11-02: ...`).
+- [x] `decision-challenges.md` carries a `## Decision Classes` table with the CTO row (`Ruled by CTO agent, 2026-11-02: ...`).
 
 ## Non-Goals
 
