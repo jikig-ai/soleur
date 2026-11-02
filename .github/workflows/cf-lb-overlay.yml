@@ -11,11 +11,16 @@
 # lb-staging/ root shares no state with prod, so reaching a prod address is a
 # structural impossibility; teardown is a whole-root destroy that cannot name one.
 #
-# THE FOUR ARMS (exactly one runs per dispatch — each job's `if:` gates on inputs.arm):
+# THE SIX ARMS (exactly one runs per dispatch — each job's `if:` gates on inputs.arm):
 #   staging-record    create the throwaway lb-staging.soleur.ai proxied A record
 #   staging-overlay   create monitor+pool+LB on lb-staging + continuity probe + verdict
 #   staging-teardown  whole-root destroy of the four staging addresses
 #   ga-overlay        create the GA LB trio on app.soleur.ai (parent root, reviewer env)
+#   ga-monitor-fix    update the GA monitor to http/:80 — the https create shape
+#                     probes a port nothing listens on and reports every origin down
+#   ga-pool-update    update the GA pool/LB (+ web_lb_health policy) — mode=drain pins
+#                     web-2 at weight 0; mode=serve is the #6027 window 0→1 flip and
+#                     runs the §(c) gate chain fail-closed BEFORE plan
 #
 # Authorization model: per-command operator go-ahead at dispatch (the epic's fresh
 # named authorization), plus per-arm confirm literals (typo-guards, NOT the
@@ -28,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       arm:
-        description: "staging-record | staging-overlay | staging-teardown | ga-overlay — see each job header and runbook cf-lb-a-record-gaplessness-verify.md"
+        description: "staging-record | staging-overlay | staging-teardown | ga-overlay | ga-monitor-fix | ga-pool-update — see each job header and runbook cf-lb-a-record-gaplessness-verify.md"
         required: true
         type: choice
         options:
@@ -36,10 +41,19 @@ on:
           - staging-overlay
           - staging-teardown
           - ga-overlay
+          - ga-monitor-fix
+          - ga-pool-update
       confirm:
-        description: "Typo-guard, NOT the authorization: CONVERT-LB-STAGING (record/overlay) | TEARDOWN-LB-STAGING | APPLY-GA-LB-OVERLAY"
+        description: "Typo-guard, NOT the authorization: CONVERT-LB-STAGING (record/overlay) | TEARDOWN-LB-STAGING | APPLY-GA-LB-OVERLAY | FIX-GA-LB-MONITOR | UPDATE-GA-LB-POOL"
         required: true
         type: string
+      mode:
+        description: "ga-pool-update only: drain = web-2 stays weight 0 (pre-flip); serve = the #6027 window 0→1 flip behind the §(c) gate chain"
+        required: false
+        type: choice
+        options:
+          - drain
+          - serve
       reason:
         description: "Audit trail for a production write — required."
         required: true
@@ -532,3 +546,353 @@ jobs:
             exit 1
           fi
           echo "app.soleur.ai served 200 throughout the overlay apply — gapless observed."
+
+  ga_monitor_fix:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-fix'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write.
+    # Deployable immediately — it needs no flip authorization (the monitor's
+    # https/:443 probe is dead-on-arrival: every origin reports permanently down).
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "FIX-GA-LB-MONITOR" ]]; then
+            echo "::error::confirm must be exactly 'FIX-GA-LB-MONITOR' for arm=ga-monitor-fix — it re-points the LIVE health probe to http/:80."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=ga-monitor-fix, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (parent root)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan (GA monitor only)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          set +e
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -target=cloudflare_load_balancer_monitor.web 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (ga-monitor-fix) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate (exactly the monitor update, pinned after-shape)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/ga-monitor-fix-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_ga_monitor_update "$RUNNER_TEMP/ga-monitor-fix-plan.json" || {
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -30 >&2 || true
+            exit 1
+          }
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
+      - name: Post-apply pool-health assertion (the monitor now reports truth)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # The monitor needs one 60s interval + consecutive_up to republish. Poll the
+          # pool-health endpoint every 15s against a ~5min deadline (well inside this
+          # job's timeout-minutes:20) rather than a fixed sleep 70 that grades whatever
+          # the edge happens to report at second 70.
+          # The bearer rides curl's stdin --config channel, never argv (Rule E); the
+          # double-quoted `bash -c` script escapes the CF_* expansions so they resolve
+          # inside the doppler-run child, while ${POOL_ID} expands here.
+          POOL_ID=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+            curl --disable --noproxy '*' -s --max-time 10 \
+              \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools\" \
+              --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\") \
+              | jq -r '.result[] | select(.name==\"web-1\") | .id'")
+          # Re-interpolated into the health URL below — pin the id shape first.
+          [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || { echo "::error::web-1 pool id unresolvable or off-shape ('${POOL_ID}') — refusing to re-interpolate it into the health URL."; exit 1; }
+          HEALTH_JSON=""; ORIGINS=0; HEALTH=""
+          for i in $(seq 1 20); do
+            HEALTH_JSON=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+              curl --disable --noproxy '*' -s --max-time 10 \
+                \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health\" \
+                --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\")" || true)
+            ORIGINS=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][]] | length' 2>/dev/null || printf '0')
+            HEALTH=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][] | .healthy] | unique | join(",")' 2>/dev/null || true)
+            [[ "$ORIGINS" =~ ^[0-9]+$ ]] || ORIGINS=0
+            if [[ "$ORIGINS" -ge 1 && "$HEALTH" == "true" ]]; then
+              echo "pool-health green after ~$((i * 15))s (${ORIGINS} origin record(s))"
+              break
+            fi
+            sleep 15
+          done
+          {
+            echo "### GA monitor-fix post-apply pool health"
+            echo "- Pool: ${POOL_ID}"
+            echo "- Origin records seen: ${ORIGINS}"
+            echo "- Origin health verdicts: ${HEALTH:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # An EMPTY pop_health is not a verdict — grade it as an instrument failure,
+          # never as healthy or unhealthy.
+          if [[ "$ORIGINS" -lt 1 ]]; then
+            echo "::error::pop_health carried no origin records across the ~5min poll — the health read cannot be graded (an empty set is not a verdict). Investigate the pool/monitor wiring."
+            exit 1
+          fi
+          if [[ "$HEALTH" != "true" ]]; then
+            echo "::error::pool-health reports unhealthy origin(s) (${HEALTH}) across the ~5min poll after the http/:80 monitor applied — the probe semantics did not take; investigate origin reachability from WEU."
+            exit 1
+          fi
+          echo "Pool reports all origins healthy — the monitor probes the real :80 listener."
+
+  ga_pool_update:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # REVIEWER-GATED like ga-overlay. mode=drain lands the drained shape (web-2 at
+    # weight 0, health-monitored). mode=serve is the #6027 maintenance-window 0→1
+    # flip — it runs the §(c) gate chain (lb-weight-gate-with-marker.sh) fail-closed
+    # BEFORE plan, so an unauthorized flip never reaches a grader.
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard + mode pin
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+          MODE_RAW: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "UPDATE-GA-LB-POOL" ]]; then
+            echo "::error::confirm must be exactly 'UPDATE-GA-LB-POOL' for arm=ga-pool-update."
+            exit 1
+          fi
+          if [[ "$MODE_RAW" != "drain" && "$MODE_RAW" != "serve" ]]; then
+            echo "::error::mode is required for arm=ga-pool-update (drain|serve)."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=ga-pool-update, mode=${MODE_RAW}, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+          echo "POOL_UPDATE_MODE=${MODE_RAW}" >> "$GITHUB_ENV"
+      - name: §(c) gate chain (serve mode only — fail-closed BEFORE plan)
+        if: inputs.mode == 'serve'
+        env:
+          # TWO tokens, two scopes — secrets.DOPPLER_TOKEN is prd_terraform-scoped and
+          # can read NEITHER config this step needs:
+          #   DOPPLER_TOKEN_PRD           — the `doppler run -c prd` that injects the
+          #     gate's SOLEUR_*/GIT_DATA_* inputs (same secret apply-web-platform-infra.yml
+          #     binds for its prd reads).
+          #   DOPPLER_TOKEN_LUKS_MARKER   — the wrapper's own marker read. Its token is
+          #     the prd_workspaces_luks_marker WRITE token (no read-only token exists on
+          #     that config — lb-weight-gate-with-marker.sh:15) and it reaches the
+          #     wrapper ONLY via env DOPPLER_TOKEN.
+          # Tokens ride env assignments ONLY — argv must never carry one.
+          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          DOPPLER_TOKEN_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+        run: |
+          set -euo pipefail
+          # The wrapper reads the WORKSPACES_LUKS marker from its dedicated config via
+          # DOPPLER_TOKEN itself, then execs lb-weight-gate.sh with an allowlisted env —
+          # the gate's SOLEUR_*/GIT_DATA_* inputs come from `prd` here, and ANY
+          # unprovable precondition (absent marker, unset rotation, relay not bound)
+          # fails closed with a named sub_condition. It can only pass when every
+          # precondition provably holds — the orchestrator (#6027) sets the full env.
+          # The outer `env DOPPLER_TOKEN=` scopes the prd read; the inner `env` hands
+          # the wrapper the marker config's own token.
+          #
+          # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
+          # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
+          # weight-flip authorization" and exits 0 WITHOUT evaluating Conditions
+          # A/B — a standby-state pass would let the serve arm proceed with zero
+          # flip preconditions proven. The flip-authorization marker
+          # `requires_runtime_bind_probe=true` is emitted on stdout ONLY by the
+          # Conditions A+B pass branch — it is the non-empty pass message this
+          # step must see.
+          GATE_OUT=""
+          GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
+            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
+            echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
+            exit 1
+          }
+          printf '%s\n' "$GATE_OUT"
+          if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
+            echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+      - name: web-2 health precondition (serve mode only)
+        if: inputs.mode == 'serve'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # The §(c) chain proves marker/precondition state, not origin health — a serve
+          # flip that adds an unhealthy web-2 routes ~half of app.soleur.ai traffic to a
+          # dead origin under origin_steering random. Require web-2 healthy:true in the
+          # CF pool-health read BEFORE any plan exists (same read the monitor-fix arm does).
+          # MEMBERSHIP FLOOR: the pooled set is {web-1, web-2} — a read carrying ONE
+          # record (or zero) is missing web-2's own record, and an absent record must
+          # never grade as healthy:true. Require n>=2 AND every record healthy.
+          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
+            POOL_ID=$(curl --disable --noproxy "*" -s --max-time 10 \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
+              --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \
+              | jq -r ".result[] | select(.name==\"web-1\") | .id")
+            [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || exit 2
+            curl --disable --noproxy "*" -s --max-time 10 \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health" \
+              --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \
+              | jq -r "[.result.pop_health[].origins[][] | .healthy] | \"n=\" + (length | tostring) + \" h=\" + (if length == 0 then \"empty\" else (unique | join(\",\")) end)"') || {
+            echo "::error::pool-health read failed — refusing to flip with health truth unprovable."
+            exit 1
+          }
+          W2_N="${W2_HEALTH#n=}"; W2_N="${W2_N%% *}"
+          W2_H="${W2_HEALTH##* h=}"
+          if [[ ! "$W2_N" =~ ^[0-9]+$ ]]; then
+            echo "::error::unparseable pool-health verdict '${W2_HEALTH}' — refusing."
+            exit 1
+          fi
+          if [[ "$W2_N" -lt 2 ]]; then
+            echo "::error::pool-health carried ${W2_N} origin record(s) — the pooled set is {web-1, web-2}; web-2's own record is absent, and an absent record is not a healthy:true. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          if [[ "$W2_H" != "true" ]]; then
+            echo "::error::an origin reports healthy:${W2_H} — web-2 must be healthy:true before the serve flip routes traffic to it. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          echo "- web-2 origin health: true across ${W2_N} pooled origin records (serve precondition met)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::empty R2 backend creds"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Terraform init (parent root)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan (GA pool + LB + health policy)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          set +e
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
+          # Emergent ordering: -target=cloudflare_load_balancer_pool.web_1 transitively
+          # pulls cloudflare_load_balancer_monitor.web (the pool's `monitor` reference),
+          # so a pending monitor change lands in this plan and the grader refuses it —
+          # ga-monitor-fix must run BEFORE ga-pool-update, by construction.
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -target=cloudflare_load_balancer_pool.web_1 \
+              -target=cloudflare_load_balancer.app \
+              -target=cloudflare_notification_policy.web_lb_health 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (ga-pool-update) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate (updates confined to the pool/LB/policy set, origins plan-resolved)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/ga-pool-update-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_ga_pool_update "$RUNNER_TEMP/ga-pool-update-plan.json" "${POOL_UPDATE_MODE}" || {
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -30 >&2 || true
+            exit 1
+          }
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
+      - name: Post-apply continuity check on app.soleur.ai
+        run: |
+          set -euo pipefail
+          bad=0
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://app.soleur.ai/health || echo CURL_FAIL)
+            [[ "$code" == "200" ]] || bad=$((bad+1))
+            sleep 1
+          done
+          {
+            echo "### GA pool-update post-apply continuity (mode=${POOL_UPDATE_MODE})"
+            echo "- Samples: 90 @ 1s tick"
+            echo "- Non-200 ticks: ${bad}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$bad" != "0" ]]; then
+            echo "::error::${bad} non-200 ticks on app.soleur.ai post-pool-update — investigate before continuing the window sequence."
+            exit 1
+          fi
+          echo "app.soleur.ai served 200 throughout the pool update — gapless observed."

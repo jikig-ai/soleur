@@ -8,6 +8,17 @@ Thresholds are keyed per MAJOR LINE, not per package. js-yaml and brace-expansio
 ship two supported majors with SEPARATE advisories (js-yaml 3.15.2 and 4.3.2;
 brace-expansion 1.1.18, 2.1.4 and 5.0.9), so a single per-package minimum would compare a
 correctly-patched 3.x copy against a 4.x threshold and report a false vulnerability.
+
+BOUNDARY -- surfaces this guard does NOT see, by construction (read before trusting a
+clean run; enumerated by the structural-enumeration review seat, #11823):
+  * tracked package.json files whose declared dependencies carry no lockfile (e.g.
+    packages/opencode-plugin): declared ranges are never parsed.
+  * ad-hoc installs outside any lockfile: Dockerfile/CI `npm install -g`,
+    `npm install --no-save`, and `npx pkg@ver` invocations (incl. .mcp.json), which
+    resolve their own trees per run.
+  * advisories on packages not in WATCHED_PACKAGES: the completeness sweep is closed
+    over the table -- a new Dependabot alert on an unwatched package is invisible
+    until a row is added (the manual batch-drain loop).
 """
 import json, re, sys
 
@@ -42,13 +53,16 @@ WATCHED_PACKAGES = {
     "@hono/node-server",
     "@opentelemetry/propagator-jaeger",
     "@sentry/nextjs",
+    "@vitest/mocker",
     "body-parser",
     "brace-expansion",
     "fast-uri",
+    "glob",
     "hono",
     "ip-address",
     "js-yaml",
     "liquidjs",
+    "minimatch",
     "nanoid",
     "next",
     "undici",
@@ -60,14 +74,24 @@ REQUIRED = [
     ("web-platform", "nanoid", 3, "3.3.18"),
     ("web-platform", "js-yaml", 3, "3.15.2"),
     ("web-platform", "js-yaml", 4, "4.3.2"),
-    ("web-platform", "hono", 4, "4.12.34"),
-    ("web-platform", "@hono/node-server", 1, "1.19.15"),
-    ("web-platform", "ip-address", 10, "10.5.1"),
-    ("web-platform", "fast-uri", 3, "3.1.7"),
+    ("web-platform", "hono", 4, "4.13.11"),
+    # @hono/node-server was retargeted from major line 1 to major line 2 in the
+    # 2026-11-01 medium/low batch: GHSA-rmxm-3fg6-px4f (serveStatic double-decode)
+    # patches only 2.1.3+ -- no patched 1.x exists, so the line is EVACUATED, not
+    # patched. The MCP SDK's own range (`^1.19.9 || ^2.0.5`) admits the crossing
+    # and Dependabot's PR #11468 made the same move; the blanket completeness
+    # sweep would otherwise demand a 1.x row that could only sit at a vulnerable
+    # floor. Its former FLOOR_ANCHORS entry is deleted alongside (below).
+    ("web-platform", "@hono/node-server", 2, "2.1.3"),
+    ("web-platform", "ip-address", 10, "10.7.4"),
+    ("web-platform", "fast-uri", 3, "3.1.9"),
     ("web-platform", "undici", 7, "7.29.0"),
     # Three rows, not one: #1327 removed the blanket `brace-expansion` override, so
     # web-platform legitimately resolves this package on major lines 1, 2 and 5 again
     # (minimatch@3 needs ^1, rimraf's minimatch@9 needs ^2, minimatch@10 needs ^5).
+    # 2026-11-01: the minimatch@11 consolidation EVACUATED major lines 1 and 2 here
+    # -- every minimatch is 11.x now and needs ^5, so the 1.x/2.x rows read
+    # '(absent)' and stand as reintroduction ratchets, not resolved rows.
     # Floors are the UNION of all SEVEN published advisories, not GHSA-v6h2-p8h4-qcjw
     # (LOW) alone: GHSA-rgw5-rvv9-x895 (HIGH) makes <1.1.18 and <2.1.4 vulnerable.
     # FOUR of the seven are HIGH -- 3jxr, 832h, mh99, rgw5. An earlier version of this
@@ -94,17 +118,22 @@ REQUIRED = [
     ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18
     # Major 5 reached the ROOT lockfile in #7927: markdownlint-cli 0.49.1 will not run
     # against brace-expansion 1.x, so package.json carries a SCOPED override giving that
-    # subtree ^5.0.8 while the root keeps the ^1.1.16 Dependabot pin. Two majors now
-    # resolve under this manifest (1.1.18 and 5.0.9) and a per-package minimum would
+    # subtree ^5.0.8 while the root kept the ^1.1.16 Dependabot pin. 2026-11-01: the
+    # ^1.1.16 pin was REMOVED -- once every minimatch consolidated on 11.x no consumer
+    # in the root tree declared a 1.x-compatible range, so the pin had no edge left to
+    # govern and actively broke minimatch@11's `brace-expansion: ^5.0.12` dep (it forced
+    # that edge down to 1.1.21). The major-1 row now reads '(absent)' and stands with
+    # this one as the re-admission ratchet the pin used to provide. Only major 5
+    # resolves under this manifest today; a per-package minimum would
     # compare across lines -- exactly the case the module docstring exists for. Floor
     # matches the web-platform major-5 row: GHSA-v6h2-p8h4-qcjw is fixed in 1.1.12,
     # 2.0.2, 3.0.1 and 4.0.1, so the whole 5.x line is out of range, and 5.0.9 is the
     # resolved version rather than a bare 5.0.0 the structural check would not catch.
     ("root", "brace-expansion", 5, "5.0.9"),
-    ("pencil-setup", "hono", 4, "4.12.34"),
-    ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
-    ("pencil-setup", "ip-address", 10, "10.5.1"),
-    ("pencil-setup", "fast-uri", 3, "3.1.7"),
+    ("pencil-setup", "hono", 4, "4.13.11"),
+    ("pencil-setup", "@hono/node-server", 2, "2.1.3"),
+    ("pencil-setup", "ip-address", 10, "10.7.4"),
+    ("pencil-setup", "fast-uri", 3, "3.1.9"),
     # pen-cli resolves a DIFFERENT major line of several watched packages than the adapter does,
     # so the completeness sweep demands a row per line (re-derived 2026-10-26 from
     # `gh api "/advisories?ecosystem=npm&affects=<pkg>"`). Floors are the strictest first_patched
@@ -114,7 +143,7 @@ REQUIRED = [
     # pen-cli/package.json carries `"overrides": {"undici": "8.12.2"}`. Drop the override when the
     # engine's dependency range itself reaches 8.12.2; bump it only after a green engine-contract-probe.sh.
     ("pen-cli", "hono", 4, "4.13.11"),
-    ("pen-cli", "@hono/node-server", 2, "2.0.10"),
+    ("pen-cli", "@hono/node-server", 2, "2.1.3"),
     ("pen-cli", "ip-address", 10, "10.7.4"),
     ("pen-cli", "fast-uri", 3, "3.1.9"),
     ("pen-cli", "brace-expansion", 5, "5.0.12"),
@@ -150,6 +179,22 @@ REQUIRED = [
     ("pencil-setup", "zod", 4, "4.6.6"),
     ("pen-cli", "zod", 4, "4.6.6"),
     ("spike", "zod", 4, "4.6.6"),
+    # 2026-11-01 medium/low batch (the #11646 grouped-bump shape). Five new rows --
+    # each is the only major line of its package present after the batch, so the
+    # completeness sweep admits no smaller set:
+    # minimatch GHSA-g3hv-75wg-m249 (globparts-amplification DoS) covers EVERY
+    # version below 11.0.1 -- no legitimately-vulnerable-free old line exists,
+    # which is why web-platform carries a BLANKET override rather than the zod
+    # scoped idiom; root + pen-cli stay scoped/exact per their file's own idiom.
+    ("web-platform", "minimatch", 11, "11.0.1"),
+    ("root", "minimatch", 11, "11.0.1"),
+    ("pen-cli", "minimatch", 11, "11.0.1"),
+    # glob GHSA-3g3m-2fjr-6pw4 (AbortSignal cancellation bypass) covers 9.0.0
+    # through 14.0.1; scoped overrides under rimraf + @sentry/bundler-plugins.
+    ("web-platform", "glob", 14, "14.0.2"),
+    # @vitest/mocker GHSA-xp26-3454-mjgp (Windows traversal) + GHSA-qxg6-89mg-rqv8
+    # (unauthenticated manual-mock code injection); vitest@4.1.12 pins it exactly.
+    ("web-platform", "@vitest/mocker", 4, "4.1.12"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -175,11 +220,17 @@ FLOOR_ANCHORS = {
     ("undici", 7): "7.29.0",
     ("nanoid", 3): "3.3.18",
     ("next", 16): "16.4.1",      # GHSA-2464-fhr4-w9xw + GHSA-673q-mjm6-r5xr (CRITICAL) + GHSA-p3m5-59mp-jv5r (HIGH)
-    ("ip-address", 10): "10.5.1",
-    ("fast-uri", 3): "3.1.7",
-    ("hono", 4): "4.12.34",
-    ("@hono/node-server", 1): "1.19.15",
-    ("@hono/node-server", 2): "2.0.10",
+    ("ip-address", 10): "10.7.4",   # GHSA-rxp7-6hxx-x8q5 (medium; Address6 zone-id ReDoS)
+    ("fast-uri", 3): "3.1.9",       # GHSA-333x-w4r6-6crp + GHSA-wjr9-j795-jxcr + GHSA-xhq7-xmqj-769h + GHSA-w74x-v6f9-j3xg
+    ("hono", 4): "4.13.11",         # GHSA-5r4p-p66f-jhc7 (medium; serveStatic double-decode)
+    # ("@hono/node-server", 1) deliberately DELETED with the row's retarget above:
+    # GHSA-rmxm-3fg6-px4f has no patched 1.x release, so a 1.x anchor could only
+    # point at a vulnerable floor. The anchor's own no-covering-row check REDs on
+    # a retarget half-done, so this removal is recorded here rather than silent.
+    ("@hono/node-server", 2): "2.1.3",  # GHSA-rmxm-3fg6-px4f (medium; evacuated 1.x line)
+    ("minimatch", 11): "11.0.1",    # GHSA-g3hv-75wg-m249 (medium; globparts DoS, all <11.0.1)
+    ("glob", 14): "14.0.2",         # GHSA-3g3m-2fjr-6pw4 (medium; AbortSignal bypass)
+    ("@vitest/mocker", 4): "4.1.12",  # GHSA-xp26-3454-mjgp + GHSA-qxg6-89mg-rqv8 (medium)
     ("undici", 8): "8.12.2",   # GHSA-xjj6-f33q-929c (HIGH); pen-cli override, see the pen-cli rows
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
     ("@sentry/nextjs", 10): "10.75.2",  # GHSA-mchm-gjx6-7h55 (CRITICAL)
@@ -240,6 +291,41 @@ def entry_name(key, meta):
     return meta.get("name") or key.split("node_modules/")[-1]
 
 
+def tracked_lockfiles():
+    """Every package-lock.json under CWD, minus generated subtrees.
+
+    LOCKS is hardcoded and MIN_LOCKS is a floor, not an equivalence: a sixth
+    package-lock.json committed anywhere used to be asserted clean by nobody.
+    Filesystem walk (not `git ls-files`) so the suite's fixture trees -- plain
+    directories, not git repos -- exercise the same census. node_modules and the
+    worktree/.claude dirs are skipped: vendored trees and sibling worktrees are not
+    this manifest's business. Two known residuals, accepted for the docstring's
+    "committed anywhere" contract: the walk also sees UNTRACKED lockfiles in a
+    developer tree (local noise, never a CI false-positive), and the skip set prunes
+    by basename at any depth, so a committed e.g. `test/dist/package-lock.json`
+    would be invisible -- a deliberately narrow blind spot disclosed here.
+    """
+    import os
+    skip = {".git", ".claude", ".worktrees", "node_modules", ".next", "dist",
+            "build", "out", "coverage", ".turbo", ".vercel"}
+    found = set()
+    for dirpath, dirnames, filenames in os.walk("."):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        if "package-lock.json" in filenames:
+            found.add(os.path.relpath(os.path.join(dirpath, "package-lock.json")))
+    # Union with the TRACKED set when CWD is a repo: the basename skip-set prunes
+    # `dist/`/`out/` at any depth, which a committed lockfile could otherwise hide
+    # behind (git ignores nothing the suite fixture plants). In the fixture trees --
+    # plain dirs -- this arm is absent and the walk carries the census alone.
+    import subprocess
+    if os.path.exists(".git"):
+        out = subprocess.run(["git", "ls-files", "--", "*package-lock.json"],
+                             capture_output=True, text=True)
+        if out.returncode == 0:
+            found |= {l for l in out.stdout.splitlines() if l}
+    return found
+
+
 def read_packages(path):
     # Context-managed rather than `json.load(open(path))`: the bare form leaves four
     # lockfile handles open until the interpreter's refcount happens to drop them, which
@@ -256,6 +342,15 @@ def main():
     resolved = 0
     print(f"{'manifest':14s} {'package':34s} {'line':>5s} {'required':>10s}  found")
     for manifest, pkg, major, minimum in REQUIRED:
+        if manifest not in packages:
+            # A row naming a manifest not in LOCKS is an absence assertion over
+            # nothing: on a resolved row MIN_RESOLVED catches the mass absence, but on
+            # an '(absent)' row nothing backstops the typo. Mirror of the
+            # MUST_STAY_ABSENT membership check below.
+            failures.append(
+                f"{manifest}: REQUIRED row names a manifest not in LOCKS, so its "
+                f"floor assertion checks nothing.")
+            continue
         found = sorted({
             v["version"] for k, v in packages.get(manifest, {}).items()
             if "node_modules/" in k and entry_name(k, v) == pkg and v.get("version")
@@ -282,7 +377,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 36  # prior 27 + the eight rows of the 2026-10-31 critical/high batch + the next-16 row re-applied with the crash classifier
+    MIN_ROWS = 41  # prior 36 + the five rows of the 2026-11-01 medium/low batch (minimatch x3, glob, @vitest/mocker)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -290,15 +385,19 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 36  # prior 27 + the eight rows of the 2026-10-31 batch + the next-16 row, all resolve
+    MIN_RESOLVED = 38  # prior 36 + the five rows of the 2026-11-01 batch, minus three net:
+                       # brace-expansion 1.x/2.x went legitimately '(absent)' in BOTH
+                       # web-platform and root-1.x when minimatch consolidated on 11.x
+                       # (no consumer left); root's major-5 row re-resolved under
+                       # minimatch@11's own ^5.0.12 dep
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "
             f"below the RESOLVED-ROW floor of {MIN_RESOLVED}. A row that matches nothing prints "
             f"'(absent)' and would otherwise pass -- check for a renamed or mistyped package.")
     # `checked != len(REQUIRED)` used to sit here. It was the exact tautology the MIN_ROWS
-    # comment fourteen lines above mocks: `checked` is incremented unconditionally once per
-    # iteration over REQUIRED and nothing breaks out of the loop, so it could not fail.
+    # comment fourteen lines above mocks: `checked` feeds only the success-path summary,
+    # which is unreachable once any failure is appended, so it could not fail.
     # MIN_ROWS and MIN_RESOLVED carry the real load.
     for pkg_major, anchor in sorted(FLOOR_ANCHORS.items()):
         pkg, major = pkg_major
@@ -316,6 +415,12 @@ def main():
                     f"below the anchored {anchor!r}. A floor moves DOWN only when an advisory "
                     f"is withdrawn -- re-derive from the advisory feed and move the anchor in "
                     f"the same commit, or this is a silent re-admission of a patched CVE.")
+    uncensused = sorted(tracked_lockfiles() - set(LOCKS.values()))
+    if uncensused:
+        failures.append(
+            f"{len(uncensused)} package-lock.json file(s) exist that LOCKS does not "
+            f"read: {uncensused}. MIN_LOCKS is a floor, not an equivalence -- add the "
+            f"manifest to LOCKS before its tree can be asserted clean.")
     if len(LOCKS) < MIN_LOCKS:
         failures.append(
             f"only {len(LOCKS)} lockfiles are read, below the MANIFEST floor of {MIN_LOCKS}. A manifest "
@@ -365,11 +470,45 @@ def main():
     covered = {(m, pkg, major) for m, pkg, major, _ in REQUIRED}
     for manifest, pkgs in packages.items():
         for key, meta in pkgs.items():
-            version = meta.get("version")
-            if not version or "node_modules/" not in key:
+            if "node_modules/" not in key:
+                # A file:/link: spec's vendor TARGET sits at a bare path key with a
+                # real name+version -- a watched package vendored that way used to
+                # exit the census at this line. Evaluate it like any other entry;
+                # a versionless or rowless one REDs below.
+                if meta.get("name") not in watched or key == "":
+                    continue
+            all_names = {key.split("node_modules/")[-1]}
+            if meta.get("name"):
+                all_names.add(meta["name"])
+            hit = all_names & watched
+            if not hit:
+                continue
+            if len(all_names) > 1:
+                # path name and meta `name` disagree while at least one is watched --
+                # a foreign `name` field hides a watched package from the census either
+                # way (npm never emits this; a hand-edit could, including a
+                # watched-name disguised as ANOTHER watched name).
+                failures.append(
+                    f"{manifest}: {key} has path/meta name disagreement "
+                    f"{sorted(all_names)} -- a hand-edit can hide a watched package "
+                    f"from the census behind either a foreign or a covered name.")
                 continue
             name = entry_name(key, meta)
-            if name not in watched:
+            if name not in hit:
+                # path name and meta `name` disagree on whether this entry is a
+                # watched package -- a foreign `name` field would hide a watched
+                # package from the census (npm never emits this; a hand-edit could).
+                failures.append(
+                    f"{manifest}: {key} resolves as {name!r} but names "
+                    f"{sorted(all_names)} -- a path/meta name disagreement hides a "
+                    f"watched package from the census.")
+                continue
+            version = meta.get("version")
+            if not version:
+                failures.append(
+                    f"{manifest}: {key} (name {name}) carries no 'version' -- a "
+                    f"file:/link:/workspace: spec installs code no floor or sweep can "
+                    f"see; vendor through normal lockfile resolution.")
                 continue
             major = ver(version)[0]
             if (manifest, name, major) not in covered:
@@ -391,10 +530,9 @@ def main():
     for manifest, pkg, path in MUST_STAY_ABSENT:
         if manifest not in packages:
             # A row naming a manifest not in LOCKS is an absence assertion over
-            # nothing -- fail loudly, the same reason MIN_ABSENT exists. The
-            # REQUIRED-loop .get() is fine (a dropped manifest reads as mass
-            # absence and trips MIN_RESOLVED/MIN_LOCKS); here nothing
-            # backstops a mistyped manifest but this check.
+            # nothing -- fail loudly, the same reason MIN_ABSENT exists and the
+            # REQUIRED loop now carries the same membership check (on its absent
+            # rows a mistyped manifest was previously green forever).
             failures.append(
                 f"{manifest}: MUST_STAY_ABSENT row names a manifest not in LOCKS, "
                 f"so its absence assertion checks nothing.")
