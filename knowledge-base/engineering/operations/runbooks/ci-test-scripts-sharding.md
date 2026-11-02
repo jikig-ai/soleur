@@ -361,19 +361,29 @@ span to the NEXT registered mark.
   artifact runs — main `push` runs elide the shards job).
 - **2026-11-02 wallclock-p90 baseline (#11774 seed):** last 30
   completed+success `ci.yml` runs per surface (30 `pull_request` head SHAs
-  + 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run,
+  + 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run
+  (**must be paginated — ~55-80 check runs per head sha vs the API's
+  30-item default page**; the probe uses `--paginate` + `per_page=100`),
   latency = check.completed_at − run.created_at, nearest-rank percentiles.
-  **`test` required-check p90: 3036 s pull_request / 2798 s merge_group**
-  (p50 2364 / 2425 s — the aggregate `test` job's own execution is ~3 s,
-  so the figure IS pipeline depth); next-slowest p90s (s): `e2e` 700/366,
-  `Bash fixture tests` 503/254, `lockfile-sync` 418/295, `adr-ordinals`
-  379/209, `grok-fidelity` 374/373, `service-role-allowlist-gate` 338/362;
-  every other required context p90 ≤ 358/373 on both surfaces; every
-  context n ≥ 29/30 per surface. These p90s (rounded up to the minute)
-  seed `scripts/required-check-wallclock-bounds.tsv` at margin 0.30.
-  Reproduced by `bash scripts/watch-wallclock-p90-11774.sh --dry-run` —
-  the standing tracker's report body carries the same aggregate table
-  (per-check percentiles only, no per-run rows, ADR-057).
+  **Commit-time probe-verified `test` required-check p90: 3246 s
+  pull_request / 2803 s merge_group** (p50 2400 / 2426 s — the aggregate
+  `test` job's own execution is ~4 s, so the figure IS pipeline depth);
+  next-slowest p90s (s): `e2e` 700/440, `Bash fixture tests` 503/260,
+  `marketplace-manifest-guard` 358/432, `grok-fidelity` 374/427,
+  `rule-body-lint` 325/370, `service-role-allowlist-gate` 338/368,
+  `lockfile-sync` 418/335; every other required context p90 ≤ 379/299 on
+  both surfaces; every context n ≥ 28/29 per surface. These p90s (rounded
+  up to the minute) seed `scripts/required-check-wallclock-bounds.tsv` at
+  margin 0.30 — every committed bound is ≥ the probe-verified p90 for its
+  (check, surface). An earlier same-day hand pass produced smaller p90s
+  for several small checks (`dependency-review` PR measured 349 s at
+  commit time, `cla-check` PR 185 s) plus uniformly lower merge-queue
+  p90s — consistent with non-paginated truncation of the ~55-80-check-run
+  payload and/or a same-day merge-queue latency step-up; the rows raised
+  at commit time are recorded in the bounds-TSV header note. Reproduced by
+  `bash scripts/watch-wallclock-p90-11774.sh --dry-run` — the standing
+  tracker's report body carries the same aggregate table (per-check
+  percentiles only, no per-run rows, ADR-057).
 - **2026-10-31 post-merge re-price (#11562 ownership checkpoint, CLOSED):**
   8 green post-merge ci.yml runs carried the arm timings — merge_group
   41132662609, 41136687119, 41138355176, 41141190932, 41146395715,

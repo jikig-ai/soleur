@@ -19,38 +19,42 @@
 # the next minute; margin 0.30 (the shard-balance-watch LEG_DRIFT_RATIO
 # precedent). Bounds are seeded from the MEASURED baseline, not the epic target
 # (PR p90 <= 1200 s / merge-queue p90 <= 900 s) — seeding at target would have
-# fired immediately: `test` measured p90 3036 s (PR) / 2798 s (merge queue).
-# The epic goal is reported as a separate column in the tracker body. Tighten a
-# bound only after the measured p90 has held below the new value; a bound may
-# loosen only with the measurement recorded in the runbook.
+# fired immediately: `test` measured p90 3246 s (PR) / 2803 s (merge queue).
+# The epic goal is reported as a separate column in the tracker body. Rows were
+# re-verified at commit time against `watch-wallclock-p90-11774.sh --dry-run`
+# (the instrument of record — it paginates `commits/{sha}/check-runs`, which
+# hand queries must too: ~55-80 check runs per head sha vs the API's 30-item
+# default page); every bound below is >= that re-measured p90. Tighten a bound
+# only after the measured p90 has held below the new value; a bound may loosen
+# only with the measurement recorded in the runbook.
 #
 # Blank lines and #-comments are ignored. A row with an unparsable number or a
 # wrong column count is a cannot-establish error in the probe, never a silent
 # skip.
 #
 # check_name	pr_bound_s	mq_bound_s	margin_frac
-test	3060	2820	0.30
-dependency-review	240	120	0.30
-e2e	720	420	0.30
+test	3300	2820	0.30
+dependency-review	360	180	0.30
+e2e	720	480	0.30
 skill-security-scan PR gate	300	120	0.30
 gitleaks scan	180	120	0.30
 lint fixture content	120	120	0.30
 allowlist-diff (.gitleaks.toml paths surface)	180	120	0.30
-rename-guard (allowlist destinations)	120	120	0.30
+rename-guard (allowlist destinations)	180	120	0.30
 waiver discipline (issue:#NNN trailer)	180	120	0.30
 Bash fixture tests for guard scripts	540	300	0.30
 markdown-lint	300	180	0.30
-lockfile-sync	420	300	0.30
+lockfile-sync	420	360	0.30
 service-role-allowlist-gate	360	420	0.30
-tc-document-sha-guard	360	240	0.30
+tc-document-sha-guard	360	300	0.30
 adr-ordinals	420	240	0.30
-rule-body-lint	360	240	0.30
-grok-fidelity	420	420	0.30
+rule-body-lint	360	420	0.30
+grok-fidelity	420	480	0.30
 enforce	300	120	0.30
 tenant-integration-required	300	180	0.30
 sentry-destroy-required	180	120	0.30
-credential-path-guard	300	240	0.30
-marketplace-manifest-guard	360	240	0.30
+credential-path-guard	300	300	0.30
+marketplace-manifest-guard	360	480	0.30
 vendor-pin-required	180	120	0.30
-cla-check	120	120	0.30
+cla-check	240	120	0.30
 cla-evidence	180	120	0.30
