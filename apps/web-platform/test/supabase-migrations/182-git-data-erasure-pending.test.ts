@@ -2,15 +2,15 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 164_git_data_erasure_pending.sql (#8211, PR-B1). Offline text lint;
+// Migration-shape test for 182_git_data_erasure_pending.sql (#8211, PR-B1). Offline text lint;
 // the behavioural proofs (RLS/grant denial, upsert, SKIP LOCKED, resolve + counter in one
 // statement, bucket boundaries, owner_gone) run in test/rls-fuzz/git-data-erasure-pending.integration.test.ts.
 // Every pattern is anchored at BOTH ends (a prefix match would pass `k.count + 10`).
 
 const DIR = path.join(__dirname, "../../supabase/migrations");
-const UP = path.join(DIR, "164_git_data_erasure_pending.sql");
-const DOWN = path.join(DIR, "164_git_data_erasure_pending.down.sql");
-const VERIFY = path.join(__dirname, "../../supabase/verify/164_git_data_erasure_pending.sql");
+const UP = path.join(DIR, "182_git_data_erasure_pending.sql");
+const DOWN = path.join(DIR, "182_git_data_erasure_pending.down.sql");
+const VERIFY = path.join(__dirname, "../../supabase/verify/182_git_data_erasure_pending.sql");
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
 const exec = (s: string): string => s.replace(/--[^\n]*/g, "");
@@ -39,7 +39,7 @@ const tableBlock = (name: string): string =>
   up.match(new RegExp(`CREATE\\s+TABLE\\s+IF\\s+NOT\\s+EXISTS\\s+public\\.${name}\\s*\\([\\s\\S]*?\\n\\);`, "i"))?.[0] ?? "";
 const squash = (s: string): string => s.replace(/\s+/g, " ").trim();
 
-describe("migration 164_git_data_erasure_pending", () => {
+describe("migration 182_git_data_erasure_pending", () => {
   it("ships with a paired down migration and a verify sentinel", () => {
     expect(existsSync(UP)).toBe(true);
     expect(existsSync(DOWN)).toBe(true);

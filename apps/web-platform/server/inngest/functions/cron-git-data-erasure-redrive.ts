@@ -4,7 +4,7 @@
 // unreachable, unauthorized, unconfigured, host_key_mismatch, a throw) used to exist only as a Sentry
 // event, and the re-drive was a manual sweep. The LUKS cutover runbook lists "the per-id re-erasure
 // path for a populated store" as a hard precondition of the real flip. account-delete.ts now records
-// each such id in git_data_erasure_pending (migration 164); this cron claims due rows and calls
+// each such id in git_data_erasure_pending (migration 182); this cron claims due rows and calls
 // removeGitDataRepo per id until the host reports `erased`.
 //
 // SHAPE
@@ -159,7 +159,7 @@ function reportQuarantineOnce(kind: "malformed_id" | "invalid_seed_id", memoKey:
  */
 /** Strict ISO-8601 instant (Date.parse alone accepts '1', 'Jan 1' and other non-ISO strings). */
 const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
-/** The ledger refuses anything older (migration 164): reject early, with the rest of the batch. */
+/** The ledger refuses anything older (migration 182): reject early, with the rest of the batch. */
 const SEED_EARLIEST_MS = Date.parse("2020-01-01T00:00:00Z");
 
 export function parseSeedRequest(

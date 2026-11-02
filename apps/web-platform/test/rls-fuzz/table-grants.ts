@@ -182,13 +182,19 @@ export function exposed(
 
 /**
  * INTERNAL — public relations holding ZERO api-role privileges by design.
- * Empty today: every catalog member carries >=1 api-role grant (all 62
- * relations enumerated on prd 2026-10-26 are covered by the 174 snapshot,
- * `_schema_migrations` included). The classification arm exists for relations
+ * The 62 relations enumerated on prd 2026-10-26 each carry >=1 api-role grant
+ * (covered by the 174 snapshot, `_schema_migrations` included); the entries
+ * below arrived after it. The classification arm is for relations
  * that arrive WITH a `soleur:no-data-api:` sentinel — the lint requires the
  * sentinel to carry a reason; this map requires the same, keyed by relname.
  */
-const INTERNAL: Record<string, string> = {};
+const INTERNAL: Record<string, string> = {
+  // Migration 182 (#8211): the git-data erasure ledger and its counter. RLS on with no policy; every api role is
+  // revoked and the tables are reached only through service_role-only SECURITY DEFINER RPCs (the `soleur:no-data-api:`
+  // sentinels in the migration carry the same reasons).
+  git_data_erasure_pending: "service-role RPC-only erasure ledger (migration 182, #8211): no api-role table privilege, access only via record/claim/resolve SECURITY DEFINER RPCs",
+  git_data_erasure_counts: "service-role RPC-only erasure counter (migration 182, #8211): no api-role table privilege, written only by resolve_git_data_erasure_pending",
+};
 
 /**
  * RETIRED — relations the corpus has DROPPED or RENAMED away. The entry is

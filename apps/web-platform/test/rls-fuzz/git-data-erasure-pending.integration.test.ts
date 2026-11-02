@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type postgres from "postgres";
 import { attackAsAnon, connect, rolledBackRaw, withTransientRetry } from "./harness-fixture";
 
-// Live-database cases for 164_git_data_erasure_pending (#8211, PR-B1). Gated like the rest of
+// Live-database cases for 182_git_data_erasure_pending (#8211, PR-B1). Gated like the rest of
 // the harness (a local disposable Postgres only; assertLocalDsn refuses anything else). The
 // ledger has no foreign keys, so most cases need no tenant seed. Cases that must observe
 // concurrency commit their own rows (random uuids) and delete them in a finally; every other
@@ -591,9 +591,9 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
   });
 
   describe("re-applying the migration", () => {
-    const UP_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/164_git_data_erasure_pending.sql"), "utf8");
+    const UP_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/182_git_data_erasure_pending.sql"), "utf8");
 
-    test("removes a stale 2-argument record overload left by an earlier edit of 164, leaving exactly one record function", async () => {
+    test("removes a stale 2-argument record overload left by an earlier edit of this migration (as 164), leaving exactly one record function", async () => {
       const out = await rolledBackRaw(sql, async (t) => {
         await t.unsafe(`create function public.record_git_data_erasure_pending(p_workspace_id uuid, p_outcome text) returns void language sql as 'select 1'`);
         const [before] = await t<{ n: number }[]>`select count(*)::int as n from pg_proc where proname = 'record_git_data_erasure_pending'`;
@@ -609,7 +609,7 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
   });
 
   describe("down migration", () => {
-    const DOWN_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/164_git_data_erasure_pending.down.sql"), "utf8");
+    const DOWN_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/182_git_data_erasure_pending.down.sql"), "utf8");
 
     test("REFUSES while the ledger holds a row, and drops nothing", async () => {
       const out = await rolledBackRaw(sql, async (t) => {

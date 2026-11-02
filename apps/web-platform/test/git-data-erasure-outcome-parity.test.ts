@@ -34,7 +34,7 @@ function unionStatuses(): string[] {
 }
 
 function migrationWords(): string[] {
-  const sql = strip(read("supabase/migrations/164_git_data_erasure_pending.sql"));
+  const sql = strip(read("supabase/migrations/182_git_data_erasure_pending.sql"));
   const m = sql.match(/last_outcome\s+text\s+CHECK\s*\(\s*last_outcome\s+IN\s*\(([^)]*)\)\s*\)/i);
   expect(m, "migration CHECK").not.toBeNull();
   return [...m![1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
@@ -64,7 +64,7 @@ describe("git-data erasure outcome words: one source of truth", () => {
   });
 
   it("the verify sentinel's CHECK text lists the same words in the same order as the migration", () => {
-    const verify = strip(read("supabase/verify/164_git_data_erasure_pending.sql"));
+    const verify = strip(read("supabase/verify/182_git_data_erasure_pending.sql"));
     const m = verify.match(/last_outcome = ANY \(ARRAY\[([^\]]*)\]/);
     const words = [...(m?.[1] ?? "").matchAll(/''([a-z_]+)''::text/g)].map((x) => x[1]);
     expect(words).toEqual(migrationWords());

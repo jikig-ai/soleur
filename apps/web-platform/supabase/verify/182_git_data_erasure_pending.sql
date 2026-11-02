@@ -1,4 +1,4 @@
--- verify/164_git_data_erasure_pending.sql
+-- verify/182_git_data_erasure_pending.sql
 -- Runtime sentinel for the git-data erasure ledger (#8211, precedent: verify/162). Each row
 -- returns bad=1 on drift; run-verify.sh fails the deploy if any bad=1. Asserts the LIVE state:
 -- only service_role may execute the six RPCs, both tables keep RLS on with no policy and no

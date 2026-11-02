@@ -1,4 +1,4 @@
--- 164_git_data_erasure_pending.sql
+-- 182_git_data_erasure_pending.sql
 -- #8211 (PR-B1) — durable pending-erasure ledger for the git-data bare-repo store.
 --
 -- Why: account deletion calls removeGitDataRepo (server/git-data-replication.ts). Any outcome
@@ -70,7 +70,7 @@ BEGIN
   IF to_regclass('auth.users') IS NULL
      OR to_regclass('public.users') IS NULL
      OR to_regclass('public.workspace_members') IS NULL THEN
-    RAISE EXCEPTION 'Migration 164 precondition failed: auth.users, public.users and public.workspace_members must exist (git_data_erasure_owner_gone reads them).';
+    RAISE EXCEPTION 'Migration 182 precondition failed: auth.users, public.users and public.workspace_members must exist (git_data_erasure_owner_gone reads them).';
   END IF;
 END $$;
 
@@ -93,6 +93,30 @@ CREATE TABLE IF NOT EXISTS public.git_data_erasure_counts (
   count  bigint NOT NULL DEFAULT 0 CHECK (count >= 0),
   PRIMARY KEY (month, bucket)
 );
+
+-- ADR-303 (api-role grant lint): neither table is a Data API surface. Access is only through the
+-- service_role-only SECURITY DEFINER RPCs below, so no api role holds any table privilege.
+-- soleur:no-data-api: public.git_data_erasure_pending — service-role RPC-only erasure ledger, no api-role table privilege
+-- soleur:no-data-api: public.git_data_erasure_counts — service-role RPC-only erasure counter, no api-role table privilege
+
+-- A dev database that applied this migration under its earlier number (164, first body) holds the
+-- CHECK with the old word 'thrown'; CREATE TABLE IF NOT EXISTS above leaves it. Replace it so the
+-- closed enum matches this file everywhere. A fresh database already has the right CHECK: no-op.
+DO $$
+DECLARE
+  v_def text;
+BEGIN
+  SELECT pg_get_constraintdef(c.oid) INTO v_def
+    FROM pg_constraint c
+   WHERE c.conrelid = 'public.git_data_erasure_pending'::regclass
+     AND c.conname = 'git_data_erasure_pending_last_outcome_check';
+  IF v_def IS NOT NULL AND v_def NOT LIKE '%''threw''%' THEN
+    ALTER TABLE public.git_data_erasure_pending DROP CONSTRAINT git_data_erasure_pending_last_outcome_check;
+    ALTER TABLE public.git_data_erasure_pending ADD CONSTRAINT git_data_erasure_pending_last_outcome_check
+      CHECK (last_outcome IN ('refused', 'unreachable', 'unauthorized', 'unconfigured', 'host_key_mismatch', 'threw', 'seeded'));
+  END IF;
+END
+$$;
 
 ALTER TABLE public.git_data_erasure_pending ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.git_data_erasure_counts  ENABLE ROW LEVEL SECURITY;

@@ -1,4 +1,4 @@
-// Durable pending-erasure ledger for the git-data bare-repo store (#8211, migration 164).
+// Durable pending-erasure ledger for the git-data bare-repo store (#8211, migration 182).
 //
 // Account deletion records every non-`erased`/`skipped` removeGitDataRepo outcome here so the
 // re-drive cron (server/inngest/functions/cron-git-data-erasure-redrive.ts) can finish the erasure
@@ -38,7 +38,7 @@ export const GIT_DATA_ERASURE_HOST_OUTCOMES = Object.keys(HOST_OUTCOME_SET) as N
  */
 export const GIT_DATA_ERASURE_LEDGER_EXTRA_OUTCOMES = ["threw", "seeded"] as const;
 
-/** The closed set `git_data_erasure_pending.last_outcome` accepts (CHECK in migration 164). */
+/** The closed set `git_data_erasure_pending.last_outcome` accepts (CHECK in migration 182). */
 export const GIT_DATA_ERASURE_LEDGER_OUTCOMES = [
   ...GIT_DATA_ERASURE_HOST_OUTCOMES,
   ...GIT_DATA_ERASURE_LEDGER_EXTRA_OUTCOMES,
@@ -80,7 +80,7 @@ export async function recordGitDataErasurePending(
 }
 
 /**
- * True only when no account/membership row still keys on the id (see migration 164's header for the
+ * True only when no account/membership row still keys on the id (see migration 182's header for the
  * exact tables). The ledger is NOT proof that an account is gone: a seeded wrong id, or a deletion
  * that aborts after the ledger write, would otherwise get a live user's repository erased. An RPC
  * error throws; callers must treat a throw as "not gone".

@@ -1,4 +1,4 @@
--- Reverts 164: drop the six RPCs, then the two tables. REFUSES while the ledger holds rows:
+-- Reverts 182: drop the six RPCs, then the two tables. REFUSES while the ledger holds rows:
 -- dropping a populated ledger discards the only durable record of owed Art. 17 erasures.
 DO $$
 BEGIN
