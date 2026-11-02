@@ -132,7 +132,7 @@ _n_alr="$(grep -cE 'resource "logtail_exploration_alert" "registry_store_not_luk
   && ok "exactly one logtail_exploration_alert.registry_store_not_luks resource header" \
   || no "logtail_exploration_alert header count is $_n_alr, want 1 — a decoy resource exists"
 
-grep -cF 'sql_query = replace(trimspace(local.registry_store_not_luks_sql), "/\\s+/", " ")' <<<"$(res_block logtail_exploration registry_store_not_luks)" | grep -qx '1' \
+[ "$(res_block logtail_exploration registry_store_not_luks | grep -cF 'sql_query = replace(trimspace(local.registry_store_not_luks_sql), "/\\s+/", " ")')" -eq 1 ] \
   && ok "the exploration carries THIS predicate, collapsed to one line (the siblings' perpetual-diff rule)" \
   || no "the exploration does not carry local.registry_store_not_luks_sql exactly once"
 

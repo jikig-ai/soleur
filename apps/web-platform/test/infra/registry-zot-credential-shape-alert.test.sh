@@ -121,7 +121,7 @@ _n_alr="$(grep -cE 'resource "logtail_exploration_alert" "registry_zot_log_crede
   && ok "exactly one logtail_exploration_alert.registry_zot_log_credential_shape resource header" \
   || no "logtail_exploration_alert header count is $_n_alr, want 1 — a decoy resource exists"
 
-grep -cF 'sql_query = replace(trimspace(local.registry_zot_log_credential_shape_sql), "/\\s+/", " ")' <<<"$(res_block logtail_exploration registry_zot_log_credential_shape)" | grep -qx '1' \
+[ "$(res_block logtail_exploration registry_zot_log_credential_shape | grep -cF 'sql_query = replace(trimspace(local.registry_zot_log_credential_shape_sql), "/\\s+/", " ")')" -eq 1 ] \
   && ok "the exploration carries THIS predicate, collapsed to one line" \
   || no "the exploration does not carry local.registry_zot_log_credential_shape_sql exactly once"
 
