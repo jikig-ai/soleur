@@ -256,7 +256,11 @@ sub is_rr { $_[0] =~ /^"?\$\{?REPO_ROOT\}?"?$/ }
 sub plumb_ok {
   my ($sub, $c, $cfg, @a) = @_;
   return 0 if $cfg || @$c != 1;
-  if ($sub eq 'read-tree' || $sub eq 'hash-object' || $sub eq 'update-index') { return is_wt($c->[0]) ? 1 : 0; }
+  # read-tree / hash-object / update-index: -C "$WT" AND the exact operand shapes the script uses (one commit word; -w --stdin;
+  # --add --cacheinfo <spec>), so --index-output=, a second tree or an extra flag cannot reach another index.
+  if ($sub eq 'read-tree')    { return (is_wt($c->[0]) && @a == 1 && $a[0] !~ /^-/) ? 1 : 0; }
+  if ($sub eq 'hash-object')  { return (is_wt($c->[0]) && @a == 2 && $a[0] eq '-w' && $a[1] eq '--stdin') ? 1 : 0; }
+  if ($sub eq 'update-index') { return (is_wt($c->[0]) && @a == 3 && $a[0] eq '--add' && $a[1] eq '--cacheinfo' && $a[2] !~ /^-/) ? 1 : 0; }
   if ($sub eq 'update-ref') {
     return (is_wt($c->[0]) && @a == 3 && $a[0] eq '--no-deref' && $a[1] eq 'HEAD' && $a[2] !~ /^-/) ? 1 : 0;
   }
@@ -275,6 +279,8 @@ sub plumb_ok {
 my $pre = qr/(?:^|[;&|({`!]|\$\(|\b(?:if|then|do|else|elif|while|until|exec|command|time|xargs|sudo|nohup)\s|\benv\b[^;|&]*?\s)/;
 my $verbs = 'issue|api|pr|repo|label|workflow|release|run|secret|variable|auth|gist|project|ruleset|cache|codespace|extension|alias|browse|search|status|org';
 while (my $l = <STDIN>) {
+  # a GIT_DIR= / GIT_INDEX_FILE= / GIT_WORK_TREE= ... prefix redirects any git call (the -C pin checks a NAME, not where it points)
+  print "[git-env-prefix] $l" if $l =~ /(?:^|[;&|({`!]|\s)GIT_(?:DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|COMMON_DIR|NAMESPACE|CEILING_DIRECTORIES|EXTERNAL_DIFF|PAGER|SSH_COMMAND|CONFIG_[A-Z_]+)=\S*\s+(?:\\?["']?(?:\S*\/)?)(?:git|gitx)["']?\s/;
   while ($l =~ /$pre\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:\\?["']?(?:\S*\/)?(git|gitx|ssh|scp|sftp|rsync|socat|telnet|ncat|netcat|ftp|python[0-9.]*|nodejs|node|ruby|php|deno|bun|openssl)["']?\s+([^;|&)]*)|"?\$\{?[A-Za-z_]\w*[^\s"]*"?\s+((?:$verbs)\b[^;|&)]*))/g) {
     my ($tool, $rest, $var) = ($1, $2, $3);
     if (defined $var) { print "[var-as-command] $var\n"; next; }
@@ -310,7 +316,7 @@ PERL
 # The comment-stripped text of one file. `for x in LIST;` is dropped only for a plain word list: a list
 # holding a command substitution keeps it (only the `for x in ` prefix goes), so `for t in $(gh ...)` is scanned.
 census_text() {
-  grep -vE '^[[:space:]]*#' "$1" | sed ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ta}' | sed -E 's/for [A-Za-z_]+ in (([^;$`]|\$[^(])*);//g; s/for [A-Za-z_]+ in //g'
+  grep -vE '^[[:space:]]*#' "$1" | sed ':a;/^[^#]*\\$/{N;s/\\\n[[:space:]]*/ /;ta}' | sed -E 's/for [A-Za-z_]+ in (([^;$`]|\$[^(])*);//g; s/for [A-Za-z_]+ in //g'
 }
 census_check_call() {
   local c="$1" t
@@ -766,6 +772,11 @@ for probe in 'gitx -C "$WT" -C "$WT" read-tree HEAD' 'gitx -C "$WT" -c core.x=1 
   'gitx -C "$REPO_ROOT" reset --hard' 'gitx -C "$WT" reset --mixed -q HEAD' 'gitx -C "$REPO_ROOT" worktree remove "$WT"' 'gitx -C "$REPO_ROOT" worktree remove --force "$WT" extra' \
   'gitx -C "$REPO_ROOT" worktree add -fB main -- --detach p HEAD' 'gitx -C "$REPO_ROOT" worktree add --detach /tmp/x HEAD' 'gitx -C "$REPO_ROOT" worktree remove --force .worktrees/other' \
   'gitx -C "$REPO_ROOT" worktree remove --force "$REPO_ROOT"' 'gitx -C "$REPO_ROOT" worktree remove --foo "$WT"' 'gitx -C "$WT" update-ref refs/heads/main HEAD x' \
+  'gitx -C "$REPO_ROOT" worktree add "$WT" HEAD' 'gitx -C "$REPO_ROOT" worktree add -B main --detach "$WT" HEAD' 'gitx -C "$REPO_ROOT" worktree add --detach "$WT" -f' \
+  'gitx -C "$WT" worktree add -q --no-checkout --detach "$WT" HEAD' 'gitx -C "$WT" update-ref --no-deref HEAD -d' \
+  'gitx -C "$WT" read-tree --index-output=x HEAD' 'gitx -C "$WT" read-tree HEAD HEAD' 'gitx -C "$WT" hash-object -w -t blob f' \
+  'gitx -C "$WT" update-index --add --cacheinfo a,b,c --force-remove' 'gitx -C "$WT" update-index --add --cacheinfo -x' \
+  'GIT_INDEX_FILE=x gitx -C "$WT" read-tree HEAD' 'GIT_DIR=x gitx -C "$WT" update-ref --no-deref HEAD y' \
   'gitx -C "$WT" update-ref --no-deref refs/heads/main x' 'gitx -C "$WT" --config-env=core.fsmonitor=V read-tree HEAD'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census_as "$P11177_NAME" "$probe")" -ge 1 ]] || { cbad=$((cbad + 1)); echo "  census let through (11177 name): $probe"; }
@@ -793,7 +804,7 @@ done
 cbad=0; cprobe=0
 for probe in '\git fetch origin' "'git' fetch" '"git" fetch' 'g=git; $g push' 'GIT=git; "$GIT" push' 'G=$(command -v git)' 'git_bin=git' \
   'GIT=$(pick_tool)' 'echo hi; "$GIT" fetch' 'type -p git' '\git push origin HEAD' '/usr/bin/git fetch' '${GIT:-git} push' 'which git' 'command git fetch' \
-  'type -P git' 'whereis git' 'command -V git' $'gitx -C \\\n"$WT" update-ref -d refs/heads/main'; do
+  'type -P git' 'whereis git' 'command -V git' $'gitx -C \\\n"$WT" update-ref -d refs/heads/main' $'true # note \\\ngit fetch origin'; do
   cprobe=$((cprobe + 1))
   [[ "$(probe_census "$probe")" -ge 1 ]] || { cbad=$((cbad + 1)); echo "  census let through: $probe"; }
 done
