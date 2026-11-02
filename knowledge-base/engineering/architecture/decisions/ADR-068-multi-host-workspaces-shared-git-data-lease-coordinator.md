@@ -1504,6 +1504,7 @@ Accepted residual, tracked as #11716: a stale clone that holds the current lease
 - **Credential posture of the flip pause read.** `--only-secrets` on the reader is hygiene: it narrows what doppler injects into the step, but the token itself can still read `prd_terraform`. It is not isolation.
 - **Unanchored marker and reporter readers (accepted residual).** The success-marker and reporter-line readers (`scripts/followthroughs/git-data-replication-signal.sh`, the flip workflow, `quiet-window.ts`) match their closed grammars as substrings and take the host from the Better Stack `host_name` field. A foreign emitter that logs under a web host's `host_name` and quotes the phrase could supply a MARKERS_PRESENT reading or a reporter row. Pre-existing for the reporter line; the marker inherits it. The signal-script reads are advisory evidence for an owner decision, not an authorization. For the flip's pause read the direction matters: the every-row-equals-1 rule means a forged `=0` row can only add a refusal, but a forged `=1` row could stand in for a host whose real reporter row is missing, and nothing here prevents that; the writer would need to log under a web host's `host_name` in the Better Stack source.
 - **F23, runbook R3.** A `git-data-overlay-not-descendant` warn row does not change the R3 verdict; it is read as a count and recorded in the rehearsal record, not treated as a gating blemish.
+
 ## Addendum — 2026-11-01 (#6027 continuation, PR #11766): GA LB monitor transport + web-2 as a drained member
 
 Two corrections against §(b) as-shipped 2026-11-01, both verified live before this amendment:
@@ -1537,5 +1538,5 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
 
 Apply path unchanged in kind, widened in set: `ga-monitor-fix` and `ga-pool-update` are
 two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` (per-arm confirm literals,
-`environment: web-platform-infra-apply`, saved-plan graders `cf_lb_gate_ga_monitor_update`
-+ `cf_lb_gate_ga_pool_update`) — the `ga-overlay` gate keeps create-only semantics.
+`environment: web-platform-infra-apply`, saved-plan graders `cf_lb_gate_ga_monitor_update` +
+`cf_lb_gate_ga_pool_update`) — the `ga-overlay` gate keeps create-only semantics.
