@@ -25,7 +25,7 @@ The four suites still carry the pre-#11601 idiom documented in #11720:
 
 ## Proposed Solution
 
-Per file, apply the batch-1 convention exactly as it shipped in `inngest-luks-wrong-volume-alert.test.sh` (donor-of-record for the port; `inngest-luks-key-probe-alert.test.sh` remains the gen-2 origin):
+Per file, apply the batch-1 convention as it shipped in `inngest-luks-wrong-volume-alert.test.sh` (donor-of-record; `inngest-luks-key-probe-alert.test.sh` is the gen-2 origin), extended by per-suite seam checks the batch-1 file delegates to siblings for — batch-2 makes them first-party per ported suite:
 
 1. **Canonical-equality compare** — `sql_local()`/`sql_local_raw()`-style extraction, whitespace-stripped heredoc compared byte-for-byte against a `*_CANON` constant built from derived literals (never re-pinned literals). Named-property greps retained only for failure-message clarity.
 2. **`res_block()`/`param()` exactly-once pins** — block-scoped, anchored both ends, count must equal 1. `param()` ERE must cover the entire value line (the ternary-prefix trap from the batch-1 postmortem).
@@ -46,7 +46,7 @@ Every line inside the contiguous window is a pure `^[[:space:]]*[A-Za-z_][A-Za-z
 5. **Mutation battery ported to `_red_verdict`/`mutate_red`/`mutate_green`/`mutate_floor_red`** — scratch-copy mutation into `MUT_DIR`, instrument self-test (`MUT_SKIP=1 bash "$SELF"` rc 0), `edit()` single-occurrence enforcement, per-row expected-FAIL fragments, rc discrimination (only rc=1 is a caught mutation — normalize instrument failures to `exit 2` where the suite currently exits 1).
 6. **Decoy/comment-extraction class rows** — decoy heredoc with gutted live body, `/* */`-wrapped decoy blocks, commented pinned lines, inline tautology, `$$` escapes — each row checked for reachability (a row is vacuous until a fixture distinguishes the mutant).
 7. **Workflow seam-check rows (the shipped replacement for the issue's "env -u" wording)** — assert `MUT_SKIP` and the suite's own `*_GUARD_*` literals are absent from `infra-validation.yml` executable text (whole-line `#` comments stripped; inline trailing comments handled explicitly). Per-suite prefix set enumerated from the file, never hand-typed. No `env -u` run lines are added — they would self-red `registry-clientip:479`'s `suite-seam-in-workflow` pin and the byte-exact run-line pins in `web-nic`/`ghcr`.
-8. **`egress-gw` floor replacement + meta-guard promotion (not "from scratch" — the advisor-verified correction)** — egress-gw already carries a constructible pass-floor (`if [ "$pass" -lt 30 ]` at :297-301), so it IS floor-bearing in the deferred ledger today. The port REPLACES that floor with the single derived `_floor` (leaving both = a half-port that masks an unconstructible new floor), moves the file deferred→covered (`n_deferred` 47→46 — under `MAX_DEFERRED=47`, the shrink is allowed), and the meta-guard edit carries THREE obligations: (a) the `PROMOTED_FILES` regex entry (repo-relative path, dots escaped — a typo yields `not-in-covered`), (b) the comment paragraph documenting covered-bar grounds every sibling entry carries, (c) `MIN_FIRING_SUITES` +1 per the hand-ratchet convention (`guard-vacuity-floor.test.sh:177,945,1419`). The `-lt 30` floor is removed; its rows fold into `PRESENCE_ROWS`.
+8. **Meta-guard promotion of ALL FOUR ported files (uniform — resolves the singleton asymmetry)** — each ported floor is verified FIRES-classified, and PROMOTED_FILES is the anti-silent-floor-deletion pin (`:1404-1417`); registering only one of four identical cases is arbitrary. Each file gets: (a) a `PROMOTED_FILES` regex entry at the LIVE site (`scripts/guard-vacuity-floor.test.sh:1089` — the last of four assignments; :798/:811/:819 are stale snapshots; dots escaped), (b) the grounds comment paragraph every sibling entry carries, (c) `MIN_FIRING_SUITES` +4 (61→65) per the hand-ratchet convention. egress-gw additionally REPLACES its existing `pass -lt 30` floor (`:298-301`, already FIRES in the deferred ledger) with the derived `_floor` — leaving both would mask the new floor via `classify_suite` best-of-candidates. Promotion is a deliberate registration act: it is not forced by ARM 5c (egress-gw is already floor-bearing; nothing grows).
 
 ## Technical Considerations
 
@@ -133,7 +133,7 @@ discoverability_test:
 | 2 | Add a `/* */`- or `#`-wrapped decoy copy of the pinned heredoc elsewhere in the `.tf` | RED — unanchored opener/param count exceeds 1 |
 | 3 | Add a second `logtail_exploration_alert` resource carrying the suite's marker after a compliant first | RED — census/param cardinality |
 | 4 | Weaken one `param()`-pinned attribute value inside the block | RED — param count drops to 0 |
-| 5 | Delete the suite's mutation-row block from the suite itself (harness edit) | RED — `_floor`/`MUT_ROWS_RUN` accounting |
+| 5 | Delete the suite's mutation-row block from the suite itself (harness edit) | RED — `MUT_ROWS`/`_floor` accounting |
 | 6 | Bump the suite's `PRESENCE_ROWS`/`MUT_ROWS` constant by 1 without adding a row (`mutate_floor_red`) | RED — floor fails on the real run |
 | 7 | Instrument-failure disguised as caught mutation (suite exits 2 on unbound var) | SURVIVED-not-RED — rc≠1 cannot be credited; row reports wrong/unresolved |
 | 8 | `env:` or `shell:` redirect of a `*_GUARD_*` axis inside the suite's workflow step | RED — seam-check row |
@@ -158,22 +158,22 @@ discoverability_test:
 
 **Anchor.** The seam set is enumerated from each suite's own `*_GUARD_*` declarations — not a hand-typed list (the finite-list staleness learning).
 
-### Guard 3 — egress-gw floor registration (meta-guard)
+### Guard 3 — four-file meta-guard promotion (uniform registration)
 
-**Property.** `egress-gw-alert.test.sh` becomes floor-bearing in a deferred dir only via a constructible floor + a `PROMOTED_FILES` ledger entry — `n_deferred` never silently moves.
+**Property.** Every ported file whose floor scores FIRES is registered in `PROMOTED_FILES` at the live write site — a silent floor deletion in any ported suite reds the membership pin.
 
-**Assembly.** `scripts/guard-vacuity-floor.test.sh` ARM 5c (`PROMOTED_FILES`, `MAX_DEFERRED=47`, `n_deferred`/`n_def_construct`/`n_def_nofire` buckets) and the egress-gw floor tail.
+**Assembly.** `scripts/guard-vacuity-floor.test.sh`'s LAST `PROMOTED_FILES=` assignment (:1089), its `MIN_FIRING_SUITES` ratchet (:1419), and the zero-slack membership pin (:1404-1417: each entry must be floor-bearing + covered + FIRES).
 
 **Mutation matrix.**
 
 | # | Edit | Expected |
 |---|---|---|
-| 1 | Port egress-gw's floor to the `[ -n "${MUT_SKIP:-}" ] && _floor=…` rebind shape without PROMOTED_FILES | RED — meta-guard CONSTRUCTION/n_deferred arm |
-| 2 | Route the floor through `ok()`/`no()` instead of printf+exit 1 | RED — constructible-shape arm |
-| 3 | `MAX_DEFERRED` bumped to absorb the move | RED — shrink-only ratchet |
-| 4 | must-PASS: constructible floor + PROMOTED_FILES entry | GREEN — ledger flat |
+| 1 | Add a ported file to a stale `PROMOTED_FILES` site (:798/:811/:819) instead of :1089 | RED — file stays deferred, membership pin never sees it (no-op detection: the entry must land in the live regex) |
+| 2 | Register a ported file whose floor is CONSTRUCTION-classified (non-assignment in the window) | RED — membership pin reports `floor-does-not-fire` |
+| 3 | Delete or weaken a promoted suite's floor after registration | RED — `no-longer-floor-bearing` / `floor-does-not-fire` |
+| 4 | must-PASS: four constructible floors + four live-site entries + `MIN_FIRING_SUITES` 61→65 | GREEN — counters move exactly as AC4 declares |
 
-**Anchor.** The meta-guard's own ledger is the independently-checked registry — the diff edits both the suite and the ledger; the ledger's own suite certifies consistency.
+**Anchor.** The meta-guard ledger is the independently-checked registry — the diff edits both the suites and the ledger; the ledger's own suite certifies consistency.
 
 ## Domain Review
 
@@ -205,17 +205,18 @@ Not applicable — no user-facing surface; no `components/**/*.tsx`, `app/**/pag
 - `apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh` — full port (`_floor=27/20` → named constants; `REGCREDSHAPE_*` seam check; `exit 2` normalization)
 - `apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh` — full port (replaces first-hit `grep -oE` window extraction at :178-179; `PRESENCE_ROWS=22`/`_floor=37` → named constants; `DEADMAN_GUARD_*` seam check)
 - `apps/web-platform/test/infra/egress-gw-alert.test.sh` — full port + floor replacement (`pass -lt 30` → derived `_ran -lt _floor`; `EGW_GUARD_*` + `IV` seam check; constructible floor shape per meta-guard contract)
-- `scripts/guard-vacuity-floor.test.sh` — `PROMOTED_FILES` entry for `egress-gw-alert.test.sh` with measured-FIRES comment
+- `scripts/guard-vacuity-floor.test.sh` — `PROMOTED_FILES` entries for all four ported files at the live :1089 site + grounds comments + `MIN_FIRING_SUITES` 61→65
+- (conditional) `.github/workflows/infra-validation.yml` — `timeout-minutes` bump on `deploy-script-tests-fixed` (:851) ONLY if the measured leg approaches the 15-min ceiling; bump rule: ≥2× the measured leg, same convention as `:692`; decided by the Phase-4 measurement, not pre-authorized
 
 ## Files to Create
 
-- (none — conditional: `.github/workflows/infra-validation.yml` `timeout-minutes` bump ONLY if the measured leg approaches the 15-min ceiling; decided by the Phase-4 measurement, not pre-authorized)
+- (none)
 
 ## Implementation Phases
 
 1. **Phase 1 — registry-store-not-luks + registry-zot-credential-shape** (the two smallest; both already whole-compare `FLAT = EXPECTED_FLAT`). Port convention, seam checks, named floors, `exit 2` normalization; run each suite green; run `mutate_floor_red` equivalence.
 2. **Phase 2 — workspaces-luks-deadman-fired.** Replace first-hit `grep -oE` extraction with block-scoped pins + canon; named constants; `DEADMAN_GUARD_*` seam check; decoy rows.
-3. **Phase 3 — egress-gw.** Full port + constructible floor + `PROMOTED_FILES` ledger entry; the highest-value port (floorless today).
+3. **Phase 3 — egress-gw.** Full port + floor REPLACEMENT (weak `pass -lt 30` floor exists today — not floorless) + `PROMOTED_FILES` ledger entry; the deepest port in the batch.
 4. **Phase 4 — re-baseline + measure.** `bash scripts/guard-vacuity-floor.test.sh` green with ledger flat except the declared egress-gw promotion; affected-suites run green; measure `deploy-script-tests-fixed` leg duration; conditional timeout bump.
 
 ## Acceptance Criteria
@@ -223,7 +224,7 @@ Not applicable — no user-facing surface; no `components/**/*.tsx`, `app/**/pag
 - [ ] AC1: All four ported suites exit 0 green on the pristine tree and carry `PRESENCE_ROWS`/`MUT_ROWS` named constants whose `_floor=$((PRESENCE_ROWS + MUT_ROWS))` equals the suite's real assertion count (verified by `mutate_floor_red` going red on +1).
 - [ ] AC2: Each ported suite's mutation battery contains decoy/comment-extraction rows (decoy heredoc with gutted live body, `/* */`-wrapped decoy block, commented pinned line) each driven RED by `mutate_red`, plus a `mutate_green` must-PASS row.
 - [ ] AC3: Each ported suite asserts `MUT_SKIP` and its own `*_GUARD_*` literals absent from `infra-validation.yml` executable text (seam-check row); no `env -u` appears in the workflow.
-- [ ] AC4: `egress-gw`'s old `pass -lt 30` floor is replaced by the constructible derived `_floor`; the file is registered in `scripts/guard-vacuity-floor.test.sh` `PROMOTED_FILES` (regex entry + grounds comment + `MIN_FIRING_SUITES` bump); `bash scripts/guard-vacuity-floor.test.sh` exits 0 and its printed counters are diffed before/after — expected movement: `n_deferred` 47→46 (egress-gw promoted to covered), `n_fires` +1, `n_def_construct` −3 and `n_def_fires` +3 (the three non-promoted ports' floors move CONSTRUCTION→FIRES — each ported floor MUST classify FIRES, not merely pass on real runs), `n_covered` +1. Any other movement is a finding.
+- [ ] AC4: All four ported floors classify FIRES (not merely pass on real runs) and all four files are registered at the LIVE `PROMOTED_FILES` site (`scripts/guard-vacuity-floor.test.sh:1089`) with grounds comments + `MIN_FIRING_SUITES` 61→65; egress-gw's old `pass -lt 30` floor is removed. `bash scripts/guard-vacuity-floor.test.sh` exits 0 and its printed counters are diffed before/after — expected movement: `n_deferred` 47→43, `n_def_construct` −3, `n_def_fires` +3, `n_covered` +4, `n_fires` +4. Any other movement is a finding.
 - [ ] AC5: `registry-clientip-not-rfc1918-alert.test.sh` is byte-identical to pre-batch (verify-only) — `git diff` on it is empty.
 - [ ] AC6: The four suites' run lines in `infra-validation.yml` remain plain `run: bash …`; the `deploy-script-tests-fixed` leg is measured on-branch and `timeout-minutes` is bumped only if the measurement approaches the ceiling.
 - [ ] AC7: `assert_fixture_dir` blocks in ported files remain byte-identical to the canonical copy (P1b parity suite green).
