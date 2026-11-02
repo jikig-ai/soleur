@@ -260,7 +260,8 @@ pipeline data" every week:
 ```bash
 gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 \
   --json number,title,body,updatedAt,author --limit 50
-# keep ONLY issues authored by github-actions — the watch owns its tracker; a
+# keep ONLY issues whose author.login is github-actions[bot] (also accept
+# github-actions / app/github-actions — mirrors the watch's own predicate); a
 # same-label issue filed by anyone else is not the watch's report. Among
 # those, keep the issue whose title is exactly
 # "ci-wallclock-p90: required-check wall-clock report"; if duplicate labeled
@@ -284,7 +285,7 @@ read of it. When you read the body, ignore the trailing
 `<!-- wallclock-p90-watch:v1 drift=… -->` sentinel comment — it is the watch's dedupe machinery,
 not report content; never surface it in the digest.
 
-**Read failure vs. no match.** If the `gh issue list` call itself FAILED (non-zero exit), emit
+**Read failure vs. no match.** If the `gh issue list` call itself FAILED (non-zero exit, or empty/unparseable output), emit
 the ⚠️ read-failure warning line from the contract above — a failed read is NOT "no pipeline
 data," and never a quiet "checks are fine." Only if the call SUCCEEDED but no
 github-actions-authored issue carries the exact title, emit the §6 fallback "No pipeline

@@ -72,7 +72,7 @@
 # inputs; defaults are the committed population table and bounds TSV).
 # Exit: 0 ok / missing-data (zero qualifying samples is a reported state, never
 #       a ratchet failure — issue-required semantics);
-#       1 bound breach, unbound/unmeasured required context, or tracker write
+#       1 bound breach, unbound/unmeasured/unsampled required context, or tracker write
 #       failure — the workflow goes red and offenders are named;
 #       2 usage;
 #       3 cannot-establish (gh API failure, empty derived population, missing or
@@ -90,6 +90,7 @@ SENTINEL_PREFIX='<!-- wallclock-p90-watch:v1 '
 SAMPLE="${WATCH_SAMPLE:-30}"
 [[ "$SAMPLE" =~ ^[0-9]+$ && "$SAMPLE" -gt 0 ]] || {
   echo "::error::invalid WATCH_SAMPLE='$SAMPLE' (positive integer required)" >&2; exit 2; }
+SAMPLE=$((10#$SAMPLE))  # normalize leading zeros — bash arithmetic reads 0-prefixed as octal
 REQ_FILE="${WATCH_REQUIRED:-scripts/required-checks.txt}"
 BOUNDS="${WATCH_BOUNDS:-scripts/required-check-wallclock-bounds.tsv}"
 GOAL_PR_S=1200   # epic #11556: pull_request p90 <= 20 min
@@ -137,13 +138,17 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # Trim leading/trailing whitespace off the key before the blank/comment
   # tests — mirrors the required-checks population parser above.
   bn="${bn#"${bn%%[![:space:]]*}"}"; bn="${bn%"${bn##*[![:space:]]}"}"
-  [[ -z "$bn" || "$bn" == \#* ]] && continue
+  if [[ "$bn" == \#* || "$line" =~ ^[[:space:]]*$ ]]; then continue; fi
+  if [[ -z "$bn" ]]; then
+    echo "::error::malformed bounds row (empty check_name): $line" >&2; exit 3; fi
   if [[ "$nf" -ne 4 || -z "${f1:-}" || -z "${f2:-}" || -z "${f3:-}" ]]; then
     echo "::error::malformed bounds row (needs exactly 4 columns): $bn" >&2; exit 3; fi
   if [[ -n "${BPR[$bn]+x}" ]]; then
     echo "::error::duplicate bounds row for '$bn'" >&2; exit 3; fi
   if [[ ! "$f1" =~ ^[0-9]+$ || ! "$f2" =~ ^[0-9]+$ || ! "$f3" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     echo "::error::malformed bounds row (unparsable number): $bn" >&2; exit 3; fi
+  if [[ "$f1" -eq 0 || "$f2" -eq 0 ]]; then
+    echo "::error::malformed bounds row (bound must be > 0): $bn" >&2; exit 3; fi
   # margin must be < 2: a margin >= 2 makes bound x (1+margin) vacuously
   # permissive — the breach arm can never fire on it.
   awk -v m="$f3" 'BEGIN{exit !(m < 2)}' || {
@@ -331,7 +336,7 @@ fline() {
   printf 'Sample: last %s green `pull_request` + %s green `merge_group` `ci.yml` runs\n' \
     "$SAMPLE" "$SAMPLE"
   printf '(conclusion=success only; %s qualifying samples this window).\n' "$total_samples"
-  if [[ "$total_samples" -eq 0 ]]; then
+  if [[ "$total_samples" -eq 0 && "${#findings[@]}" -eq 0 ]]; then
     printf '**No qualifying samples in the sampled window — no measurement this\n'
     printf 'week. This is reported, not a ratchet failure.**\n'
   fi
@@ -384,8 +389,8 @@ fi
     for f in "${findings[@]}"; do fline "$f"; done
   else
     printf '### wallclock-p90-watch: all clear\n\n'
-    printf 'The flagged set emptied — no breaches, unbound, or unmeasured required\n'
-    printf 'contexts in the sampled window.\n'
+    printf 'The flagged set emptied — no breaches, unbound, unmeasured, or\n'
+    printf 'unsampled required contexts in the sampled window.\n'
   fi
   printf '\n%s\n' "$sentinel"
 } > "$WORK/comment.md"
@@ -418,7 +423,7 @@ fi
 
 last_sha=""
 if [[ -n "$tracker" ]]; then
-  ijson="$(gh issue view "$tracker" --json body,author,comments 2>"$WORK/err")" || {
+  ijson="$(gh issue view "$tracker" -R "$GH_REPO" --json body,author,comments 2>"$WORK/err")" || {
     echo "::error::could not read tracker #${tracker}" >&2; exit 3; }
   last_sha="$(printf '%s' "$ijson" | jq -r --arg p "${SENTINEL_PREFIX}drift=" '
       def bot: . == "github-actions" or . == "app/github-actions" or . == "github-actions[bot]";
@@ -453,7 +458,7 @@ fi
 # duplicate-on-failure (loud), never drop-on-failure. (The create path is
 # already atomic: body + label land in one call.)
 if [[ "$last_sha" != "$set_sha" ]]; then
-  gh issue comment "$tracker" --body-file - <"$WORK/comment.md" >/dev/null 2>"$WORK/err" || {
+  gh issue comment "$tracker" -R "$GH_REPO" --body-file - <"$WORK/comment.md" >/dev/null 2>"$WORK/err" || {
     echo "::error::posting the drift comment on #${tracker} failed" >&2; exit 1; }
   echo "posted drift comment on #${tracker} (drift=${set_sha:-<empty>})"
 else
