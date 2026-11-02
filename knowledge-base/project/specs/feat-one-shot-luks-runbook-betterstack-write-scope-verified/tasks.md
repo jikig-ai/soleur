@@ -11,7 +11,7 @@ Issue ref: #11869 | PR: #11926 (draft, reuse)
 
 ## Phase 2 - Verify
 
-- 2.1 Run the plan's AC1-AC5 `git grep` / `git diff` checks; each must pass.
+- 2.1 Run the plan's AC1-AC5 checks; each must pass. The paragraph is hard-wrapped, so AC2 and AC3 grep a newline-flattened copy (`tr '\n' ' ' < file | tr -s ' '`) and AC3 compares PR head with `git show origin/main:<runbook>`; AC1 greps the single-line anchors `UNVERIFIED**` and `has not been exercised from this repo`.
 - 2.2 Run markdownlint on the runbook and `bash scripts/pre-push-ratchet-lane.sh`.
 
 ## Phase 3 - Ship
