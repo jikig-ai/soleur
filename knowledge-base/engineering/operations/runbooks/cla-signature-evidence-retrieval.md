@@ -155,13 +155,28 @@ When evidence is being handed to outside counsel, bundle it with a fresh RFC 316
 
    ```bash
    cp records/*.json .
-   # Fetch the most-recent monthly TSR
+   # Fetch the most-recent monthly manifest+.tsr pair. Keys under the month
+   # prefix are per-run versioned (manifest-<run_id>-<run_attempt>.jsonl and
+   # manifest-<run_id>-<run_attempt>.tsr); earlier months may still hold the
+   # legacy fixed pair manifest.jsonl and manifest.tsr — this recipe resolves
+   # both shapes. Take the newest manifest-*.jsonl by LastModified whose
+   # same-stem .tsr also exists: a .jsonl without its sibling marks an
+   # incomplete run — skip it and take the previous complete pair.
+   PREFIX="timestamps/$(date -u +%Y-%m)/"
+   LIST=$(aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api list-objects-v2 \
+     --bucket "$R2_CLA_EVIDENCE_BUCKET" --prefix "$PREFIX" --output json)
+   JSONL_KEY=$(printf '%s' "$LIST" | jq -r '
+     [.Contents[].Key] as $all
+     | [.Contents[] | select(.Key | test("manifest(-[0-9]+-[0-9]+)?\\.jsonl$"))]
+     | sort_by(.LastModified) | reverse
+     | first(.[] | select(.Key | sub("\\.jsonl$"; ".tsr") as $t | $all | index($t) != null))
+     | .Key // empty')
+   TSR_KEY="${JSONL_KEY%.jsonl}.tsr"
+   # If JSONL_KEY is empty, the month has no complete pair yet — nothing to bundle.
    aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3 cp \
-     "s3://${R2_CLA_EVIDENCE_BUCKET}/timestamps/$(date -u +%Y-%m)/manifest.tsr" \
-     monthly.tsr
+     "s3://${R2_CLA_EVIDENCE_BUCKET}/${JSONL_KEY}" monthly.jsonl
    aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3 cp \
-     "s3://${R2_CLA_EVIDENCE_BUCKET}/timestamps/$(date -u +%Y-%m)/manifest.jsonl" \
-     monthly.jsonl
+     "s3://${R2_CLA_EVIDENCE_BUCKET}/${TSR_KEY}" monthly.tsr
    tar czf /tmp/cla-export.tar.gz records/*.json manifest.txt request.tsq response.tsr monthly.tsr monthly.jsonl
    sha256sum /tmp/cla-export.tar.gz | tee /tmp/cla-export.tar.gz.sha256
    ```
@@ -356,11 +371,20 @@ Do NOT wait for the 1-hour TTL.
 
 ### 7.7 Confirm in the next monthly manifest
 
-After the next month's `cla-evidence-timestamp.yml` run, verify the tombstone is in the manifest:
+After the next month's `cla-evidence-timestamp.yml` run, verify the tombstone is in the manifest. The month's object keys are per-run versioned, so select the latest complete manifest as in §6 step 4 (newest `manifest-*.jsonl` by `LastModified` under `timestamps/<next-month>/` whose same-stem `.tsr` also exists — a `.jsonl` without its sibling `.tsr` marks an incomplete run; read the previous complete pair instead):
 
 ```bash
+PREFIX="timestamps/<next-month>/"
+LIST=$(aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3api list-objects-v2 \
+  --bucket "$R2_CLA_EVIDENCE_BUCKET" --prefix "$PREFIX" --output json)
+JSONL_KEY=$(printf '%s' "$LIST" | jq -r '
+  [.Contents[].Key] as $all
+  | [.Contents[] | select(.Key | test("manifest(-[0-9]+-[0-9]+)?\\.jsonl$"))]
+  | sort_by(.LastModified) | reverse
+  | first(.[] | select(.Key | sub("\\.jsonl$"; ".tsr") as $t | $all | index($t) != null))
+  | .Key // empty')
 aws --endpoint-url "$R2_CLA_EVIDENCE_ENDPOINT" s3 cp \
-  "s3://${R2_CLA_EVIDENCE_BUCKET}/timestamps/<next-month>/manifest.jsonl" - \
+  "s3://${R2_CLA_EVIDENCE_BUCKET}/${JSONL_KEY}" - \
   | grep "tombstones/<sha>.deleted.json"
 ```
 
