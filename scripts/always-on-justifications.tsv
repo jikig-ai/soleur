@@ -14,7 +14,6 @@ scripts/lint-agents-enforcement-tags-live	always-on class: repo-global scanners:
 scripts/lint-anthropic-content-position-live	always-on class: repo-global scanners: -live convention
 scripts/lint-doppler-description-length-live	always-on class: repo-global scanners: -live convention
 scripts/lint-dual-lockfile-live	always-on class: repo-global scanners: -live convention
-scripts/lint-gh-argv-arg-live	always-on class: repo-global scanners: -live convention
 scripts/lint-guard-contract-live	always-on class: repo-global scanners: -live convention
 scripts/lint-feature-map-coverage-live	always-on class: repo-global scanners: -live convention
 scripts/lint-integration-env-gates-live	always-on class: repo-global scanners: -live convention
@@ -29,21 +28,18 @@ scripts/lint-workflow-install-sites-live	always-on class: repo-global scanners: 
 scripts/lint-workflow-issue-write-scope-live	always-on class: repo-global scanners: -live convention
 scripts/lint-workflow-step-env-refs-live	always-on class: repo-global scanners: -live convention
 scripts/lint-ratchet-ruff-live	always-on class: repo-global scanners: -live convention
-tests/scripts/lint-ratchet	always-on class: repo-global scanners: -live convention
 scripts/review-reminder-liveness	always-on class: repo-global scanners: -live convention
 scripts/watch-live-verify-pass	always-on class: repo-global scanners: -live convention
 scripts/cosign-verify-live-8037	live-scanner batteries named for the gates they probe (#8384 landed these)
 scripts/generate-kb-index-live	always-on class: repo-global scanners: -live convention
 scripts/test-all-capacity-signal	Verdicts assert properties of the runner itself or of the whole registration set — both invisible to any file-based selection.
 scripts/test-all-webplat-gate	#8993/#8940's run-path watchdog + durable-log battery — a runner-SUT property suite like its killed-classification sibling.
-scripts/test-all-group-affected	scripts/test-all-affected is NOT here: ADR-262 withdrew it (see AFFECTED_CONSUMED_EDGES). Its verdict is computed on sandbox copies of named files, not on the live tree. #8591's TEST_GROUP=affected mutation suite — a runner-SUT property…
 scripts/suite-exit-class-parity	always-on class: runner-SUT and registry-property suites
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	ADR-262 withdrew four self-test mutation batteries from this list — test-all-affected's --rows arms (#11562), battery-tag-authorship-mutations and the two --rows halves of the lint-orphan battery (#8864). Each is a mutation battery over a…
 scripts/lint-agents-enforcement-tags-unit	A ratchet counts a property across the whole tree and references nothing — no file-based query can ever return it (the #8023/#8092/#8177 class).
 scripts/lint-credential-path-literals	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-diagnosis-claims	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-dual-lockfile	always-on class: corpus linters: verdict spans a file class scanned wholesale
-scripts/lint-encryption-posture	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-infra-no-human-steps	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-legal-mirror-drift-baseline-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-legal-registers-unit	always-on class: corpus linters: verdict spans a file class scanned wholesale
@@ -81,13 +77,10 @@ scripts/ship-incident-pir-gate-mutations	always-on class: whole-corpus guards, d
 plugins/soleur/test/auto-close-scanner.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/vendor-drift-classify.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/vendor-drift-workflow.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
-plugins/soleur/test/token-drift-workflow-causes.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
-plugins/soleur/test/check-deps-adapter-drift.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/c4-count-parity.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/test/reusable-release-caller-permissions.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
-plugins/soleur/test/gitleaks-merge-commit.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
 .claude/hooks/hookeventname-coverage.test.sh	always-on class: whole-corpus guards, drift checks, parity and census gates
@@ -122,6 +115,5 @@ plugins/soleur/test/worktree-manager-atomic-config.test.sh	always-on class: Roun
 plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh	always-on class: Round 3 re-check with the contamination fix (review of PR 9422, always-on-audit.md "Round 3 re-check"). The first recorder
 scripts/test-all-fast-tier-budget	always-on class: Round 4 (section 2 of #9307; measurements and cost in always-on-audit.md, 2026-10-04 addendum). The recorder,
 scripts/test-all-weight-drift	#9814: the local weight-drift detector — its verdict asserts properties of the runner's own wiring (default arm, epilogue emit), a runner-SUT property suite like its sibling above.
-.claude/hooks/grep-q-pipe-guard.test.sh	S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms,…
 scripts/test-all-corpus-weight-budget	#11662: corpus-wide committed-weight cap — verdict is a property of the committed tables, not any diff edge.
 scripts/always-on-ledger	#11662: always-on justifications parity + non-live membership ceiling — a corpus property, invisible to file-based selection.

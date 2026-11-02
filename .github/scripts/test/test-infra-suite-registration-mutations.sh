@@ -412,8 +412,8 @@ expect_red_durations() {  # durations-mutating variant of expect_red
 expect_red_durations "M28 phantom durations row" "not an executable infra" \
   sh -c 'printf "%s\t%s\t%s\n" "apps/web-platform/infra/zzz-stale-dur.test.sh" "100" "measured" >> "$1"' _ "$SB/$DURATIONS_REL"
 
-# M29 -- a src value outside {measured,floor} is a malformed row; a typo'd
-# enum must not silently pass as a third class.
+# M29 -- a src value outside {measured,floor,estimate} is a malformed row; a typo'd
+# enum must not silently pass as a fourth class.
 expect_red_durations "M29 durations src outside enum" "malformed" \
   sh -c 'printf "%s\t%s\t%s\n" "apps/web-platform/infra/ci-deploy.test.sh" "100" "weighed" >> "$1"' _ "$SB/$DURATIONS_REL"
 

@@ -209,6 +209,26 @@ CURL_AUTH_PROBE=$(PATH="$WORK/bin:$PATH" CURL_OUT="$WORK/probe.txt" sh -c 'curl 
 assert "harness: the curl stub REFUSES a POST with no Authorization header (exit 64, not a no-op)" \
   "[[ '$CURL_AUTH_PROBE' -eq 64 ]]"
 
+# --- ARM 5 (CTO N12): the detail scrub masks a DOTTED Doppler service token ----------------------
+# A service token is `dp.st.<config>.<body>`: the dot after the config segment ended the old
+# `[A-Za-z0-9_-]{10,}` body class, so the pattern never matched a real token, and the 32-hex /
+# 40-char backstops are no help to a mixed-case body. Phone-home POSTs bypass Vector's scrub, so
+# this is the only mask on that channel. The body is a SYNTHETIC mixed-case string (no hex run, so
+# the generic backstop cannot be what masks it) and is never printed.
+DPM_BODY='Zq9XrT2mKw4LpV8nYb3Hs6JdQ1cFg5Ua'
+: > "$LOGGER_OUT"; : > "$CURL_OUT"; : > "$CURL_OUT.stdin"
+printf '%s' 'synthetic-token-value' > "$TOK"
+PATH="$WORK/bin:$PATH" LOGGER_OUT="$LOGGER_OUT" CURL_OUT="$CURL_OUT" CURL_STUB_RC=0 \
+  SOLEUR_INNGEST_BS_TOKEN_FILE="$TOK" bash "$EMITTER" "dp-mask-stage" "doppler said dp.st.prd.${DPM_BODY} rejected" || true
+assert "ARM5 a POST was attempted for the dotted-token detail (the mask is exercised, not short-circuited)" \
+  "[[ -s '$CURL_OUT' ]]"
+assert "ARM5 the dotted dp.st.<config>.<body> token body does NOT reach the POST payload" \
+  "! grep -qF '$DPM_BODY' '$CURL_OUT'"
+assert "ARM5 the dotted token is replaced by the REDACTED marker (the payload still carries the surrounding text)" \
+  "grep -qF 'REDACTED' '$CURL_OUT' && grep -qF 'rejected' '$CURL_OUT'"
+assert "ARM5 a prefix-only token with a short body is left readable (the mask is not a blanket)" \
+  "PATH='$WORK/bin':\$PATH LOGGER_OUT='$LOGGER_OUT' CURL_OUT='$CURL_OUT' CURL_STUB_RC=0 SOLEUR_INNGEST_BS_TOKEN_FILE='$TOK' bash '$EMITTER' dp-mask-stage 'plain dp.st.prd is a prefix' && grep -qF 'dp.st.prd is a prefix' '$CURL_OUT'"
+
 # --- #7228 AC5: the per-boot token re-stage, asserted over the RENDERED userdata ----------------
 # WHY RENDERED AND NOT THE SOURCE. cloud-init-inngest.yml is a Terraform templatefile(), so the
 # bytes the host actually receives are not the bytes in this repo: `$${...}` collapses, `%{...}`
@@ -236,7 +256,7 @@ else
   # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
   # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
   # Guard 4 cases prove the explicit enumeration rather than the backstop.
-  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_luks_volume_id="v2", doppler_token="d", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42", infra_config_install_text="fixture-installer-body", cosign_trusted_root_text="{}" })' "$CLOUD_INIT")"
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_luks_volume_id="v2", doppler_token="d", doppler_flip_token="f", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42", infra_config_install_text="fixture-installer-body", cosign_trusted_root_text="{}" })' "$CLOUD_INIT")"
   printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -298,8 +318,12 @@ else
   # no alert, query, workflow or script keyed on its field). The extraction anchor on the MAP_KEYS line
   # below moved to the new first key in the same change: anchored on the dropped key it would return an
   # empty list. The floor stays 16 and the bound is now 18.
+  # 18 -> 19: the flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4) threads
+  # `doppler_flip_token` (the read/write token consumed as an EnvironmentFile only by inngest-cutover-flip.service; the redactor also reads it by value); this
+  # suite's hand-kept render map gained it in the same change, or every render assertion in the
+  # suite would red for the wrong reason (a missing template variable).
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 18 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 19 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
@@ -695,23 +719,86 @@ EPH
   mutant_red "G4 row 5: the redactor body is empty (dispatch)" '2,$d' case_redact "$REDACT"
   mutant_red "G4 row 5b: the redactor is a no-op (injection case must still see its output)" '2,$d' case_inject_redact "$REDACT"
 
+  # --- CTO R4 (flip-token split): the flip token is redacted BY VALUE, read with sed, never sourced --
+  # The generic [A-Za-z0-9_+/-]{40,} backstop cannot be relied on for `dp.st.<config>.<body>`: the
+  # dots break the run and a truncated tail can cut the body under 40. The redactor therefore reads
+  # /etc/default/inngest-flip itself. It hard-codes TWO paths (the flip file and the sourced
+  # /etc/default/inngest-doppler); both are rewritten to fixtures in a COPY, each literal must occur
+  # exactly once (so a refactor cannot turn the rewrite into a silent no-op), and stub `doppler` and
+  # `jq` sit first on PATH (a non-empty boot token otherwise triggers the redactor's Doppler download
+  # and a real network call). The stub doppler records the DOPPLER_TOKEN it was handed: a redactor
+  # that SOURCED the flip file would hand the later download the flip token instead of the boot one.
+  FLIP_FX="$WORK/flipfx"; mkdir -p "$FLIP_FX/bin"
+  # Synthetic, mixed-case, no hex run of 32+: only the by-value line can mask these.
+  FLIP_BODY='Fj3RkT8mQw2LpV7nYb4Hs9JdZ1cXg6Ua'
+  BOOT_BODY='Bq5XrT1mKw8LpV2nYb7Hs3JdQ9cFg4Ue'
+  printf 'DOPPLER_TOKEN=dp.st.prd.%s\n' "$FLIP_BODY" > "$FLIP_FX/flip.env"
+  printf 'HOME=/root\nDOPPLER_TOKEN=dp.st.prd.%s\nDOPPLER_CONFIG=prd\n' "$BOOT_BODY" > "$FLIP_FX/doppler.env"
+  printf '#!/bin/sh\nprintf %%s "$DOPPLER_TOKEN" > "%s/doppler-saw-token"\nprintf "{}"\n' "$FLIP_FX" > "$FLIP_FX/bin/doppler"
+  printf '#!/bin/sh\n%s\n%s\n' 'cat >/dev/null' 'exit 0' > "$FLIP_FX/bin/jq"
+  chmod +x "$FLIP_FX/bin/doppler" "$FLIP_FX/bin/jq"
+  # rewrite_redact <src> <out>: point both hard-coded paths at fixtures
+  rewrite_redact() {
+    sed -e "s#/etc/default/inngest-flip#$FLIP_FX/flip.env#g" -e "s#/etc/default/inngest-doppler#$FLIP_FX/doppler.env#g" "$1" > "$2"
+  }
+  run_redact_flip() { # $1 rewritten redactor, stdin = tail
+    rm -f "$FLIP_FX/doppler-saw-token"
+    # DOPPLER_TOKEN is EXPORTED in the inherited environment, as it is for the callers that run the
+    # redactor under `set -a`: a variable already in the environment is updated by an assignment in a
+    # sourced file and the update reaches the child, so this is the shape in which sourcing the flip file
+    # would hand the Doppler download the flip token.
+    env -i PATH="$FLIP_FX/bin:$PATH" HOME="$WORK" DOPPLER_TOKEN="dp.st.prd.$BOOT_BODY" SOLEUR_INNGEST_SENTRY_DSN_FILE="$RENDERED_DSN" bash "$1"
+  }
+  case_redact_flip() { # behaviour: both tokens masked by value; the Doppler call keeps the BOOT token
+    local rw="$WORK/redact-flip-rw.$RANDOM" out saw
+    rewrite_redact "$1" "$rw"
+    out="$(printf 'doppler rejected dp.st.prd.%s and dp.st.prd.%s today' "$FLIP_BODY" "$BOOT_BODY" | run_redact_flip "$rw")"
+    [[ -n "$out" ]] || return 1
+    ! grep -qF "$FLIP_BODY" <<<"$out" || return 1
+    ! grep -qF "$BOOT_BODY" <<<"$out" || return 1
+    grep -qF 'today' <<<"$out" || return 1
+    saw="$(cat "$FLIP_FX/doppler-saw-token" 2>/dev/null)"
+    [[ "$saw" == "dp.st.prd.$BOOT_BODY" ]]
+  }
+  case_redact_flip_absent() { # an absent flip file degrades quietly: the boot token is still masked, no error
+    local rw="$WORK/redact-flip-rw.$RANDOM" out
+    rewrite_redact "$1" "$rw"
+    mv "$FLIP_FX/flip.env" "$FLIP_FX/flip.env.off"
+    out="$(printf 'x dp.st.prd.%s y' "$BOOT_BODY" | run_redact_flip "$rw")"
+    mv "$FLIP_FX/flip.env.off" "$FLIP_FX/flip.env"
+    [[ -n "$out" ]] && ! grep -qF "$BOOT_BODY" <<<"$out" && grep -qF 'y' <<<"$out"
+  }
+  case_redact_flip_paths() { # each hard-coded path occurs exactly once, so the rewrite above is not a no-op
+    [[ "$(grep -o '/etc/default/inngest-flip' "$1" | wc -l)" -eq 1 ]] \
+      && [[ "$(grep -o '/etc/default/inngest-doppler' "$1" | wc -l)" -eq 1 ]]
+  }
+  S_FLIP_REDACT_CASES=(case_redact_flip case_redact_flip_absent case_redact_flip_paths)
+  for c in "${S_FLIP_REDACT_CASES[@]}"; do
+    assert "flip-token split must-PASS: $c holds for the rendered redactor" "$c '$REDACT'"
+  done
+  mutant_red "flip row 1: drop the flip-token by-value line" '/inngest-flip/d' case_redact_flip "$REDACT"
+  mutant_red "flip row 2: SOURCE the flip file instead of reading it with sed (clobbers DOPPLER_TOKEN for the download)" \
+    's#vals+=("$(sed -n .s/^DOPPLER_TOKEN=//p. /etc/default/inngest-flip 2>/dev/null)")#. /etc/default/inngest-flip; vals+=("$DOPPLER_TOKEN")#' case_redact_flip "$REDACT"
+  mutant_red "flip row 3: read a path the flip file is never written to" 's#/etc/default/inngest-flip#/etc/default/inngest-flp#' case_redact_flip_paths "$REDACT"
+  mutant_red "flip row 4: the redactor is a no-op (dispatch)" '2,$d' case_redact_flip "$REDACT"
+
   # Section floors (review P2-2): a case dropped from a loop, or a mutant row deleted, must red.
   # Literals adjacent to their `if` so guard-vacuity-floor.test.sh can slice them.
-  S6500_NCASES=$(( ${#S6500_CASES[@]} + ${#S6500_REDACT_CASES[@]} ))
-  if [[ "$S6500_NCASES" -ne 13 ]]; then
-    printf '[FATAL] anti-vacuity floor: #6500 section ran %s must-PASS cases, expected 13 — a case was dropped from a loop\n' "$S6500_NCASES" >&2
+  S6500_NCASES=$(( ${#S6500_CASES[@]} + ${#S6500_REDACT_CASES[@]} + ${#S_FLIP_REDACT_CASES[@]} ))
+  if [[ "$S6500_NCASES" -ne 16 ]]; then
+    printf '[FATAL] anti-vacuity floor: #6500 section ran %s must-PASS cases, expected 16 — a case was dropped from a loop\n' "$S6500_NCASES" >&2
     exit 1
   fi
   # Mutation rows: counted by mutant_red itself, so a deleted row lowers it.
-  S6500_EXPECTED_ROWS=32
+  S6500_EXPECTED_ROWS=36
   if [[ "$S6500_ROWS" -lt $S6500_EXPECTED_ROWS ]]; then
     printf '[FATAL] anti-vacuity floor: only %s #6500 mutation rows ran, expected %s — a row was deleted\n' "$S6500_ROWS" "$S6500_EXPECTED_ROWS" >&2
     exit 1
   fi
   # Whole-suite verdict floor: the 42 pre-#6500 assertions (40 + #8562's two argv/stdin rows) plus
-  # this section's 53.
+  # this section's 53, plus the 4 ARM5 dp-mask rows and the 7 flip-token redactor rows (95 -> 106).
   SUITE_VERDICTS=$((PASS + FAIL))
-  SUITE_EXPECTED_VERDICTS=95
+  SUITE_EXPECTED_VERDICTS=106
   if [[ "$SUITE_VERDICTS" -lt $SUITE_EXPECTED_VERDICTS ]]; then
     printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected %s\n' "$SUITE_VERDICTS" "$SUITE_EXPECTED_VERDICTS" >&2
     exit 1

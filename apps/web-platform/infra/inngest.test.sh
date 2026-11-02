@@ -3303,6 +3303,20 @@ assert "soleur-inngest-provision.service: every [Service] EnvironmentFile path h
 assert "inngest-redis.service stays deliberately unconditioned on the env file (designed-loud, #9962)" \
   "! _luks_sec '$REDIS_SVC' Unit | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
 
+# DELIBERATE EXCEPTION to the pairing calibration above (flip-token split, ADR-282 addendum 2026-10-30,
+# #9927 item 4; CTO N1). The cloud-init drop-in that points inngest-cutover-flip.service at
+# /etc/default/inngest-flip carries an UNPREFIXED EnvironmentFile= and NO ConditionPathExists. Every
+# pin above asks "does a late-runcmd EnvironmentFile have a matching Condition"; here the answer is
+# deliberately no: the flip service and timer are installed by the bootstrap only AFTER the runcmd item
+# that writes the flip file, a failed write aborts runcmd (`|| exit 1`), and a Condition would turn a
+# loud failure (the unit fails on every 30 s start, stderr shipped) into a silent skip with no detector
+# that does not share the gate (learnings/bug-fixes/2026-10-11-conditioning-a-unit-also-conditions-...).
+# The base unit's own ConditionPathExists=/etc/default/inngest-server (pinned above) still gates it.
+# inngest-flip-token.test.sh section R proves the resolution; this row pins the shape from this suite.
+_flip_dropin() { awk '/^  - path: \/etc\/systemd\/system\/inngest-cutover-flip\.service\.d\/10-flip-token\.conf$/{f=1;next} f&&/^  - path: /{f=0} f' "$SCRIPT_DIR/cloud-init-inngest.yml"; }
+assert "the flip drop-in has an unprefixed EnvironmentFile=/etc/default/inngest-flip under [Service] and NO ConditionPathExists (deliberate, CTO N1)" \
+  "[[ \$(_flip_dropin | _sec_body_vals Service EnvironmentFile) == /etc/default/inngest-flip ]] && ! _flip_dropin | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
@@ -3335,7 +3349,8 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # path pin).
 # #10540: 586 -> 601 (the app copies derive from the dedicated random_id: expression equality, derivation, ignore_changes kept,
 # dedicated pair without lifecycle, contract/NOTE/retired-comment pins; 15 rows).
-INNGEST_MIN_ASSERTIONS_FULL=601
+# flip-token split: 601 -> 602 (the flip drop-in's unprefixed, Condition-less EnvironmentFile= pin).
+INNGEST_MIN_ASSERTIONS_FULL=602
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
