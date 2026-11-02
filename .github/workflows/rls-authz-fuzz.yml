@@ -214,7 +214,7 @@ jobs:
           jq -e '.numPassedTests >= 7 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
             || { echo "::error::rls-grants api-role grant cases did not all execute"; jq '{numPassedTests,numPendingTests,numFailedTests}' "$report"; exit 1; }
 
-      # Same not-skipped assertion for the git-data erasure ledger cases (#8211, migration 164).
+      # Same not-skipped assertion for the git-data erasure ledger cases (#8211, migration 182).
       - name: Assert the git-data erasure ledger cases executed (not skipped)
         working-directory: apps/web-platform
         env:
