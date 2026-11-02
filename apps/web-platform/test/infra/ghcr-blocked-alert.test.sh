@@ -34,6 +34,18 @@
 #     workflow's push trigger: the page depends on what the emitters MEAN, when they run and whether the
 #     alert is created, not only on the literals.
 #
+# WHAT THIS FILE NOW PROVES (post-#11720 convention):
+#   * CANONICAL EQUALITY — the flattened heredoc must EQUAL the string built from the emitters' own
+#     needles (derived, never re-pinned), so dead text and arithmetic edits go red; decoy heredoc
+#     and resource openers are counted file-wide and red.
+#   * BLOCK-SCOPED EXACTLY-ONCE PINS — every alert attribute is asserted inside its own resource
+#     block by param(), whole value line anchored both ends, required exactly once.
+#   * THE BATTERY CANNOT BE MUTED — MUT_SKIP skips mutation rows on an inner run only; the
+#     pristine-child control FATALs (rc 2) otherwise; GHCR_GUARD_/MUT_SKIP literals may not reach
+#     the workflow's executable text (the seam check).
+#   * RC DISCRIMINATION — only rc=1 (a real [FAIL] verdict) is a caught mutation; instrument
+#     failures (rc>=2) are UNRESOLVED. Floor/ledger trips exit 1.
+#
 # WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (it is created by an apply of
 # apply-web-platform-infra.yml; the reconciler's `logs_alert` arm reads the live world twice daily), that the
 # Vector allowlist ships the ci-deploy tag (journald-config.test.sh pins that), nor that a real row reaches
@@ -86,35 +98,55 @@ for f in "$TF" "$WF" "$CI" "$CR" "$RB" "$IV"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
+# Extract a <<[-]SQL heredoc local by name: first line after `name = <<[-]SQL` to its `  SQL` terminator.
+sql_local() {  # sql_local <local-name>
+  awk -v n="$1" '
+    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<[-]SQL" { f=1; next }
+    f && /^  SQL$/ { f=0 }
+    f { print }
+  ' "$TF"
+}
+# res_block: one resource block from its column-0 header to its column-0 closing brace.
+res_block() {  # res_block <type> <name>
+  awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
+}
+# param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
+# both ends, required EXACTLY ONCE — a decoy or duplicated line is a red, not a shrug.
+# Every grep over a captured VARIABLE reads a pipe-fed grep -cE count, never `… | grep -q`: under
+# pipefail, grep -q exiting on its first match can SIGPIPE the writer and fail a negated check OPEN.
+param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
+  [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
+}
+
 # The predicate heredoc, from the FIRST UNCOMMENTED opening line to its own terminator.
-LOCAL_SQL="$(awk '/^[[:space:]]*ghcr_hostsfile_deny_lost_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^[[:space:]]*SQL$/{exit} f' "$TF")"
+LOCAL_SQL="$(sql_local ghcr_hostsfile_deny_lost_sql)"
 # Layout-independent view: every run of whitespace is one space, and no space sits inside a parenthesis pair,
 # so re-wrapping the heredoc (the resource collapses it the same way) is not a contract change.
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
 # The alert and exploration blocks, from their exact header to the first column-0 "}".
-ALERT="$(awk '/^resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-EXPL="$(awk '/^resource "logtail_exploration" "ghcr_hostsfile_deny_lost" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
+ALERT="$(res_block logtail_exploration_alert ghcr_hostsfile_deny_lost)"
+EXPL="$(res_block logtail_exploration ghcr_hostsfile_deny_lost)"
 # The push-triggered MAIN plan: from the first `terraform plan -no-color` to its `rc=$?`. The workflow
 # has other plan commands whose -target lists never run on a push to main, so the allowlist rows below
 # read THIS region, not the whole file.
 MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=\$\?/{exit}' "$WF")"
 
-# Whole-line assertions anchored at both ends: a bare substring grep is satisfied by the same text
-# inside a comment, or with a suffix that inverts it (`paused = false || true`).
-# Every grep over a captured VARIABLE reads a HERE-STRING, never `printf … | grep -q`: under pipefail, grep -q exiting on its
-# first match can SIGPIPE the writer and fail the pipeline, which fails a negated check OPEN.
-line_in() {  # line_in <text> <ERE for the whole line, without anchors>
-  grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
-}
-# A resource's own attributes sit at exactly two spaces and a nested block's at four, so a decoy
-# `paused = false` inside `metadata = { … }` cannot satisfy a top-level check (valid HCL cannot repeat a
-# top-level attribute, which is what makes one anchored line sufficient).
-top_in() {  # top_in <text> <ERE for the whole line, without anchors>
-  grep -qE "^  $2[[:space:]]*(#.*)?$" <<< "$1"
-}
-blk_in() {  # blk_in <text> <ERE for the whole line, without anchors>
-  grep -qE "^    $2[[:space:]]*(#.*)?$" <<< "$1"
-}
+# Opener/header counts — unanchored, file-wide, exactly once each. A /* */- or #-wrapped
+# decoy opener still counts and goes red; dead text can never satisfy the live local.
+_n="$(grep -cE 'ghcr_hostsfile_deny_lost_sql[[:space:]]*=[[:space:]]*<<[-]SQL' "$TF")"
+[ "$_n" -eq 1 ] \
+  && ok "exactly one ghcr_hostsfile_deny_lost_sql heredoc opener in the file (decoy copies count)" \
+  || no "ghcr_hostsfile_deny_lost_sql opener count is $_n, want 1 — a decoy local exists"
+for _r in "logtail_exploration ghcr_hostsfile_deny_lost" "logtail_exploration_alert ghcr_hostsfile_deny_lost"; do
+  _n="$(grep -cE "resource \"${_r%% *}\" \"${_r##* }\"" "$TF")"
+  [ "$_n" -eq 1 ] \
+    && ok "exactly one resource ${_r} header in the file" \
+    || no "resource ${_r} header count is $_n, want 1 — a decoy resource exists"
+done
 
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
@@ -230,46 +262,49 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
 
 EXPL_QRY="$(awk '/^  query \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
 EXPL_VAR="$(awk '/^  variable \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
-blk_in "$EXPL_QRY" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.ghcr_hostsfile_deny_lost_sql\), "/\\\\s\+/", " "\)' \
+param "$EXPL" 'sql_query' 'replace\(trimspace\(local\.ghcr_hostsfile_deny_lost_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.ghcr_hostsfile_deny_lost_sql as its sql_query"
-blk_in "$EXPL_VAR" 'values[[:space:]]*=[[:space:]]*\[local\.vector_prd_source_id\]' \
+param "$EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "the exploration reads the prd Vector source" \
   || no "the exploration's source variable is not local.vector_prd_source_id"
 [ "$(grep -cE '^  query \{' <<< "$EXPL")" -eq 1 ] && [ "$(grep -cE '^  variable \{' <<< "$EXPL")" -eq 1 ] \
-  && blk_in "$EXPL_QRY" 'source_variable[[:space:]]*=[[:space:]]*"source"' \
-  && blk_in "$EXPL_QRY" 'query_type[[:space:]]*=[[:space:]]*"sql_expression"' \
-  && blk_in "$EXPL_VAR" 'name[[:space:]]*=[[:space:]]*"source"' \
+  && param "$EXPL" 'source_variable' '"source"' \
+  && param "$EXPL" 'query_type' '"sql_expression"' \
+  && param "$EXPL" 'name' '"source"' \
   && ok "the exploration has exactly one query and one variable block, and the wiring is read inside each (source_variable=source -> variable source, the prd source)" \
   || no "the exploration's query/variable wiring is not exactly one sql_expression query reading variable \"source\""
 
 [ -n "$ALERT" ] && ok "logtail_exploration_alert.ghcr_hostsfile_deny_lost exists (exact header)" \
   || no "logtail_exploration_alert.ghcr_hostsfile_deny_lost is missing"
-top_in "$ALERT" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.ghcr_hostsfile_deny_lost\.id' \
+param "$ALERT" 'exploration_id' 'logtail_exploration\.ghcr_hostsfile_deny_lost\.id' \
   && ok "the alert watches ITS OWN exploration" \
   || no "the alert's exploration_id is not logtail_exploration.ghcr_hostsfile_deny_lost.id"
-top_in "$ALERT" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-hostsfile-deny-lost-prd"' \
-  && top_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"soleur-ghcr-hostsfile-deny-lost-prd"' \
+param "$ALERT" 'name' '"soleur-ghcr-hostsfile-deny-lost-prd"' \
+  && param "$EXPL" 'name' '"soleur-ghcr-hostsfile-deny-lost-prd"' \
   && ok "both are named soleur-ghcr-hostsfile-deny-lost-prd" \
   || no "the exploration/alert name drifted from soleur-ghcr-hostsfile-deny-lost-prd"
-top_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
-  && top_in "$ALERT" 'operator[[:space:]]*=[[:space:]]*"higher_than"' \
-  && top_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
+param "$ALERT" 'alert_type' '"threshold"' \
+  && param "$ALERT" 'operator' '"higher_than"' \
+  && param "$ALERT" 'value' '0' \
   && ok "threshold, higher_than 0: ONE row reading ghcr_blocked=0 alerts" \
   || no "the alert is not threshold/higher_than/0 — a single lost-deny row would not alert"
-top_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
+param "$ALERT" 'on_missing_data' '"treat_as_zero"' \
   && ok "treat_as_zero, so an open incident can observe recovery" \
   || no "on_missing_data is not treat_as_zero"
-top_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
+param "$ALERT" 'paused' 'false' \
   && ok "paused = false on its own line" \
   || no "the alert is paused (or paused carries a suffix)"
-top_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
+[ "$(printf '%s\n' "$ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "the string 'paused' occurs exactly once in the alert block (a commented or duplicated decoy counts)" \
+  || no "'paused' occurs !=1 time in the alert block — a commented pinned-line decoy exists"
+param "$ALERT" 'email' 'true' \
   && ok "email = true (the free-tier alerting surface)" \
   || no "email is not true"
-top_in "$ALERT" 'confirmation_period[[:space:]]*=[[:space:]]*0' \
-  && top_in "$ALERT" 'check_period[[:space:]]*=[[:space:]]*300' \
-  && top_in "$ALERT" 'query_period[[:space:]]*=[[:space:]]*900' \
-  && top_in "$ALERT" 'recovery_period[[:space:]]*=[[:space:]]*1800' \
+param "$ALERT" 'confirmation_period' '0' \
+  && param "$ALERT" 'check_period' '300' \
+  && param "$ALERT" 'query_period' '900' \
+  && param "$ALERT" 'recovery_period' '1800' \
   && ok "check 300 / query 900 / recovery 1800 with no confirmation delay: the registry heartbeat is */5 so the window holds three emissions, and one quiet bucket does not close an incident the next would re-open" \
   || no "the paging windows drifted from check 300 / query 900 / confirmation 0 / recovery 1800 (the registry_store_not_luks combination)"
 if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALERT"$'\n'"$EXPL"; then
@@ -277,8 +312,8 @@ if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALE
 else
   ok "no count/for_each/lifecycle/ignore_changes on the alert or exploration (the resource exists and reconciles)"
 fi
-line_in "$ALERT" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
-  && line_in "$ALERT" 'team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"' \
+param "$ALERT" 'policy_id' 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
+  && param "$ALERT" 'team_name' 'var\.betterstack_paid_tier \? null : "Your team"' \
   && ok "the escalation target is the free/paid ternary every sibling uses (ADR-218)" \
   || no "the escalation_target drifted from the sibling ternary"
 # The incident text must not claim resolution means a fix: the alert auto-resolves after quiet minutes.
@@ -288,7 +323,7 @@ grep -qE '^  incident_cause[[:space:]]*=.*does NOT mean the deny is back' <<< "$
 
 RB_URL_RE='^[[:space:]]*ghcr_hostsfile_deny_lost_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md#[a-z0-9_-]+"'
 grep -qE '^  incident_cause[[:space:]]*=.*[Rr]unbook: \$\{local\.ghcr_hostsfile_deny_lost_runbook_url\}"[[:space:]]*$' <<< "$ALERT" \
-  && blk_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.ghcr_hostsfile_deny_lost_runbook_url' \
+  && param "$ALERT" 'runbook' 'local\.ghcr_hostsfile_deny_lost_runbook_url' \
   && grep -qE "$RB_URL_RE" "$TF" \
   && ok "incident_cause and metadata.runbook carry the cron-egress-blocked runbook URL (the email is what a reader acts on)" \
   || no "the incident has no clickable cron-egress-blocked runbook URL"
@@ -322,6 +357,20 @@ if [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/cron-
 else
   no "infra-validation.yml no longer wires this guard: runbook or apply-workflow path missing from pull_request paths, the step missing/conditional/non-blocking, or its job conditional/non-blocking"
 fi
+
+# ── Workflow seam — registered exactly once, and no env axis reaches executable text ─────────
+IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
+REG_RUN='        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh'
+n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
+[ "$n_run" -eq 1 ] \
+  && ok "this suite's run line is registered in infra-validation.yml exactly once" \
+  || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+seam_bad=""
+printf '%s\n' "$IV_CODE" | grep -nE 'GHCR_GUARD_' >/dev/null && seam_bad="$seam_bad GHCR_GUARD_-literal"
+printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+[ -z "$seam_bad" ] \
+  && ok "no GHCR_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
 
 # The runbook's decode is the only no-SSH reader of this alert: run its own function body against synthetic rows
 # (a non-JSON row, an object-message row, a forged ` zot_last_err` tail, healthy rows) with the two network tools stubbed.
@@ -380,8 +429,6 @@ PY
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching GHCR_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=38
-MUT_ROWS_EXPECTED=40
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t ghcralert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -395,9 +442,35 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|CI|CR|RB|IV> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
-    local want="$1" label="$2" which="$3" expect="$4" prog="$5" src copy rc=0
-    local ilog="$MUT_DIR/inner.log"
+  PRELUDE='Q = chr(39)
+def edit(s, anchor, old, new, end="\n}\n"):
+    i = s.index(anchor)
+    j = s.index(end, i)
+    region = s[i:j]
+    assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
+    return s[:i] + region.replace(old, new) + s[j:]
+def sql_replace(s, old, new):
+    # The first occurrence AFTER the predicate local opener: other alerts in this file carry
+    # identical tag conjuncts earlier on.
+    i = s.index("  ghcr_hostsfile_deny_lost_sql = <<\x2dSQL")
+    j = s.index(old, i)
+    return s[:j] + new + s[j + len(old):]
+SQLLOC = "  ghcr_hostsfile_deny_lost_sql = <<\x2dSQL"
+SQLEND = "\n  SQL\n"
+ALRRES = "resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" {"'
+
+  _red_verdict() {
+    case "$1" in
+      1) if [ -z "$3" ] || { grep -F '[FAIL]' "$2" | grep -F -- "$3" >/dev/null; }; then echo red; else echo wrong; fi ;;
+      0) echo survived ;;
+      *) echo unresolved ;;
+    esac
+  }
+
+  # mutate_red <label> <TF|WF|CI|CR|RB|IV> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  mutate_red() {
+    local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
+    MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
@@ -405,277 +478,353 @@ if [ -z "${MUT_SKIP:-}" ]; then
       CR) src="$CR"; copy="$MUT_DIR/cloud-init-registry.yml" ;;
       RB) src="$RB"; copy="$MUT_DIR/cron-egress-blocked.md" ;;
       IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
-      *) printf '[FATAL] mutate: unknown target %s\n' "$which" >&2; exit 2 ;;
+      *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
-    cp "$src" "$copy" || { printf '[FATAL] mutate: cp %s failed\n' "$src" >&2; exit 2; }
-    # The program is handed to python through the ENVIRONMENT, so no shell layer rewrites it.
-    MUT_PROG="$prog" python3 - "$copy" <<'PY' || { no "mutation '$label' did not land (anchor drifted)"; MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1)); return 0; }
-import os, sys
+    cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "mutation '$label' did not land (anchor drifted)"; return 0; }
+import sys
 p = sys.argv[1]
+$PRELUDE
 orig = open(p, encoding="utf-8").read()
 s = orig
-def sql_replace(s, old, new):
-    # The first occurrence AFTER the predicate local's opening line: other alerts in this file carry
-    # identical tag conjuncts earlier on.
-    i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
-    j = s.index(old, i)
-    return s[:j] + new + s[j + len(old):]
-exec(os.environ["MUT_PROG"])
+$prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "GHCR_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$ilog" 2>&1 || rc=$?
-    # Only rc=1 (an assertion went red) is a caught mutation; rc>=2 is this guard's own FATAL class.
-    # A RED row must ALSO name the row it targets: "any row failed" would let one unrelated red row
-    # certify every mutation (a row with no unique catcher could then be deleted unnoticed).
-    case "$want:$rc" in
-      RED:1)
-        if grep -qF -- "[FAIL] $expect" "$ilog"; then
-          ok "mutation RED: $label"
-        else
-          no "mutation RED for the WRONG reason (no '[FAIL] $expect' line): $label"
-        fi ;;
-      RED:0)  no "mutation SURVIVED: $label — the rows above pin nothing" ;;
-      PASS:0) ok "must-PASS edit stays green: $label" ;;
-      PASS:*) no "must-PASS edit went red (inner rc=$rc): $label — the guard over-fits" ;;
-      *)      no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
+    env "GHCR_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
+    case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
+      red:red) ok "mutation RED: $label" ;;
+      wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
+      wrong:red) no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label" ;;
+      red:wrong) no "scorer control: the wrong-reason mutant was graded RED (the fragment check accepts anything): $label" ;;
+      survived:*) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
     esac
+  }
+
+  mutate_green() {
+    local label="$1" prog="$2" copy rc=0
     MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
+    copy="$MUT_DIR/betterstack-logs-alerts.tf"
+    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
+import sys
+p = sys.argv[1]
+$PRELUDE
+orig = open(p, encoding="utf-8").read()
+s = orig
+$prog
+assert s != orig, "mutation produced no change"
+open(p, 'w', encoding="utf-8").write(s)
+PY
+    GHCR_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    case "$rc" in
+      0) ok "must-PASS edit stays green: $label" ;;
+      1) no "legitimate edit went RED: $label" ;;
+      *) no "must-PASS UNRESOLVED (inner rc=$rc): $label - instrument, not evidence" ;;
+    esac
+  }
+
+  mutate_floor_red() {
+    local label="$1" copy rc=0 cur
+    MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
+    copy="$MUT_DIR/floor-mutated.test.sh"
+    cur="$(grep -oE '^PRESENCE_ROWS=[0-9]+$' "$SELF" | cut -d= -f2)"
+    [ -n "$cur" ] || { no "mutation '$label' did not land (no PRESENCE_ROWS declaration)"; return 0; }
+    sed -e "s/^PRESENCE_ROWS=${cur}$/PRESENCE_ROWS=$((cur + 1))/" \
+        -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
+    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      1) ok "mutation RED: $label" ;;
+      0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label - instrument, not evidence" ;;
+    esac
   }
   MUT_ROWS_RUN=0
 
   # M1 — the web arm's tag conjunct is dropped: rows quoting the marker under another identifier could alert.
-  mutate RED "M1a the tag conjunct is dropped (quoting rows under another SYSLOG_IDENTIFIER could alert)" TF \
-    "the SYSLOG_IDENTIFIER='ci-deploy' conjunct is missing" \
-    's = sql_replace(s, "(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27\n          AND ", "(")'
+  mutate_red "M1a the tag conjunct is dropped (quoting rows under another SYSLOG_IDENTIFIER could alert)" TF \
+    's = sql_replace(s, "(JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27\n          AND ", "(")' \
+    "the SYSLOG_IDENTIFIER='ci-deploy' conjunct is missing"
   # M1 — exactness is loosened to startsWith: a row that merely begins with the marker could alert.
-  mutate RED "M1b equality is loosened to startsWith (a longer row beginning with the marker could alert)" TF \
-    "the web arm's exactness conjunct is missing" \
-    's = sql_replace(s, "JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=0\x27", "startsWith(JSONExtractString(raw, \x27message\x27), \x27GHCR_DENY ghcr_blocked=0\x27)")'
+  mutate_red "M1b equality is loosened to startsWith (a longer row beginning with the marker could alert)" TF \
+    's = sql_replace(s, "JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=0\x27", "startsWith(JSONExtractString(raw, \x27message\x27), \x27GHCR_DENY ghcr_blocked=0\x27)")' \
+    "the web arm's exactness conjunct is missing"
   # M2 — the registry arm's head-scope is dropped: the free text after ` zot_last_err=` could forge the field.
-  mutate RED "M2 the registry head-scope is dropped (zot_last_err free text could forge ghcr_blocked=0)" TF \
-    "the registry arm's head-scope is missing" \
-    's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) < position(JSONExtractString(raw, \x27message\x27), \x27 zot_last_err=\x27)", "")'
+  mutate_red "M2 the registry head-scope is dropped (zot_last_err free text could forge ghcr_blocked=0)" TF \
+    's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) < position(JSONExtractString(raw, \x27message\x27), \x27 zot_last_err=\x27)", "")' \
+    "the registry arm's head-scope is missing"
   # M3 — the emitter literal is reworded in a COPY of each emitter; the alert's literal is untouched. The
   # guard must be reading the consumer's own needle, not a pinned string.
-  mutate RED "M3a the web emitter is reworded in ci-deploy.sh only (GHCR_DENY -> GHCR_STATE; no sink is found and arm W no longer matches it)" CI \
-    "the web arm's exactness conjunct is missing" \
+  mutate_red "M3a the web emitter is reworded in ci-deploy.sh only (GHCR_DENY -> GHCR_STATE; no sink is found and arm W no longer matches it)" CI \
     'old = "\"GHCR_DENY ghcr_blocked=$_ghcr_blocked\""
 assert s.count(old) == 1
-s = s.replace(old, "\"GHCR_STATE ghcr_blocked=$_ghcr_blocked\"")'
-  mutate RED "M3b the registry field is renamed in cloud-init-registry.yml only (arm R would silently stop matching)" CR \
-    "cloud-init-registry.yml no longer has exactly one LINE" \
+s = s.replace(old, "\"GHCR_STATE ghcr_blocked=$_ghcr_blocked\"")' \
+    "the web arm's exactness conjunct is missing"
+  mutate_red "M3b the registry field is renamed in cloud-init-registry.yml only (arm R would silently stop matching)" CR \
     'old = " ghcr_blocked=$GHCR_BLOCKED "
 assert s.count(old) == 1
-s = s.replace(old, " ghcr_state=$GHCR_BLOCKED ")'
-  mutate RED "M3c the web sink is indented off column 0 (a conditional wrapper would; ci-deploy.test.sh owns per-action reachability)" CI \
-    "ci-deploy.sh no longer has exactly one column-0" \
+s = s.replace(old, " ghcr_state=$GHCR_BLOCKED ")' \
+    "cloud-init-registry.yml no longer has exactly one LINE"
+  mutate_red "M3c the web sink is indented off column 0 (a conditional wrapper would; ci-deploy.test.sh owns per-action reachability)" CI \
     'old = "\nlogger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\""
 assert s.count(old) == 1
-s = s.replace(old, "\n  logger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\"")'
+s = s.replace(old, "\n  logger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\"")' \
+    "ci-deploy.sh no longer has exactly one column-0"
   # M4 — either -target= line is dropped, and then both are MOVED out of the main plan (still in the
   # file, never applied).
-  mutate RED "M4a the exploration is dropped from the apply allowlist" WF \
-    "one or both -target= lines are missing" \
+  mutate_red "M4a the exploration is dropped from the apply allowlist" WF \
     'old = "              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "M4b the alert is dropped from the apply allowlist" WF \
-    "one or both -target= lines are missing" \
+s = s.replace(old, "")' \
+    "one or both -target= lines are missing"
+  mutate_red "M4b the alert is dropped from the apply allowlist" WF \
     'old = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "M4c the -target= lines move out of the main plan (still in the file, never applied)" WF \
-    "one or both -target= lines are missing" \
+s = s.replace(old, "")' \
+    "one or both -target= lines are missing"
+  mutate_red "M4c the -target= lines move out of the main plan (still in the file, never applied)" WF \
     'a = "              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n"
 b = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n"
 assert s.count(a) == 1 and s.count(b) == 1
-s = s.replace(a, "").replace(b, "") + "\n" + a + b'
+s = s.replace(a, "").replace(b, "") + "\n" + a + b' \
+    "one or both -target= lines are missing"
   # M5 — a THIRD arm is appended after a compliant pair: a check that stops at the first member passes it.
-  mutate RED "M5 a third OR arm matching ghcr_blocked=1 is appended after the compliant pair" TF \
-    "the predicate has more than one OR" \
-    's = sql_replace(s, "\n      )\n    GROUP BY time", "\n    OR (JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27 AND JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=1\x27)\n  )\n    GROUP BY time")'
+  mutate_red "M5 a third OR arm matching ghcr_blocked=1 is appended after the compliant pair" TF \
+    's = sql_replace(s, "\n      )\n    GROUP BY time", "\n    OR (JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27 AND JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=1\x27)\n  )\n    GROUP BY time")' \
+    "the predicate has more than one OR"
   # M6 — the guard's OWN dispatch: the locals key is renamed so the heredoc extractor returns empty.
-  mutate RED "M6 the predicate local is renamed so the heredoc extractor finds nothing (the guard must not go vacuous)" TF \
-    "ghcr_hostsfile_deny_lost_sql: heredoc not found" \
-    'old = "  ghcr_hostsfile_deny_lost_sql = <<-SQL"
-assert s.count(old) == 1
-s = s.replace(old, "  ghcr_hostsfile_deny_lost_sql_renamed = <<-SQL")'
+  mutate_red "M6 the predicate local is renamed so the heredoc extractor finds nothing (the guard must not go vacuous)" TF \
+    'assert s.count(SQLLOC) == 1
+s = s.replace(SQLLOC, "  ghcr_hostsfile_deny_lost_sql_renamed = <<\x2dSQL")' \
+    "ghcr_hostsfile_deny_lost_sql: heredoc not found"
+
+  # ── Dead-text / extraction-class rows ──────────────────────────────────────────────────────────
+  mutate_red "a /* */-wrapped decoy heredoc sits before the live local while the live body is gutted" TF \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
+i = s.index(SQLLOC)
+s = s[:i] + "/*\n  ghcr_hostsfile_deny_lost_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+    "decoy local exists"
+  mutate_red "a #-commented decoy opener line sits above the live local" TF \
+    'i = s.index(SQLLOC)
+s = s[:i] + "  # ghcr_hostsfile_deny_lost_sql = <<\x2dSQL\n" + s[i:]' \
+    "decoy local exists"
+  mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
+    "decoy exists"
+  mutate_red "an inline tautology is appended inside the predicate" TF \
+    's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
+    "the predicate is not the two-arm string"
+  mutate_red "a doubled-dollar escape literal appears inside the heredoc" TF \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* $$escaped */", SQLEND)' \
+    "the predicate is not the two-arm string"
+  mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
+    'i = s.index(SQLLOC); j = s.index(SQLEND, i)
+blk = s[i:j]
+assert "count(*) AS value" in blk
+s = s[:i] + SQLLOC + "\n    SELECT 1" + s[j:]' \
+    "the predicate is not the two-arm string"
   # M7 — paging semantics, each its own row.
-  mutate RED "M7a the threshold value is raised to 1 (a single lost-deny row no longer alerts)" TF \
-    "the alert is not threshold/higher_than/0" \
+  mutate_red "M7a the threshold value is raised to 1 (a single lost-deny row no longer alerts)" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  value\s*=\s*)0", s, re.S)
 assert m
-s = s[:m.end(1)] + "1" + s[m.end():]'
-  mutate RED "M7b on_missing_data is no longer treat_as_zero" TF \
-    "on_missing_data is not treat_as_zero" \
+s = s[:m.end(1)] + "1" + s[m.end():]' \
+    "the alert is not threshold/higher_than/0"
+  mutate_red "M7b on_missing_data is no longer treat_as_zero" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  on_missing_data\s*=\s*)\"treat_as_zero\"", s, re.S)
 assert m
-s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]'
-  mutate RED "M7c the alert is paused" TF \
-    "the alert is paused" \
+s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]' \
+    "on_missing_data is not treat_as_zero"
+  mutate_red "M7c the alert is paused" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  paused = )false", s, re.S)
 assert m
-s = s[:m.end(1)] + "true" + s[m.end():]'
-  mutate RED "M7d the query window is shortened to 300 (a registry heartbeat gap would flap the incident)" TF \
-    "the paging windows drifted" \
+s = s[:m.end(1)] + "true" + s[m.end():]' \
+    "the alert is paused"
+  mutate_red "M7d the query window is shortened to 300 (a registry heartbeat gap would flap the incident)" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  query_period\s*=\s*)900", s, re.S)
 assert m
-s = s[:m.end(1)] + "300" + s[m.end():]'
-  mutate RED "M7e email is switched off (the free-tier alerting surface)" TF \
-    "email is not true" \
+s = s[:m.end(1)] + "300" + s[m.end():]' \
+    "the paging windows drifted"
+  mutate_red "M7e email is switched off (the free-tier alerting surface)" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\" \{.*?\n  email\s*=\s*)true", s, re.S)
 assert m
-s = s[:m.end(1)] + "false" + s[m.end():]'
+s = s[:m.end(1)] + "false" + s[m.end():]' \
+    "email is not true"
   # M8 — the runbook heading is renamed in the copy: the alert's link would dangle.
-  mutate RED "M8 the runbook heading is renamed (the alert's runbook link would dangle)" RB \
-    "the runbook anchor" \
+  mutate_red "M8 the runbook heading is renamed (the alert's runbook link would dangle)" RB \
     'old = "### Hosts-file deny lost (Better Stack alert)"
 assert s.count(old) == 1
-s = s.replace(old, "### Hosts-file deny lost (renamed)")'
+s = s.replace(old, "### Hosts-file deny lost (renamed)")' \
+    "the runbook anchor"
   # M9 — a host conjunct is added: web-2 and the pre-rename web-1 name would go silent.
-  mutate RED "M9 a host_name conjunct is added (web-2 and the pre-rename web-1 name would go silent)" TF \
-    "the predicate carries a host_name conjunct" \
-    's = sql_replace(s, "\n      )\n    GROUP BY time", "\n  )\n      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n    GROUP BY time")'
+  mutate_red "M9 a host_name conjunct is added (web-2 and the pre-rename web-1 name would go silent)" TF \
+    's = sql_replace(s, "\n      )\n    GROUP BY time", "\n  )\n      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n    GROUP BY time")' \
+    "the predicate carries a host_name conjunct"
   # M10 — a value-1 needle is added to the registry arm: the alert would page on the healthy state.
-  mutate RED "M10 the registry arm matches ghcr_blocked=1 instead of 0 (it would page on the healthy state)" TF \
-    "the predicate names value 1 or unknown" \
+  mutate_red "M10 the registry arm matches ghcr_blocked=1 instead of 0 (it would page on the healthy state)" TF \
     'old = "\x27 ghcr_blocked=0 \x27) > 0"
-i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
+i = s.index(SQLLOC)
 j = s.index(old, i)
-s = s[:j] + "\x27 ghcr_blocked=1 \x27) > 0" + s[j + len(old):]'
+s = s[:j] + "\x27 ghcr_blocked=1 \x27) > 0" + s[j + len(old):]' \
+    "the predicate names value 1 or unknown"
 
   # Must-PASS: layout is not part of the contract (the resource flattens the predicate with replace(…, "/\\s+/", " ")).
-  mutate PASS "M11a every heredoc line is re-indented far deeper (layout is not part of the contract)" TF \
-    "" \
+  mutate_green "M11a every heredoc line is re-indented far deeper (layout is not part of the contract)" \
     'import re
-i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
+i = s.index(SQLLOC)
 j = s.index("\n  SQL\n", i)
 head, rest = s[i:j].split("\n", 1)
 s = s[:i] + head + "\n" + re.sub(r"(?m)^\s+", "                    ", rest) + s[j:]'
-  mutate PASS "M11b the predicate is joined onto one line with irregular spacing (layout is not part of the contract)" TF \
-    "" \
+  mutate_green "M11b the predicate is joined onto one line with irregular spacing (layout is not part of the contract)" \
     'import re
-i = s.index("  ghcr_hostsfile_deny_lost_sql = <<-SQL")
+i = s.index(SQLLOC)
 j = s.index("\n  SQL\n", i)
 head, rest = s[i:j].split("\n", 1)
 s = s[:i] + head + "\n    " + re.sub(r"\s*\n\s*", "   ", rest.strip()) + s[j:]'
 
   # The ">0" conjunct: without it a missing field (position 0) satisfies "< position(zot_last_err)" on a row
   # whose head lacks the field entirely.
-  mutate RED "M12 the registry arm's field-present conjunct (> 0) is dropped" TF \
-    "the predicate is not the two-arm string" \
-    's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) > 0", "")'
+  mutate_red "M12 the registry arm's field-present conjunct (> 0) is dropped" TF \
+    's = sql_replace(s, "\n          AND position(JSONExtractString(raw, \x27message\x27), \x27 ghcr_blocked=0 \x27) > 0", "")' \
+    "the predicate is not the two-arm string"
   # The DIRECTION of the web emitter's derivation: swapping the echoes keeps every literal intact.
-  mutate RED "M13 the web emitter's derivation is inverted (0 printed when the deny IS in force)" CI \
-    "ci-deploy.sh no longer prints 0 on the non-sinkhole branch" \
+  mutate_red "M13 the web emitter's derivation is inverted (0 printed when the deny IS in force)" CI \
     'old = "; then\n    echo 0\n  else\n    echo 1\n  fi"
 assert s.count(old) == 1
-s = s.replace(old, "; then\n    echo 1\n  else\n    echo 0\n  fi")'
+s = s.replace(old, "; then\n    echo 1\n  else\n    echo 0\n  fi")' \
+    "ci-deploy.sh no longer prints 0 on the non-sinkhole branch"
   # The cadence the paging windows were sized for.
-  mutate RED "M14 the registry heartbeat cadence changes from every 5 to every 15 minutes" CR \
-    "the /etc/cron.d/zot-disk-heartbeat entry in cloud-init-registry.yml no longer carries" \
+  mutate_red "M14 the registry heartbeat cadence changes from every 5 to every 15 minutes" CR \
     'old = "*/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh"
 assert s.count(old) == 1
-s = s.replace(old, old.replace("*/5", "*/15"))'
-  # A decoy attribute in a nested block must not satisfy a top-level check.
-  mutate RED "M15 the alert is paused at top level while a decoy paused = false sits in metadata" TF \
-    "the alert is paused" \
+s = s.replace(old, old.replace("*/5", "*/15"))' \
+    "the /etc/cron.d/zot-disk-heartbeat entry in cloud-init-registry.yml no longer carries"
+  # A decoy attribute in a nested block is counted by the 'paused' census even when param() still
+  # sees one live occurrence.
+  mutate_red "M15 the alert is paused at top level while a decoy paused = false sits in metadata" TF \
     'k = s.index("resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\"")
 t = s.index("\n  paused = false\n", k)
 s = s[:t] + "\n  paused = true\n" + s[t + len("\n  paused = false\n"):]
 m = s.index("    runbook = local.ghcr_hostsfile_deny_lost_runbook_url\n", k)
-s = s[:m] + "    paused = false\n" + s[m:]'
+s = s[:m] + "    paused = false\n" + s[m:]' \
+    "decoy exists"
   # The apply workflow must still run on a merge to main.
-  mutate RED "M16 the apply workflow stops triggering on push to main" WF \
-    "apply-web-platform-infra.yml no longer triggers the apply on push" \
+  mutate_red "M16 the apply workflow stops triggering on push to main" WF \
     'old = "on:\n  push:\n    branches: [main]"
 assert s.count(old) == 1
-s = s.replace(old, "on:\n  push:\n    branches: [release]")'
+s = s.replace(old, "on:\n  push:\n    branches: [release]")' \
+    "apply-web-platform-infra.yml no longer triggers the apply on push"
   # The runbook is wired into infra-validation's paths.
-  mutate RED "M17 the runbook path is dropped from infra-validation.yml's pull_request paths" IV \
-    "infra-validation.yml no longer wires this guard" \
+  mutate_red "M17 the runbook path is dropped from infra-validation.yml's pull_request paths" IV \
     'old = "      - \"knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md\"\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "M18 the push apply stops covering this alert's own file (a negation of betterstack-logs-alerts.tf)" WF \
-    "apply-web-platform-infra.yml no longer triggers the apply on push" \
+s = s.replace(old, "")' \
+    "infra-validation.yml no longer wires this guard"
+  mutate_red "M18 the push apply stops covering this alert's own file (a negation of betterstack-logs-alerts.tf)" WF \
     'old = "    paths:\n      - \"apps/web-platform/infra/**\"\n"
 assert s.count(old) == 1
-s = s.replace(old, old + "      - \"!apps/web-platform/infra/betterstack-logs-alerts.tf\"\n")'
-  mutate RED "M19 the apply job no longer runs on push (manual-rerun only)" WF \
-    "apply-web-platform-infra.yml no longer triggers the apply on push" \
+s = s.replace(old, old + "      - \"!apps/web-platform/infra/betterstack-logs-alerts.tf\"\n")' \
+    "apply-web-platform-infra.yml no longer triggers the apply on push"
+  mutate_red "M19 the apply job no longer runs on push (manual-rerun only)" WF \
     'old = "      (github.event_name == \x27push\x27 || inputs.apply_target == \x27manual-rerun\x27)\n"
 assert s.count(old) == 1
-s = s.replace(old, "      (inputs.apply_target == \x27manual-rerun\x27)\n")'
-  mutate RED "M20 the guard step becomes non-blocking (continue-on-error)" IV \
-    "infra-validation.yml no longer wires this guard" \
+s = s.replace(old, "      (inputs.apply_target == \x27manual-rerun\x27)\n")' \
+    "apply-web-platform-infra.yml no longer triggers the apply on push"
+  mutate_red "M20 the guard step becomes non-blocking (continue-on-error)" IV \
     'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
 assert s.count(old) == 1
-s = s.replace(old, "        continue-on-error: true\n" + old)'
-  mutate RED "M21 the guard's job is disabled (if: false)" IV \
-    "infra-validation.yml no longer wires this guard" \
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "infra-validation.yml no longer wires this guard"
+  mutate_red "M21 the guard's job is disabled (if: false)" IV \
     'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n"
 assert s.count(old) == 1
-s = s.replace(old, "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: false\n")'
-  mutate RED "M22 the apply workflow path is dropped from the pull_request paths" IV \
-    "infra-validation.yml no longer wires this guard" \
+s = s.replace(old, "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: false\n")' \
+    "infra-validation.yml no longer wires this guard"
+  mutate_red "M22 the apply workflow path is dropped from the pull_request paths" IV \
     'old = "      - \".github/workflows/apply-web-platform-infra.yml\"\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "M23 the heartbeat cron line is neutralised (root true #)" CR \
-    "the /etc/cron.d/zot-disk-heartbeat entry in cloud-init-registry.yml no longer carries" \
+s = s.replace(old, "")' \
+    "infra-validation.yml no longer wires this guard"
+  mutate_red "M23 the heartbeat cron line is neutralised (root true #)" CR \
     'old = "*/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh"
 assert s.count(old) == 1
-s = s.replace(old, "*/5 * * * * root true # /usr/local/bin/zot-disk-heartbeat.sh")'
-  mutate RED "M24 the heartbeat POST body changes shape ({\"msg\":...})" CR \
-    "zot-disk-heartbeat.sh no longer POSTs" \
+s = s.replace(old, "*/5 * * * * root true # /usr/local/bin/zot-disk-heartbeat.sh")' \
+    "the /etc/cron.d/zot-disk-heartbeat entry in cloud-init-registry.yml no longer carries"
+  mutate_red "M24 the heartbeat POST body changes shape ({\"msg\":...})" CR \
     'k = s.index("path: /usr/local/bin/zot-disk-heartbeat.sh")
 old = "--data-raw \"{\\\"message\\\":\\\"$LINE\\\""
 t = s.index(old, k)
-s = s[:t] + "--data-raw \"{\\\"msg\\\":\\\"$LINE\\\"" + s[t + len(old):]'
-  mutate RED "M25 an exit is inserted between the web sink and the lock" CI \
-    "the GHCR_DENY sink is no longer between" \
+s = s[:t] + "--data-raw \"{\\\"msg\\\":\\\"$LINE\\\"" + s[t + len(old):]' \
+    "zot-disk-heartbeat.sh no longer POSTs"
+  mutate_red "M25 an exit is inserted between the web sink and the lock" CI \
     'old = "unset _ghcr_blocked\n\nLOCK_FILE="
 assert s.count(old) == 1
-s = s.replace(old, "unset _ghcr_blocked\nexit 0\n\nLOCK_FILE=")'
-  mutate RED "M26 the web sink moves below the lock line" CI \
-    "the GHCR_DENY sink is no longer between" \
+s = s.replace(old, "unset _ghcr_blocked\nexit 0\n\nLOCK_FILE=")' \
+    "the GHCR_DENY sink is no longer between"
+  mutate_red "M26 the web sink moves below the lock line" CI \
     'sink = "logger -t \"$LOG_TAG\" \"GHCR_DENY ghcr_blocked=$_ghcr_blocked\" 2>/dev/null || true\n"
 assert s.count(sink) == 1
 s = s.replace(sink, "")
 k = s.index("\nLOCK_FILE=")
 e = s.index("\n", k + 1)
-s = s[:e + 1] + sink + s[e + 1:]'
-  mutate RED "M27 the alert's incident_cause is cut while a decoy copy sits in metadata" TF \
-    "the incident has no clickable cron-egress-blocked runbook URL" \
+s = s[:e + 1] + sink + s[e + 1:]' \
+    "the GHCR_DENY sink is no longer between"
+  mutate_red "M27 the alert's incident_cause is cut while a decoy copy sits in metadata" TF \
     'k = s.index("resource \"logtail_exploration_alert\" \"ghcr_hostsfile_deny_lost\"")
 t = s.index("\n  incident_cause = ", k)
 e = s.index("\n  metadata = {", t)
 full = s[t + 1:e]
 s = s[:t + 1] + "  incident_cause = \"A host reports a thing.\"" + s[e:]
 m = s.index("    runbook = local.ghcr_hostsfile_deny_lost_runbook_url\n", t)
-s = s[:m] + "  " + full.replace("\n  ", "\n  ") + "\n" + s[m:]'
+s = s[:m] + "  " + full.replace("\n  ", "\n  ") + "\n" + s[m:]' \
+    "the incident has no clickable cron-egress-blocked runbook URL"
 
-  mutate RED "M28 an early exit is inserted ABOVE the web sink (a non-deploy action would skip it)" CI \
-    "the GHCR_DENY sink is no longer between" \
+  mutate_red "M28 an early exit is inserted ABOVE the web sink (a non-deploy action would skip it)" CI \
     'old = "_ghcr_blocked=$(_ghcr_blocked_state 2>/dev/null) || _ghcr_blocked=unknown\n"
 assert s.count(old) == 1
-s = s.replace(old, "[[ \"${ACTION:-}\" == deploy ]] || { exit 0; }\n" + old)'
-  mutate RED "M29 the runbook decode's head-scope is inverted (i < e becomes i > e)" RB \
-    "the runbook's ghcr_deny_rows decode no longer returns exactly" \
+s = s.replace(old, "[[ \"${ACTION:-}\" == deploy ]] || { exit 0; }\n" + old)' \
+    "the GHCR_DENY sink is no longer between"
+  mutate_red "M29 the runbook decode's head-scope is inverted (i < e becomes i > e)" RB \
     'old = "$i != null and $e != null and $i < $e"
 assert s.count(old) == 1
-s = s.replace(old, "$i != null and $e != null and $i > $e")'
+s = s.replace(old, "$i != null and $e != null and $i > $e")' \
+    "the runbook's ghcr_deny_rows decode no longer returns exactly"
+
+  # ── Workflow seam rows ────────────────────────────────────────────────────────────────────────
+  mutate_red "a MUT_SKIP literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
+    "workflow seam"
+  mutate_red "a GHCR_GUARD_ literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          GHCR_GUARD_TF: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "the suite's own run line is dropped from the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "unregistered or double-registered"
+
+  # ── Scorer negative control ────────────────────────────────────────────────────────────────────
+  mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = true\n")' \
+    "this-fragment-does-not-exist" wrong
+
+  # ── Floor row ────────────────────────────────────────────────────────────────────────────────
+  mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # Harness row (a) — edit the SUITE: delete the assertion that reads the web emitter's needle. The floor
-  # must RED (rc 2, the guard's FATAL class), because a guard that reports fewer checks and exits 0 is vacuous.
+  # must RED (rc 1, the verdict class), because a guard that reports fewer checks and exits 0 is vacuous.
   suite_copy="$MUT_DIR/suite-minus-needle.sh"
+  MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
   python3 - "$SELF" "$suite_copy" <<'PY' || { no "harness row (a) did not land (anchor drifted)"; }
 import sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -687,22 +836,34 @@ PY
   # The copy lives in MUT_DIR, so its own DIR/REPO resolve there: point it at the real tree explicitly.
   h_rc=0
   env GHCR_GUARD_TF="$TF" GHCR_GUARD_WF="$WF" GHCR_GUARD_CI="$CI" GHCR_GUARD_CR="$CR" GHCR_GUARD_RB="$RB" GHCR_GUARD_IV="$IV" MUT_SKIP=1 bash "$suite_copy" >"$MUT_DIR/h.log" 2>&1 || h_rc=$?
-  if [ "$h_rc" -eq 2 ] && grep -qF 'assertion floor' "$MUT_DIR/h.log"; then
+  if [ "$h_rc" -eq 1 ] && grep -qF 'assertion floor' "$MUT_DIR/h.log"; then
     ok "harness (a): deleting the assertion that reads the web emitter's needle trips the assertion floor"
   else
     no "harness (a): the suite with the needle assertion deleted exited $h_rc without the floor firing — the guard can lose a check silently"
   fi
-  MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
 fi
 
-if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
-  printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS_EXPECTED\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS_EXPECTED" >&2; exit 2
-fi
-_floor=$((PRESENCE_ROWS))
-[ -z "${MUT_SKIP:-}" ] && _floor=$((PRESENCE_ROWS + MUT_ROWS_EXPECTED))
+# ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────────
+# Instrument failures exit 2 (the MUT_ROWS_RUN conservation ledger); floor/ledger trips exit 1 —
+# the battery grades an inner rc 1 as a CAUGHT mutation.
+PRESENCE_ROWS=44
+MUT_ROWS=51
+_eff=${MUT_SKIP:+0}
+_eff=${_eff:-$MUT_ROWS}
+_floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-# Instrument failures exit 2, never 1: the battery grades an inner rc 1 as a CAUGHT mutation.
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS" ]; then
+  printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS" >&2
+  exit 2
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
+[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); GHCR_GUARD_{TF,WF,CI,CR,RB,IV}=%s,%s,%s,%s,%s,%s\n' "$_floor" "${GHCR_GUARD_TF:-unset}" "${GHCR_GUARD_WF:-unset}" "${GHCR_GUARD_CI:-unset}" "${GHCR_GUARD_CR:-unset}" "${GHCR_GUARD_RB:-unset}" "${GHCR_GUARD_IV:-unset}"
 printf '\n=== ghcr-blocked-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]
