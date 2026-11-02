@@ -1133,8 +1133,9 @@ kr_cmd_redeploy() {
   kr_evidence "$mode" "$keys" "$ts"
 }
 
-# kr_evidence: the value-free record and the ready-to-paste S5-A5-DONE line. PRINTED ONLY: nothing here posts it (the
-# follow-through probe reads the owner's own comments; an agent-posted line does not satisfy the owner record). The host evidence is
+# kr_evidence: the value-free record and the S5-A5-DONE line the owner may type themselves. PRINTED ONLY: nothing here posts it (an
+# agent never writes a DONE line; after the owner's one reply their session posts an S5-A5-RELAYED record instead, technical-ruling-
+# delegation.md section 9). The host evidence is
 # the MEASURED values the reboot job carried (boot_id of the pre and the new boot, the 8 hex of a non-secret cloud-init phone-home
 # row; the POST time; the time verify passed), never literals: a missing value prints "unknown", never "true".
 kr_evidence() {
@@ -1148,14 +1149,14 @@ kr_evidence() {
   [[ "$new" == unknown ]] || { [[ "$new" != "$pre" ]] && seen=true; }
   url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-0}"
   {
-    printf '### Evidence (value-free; paste on #10136 with the line below if you accept it)\n\n'
+    printf '### Evidence (value-free; goes on #10136 with the A5 record, posted by you or by your session after your one reply)\n\n'
     printf '```\nmode=%s keys=%s\nredeploy_confirmed_at=%s\nrun=%s\nrotated_at=%s\nboot_id_pre=%s boot_id_new=%s\nreboot_requested_at=%s host_verified_at=%s\nbooleans: copies_equal=true new_boot_id_seen=%s serving=%s tls_listener=%s link_flag_is_1=true redeploy_ok=true\n```\n' \
       "$mode" "$keys" "$ts" "$url" "$rot" "$pre" "$new" "$post" "$ver" "$seen" "$serving" "$listener"
   } | while IFS= read -r l; do kr_summary "$l"; printf '%s\n' "$l" >&2; done
   if [[ "$keys" == signing || "$keys" == both ]]; then
     printf 'S5-A5-DONE: %s\n' "$ts"
     kr_summary "S5-A5-DONE: ${ts}"
-    kr_log "inngest-key-rotate: the line above is printed only; the owner posts it on #10136. Nothing in this workflow posts it."
+    kr_log "inngest-key-rotate: the line above is printed only; nothing in this workflow posts it. The owner may type it on #10136, or reply once in their session so that it posts an S5-A5-RELAYED record."
   else
     kr_log "inngest-key-rotate: keys=event rotated the event key only; A5 is the signing-key rotation, so no S5-A5-DONE line is printed."
   fi

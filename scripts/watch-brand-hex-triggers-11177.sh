@@ -54,7 +54,8 @@
 #   the comment says the commit could not be judged, never that it is clean.
 #   The commit stream is verified: every header SHA and its first parent must equal the next entries
 #   of the first-parent list written beforehand, so a tracked path named like a header (a control
-#   character plus 40 hex digits) cannot hide the real commit's files; a mismatch is exit 3.
+#   character plus 40 hex digits) cannot hide the real commit's files; a mismatch is exit 3, and the message
+#   carries the remedy (T2_STREAM_HINT: the state is permanent while #11177 is open; see RED RUN in the workflow).
 #   The run budget (default 480 s) is measured from SCRIPT START and checked while collecting
 #   candidates and between commits (the collection check applies only once a candidate exists, so at least one
 #   candidate is always judged); on overrun it stops,
@@ -80,7 +81,7 @@
 #
 # Exit: 0 posted, or any no-op (tracker not open or gone, nothing new, dry-run, print-state);
 #       1 comment post failed; 2 usage (anything but no argument, --dry-run or --print-state); 3 cannot establish (a read the verdict depends on failed,
-#       a tool or the gate is missing, history unreadable, invalid path-class regex, canary or
+#       a tool or the gate is missing, `env -0` produced no output, history unreadable, invalid path-class regex, canary or
 #       systemic gate failure) - nothing is posted so the next run retries; 78 refusing to run
 #       under xtrace.
 set -uo pipefail
@@ -124,13 +125,16 @@ over_budget() { [[ "$(( SECONDS - SCRIPT_START ))" -ge "$BUDGET" ]]; }
 # Every git call goes through gitx: the git location AND configuration variables are removed so an
 # inherited one (a hook, a wrapper, a CI shell) can never redirect an update-ref/read-tree/worktree
 # write at another repository's branch or index, nor inject a config value (GIT_CONFIG_COUNT with
-# GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS). The numbered ones are found in `env`.
+# GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n, GIT_CONFIG_PARAMETERS). The numbered ones are found in `env -0`;
+# a failed `env -0` (a non-GNU env, no records read) is exit 3 right after the loop, before any git call or post.
 GIT_UNSET=(); GATE_PASS=()
 for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX \
           GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM \
           GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_GRAFT_FILE GIT_SHALLOW_FILE; do GIT_UNSET+=(-u "$_v"); done
+_envn=0
 while IFS= read -r -d '' _kv; do
   _n="${_kv%%=*}"
+  _envn=$((_envn + 1))
   case "$_n" in
     GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n") ;;
     # The only variables forwarded to the gate child besides its fixed allowlist (see judge_gate): the
@@ -138,6 +142,10 @@ while IFS= read -r -d '' _kv; do
     WATCH_GATE_X_[A-Z0-9_]*) GATE_PASS+=("$_kv") ;;
   esac
 done < <(env -0)
+# `env -0` is GNU. The loop's exit status is not observable here (no errexit), so a non-GNU env would leave
+# the numbered GIT_CONFIG_KEY_n/VALUE_n variables set and silently reach every git call. bash always exports
+# at least PWD, SHLVL and _, so zero records means `env -0` produced nothing and the scrub list could not be built: exit 3 before any git call or post.
+[[ "$_envn" -gt 0 ]] || { echo "::error::env -0 produced no output (a non-GNU env?); cannot scrub GIT_CONFIG_KEY_n/VALUE_n from git calls; nothing was posted, run on a runner with GNU env" >&2; exit 3; }
 gitx() { env "${GIT_UNSET[@]}" git "$@"; }
 
 REPO_ROOT=""; WT=""; EMPTY=""
@@ -268,6 +276,11 @@ t2_flush() {
   if [[ "${#CAND_SHA[@]}" -ge 1 ]] && [[ "$1" -eq 1 ]] && over_budget; then TRUNC_BUDGET=1; return 1; fi
   return 0
 }
+# The remedy for the "does not match the first-parent list" exit, kept as ONE string so the workflow note and
+# the suite's parity row can follow it. The window is anchored at the tracker's creation date and never slides,
+# and `git log --no-renames --name-only` lists a renamed or deleted path again, so a header-shaped path in the
+# window cannot be cleared by editing it. The NUL-safe parser follow-up is #11864.
+T2_STREAM_HINT="re-run once to rule out a transient failure; if it fails identically, a commit in the window touches a path named like a commit header, renaming or deleting that path does not clear it, trigger 1 is held on every run, and the only exits are closing #11177 once its retirement criteria are met or fixing the parser (#11864); never edit or forge a sentinel to get past it; see RED RUN in code-quality-followups-watch.yml"
 # t2_collect: newest-first first-parent commits in the window that touch the path classes, at most
 # CAP of them (CAND_MORE=1 when more existed), from ONE git log pass parsed here.
 t2_collect() {
@@ -287,7 +300,7 @@ t2_collect() {
       # A tracked path named like a header (control character + 40 hex digits) must not forge one:
       # each real header carries the next first-parent SHA, in order, and its first parent.
       if [[ "$hdr_sha" != "${FP[$hi]:-}" || "$hdr_par" != "${FP[$((hi + 1))]:-}" ]]; then
-        echo "::error::the commit stream does not match the first-parent list (a tracked path named like a commit header, or history changed during the run); cannot establish trigger 2" >&2
+        echo "::error::the commit stream does not match the first-parent list (a tracked path named like a commit header, or history changed during the run); cannot establish trigger 2 - ${T2_STREAM_HINT}" >&2
         return 3
       fi
       hi=$((hi + 1))
