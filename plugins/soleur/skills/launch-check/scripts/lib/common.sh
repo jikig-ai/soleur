@@ -1,5 +1,8 @@
 # shellcheck shell=bash
 # Shared by every launch-check lib. Sourced; never executed.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # lc_abort <reason> <exit-code> [detail]: one machine-readable marker on stdout (the customer's tool
 # result is the only sink; there is no Soleur-side telemetry by design), then exit.
