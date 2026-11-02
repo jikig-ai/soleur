@@ -1,0 +1,8 @@
+# Decision Challenges — feat-one-shot-11848-ratchet-accept-row
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| R1 pair disposition (plugins/soleur ↔ apps/web-platform/infra/inngest-userdata-budget.sh): issue-prescribed anchor-keyed accept row vs declared `AFFECTED_PLUGINS_SOLEUR_PATHS` edge | technical | pending - assumed: **declare the edge** — the suite really reads AND executes the script: `plugins/soleur/test/cloud-init-user-data-size.test.ts` `BUDGET_SH = join(INFRA, "inngest-userdata-budget.sh")` → `readFileSync(BUDGET_SH)` + `spawnSync("bash", [BUDGET_SH, ...])` (the computed `join(INFRA, …)` is invisible to the audit's literal-name scan, which is exactly the case the runbook's pre-acceptance grep exists to catch). An accept row on a file the suite really reads is the documented false negative that goes live when PR3b (#10859) makes the context required. Disqualifying facts checked: FOR declare — none found; the drain-reveal is empty (script has zero literal tracked-path mentions outside comments) and 19 sibling `apps/web-platform/infra/*.sh` edges are already declared for this suite. AGAINST declare (cost): script is hot (12 commits/90d) → `plugins/soleur` bun suite selects on each script-touch PR — accepted as the correct price of an honest index. Prior CTO ruling on this exact class (#11771 → PR #11781): "ambiguity resolves to the stricter default (declare)". CTO consult unavailable: no agent-spawn tool on this harness; `pending - assumed` per the technical-ruling fallback. |
+| threshold `none` (User-Brand) | taste | threshold: none — CI-selection machinery, no user-facing surface; challengeable |
