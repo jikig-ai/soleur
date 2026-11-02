@@ -60,3 +60,13 @@ deepen-plan → technical-ruling gate → soleur:work → review → fix-round �
 - Awaiting required checks; a background poll watches for resolution before merge.
   NOTE: enqueuePullRequest landmine — wait for the `test` aggregator to be created on the
   head; do not re-arm blindly.
+
+## Ship-phase update 2 (2026-11-02)
+
+- KB artifacts archived at ship (archive-kb.sh → specs/archive/20261102-113422-*, plans/archive/20261102-113422-*).
+- Merge queue requires `test` aggregator on head; `enqueuePullRequest` rejected until it exists.
+- First `test` run FAILED on 2 shards: test-scripts(6/8) = grep-q-pipe-guard flagged 2
+  `| grep -qx` sites in store+zot (FIXED: count-compare form, pushed); test-scripts(8/8) =
+  scripts/check-cloudflare-token-drift (external/credential-dependent, UNRELATED — flake).
+- Latest head fixes the gqpg sites; suites still 55/53 green locally.
+- REMAINING: watch `test` on new head → enqueue → merge → postmerge verify.
