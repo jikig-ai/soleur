@@ -33,8 +33,10 @@ in Research Insights):
   for two of the seven items, not incidental.
 - `GH_TOKEN=… bash scripts/followthroughs/ratchet-observation-window-10865.sh` →
   three `NOT YET` lines: latest merge_group unit red (`new-pair`), wall max 284 s
-  over the provisional 270 s ceiling (a ceiling re-rule is owed to the CTO), and
-  the read budget truncated the sweep.
+  over the provisional 270 s ceiling, and the read budget truncated the sweep.
+  CTO ruling (2026-11-02, ratifies the ruling already on #10865): raise now —
+  `P95_MAX=240`, `MAX_MAX=285` constants only; that two-constant diff lands in
+  this PR (Phase 1).
 - `gh run view 41305160049 --log` (cla-evidence-timestamp, 2026-11-01): the
   core succeeded — FreeTSA HTTP 200, `Verification: OK`, R2 upload — then
   `git push` died `403` (`permissions: contents: read` at
@@ -244,11 +246,12 @@ quoted-body containing `gh pr merge <M>` before and after the real
 2. `.github/workflows/main-health-monitor.yml`: the `Run test suite` steps
    carry `timeout-minutes: 10` (webplat leg) / 15 (scripts leg) ceilings that
    the current suite set measurably exceeds — the legs are killed mid-run and
-   the monitor reports "unverified". Realign: either raise the step ceilings
-   to cover the measured leg wall time with headroom (bounded by the 30-min
-   job ceiling and the workflow's own step-ceiling-vs-`timeout-minutes`
-   contract), or split the over-long leg. Pick by measuring each leg's
-   elapsed_s from the failed run's staged reports; keep
+   the monitor reports "unverified". CTO ruling (2026-11-02): realign by the
+   workflow's own TIMEOUT BUDGET formula — `test-scripts` step 15→60 and job
+   `timeout-minutes` 35→80; `test-webplat` step 10→30 and job 30→50;
+   `test-bun` unchanged; no split (uncensored ci.yml run 41408788451 measured
+   leg_max ≈37.6 min scripts / ≈17.2 min webplat; `leg_step =
+   roundup5(leg_max × 1.5)`, `leg_job = leg_step + 20`). Keep
    `plugins/soleur/test/main-health-monitor-workflow.test.sh` green (it pins
    ceiling invariants).
 3. `lint-orphan-test-suites-mutations-a`: file or fix the orphan suite it
@@ -265,6 +268,7 @@ quoted-body containing `gh pr merge <M>` before and after the real
 ## Files to Edit
 
 - `scripts/ci-pr-affected-audit.accept.tsv` *or* `scripts/lib/test-affected-paths.sh` (one row/edge, per Phase 1 step 1's rubric call)
+- `scripts/followthroughs/ratchet-observation-window-10865.sh` (`P95_MAX=240`, `MAX_MAX=285` — CTO-ruled ceiling re-rule)
 - `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` (schedule note)
 - `plugins/soleur/scripts/sync-pr-behind.sh` (armed classification gains queue-flag input)
 - `plugins/soleur/test/sync-pr-behind.test.sh` (queued+null-autoMergeRequest rows)

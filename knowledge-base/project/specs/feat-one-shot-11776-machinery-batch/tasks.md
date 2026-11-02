@@ -15,6 +15,9 @@ Issues: #11776, #10859 (hold), #11789, #11795, #3926, #9457, #9830
 - [ ] 1.3 Schedule artifact: fresh `audit` numbers mapped onto #10860/#10861/
       #10959 + named remainder; post schedule comment to #11776; pointer note
       in `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`.
+- [ ] 1.4 CTO-ruled ceiling re-rule (#10865): `P95_MAX=240`, `MAX_MAX=285`
+      constants only in `scripts/followthroughs/ratchet-observation-window-10865.sh`
+      (~lines 89-90); ratifies the ruling already on #10865 at 08:31:45Z.
 
 ## Phase 2 — Merge-watch disarm gating (#11789)
 
@@ -57,14 +60,16 @@ Issues: #11776, #10859 (hold), #11789, #11795, #3926, #9457, #9830
 - [ ] 5.1 #9457 findings comment: Oct-3 `audit-suite-reads` signature absent
       from last 40 monitor runs; current mode = legs killed at step ceilings +
       `[FAIL] lint-orphan-test-suites-mutations-a`.
-- [ ] 5.2 `.github/workflows/main-health-monitor.yml`: realign `Run test suite`
-      step ceilings to measured leg wall time (or split the over-long leg);
-      keep `plugins/soleur/test/main-health-monitor-workflow.test.sh` green.
+- [ ] 5.2 `.github/workflows/main-health-monitor.yml`: CTO-ruled realignment —
+      `test-scripts` step 15→60 and job `timeout-minutes` 35→80; `test-webplat`
+      step 10→30 and job 30→50; `test-bun` unchanged; no split; keep
+      `plugins/soleur/test/main-health-monitor-workflow.test.sh` green.
 - [ ] 5.3 Disposition the `lint-orphan-test-suites-mutations-a` orphan (register
       the suite or fix per orphan-lint contract).
 - [ ] 5.4 #9830: classify the 8 push failures (2026-10-05→09) — flake /
-      post-merge-only / queue-miss; document queue-vs-push gap; state target
-      red rate; add rate line to the monitor's report surface; comment on #9830.
+      post-merge-only / queue-miss; document queue-vs-push gap; state the
+      CTO-ruled target ≤2% of push runs on main red (rolling 50-run window);
+      add rate line to the monitor's report surface; comment on #9830.
 
 ## Phase 6 — Hold record + ship prep
 
