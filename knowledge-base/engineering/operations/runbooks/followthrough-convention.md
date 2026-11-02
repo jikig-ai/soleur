@@ -377,17 +377,28 @@ marker; it posts a sibling `<marker>-RELAYED:` record, in one unfenced comment, 
 (`technical-ruling-delegation.md`, section 9):
 
 ```text
-S6-A6-RELAYED: <UTC time ending in Z>
+<MARKER>-RELAYED: <UTC time ending in Z>
 relayed-by: agent
 owner-words: «the owner's sentence, verbatim»
-owner-reply-at: <UTC time ending in Z, not later than the post>
+owner-reply-at: <UTC time ending in Z>
+run=<id>
 ```
 
-A probe that accepts it checks the shape and nothing else of the words, names a malformed record in the ask that waits for it (as for a
-malformed DONE line), lets the lib drop a fenced or HTML-commented one, and says in its output that the act was recorded by relay.
-Where the record rests on an artifact, the probe verifies the artifact itself: `S5-A5-RELAYED` also needs `run=<id>`, read with `gh run view`
-and accepted only as a completed, successful `workflow_dispatch` run of the rotation workflow (rotate or converge, signing key). A failed read
-of it is CANNOT ESTABLISH, never an ask. Reference implementation and its suite: `scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh`.
+The parser is `scripts/lib/relayed-verdict.sh` (`relayed_verdict_state <marker> <text> <verifier> <now_epoch>`), fed the text from
+`trusted_verdict_bodies`; its header is the one description of the format. In short: the lines after the marker are read up to the next
+marker line or 8 non-blank lines; each label may occur once (a repeat makes the block malformed, never last-wins); the quote is in
+`« »` or straight double quotes and not empty; `owner-reply-at` is a real time, not later than the post and not in the future; the marker is
+case-sensitive; the first well-formed block wins. `run=` is required only when the probe passes a verifier, a function the probe keeps (the
+artifact check is the probe's, not the lib's): it is called with the id and the reply epoch, and returns 0 qualifies, 1 refused, 2 read failed.
+A failed or empty read is CANNOT ESTABLISH (exit 3), never a malformed record and never an ask. A probe that accepts a relayed record
+names a malformed one in the ask that waits for it (as for a malformed DONE line), lets the trusted-verdict lib drop a fenced or
+HTML-commented one, and says in its output that the act was recorded by relay. The probe checks shape and artifact, never the truth of the
+owner's words. It cannot tell who typed a DONE line either, so "an agent-posted DONE line does not count" rests on agents never writing
+one; the asks say so.
+
+Worked example: `scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh` and its suite. Its verifier reads the run with `gh run view` and
+accepts a completed, successful `workflow_dispatch` run of the Inngest Key Rotate workflow on `main`, titled as a rotate or converge of
+the signing key (`keys` signing or both), that finished no later than `owner-reply-at`.
 
 ## Retiring a probe
 
