@@ -555,7 +555,7 @@ s = s[:i] + "  # agent_sandbox_bash_denial_sql = <<\x2dSQL\n" + s[i:]' \
     's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
     "drifted from the pinned"
   mutate_red "a doubled-dollar escape literal appears inside the heredoc" TF \
-    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* $$escaped */", SQLEND)' \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* \x24\x24escaped */", SQLEND)' \
     "drifted from the pinned"
   mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
     's = edit(s, SQLLOC, "SELECT {{time}} AS time, count(*) AS value", "SELECT 1", SQLEND)' \

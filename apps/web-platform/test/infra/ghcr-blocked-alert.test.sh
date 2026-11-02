@@ -59,6 +59,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing — the mutation battery needs it\n' >&2; exit 2; }
 REPO="$(cd "$DIR/../../../.." && pwd)"
 TF="${GHCR_GUARD_TF:-$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf}"
 WF="${GHCR_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
@@ -615,7 +616,7 @@ s = s[:i] + "  # ghcr_hostsfile_deny_lost_sql = <<\x2dSQL\n" + s[i:]' \
     's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
     "the predicate is not the two-arm string"
   mutate_red "a doubled-dollar escape literal appears inside the heredoc" TF \
-    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* $$escaped */", SQLEND)' \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* \x24\x24escaped */", SQLEND)' \
     "the predicate is not the two-arm string"
   mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
     'i = s.index(SQLLOC); j = s.index(SQLEND, i)
