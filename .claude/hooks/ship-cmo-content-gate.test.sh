@@ -83,18 +83,32 @@ assert_eq "feat PR without CMO disposition is denied" "deny" "$decision"
 res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability" "1")
 assert_eq "feat PR with skip override passes" "" "$res"
 
-# 5. Feat PR with trailer -> pass
+# 5. Compound call: a `gh pr merge <M>` mention inside a quoted --body BEFORE
+#    the real `gh pr ready <N>` must not hijack PR_NUM — the deny has to land
+#    on N (#11795).
+res=$(run_hook "gh pr edit 123 --body 'note: gh pr merge 999' && gh pr ready 123" "feat: new capability")
+decision=$(echo "$res" | jq -r .decision 2>/dev/null || echo "")
+assert_eq "quoted merge-body before real ready is still denied" "deny" "$decision"
+assert_eq "quoted merge-body before real ready denies the real PR" "PR #123" "$(echo "$res" | jq -r .reason 2>/dev/null | grep -oE 'PR #[0-9]+' | head -1)"
+
+# 6. Same shape with the quoted mention AFTER the real invocation.
+res=$(run_hook "gh pr ready 123 && gh pr edit 123 --body 'note: gh pr merge 999'" "feat: new capability")
+decision=$(echo "$res" | jq -r .decision 2>/dev/null || echo "")
+assert_eq "quoted merge-body after real ready is still denied" "deny" "$decision"
+assert_eq "quoted merge-body after real ready denies the real PR" "PR #123" "$(echo "$res" | jq -r .reason 2>/dev/null | grep -oE 'PR #[0-9]+' | head -1)"
+
+# 7. Feat PR with trailer -> pass
 res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability" "0" "$(printf 'cmo: review\n\nReviewed-By-CMO: skip (internal only)')")
 assert_eq "feat PR with Reviewed-By-CMO trailer passes" "" "$res"
 
-# 6. Session rooted at the main checkout: HEAD==main, the trailer lives only on
+# 8. Session rooted at the main checkout: HEAD==main, the trailer lives only on
 #    the PR head ref (#11682). Pin origin/feat-branch at the feat tip first.
 git -C "$WORKDIR" update-ref refs/remotes/origin/feat-branch "$(git -C "$WORKDIR" rev-parse feat-branch)"
 git -C "$WORKDIR" checkout -q main
 res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
 assert_eq "main-checkout session sees trailer on origin/<headRef>" "" "$res"
 
-# 7. Same fixture but the PR head predates the trailer commit -> still deny
+# 9. Same fixture but the PR head predates the trailer commit -> still deny
 git -C "$WORKDIR" update-ref refs/remotes/origin/feat-branch "$(git -C "$WORKDIR" rev-parse feat-branch^)"
 res=$(run_hook "gh pr merge 123 --squash --auto" "feat: new capability")
 decision=$(echo "$res" | jq -r .decision 2>/dev/null || echo "")
@@ -102,7 +116,7 @@ assert_eq "main-checkout session still denies without the trailer" "deny" "$deci
 git -C "$WORKDIR" checkout -q feat-branch
 git -C "$WORKDIR" update-ref -d refs/remotes/origin/feat-branch
 
-# 8. Deleted head branch: no origin/<headRef>, no local pull ref — the lazy
+# 10. Deleted head branch: no origin/<headRef>, no local pull ref — the lazy
 #    pull/N/head fetch still reaches the trailer (#11682 fallback arm).
 git init -q --bare "$TMPDIR/origin.git"
 git -C "$WORKDIR" push -q "$TMPDIR/origin.git" "feat-branch:refs/pull/123/head"
