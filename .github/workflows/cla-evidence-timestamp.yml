@@ -37,7 +37,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write # evidence commit push (run 41305160049 died 403 on contents: read)
   pull-requests: write
   issues: write # auto-file tracking issue on persistent failure (Kieran F9)
 
@@ -319,6 +319,16 @@ jobs:
             printf 'Retry via Actions → cla-evidence-timestamp → Run workflow (workflow_dispatch).\n'
             printf 'After 7 consecutive failures, switch to the paid-TSA fallback documented at `%s`.\n' "$runbook"
           } > out/issue-body.txt
+
+          # Label bootstrap (#3926): `gh issue list/create --label` dies on a
+          # missing label and silently loses the tracking issue — the exact
+          # failure this step exists to prevent (run 41305160049:
+          # `could not add label: 'timestamp-failure' not found`). `gh label
+          # create … || true` is the established self-healing pattern; each
+          # call is a no-op when the label already exists.
+          gh label create cla-evidence --repo "$REPO_FULL" --description "CLA evidence machinery" --color 1f6feb 2>/dev/null || true
+          gh label create timestamp-failure --repo "$REPO_FULL" --description "Monthly RFC 3161 timestamp workflow failure" --color d73a4a 2>/dev/null || true
+          gh label create action-required --repo "$REPO_FULL" --description "Operator action required" --color b60205 2>/dev/null || true
 
           # Dedup by exact title match (deterministic; no list-search needed
           # to construct unique titles).
