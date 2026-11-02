@@ -188,7 +188,7 @@ No new script, suite or workflow, so no `scripts/test-all.sh`, `suite-durations.
 
 | # | Edit (scratch copy) | Must go RED |
 |---|---|---|
-| 1 | Copy of the real 11177 script (real basename): keep every compliant call and **append**, anchored at the unique literal `wn_preflight || exit 3`, `gitx -C "$WT" update-ref -d refs/heads/main` (second member after compliant ones; also proves the scan reaches the file under its basename) | the finding text `[git-subcommand] gitx -C "$WT" update-ref` appears in the census output |
+| 1 | Copy of the real 11177 script (real basename): keep every compliant call and **append**, anchored at the unique `wn_preflight` line, `gitx -C "$WT" update-ref -d refs/heads/main` (second member after compliant ones; also proves the scan reaches the file under its basename) | the finding text `[git-subcommand] gitx -C "$WT" update-ref` appears in the census output |
 | 2 | The unmodified 11177 text saved under another basename via `mutcopy_as` with no substitution (proves the scope key is honoured; landed = basename differs and content is `cmp`-equal; control under the real basename = 0) | census >= 1 |
 | 3 | In a copy of the 11177 script, one mutation per line: `worktree add -q --no-checkout --detach` -> `worktree add -B main` (drop `--detach`); `update-ref --no-deref HEAD "$parent"` -> `update-ref --no-deref HEAD -d`; `-C "$WT" read-tree` -> `-C "$REPO_ROOT" read-tree` (all mutation text uses `gitx`, never the literal `git -C` form) | three distinct finding texts, one per mutated line |
 
@@ -225,12 +225,12 @@ Rows 1, 2 and 4 are realised as table-driven probe rows in T3 (same text, same s
 
 **Assembly.** One loop at the top of the script, ahead of mode dispatch, so `--dry-run` and `--print-state` pass through the same site; consumers of its result are `gitx` and the gate child's `GATE_PASS`, both built in that loop. The property is about ORDER (check before first use), so the matrix needs a REORDER row.
 
-**Mutation matrix.** Realised with `mutation_row` (`sut OLD NEW` triples; `wn_preflight || exit 3` is a unique anchor).
+**Mutation matrix.** Realised with `mutation_row` (`sut OLD NEW` triples; the `wn_preflight` line is a unique anchor (the `wn_preflight` line)).
 
 | # | Edit | Must go RED |
 |---|---|---|
 | 1 | Delete the `[[ "$_envn" -gt 0 ]]` exit | `chk_envfail_a` no longer sees `RC=3` |
-| 2 | **Reorder:** delete the check and re-insert it immediately before `wn_preflight || exit 3` (after `REPO_ROOT=$(gitx rev-parse ...)`) | `chk_envfail_a` sees a logged git call |
+| 2 | **Reorder:** delete the check and re-insert it immediately before the `wn_preflight` line (after `REPO_ROOT=$(gitx rev-parse ...)`) | `chk_envfail_a` sees a logged git call |
 | 3 | Count only records matched by a `case` arm instead of every record | `chk_envfail_b` (the real env has no matching records, so the script exits 3) |
 | 3b | `-gt 0` -> `-gt 1` (needs two records) | `chk_envfail_c` (a single `PATH=` record now exits 3); only (c) kills it |
 

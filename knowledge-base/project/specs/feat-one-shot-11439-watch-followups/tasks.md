@@ -34,7 +34,7 @@ Files: `scripts/watch-brand-hex-triggers-11177.sh`, `scripts/watch-brand-hex-tri
 - 3.1 Write three registered scenarios first: `chk_envfail_a` (shim rejects `-0`, real `env` by absolute path otherwise, logging `git` shim -> `RC=3`, zero posts, `::error::` naming `env -0`, zero logged git calls, empty `$MOCKD/tmp`), `chk_envfail_b` (pass-through shim on a one-commit clean repo -> `RC==0`, `examined=1`, no `env -0` error), `chk_envfail_c` (single `PATH=` record -> same assertions as b).
 - 3.2 Add the seen-flag counter to the scrub loop and the `exit 3` check immediately after it, before `gitx` is defined or used.
 - 3.3 Update the header comment about the scrub.
-- 3.4 Mutation rows (Guard 3 matrix 1, 2, 3, 3b) via `mutation_row`: delete the check; reorder it to just before `wn_preflight || exit 3` (two `sut` triples); count only matching records; `-gt 0` -> `-gt 1`.
+- 3.4 Mutation rows (Guard 3 matrix 1, 2, 3, 3b) via `mutation_row`: delete the check; reorder it to just before the `wn_preflight` line (two `sut` triples); count only matching records; `-gt 0` -> `-gt 1`.
 
 ## Phase 4: Forged-header guidance (item 4)
 
