@@ -256,9 +256,9 @@ a `.tf` comment that reads badly or, if a guard anchor were broken, a red CI che
 **If this leaks, the user's data is exposed via:** no vector. The text names incident ids and issue numbers already in the repo's
 public mirror issues; no row content, host address, or token is quoted.
 
-**Brand-survival threshold:** none
+- **Brand-survival threshold:** none
 
-threshold: none, reason: comment-only edit under `apps/web-platform/infra/` (a sensitive path) plus a runbook sentence; the
+- threshold: none, reason: comment-only edit under `apps/web-platform/infra/` (a sensitive path) plus a runbook sentence; the
 Terraform plan shows no resource change and no code, credential, or state is touched.
 
 ## Observability
