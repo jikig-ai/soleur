@@ -936,6 +936,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  # #11766: terraform-target-parity.test.ts readFileSync-parses the cf-lb-overlay workflow (arm↔gate -target/ordering pins).
+  ".github/workflows/cf-lb-overlay.yml"
   # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
   ".github/workflows/inngest-key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
@@ -958,6 +960,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-redis-bootstrap.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
   "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  # #11848: cloud-init-user-data-size.test.ts reads and executes the real script via BUDGET_SH (join(INFRA, ...)); terraform-target-parity.test.ts only names it in a yaml-pin.
+  "apps/web-platform/infra/inngest-userdata-budget.sh"
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
   "apps/web-platform/lib/c4-canonical.mjs"
   "apps/web-platform/server/auto-sync-trigger.ts"
@@ -3802,6 +3806,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
   ".github/workflows/npm-publish.yml"
   "knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md"
+  "package.json"
   "packages/opencode-plugin/package.json"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

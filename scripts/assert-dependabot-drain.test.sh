@@ -87,14 +87,18 @@ def pkgs(entries):
         out[f"node_modules/{name}"] = {"version": f"{major}.999.999"}
     return out
 
-web = [("nanoid", 3), ("js-yaml", 3), ("hono", 4), ("@hono/node-server", 1),
+web = [("nanoid", 3), ("js-yaml", 3), ("hono", 4), ("@hono/node-server", 2),
        ("ip-address", 10), ("fast-uri", 3), ("undici", 7),
        ("brace-expansion", 1), ("@opentelemetry/propagator-jaeger", 2),
        ("@sentry/nextjs", 10), ("body-parser", 2), ("zod", 4),
-       ("next", 16)]
+       ("next", 16), ("minimatch", 11), ("glob", 14), ("@vitest/mocker", 4)]
 w = pkgs(web)
 # js-yaml and brace-expansion carry two more major lines each, nested so the paths differ.
 w["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
+# brace-expansion majors 1 and 2 are EVACUATED in the real tree (minimatch@11
+# consolidated every edge on ^5) but retained in the fixture on purpose: they keep the
+# web 1.x/2.x rows' resolved-comparison path exercised, and the 2.x copy is what makes
+# the "present major left uncovered" arm red when its REQUIRED row is deleted.
 w["node_modules/b/node_modules/brace-expansion"] = {"version": "2.999.999"}
 w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
 # The two MUST_STAY_ABSENT rows assert these paths are GONE (next 16 stopped vendoring
@@ -108,23 +112,27 @@ w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
 if extra:
     w.update(json.loads(extra))
 
-rt = pkgs([("js-yaml", 3), ("brace-expansion", 1), ("liquidjs", 10)])
+rt = pkgs([("js-yaml", 3), ("brace-expansion", 1), ("liquidjs", 10), ("minimatch", 11)])
 rt["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 # The markdown linter pinned by #7927 will not run against brace-expansion 1.x, so its
-# subtree gets a SCOPED ^5.0.8 override while the root keeps its ^1.1.16 Dependabot
-# pin. Two majors now resolve under the root manifest, nested so the paths differ.
+# subtree gets a SCOPED ^5.0.8 override; the root's blanket ^1.1.16 Dependabot pin was
+# removed 2026-11-01 (consumerless once minimatch consolidated on 11.x -- it broke
+# minimatch@11's own ^5.0.12 edge). Only major 5 resolves under the root manifest today;
+# the fixture keeps the 1.x entry so that row's resolved-comparison path stays exercised
+# (the floor-anchor arm is a source-grep and does not read the fixture).
 # The nesting parent is a generic letter like its siblings above, NOT the real package
 # name: this repo asserts it has exactly ONE markdown-lint invoker by grepping source,
 # and a lockfile path in fixture DATA reads to that grep as a second call site.
 rt["node_modules/d/node_modules/brace-expansion"] = {"version": "5.999.999"}
 
-pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3),
+pen = pkgs([("hono", 4), ("@hono/node-server", 2), ("ip-address", 10), ("fast-uri", 3),
             ("body-parser", 2), ("zod", 4)])
 # The pinned headless engine's own lockfile (#11156): its tree resolves hono 4, @hono/node-server 2,
-# ip-address 10, fast-uri 3, undici 8, brace-expansion 5, body-parser 2 and zod 4,
+# ip-address 10, fast-uri 3, undici 8, brace-expansion 5, body-parser 2, zod 4 and minimatch 11,
 # each of which needs a row of its own.
 pencli = pkgs([("hono", 4), ("@hono/node-server", 2), ("ip-address", 10), ("fast-uri", 3),
-               ("undici", 8), ("brace-expansion", 5), ("body-parser", 2), ("zod", 4)])
+               ("undici", 8), ("brace-expansion", 5), ("body-parser", 2), ("zod", 4),
+               ("minimatch", 11)])
 spike = pkgs([("zod", 4)])
 
 for rel, p in [("apps/web-platform/package-lock.json", w),
@@ -204,7 +212,7 @@ fi
 # per the cross-file-drift convention (work/SKILL.md): the first version used `head -1`,
 # and a shadowing `MIN_ROWS = 0` added later inside main() was reported "[ok] MIN_ROWS is
 # 19" while the effective floor was 0.
-for spec in "MIN_ROWS:36" "MIN_RESOLVED:36" "MIN_LOCKS:5"; do
+for spec in "MIN_ROWS:41" "MIN_RESOLVED:38" "MIN_LOCKS:5"; do
   name="${spec%%:*}"; floor="${spec##*:}"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *${name} = [0-9]+" "$GUARD" || true)"
@@ -230,7 +238,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.0.10" "@sentry/nextjs:10:10.75.2" "body-parser:2:2.4.0" "zod:4:4.6.6" "next:16:16.4.1"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.1.3" "@sentry/nextjs:10:10.75.2" "body-parser:2:2.4.0" "zod:4:4.6.6" "next:16:16.4.1" "hono:4:4.13.11" "ip-address:10:10.7.4" "fast-uri:3:3.1.9" "minimatch:11:11.0.1" "glob:14:14.0.2" "@vitest/mocker:4:4.1.12"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"
@@ -304,7 +312,7 @@ sys.stdout.write(s.replace(
     chr(34) + "chalk" + chr(34) + ", 4, " + chr(34) + "4.999.0" + chr(34), 1))
 '
 
-mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 36" '
+mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 41" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(
@@ -312,7 +320,7 @@ sys.stdout.write(re.sub(
     "", s, flags=re.M))
 '
 
-mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 36" '
+mutate "a row renamed to a nonexistent package REDs" "the table's package set drifted from WATCHED_PACKAGES" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace(chr(34) + "nanoid" + chr(34) + ", 3",
@@ -433,6 +441,109 @@ else
 fi
 build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
 
+# --- Fixture-mirror population check. All 41 REQUIRED rows resolve inside the fixture
+# (the evacuated brace-expansion majors are retained deliberately), so the control's
+# summary must report the fixture's own population. An unmirrored table addition drops
+# the fixture's resolved count and this arm reds -- restoring the per-row mirror
+# guarantee the header contract states. ---
+asserted=$((asserted + 1))
+if run_mutant "$SANDBOX/pristine.py" && grep -qF "41 rows evaluated, 41 resolved" "$SANDBOX/last.out"; then
+  pass "fixture mirror: all 41 REQUIRED rows evaluate AND resolve in the fixture (an unmirrored table addition prints '42 evaluated, 41 resolved' and reds here)"
+else
+  fail "control did not report '41 rows evaluated, 41 resolved' -- a REQUIRED row has no fixture entry or the summary text drifted"
+fi
+
+# REQUIRED-loop manifest-membership check: a row naming a manifest not in LOCKS is a
+# floor assertion over nothing, and on an '(absent)' row nothing else backstops the typo.
+mutate "a REQUIRED row naming a manifest not in LOCKS REDs" "REQUIRED row names a manifest not in LOCKS" '
+import sys
+s = sys.stdin.read()
+sys.stdout.write(s.replace("(" + chr(34) + "web-platform" + chr(34) + ", " + chr(34) + "nanoid" + chr(34),
+                           "(" + chr(34) + "webplatform" + chr(34) + ", " + chr(34) + "nanoid" + chr(34), 1))
+'
+
+# Tree-side: a lockfile LOCKS does not read must RED the census -- MIN_LOCKS is a floor,
+# not an equivalence, and a sixth package-lock.json was asserted clean by nobody.
+asserted=$((asserted + 1))
+if build_fixture && mkdir -p "$FIX/tools/rogue" && printf '%s' '{"packages":{}}' > "$FIX/tools/rogue/package-lock.json"; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a package-lock.json outside LOCKS exited 0 — the census is floor-only, not exhaustive"
+  elif ! grep -qF "LOCKS does not read" "$SANDBOX/last.out"; then
+    fail "reddened, but not via the census (no 'LOCKS does not read' in output)"
+  else
+    pass "a package-lock.json outside LOCKS is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with an uncensused lockfile"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# Tree-side: a file:/link:/workspace: spec carries no version -- it must RED, or watched
+# code installs invisible to every floor and sweep.
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/evil/node_modules/minimatch": {"resolved": "vendor/min", "link": true}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a versionless link entry for a watched package exited 0 — the sweep skips it"
+  elif ! grep -qF "carries no 'version'" "$SANDBOX/last.out"; then
+    fail "reddened, but not via the versionless check (no 'carries no 'version'' in output)"
+  else
+    pass "a file:/link: spec for a watched package is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a link entry"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# Tree-side: a path/meta name disagreement -- the path names a watched package while the
+# entry's meta `name` does not -- must RED (npm never emits this; a hand-edit would hide
+# a watched package under a foreign name).
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/evil/node_modules/minimatch": {"name": "innocent", "version": "11.0.3"}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a path/meta name disagreement on a watched package exited 0 — the census trusts meta.name alone"
+  elif ! grep -qF "path/meta name disagreement" "$SANDBOX/last.out"; then
+    fail "reddened, but not via the name-disagreement check (no 'path/meta name disagreement' in output)"
+  else
+    pass "a path/meta name disagreement on a watched package is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a name-mismatch entry"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# The sharpest disguise: path names a watched package while meta `name` names a
+# DIFFERENT watched package — the entry would be evaluated under the covered alias
+# and produce no signal at all without the disagreement check.
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/evil/node_modules/minimatch": {"name": "zod", "version": "4.6.6"}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a watched<->watched name swap exited 0 — one watched package hid behind another's row"
+  elif ! grep -qF "path/meta name disagreement" "$SANDBOX/last.out"; then
+    fail "reddened, but not via the name-disagreement check (no 'path/meta name disagreement' in output)"
+  else
+    pass "a watched<->watched name swap is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a watched<->watched swap"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# A file: spec's vendor target lives at a bare path key with real name+version — the
+# sharpest shape, because it needs no hand-edited lockfile, only a "file:vendor/min" dep.
+asserted=$((asserted + 1))
+if build_fixture '{"vendor/min": {"name": "minimatch", "version": "9.0.0"}, "node_modules/helper": {"resolved": "vendor/min", "link": true}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a vendored watched package behind a file: spec exited 0 — vendor targets escape the census"
+  elif ! grep -qE "no row covers|carries no 'version'|name disagreement" "$SANDBOX/last.out"; then
+    fail "reddened, but not via coverage/versionless/disagreement check"
+  else
+    pass "a file:-vendored watched package is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a vendor-target entry"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
 # --- Accounting. Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -450,7 +561,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=47
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
