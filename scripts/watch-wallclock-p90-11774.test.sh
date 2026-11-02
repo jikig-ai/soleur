@@ -87,7 +87,8 @@ case "$1" in
     case "$2" in
       "list") cat "$MOCKD/issues.json"; exit 0 ;;
       "view") cat "$MOCKD/issue.json"; exit 0 ;;
-      "comment") printf '%s' "$piped" >> "$MOCKD/bodies"; exit 0 ;;
+      "comment") [[ -f "$MOCKD/fail_comment" ]] && { echo "gh: comment boom" >&2; exit 1; }
+        printf '%s' "$piped" >> "$MOCKD/bodies"; exit 0 ;;
       "create") printf '%s' "$piped" >> "$MOCKD/created"; printf 'https://example.invalid/i/505\n'; exit 0 ;;
       "edit") printf '%s' "$piped" >> "$MOCKD/edited"; exit 0 ;;
     esac ;;
@@ -239,15 +240,15 @@ run
   && pass "G1-7 identical flagged set: no repost, body still rewritten" \
   || fail "G1-7 (rc=$RC comments=$(ncalls 'issue comment') edits=$(ncalls 'issue edit'))"
 
-# ---- G1-8: zero qualifying samples -> exit 0 with a no-data report -----------
+# ---- G1-8: no green runs listed at all -> exit 0 with a no-data report -------
+# Zero listed runs is the reported missing-data state. (A surface that lists
+# runs but resolves zero samples is NOT this case — see G3-1.)
 mkscene
-seed_run pull_request 101 shap1 "2026-11-02T08:00:00Z" 9001
-seed_checks shap1 "[$(cr test '"skipped"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"skipped"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"skipped"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
 run
 body="$(cat "$MOCKD/created")"
 [[ "$RC" -eq 0 && ("$body" == *"No qualifying samples"* || "$OUT" == *"No qualifying samples"*) \
    && "$(ncalls 'issue comment')" -eq 0 ]] \
-  && pass "G1-8 zero qualifying samples -> exit 0 no-data report, never a ratchet fail" \
+  && pass "G1-8 zero listed runs -> exit 0 no-data report, never a ratchet fail" \
   || fail "G1-8 (rc=$RC)"
 
 # ---- G2-1: required-checks.txt +1 row with no bound -> unbound finding -------
@@ -292,6 +293,32 @@ body="$(cat "$MOCKD/created")"
 [[ "$RC" -eq 0 && "$body" != *"not-a-required-check"* ]] \
   && pass "G2-5 non-required check-run name excluded from measurement" || fail "G2-5 (rc=$RC)"
 
+# ---- G3-1: dead surface — listed runs resolve to zero samples -> unsampled ----
+# pull_request samples fine; merge_group lists a run whose check-runs ALL fail
+# resolution (every check completed before the run was created — a stale batch
+# on the same sha). The surface-level `unsampled` finding names the surface;
+# it must NOT exit green.
+mkscene
+seed_run pull_request 101 shap1 "2026-11-02T08:00:00Z" 9001
+seed_checks shap1 "[$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+seed_run merge_group 201 sham1 "2026-11-02T09:00:00Z" 9003
+seed_checks sham1 "[$(cr test '"success"' 9003 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9003 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9004 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+run
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 1 && "$body" == *'- unsampled: `merge_group` surface'* \
+   && "$body" != *'- unmeasured: `test` (`merge_group`)'* ]] \
+  && pass "G3-1 dead surface -> surface-level unsampled finding, exit 1" || fail "G3-1 (rc=$RC)"
+
+# ---- G3-2: mis-shaped check-runs payload counts as a fetch failure ------------
+# A 200 response whose body lacks the check_runs key yields zero rows per run;
+# every listed run empty -> cannot-establish, exit 3 (not a green window).
+mkscene; seed_green_scene
+printf '{"runs":[]}\n' > "$MOCKD/checks_shap1.json"
+printf '{"runs":[]}\n' > "$MOCKD/checks_sham1.json"
+run
+[[ "$RC" -eq 3 && "$(ncalls 'issue create')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 ]] \
+  && pass "G3-2 wrong-shape 200 payload is a fetch failure -> exit 3" || fail "G3-2 (rc=$RC)"
+
 # ---- T1: standing tracker lifecycle ------------------------------------------
 mkscene; seed_green_scene
 run
@@ -328,6 +355,29 @@ run
 [[ "$RC" -eq 1 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue edit')" -eq 1 \
    && "$(sentinel_of "$MOCKD/bodies")" != "drift=0000000000000000000000000000000000000001" ]] \
   && pass "T4 changed flagged set comments once with a new sentinel; body rewritten" || fail "T4"
+
+# ---- T14: failed drift comment must not burn the sentinel --------------------
+# The comment posts BEFORE the body rewrite: a failed comment leaves the OLD
+# sentinel in the un-rewritten body, so the next run reposts
+# (duplicate-on-failure, never drop-on-failure).
+mkscene
+seed_run pull_request 101 shap1 "2026-11-02T08:00:00Z" 9001
+seed_checks shap1 "[$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+printf '[{"number":505,"title":"ci-wallclock-p90: required-check wall-clock report","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"prior body\\n<!-- wallclock-p90-watch:v1 drift=0000000000000000000000000000000000000001 -->","comments":[]}' > "$MOCKD/issue.json"
+seed_run pull_request 102 shap2 "2026-11-02T08:10:00Z" 9011
+seed_checks shap2 "[$(cr test '"success"' 9011 '"2026-11-02T08:11:00Z"' '"2026-11-02T09:33:20Z"'),$(cr e2e '"success"' 9011 '"2026-11-02T08:11:00Z"' '"2026-11-02T08:15:00Z"'),$(cr cla-check '"success"' 9012 '"2026-11-02T08:11:00Z"' '"2026-11-02T08:15:00Z"')]"
+: > "$MOCKD/fail_comment"
+run
+[[ "$RC" -eq 1 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue edit')" -eq 0 \
+   && ! -s "$MOCKD/bodies" && ! -s "$MOCKD/edited" ]] \
+  && pass "T14a failed drift comment: body rewrite skipped, sentinel unburned" \
+  || fail "T14a (rc=$RC comments=$(ncalls 'issue comment') edits=$(ncalls 'issue edit'))"
+rm -f "$MOCKD/fail_comment"; : > "$MOCKD/calls"
+run
+[[ "$RC" -eq 1 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue edit')" -eq 1 \
+   && "$(sentinel_of "$MOCKD/bodies")" =~ ^drift=[0-9a-f]{40}$ ]] \
+  && pass "T14b next run reposts the drift comment then rewrites the body" || fail "T14b (rc=$RC)"
 
 # ---- T13: ci/wallclock-p90 label contract — the digest §6 read's selector ----
 mkscene; seed_green_scene

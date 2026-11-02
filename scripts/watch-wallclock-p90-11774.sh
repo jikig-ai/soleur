@@ -31,7 +31,9 @@
 # (1+margin). A required context with NO bound row is itself a finding (the
 # untracked-member class: adding a required check forces a bound row in the same
 # change). A required context with zero qualifying samples on a surface that
-# otherwise measured is an unmeasured finding, never a silent drop.
+# otherwise measured is an unmeasured finding, never a silent drop. A surface
+# that LISTED green runs but produced zero qualifying samples is a
+# surface-level `unsampled` finding — a dead surface never reads green.
 #
 # Report home: ONE watch-owned standing tracker issue
 #   `ci-wallclock-p90: required-check wall-clock report`
@@ -135,7 +137,12 @@ echo "bound rows: ${#BPR[@]}"
 
 # ---- (1) sample + extract per-run check timings ------------------------------
 : > "$WORK/samples.tsv"
-declare -A SURF_TOTAL; SURF_TOTAL[pull_request]=0; SURF_TOTAL[merge_group]=0
+# SURF_RUNS counts green runs LISTED per surface; SURF_TOTAL counts qualifying
+# sample rows per surface. Runs-listed > 0 with samples == 0 is a dead surface
+# (see the `unsampled` finding) — distinct from a surface that listed nothing.
+declare -A SURF_TOTAL SURF_RUNS
+SURF_TOTAL[pull_request]=0; SURF_TOTAL[merge_group]=0
+SURF_RUNS[pull_request]=0; SURF_RUNS[merge_group]=0
 runs_seen=0; fetch_fail=0
 for ev in pull_request merge_group; do
   # ONE list call per surface: the workflow-runs endpoint returns id,
@@ -157,6 +164,7 @@ for ev in pull_request merge_group; do
   while IFS=$'\t' read -r rid csid sha created; do
     [[ -n "$rid" ]] || continue
     runs_seen=$((runs_seen + 1))
+    SURF_RUNS[$ev]=$(( ${SURF_RUNS[$ev]:-0} + 1 ))
     checks="$(gh api --paginate "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" 2>"$WORK/err")" || {
       echo "::warning::check-runs for run $rid unreadable — skipped ($(tail -1 "$WORK/err"))" >&2
       fetch_fail=$((fetch_fail + 1)); continue; }
@@ -164,7 +172,13 @@ for ev in pull_request merge_group; do
     # suite; else the resolvable candidate nearest to the run's creation.
     # Resolvable = completed AFTER the run was created (an earlier completion
     # belongs to a stale suite on the same sha — drop, never misattribute).
-    printf '%s' "$checks" | jq -sr \
+    # The projection writes a per-run file and appends ONLY on jq success — a
+    # jq that dies mid-stream would otherwise count its partial rows as
+    # samples. And a listed run whose projection produced ZERO rows counts as
+    # a failed read, not a clean fetch: a 200 response with a missing/renamed
+    # check_runs key (or an all-unresolvable payload) must not pass as
+    # "fetched fine, sampled nothing".
+    if printf '%s' "$checks" | jq -sr \
         --argjson req "$(cat "$WORK/reqnames.json")" \
         --argjson suite "${csid:-0}" --arg ev "$ev" --arg c0 "$created" '
       def abs: if . < 0 then -. else . end;
@@ -181,18 +195,26 @@ for ev in pull_request merge_group; do
          else null end) as $p
       | select($p != null)
       | "\($name)\t\($ev)\t\((($p.completed_at | fromdateiso8601) - $t0) | floor)\t\((($p.completed_at | fromdateiso8601) - ($p.started_at | fromdateiso8601)) | floor)"
-    ' >> "$WORK/samples.tsv" || {
+    ' > "$WORK/run-samples.tsv"; then
+      if [[ -s "$WORK/run-samples.tsv" ]]; then
+        cat "$WORK/run-samples.tsv" >> "$WORK/samples.tsv"
+      else
+        echo "::warning::check-runs fetch for run $rid produced zero qualifying samples — counted as a failed read" >&2
+        fetch_fail=$((fetch_fail + 1))
+      fi
+    else
       echo "::warning::check-runs payload for run $rid unparseable — skipped" >&2
-      fetch_fail=$((fetch_fail + 1)); continue; }
+      fetch_fail=$((fetch_fail + 1))
+    fi
   done <<<"$runs"
 done
 total_samples="$(awk 'END{print NR}' "$WORK/samples.tsv")"
 while IFS=$'\t' read -r _ sv _lat _dur; do
   SURF_TOTAL[$sv]=$(( ${SURF_TOTAL[$sv]:-0} + 1 ))
 done < "$WORK/samples.tsv"
-echo "sampled runs: $runs_seen (fetch failures: $fetch_fail); qualifying samples: $total_samples"
+echo "sampled runs: $runs_seen (failed/empty check-runs reads: $fetch_fail); qualifying samples: $total_samples"
 if [[ "$runs_seen" -gt 0 && "$fetch_fail" -eq "$runs_seen" ]]; then
-  echo "::error::every per-run check-runs fetch failed — cannot establish a measurement" >&2; exit 3
+  echo "::error::every per-run check-runs read failed or produced zero qualifying samples — cannot establish a measurement" >&2; exit 3
 fi
 
 # ---- (2) aggregate: nearest-rank p50/p90 per (check, surface) ----------------
@@ -246,6 +268,15 @@ for n in "${REQNAMES[@]}"; do
     fi
   done
 done
+# A surface that LISTED green runs but resolved zero qualifying samples is a
+# dead surface — one surface-level `unsampled` finding, loud never green. A
+# surface that listed NO runs stays the reported no-data case (exit 0).
+for ev in pull_request merge_group; do
+  if [[ "${SURF_RUNS[$ev]:-0}" -gt 0 && "${SURF_TOTAL[$ev]:-0}" -eq 0 ]]; then
+    findings+=("unsampled	-	$ev	listed ${SURF_RUNS[$ev]} green run(s) but produced zero qualifying samples — the whole surface is unmeasurable")
+    echo "::error::surface $ev listed ${SURF_RUNS[$ev]} green run(s) but produced zero qualifying samples — dead surface, not a quiet week" >&2
+  fi
+done
 echo "flagged findings: ${#findings[@]}"
 
 # ---- (4) compose the standing report body ------------------------------------
@@ -260,6 +291,10 @@ fline() {
     breach)     printf -- "- breach: \`%s\` (\`%s\`) — %s\n" "$n" "$s" "$mag" ;;
     unbound)    printf -- "- unbound: \`%s\` — %s\n" "$n" "$mag" ;;
     unmeasured) printf -- "- unmeasured: \`%s\` (\`%s\`) — %s\n" "$n" "$s" "$mag" ;;
+    unsampled)  printf -- "- unsampled: \`%s\` surface — %s\n" "$s" "$mag" ;;
+    # An unknown finding type renders VISIBLY — never silently dropped from
+    # the report/comment it was flagged into.
+    *)          printf -- "- %s: \`%s\` (\`%s\`) — %s\n" "$t" "$n" "$s" "$mag" ;;
   esac
 }
 
@@ -388,18 +423,25 @@ if [[ -z "$tracker" ]]; then
   exit "$verdict"
 fi
 
+# Post the drift comment BEFORE the body rewrite. The comment is what carries
+# the new sentinel into the issue's comment history; if the body were
+# rewritten first and the comment post then failed, the new sentinel would sit
+# in the body with no comment behind it — the next run would read "already
+# posted" and suppress the repost forever. Ordering it this way is
+# duplicate-on-failure (loud), never drop-on-failure. (The create path is
+# already atomic: body + label land in one call.)
+if [[ "$last_sha" != "$set_sha" ]]; then
+  gh issue comment "$tracker" --body-file - <"$WORK/comment.md" >/dev/null 2>"$WORK/err" || {
+    echo "::error::posting the drift comment on #${tracker} failed" >&2; exit 1; }
+  echo "posted drift comment on #${tracker} (drift=${set_sha:-<empty>})"
+else
+  echo "unchanged flagged set on tracker #${tracker} (drift=${set_sha:-<empty>}) — no repost"
+fi
+
 # The standing report: rewrite the body every run, whatever the verdict. The
 # --add-label re-attaches the selector if a human stripped it (self-heal).
 gh issue edit "$tracker" -R "$GH_REPO" --add-label ci/wallclock-p90 \
     --body-file - <"$WORK/body.md" >/dev/null 2>"$WORK/err" || {
   echo "::error::report-body rewrite on #${tracker} failed" >&2; exit 1; }
 echo "rewrote report body on tracker #${tracker}"
-
-if [[ "$last_sha" == "$set_sha" ]]; then
-  echo "unchanged flagged set on tracker #${tracker} (drift=${set_sha:-<empty>}) — no repost"
-  exit "$verdict"
-fi
-gh issue comment "$tracker" --body-file - <"$WORK/comment.md" >/dev/null 2>"$WORK/err" || {
-  echo "::error::posting the drift comment on #${tracker} failed" >&2; exit 1; }
-echo "posted drift comment on #${tracker} (drift=${set_sha:-<empty>})"
 exit "$verdict"
