@@ -367,8 +367,8 @@ span to the NEXT registered mark.
   `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
   artifact runs — main `push` runs elide the shards job).
 - **2026-11-02 wallclock-p90 baseline (#11774 seed):** last 30
-  completed+success `ci.yml` runs per surface (30 `pull_request` head SHAs
-  + 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run
+  completed+success `ci.yml` runs per surface (30 `pull_request` head
+  SHAs plus 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run
   (**must be paginated — ~55-80 check runs per head sha vs the API's
   30-item default page**; the probe uses `--paginate` + `per_page=100`),
   latency = check.completed_at − run.created_at, nearest-rank percentiles.
