@@ -89,7 +89,7 @@ pass() { PASS=$((PASS + 1)); echo "  [ok] $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2; printf '%s\n' "$1" >> "$FAILLOG"; }
 
 for _required in "$RUNNER" "$AFF_LIB" "$REL_LIB" "$RWB_LIB"; do
-  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 1; }
+  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 2; }
 done
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ FAILLOG="$_real_faillog"
 if (( PASS != _self_pass + 1 )) || (( FAIL != _self_fail + 1 )) || (( _self_logged != 1 )); then
   printf '\n[FATAL] instrument self-test failed: pass moved %d, fail moved %d, log lines %d\n' \
     "$((PASS - _self_pass))" "$((FAIL - _self_fail))" "$_self_logged" >&2
-  exit 1
+  exit 2
 fi
 PASS=$_self_pass; FAIL=$_self_fail; cases=0
 
@@ -333,46 +333,26 @@ echo "== test-all-affected: mutation matrix =="
 # tiling 1..DECLARED_TOTAL is asserted by plugins/soleur/test/scripts-shard-totality.test.sh.
 # A DECLARED_TOTAL bump and the registered-range re-split land in the same commit.
 DECLARED_TOTAL=38   # the gated `# ---` row blocks below (a .. th8m); setup/floors are unconditional
-ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared blocks
-_seen_rows_flag=0
-while (( $# )); do
-  case "$1" in
-    --rows)
-      shift
-      if [[ ! "${1:-}" =~ ^[0123456789]{1,9}-[0123456789]{1,9}$ ]]; then
-        echo "ERROR: --rows requires a decimal range A-B (got '${1:-<missing>}')" >&2
-        exit 2
-      fi
-      if (( _seen_rows_flag == 1 )); then
-        echo "ERROR: --rows given twice — a range must be stated once" >&2
-        exit 2
-      fi
-      _seen_rows_flag=1
-      ROWS_LO=$((10#${1%-*})); ROWS_HI=$((10#${1#*-}))
-      ;;
-    *)
-      echo "ERROR: unknown argument '$1' (usage: $0 [--rows A-B])" >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-if (( _seen_rows_flag == 1 )) && ! (( 1 <= ROWS_LO && ROWS_LO <= ROWS_HI && ROWS_HI <= DECLARED_TOTAL )); then
-  echo "ERROR: --rows ${ROWS_LO}-${ROWS_HI} is out of bounds: need 1 <= A <= B <= ${DECLARED_TOTAL} declared blocks." >&2
-  exit 2
-fi
-# in_range: called once per gated row block, in file order. _site_seq counts gated blocks;
-# EXECUTED counts dispatched blocks. No per-site ordinal — the block order IS the declared
-# order and the end-of-file _site_seq == DECLARED_TOTAL check is the add/delete guard; a reorder keeps coverage total but silently re-maps which range covers which rows — a balance skew, not a gap.
-_site_seq=0; EXECUTED=0
-in_range() {
-  _site_seq=$(( _site_seq + 1 ))
-  if (( ROWS_HI == 0 )) || (( ROWS_LO <= _site_seq && _site_seq <= ROWS_HI )); then
-    EXECUTED=$(( EXECUTED + 1 ))
-    return 0
-  fi
-  return 1
-}
+ROWS_UNIT=blocks
+# S4 per-block case floors (#11647): ROWS_COUNT_VAR names the counter in_range
+# snapshots per gate call; ROWS_BLOCK_CASES carries one declared `>=` minimum
+# per gated ordinal (index = ordinal-1). The declared counts are each block's
+# straight-line cases+= sites — loop-driven blocks (rc/re/tg/th census rows)
+# declare only their unconditional floor so legitimate case growth cannot
+# false-fire. Ordinals map to blocks: 1 a, 2 b, 3 c, 4 d, 5 e, 6 f, 7 g, 8 h,
+# 9 i, 10 j, 11 k, 12 k2-k4, 13 rc*, 14 re*, 15 l, 16 m, 17 n, 18 o, 19 p,
+# 20 q, 21 r, 22 s, 23 t, 24 u, 25 x, 26 w, 27 v, 28 y/z, 29 z8, 30 sc, 31 sc9,
+# 32 t1-t10/m*, 33 p1-p6/m4, 34 q1-q4/m6, 35 q7-q9, 36 tg, 37 th, 38 th6*/th8.
+ROWS_COUNT_VAR=cases
+ROWS_BLOCK_CASES=( 1 1 1 1 1 1 1 1 1 1 1 4 1 19 2 3 1 1 1 1 1 2 1 2 1 2 2 11 1 8 1 18 7 9 3 5 4 4 )
+# shellcheck source=scripts/lib/rows-range.sh
+source "$REPO_ROOT/scripts/lib/rows-range.sh"
+rows_parse_args "$@"
+# in_range (from the lib): called once per gated row block, in file order. _site_seq counts
+# gated blocks; EXECUTED counts dispatched blocks. No per-site ordinal — the block order IS the
+# declared order and the end-of-file _site_seq == DECLARED_TOTAL check is the add/delete guard;
+# a reorder keeps coverage total but silently re-maps which range covers which rows — a balance
+# skew, not a gap.
 
 # Whole-prefix sweep, not a named list — a named GIT_* list went stale within
 # a day once already (sc9's comment). The subshell keeps the unsets out of the
@@ -4242,14 +4222,7 @@ fi
 # the gate dispatched exactly the range — a deleted block cannot hide behind
 # the conservation check above.
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
-if (( _site_seq != DECLARED_TOTAL )); then
-  echo "[FATAL] range gate: $_site_seq gated blocks reached in_range, expected $DECLARED_TOTAL — a row block was added or deleted without re-splitting the registered --rows ranges" >&2
-  exit 2
-fi
-if (( EXECUTED != EXPECTED_EXECUTED )); then
-  echo "[FATAL] range gate: $EXECUTED blocks dispatched, expected $EXPECTED_EXECUTED for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected" >&2
-  exit 2
-fi
+rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == EXPECTED_EXECUTED, >= 1
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.

@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=578 → 1-193/194-386/387-578) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=582 → 1-193/194-386/387-582) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -163,9 +163,11 @@ A weekly advisory probe (`Tue 09:41 UTC` + `workflow_dispatch`) samples the
 last 5 green `merge_group` `ci.yml` runs' `suite-timings-scripts-*` artifacts
 and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
 --timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
-`src=floor` durations row that finally measured), `LEG_PREDICTED`,
+`src=floor` or `src=estimate` durations row that finally measured —
+`FLOOR_UNMEASURED` counts both src classes; the token stays literal because
+the watcher greps it), `LEG_PREDICTED`,
 `LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
-`BOUND_PERFECT`, and `FLOOR_UNMEASURED` rows against the committed tables.
+`BOUND_PERFECT` (light only), and `FLOOR_UNMEASURED` rows against the committed tables.
 `scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
 leg ratio > 1.30) and manages ONE watch-owned tracker issue
 (`ci-shard-balance-watch: manifest drift findings`, sentinel
@@ -394,3 +396,44 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
   synthetic `test` check has six `needs:` jobs; a failed or skipped heavy
   matrix fails it.
+
+## Arm-split checklist (#11562 convention, ADR-313)
+
+Splitting a too-long battery into `--rows` `-<letter>` arms touches every
+site below — the same commit bumps `DECLARED_TOTAL` and re-splits the
+registered ranges, because the bounds check refuses a range the battery
+cannot execute.
+
+1. **Registrations**: `run_suite "<stem>-<letter>" bash <file> --rows A-B`
+   pairs, one per arm, every registration flagged (a mixed contract reds);
+   each `skip_suite` re-run text carries the same `bash <file> --rows A-B`
+   line, and `_relevance_declined` counts stay in step (pr-gated arms only).
+   A `ci.yml` `rows:` matrix is the other style — its run step consumes
+   `--rows "${{ matrix.rows }}"`.
+2. **Relevance**: shared `<NAME>_PATHS` array in
+   `scripts/lib/test-relevance-paths.sh` + `RELEVANCE_ARRAYS` row in
+   `scripts/lint-orphan-test-suites.sh`; `AFFECTED_CONSUMED_EDGES` rows per
+   arm label in `scripts/lib/test-affected-paths.sh`; `is_pr_gated_decline`
+   in `scripts/ci-pr-selection.sh`; `GATED` rows in
+   `scripts/test-all-infra-coverage-notice.test.sh`; pr-battery-gate
+   constants (`L_*`/`ARRAYS`/`own_file`/`add_arm`/`arm_id`) in
+   `scripts/test-all-pr-battery-gate.test.sh`.
+3. **Battery**: `DECLARED_TOTAL` beside the gate comment; source
+   `scripts/lib/rows-range.sh`, call `rows_parse_args "$@"`, `in_range`
+   once per gated site in file order (ordinal arg where declared),
+   `rows_gate_floor` + battery extras at EOF. Optional `ROWS_COUNT_VAR` +
+   `ROWS_BLOCK_CASES` per-block case floors.
+4. **Regen**: `python3 scripts/regenerate-shard-manifest.py --incremental
+   --write` for both TSVs — the distinct-legs post-pass must pin each
+   `-<letter>` sibling on a different leg.
+5. **Guards**: re-pin totality-mutations' verbatim `run_suite … --rows`
+   anchors if the argv lines moved; run the affected-index ratchet and add
+   declared edges or accept rows for every newly flagged (suite, path)
+   pair.
+6. **Seeding prices**: a hand-seeded arm price stamps `src=estimate` in
+   `scripts/suite-durations.tsv` — never `measured`. An estimate supplies
+   weight but stays out of the floor median and the measured-only drift
+   accounting; it upgrades to `measured` only when a `--runs`/`--timings-dir`
+   pass has real timing rows. (`estimate→measured` / `measured→estimate`
+   emit named drift-gate notes; `DRIFT_ROW`/`FLOOR_UNMEASURED` count both
+   src classes.)

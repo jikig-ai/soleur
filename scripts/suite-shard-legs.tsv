@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1222
-# generated-at=2026-11-01T08:11:46Z
+# default-weight-ms=1223
+# generated-at=2026-11-01T23:04:46Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -457,6 +457,7 @@ scripts/lib/legal-base-ref.test.sh	7
 scripts/lib/legal-normalise-property.test.sh	1
 scripts/lib/legal-normalise.test.sh	6
 scripts/lib/repo-write-boundary.test.sh	2
+scripts/lib/rows-range.test.sh	6
 scripts/lib/rule-line-regex-parity.test.sh	3
 scripts/lib/scratch-root.test.sh	2
 scripts/lib/supabase-logs-verdict.test.sh	4

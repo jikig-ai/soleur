@@ -418,9 +418,10 @@ def read_durations_rows(path):
                 continue
             parts = line.split("\t")
             if len(parts) != 3 or not parts[1].isdigit() \
-                    or parts[2] not in ("measured", "floor"):
+                    or parts[2] not in ("measured", "floor", "estimate"):
                 die(f"{path}:{lineno}: malformed durations row {line!r} — "
-                    f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+                    f"expected 'label<TAB>ms<TAB>src' with src in "
+                    "(measured|floor|estimate)")
             rows[parts[0]] = (int(parts[1]), parts[2])
     return rows
 
@@ -428,15 +429,20 @@ def read_durations_rows(path):
 def read_durations(path):
     """Read a committed durations table (`label<TAB>ms<TAB>src`).
 
-    Returns (weights, floor_labels): src=measured rows supply weights; src=floor
-    rows supply NO weight — they re-derive at floor_ms on this invocation, so an
-    estimate can never launder into a measurement across regenerations."""
+    Returns (weights, floor_labels, est_labels): src=measured and src=estimate
+    rows both supply weight — an estimate is a declared seeded price, never a
+    measurement, so it prices its leg but must stay out of the floor median
+    and every measured-only accounting; src=floor rows supply NO weight — they
+    re-derive at floor_ms on this invocation, so an estimate can never launder
+    into a measurement across regenerations."""
     rows = read_durations_rows(path)
     if rows is None:
         die(f"--durations file not found: {path}")
-    weights = {l: ms for l, (ms, src) in rows.items() if src == "measured"}
+    weights = {l: ms for l, (ms, src) in rows.items()
+               if src in ("measured", "estimate")}
     floors = {l for l, (ms, src) in rows.items() if src == "floor"}
-    return weights, floors
+    ests = {l for l, (ms, src) in rows.items() if src == "estimate"}
+    return weights, floors, ests
 
 
 def repo_root():
@@ -477,22 +483,25 @@ def parse_durations_text(text, source):
             continue
         parts = line.split("\t")
         if len(parts) != 3 or not parts[1].isdigit() \
-                or parts[2] not in ("measured", "floor"):
+                or parts[2] not in ("measured", "floor", "estimate"):
             die(f"{source}:{lineno}: malformed durations row {line!r} — "
-                f"expected 'label<TAB>ms<TAB>src' with src in (measured|floor)")
+                f"expected 'label<TAB>ms<TAB>src' with src in "
+                "(measured|floor|estimate)")
         rows[parts[0]] = (int(parts[1]), parts[2])
     return rows
 
 
 def drift_violations(new_rows, base_rows):
     """Per-suite and total measured-weight drift of NEW_ROWS vs BASE_ROWS,
-    each {label: (ms, src)}. floor→measured is exempt per-suite but counts
-    toward the total; measured→floor is a named report line; count growth is
-    reported, never gated. Returns (violations, notes)."""
+    each {label: (ms, src)}. floor→measured and estimate→measured are exempt
+    per-suite but count toward the total; measured→floor and
+    measured→estimate are named report lines; count growth is reported, never
+    gated. Returns (violations, notes)."""
     violations, notes = [], []
     new_m = {l: ms for l, (ms, s) in new_rows.items() if s == "measured"}
     base_m = {l: ms for l, (ms, s) in base_rows.items() if s == "measured"}
     base_f = {l for l, (ms, s) in base_rows.items() if s == "floor"}
+    base_e = {l for l, (ms, s) in base_rows.items() if s == "estimate"}
     for l in sorted(new_m):
         if l in base_m:
             b, n = base_m[l], new_m[l]
@@ -503,10 +512,17 @@ def drift_violations(new_rows, base_rows):
         elif l in base_f:
             notes.append(f"floor→measured {l!r}: {new_m[l]}ms "
                          "(exempt per-suite, counts toward total)")
+        elif l in base_e:
+            notes.append(f"estimate→measured {l!r}: {new_m[l]}ms "
+                         "(exempt per-suite, counts toward total)")
     for l in sorted(base_m):
         if l in new_rows and new_rows[l][1] == "floor":
             notes.append(f"measured→floor {l!r}: was {base_m[l]}ms "
                          "(stopped producing timings — a finding if persistent)")
+        elif l in new_rows and new_rows[l][1] == "estimate":
+            notes.append(f"measured→estimate {l!r}: was {base_m[l]}ms "
+                         "(downgraded to a seeded estimate — a finding if "
+                         "persistent)")
     if base_m:
         growth = sum(new_m.values()) - sum(base_m.values())
         if growth > DRIFT_TOTAL_PCT * sum(base_m.values()):
@@ -592,11 +608,12 @@ def drift_gate(new_rows, args, baseline_path, committed_write, write_target):
 
 def read_durations_ms(path):
     """(all_ms, measured_ms) from a committed durations table for incremental
-    mode: all_ms maps EVERY row's label to its ms — a src=floor row still
-    prices its leg in a load tally — while measured_ms collects only
-    src=measured values so the floor median never launders an estimate into a
-    measurement. An absent file yields ({}, []): the caller floors at
-    DEFAULT_SUITE_MS, which is the honest degrade for a pre-#9232 manifest."""
+    mode: all_ms maps EVERY row's label to its ms — a src=floor or
+    src=estimate row still prices its leg in a load tally — while measured_ms
+    collects only src=measured values so the floor median never launders an
+    estimate into a measurement. An absent file yields ({}, []): the caller
+    floors at DEFAULT_SUITE_MS, which is the honest degrade for a pre-#9232
+    manifest."""
     rows = read_durations_rows(path) or {}
     all_ms = {l: ms for l, (ms, _src) in rows.items()}
     measured = [ms for _l, (ms, src) in rows.items() if src == "measured"]
@@ -610,7 +627,9 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
     Read-only comparison of fresh cross-run medians against the committed
     pricing. Emission contract (stdout, one row per line):
       DRIFT_ROW <group> <label> <committed_ms> <fresh_median_ms> <timed>/<sampled>
-        — one per src=floor row that measured in >= 1 sampled run.
+        — one per src=floor or src=estimate row that measured in >= 1 sampled
+        run (an estimate that finally measures IS the drift event this probe
+        exists to name).
       LEG_PREDICTED <group> <leg> <sum_ms>
         — committed durations summed through the incumbent manifest.
       LEG_OBSERVED light <leg> <sum_ms>
@@ -619,8 +638,10 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
           pollution gotcha) and heavy legs are one-suite-per-leg atomic floors
           with no packing lever for the assertion to move (T7).
       BOUND_PERFECT light <ms> — observed total / legs.
-      FLOOR_UNMEASURED <group> <count> — floor rows absent from every sample
-        (informational: an unmeasured row cannot exceed a cost bound)."""
+      FLOOR_UNMEASURED <group> <count> — floor and estimate rows absent from
+        every sample (informational: an unmeasured row cannot exceed a cost
+        bound; the token stays FLOOR_UNMEASURED —
+        watch-shard-balance-11564.sh parses it literally)."""
     rows = read_durations_rows(durations_path)
     if rows is None:
         die(f"--drift-report: comparison-base durations table not found: "
@@ -635,7 +656,8 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
     fresh = {label: median(xs) for label, xs in samples.items()}
     timed_n = {label: len(xs) for label, xs in samples.items()}
 
-    floor_labels = {l for l, (_ms, src) in rows.items() if src == "floor"}
+    floor_labels = {l for l, (_ms, src) in rows.items()
+                    if src in ("floor", "estimate")}
     for label in sorted(floor_labels & set(fresh)):
         print(f"DRIFT_ROW {group} {label} {rows[label][0]} "
               f"{fresh[label]} {timed_n[label]}/{sampled}")
@@ -1136,10 +1158,11 @@ def main():
     # Input-source precedence mirrors the file's pairing rule: whichever source
     # actually fed stamps the provenance. --durations > --timings-dir > gh.
     floor_inputs = set()
+    est_inputs = set()
     run_ids = []
     per_run = []
     if args.durations:
-        weights, floor_inputs = read_durations(args.durations)
+        weights, floor_inputs, est_inputs = read_durations(args.durations)
         src = f"durations:{args.durations}"
         if args.timings_dir or args.run or args.runs is not None:
             print(f"WARN: --durations wins over "
@@ -1186,7 +1209,7 @@ def main():
             "--registered-file is empty/mispathed)")
     dropped = sorted(set(measured) - registered)
     for label in dropped:
-        print(f"WARN: dropping timed-but-unregistered label {label!r}",
+        print(f"WARN: dropping priced-but-unregistered label {label!r}",
               file=sys.stderr)
         del measured[label]
     dropped_floor = sorted(floor_inputs - registered)
@@ -1204,9 +1227,22 @@ def main():
     # that is >50% zero-ms would median to 0, and every floored label would then
     # carry zero weight — the pile-onto-one-leg degeneracy floor tabling exists
     # to avoid (oracle review, PR #9233).
-    floor_ms = max(median(measured.values()) if measured else DEFAULT_SUITE_MS, 1)
+    # The median population is measured-ONLY: under --durations `measured` is
+    # the weights dict, which also carries src=estimate rows (they price their
+    # legs but are declared estimates, not measurements — an estimate must
+    # never anchor the floor median, mirroring the incremental path's
+    # measured-only median). An est-only input empties the pool: floor falls
+    # back to DEFAULT_SUITE_MS with a WARN, exactly like incremental.
+    measured_only = {l: ms for l, ms in measured.items()
+                     if l not in est_inputs}
+    floor_ms = max(median(measured_only.values()) if measured_only
+                   else DEFAULT_SUITE_MS, 1)
+    if measured and not measured_only:
+        print(f"WARN: {args.durations} has no measured rows (estimates only) "
+              f"— new labels floor at {floor_ms}ms", file=sys.stderr)
     timings = dict(measured)
-    src_map = {label: "measured" for label in measured}
+    src_map = {label: "estimate" if label in est_inputs else "measured"
+               for label in measured}
     floored = 0
     for label in sorted(registered):
         if label not in timings:
@@ -1227,8 +1263,11 @@ def main():
     print(f"source: {src}")
     for label_src, t in per_run:
         print(f"  {label_src}: {len(t)} timed label(s)")
-    print(f"suites: {len(timings)} tabled ({len(measured)} measured, "
-          f"{floored} at floor {floor_ms}ms)  total: {sum(timings.values())}ms")
+    n_est = sum(1 for l in measured if l in est_inputs)
+    est_frag = f", {n_est} estimate" if n_est else ""
+    print(f"suites: {len(timings)} tabled ({len(measured) - n_est} measured"
+          f"{est_frag}, {floored} at floor {floor_ms}ms)  "
+          f"total: {sum(timings.values())}ms")
     for i, ms in enumerate(loads, 1):
         print(f"  leg {i}/{n}: {ms}ms ({ms / 1000:.1f}s)")
     spread = max(loads) - min(loads)
