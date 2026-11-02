@@ -482,7 +482,7 @@ s = s.replace(SQLLOC, "registry_store_not_luks_sql_v2 = <<\x2dSQL")' \
   # ── Emitter/wiring rows ────────────────────────────────────────────────────────────────────
   # (No emitter-mutation row: a renamed emitter literal FATALs the derivation at rc 2 — the
   # FATAL-on-empty contract is the guard; rc 2 is instrument-class, not a gradeable verdict.)
-  mutate_red "the mute knob `count = 0` is added inside the alert resource" TF \
+  mutate_red "the count=0 mute knob is added inside the alert resource" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
     "mute knob"
 
