@@ -178,3 +178,26 @@ Both rules apply in every mode and are not approval gates, so they fire in pipel
 6. Section 3 (two-spawn cap and tally), section 6 (on exhaustion the PR stays draft and ship files one `domain/engineering` issue, never an operator question) and section 4 (operator row for data loss, an irreversible act, money or legal exposure) apply unchanged.
 
 **Why:** #10499 - on PR #10376 a review/work session ended with an "Owner decisions" list in which three of four items were technical forks; the CTO settled all three in one pass once asked. Each earlier enforcer reads a different carrier (AskUserQuestion, the Decision Classes table, closing prose); the report list was a fourth.
+
+## 9. Owner-knowledge acts: relay, do not hand off
+
+An act that only the owner can complete (a knowledge claim, acceptance of a named risk, a scope change; in the Inngest arc A5, A6, A7) is never handed back as "paste this text" or "post this yourself". The agent does everything that is not the owner's words and asks once. Applies in every mode; it is a routing rule, not an approval gate. Rulings: CTO and CLO, 2026-11-02.
+
+**What the agent does.** Measure, enumerate, draft, file, post, link and read back. The agent may post the record and the evidence when the owner has delegated the posting in their own user turn of this session.
+
+**What stays the owner's.** The owner states, in their own user turn (never an agent message, a brief, a resume prompt or an automated notification): a knowledge claim, in their own words; acceptance of a named risk, referencing the exact record by comment id or digest; any scope change. The agent never writes a knowledge statement for the owner, and never posts under a heading that claims the owner typed it. The line `SIGNED BY OWNER (human, not an agent)` stays banned on an agent-posted record. Rotating a credential stays the owner's dispatch: an agent never runs `rotate` or `converge` (runbook `inngest-server.md`, "Production Envelope for the post-merge acts").
+
+**The ask.** ONE plain-words confirmation, for the owner and for any Soleur operator: it contains the owner's own sentence(s) for the owner to confirm or edit, and says in one line what the agent will post and where. The owner's typed in-session reply is quoted verbatim in the record. A reply that does not contain the sentence, or an answer such as "ok" to a question that did not, is not the sentence: ask again.
+
+**Provenance block, mandatory on every agent-posted record:**
+
+```text
+Posted by <agent> at <UTC> on the owner's instruction given in session at <time>.
+Owner's words, verbatim: «...». Agent-drafted text: yes/no. Not typed by the owner into this thread.
+```
+
+An agent-posted record that claims human typing is void.
+
+**The probe cannot tell an agent's post from the owner's.** Both come from the owner's login and `scripts/lib/trusted-verdict.sh` checks permission only. So the agent NEVER writes a DONE line (`S5-A5-DONE:`, `S6-A6-DONE:`): those stay the owner's hand-typed lines. It posts, in one comment, a RELAYED record instead (`S5-A5-RELAYED: <UTC Z>` or `S6-A6-RELAYED: <UTC Z>`), with these lines after it: `relayed-by: agent`, `owner-words: <the quote, in « » or double quotes>`, `owner-reply-at: <UTC Z>` (not later than the post); S5 adds `run=<id>` of a successful `inngest-key-rotate.yml` rotate or converge run, which the probe verifies through `gh`. The follow-through probe `scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh` names a malformed RELAYED line, ignores a fenced or HTML-commented one, and treats a well-formed one as recorded ("recorded by relay"). Format reference: followthrough-convention.md, "Relayed records".
+
+**Why:** 2026-11-02 - the owner said that A5, A6 and A7 must not be handed back as text to paste, and that Soleur should gather the evidence, draft and, once delegated in session, post, asking for one confirmation. Refs #10205, #11294.

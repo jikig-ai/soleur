@@ -4,12 +4,14 @@
 # A6 (the "no known access" record). The A5 ask names the exact dispatch lines of the rotation route
 # (.github/workflows/inngest-key-rotate.yml, ADR-307, #10540): the read-only plan rehearsal, the rotate line, and the converge line
 # that finishes a failed run. Only the owner dispatches rotate and converge, each under a fresh in-session go naming the exact line;
-# the route prints the S5-A5-DONE line and never posts it, and the owner posts it themselves on the epic (an agent-posted line,
-# or one posted by the workflow, does not satisfy the record).
+# the route prints the S5-A5-DONE line and never posts it. The owner has two ways to record A5 and A6, and the ask offers the easy
+# one first: ONE reply in their own session ("continue A5" / "continue A6", with their own sentence), after which the agent
+# measures, drafts and posts the evidence and a RELAYED line quoting that reply (technical-ruling-delegation.md, section 9). Or the
+# owner posts the DONE line themselves. A DONE line posted by an agent, or one posted by the workflow, does not satisfy the record.
 #
 # EXIT CONTRACT. 0 and 1 are NEVER taken: this probe never closes its tracker and never performs an act (A5 and A6
-# are owner-human: no agent runs them and no delegation covers them, runbook inngest-server.md, "Production Envelope
-# for the post-merge acts"). It speaks the notify-only vocabulary of followthrough-convention.md:
+# are owner-human: no agent runs rotate or converge, and no delegation covers the owner's own words, runbook
+# inngest-server.md, "Production Envelope for the post-merge acts"). It speaks the notify-only vocabulary of followthrough-convention.md:
 #   2 NOT YET            nothing for the owner to do yet
 #   3 CANNOT ESTABLISH   a read failed or returned something unparseable; never turned into an ask
 #   5 ACTION REQUIRED    the owner has something to do (the sweeper repeats the comment on every daily sweep of an
@@ -18,7 +20,8 @@
 # its follow-through label.
 #
 # DECISION ORDER, first match wins. Any read that fails or returns something unparseable is exit 3, never an ask.
-#   1. trusted S6-A6-DONE and S5-A5-DONE on the epic -> 2  both acts recorded; close this tracker
+#   1. S6 and S5 recorded on the epic (each by a trusted DONE line or a well-formed RELAYED line, below) -> 2  both acts
+#      recorded; close this tracker (output says "recorded by relay" for an act recorded that way)
 #      (S6 without S5 is an inconsistent record -> 3, never "both recorded")
 #   2. no S5-A5-DONE, today >= 2026-11-09, and NOT (soak #11215 closed COMPLETED and route #10540 closed COMPLETED)
 #                                                    -> 5  the legal bridge date is at risk; says which is missing
@@ -38,6 +41,22 @@
 # A line starting with a marker whose time is NOT a real UTC time in that format is named in every ask that is waiting
 # for it (the dead-man warning, the A6 ask, the A5 ask), not silently ignored.
 #
+# THE RELAYED RECORD. The probe cannot tell an agent's post from the owner's by author (both come from the owner's login, and the
+# lib checks permission only), so the agent NEVER writes a DONE line: those stay the owner's hand-typed lines. When the owner has
+# answered the one-reply ask in their session, the agent posts instead (plain unfenced lines in ONE comment on #10136):
+#   S6-A6-RELAYED: 2026-11-25T09:30:00Z     the time of the post, a real UTC time ending in Z
+#   relayed-by: agent
+#   owner-words: «the owner's sentence, verbatim»        (guillemets or double quotes, not empty)
+#   owner-reply-at: 2026-11-25T09:29:00Z    when the owner typed it; not later than the post
+#   run=39400431311                         S5-A5-RELAYED only: the id of the rotation run
+# The lines after the marker are read until the next marker line or 8 non-blank lines. For S5 the probe asks gh for the run and
+# accepts it only as a completed, successful workflow_dispatch run of Inngest Key Rotate whose title is a rotate or converge of
+# keys signing or both (a plan run, a failed run, another workflow or an event-only rotation is refused). A malformed RELAYED line
+# is named in every ask that waits for it, like a malformed DONE line; a fenced or HTML-commented one is ignored by the lib. A
+# well-formed RELAYED line records the act exactly as a DONE line does (and the output says it was recorded by relay). This is a
+# provenance record, not proof of the owner's words: the probe checks the shape and the run, the owner's sentence is read by humans.
+# The S5 run read is made only while no S5 DONE line exists, and a failed read is exit 3, never an ask.
+#
 # DATES are constants derived from the legal bridge date 2026-11-12 (extendable once, to 2026-12-10): the dead-man
 # is three days before it. If the bridge is extended or lapses, edit them here.
 #
@@ -48,7 +67,8 @@
 # plain words built from constants and computed integers: no login, host id, key name or credential. The suite greps
 # for that. `state` and `stateReason` from gh are validated against a closed shape and only compared, never printed.
 #
-# CREDENTIAL POSTURE. The directive declares only GH_TOKEN (issue reads and the author-permission lookup).
+# CREDENTIAL POSTURE. The directive declares only GH_TOKEN (issue reads, the author-permission lookup and the read of the
+# rotation run named in an S5-A5-RELAYED line).
 #
 # RETIREMENT. This probe dies when its tracker is closed after A6 is recorded. Delete with it:
 #   scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
@@ -119,6 +139,71 @@ anchor_state() {
   say none
 }
 
+# utc_epoch <ts>: prints the epoch of a full UTC time ending in Z; returns 1 for anything else (a typo is not a time).
+utc_epoch() {
+  local e
+  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$ ]] || return 1
+  e="$(date -u -d "$1" +%s 2>/dev/null)" && [[ "$e" =~ ^[0-9]+$ ]] || return 1
+  say "$e"
+}
+
+# verify_run <id>: 0 = a completed, successful dispatch of the key-rotation workflow that rotated or converged the signing key
+# (keys signing or both); 1 = some other run; 2 = the read failed. The title is the workflow's run-name, built from two choice inputs.
+verify_run() {
+  local out
+  out="$(gh run view "$1" --repo "$REPO" --json workflowName,event,status,conclusion,displayTitle \
+        --jq '[.workflowName,.event,.status,.conclusion,.displayTitle]|join("|")' 2>/dev/null)" || return 2
+  [[ "$out" =~ ^Inngest\ Key\ Rotate\|workflow_dispatch\|completed\|success\|inngest-key-rotate\ (rotate|converge)\ (signing|both)$ ]]
+}
+
+# relay_state <name> <text> <needrun>: prints ok (a well-formed RELAYED block), bad (a line starts with the marker but no block
+# is well-formed) or none. Returns 1 when the scan itself fails, 4 when the S5 run read failed and nothing else recorded the act.
+# A block is the marker line plus the lines after it up to the next marker line or 8 non-blank lines (see THE RELAYED RECORD).
+relay_state() {
+  local name="$1" text="$2" needrun="$3"
+  local -a lines=()
+  local i j n seen=0 okfound=0 readfail=0 look line relayed_e reply_e vrc
+  local by words reply run
+  local mark_re='^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):'
+  # the owner's sentence in guillemets or double quotes, with at least one non-space character inside
+  local words_re='^owner-words: («.*[^[:space:]].*»|".*[^[:space:]].*"|“.*[^[:space:]].*”)[[:space:]]*$'
+  local head_re="^${name}: ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z)[[:space:]]*\$"
+  mapfile -t lines <<<"$text" || return 1
+  n=${#lines[@]}
+  for ((i = 0; i < n; i++)); do
+    [[ "${lines[i]}" == "${name}:"* ]] || continue
+    seen=1
+    [[ "${lines[i]}" =~ $head_re ]] || continue
+    relayed_e="$(utc_epoch "${BASH_REMATCH[1]}")" || continue
+    by=""; words=""; reply=""; run=""; look=0
+    for ((j = i + 1; j < n && look < 8; j++)); do
+      line="${lines[j]}"
+      [[ "$line" =~ $mark_re ]] && break
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      look=$((look + 1))
+      if [[ "$line" =~ ^relayed-by:\ agent[[:space:]]*$ ]]; then by=agent
+      elif [[ "$line" =~ $words_re ]]; then words=ok
+      elif [[ "$line" =~ ^owner-reply-at:\ ([0-9TZ:-]+)[[:space:]]*$ ]]; then reply="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ ^run=([1-9][0-9]{0,17})[[:space:]]*$ ]]; then run="${BASH_REMATCH[1]}"
+      fi
+    done
+    [ "$by" = agent ] && [ "$words" = ok ] || continue
+    reply_e="$(utc_epoch "$reply")" || continue
+    [ "$reply_e" -le "$relayed_e" ] || continue
+    if [ -n "$needrun" ]; then
+      [ -n "$run" ] || continue
+      verify_run "$run"; vrc=$?
+      if [ "$vrc" -eq 2 ]; then readfail=1; continue; fi
+      [ "$vrc" -eq 0 ] || continue
+    fi
+    okfound=1; break
+  done
+  if [ "$okfound" -eq 1 ]; then say ok; return 0; fi
+  if [ "$readfail" -eq 1 ]; then return 4; fi
+  if [ "$seen" -eq 1 ]; then say bad; else say none; fi
+  return 0
+}
+
 # The body runs in a subshell so an internal error (unbound variable, failed builtin) cannot leak exit 1.
 main() {
   local need
@@ -151,23 +236,43 @@ main() {
   local a5 a6
   a5="$(anchor_state S5-A5-DONE "$bodies")" || { say "CANNOT ESTABLISH: could not scan the owner's done lines"; return 3; }
   a6="$(anchor_state S6-A6-DONE "$bodies")" || { say "CANNOT ESTABLISH: could not scan the owner's done lines"; return 3; }
+  # The RELAYED records (THE RELAYED RECORD in the header). The S5 run is read only while no S5 DONE line exists.
+  local r5=none r6 rrc
+  if [ "$a5" != ok ]; then
+    r5="$(relay_state S5-A5-RELAYED "$bodies" run)"; rrc=$?
+    [ "$rrc" -ne 4 ] || { say "CANNOT ESTABLISH: could not read the rotation run named in the S5-A5-RELAYED line on #$EPIC"; return 3; }
+    [ "$rrc" -eq 0 ] || { say "CANNOT ESTABLISH: could not scan the relayed lines"; return 3; }
+  fi
+  r6="$(relay_state S6-A6-RELAYED "$bodies" "")" || { say "CANNOT ESTABLISH: could not scan the relayed lines"; return 3; }
+  # An act is recorded by a trusted DONE line or by a well-formed RELAYED line; relnote says which acts rest on a relay.
+  local have5=0 have6=0 relnote=""
+  if [ "$a5" = ok ] || [ "$r5" = ok ]; then have5=1; fi
+  if [ "$a6" = ok ] || [ "$r6" = ok ]; then have6=1; fi
+  [ "$a5" = ok ] || [ "$r5" != ok ] || relnote="A5"
+  [ "$a6" = ok ] || [ "$r6" != ok ] || relnote="${relnote:+$relnote and }A6"
+  [ -z "$relnote" ] || relnote=" ($relnote recorded by relay)"
   local fmt="YYYY-MM-DDTHH:MM:SSZ" bad_note=""
-  [ "$a5" != bad ] || bad_note="A line starting with S5-A5-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
-  [ "$a6" != bad ] || bad_note="${bad_note:+$bad_note }A line starting with S6-A6-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
+  local relay_fmt="a real UTC time ($fmt, ending in Z), then on the following lines relayed-by: agent, owner-words: with the owner's own sentence in quotes, and owner-reply-at: with the real UTC time of that reply"
+  [ "$a5" != bad ] || [ "$have5" -eq 1 ] || bad_note="A line starting with S5-A5-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
+  [ "$a6" != bad ] || [ "$have6" -eq 1 ] || bad_note="${bad_note:+$bad_note }A line starting with S6-A6-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
+  [ "$r5" != bad ] || bad_note="${bad_note:+$bad_note }A line starting with S5-A5-RELAYED: was found on #$EPIC but is malformed, so it was ignored. It needs $relay_fmt, and run= with the id of a successful rotation run."
+  [ "$r6" != bad ] || [ "$have6" -eq 1 ] || bad_note="${bad_note:+$bad_note }A line starting with S6-A6-RELAYED: was found on #$EPIC but is malformed, so it was ignored. It needs $relay_fmt."
   days() { if [ "$1" -eq 1 ]; then say "1 day"; else say "$1 days"; fi; }
 
   # 1. both acts recorded
-  if [ "$a6" = ok ] && [ "$a5" = ok ]; then
-    say "NOT YET: A5 and A6 are both recorded on #$EPIC. Close this tracker and remove its follow-through label."
+  if [ "$have6" -eq 1 ] && [ "$have5" -eq 1 ]; then
+    say "NOT YET: A5 and A6 are both recorded on #$EPIC$relnote. Close this tracker and remove its follow-through label."
+    [ -z "$relnote" ] || say "A relayed record carries the owner's own words, quoted by the agent that posted it; it is not a line the owner typed."
     return 2
   fi
-  if [ "$a6" = ok ] && [ "$a5" != ok ]; then
-    say "CANNOT ESTABLISH: A6 is recorded on #$EPIC but A5 is not. A6 only follows A5. Post the S5-A5-DONE line ($fmt, the real time ending in Z) or correct the A6 line."
+  if [ "$have6" -eq 1 ] && [ "$have5" -ne 1 ]; then
+    say "CANNOT ESTABLISH: A6 is recorded on #$EPIC but A5 is not. A6 only follows A5. Post the S5-A5-DONE line ($fmt, the real time ending in Z) or have your session relay A5, or correct the A6 line."
+    [ -z "$bad_note" ] || say "$bad_note"
     return 3
   fi
 
   # 2. the bridge date is at risk, whatever state the soak is in
-  if [ "$a5" != ok ] && [ "$today_e" -ge "$deadman_e" ]; then
+  if [ "$have5" -ne 1 ] && [ "$today_e" -ge "$deadman_e" ]; then
     local soak_ok=0 route_ok=0 soak_msg="" route_msg=""
     issue_state "$SOAK" || { say "CANNOT ESTABLISH: could not read the soak tracker (#$SOAK)"; return 3; }
     if completed; then soak_ok=1
@@ -195,11 +300,12 @@ main() {
   fi
 
   # 3. A5 recorded: ask for A6
-  if [ "$a5" = ok ]; then
+  if [ "$have5" -eq 1 ]; then
     local left=$(( ( lapse_e - today_e ) / 86400 ))
-    say "ACTION REQUIRED: A5 is recorded. Next is A6, the no-known-access record."
-    say "Write it in the legal audits folder of the knowledge base and link it from #$LINKED and #$EPIC. The legal reviewer attests it separately."
-    say "It needs the measured firewall-rule re-read from the host and the read-only list of Hetzner members on the private network."
+    say "ACTION REQUIRED: A5 is recorded$relnote. Next is A6, the no-known-access record."
+    say "Your session does the work: it re-reads the firewall rules from the host, lists the Hetzner members on the private network read-only, drafts the record in the legal audits folder of the knowledge base, and links it from #$LINKED and #$EPIC. The legal reviewer attests it separately."
+    say "The one thing only you can give is the knowledge claim itself, in your own words: that you know of no access to the private network beyond the measured list. It is yours, so Soleur does not write it for you."
+    say "Your one step: tell your session to continue A6 and include that sentence. Soleur then posts the record with a note saying who posted it and quoting your sentence word for word, and a S6-A6-RELAYED line on #$EPIC. Posting it for you needs your words in that reply."
     if [ "$left" -lt 0 ]; then
       say "The Inngest accepted-risk entry lapsed on $LAPSE ($(days "$(( -left ))") ago)."
     elif [ "$today_e" -gt "$bridge_e" ]; then
@@ -207,7 +313,7 @@ main() {
     else
       say "The Inngest accepted-risk entry lapses $LAPSE ($(days "$left") left)."
     fi
-    say "When it is filed, post this line on #$EPIC, with the real UTC time: S6-A6-DONE: $fmt"
+    say "If you prefer to type it all yourself, post this line on #$EPIC when the record is filed, with the real UTC time: S6-A6-DONE: $fmt. A DONE line posted by an agent does not count."
     [ -z "$bad_note" ] || say "$bad_note"
     return 5
   fi
@@ -252,7 +358,8 @@ main() {
   say "It should also say: the production Inngest host has never been rebooted with its LUKS volume and live scheduler, so the LUKS reopen is unverified; the rotation is key hygiene only and does not add TLS or close A6; the rollback is the link flip off with its extra confirmation, and a re-rotation follows."
   say "And: approve only if still quiet. quiet_window=true is your statement at the moment you approve; the route re-reads the link flag, runs in flight and the host just before the reboot, but it cannot see a cron, an approved action or a payment in flight."
   say "To read the verdict of any run: $VERDICT_LINE"
-  say "When the rotation run is green it prints a line S5-A5-DONE: followed by the real UTC time. Post that line yourself as a comment on #$EPIC, with the run's evidence block. The workflow never posts it, and a line posted by an agent or by the workflow does not count. The line looks like this: S5-A5-DONE: $fmt"
+  say "Recording it takes one reply: after you dispatch the rotation and it is green, tell your session to continue A5 and say in your own words that you ran it. Your session reads the verdict, posts the run's evidence block, and posts a S5-A5-RELAYED line on #$EPIC that names the run and quotes your reply word for word."
+  say "Or post the done line yourself: the green run prints S5-A5-DONE: followed by the real UTC time, and you post it as a comment on #$EPIC with the run's evidence block. The workflow never posts it, and a DONE line posted by an agent or by the workflow does not count. The line looks like this: S5-A5-DONE: $fmt"
   return 5
 }
 

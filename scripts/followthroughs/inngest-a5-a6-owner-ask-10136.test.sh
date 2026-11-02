@@ -72,6 +72,30 @@ if [[ "$1 $2" == "issue view" ]]; then
   fi
   echo "gh shim: unexpected --json '$json'" >&2; exit 64
 fi
+if [[ "$1 $2" == "run view" ]]; then
+  # a run read: GH_RUN_<id> holds "workflowName|event|status|conclusion|displayTitle" ("FAIL" = the read fails); the probe's
+  # own jq expression runs on the JSON built from it, as for the comments
+  n="$3"; shift 3
+  repo=""; json=""; jqx=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --json) json="$2"; shift 2 ;;
+      --jq) jqx="$2"; shift 2 ;;
+      *) echo "gh shim: unexpected argument '$1'" >&2; exit 64 ;;
+    esac
+  done
+  [[ "$repo" == "jikig-ai/soleur" ]] || { echo "gh shim: wrong --repo '$repo'" >&2; exit 64; }
+  [[ "$json" == "workflowName,event,status,conclusion,displayTitle" ]] || { echo "gh shim: unexpected --json '$json'" >&2; exit 64; }
+  var="GH_RUN_$n"
+  val="${!var-}"
+  [[ -n "$val" ]] || { echo "gh shim: no fixture for run $n" >&2; exit 64; }
+  [[ "$val" != "FAIL" ]] || exit 1
+  IFS='|' read -r f_name f_event f_status f_concl f_title <<<"$val"
+  jq -nc --arg a "$f_name" --arg b "$f_event" --arg c "$f_status" --arg d "$f_concl" --arg e "$f_title" \
+    '{workflowName:$a,event:$b,status:$c,conclusion:(if $d == "" then null else $d end),displayTitle:$e}' | jq -r "$jqx"
+  exit $?
+fi
 if [[ "$1" == "api" ]]; then
   path="$2"
   login="${path#repos/jikig-ai/soleur/collaborators/}"; login="${login%/permission}"
@@ -105,6 +129,8 @@ run_case() {
         GH_PERM_owner1="${GH_PERM_owner1-admin}" GH_PERM_drive_by="${GH_PERM_drive_by-none}" \
         GH_ISSUE_11215="${GH_ISSUE_11215-OPEN:}" GH_ISSUE_10540="${GH_ISSUE_10540-OPEN:}" \
         GH_ISSUE_10543="${GH_ISSUE_10543-OPEN:}" \
+        GH_RUN_8001="$GH_RUN_8001" GH_RUN_8002="$GH_RUN_8002" GH_RUN_8003="$GH_RUN_8003" GH_RUN_8004="$GH_RUN_8004" \
+        GH_RUN_8005="$GH_RUN_8005" GH_RUN_8006="$GH_RUN_8006" GH_RUN_8007="$GH_RUN_8007" \
         ${today:+OWNER_ASK_TODAY=$today} bash "$PROBE" 2>&1)"
   RC=$?
   ALL_RCS+=("$RC")
@@ -126,6 +152,14 @@ reset_fixture() {
   unset GH_COMMENTS_FAIL
   GH_PERM_owner1="admin"; GH_PERM_drive_by="none"
   GH_ISSUE_11215="OPEN:"; GH_ISSUE_10540="OPEN:"; GH_ISSUE_10543="OPEN:"
+  # the rotation runs a RELAYED line may name: 8001 is the good one, the rest are each refused for one reason
+  GH_RUN_8001="Inngest Key Rotate|workflow_dispatch|completed|success|inngest-key-rotate rotate signing"
+  GH_RUN_8002="Inngest Key Rotate|workflow_dispatch|completed|failure|inngest-key-rotate rotate signing"
+  GH_RUN_8003="Inngest Key Rotate|workflow_dispatch|completed|success|inngest-key-rotate plan signing"
+  GH_RUN_8004="FAIL"
+  GH_RUN_8005="Apply Web Platform Infra|workflow_dispatch|completed|success|inngest-key-rotate rotate signing"
+  GH_RUN_8006="Inngest Key Rotate|workflow_dispatch|completed|success|inngest-key-rotate rotate event"
+  GH_RUN_8007="Inngest Key Rotate|workflow_dispatch|completed|success|inngest-key-rotate converge both"
   mk_comments
 }
 
@@ -248,10 +282,12 @@ expect "row 7: the ask names the read-only plan rehearsal line" 5 "gh workflow r
 expect "row 7: the ask names the exact rotate line with its typed confirm" 5 "-f mode=rotate -f keys=signing -f confirm=ROTATE-INNGEST-SIGNING-YYYY-MM-DD -f quiet_window=true"
 expect "row 7: the ask names the converge line and says it needs its own go" 5 "-f mode=converge -f keys=signing -f confirm=CONVERGE-INNGEST-SIGNING-YYYY-MM-DD" "restart-inngest-server"
 expect "row 7: the ask says only the owner dispatches and that a go on another issue does not count" 5 "only you dispatch it" "run the manual"
-expect "row 7: the ask hands off the done line to the owner and says an agent-posted line does not count" 5 "Post that line yourself as a comment on #10136"
-cases=$((cases + 1)); grep -qF "a line posted by an agent or by the workflow does not count" <<<"$OUT" && grep -qF "S5-A5-DONE: YYYY-MM-DDTHH:MM:SSZ" <<<"$OUT" \
-  && pass "row 7: the ask states the agent-posted-line rule and the done-line format" \
-  || fail "row 7: the ask lacks the agent-posted-line rule or the done-line format"
+expect "row 7: the ask is a one-reply ask: tell your session to continue A5, and the relay line names the run and quotes the reply" 5 "tell your session to continue A5" "Post that line yourself"
+expect "row 7: the ask still offers the owner's own done line, as a comment on the epic" 5 "post the done line yourself: the green run prints S5-A5-DONE"
+cases=$((cases + 1)); grep -qF "a DONE line posted by an agent or by the workflow does not count" <<<"$OUT" && grep -qF "S5-A5-DONE: YYYY-MM-DDTHH:MM:SSZ" <<<"$OUT" \
+  && pass "row 7: the ask states the agent-posted-DONE-line rule and the done-line format" \
+  || fail "row 7: the ask lacks the agent-posted-DONE-line rule or the done-line format"
+expect "row 7: the ask keeps the rule that no agent dispatches the rotation" 5 "no agent runs it"
 cases=$((cases + 1)); grep -qF "the Inngest host is down for a few minutes" <<<"$OUT" \
   && pass "row 7: the ask tells the owner what the go must say about downtime" \
   || fail "row 7: the ask lacks the downtime sentence"
@@ -334,6 +370,133 @@ reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLET
 run_case 2026-10-30
 expect "row 7: a replay-defect tracker closed as not planned is not 'fixed'" 5 "quiet window" "is fixed"
 
+# --- the RELAYED record: the agent posts it from the owner's one reply, the DONE lines stay the owner's ----------------------
+# A relayed record is lines after the marker (relayed-by, owner-words, owner-reply-at; S5 adds run=). The agent posts it from
+# the owner's login, so the probe checks the shape, the order of the two times and (S5) that the run is a successful rotation.
+relay_block() {  # <marker> <post ts> <line>...   (a line given as "-" is left out)
+  local out="$1: $2" x
+  shift 2
+  for x in "$@"; do [[ "$x" == "-" ]] || out+=$'\n'"$x"; done
+  printf '%s' "$out"
+}
+BY="relayed-by: agent"
+WORDS="owner-words: «I know of no access beyond the measured list. CANARY-LEAK-7f3»"
+REPLY="owner-reply-at: 2026-11-25T09:29:00Z"
+S5WORDS='owner-words: "I dispatched it and it is green."'
+S5REPLY="owner-reply-at: 2026-11-20T13:58:00Z"
+GOOD6="$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" "$WORDS" "$REPLY")"
+GOOD5="$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" "$S5WORDS" "$S5REPLY" run=8001)"
+S5DONE="owner1|S5-A5-DONE: 2026-11-20T14:00:00Z"
+
+reset_fixture
+mk_comments "$S5DONE" "owner1|$GOOD6"
+run_case 2026-11-26
+expect "relay: a well-formed S6-A6-RELAYED ends the nag, and the output says it was recorded by relay" 2 "A6 recorded by relay" "was found"
+expect "relay: the ended tracker is told to close, and the relayed record is not called a line the owner typed" 2 "Close this tracker" "both recorded on #10136."
+expect "relay: the output says a relayed record is not a typed line, and never echoes the owner's words" 2 "not a line the owner typed" "CANARY-LEAK-7f3"
+reset_fixture
+mk_comments "owner1|$GOOD5" "owner1|$GOOD6"
+run_case 2026-11-26
+expect "relay: S5 and S6 both relayed end the nag" 2 "A5 and A6 recorded by relay"
+reset_fixture
+mk_comments "owner1|$GOOD5"
+run_case 2026-11-26
+expect "relay: a well-formed S5-A5-RELAYED stops the A5 ask and asks for A6" 5 "A5 is recorded (A5 recorded by relay)" "A5 is ready"
+expect "relay: the A6 ask is a one-reply ask: tell your session to continue A6 with the owner's own sentence" 5 "tell your session to continue A6 and include that sentence" "Write it in the legal audits folder"
+expect "relay: the A6 ask keeps the owner-typed DONE line and says an agent-posted DONE line does not count" 5 "S6-A6-DONE: YYYY-MM-DDTHH:MM:SSZ. A DONE line posted by an agent does not count"
+expect "relay: the A6 ask says the knowledge claim is the owner's own words" 5 "in your own words" "S6-A6-RELAYED: was found"
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+mk_comments "owner1|$GOOD5"
+run_case 2026-11-12
+expect "relay: a relayed S5 beats the dead-man warning and the A5 ask" 5 "A5 is recorded" "cannot start yet"
+reset_fixture
+mk_comments "owner1|$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" 'owner-words: “done”' "$S5REPLY" run=8007)"
+run_case 2026-11-26
+expect "relay: a converge run of keys both is a good S5 run, and curly quotes hold the owner's words" 5 "A5 is recorded (A5 recorded by relay)"
+
+# a RELAYED line that is not well-formed is named, like a malformed DONE line, and records nothing
+for variant in \
+  "missing relayed-by|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z - "$WORDS" "$REPLY")" \
+  "wrong relayed-by|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z 'relayed-by: owner' "$WORDS" "$REPLY")" \
+  "missing owner-words|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" - "$REPLY")" \
+  "owner-words not quoted|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" 'owner-words: I know of no access' "$REPLY")" \
+  "owner-words empty quote|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" 'owner-words: «  »' "$REPLY")" \
+  "missing owner-reply-at|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" "$WORDS")" \
+  "owner-reply-at not a time|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" "$WORDS" 'owner-reply-at: yesterday')" \
+  "owner-reply-at after the post|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z "$BY" "$WORDS" 'owner-reply-at: 2026-11-25T09:31:00Z')" \
+  "post time not a real time|$(relay_block S6-A6-RELAYED 2026-13-45T99:99:99Z "$BY" "$WORDS" "$REPLY")" \
+  "only the marker line|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z)"; do
+  reset_fixture
+  mk_comments "$S5DONE" "owner1|${variant#*|}"
+  run_case 2026-11-26
+  expect "relay malformed (${variant%%|*}): named in the A6 ask and does not end the tracker" 5 "S6-A6-RELAYED: was found on #10136 but is malformed" "Close this tracker"
+done
+# the lines must follow the marker, and another marker line closes the block
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(printf '%s\n%s\n%s\nS6-A6-RELAYED: 2026-11-25T09:30:00Z' "$BY" "$WORDS" "$REPLY")"
+run_case 2026-11-26
+expect "relay malformed (the lines come before the marker): not a record" 5 "S6-A6-RELAYED: was found" "Close this tracker"
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(printf 'S6-A6-RELAYED: 2026-11-25T09:30:00Z\nS6-A6-DONE: soon\n%s\n%s\n%s' "$BY" "$WORDS" "$REPLY")"
+run_case 2026-11-26
+expect "relay malformed (another marker line cuts the block short): not a record" 5 "S6-A6-RELAYED: was found" "Close this tracker"
+# a later well-formed relay is the record even after an earlier malformed one
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(relay_block S6-A6-RELAYED 2026-11-25T09:30:00Z - "$WORDS" "$REPLY")" "owner1|$GOOD6"
+run_case 2026-11-26
+expect "relay: a well-formed record after a malformed one is the record" 2 "A6 recorded by relay" "was found"
+
+# a fenced or HTML-commented RELAYED block is a quoted template, not a record (same lib rule as for the DONE lines)
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(printf '```\n%s\n```' "$GOOD6")"
+run_case 2026-11-26
+expect "relay guard: a fenced RELAYED block is ignored (the A6 ask continues, nothing is named)" 5 "continue A6" "recorded by relay"
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(printf '<!--\n%s\n-->' "$GOOD6")"
+run_case 2026-11-26
+expect "relay guard: an HTML-commented RELAYED block is ignored" 5 "continue A6" "recorded by relay"
+reset_fixture
+mk_comments "$S5DONE" "owner1|$(printf 'S6-A6-RELAYED: 2026-11-25T09:30:00Z\n%s\n```\n%s\n```\n%s' "$BY" "$WORDS" "$REPLY")"
+run_case 2026-11-26
+expect "relay guard: a fenced owner-words line does not complete the block" 5 "S6-A6-RELAYED: was found" "recorded by relay"
+reset_fixture
+mk_comments "drive-by|$GOOD6" "$S5DONE"
+run_case 2026-11-26
+expect "relay guard: an author without write permission cannot post the relayed record" 5 "continue A6" "recorded by relay"
+
+# S6 without S5 is inconsistent, however it was recorded
+reset_fixture
+mk_comments "owner1|$GOOD6"
+run_case 2026-11-26
+expect "relay: S6-A6-RELAYED without any S5 record cannot establish" 3 "A6 is recorded" "both recorded"
+reset_fixture
+mk_comments "owner1|$GOOD6" "owner1|$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" 'owner-words: "done"' "$S5REPLY" run=8002)"
+run_case 2026-11-26
+expect "relay: S6-A6-RELAYED with a refused S5 relay still cannot establish" 3 "A6 is recorded"
+
+# S5-A5-RELAYED needs a run that is a successful rotation; each refusal is named, and none records A5
+for variant in \
+  "run failed|run=8002" \
+  "run is a plan rehearsal|run=8003" \
+  "run is another workflow|run=8005" \
+  "run rotates the event key only|run=8006" \
+  "run id not a number|run=abc" \
+  "run id with a leading zero|run=0123" \
+  "run line missing|-"; do
+  reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+  mk_comments "owner1|$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" 'owner-words: "I ran it."' "$S5REPLY" "${variant#*|}")"
+  run_case 2026-11-26
+  expect "relay S5 (${variant%%|*}): refused and named in the A5 ask, which keeps asking" 5 "S5-A5-RELAYED: was found on #10136 but is malformed" "A5 is recorded"
+done
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+mk_comments "owner1|$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" 'owner-words: "I ran it."' "$S5REPLY" run=8004)"
+run_case 2026-11-26
+expect "relay S5: a failed read of the run is exit 3, never an ask and never a record" 3 "could not read the rotation run" "A5 is ready"
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+mk_comments "$S5DONE" "owner1|$(relay_block S5-A5-RELAYED 2026-11-20T14:00:00Z "$BY" 'owner-words: "I ran it."' "$S5REPLY" run=8004)"
+run_case 2026-11-26
+expect "relay S5: with the owner's own DONE line present the run is not read at all, and A5 is not reported as relayed" 5 "A5 is recorded." "recorded by relay"
+
 # --- read failures are exit 3, never an ask ---------------------------------------------------------------------
 reset_fixture; GH_ISSUE_11215="FAIL"
 run_case 2026-10-30
@@ -387,8 +550,9 @@ cases=$((cases + 1))
 cases=$((cases + 1))
 # The four *_LINE constants hold the dispatch lines and the verdict-reading recipe the A5 ask prints as TEXT; they are authored constants, never executed.
 gh_calls="$(grep -nE '(^|[^[:alnum:]_./-])gh[[:space:]]+[a-z]' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '^[0-9]+:(PLAN|ROTATE|CONVERGE|VERDICT)_LINE="' | grep -v 'for need in' || true)"
-if [[ "$(grep -c . <<<"$gh_calls")" -eq 1 ]] && grep -qF 'gh issue view "$1" --repo "$REPO" --json state,stateReason' <<<"$gh_calls"; then
-  pass "the probe's only gh call is the state read (every comment read goes through the trusted lib)"
+if [[ "$(grep -c . <<<"$gh_calls")" -eq 2 ]] && grep -qF 'gh issue view "$1" --repo "$REPO" --json state,stateReason' <<<"$gh_calls" \
+  && grep -qF 'gh run view "$1" --repo "$REPO" --json workflowName,event,status,conclusion,displayTitle' <<<"$gh_calls"; then
+  pass "the probe's only gh calls are the state read and the rotation-run read (every comment read goes through the trusted lib)"
 else
   fail "the probe makes a gh call other than the state read: $(head -c 200 <<<"$gh_calls")"
 fi
@@ -401,7 +565,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   exit 1
 fi
 # Exact on purpose: deleting any case must red the suite (a floor with slack is attack budget).
-MIN_ASSERTIONS=71
+MIN_ASSERTIONS=111
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
