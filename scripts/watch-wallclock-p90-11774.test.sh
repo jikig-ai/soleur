@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Suite for scripts/watch-wallclock-p90-11774.sh — the weekly required-check
 # wall-clock p50/p90 probe + bound ratchet (#11774, epic #11556 Lever E). Mock
-# `gh` serves run-list / actions-runs / check-runs / issue verbs and records
+# `gh` serves workflow-runs-list / check-runs / issue / label verbs and records
 # every argv; WATCH_* env seams feed fixture required-checks.txt, bounds TSVs,
 # and sample sizes. One scenario per Guard Contract mutation row.
 set -uo pipefail
@@ -70,19 +70,15 @@ printf '%s\n' "$*" >> "$MOCKD/calls"
 piped=""
 case " $* " in *" --body-file - "*) piped="$(timeout 2 cat)" ;; esac
 case "$1" in
-  "run")
-    [[ -f "$MOCKD/fail_runlist" ]] && { echo "gh: boom" >&2; exit 1; }
-    ev=""; prev=""; for a in "$@"; do [[ "$prev" == "--event" ]] && ev="$a"; prev="$a"; done
-    [[ -f "$MOCKD/runlist_$ev" ]] && cat "$MOCKD/runlist_$ev"; exit 0 ;;
   "api")
-    [[ -f "$MOCKD/fail_api" ]] && { echo "gh: boom" >&2; exit 1; }
     ep=""; for a in "$@"; do case "$a" in repos/*) ep="$a" ;; esac; done
     case "$ep" in
-      */actions/runs/*)
-        rid="${ep##*/actions/runs/}"
-        [[ -f "$MOCKD/run_$rid.json" ]] && cat "$MOCKD/run_$rid.json" || { echo "gh: no fixture run $rid" >&2; exit 1; }
-        exit 0 ;;
+      */actions/workflows/*/runs*)
+        [[ -f "$MOCKD/fail_runlist" ]] && { echo "gh: boom" >&2; exit 1; }
+        ev=""; case "$ep" in *"event="*) ev="${ep#*event=}"; ev="${ev%%&*}" ;; esac
+        [[ -f "$MOCKD/runlist_$ev" ]] && cat "$MOCKD/runlist_$ev"; exit 0 ;;
       */check-runs*)
+        [[ -f "$MOCKD/fail_api" ]] && { echo "gh: boom" >&2; exit 1; }
         sha="${ep#*/commits/}"; sha="${sha%%/check-runs*}"
         [[ -f "$MOCKD/checks_$sha.json" ]] && cat "$MOCKD/checks_$sha.json" || { echo "gh: no fixture checks $sha" >&2; exit 1; }
         exit 0 ;;
@@ -106,12 +102,12 @@ MOCK
 }
 
 # seed_run <event> <rid> <sha> <created-iso> <suite-id> : one sampled ci.yml run.
+# The workflow-runs list returns id + check_suite_id + head_sha + created_at
+# inline — the fixture is the post-jq TSV row the probe reads.
 seed_run() {
   local ev="$1" rid="$2" sha="$3" created="$4" suite="$5"
   assert_fixture_dir "$MOCKD"
-  printf '%s\t%s\t%s\n' "$rid" "$sha" "$created" >> "$MOCKD/runlist_$ev"
-  printf '{"check_suite_id":%s,"created_at":"%s","conclusion":"success"}\n' \
-    "$suite" "$created" > "$MOCKD/run_$rid.json"
+  printf '%s\t%s\t%s\t%s\n' "$rid" "$suite" "$sha" "$created" >> "$MOCKD/runlist_$ev"
 }
 
 # seed_checks <sha> <json-array> : the check-runs payload for a head sha.
@@ -439,7 +435,7 @@ for d in "$ROOT"/mock*; do
   [[ -s "$d/calls" ]] || continue
   while IFS= read -r line; do
     case "$line" in
-      "run list "*|"api "*|"issue list "*|"issue view "*|"issue comment "*|"issue create "*|"issue edit "*|"label create "*) ;;
+      "api "*|"issue list "*|"issue view "*|"issue comment "*|"issue create "*|"issue edit "*|"label create "*) ;;
       *) bad=$((bad + 1)); echo "unexpected call: $line" ;;
     esac
   done < "$d/calls"

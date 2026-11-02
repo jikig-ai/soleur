@@ -3,7 +3,10 @@
 # and regression ratchet (#11774, epic #11556 Lever E item 1).
 #
 # Samples the last SAMPLE (default 30) completed, conclusion=success ci.yml runs
-# per surface — pull_request and merge_group. Per run, ONE
+# per surface — pull_request and merge_group. ONE
+# repos/{r}/actions/workflows/ci.yml/runs list call per surface returns run id,
+# check_suite_id, head_sha, and created_at inline (no per-run actions/runs/$id
+# fetch); then per run, ONE
 # repos/{r}/commits/{head_sha}/check-runs call covers every required context
 # across all workflows (ci.yml, secret-scan, pr-quality-guards, cla*, tenant,
 # vendor-pin, sentry-destroy). For each required name — the population is every
@@ -135,21 +138,25 @@ echo "bound rows: ${#BPR[@]}"
 declare -A SURF_TOTAL; SURF_TOTAL[pull_request]=0; SURF_TOTAL[merge_group]=0
 runs_seen=0; fetch_fail=0
 for ev in pull_request merge_group; do
-  runs="$(gh run list --workflow ci.yml --event "$ev" --status success -L "$SAMPLE" \
-      --json databaseId,headSha,createdAt \
-      --jq '.[] | [.databaseId,.headSha,.createdAt] | @tsv' 2>"$WORK/err")" || {
-    echo "::error::gh run list ($ev) failed: $(tail -1 "$WORK/err")" >&2; exit 3; }
+  # ONE list call per surface: the workflow-runs endpoint returns id,
+  # check_suite_id, head_sha, and created_at inline — no per-run
+  # actions/runs/$id fetch. per_page caps at 100; --paginate only when the
+  # sample window needs more than one page (the 30-run default does not).
+  page_size="$SAMPLE"; [[ "$page_size" -gt 100 ]] && page_size=100
+  paginate=(); [[ "$SAMPLE" -gt 100 ]] && paginate=(--paginate)
+  runs="$(gh api ${paginate[@]+"${paginate[@]}"} \
+      "repos/$GH_REPO/actions/workflows/ci.yml/runs?event=$ev&status=success&per_page=$page_size" \
+      --jq '.workflow_runs[] | [.id, (.check_suite_id // 0), .head_sha, .created_at] | @tsv' \
+      2>"$WORK/err")" || {
+    echo "::error::workflow-runs list ($ev) failed: $(tail -1 "$WORK/err")" >&2; exit 3; }
+  runs="$(head -n "$SAMPLE" <<<"$runs")"
   if [[ -z "$runs" ]]; then
     echo "::warning::no green $ev ci.yml runs in the window — surface contributes no samples" >&2
     continue
   fi
-  while IFS=$'\t' read -r rid sha created; do
+  while IFS=$'\t' read -r rid csid sha created; do
     [[ -n "$rid" ]] || continue
     runs_seen=$((runs_seen + 1))
-    runjson="$(gh api "repos/$GH_REPO/actions/runs/$rid" 2>"$WORK/err")" || {
-      echo "::warning::run $rid unreadable — skipped ($(tail -1 "$WORK/err"))" >&2
-      fetch_fail=$((fetch_fail + 1)); continue; }
-    csid="$(jq -r '.check_suite_id // empty' <<<"$runjson")" || csid=""
     checks="$(gh api --paginate "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" 2>"$WORK/err")" || {
       echo "::warning::check-runs for run $rid unreadable — skipped ($(tail -1 "$WORK/err"))" >&2
       fetch_fail=$((fetch_fail + 1)); continue; }
