@@ -117,10 +117,13 @@
 # and the sentence that made the round trip look unpreventable rather than merely unprevented.
 # See ADR-164, "Known limitations" (amended), and ADR-168.
 #
-# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: 16 configs exist. This list stays the 13 below on
-# purpose (CTO ruling 2026-11-02): it is the for_each key set that mints one read token per name, so adding a name is
-# a credential-minting change. prd_git_data, prd_workspaces_luks_marker and prd_workspaces_luks_web are Terraform-declared
-# and deliberately not listed here; the PR that mints their tokens raises this list and DOPPLER_CONFIGS_FLOOR together.
+# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: the live project holds MORE configs than are listed
+# below. The name list was NOT regenerated and stays as-is on purpose (CTO ruling 2026-11-02): it is the for_each key set
+# that mints one read token per name, so adding a name is a credential-minting change. prd_git_data,
+# prd_workspaces_luks_marker and prd_workspaces_luks_web are Terraform-declared and deliberately not listed here; the PR
+# that mints their tokens (#11857) raises this list, adds the depends_on that prd_git_data needs, and raises
+# DOPPLER_CONFIGS_FLOOR together. The `# generated:` stamp on line 1 records this verification date, not a regeneration
+# of the names; it only resets the 90-day staleness caveat.
 ci
 cli
 cli_ops
