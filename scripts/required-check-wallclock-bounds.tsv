@@ -9,6 +9,11 @@
 #   mq_bound_s   bound in SECONDS on merge_group-surface latency
 #   margin_frac  drift margin — breach iff measured p90 > bound * (1 + margin)
 #
+# A required check that legitimately runs on only ONE surface reports
+# `unmeasured` on the other every week — that is intended loud signal; silence
+# it only by editing scripts/required-checks.txt, never by bound-row removal
+# (a boundless required context is itself a ratchet finding).
+#
 # latency_s = check.completed_at - sampled ci.yml run.created_at (queue wait +
 # runner acquisition + every serialized predecessor + execution — the wall clock
 # a PR or merge-queue entry actually experiences; see the "Runner-availability

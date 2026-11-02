@@ -219,7 +219,9 @@ red and the offenders are named; `0` ok/no-data (zero qualifying samples
 is a reported state, never a ratchet failure); `3` cannot-establish (gh
 API failure, empty derived population, malformed bounds TSV). The report
 home is ONE standing tracker, `ci-wallclock-p90: required-check wall-clock
-report`, whose body the watch rewrites in place every run — it is also the
+report`, labelled `ci/wallclock-p90` (the digest's §6 read selects on that
+label; the watch re-adds it on every run so a stripped label self-heals),
+whose body the watch rewrites in place every run — it is also the
 sixth source the weekly operator digest reads (aggregate-only, ADR-057) —
 and it NEVER auto-closes (the deliberate divergence from
 shard-balance-watch: standing report, not episode tracker). Drift comments
@@ -232,7 +234,11 @@ in Measured history below — NOT the epic target (seeding `test` at the
 20-min goal would have fired immediately at a measured p90 of ~51 min).
 Re-derive a row when a required check is added (in the same change as the
 required-checks.txt row) or when a sustained improvement justifies a
-tighter bound; record the measurement that moved a bound here.
+tighter bound; record the measurement that moved a bound here. A required
+check that legitimately runs on only one surface reports `unmeasured` on
+the other every week — intended loud signal; silence it only by editing
+`required-checks.txt`, never by removing its bound row (bound-row removal
+is itself an unbound finding).
 
 `bash scripts/watch-wallclock-p90-11774.sh --dry-run` prints the would-be
 table/comments and posts nothing; `--print-report` prints the derived
