@@ -509,14 +509,14 @@ export const cronGitDataErasureRedrive = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      // Every 15 minutes. (Cron literal kept out of the header comment: a star-slash inside a
+      // block comment would close it.)
+      { cron: "*/15 * * * *" },
+      // Manual run; may carry `data.ids` (UUIDs) plus `data.requested_at` to seed ids swept from a
+      // freeze/rotate window.
+      { event: "cron/git-data-erasure-redrive.manual-trigger" },
+    ],
   },
-  [
-    // Every 15 minutes. (Cron literal kept out of the header comment: a star-slash inside a
-    // block comment would close it.)
-    { cron: "*/15 * * * *" },
-    // Manual run; may carry `data.ids` (UUIDs) plus `data.requested_at` to seed ids swept from a
-    // freeze/rotate window.
-    { event: "cron/git-data-erasure-redrive.manual-trigger" },
-  ],
-  cronGitDataErasureRedriveHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronGitDataErasureRedriveHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
