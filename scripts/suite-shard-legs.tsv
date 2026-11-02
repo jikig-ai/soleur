@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1222
-# generated-at=2026-11-01T08:11:46Z
+# default-weight-ms=1223
+# generated-at=2026-11-01T23:04:46Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -90,6 +90,7 @@ apps/web-platform/scripts/lint-migration-fk-preconditions.test.sh	7
 apps/web-platform/scripts/lint-migration-immutability.test.sh	1
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	2
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	6
+apps/web-platform/scripts/real-sdk-ask-probe.test.sh	3
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	2
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	7
@@ -274,6 +275,7 @@ plugins/soleur/test/pr-overlap-preflight.test.sh	5
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	4
 plugins/soleur/test/proc.test.sh	1
 plugins/soleur/test/ralph-loop.test.sh	2
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	7
 plugins/soleur/test/redact-class-parity.test.sh	6
 plugins/soleur/test/regenerate-shard-manifest.test.sh	1
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	2
@@ -455,6 +457,7 @@ scripts/lib/legal-base-ref.test.sh	7
 scripts/lib/legal-normalise-property.test.sh	1
 scripts/lib/legal-normalise.test.sh	6
 scripts/lib/repo-write-boundary.test.sh	2
+scripts/lib/rows-range.test.sh	6
 scripts/lib/rule-line-regex-parity.test.sh	3
 scripts/lib/scratch-root.test.sh	2
 scripts/lib/supabase-logs-verdict.test.sh	4

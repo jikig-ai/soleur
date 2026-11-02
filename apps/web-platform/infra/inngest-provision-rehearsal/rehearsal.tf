@@ -61,6 +61,12 @@ locals {
     # --- identity/scratch args (the ONLY deliberate divergences from prod's map) ---
     inngest_luks_volume_id = hcloud_volume.rehearsal_inngest_luks.id
     doppler_token          = doppler_service_token.rehearsal.key
+    # The template gained doppler_flip_token (ADR-282 addendum 2026-10-30, #9927 item 4). The rehearsal
+    # host NEVER arms the cutover flip (INNGEST_DIAGNOSTIC_BOOT is staged true), so it carries its
+    # READ-only token in both files; a rehearsal that must exercise a real flip write is out of scope
+    # and would need a read/write token of its own. inngest-provision-rehearsal.test.sh pins this line
+    # to the rehearsal token so the rehearsal can never be handed a read/write one.
+    doppler_flip_token     = doppler_service_token.rehearsal.key
     inngest_doppler_config = local.rehearsal_doppler_config
     # SDK URL at loopback — no web backend exists for this host to register with, and a
     # closed loopback port is what INNGEST_DIAGNOSTIC_BOOT expects anyway.

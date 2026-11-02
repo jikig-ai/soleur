@@ -153,6 +153,11 @@ Consequences of Bash reaching `createCanUseTool` again, all of them the callback
 Re-run the probe (`apps/web-platform/scripts/dev-probe-destroy-ask.ts`) after any SDK, CLI or sandbox-option bump: it is the only
 check that exercises hook-then-`canUseTool` precedence against the real binary; nothing in CI does.
 
+> **Superseded 2026-11-01 (#10111):** the last clause above ("nothing in CI does") is no longer true for the files in the scheduled
+> workflow's push filter: a non-blocking scheduled workflow now runs the probe for them and weekly (see "Amendment 2026-11-01 (#10111,
+> Part 1)" below). It stays true of `ci.yml`: no required or PR-gating check runs the probe. The run is host-only, and a change outside
+> the filter is caught only by the weekly run.
+
 > **Superseded 2026-10-12 (#10054):** the C9 paragraph above says when the gate went inert "is **not measured**", that the start lies
 > between 2026-05-05 and the SDK 0.3.284 bump, and that the 0.3.x line arriving with #5849 was "an untested candidate". Measured since:
 > the SDK version is not the discriminator (the pre-fix tree is inert on every pinned SDK, 0.2.80 to 0.3.284), each cause alone
@@ -315,6 +320,10 @@ of the repository through the installation token and is not itself audited.
    `server/agent-runner-query-options.ts`, `server/permission-callback.ts` and `server/destroy-ask-*.ts`); otherwise re-run the probe on
    that build and re-time both directives from that deploy. sdk-bump-sandbox-gate.sh does NOT enforce this (it demands a commit
    attestation on a lockfile SDK change and cannot see the other files), so this check is a human step.
+   > **Superseded 2026-11-01 (#10111):** "so this check is a human step" is narrowed. A non-blocking scheduled workflow (see
+   > "Amendment 2026-11-01 (#10111, Part 1)") now re-runs the probe on pushes that touch the files in its filter and weekly, so a change
+   > inside the filter is no longer left to memory. The human check of this criterion remains for everything outside the filter, and a
+   > scheduled PASS runs repo head on a CI host: it does not discharge this criterion without a `build_sha` match against the deployed build.
 6. The OPERATOR ratifies limb (a) of the proposed equivalence in the flip PR (and, per criterion 4, records the acceptance of the
    substitute for limb (b) unless a production arrival has been recorded), and the counsel-review audit disposition is updated by the
    CLO agent in the same PR to record both decisions.
@@ -340,6 +349,11 @@ script: remove the mode or repoint it); then `git grep -n 'hosted-destroy-ask-wi
 (`gh issue edit <n> --remove-label follow-through`) so the closed-set sweep stops re-running the probe. Retiring the soak probe leaves
 nothing that detects a lane re-inerted by a later change: the follow-up that does is #10111 (a scheduled real-SDK probe on SDK bump and a
 synthetic canary), and until it exists criterion 5 above is the only guard.
+
+> **Superseded 2026-11-01 (#10111):** the closing clause ("until it exists criterion 5 above is the only guard") is narrowed. The
+> non-blocking scheduled real-SDK probe (Part 1 of #10111, see "Amendment 2026-11-01 (#10111, Part 1)") now detects a lane re-inerted by a
+> change to the files in its filter, host-only; criterion 5's human check remains the guard for everything outside that filter. The
+> synthetic hosted-ask canary (#10111 Part 2) is not built.
 
 ## Cost Impacts
 
@@ -367,3 +381,105 @@ The Context phrase "no new approval surface" and the lane's memory-less posture 
 A separate, flag-gated mechanism now gives eight gated platform tools a durable, single-use, action-bound approval request in the gated branch of `canUseTool`; it does not alter or extend this lane's
 behaviour (the lane still writes no acknowledgement and no cache entry). It is not isolated from the lane: both use the shared `holdForUser` lifecycle and the per-session `pendingGates` budget (5 pending cards,
 Bash and platform together), so a pending approval wait counts against the same budget as a pending Bash card. The rationale, invariants and residual risk are recorded once in [ADR-309](./ADR-309-durable-action-bound-approval-requests.md).
+
+## Amendment 2026-11-01 (#10111, Part 1)
+
+Status stays `adopting`. This amendment records the automation of the real-SDK probe (Part 1 of #10111). It does not touch Flip
+criteria 4 and 6, it records no operator decision, and it does not say the hosted gate is verified anywhere beyond the CI host:
+**the real-SDK probe passes against SDK 0.3.284 and the CLI version the SDK declares (cli=2.1.284 on the measured run; the repo pins
+@anthropic-ai/claude-code 2.1.293 and no pathToClaudeCodeExecutable is set, so which binary the hosted query spawns is not shown by this
+probe), through the repo-head option builder, on a CI host with host bwrap; production telemetry arrival is not yet observed.** A pass
+says nothing about the hosted container sandbox (the variable behind #10054).
+
+**What shipped.** A non-required, non-blocking workflow `.github/workflows/scheduled-real-sdk-ask-probe.yml` runs
+`apps/web-platform/scripts/dev-probe-destroy-ask.ts` on a direct `ubuntu-latest` runner with the CI-partitioned `ANTHROPIC_API_KEY` repo
+secret (the `soleur-ci-eval` workspace, ADR-244; never the production key). It is not in the required-checks ruleset and must not be added
+(CTO 2026-10-12, reaffirmed 2026-11-01: a nondeterministic paid call does not gate pull requests). The runner script
+`apps/web-platform/scripts/real-sdk-ask-probe.sh` owns the exit-code mapping, the rerun policy and the issue dedupe so they are testable offline.
+
+**Triggers.** A push to `main` that touches one of the files below, a weekly cron (Monday 09:17 UTC), `workflow_dispatch`, and a
+same-repo `pull_request` limited to edits of the workflow, the probe, the runner script and `probe-budget.ts` (the self-test run;
+fork pull requests and the Dependabot actor are excluded). A push that changes only the two package files early-exits when neither
+`@anthropic-ai/claude-agent-sdk` nor `@anthropic-ai/claude-code` moved since the newest run of the workflow on `main` whose probe step
+actually reached a verdict (a final "Record that the probe measured" step succeeds only after an explicit pass or fail; a billing-skipped run, a not-run push or a blind run (CANT-RUN, crash, step timeout, budget stop) is never a baseline; an API error, no qualifying
+run or an unreadable baseline means the probe runs).
+The push filter (`on.push.paths`) is:
+
+- `apps/web-platform/package.json`
+- `apps/web-platform/package-lock.json`
+- `apps/web-platform/server/agent-runner-sandbox-config.ts`
+- `apps/web-platform/server/sandbox-hook.ts`
+- `apps/web-platform/server/agent-runner-query-options.ts`
+- `apps/web-platform/server/permission-callback.ts`
+- `apps/web-platform/server/destroy-ask-classifier.ts`
+- `apps/web-platform/server/destroy-ask-lane.ts`
+- `apps/web-platform/server/agent-env.ts`
+- `apps/web-platform/scripts/dev-probe-destroy-ask.ts`
+- `apps/web-platform/scripts/real-sdk-ask-probe.sh`
+- `apps/web-platform/scripts/lib/probe-budget.ts`
+- `plugins/soleur/hooks/**`
+- `.github/workflows/scheduled-real-sdk-ask-probe.yml`
+
+The probe's static import closure is 189 files (measured 2026-11-01), too many to filter on at about 25 runs a month, so the filter is
+a narrow allowlist guarded by a depth-1 coverage test (a classification table of the direct imports of the probe and of
+`permission-callback.ts`). That test proves consistency between the filter and the table, not integrity; review and the weekly run are
+the integrity layer.
+
+**Cost caps (CTO F3, within the existing CI key and the $100/month workspace cap, ADR-244).** The model is the production default (no
+override). The probe prints a measured `costUsd` per case and a `TOTAL costUsd=` line. Spend cap $4 per run (a per-case
+`maxBudgetUsd` of the run budget divided by the case count, plus a cumulative stop; a rerun spends only the remaining share of the same
+$4, never a second $4; the harness-only `maxBudgetUsd` never enters the production option builder). The cap is soft by at most one
+in-flight turn: the SDK checks `maxBudgetUsd` between turns, so a case can overshoot by the cost of the turn that was running when the
+budget was crossed; a case that ends in an error or abort, or without a result frame, is recorded against the cap at its full per-case
+share rather than at zero. Monthly ceiling $25. Measured on the first self-test run (run 41295302456 at head 075832071a): 8 cases PASS,
+`TOTAL costUsd=0.5762`, probe step 36 s, job about 1 min 44 s by the API timestamps. That supersedes the planning estimate of $1.5 per run and puts the $25 ceiling
+at about 43 runs a month. The review panel counted 50 commits to `main` touching the allowlist in 30 days (about 39 probe runs; the panel's count, not reproduced here), which
+puts steady state near the ceiling in a busy month, so the $2.50-per-run trigger stays and a monthly-spend check against the workspace
+spend view is the named review point. Review trigger $2.50: a first measured cost above $2.50 per run, or a projected or
+trailing 30-day spend above $25, switches to the reduced shape: the push filter narrows to a move of the two SDK package versions plus
+`agent-runner-sandbox-config.ts` and `sandbox-hook.ts`, and the weekly cron and `workflow_dispatch` are kept. The reported cost is the
+SDK's own estimate (`total_cost_usd`, "an estimate, not a billing statement"); compare it with the workspace spend view.
+
+**Outcome mapping.** The runner reports a pass only when the probe exited 0, printed `RESULT: PASS`, ran at least 8 cases, printed at
+least 8 case lines and `PROBE remote-refs-unchanged=true`. A failing verdict (exit 1) files the p1 "regression" issue. A run that could
+not measure (CANT-RUN, a diagnostic, a crash without a result line, `CANT-RUN:budget-exceeded`, a setup failure with no outcome) is
+rerun once on the remaining budget where that is meaningful (never when the first pass's spend could not be read), then files the p2 "blind" issue; it is never a pass and never a failure.
+A billing-cap skip (`anthropic-preflight`) prints SKIPPED and warns; it is not a pass. A push that the runner decides not to run reports
+`not-run` and files nothing. Both issue classes are deduped by exact title.
+A green run never closes the regression issue (it may add one "subsequently passed" note per open regression issue); a human closes it. The blind issue closes
+itself on a later pass. Every issue body, the job summary and the workflow name carry the host-only residual and "production arrival not
+observed".
+
+**Residuals.**
+
+- **No heartbeat (CTO F4).** A schedule that never fires, or a disabled workflow, is not detected. The criterion-5 human check at flip time is the backstop.
+- **Nondeterminism.** The call is a live model call; a run where the model does not use Bash is CANT-RUN (blind), not a result about the lane.
+- **Path-set miss.** A change outside the filter that re-inerts the lane is caught only by the next weekly run (up to 7 days) and by the human check of Flip criterion 5.
+- **Concurrency edges.** Each same-repo pull request self-test has its own concurrency group, so N open pull requests that edit the workflow, the probe, the runner or `probe-budget.ts` can each draw up to the $4 cap in parallel on the shared CI key (bounded by the path filter, same-repo only, and the workspace cap, ADR-244). A pending main-push or cron run is replaced by a newer one in the shared group (GitHub keeps one pending run), so a Monday cron run queued behind a main push can be evicted by the next push; the replaced run concludes cancelled and is never a baseline, and the next run diffs against the last run that measured. A pending `workflow_dispatch` run is replaced the same way.
+- **Self-test posture.** The `pull_request` self-test runs the same-repo pull-request-head tree, including its `server/**` import closure and its `npm ci --ignore-scripts` install, with the CI key in the probe step's environment (the same posture as the `ci.yml` real-turn gates). Fork pull requests and the Dependabot actor are excluded; the blast radius is the `soleur-ci-eval` workspace.
+- **Host-only.** The probe runs with host bwrap on a GitHub-hosted runner, not in the hosted container.
+- **A scheduled pass does not discharge a Flip criterion.** A scheduled run executes repo head on a CI host, so a pass never discharges Flip criterion 1 or 5 without a `build_sha` match against the deployed build. The workflow reads the repo secret where the documented command above uses Doppler `ci`.
+- **First measurement is a PR self-test.** The only run observed is the PR self-test run 41295302456 at head 075832071a (cost above); no push or scheduled run had been observed when this amendment was written.
+- **Skipped-run streak.** A billing, spend-cap or 5xx skip stays green with only a `::warning::` annotation (accepted, CTO F4). The weekly run does NOT bound the streak: it uses the same preflight, so while the API reports unavailable every trigger skips, and a streak is visible only to a human reading the warnings or job summaries. A skipped run never becomes the push baseline, so the first trigger after the API recovers measures.
+- **A single flaky FAIL opens the p1 immediately.** A run that prints a failing verdict files the regression issue without a confirming rerun. This is the conservative choice and is recorded as a tradeoff: a false p1 costs a human triage, a swallowed real FAIL costs the guard.
+- **Inactivity auto-disable.** GitHub disables scheduled workflows after 60 days without repository activity. Acknowledged and moot for this repository, which sees `main` activity far more often than every 60 days; the no-heartbeat residual above still applies.
+- **Production call-site wiring is unobserved.** The probe injects its own `canUseTool` and option wiring; the production call sites (`cc-dispatcher`, `agent-runner`, `soleur-go-runner`) are not exercised, so a regression in how they build or pass options is invisible to it.
+- **Depth.** Imports below depth 1 of the probe and of `permission-callback.ts` are covered only by the weekly run. The depth-1 coverage test classifies direct imports only.
+- **New lane files.** A new `destroy-ask-*.ts` file is not selected by the push filter until it is declared in it and in the coverage table.
+- **Filter edges.** Plugin-hook helper files outside `plugins/soleur/hooks/**`, and the `anthropic-preflight` composite action, are outside the filter.
+- **Runner allowlist parity.** The runner's own `in_run_allowlist` (the package-only early-exit) is now parity-tested against the push filter in the workflow suite, so the two lists cannot drift apart silently.
+
+**Re-evaluation verdict (#10111, recorded 2026-11-01).**
+
+| Re-eval criterion | Criterion (any one) | Verdict |
+|---|---|---|
+| Re-eval criterion 1 | Any SDK, bundled-CLI or sandbox-option bump lands | **Fired** (sandbox-option, hook and option-builder class). Evidence: `git log --oneline dfb9e2dba5..origin/main` over `agent-runner-sandbox-config.ts`, `sandbox-hook.ts`, `agent-runner-query-options.ts` and `permission-callback.ts` lists commits including ba483a9948 (changes `sandbox-hook.ts` and `permission-callback.ts`) and 8e1d13797a (changes `permission-callback.ts`); the SDK pin (0.3.284) and the Claude Code package (2.1.293) are unchanged. `sdk-bump-sandbox-gate.sh` cannot see this class. Flip criterion 5 is therefore unmet on `origin/main` at this date: the probe has to be re-run on the current build, and this amendment records no result of that re-run. |
+| Re-eval criterion 2 | First workspace with more than one active member uses autonomous mode | Not measurable from the repository; not claimed. |
+| Re-eval criterion 3 | First external founder | Not measurable from the repository; not claimed. |
+| Re-eval criterion 4 | 7-day soak closes with zero natural asks and no accepted substitute | Not demonstrably fired. The soak window closed 2026-10-19T08:40Z, this record is still `adopting`, and no soak numbers are recorded here. The substitute is an operator decision (Flip criterion 4) and stays untouched. |
+
+Criterion 1 alone justifies Part 1. It does not touch Part 2.
+
+**Part 2 (not built).** The synthetic hosted-ask canary (a production write that would observe arrival of the lane's pino line and
+Sentry event in the production sinks) is NOT built. It lives in #10111 under an `Operator-reserved:` hold. This amendment ships nothing
+that emits into a production sink and records no operator authorisation or acceptance.

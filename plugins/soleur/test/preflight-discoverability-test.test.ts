@@ -3100,7 +3100,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `git_data_replication_success` marker rows from Better Stack through the read connection (Doppler soleur/prd_terraform). NO SUBSTITUTE:
   // those rows exist only in the stored log stream and Better Stack has no unauthenticated reader, so no probe verifies the same
   // property without the credentials; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
-  const BASELINE_DECLARED_PROBES = 90;
+  // flip-token split (2026-11-01, #9927 item 4): +1 (90 -> 91) for `2026-11-01-feat-inngest-flip-token-split-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 72h --grep provision-unit-armed --limit 1`) reads the boot
+  // phone-home row the replaced host emits once per host life; it verifies BOOT ARMING (the flip write precedes the arming item and a
+  // failed write aborts runcmd), NOT the flip-token property itself. It returns a row only after the owner-gated host replace, and a
+  // healthy host older than 72 h returns nothing (the instance-id keyed recipe in runbooks/inngest-server.md is the precise read).
+  // NO SUBSTITUTE: the row exists only in the stored log stream and Better Stack has no unauthenticated reader; the plan's
+  // `credentials_required` line names the BETTERSTACK_QUERY_* secrets. Genuine.
+  const BASELINE_DECLARED_PROBES = 91;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -1779,6 +1779,8 @@ jobs:
         # Since #6894 the plan must ALSO pass inngest_host_shape_gate (ADR-142 Guard 3): every
         # action must be in the gate's per-address permitted table (creates PERMITTED, never
         # REQUIRED), and the gate's allow-set is exactly the -target= list below.
+        # The inngest_flip -target is graph-redundant (the server already pulls it in); it keeps the
+        # shape-gate allow set EQUAL to this list (parity test). Do not remove it (ADR-282 addendum).
         run: |
           set -uo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
@@ -1802,6 +1804,7 @@ jobs:
               -target='doppler_secret.inngest_event_key_dedicated' \
               -target='doppler_secret.inngest_redis_password_dedicated' \
               -target='doppler_secret.inngest_betterstack_logs_token' \
+              -target='doppler_service_token.inngest_flip' \
               -target='doppler_service_token.inngest' 2>&1 | tf_redact_random_ids
           rc=${PIPESTATUS[0]}
           if [[ $rc -ne 0 ]]; then
@@ -2037,6 +2040,12 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
 
+      - name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)
+        # CTO N9: on the first replace after the flip-token split both token keys are unknown at plan
+        # time, so the user_data length precondition is deferred to APPLY (after the destroy). This
+        # offline step is the only pre-destroy size gate; see runbooks/inngest-server.md.
+        run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only
+
       - name: Warn if SENTRY_DSN is absent (#6500)
         # Advisory, and it degrades open, like the #7228 strand warning above. This job is also
         # a RECOVERY route for the sole scheduler, and the boot does not need the DSN (the precondition in inngest-host.tf admits ""), so
@@ -2155,7 +2164,7 @@ jobs:
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report inngest-host-replace tfplan.json --probe-state
-            echo "::error::terraform apply (inngest-host-replace) failed mid-replace — the host may be absent and its Redis AOF volume detached-but-retained. Re-dispatch inngest-host-replace to recover per the recovery-read above."
+            echo "::error::terraform apply (inngest-host-replace) failed mid-replace — the host may be absent and its Redis AOF volume detached-but-retained. Recover per the runbook recovery matrix (the route depends on what survived; some routes are owner-run first). Each dispatch needs the owner go."
             exit 1
           fi
           VOL_DELETES=$(jq '[.resource_changes[]?
