@@ -208,7 +208,10 @@ for ev in pull_request merge_group; do
                            and .started_at != null and .completed_at != null
                            and ((.completed_at | fromdateiso8601) > $t0)) ]) as $cand
       | ([ $cand[] | select(.check_suite.id == $suite) ]) as $own
-      | (if ($own | length) > 0 then $own[0]
+      # Inside the own suite pick the LATEST completed candidate — a retried
+      # run reuses the same check_suite.id, and API order is not chronological
+      # (the stale attempt can sort first and misattribute the wall clock).
+      | (if ($own | length) > 0 then ($own | max_by(.completed_at | fromdateiso8601))
          elif ($cand | length) > 0
            then ($cand | min_by(((.started_at | fromdateiso8601) - $t0) | fabs))
          else null end) as $p

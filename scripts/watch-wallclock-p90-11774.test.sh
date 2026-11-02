@@ -122,10 +122,11 @@ run() {
   OUT=""; ERR=""; RC=0
   local o="$MOCKD/stdout" e="$MOCKD/stderr"
   ( cd "$REPO_ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" GH_REPO=jikig-ai/soleur \
-      WATCH_SAMPLE=10 WATCH_REQUIRED="$REQ" WATCH_BOUNDS="$BND" \
+      WATCH_SAMPLE="${WSAMP:-10}" WATCH_REQUIRED="$REQ" WATCH_BOUNDS="$BND" \
       bash "$SUT" "$@" ) > "$o" 2> "$e"
   RC=$?; OUT="$(cat "$o")"; ERR="$(cat "$e")"
 }
+iso_plus() { local t; t="$(date -u -d "$1" +%s)"; date -u -d "@$((t + $2))" +%FT%TZ; }
 ncalls() { grep -c "^$1" "$MOCKD/calls" || true; }
 sentinel_of() { grep -oE 'drift=[0-9a-f]{40}' "$1" | tail -1; }
 
@@ -149,10 +150,10 @@ seed_run merge_group 201 sham1 "2026-11-02T09:00:00Z" 9003
 seed_checks sham1 "[$(cr test '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr e2e '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr cla-check '"success"' 9004 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"')]"
 run
 body="$(cat "$MOCKD/created")"
-[[ "$RC" -eq 1 && "$body" == *"test"* && "$body" == *"pull_request"* \
+[[ "$RC" -eq 1 && "$body" == *'- breach: `test` (`pull_request`)'* \
    && "$body" == *'<!-- wallclock-p90-watch:v1 drift='* \
    && "$(ncalls 'issue create')" -eq 1 ]] \
-  && pass "G1-1 breaching p90 -> exit 1, comment names (test, pull_request)" \
+  && pass "G1-1 breaching p90 -> exit 1, finding names (test, pull_request) anchored" \
   || fail "G1-1 (rc=$RC creates=$(ncalls 'issue create'))"
 [[ "$body" != *"e2e pull_request"* ]] \
   && pass "G1-1b in-bound check is not flagged" || fail "G1-1b"
@@ -179,7 +180,8 @@ seed_run merge_group 201 sham1 "2026-11-02T09:00:00Z" 9003
 seed_checks sham1 "[$(cr test '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr e2e '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T10:25:00Z"'),$(cr cla-check '"success"' 9004 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"')]"
 run
 body="$(cat "$MOCKD/created")"
-[[ "$RC" -eq 1 && "$body" == *"test"*"pull_request"* && "$body" == *"e2e"*"merge_group"* ]] \
+[[ "$RC" -eq 1 && "$body" == *'- breach: `test` (`pull_request`)'* \
+   && "$body" == *'- breach: `e2e` (`merge_group`)'* ]] \
   && pass "G1-3 two breaching pairs both named in one flagged set" || fail "G1-3 (rc=$RC)"
 
 # ---- G1-4: bound row removed for a required context -> unbound finding -------
@@ -252,11 +254,18 @@ body="$(cat "$MOCKD/created")"
   || fail "G1-8 (rc=$RC)"
 
 # ---- G2-1: required-checks.txt +1 row with no bound -> unbound finding -------
+# The new gate DOES produce check-runs (seeded below) — isolating the unbound
+# arm from the unmeasured arm that would otherwise fire on a zero-sample name.
 mkscene; seed_green_scene
+seed_checks shap1 "[$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr brand-new-gate '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+seed_checks sham1 "[$(cr test '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr e2e '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr cla-check '"success"' 9004 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"'),$(cr brand-new-gate '"success"' 9003 '"2026-11-02T09:01:00Z"' '"2026-11-02T09:05:00Z"')]"
 printf 'brand-new-gate\n' >> "$REQ"
 run
-[[ "$RC" -eq 1 && "$OUT$ERR$(cat "$MOCKD/created")" == *"brand-new-gate"* ]] \
-  && pass "G2-1 added required row w/o bound -> unbound finding names it" || fail "G2-1 (rc=$RC)"
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 1 && "$body" == *'- unbound: `brand-new-gate`'* \
+   && "$body" != *'- unmeasured: `brand-new-gate`'* ]] \
+  && pass "G2-1 added required row w/o bound -> unbound finding names it (unmeasured isolated)" \
+  || fail "G2-1 (rc=$RC)"
 sed -i '/^brand-new-gate$/d' "$REQ"
 
 # ---- G2-2: renamed required row carries no check run -> unmeasured finding ---
@@ -280,7 +289,7 @@ printf '# fixture required set\ntest\ne2e\ncla-check\n' > "$REQ"
 mkscene; seed_green_scene
 printf '# every row commented\n# test\n# e2e\n' > "$REQ"
 run
-[[ "$RC" -ne 0 && "$(ncalls 'issue create')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 ]] \
+[[ "$RC" -eq 3 && "$(ncalls 'issue create')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 ]] \
   && pass "G2-4 empty derived population can never reach a verdict" || fail "G2-4 (rc=$RC)"
 printf '# fixture required set\ntest\ne2e\ncla-check\n' > "$REQ"
 
@@ -352,8 +361,9 @@ printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":
 seed_run pull_request 102 shap2 "2026-11-02T08:10:00Z" 9011
 seed_checks shap2 "[$(cr test '"success"' 9011 '"2026-11-02T08:11:00Z"' '"2026-11-02T09:33:20Z"'),$(cr e2e '"success"' 9011 '"2026-11-02T08:11:00Z"' '"2026-11-02T08:15:00Z"'),$(cr cla-check '"success"' 9012 '"2026-11-02T08:11:00Z"' '"2026-11-02T08:15:00Z"')]"
 run
+newsha="$(sentinel_of "$MOCKD/bodies")"
 [[ "$RC" -eq 1 && "$(ncalls 'issue comment')" -eq 1 && "$(ncalls 'issue edit')" -eq 1 \
-   && "$(sentinel_of "$MOCKD/bodies")" != "drift=0000000000000000000000000000000000000001" ]] \
+   && "$newsha" =~ ^drift=[0-9a-f]{40}$ && "$newsha" != "drift=0000000000000000000000000000000000000001" ]] \
   && pass "T4 changed flagged set comments once with a new sentinel; body rewritten" || fail "T4"
 
 # ---- T14: failed drift comment must not burn the sentinel --------------------
@@ -430,14 +440,16 @@ printf '# fixture bounds\ntest\t600\t600\t0.30\ne2e\t600\t600\t0.30\ncla-check\t
 
 # ---- T6: same-sha suites resolve to the SAMPLED run's check suite ------------
 # The sha carries two `test` check runs: the sampled run's own suite (green,
-# fast) and a later retry's suite (slow). Own-suite id match must pick the
-# green one — attributing the retry's check would fabricate a breach.
+# fast) and a retry's suite (slow). The retry's started_at (08:00:30) is
+# CLOSER to the run's created_at than the own check's (08:01:00) — if
+# nearest-started_at won over own-suite-id, the retry's check would fabricate
+# a breach. Own-suite id match must win outright.
 mkscene
 seed_run pull_request 101 shap1 "2026-11-02T08:00:00Z" 9001
-seed_checks shap1 "[$(cr test '"success"' 9999 '"2026-11-02T08:05:00Z"' '"2026-11-02T09:40:00Z"'),$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+seed_checks shap1 "[$(cr test '"success"' 9999 '"2026-11-02T08:00:30Z"' '"2026-11-02T09:40:00Z"'),$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
 run
 [[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 ]] \
-  && pass "T6 same-sha retry suite: own check_suite.id wins, no fabricated breach" || fail "T6 (rc=$RC)"
+  && pass "T6 same-sha retry suite: own check_suite.id wins over nearer-started_at, no fabricated breach" || fail "T6 (rc=$RC)"
 
 # ---- T7: a check completed BEFORE the sampled run was created is unresolvable
 # (it belongs to an earlier trigger batch on the same sha — a retry sees the
@@ -450,6 +462,18 @@ seed_checks shap1 "[$(cr test '"success"' 9001 '"2026-11-02T08:11:00Z"' '"2026-1
 run
 [[ "$RC" -eq 1 && "$OUT$ERR$(cat "$MOCKD/created")" == *"cla-check"* ]] \
   && pass "T7 stale-suite check (completed before run created) is not sampled" || fail "T7 (rc=$RC)"
+
+# ---- T15: two candidates inside the OWN suite -> latest completed wins --------
+# A retried run reuses the same check_suite.id and API order is not
+# chronological: the EARLIER completion sorts first in the array while the
+# LATER one is the live attempt. Array-order-first would hide the breach.
+mkscene
+seed_run pull_request 101 shap1 "2026-11-02T08:00:00Z" 9001
+seed_checks shap1 "[$(cr test '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr test '"success"' 9001 '"2026-11-02T08:30:00Z"' '"2026-11-02T09:30:00Z"'),$(cr e2e '"success"' 9001 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"'),$(cr cla-check '"success"' 9002 '"2026-11-02T08:01:00Z"' '"2026-11-02T08:05:00Z"')]"
+run
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 1 && "$body" == *'- breach: `test` (`pull_request`)'* ]] \
+  && pass "T15 inside the own suite the LATEST completed candidate wins" || fail "T15 (rc=$RC)"
 
 # ---- T8: exit vocabulary ------------------------------------------------------
 mkscene; run --bogus
@@ -478,14 +502,41 @@ ERR="$(cat "$MOCKD/stderr")"
 mkscene; seed_green_scene
 run --dry-run
 [[ "$RC" -eq 0 && "$OUT" == *"test"* && "$OUT" == *"pull_request"* \
-   && "$(ncalls 'issue create')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue edit')" -eq 0 ]] \
-  && pass "T9 --dry-run prints the table and posts nothing" || fail "T9 (rc=$RC)"
+   && "$(ncalls 'issue create')" -eq 0 && "$(ncalls 'issue comment')" -eq 0 \
+   && "$(ncalls 'issue edit')" -eq 0 && "$(ncalls 'label create')" -eq 0 ]] \
+  && pass "T9 --dry-run prints the table and writes nothing (incl. label)" || fail "T9 (rc=$RC)"
 
 # ---- T10: --print-report emits raw rows, zero issue calls ---------------------
 mkscene; seed_green_scene
 run --print-report
-[[ "$RC" -eq 0 && "$OUT" == *"test"* && "$(ncalls 'issue')" -eq 0 ]] \
+[[ "$RC" -eq 0 && "$OUT" == *"test"* && "$(ncalls 'issue')" -eq 0 && "$(ncalls 'label create')" -eq 0 ]] \
   && pass "T10 --print-report prints rows, no tracker reads or writes" || fail "T10 (rc=$RC)"
+
+# ---- P1: exact p50/p90 values pin nearest-rank (not a max-mutant) -------------
+# test bucket (n=4): latencies 100/200/300/700 -> p50=v[1]=200, p90=v[3]=700
+# (at n=4 nearest-rank p90 IS the max — the n=11 bucket is the discriminant).
+# e2e bucket (n=11): latencies 100..1100 -> p50=v[5]=600, p90=v[9]=1000;
+# a max-equivalent mutant would print 1100 here.
+mkscene
+lats=(100 200 300 700)
+for i in 0 1 2 3; do
+  c0="2026-11-02T07:0${i}:00Z"
+  seed_run pull_request "40$i" "tsha$i" "$c0" "60$i"
+  st="$(iso_plus "$c0" "$((lats[i] - 60))")"; cp="$(iso_plus "$c0" "${lats[i]}")"
+  cs="$(iso_plus "$c0" 60)"; cc="$(iso_plus "$c0" 120)"
+  seed_checks "tsha$i" "[$(cr test '"success"' "60$i" "\"$st\"" "\"$cp\""),$(cr cla-check '"success"' "60$i" "\"$cs\"" "\"$cc\"")]"
+done
+for i in $(seq 1 11); do
+  c0="2026-11-02T10:00:00Z"
+  seed_run pull_request "50$i" "esha$i" "$c0" "70$i"
+  st="$(iso_plus "$c0" "$((i * 100 - 60))")"; cp="$(iso_plus "$c0" "$((i * 100))")"
+  seed_checks "esha$i" "[$(cr e2e '"success"' "70$i" "\"$st\"" "\"$cp\""),$(cr cla-check '"success"' "70$i" '"2026-11-02T10:00:30Z"' '"2026-11-02T10:01:30Z"')]"
+done
+WSAMP=20; run --print-report; WSAMP=""
+[[ "$RC" -eq 0 \
+   && "$(grep -cF $'test\tpull_request\t4\t200\t700\t' <<<"$OUT")" -eq 1 \
+   && "$(grep -cF $'e2e\tpull_request\t11\t600\t1000\t' <<<"$OUT")" -eq 1 ]] \
+  && pass "P1 exact p50/p90 on 4- and 11-sample buckets pin nearest-rank" || fail "P1 (rc=$RC)"
 
 # ---- T11: workflow contract ---------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
@@ -527,7 +578,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=26
+MIN_ASSERTIONS=40
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi
