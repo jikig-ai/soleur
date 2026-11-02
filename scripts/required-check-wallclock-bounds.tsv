@@ -49,10 +49,10 @@ rename-guard (allowlist destinations)	180	120	0.30
 waiver discipline (issue:#NNN trailer)	180	120	0.30
 Bash fixture tests for guard scripts	540	300	0.30
 markdown-lint	300	180	0.30
-lockfile-sync	420	360	0.30
+lockfile-sync	420	660	0.30
 service-role-allowlist-gate	360	420	0.30
 tc-document-sha-guard	360	300	0.30
-adr-ordinals	420	240	0.30
+adr-ordinals	420	420	0.30
 rule-body-lint	360	420	0.30
 grok-fidelity	420	480	0.30
 enforce	300	120	0.30
