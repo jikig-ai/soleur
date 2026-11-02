@@ -292,3 +292,12 @@ Post-merge bootstrap: re-run `plugins/soleur/skills/operator-digest/scripts/prov
 - `scripts/required-checks.txt`, `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
 - ADR-057 (digest two-repo privacy boundary), ADR-033 (repo-scoped Actions)
 - Learnings: 2026-10-04, 2026-08-04, 2026-10-18, 2026-10-14, 2026-10-29 (see Research Insights)
+
+## Enhancement Summary
+
+Deepen-pass (run inline; sequential-fallback — no subagent harness, Reviewed-Coverage: sequential-fallback).
+
+- **Scheduled-work precedent check (Phase 4.4):** Inngest cron functions exist, but GH Actions is correct here under ADR-033's repo-scoped exception — the probe holds only `github.token` (`actions:read`, `contents:read`, `issues:write`), reads GitHub APIs, and writes a same-repo tracker; no app context, secrets, or Sentry, and no `step.run` memoization to gain. Matches all three sibling watches; the digest's own cron lives in the private repo per ADR-057.
+- **Verify-the-negative pass:** every negative claim greps clean — "no per-PR/per-actor" (report rows are aggregates by construction), "never auto-closed" (explicit non-close arm unlike sibling), "agent cannot post" (allowlist unchanged — `gh issue list` only), "no committed report file" (tracker body is the artifact). No contradictions found.
+- **Halt gates verified:** `## User-Brand Impact` present with `threshold: none` + sensitive-path scope-out (4.6); `## Observability` complete, probe verb allowlisted, literal expected output, 15 s-capable (4.7); no PAT-shaped vars (4.8); no UI surface (4.9 N/A); `## Encryption Posture` validly skipped — no new store or connection (4.10); `lint-guard-contract.py` PASSES — 2 guard entries (4.11); `## Scope Check` — all 7 asks mapped, no BLOCKED (4.12); `## Task Design` emitted for the new workflow (4.13); `technical-ruling-gate.sh --branch` PASS — 5 ruled rows. Network-outage (4.5) and Downtime (4.55) gates don't trigger; GDPR applied inline (no personal data).
+- **Post-edit self-audit:** no dropped symbols; all file/symbol references verified against the tree during planning (check-runs API verified live; `grep -c "cron:"` = 1 on sibling).
