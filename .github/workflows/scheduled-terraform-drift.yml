@@ -263,7 +263,7 @@ jobs:
           # `degraded` — a credential is absent — rather than the malformed-map arm, whose
           # remedy says the Doppler identity is not at fault.
           #
-          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 16 (13 configs through 2026-08-03, 16 from 2026-11-02). Do NOT "fix" a red by lowering it:
+          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. Do NOT "fix" a red by lowering it:
           # that is the floor-edited-down-to-match-a-narrowed-grant shape, and the runtime
           # `configs_floor < 13` assertion below forces `degraded` anyway.
           DOPPLER_TOKEN_MAP: ${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}
@@ -290,7 +290,7 @@ jobs:
           # DESTROYS tokens, which the destroy guard catches — the one layer that fires
           # ABOVE 13, where the three literals above only bound it from below. The
           # inventory's own header carries the full floor-raising checklist.
-          DOPPLER_CONFIGS_FLOOR: 16
+          DOPPLER_CONFIGS_FLOOR: 13
         run: |
           set -uo pipefail
           # ── FLOOR GUARD: WRITE THE OUTPUTS, *THEN* FAIL ────────────────────────────
@@ -2527,7 +2527,7 @@ jobs:
           # the committed inventory; see the ratchet note in
           # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-164's Known
           # limitations. Three literals, one number.
-          RUNG2_CONFIGS_FLOOR: 16
+          RUNG2_CONFIGS_FLOOR: 13
         run: |
           set -euo pipefail
           # The token reaches curl on its stdin config through the shared library (ADR-280); a library that cannot be loaded ends the sweep with no verdict.

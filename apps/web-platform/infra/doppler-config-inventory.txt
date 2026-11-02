@@ -1,9 +1,8 @@
-# generated: 2026-11-02T09:50:00Z
+# generated: 2026-11-02T09:05:23Z
 # command: doppler configs -p soleur --json | python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' | sort
 #
 # The live config names of the Doppler `soleur` project, measured by probe G of the #7159 plan
-# (2026-08-03); re-measured 2026-11-02 via the header command above (16 names: +prd_git_data,
-# +prd_workspaces_luks_marker, +prd_workspaces_luks_web).
+# (2026-08-03).
 #
 # NO COUNTS IN THIS HEADER. It used to read "13 configs across 4 environments — dev 3, ci 1,
 # prd 7, cli 2". Nothing pinned any of those five numbers: the CI check counts the bare name
@@ -117,6 +116,14 @@
 # are the ONLY thing that makes a REDUCTION visible" — true when written, false since #7234's F4b,
 # and the sentence that made the round trip look unpreventable rather than merely unprevented.
 # See ADR-164, "Known limitations" (amended), and ADR-168.
+#
+# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: the live project holds MORE configs than are listed
+# below. The name list was NOT regenerated and stays as-is on purpose (CTO ruling 2026-11-02): it is the for_each key set
+# that mints one read token per name, so adding a name is a credential-minting change. prd_git_data,
+# prd_workspaces_luks_marker and prd_workspaces_luks_web are Terraform-declared and deliberately not listed here; the PR
+# that mints their tokens (#11857) raises this list, adds the depends_on that prd_git_data needs, and raises
+# DOPPLER_CONFIGS_FLOOR together. The `# generated:` stamp on line 1 records this verification date, not a regeneration
+# of the names; it only resets the 90-day staleness caveat.
 ci
 cli
 cli_ops
@@ -126,10 +133,7 @@ dev_scheduled
 prd
 prd_cla
 prd_ghcr
-prd_git_data
 prd_kb_drift_walker
 prd_scheduled
 prd_terraform
 prd_workspaces_luks
-prd_workspaces_luks_marker
-prd_workspaces_luks_web
