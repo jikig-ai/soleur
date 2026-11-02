@@ -63,7 +63,7 @@ name: wallclock-p90 watch
 
 on:
   schedule:
-    - cron: '7 10 * * 6' # Saturdays 10:07 UTC (staggered from the Mon 09:17 trio + Tue 09:41 sibling)
+    - cron: '7 9 * * 5' # Fridays 09:07 UTC — must precede the operator digest's Fri 13:00 UTC run (§6 reads the tracker this run rewrites); staggered from the Mon 09:17 trio + Tue 09:41 sibling
   workflow_dispatch:
     inputs:
       dry_run:
@@ -84,7 +84,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      actions: read   # gh run list + commits/{sha}/check-runs read the Actions API (the token 403s without it)
+      actions: read   # actions/workflows/{wf}/runs is the Actions API (the token 403s without it)
+      checks: read    # commits/{sha}/check-runs is the Checks API — needs its own scope (precedent: codeql-main-alert-gate)
       contents: read
       issues: write
     steps:

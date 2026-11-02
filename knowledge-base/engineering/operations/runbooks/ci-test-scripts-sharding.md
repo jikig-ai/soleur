@@ -186,7 +186,8 @@ Retirement checklist: the workflow header.
 
 ## The wall-clock ratchet (`wallclock-p90-watch`, #11774)
 
-A weekly RATCHET (`Sat 10:07 UTC` + `workflow_dispatch`) — the standing
+A weekly RATCHET (`Fri 09:07 UTC` + `workflow_dispatch`, deliberately ahead
+of the operator digest's Friday 13:00 UTC run that reads its tracker) — the standing
 instrument for epic #11556's 20-min/15-min required-check wall-clock goals.
 `scripts/watch-wallclock-p90-11774.sh` samples the last 30 completed,
 conclusion=success `ci.yml` runs per surface (`pull_request` AND
