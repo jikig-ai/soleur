@@ -344,3 +344,14 @@ The probe is a one-grep literal check that finishes instantly (preflight Check 1
 - Do not use `[skip-web-platform-apply]` and do not cancel any in-flight apply.
 - A recut, restore or `registry_pull_path_gate` dispatch is never part of this work.
 - R4 now reads "Nothing was written; the store is unchanged by this step" for the Doppler abort: it is a statement about the attempt, matching the exit-1 and exit-78 arms. The summary-level "empty or partial" line of the restore summary step is unchanged and still accurate.
+
+## Addendum — 2026-11-02 (review round, PR #11841)
+
+The edit table above is the plan-time set. The review round (8 seats, no P1, then a 4-seat fix round) changed the shipped set, per CTO rulings recorded as `Review round A..E` rows in `decision-challenges.md`. Where this addendum and the table disagree, the addendum is what shipped (head `8c561a7042`):
+
+- R8 exit-6 arm tail is now `...then re-run this job by hand: it does not retry 6. If 6 repeats, follow the runbook row for exit 6.` (+53 B vs the plan-time wording's tail).
+- The recut summary body line now starts `If the store was rebuilt, the fresh volume is luksFormatted and empty, ...` (+26 B) so it agrees with the hedged heading.
+- E5 was reversed: the exit-5 arm no longer carries `, and retrying unchanged will not clear it` (-42 B); the runbook's `htpasswd_push_matches=true` branch makes a re-run the remedy.
+- CMT line 2 (`# Exit 6 is unclassified: ...`) was dropped (-86 B); line 1 stays.
+- W9 pins the clauses `store unverified` and `do not deploy until a re-run exits 0` (both case-insensitive), the control needles are the full messages, and a must-PASS control `reword6` was added; `EXPECTED_ASSERTIONS` is 94, not 93.
+- Final workflow size 489,568 B (origin/main 489,680 B, -112 B; gate 490,000 B).
