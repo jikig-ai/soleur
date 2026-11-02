@@ -43,6 +43,7 @@ Every retrieval recipe switches from fixed filenames to "latest object under `ti
 - **Partial-upload safety.** A first run that wrote only `manifest-<id>.jsonl` before dying leaves a half-pair under the prefix; "latest by LastModified" recipes select the newest `.jsonl` and require its same-suffix `.tsr` to exist, else the run is documented as incomplete and the previous pair is read instead — the runbook states this explicitly.
 - **No new guard, store, connection, ADR, or autonomous task.** Existing substrate and trust boundaries are unchanged; no `*.tf`, no new workflow file, no schema change. Encryption posture, Task Design, Guard Contract, and ADR/C4 gates all skip on their own detection rules.
 - **Merge does not mutate production.** The diff touches `.github/workflows/` (no push-triggered apply reaches it — apply workflows are `paths:`-filtered to `infra/`) plus docs; the change takes effect on the next dispatch/cron only.
+- **Precedent (4.4).** The prescribed `aws s3api list-objects-v2 --bucket … --prefix … --output json | jq` retrieval shape is not novel — the same workflow's `Build manifest` step already invokes `list-objects-v2` with `--prefix` + `--output json` + `jq` over `.Contents` (workflow ~:133-139), and `inspect-evidence.sh`/`by-pr` uses the same list-and-filter idiom. The runbook recipe adopts that form verbatim; the only delta is sorting by `LastModified` rather than `Key`.
 
 ## Research Insights
 
@@ -218,6 +219,22 @@ None — open `code-review`-labelled issues were queried (`gh issue list --label
 - **Risk: run_id-only key re-collision on re-run of failed jobs.** Mitigated by the `run_attempt` segment.
 - **Dependency:** none — no new secrets, tokens, or infra. The `prd_cla` R2 token already holds put on `timestamps/`.
 - **Rollback:** revert this PR; the versioned objects already written are orphaned but harmless (older `LastModified`, unpicked by latest-selection, still sealed by the Lock Rule — they cannot be deleted, which is the property's point).
+
+## Deepen Pass (2026-11-02, inline — no Task/Agent tool in this harness)
+
+Halt gates cleared:
+
+- **4.6 User-Brand Impact:** section present, concrete artifact/vector/threshold — PASS.
+- **4.7 Observability:** section present; all 5 fields non-placeholder; `discoverability_test.command` starts with allowlisted `curl`, no SSH, runs in ~1s (verified once — returns `workflow_runs` unauthenticated); `expected_output` is a literal token; no `credentials_required` (no ratchet move) — PASS.
+- **4.8 PAT-shaped variables:** regex sweep clean — PASS.
+- **4.12 Scope Check:** exactly one unfenced `## Scope Check`; all three subsections present; no `unmapped`/empty-justification/`status: BLOCKED` rows; `Recommendation:` present; asks quoted verbatim from issue #11916 + routing args — PASS.
+- **4.9 / 4.10 / 4.11 / 4.13 (conditional):** skip — no UI-surface files, no new store or cross-component connection (`*.tf`/`.sql`/cloud-init/compose absent from Files-to-Edit), no guard deliverable, no new autonomous-task surface (existing workflow edited, none created).
+- **4.5 network-outage / 4.55 downtime-cutover:** triggers do not fire (no SSH/network keywords; no host/migration/deploy-surface change).
+- **4.45 verify-the-negative:** the plan's negative claims were each grep-verified at write time — "no other workflow references `timestamps/`" (whole `.github/workflows/` sweep), "article-30 asserts no fixed names" (targeted grep), "no code consumer" (`apps/cla-evidence/` sweep). Post-edit self-audit: no dropped symbols to chase.
+
+Enhancements applied during the pass: `RUN_ATTEMPT` key segment (run-id reuse across GitHub re-runs — the retry path itself could re-collide), `LastModified` ordering instead of lexicographic key sort (variable-width run ids), same-suffix `.tsr` pairing rule, partial-pair caveat, DPD mirror-pair scope discovery, stale "PUT overwrites" comment sweep, precedent citation (workflow's own `list-objects-v2` idiom).
+
+Named-panel residual: no independent plan-review panel, domain leader, or advisor spawn was possible in this harness (no Task tool); every gate ran inline in-process. Disclosed in `decision-challenges.md`; `soleur:plan-review` may still run at review stage.
 
 ## References & Research
 
