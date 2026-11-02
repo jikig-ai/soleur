@@ -39,7 +39,7 @@ const RAW = JSON.stringify({
     b: { id: "b", title: "B — backend", description: { txt: "line one\nline two" } },
     a: { id: "a", title: "A", description: { txt: "pasted\u2028   text" } },
   },
-  relations: { r1: { source: "a", target: "b", title: "uses" } },
+  relations: { r1: { id: "r1", source: { model: "a" }, target: { model: "b" }, title: "uses" } },
   views: {
     index: {
       id: "index",
@@ -48,7 +48,7 @@ const RAW = JSON.stringify({
         { id: "b", x: 12.345, y: 1e21 },
         { id: "a", x: 1, y: -2.5 },
       ],
-      edges: [{ id: "e1", points: [[3, 4], [1, 2]] }],
+      edges: [{ id: "e1", points: [[3, 4], [1, 2]], relations: ["r1"] }],
     },
     context: { id: "context", hash: "enjPCp_0DCUhTkngHCSw18BHR3S8EP80rilGMTPdK2Q", nodes: [] },
     bare: { id: "bare", nodes: [] },
@@ -98,13 +98,63 @@ describe("canonicalizeC4Model", () => {
     expect(parsed.manualLayouts.index.hash).toBe("keep-me");
   });
 
-  test("round-trips: same data except blanked view hashes, same key order", () => {
+  test("round-trips: same data except blanked view hashes and re-keyed relations, same key order", () => {
     const want = JSON.parse(RAW);
     for (const v of Object.values<Record<string, unknown>>(want.views)) if ("hash" in v) v.hash = "";
+    // Relations are re-keyed to a content hash (#11915): map key, the relation's
+    // own `id`, and every edge `.relations` referent move together. The key is
+    // content-derived, so `want` borrows it from `parsed` — the assertion is on
+    // every other byte.
+    const newKey = Object.keys(parsed.relations)[0];
+    want.relations = { [newKey]: { ...want.relations.r1, id: newKey } };
+    want.views.index.edges[0].relations = [newKey];
     expect(parsed).toEqual(want);
     // Key-order oracle is JSON.stringify(JSON.parse(x)), not the raw text:
     // JS hoists integer-like keys, and the canonical form inherits that.
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(want));
+  });
+
+  test("re-keys relations to a path-independent content hash (#11915)", () => {
+    // The likec4 1.60 CLI derives relation ids from the absolute workspace
+    // path, so the SAME model rendered under a different root arrives with
+    // different relation keys, ids and edge referents — and nothing else.
+    const otherPath = JSON.parse(RAW);
+    otherPath.relations = { zz9pathid: { ...otherPath.relations.r1, id: "zz9pathid" } };
+    otherPath.views.index.edges[0].relations = ["zz9pathid"];
+    expect(canonicalizeC4Model(JSON.stringify(otherPath))).toBe(out);
+  });
+
+  test("re-keyed id rewrites the relation's own `id` and every edge referent", () => {
+    const [key, rel] = Object.entries<any>(parsed.relations)[0];
+    expect(rel.id).toBe(key);
+    expect(rel).toMatchObject({ source: { model: "a" }, target: { model: "b" }, title: "uses" });
+    expect(parsed.views.index.edges[0].relations).toEqual([key]);
+    // Element and edge ids are content-stable upstream and pass through.
+    expect(parsed.views.index.edges[0].id).toBe("e1");
+  });
+
+  test("duplicate-content relations disambiguate deterministically (-N suffix)", () => {
+    const dup = JSON.parse(RAW);
+    dup.relations.r2 = { ...dup.relations.r1, id: "r2" };
+    dup.views.index.edges[0].relations = ["r1", "r2"];
+    const d = JSON.parse(canonicalizeC4Model(JSON.stringify(dup)));
+    const keys = Object.keys(d.relations);
+    expect(keys.length).toBe(2);
+    expect(keys[1]).toBe(`${keys[0]}-2`);
+    expect(d.views.index.edges[0].relations).toEqual(keys);
+    // Referents map by OLD id, not by position — reordering edge refs tracks.
+    const swapped = JSON.parse(RAW);
+    swapped.relations.r2 = { ...swapped.relations.r1, id: "r2" };
+    swapped.views.index.edges[0].relations = ["r2", "r1"];
+    const s = JSON.parse(canonicalizeC4Model(JSON.stringify(swapped)));
+    expect(s.views.index.edges[0].relations).toEqual([...keys].reverse());
+  });
+
+  test("an edge referent naming no relation passes through unchanged", () => {
+    const orphan = JSON.parse(RAW);
+    orphan.views.index.edges[0].relations = ["r1", "ghost-id"];
+    const o = JSON.parse(canonicalizeC4Model(JSON.stringify(orphan)));
+    expect(o.views.index.edges[0].relations[1]).toBe("ghost-id");
   });
 
   test("one value per line: no line starts with whitespace, exactly one trailing newline", () => {

@@ -23,9 +23,9 @@
 /*
  * 1. Drop the upstream LikeC4 wordmark; keep the rest of the nav panel.
  *
- * The diagram's nav-panel logo (LogoButton.js) renders a Mantine <button> with
+ * The diagram's nav-panel logo (LogoButton) renders a Mantine <button> with
  * NO stable class — it wraps the brand <svg viewBox="0 0 222 56"> (full
- * wordmark) + <svg viewBox="0 0 56 56"> (icon) from components/Logo.js. That
+ * wordmark) + <svg viewBox="0 0 56 56"> (icon) from components/Logo.mjs. That
  * 222x56 viewBox is unique across @likec4/diagram, so it is the stable hook:
  * `:has()` selects the whole logo button and collapses it, leaving the
  * breadcrumbs / navigation buttons untouched (AC1). c4-theme.test.ts guards
@@ -79,13 +79,13 @@
 }
 
 /*
- * 2c. Person-shape silhouette legibility. The `person` shape (ElementShape.js
+ * 2c. Person-shape silhouette legibility. The `person` shape (ElementShape.mjs
  *     case "person") paints a PersonIcon SVG at the node's bottom-right corner
  *     with data-likec4-fill="mix-stroke", which the library's bundled CSS
  *     resolves to color-mix(in oklab, var(--likec4-palette-stroke) 80%,
  *     var(--likec4-palette-fill)) — i.e. 80% of the element stroke. With
  *     Soleur's gold stroke (§2b) that is a bright-gold slab. The node's centered
- *     title + description (ElementData.js) are painted OVER the silhouette
+ *     title + description (ElementData.mjs) are painted OVER the silhouette
  *     (paint order: shape then data), and a long description overruns into that
  *     corner — light text on bright gold fails WCAG and the text is unreadable.
  *

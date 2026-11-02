@@ -34,3 +34,15 @@ REMAINING RED (current head):
 3. `tenant-integration` + `tenant-integration-required` fail 15m24s — UNEXAMINED; log shows FAIL_ON_DRIFT:false migration-drift probe region; likely merge-introduced drift or unrelated flake — read job 125534395038 next session.
 
 Watcher/poll state: Phase-7 poll armed in bg shell; watcher agent loop killed by self after reporting exit-2 (its probe-error heuristic was buggy — real fails are genuine).
+
+## Resume-3 additions (2026-11-02 ~23:15Z, fixes on top of 739e7b88eb)
+
+- tenant-integration job 125534395038 examined: `##[error]The operation was canceled.` at 15m24s — superseded by the push of 7a60782059, NOT a real failure. The rule-body-lint `##[error]` lines were synthetic-fixture output (rule-body-gate-recursion-invariant.test.ts); bot-fixture seed error is a tolerated warning-path.
+- affected-index-ratchet `new-pair` (inngest-a5-a6-owner-ask-10136 → scripts/lib/trusted-verdict.sh): branch was 4 behind main incl. 78cfe8c282 ratchet repair; merged origin/main (739e7b88eb) per the gate's own remedy.
+- CTO ruling (fix-forward, recorded in decision-challenges.md): Option A.
+  1. @mantine/core+hooks 8.3.15→9.7.1 — single-copy dedupe verified (nested @likec4/diagram/node_modules/@mantine gone); app uses Mantine only in c4-shared.tsx.
+  2. c4-theme.test.ts guards re-pointed to 1.60 dist (.js→.mjs; styles.css2.js→styles.css; DefaultMantineProvider→LikeC4MantineProvider.mjs; `defaultColorScheme = "auto"`). 16/16 pass.
+  3. c4-canonical.mjs re-keys relations to FNV-1a-64 content hash (+ `-N` dup disambiguation); referents in views.*.edges[].relations[] rewritten. Controlled two-path render: byte-identical canonical output; 203 relations, 0 dangling referents, idempotent. Mirror synced; 24/24 canonical tests pass.
+- model.likec4.json regenerated with content-keyed ids; c4-model-freshness PASSes locally for the first time under 1.60.
+- Determinism defect filed as #11915.
+- Verified: 123 C4 vitest tests, c4-count-parity/render-c4-model/c4-from-components shell suites, assert-dependabot-drain (44 rows OK), npm audit 0 vulns.
