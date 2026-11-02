@@ -9,10 +9,10 @@ Plan: `knowledge-base/project/plans/2026-11-02-chore-workflow-exit-arm-strings-1
 
 ## Phase 1: RED pin (tests/scripts/test-registry-d10-workflow-wiring.sh)
 
-- 1.1 In `w9_check`'s per-code `case "$code" in` block add `6)`: annotation contains `UNVERIFIED` and `does not retry 6` (case-insensitive `grep -qiF`; `w9_add` messages carry the literal lowercase needle).
-- 1.2 Add the `unv6|unverified` control to the `for w9_c` list and an `elif k == "unv6"` branch in `W9_PY` (locate the arm with `re.search(r'\n( *6\) echo [^\n]*)', seg)`, replace `UNVERIFIED`).
-- 1.3 Raise `EXPECTED_ASSERTIONS` from 91 to 92.
-- 1.4 Run the suite against the UNCHANGED workflow; record the RED output (the `6)` check and the `unv6` control fail).
+- 1.1 In `w9_check`'s per-code `case "$code" in` block add `6)` on `$line`: `grep -qiF 'unverified'` and `grep -qF 'do not deploy'`; `w9_add` messages carry the literal lowercase needle.
+- 1.2 Add `unv6|unverified` and `nodeploy|do not deploy` controls to the `for w9_c` list and matching `elif` branches in `W9_PY` (locate the arm with `re.search(r'\n( *6\) echo [^\n]*)', seg)`, `once(...)`-guarded `re.sub` removing the phrase; template: the `manifest` branch).
+- 1.3 Raise `EXPECTED_ASSERTIONS` from 91 to 93.
+- 1.4 Run the suite against the UNCHANGED workflow; record the RED output (the `6)` check and both controls fail).
 
 ## Phase 2: GREEN workflow edit (.github/workflows/apply-web-platform-infra.yml)
 
@@ -22,8 +22,8 @@ Plan: `knowledge-base/project/plans/2026-11-02-chore-workflow-exit-arm-strings-1
 
 ## Phase 3: Verification
 
-- 3.1 `bash tests/scripts/test-registry-d10-workflow-wiring.sh` (92 passed, 0 failed).
-- 3.2 One-off scratch mutations (not permanent controls): arm 6 without `the job does not retry 6` is refused; `6)` label neutered in the suite makes `unv6` report "not refused"; arm 6 reworded (order and case) is accepted.
+- 3.1 `bash tests/scripts/test-registry-d10-workflow-wiring.sh` (93 passed, 0 failed).
+- 3.2 One-off scratch mutations (not permanent controls): `6)` label neutered in the suite makes both controls report `expected a refusal ... got: <nothing>`; arm 6 reworded (order and case) is accepted.
 - 3.3 `bun test plugins/soleur/test/workflow-file-size.test.ts` (test `no workflow file exceeds the gate`).
 - 3.4 YAML parse of the workflow.
 - 3.5 `bun test plugins/soleur/test/terraform-target-parity.test.ts plugins/soleur/test/stock-preflight-coverage.test.ts`; `bash tests/scripts/test-argv-bearer-sweep.sh`; `bash tests/scripts/test-registry-luks-recut-gate.sh`.

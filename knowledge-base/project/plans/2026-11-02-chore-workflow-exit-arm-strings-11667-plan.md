@@ -11,6 +11,18 @@ lane: cross-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Gates run inline (all pass):** 4.6 user-brand (threshold `none` plus the sensitive-path scope-out bullet, because `.github/workflows/apply-web-platform-infra.yml` matches the canonical regex), 4.7 observability (probe rewritten, see below), 4.8 PAT sweep (no hit), 4.11 guard contract (`lint-guard-contract.py` green, assembly structural), 4.12 scope check (one unfenced section, no `BLOCKED` marker). Not triggered: 4.4 precedent-diff (no pattern-bound behaviour), 4.45 grep passes (the negative claims were verified by script in the census), 4.5 network outage, 4.55 downtime (no downtime-inducing operation; the push apply run is a no-op on infrastructure), 4.9 UI, 4.10 encryption (no store or connection added; the plan only names the registry store), 4.13 task design (no new autonomous task).
+**Research agents used:** `soleur:engineering:cto` (binding rulings, twice), `soleur:engineering:review:dhh-rails-reviewer`, `soleur:engineering:review:kieran-rails-reviewer`, `soleur:engineering:review:code-simplicity-reviewer` (plan-review panel), `soleur:engineering:review:test-design-reviewer`, `soleur:engineering:research:learnings-researcher`. The full "run every discovered agent" fan-out was NOT run: the change is eight strings and one pin, so the panel was scoped to the agents whose lens can change the diff.
+
+### Key improvements from review and deepen
+1. R4 (Doppler abort) no longer claims the store is "EMPTY or only partly refilled": the step fires before any engine call, so it now says only that nothing was written (CTO re-ruling).
+2. R6 (exit-4 runbook pointer) and the job-rationale runbook sentence were cut; the W9 pin shrank to the exit-6 arm with one permanent control. Net is now -63 bytes with a 383-byte margin (was -35 / 355).
+3. The observability probe was rewritten from a `bun test` suite command (suite-shaped, rejected by the Check 10 rules) to a one-grep literal check.
+4. Cited push runs resolved live: the push apply runs for `e0af599081` (#11787), `32b7ee7d78` (#11785) and `b9deac6de5` (#11815) all concluded `success`; `gh run list --workflow apply-web-platform-infra.yml --branch main --event push`.
+
 ## Overview
 
 Item 2b of tracker #11667: the operator-facing strings of the chained restore job in `.github/workflows/apply-web-platform-infra.yml` still describe an engine that no longer exists. The engine (PR #11813, merge `508922e7bcec3ae321852acb51e40200b58810cb`) now exits 6 for an unclassified read fault that used to exit 4, and the job retries only exit 3. Six workflow strings say otherwise, one code comment makes a claim that is false for exit 6, and the exit-5 arm lacks the "unchanged" qualifier the engine header and runbook already carry.
@@ -46,7 +58,7 @@ Checked: #11667 OPEN, #9757 CLOSED (plain `Ref` only), PR #11813 MERGED at `5089
 3. Exit 6 and exit 4 read as different verdicts: 6 is "unverified" (the engine could not name the fault), 4 is "not trustworthy" (a copy landed wrong).
 4. No string tells the operator to re-run with an input the job does not have ("a wider set").
 5. The change is net-negative in bytes and the file stays under the 490,000 gate.
-6. The W9 wiring suite keeps passing, and the exit-6 arm, whose safety claim ("do not deploy") changed because the engine moved, is pinned so it cannot lag again.
+6. The W9 wiring suite keeps passing, and the exit-6 arm, whose safety claim ("UNVERIFIED, do not deploy") changed because the engine moved, is pinned so neither word can be dropped silently.
 
 ### Cut List
 
@@ -56,7 +68,7 @@ Checked: #11667 OPEN, #9757 CLOSED (plain `Ref` only), PR #11813 MERGED at `5089
 | R6: exit-4 arm pointer `then runbook row 4` (+20; the unambiguous `registry-luks-recut-6929.md row 4` form is +40) | 3 | Cut (CTO, reversed after review): the bare form is ambiguous (two runbooks), the file-named form is too dear, and R2 plus the `*)` summary line already send the operator to "the runbook row for its exit code". Stays on #11667. |
 | Pointer from the exit-6 arm to row 6's `crane validate --remote` discriminator (about +30) | 3 | Cut (CTO): the arm already blocks deploy ("UNVERIFIED") and R2 sends the operator to row 6. Stays on #11667. |
 | Job-rationale runbook sentence (dated note beside "Why exit 1 has its own restore-step arm") | 2 | Cut (CTO, DHH and simplicity reviewers agree): that section already carries the reasoning R4 and R5 reuse; it adds a third subsystem for no requirement. |
-| W9 pin for arm 4, `retry6`/`row4`/`reword6` permanent controls | 6 | Cut (review): arm 4 no longer changes; the `does not retry 6` needle is checked by a one-off scratch mutation, not a permanent control. |
+| W9 pin for arm 4, a needle on `does not retry 6`, and `retry6`/`row4`/`reword6` permanent controls | 6 | Cut (review, CTO): arm 4 no longer changes; `does not retry 6` is wording, and W9 already asserts the behaviour (exactly one engine call for exit 6); an unmutated needle is dead weight. AC5 still greps the phrase. |
 | R1 variant (a) "was rebuilt empty" (+9) | 2 | Cut (CTO): asserts a destroy that may not have happened. Replaced by "may be EMPTY" (+4). |
 | Long R8 wording (+167) and short R8 wording (+51) | 3 | Cut (CTO): the long form is over budget, the short form drops "do not deploy until a re-run exits 0". |
 | Rewrite "The fresh volume is luksFormatted and empty" (recut summary body) | 2 | Cut (CTO): same overclaim as the heading but costs bytes; accurate at emit time because the restore has not run. |
@@ -71,6 +83,8 @@ Checked: #11667 OPEN, #9757 CLOSED (plain `Ref` only), PR #11813 MERGED at `5089
 - `knowledge-base/project/learnings/2026-11-01-not-retryable-is-a-label-not-a-determinism-claim.md`: quote the engine header's label, not the consequence inferred from it; deleting a "re-run" orphans neighbouring sentences; grep the claim's SUBJECT. Applied: R2 keeps the re-run sentence and qualifies it instead of deleting it; no string says "fails identically" for exit 4, 5 or 6.
 - `knowledge-base/project/learnings/2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so.md`: measure deltas against the merge base; a sibling merge can cross the gate.
 - Plan sharp edge (`plan-sharp-edges.md`, "does merging THIS alone mutate production?"): answered in the Overview and the apply-trigger plan.
+- Deepen check of R2's "re-running is safe": the engine header's preamble for codes 2-6 says "a re-run never redoes them and is safe" and row 1 wrote nothing, so the word is quoted from the contract, not inferred from a label; the sentence does not claim a re-run clears any exit.
+- `knowledge-base/project/learnings/2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so.md`: a file over GitHub's real limit gives `startup_failure` with zero jobs and no email; the post-merge check reads that conclusion explicitly.
 - Plan sharp edge (inventory what exact-matches a line before rewriting it): the pin census below.
 
 ### Subject census (grep the claim, not the phrasing)
@@ -133,7 +147,7 @@ Anchors are exact current text, each occurring once. "Bytes" is `len(new.encode(
 
 ## Apply-trigger plan
 
-**What the push apply run does.** The workflow's `on.push` (branches `[main]`, `paths` includes the workflow file itself) fires on the squash merge. Jobs that run on push: `preflight` (kill-switch check) and `apply` (init, allow-listed plan, pre-apply entrypoint gate, terraform apply of the non-SSH set, tunnel/origin checks, Doppler CI-token sync, then the CF-tunnel-bridged SSH apply of the SSH-provisioned resources and the heartbeat-arm steps), plus the failure-notification step that only acts when `apply` fails. No `.tf` file changes, so the expected plan is empty (or shows only drift that already existed). Same precedent: #11787, #11785 and #11815 merged workflow-only edits and their push runs were green.
+**What the push apply run does.** The workflow's `on.push` (branches `[main]`, `paths` includes the workflow file itself) fires on the squash merge. Jobs that run on push: `preflight` (kill-switch check) and `apply` (init, allow-listed plan, pre-apply entrypoint gate, terraform apply of the non-SSH set, tunnel/origin checks, Doppler CI-token sync, then the CF-tunnel-bridged SSH apply of the SSH-provisioned resources and the heartbeat-arm steps), plus the failure-notification step that only acts when `apply` fails. No `.tf` file changes, so the expected plan is empty (or shows only drift that already existed). Same precedent, resolved live with `gh run list --workflow apply-web-platform-infra.yml --branch main --event push`: the push runs for `e0af599081` (#11787), `32b7ee7d78` (#11785) and `b9deac6de5` (#11815) all concluded `success`.
 
 **Why the restore and recut do not run on push.** Verified in the file: `registry_luks_recut` is `if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'`; `registry_pull_path_gate` has the same dispatch-only guard; `registry_store_restore` is `if: ${{ !cancelled() && needs.registry_luks_recut.outputs.store_refill_needed == 'true' }}` and a skipped job's output is empty, so the comparison is false. No recut, pull-path gate or restore is dispatched by this PR or by any step of this plan; the strings it edits only render on a real recut.
 
@@ -145,7 +159,7 @@ Anchors are exact current text, each occurring once. "Bytes" is `len(new.encode(
 3. CI on the PR green, including `workflow-file-size`, the W9 suite and `infra-validation`.
 
 **How to verify the push run succeeded post-merge** (template: the #11787 tracker verification):
-1. `gh run list --workflow apply-web-platform-infra.yml --branch main --limit 5`, find the run for the merge commit, then `gh run view <id> --json jobs --jq '.jobs[]|[.name,.conclusion]'`: `preflight` and `apply` are `success`; `registry_luks_recut`, `registry_pull_path_gate` and `registry_store_restore` are `skipped`; the failure-notification job is `skipped` or `success`.
+1. `gh run list --workflow apply-web-platform-infra.yml --branch main --limit 5`, find the run for the merge commit (a `startup_failure` conclusion with zero jobs means GitHub refused the file, e.g. over its real 512,000-byte limit; it sends no failure email), then `gh run view <id> --json jobs --jq '.jobs[]|[.name,.conclusion]'`: `preflight` and `apply` are `success`; `registry_luks_recut`, `registry_pull_path_gate` and `registry_store_restore` are `skipped`; the failure-notification job is `skipped` or `success`.
 2. Read the apply plan summary: no destroy HALT and no unexpected diff. A pre-existing drift failure is not ours; handle it by the workflow's own unwedge route, not as a regression.
 3. `git show origin/main:.github/workflows/apply-web-platform-infra.yml | wc -c` is 489,617 (strictly below 489,680 and below 490,000); each new string appears exactly once and each old string zero times (`wider set`, `recovered by re-running rather than`, `still EMPTY`, `retry cannot clear`, `cannot refill it`).
 4. CI on main green; `/health` ok; no new `ci/` issue since the merge (the older Better Stack incident `soleur-egress-gw-probe-silent-prd` is unrelated and is left alone).
@@ -167,7 +181,7 @@ Order follows `cq-write-failing-tests-before`: the pin first (RED), the workflow
 
 ### Phase 1: RED pin in the W9 suite
 
-File: `tests/scripts/test-registry-d10-workflow-wiring.sh`. Inside the per-code `case "$code" in` block of `w9_check` (beside the `2|5`, `1`, `78` checks) add a `6)` check requiring the annotation to contain `UNVERIFIED` and `does not retry 6` (case-insensitive `grep -qiF`, two separate needles whose `w9_add` messages carry the literal lowercase needle: `does not say unverified`, `does not say the job does not retry 6`). Add one refusal control to the `for w9_c in ...` list, `unv6|unverified`, with a matching `elif k == "unv6"` branch in `W9_PY` that finds the arm with `re.search(r'\n( *6\) echo [^\n]*)', seg)` (like the `1)`/`78)` controls) and replaces `UNVERIFIED`. Raise `EXPECTED_ASSERTIONS` from 91 to 92 (one control, one report). Run the suite against the UNCHANGED workflow: the `6)` check and the `unv6` control must FAIL (the arm lacks `UNVERIFIED`, so the "mutation landed" report fails); record the run as RED evidence.
+File: `tests/scripts/test-registry-d10-workflow-wiring.sh`. Inside the per-code `case "$code" in` block of `w9_check` (beside the `2|5`, `1`, `78` checks) add a `6)` check on the annotation line (`$line`, already the exit-6 `::error::restore FAILED` line, so it cannot be satisfied by exit 4's "Do not deploy"): `grep -qiF 'unverified'` and `grep -qF 'do not deploy'` (the second case-sensitive, lowercase, matching the arm text), each with its own `w9_add` message carrying the literal lowercase needle (`... does not say unverified`, `... does not say do not deploy`). Add two permanent refusal controls to the `for w9_c in ...` list, `unv6|unverified` and `nodeploy|do not deploy`, with matching `elif k == ...` branches in `W9_PY` that find the arm with `re.search(r'\n( *6\) echo [^\n]*)', seg)` (template: the `manifest` branch) and remove the phrase with `re.sub` (`(?i)unverified` replaced by `unchecked`, so no `unverified` remains in the arm; `do not deploy` replaced by `proceed`), each guarded by `once(...)` so a mutation that did not land cannot slip through. Raise `EXPECTED_ASSERTIONS` from 91 to **93** (two controls, one report each). Run the suite against the UNCHANGED workflow: the main W9 row and the `unv6` control (the "mutation landed" report) fail because the arm lacks `UNVERIFIED` and `do not deploy` is absent from the old arm text; record the run as RED evidence. W9 runs as one shell suite that stubs the engine and runs the real step body, so it is a single layer (no unit/integration labels).
 
 ### Phase 2: workflow edit (GREEN)
 
@@ -175,8 +189,8 @@ File: `.github/workflows/apply-web-platform-infra.yml`. Apply the eight edits in
 
 ### Phase 3: verification
 
-1. `bash tests/scripts/test-registry-d10-workflow-wiring.sh` (92 passed, 0 failed).
-2. One-off scratch mutations of the edited workflow, not permanent controls (run on a copy; record the output): arm 6 without `the job does not retry 6` must be refused; the `6)` label neutered in the suite (`66)`) must make the `unv6` control report "not refused"; arm 6 reworded in a different order and case, same facts, must be accepted.
+1. `bash tests/scripts/test-registry-d10-workflow-wiring.sh` (93 passed, 0 failed).
+2. One-off scratch mutations on a copy, not permanent controls (record the output): the `6)` label neutered in the suite (`66)`) must make the `unv6` and `nodeploy` controls report `expected a refusal naming '...', got: <nothing>`; arm 6 reworded in a different order and case, same facts, must be accepted; arm 6 without `the job does not retry 6` is NOT caught by W9 (by design, see Cut List) and is covered by AC5's grep.
 3. `bun test plugins/soleur/test/workflow-file-size.test.ts`.
 4. `python3 -I -c "import yaml;yaml.safe_load(open('.github/workflows/apply-web-platform-infra.yml'))"`.
 5. `bun test plugins/soleur/test/terraform-target-parity.test.ts plugins/soleur/test/stock-preflight-coverage.test.ts`; `bash tests/scripts/test-argv-bearer-sweep.sh`; `bash tests/scripts/test-registry-luks-recut-gate.sh`.
@@ -189,7 +203,7 @@ One PR (#11841). PR body first line: "Merging fires the push-triggered apply run
 ## Files to Edit
 
 - `.github/workflows/apply-web-platform-infra.yml` (eight edits, net -63 B)
-- `tests/scripts/test-registry-d10-workflow-wiring.sh` (one `6)` check, one `unv6` control, assertion floor 91 to 92)
+- `tests/scripts/test-registry-d10-workflow-wiring.sh` (one `6)` check with two needles, `unv6` and `nodeploy` controls, assertion floor 91 to 93)
 
 ## Files to Create
 
@@ -218,21 +232,21 @@ No cross-domain implications detected: operator-facing wording in an infrastruct
 
 ### Guard 1 — W9 pin for the exit-6 arm
 
-**Property.** The restore step's exit-6 annotation says the store is UNVERIFIED and that the job does not retry 6, so a future engine change cannot leave the arm that carries the "do not deploy" safety claim contradicting the contract unnoticed.
+**Property.** The restore step's exit-6 annotation says the store is UNVERIFIED and says not to deploy, so a future engine change cannot leave the arm that carries the "do not deploy" safety claim contradicting the contract unnoticed.
 
-**Assembly.** The arm is extracted from the real `run:` body of the `Restore production's pinned image set from GHCR` step in job `registry_store_restore` (PyYAML extraction W9 already uses) and observed by running that body with the engine stubbed to exit 6; the chokepoint is the per-code loop in `w9_check`. The new check sits in the same `case "$code"` as the `2|5`, `1` and `78` checks, so a seventh code added to the engine header still falls to the existing "fell to the `*)` arm" check; the wording needles themselves cover code 6 only, by design.
+**Assembly.** The arm is extracted from the real `run:` body of the `Restore production's pinned image set from GHCR` step in job `registry_store_restore` (PyYAML extraction W9 already uses) and observed by running that body with the engine stubbed to exit 6; the chokepoint is the per-code loop in `w9_check`, and the needles are matched against the exit-6 annotation line only (`$line`), never against the whole output, so exit 4's own "Do not deploy" cannot satisfy them. The new check sits in the same `case "$code"` as the `2|5`, `1` and `78` checks, so a seventh code added to the engine header still falls to the existing "fell to the `*)` arm" check; the wording needles cover code 6 only, by design.
 
-**Mutation matrix.** Row 1 is a permanent control; rows 2-5 are one-off scratch-mutation checks run at work time (Phase 3, step 2) and are not counted in the assertion floor.
+**Mutation matrix.** Rows 1-2 are permanent controls; rows 3-5 are one-off scratch-mutation checks run at work time (Phase 3, step 2) and are not counted in the assertion floor.
 
 | # | Mutation (must turn the suite RED unless marked must-PASS) | Expected result |
 |---|---|---|
 | 1 | Arm 6 loses the word `UNVERIFIED` (permanent control `unv6`) | refused, message names `unverified` |
-| 2 | Arm 6 loses `the job does not retry 6` | refused, message names `does not retry 6` |
+| 2 | Arm 6 loses `do not deploy` while arm 4 still says "Do not deploy" (permanent control `nodeploy`) | refused, message names `do not deploy` |
 | 3 | Arm 1 loses `manifest` while arm 6 stays compliant (existing control `manifest`; proves the loop does not stop at the first compliant member) | refused, `does not name the manifest fault` |
-| 4 | Own dispatch: the `6)` case label is neutered in the suite (`66)`), so no check runs for code 6 | the `unv6` control reports "not refused" and the suite reds (harness row) |
+| 4 | Own dispatch: the `6)` case label is neutered in the suite (`66)`), so no check runs for code 6 | both controls report `expected a refusal naming '...', got: <nothing>` and the suite reds (harness row) |
 | 5 | Arm 6 reworded in a different order and case with the same facts (must-PASS, not the canonical) | accepted |
 
-**Harness rows.** Row 4 edits the suite, not the guard; row 5 is a must-PASS input differing from the canonical in a way the contract permits, so a check that rejects everything is also caught. `EXPECTED_ASSERTIONS` is pinned exactly (91 to 92), so silencing the control also reds.
+**Harness rows.** Row 4 edits the suite, not the guard; row 5 is a must-PASS input differing from the canonical in a way the contract permits, so a check that rejects everything is also caught. `EXPECTED_ASSERTIONS` is pinned exactly (91 to 93), so silencing a control also reds.
 
 **Anchor.** The pinned needles and the arm text live in the same repository, so one diff can weaken both; this guard proves consistency, not integrity. The independent anchors are the engine header (`restore_header_codes` against the die/exit sites, already compared by W9), runbook row 6 and ADR-169 Amendment 2026-11-01, which a reviewer reads alongside the diff, and the exact assertion count that moves in the same diff.
 
@@ -260,7 +274,7 @@ No cross-domain implications detected: operator-facing wording in an infrastruct
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | `.github/workflows/apply-web-platform-infra.yml` edits (eight) | "Item 2b of #11667 (workflow strings in .github/workflows/apply-web-platform-infra.yml)" | asked |
-| W9 pin for arm 6 (`tests/scripts/test-registry-d10-workflow-wiring.sh`) | — | inferred — justification: the arm changed because the engine moved and the workflow lagged unnoticed; W9 compares exit codes but not arm claims, so without a pin the "do not deploy" claim can drift again (CTO recommended it; shrunk to the one arm that carries the safety claim) |
+| W9 pin for arm 6 (`tests/scripts/test-registry-d10-workflow-wiring.sh`) | — | inferred — justification: the arm changed because the engine moved and the workflow lagged unnoticed; W9 compares exit codes but not arm claims, so without a pin the "UNVERIFIED, do not deploy" claim can drift again (CTO recommended it; shrunk to the one arm that carries the safety claim, two needles, two controls) |
 | Phase 0 re-measure | "Re-measure before and after." | asked |
 | Apply-trigger plan | "plus an apply-trigger plan" | asked |
 
@@ -276,7 +290,7 @@ No cross-domain implications detected: operator-facing wording in an infrastruct
 - [ ] AC1: `wc -c` of the workflow in the branch is at most 489,650 and strictly below `git show origin/main:.github/workflows/apply-web-platform-infra.yml | wc -c` (expected 489,617, delta -63).
 - [ ] AC2: `bun test plugins/soleur/test/workflow-file-size.test.ts` passes (`no workflow file exceeds the gate`).
 - [ ] AC3: each of the eight new strings occurs exactly once in the file; `wider set`, `recovered by re-running rather than`, `still EMPTY`, `retry cannot clear` and `cannot refill it` occur zero times in the workflow (`grep -c`).
-- [ ] AC4: `bash tests/scripts/test-registry-d10-workflow-wiring.sh` passes with `EXPECTED_ASSERTIONS=92`; RED evidence for the `6)` check and the `unv6` control (run against the unchanged workflow) is recorded.
+- [ ] AC4: `bash tests/scripts/test-registry-d10-workflow-wiring.sh` passes with `EXPECTED_ASSERTIONS=93`; RED evidence for the `6)` check and the `unv6`/`nodeploy` controls (run against the unchanged workflow) is recorded.
 - [ ] AC5: the exit-6 arm contains `UNVERIFIED`, `do not deploy until a re-run exits 0`, `then re-run by hand` and `the job does not retry 6`; the exit-5 arm contains `retrying unchanged will not clear it`; the exit-78 arm contains `unchanged by this step`; the Doppler abort still contains `registry-store-restore ABORT`.
 - [ ] AC6: the Restore-summary echo lines, the exit-1/2/3/4 arms, the `*)` arm and all `# Rationale:` pointer lines are byte-identical to `origin/main`.
 - [ ] AC7: YAML parses; `terraform-target-parity`, `stock-preflight-coverage`, `test-argv-bearer-sweep` and `test-registry-luks-recut-gate` suites pass.
@@ -286,11 +300,11 @@ No cross-domain implications detected: operator-facing wording in an infrastruct
 
 ## Test Scenarios
 
-- Given the unchanged workflow, when the new `6)` check runs, then it fails (RED, `unit`).
-- Given the edited workflow, when W9 runs the step body with the engine stubbed to exit 6, then the annotation names exit 6, contains `UNVERIFIED` and `does not retry 6`, and the step exits 6 after exactly one engine call (`integration`, existing harness).
+- Given the unchanged workflow, when the new `6)` check runs, then it fails (RED).
+- Given the edited workflow, when W9 runs the step body with the engine stubbed to exit 6, then the annotation names exit 6, contains `UNVERIFIED` and `do not deploy`, and the step exits 6 after exactly one engine call (existing harness).
 - Given the engine stubbed to exit 3 three times then 0, then the retry loop still recovers (existing scenario; the comment edit must not move `rc=$?`, `max=6`, `case "$rc" in`, `exit "$rc"`).
 - Given a Doppler read failure, then `registry-store-restore ABORT` is printed and the step exits 1 with zero engine calls (existing scenario; the new text keeps the `ABORT` anchor).
-- Given the file at 489,617 bytes, then `no workflow file exceeds the gate` passes (`unit`).
+- Given the file at 489,617 bytes, then `no workflow file exceeds the gate` passes.
 
 ## Observability
 
@@ -298,7 +312,7 @@ Not triggered as a new surface: the change edits operator-facing annotation text
 
 ```yaml
 liveness_signal:
-  what: the push-triggered apply run of apply-web-platform-infra.yml for the merge commit
+  what: the corrected exit-6 annotation is present in the workflow on main, and the push-triggered apply run for the merge commit concluded success
   cadence: once per merge touching the workflow
   alert_target: the workflow's own ops email on a non-green apply and the ci/ issue sweep
   configured_in: .github/workflows/apply-web-platform-infra.yml (job apply, final steps)
@@ -316,9 +330,11 @@ logs:
   where: GitHub Actions run logs of the push apply run
   retention: GitHub default run-log retention
 discoverability_test:
-  command: bun test plugins/soleur/test/workflow-file-size.test.ts
-  expected_output: 0 fail
+  command: grep -c "store UNVERIFIED, do not deploy until a re-run exits 0" .github/workflows/apply-web-platform-infra.yml
+  expected_output: 1
 ```
+
+The probe is a one-grep literal check that finishes instantly (preflight Check 10 allowlists `grep`; no shell-active characters). It is deliberately not the size-gate suite: a `bun test` command is suite-shaped and Check 10's 15-second cap and probe rules are written for a signal, not a suite. The push-run conclusion is read with `gh run view` in the post-merge checklist, which is not a Check 10 probe.
 
 ## Sharp Edges
 
