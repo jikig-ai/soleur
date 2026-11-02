@@ -287,7 +287,7 @@ Following the zod (scoped) / undici (exact) precedents:
 ### Group 3 — drain-guard ratchet (`scripts/assert-dependabot-drain.py` + `.test.sh`)
 
 - `WATCHED_PACKAGES` += `minimatch`, `glob`, `@vitest/mocker` (14→17).
-- `REQUIRED` — retarget 2 rows and raise 9 floors, add 5 rows (36→41):
+- `REQUIRED` — retarget 2 rows and raise 7 floors, add 5 rows (36→41):
   - `("web-platform","@hono/node-server",1,"1.19.15")` →
     `("web-platform","@hono/node-server",2,"2.1.3")` — GHSA-rmxm has no
     patched 1.x; the line is evacuated, not patched.
@@ -310,13 +310,13 @@ Following the zod (scoped) / undici (exact) precedents:
   anchor no row covers, so the delete is deliberate and documented); add
   `("minimatch",11):"11.0.1"`, `("glob",14):"14.0.2"`,
   `("@vitest/mocker",4):"4.1.12"`, each commented with its GHSA.
-- `MIN_ROWS` 36→41, `MIN_RESOLVED` 36→41 (comment updated in the same
+- `MIN_ROWS` 36→41, `MIN_RESOLVED` 36→38 (comment updated in the same
   style).
 - `scripts/assert-dependabot-drain.test.sh` — fixture mirrors gain
   `("minimatch",11)` on web-platform/root/pen-cli, `("glob",14)` and
   `("@vitest/mocker",4)` on web-platform, and the web-platform/pencil-setup
   `("@hono/node-server",1)` fixture entries move to `2`; floor specs
-  `MIN_ROWS:36→41`, `MIN_RESOLVED:36→41`; the anchor spec list updates
+  `MIN_ROWS:41`, `MIN_RESOLVED:38`; the anchor spec list updates
   `"@hono/node-server:2:2.0.10"`→`"2.1.3"` and gains
   `"hono:4:4.13.11" "ip-address:10:10.7.4" "fast-uri:3:3.1.9"
   "minimatch:11:11.0.1" "glob:14:14.0.2" "@vitest/mocker:4:4.1.12"`; the
@@ -569,8 +569,8 @@ four lockfiles, `scripts/assert-dependabot-drain.{py,test.sh}`,
   9.0.0–14.0.1 anywhere in the five lockfiles — same census form (closes
   alerts #374–#377).
 - [ ] AC-3 `scripts/assert-dependabot-drain.py` carries the three new
-  watched packages, the two retargeted + nine raised + five new REQUIRED
-  rows (MIN_ROWS/MIN_RESOLVED = 41), the updated/added/dropped anchors;
+  watched packages, the two retargeted + seven raised + five new REQUIRED
+  rows (MIN_ROWS = 41, MIN_RESOLVED = 38), the updated/added/dropped anchors;
   `python3 scripts/assert-dependabot-drain.py` exits 0 and
   `bash scripts/assert-dependabot-drain.test.sh` is green with
   MIN_ASSERTIONS ratcheted to the new arm count.

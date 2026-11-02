@@ -8,6 +8,17 @@ Thresholds are keyed per MAJOR LINE, not per package. js-yaml and brace-expansio
 ship two supported majors with SEPARATE advisories (js-yaml 3.15.2 and 4.3.2;
 brace-expansion 1.1.18, 2.1.4 and 5.0.9), so a single per-package minimum would compare a
 correctly-patched 3.x copy against a 4.x threshold and report a false vulnerability.
+
+BOUNDARY -- surfaces this guard does NOT see, by construction (read before trusting a
+clean run; enumerated by the structural-enumeration review seat, #11823):
+  * tracked package.json files whose declared dependencies carry no lockfile (e.g.
+    packages/opencode-plugin): declared ranges are never parsed.
+  * ad-hoc installs outside any lockfile: Dockerfile/CI `npm install -g`,
+    `npm install --no-save`, and `npx pkg@ver` invocations (incl. .mcp.json), which
+    resolve their own trees per run.
+  * advisories on packages not in WATCHED_PACKAGES: the completeness sweep is closed
+    over the table -- a new Dependabot alert on an unwatched package is invisible
+    until a row is added (the manual batch-drain loop).
 """
 import json, re, sys
 
@@ -280,6 +291,28 @@ def entry_name(key, meta):
     return meta.get("name") or key.split("node_modules/")[-1]
 
 
+def tracked_lockfiles():
+    """Every package-lock.json under CWD, minus generated subtrees.
+
+    LOCKS is hardcoded and MIN_LOCKS is a floor, not an equivalence: a sixth
+    package-lock.json committed anywhere used to be asserted clean by nobody.
+    Filesystem walk (not `git ls-files`) so the suite's fixture trees -- plain
+    directories, not git repos -- exercise the same census. node_modules and the
+    worktree/.claude dirs are skipped: vendored trees and sibling worktrees are not
+    this manifest's business.
+    """
+    import os
+    skip = {".git", ".claude", ".worktrees", "node_modules", ".next", "dist",
+            "build", "out", "coverage", ".turbo", ".vercel"}
+    found = set()
+    for dirpath, dirnames, filenames in os.walk("."):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        if "package-lock.json" in filenames:
+            found.add(os.path.normpath(
+                os.path.relpath(os.path.join(dirpath, "package-lock.json"))))
+    return found
+
+
 def read_packages(path):
     # Context-managed rather than `json.load(open(path))`: the bare form leaves four
     # lockfile handles open until the interpreter's refcount happens to drop them, which
@@ -296,6 +329,15 @@ def main():
     resolved = 0
     print(f"{'manifest':14s} {'package':34s} {'line':>5s} {'required':>10s}  found")
     for manifest, pkg, major, minimum in REQUIRED:
+        if manifest not in packages:
+            # A row naming a manifest not in LOCKS is an absence assertion over
+            # nothing: on a resolved row MIN_RESOLVED catches the mass absence, but on
+            # an '(absent)' row nothing backstops the typo. Mirror of the
+            # MUST_STAY_ABSENT membership check below.
+            failures.append(
+                f"{manifest}: REQUIRED row names a manifest not in LOCKS, so its "
+                f"floor assertion checks nothing.")
+            continue
         found = sorted({
             v["version"] for k, v in packages.get(manifest, {}).items()
             if "node_modules/" in k and entry_name(k, v) == pkg and v.get("version")
@@ -360,6 +402,12 @@ def main():
                     f"below the anchored {anchor!r}. A floor moves DOWN only when an advisory "
                     f"is withdrawn -- re-derive from the advisory feed and move the anchor in "
                     f"the same commit, or this is a silent re-admission of a patched CVE.")
+    uncensused = sorted(tracked_lockfiles() - set(LOCKS.values()))
+    if uncensused:
+        failures.append(
+            f"{len(uncensused)} package-lock.json file(s) exist that LOCKS does not "
+            f"read: {uncensused}. MIN_LOCKS is a floor, not an equivalence -- add the "
+            f"manifest to LOCKS before its tree can be asserted clean.")
     if len(LOCKS) < MIN_LOCKS:
         failures.append(
             f"only {len(LOCKS)} lockfiles are read, below the MANIFEST floor of {MIN_LOCKS}. A manifest "
@@ -409,11 +457,30 @@ def main():
     covered = {(m, pkg, major) for m, pkg, major, _ in REQUIRED}
     for manifest, pkgs in packages.items():
         for key, meta in pkgs.items():
-            version = meta.get("version")
-            if not version or "node_modules/" not in key:
+            if "node_modules/" not in key:
+                continue
+            all_names = {key.split("node_modules/")[-1]}
+            if meta.get("name"):
+                all_names.add(meta["name"])
+            hit = all_names & watched
+            if not hit:
                 continue
             name = entry_name(key, meta)
-            if name not in watched:
+            if name not in hit:
+                # path name and meta `name` disagree on whether this entry is a
+                # watched package -- a foreign `name` field would hide a watched
+                # package from the census (npm never emits this; a hand-edit could).
+                failures.append(
+                    f"{manifest}: {key} resolves as {name!r} but names "
+                    f"{sorted(all_names)} -- a path/meta name disagreement hides a "
+                    f"watched package from the census.")
+                continue
+            version = meta.get("version")
+            if not version:
+                failures.append(
+                    f"{manifest}: {key} (name {name}) carries no 'version' -- a "
+                    f"file:/link:/workspace: spec installs code no floor or sweep can "
+                    f"see; vendor through normal lockfile resolution.")
                 continue
             major = ver(version)[0]
             if (manifest, name, major) not in covered:
@@ -435,10 +502,9 @@ def main():
     for manifest, pkg, path in MUST_STAY_ABSENT:
         if manifest not in packages:
             # A row naming a manifest not in LOCKS is an absence assertion over
-            # nothing -- fail loudly, the same reason MIN_ABSENT exists. The
-            # REQUIRED-loop .get() is fine (a dropped manifest reads as mass
-            # absence and trips MIN_RESOLVED/MIN_LOCKS); here nothing
-            # backstops a mistyped manifest but this check.
+            # nothing -- fail loudly, the same reason MIN_ABSENT exists and the
+            # REQUIRED loop now carries the same membership check (on its absent
+            # rows a mistyped manifest was previously green forever).
             failures.append(
                 f"{manifest}: MUST_STAY_ABSENT row names a manifest not in LOCKS, "
                 f"so its absence assertion checks nothing.")

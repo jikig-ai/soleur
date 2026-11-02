@@ -53,10 +53,10 @@ Plan: `knowledge-base/project/plans/2026-11-01-chore-batch-dependabot-medium-low
       fast-uri:3→3.1.9, @hono/node-server:2→2.1.3; DELETE ("@hono/node-server",1)
       with the evacuation comment; add minimatch:11:11.0.1, glob:14:14.0.2,
       @vitest/mocker:4:4.1.12 with GHSA comments.
-- [x] 4.4 `MIN_ROWS`/`MIN_RESOLVED` 36→41 (comment updated in style).
+- [x] 4.4 `MIN_ROWS` 36→41 / `MIN_RESOLVED` 36→38 (comment updated in style).
 - [x] 4.5 `.test.sh`: fixture mirrors (+minimatch11 on web/root/pencli, +glob14,
       +@vitest/mocker4 on web, @hono/node-server 1→2 on web/pen); floor specs
-      36→41; anchor spec list update + six adds; mutate-arm substrings 36→41;
+      floor specs `MIN_ROWS:41`, `MIN_RESOLVED:38`; anchor spec list update + six adds; mutate-arm substrings updated;
       MIN_ASSERTIONS ratcheted to the new arm count in the same commit.
 - [x] 4.6 `python3 scripts/assert-dependabot-drain.py` exit 0;
       `bash scripts/assert-dependabot-drain.test.sh` green.

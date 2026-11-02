@@ -14,7 +14,7 @@ None. (Planning subagent reported: no Task/agent-spawn capability inside its own
 - hono 2.x migration NOT needed — GHSA-5r4p patches on 4.x (4.13.11); @hono/node-server 1→2 upstream-sanctioned. Dependabot's open PR #11468 (@hono/node-server 1.19.17→2.1.5, apps/web-platform/package-lock.json) is SUPERSEDED by this batch — close it as superseded at ship time per scripts/close-superseded-dependabot-prs.sh convention.
 - minimatch/glob require `overrides` (advisories cover every installed major, no backports).
 - roster-entry-gate.test.ts verified GREEN 23/23 on current main — brief's "KNOWN MAIN BREAKAGE" does not reproduce; work phase re-verifies (AC-12).
-- Drain-guard ratchet enumerated: WATCHED_PACKAGES 14→17, REQUIRED 36→41, FLOOR_ANCHORS 4 updates + 3 adds + 1 delete, MIN_ROWS/MIN_RESOLVED 36→41.
+- Drain-guard ratchet enumerated: WATCHED_PACKAGES 14→17, REQUIRED 36→41, FLOOR_ANCHORS 4 updates + 3 adds + 1 delete, `MIN_ROWS` 36→41 / `MIN_RESOLVED` 36→38.
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review (inline), soleur:deepen-plan — via subagent_general planning subagent
@@ -40,3 +40,12 @@ None. (Planning subagent reported: no Task/agent-spawn capability inside its own
   116/116 across 10 vi.mock files under vitest@4.1.12.
 - Status: complete. Next: one-shot Steps 4-8 (review -> resolve -> QA
   -> compound -> ship -> DONE).
+
+## Review Phase
+- Panel: 8 seats + inline shellcheck at PANEL_SHA 20b86f2417 (post-merge review identical).
+- P1 fixed: Dockerfile vitest pin 4.1.11→4.1.12 (pin-parity RED, canary pulled vulnerable @vitest/mocker).
+- Guard hardening inline: REQUIRED manifest-membership check, lockfile census exhaustiveness, versionless link/file: entries RED, path/meta name-disagreement RED, BOUNDARY docstring; lint-dual-lockfile ban + yarn/pnpm/shrinkwrap.
+- eslint.config.mjs enablement-trap comment (blanket minimatch@11 = non-callable export; react/import/a11y rules need call-shape audit first).
+- Fixture-mirror population arm (41 resolved), be-fixture comments, plan/tasks/session-state floor corrections.
+- Filed: #11855 (deferred-scope-out, CONCUR code-simplicity-reviewer) — drain-guard boundary surfaces.
+- Seats clean: security-sentinel, semgrep-sast (159+85 rules, non-vacuous), git-history (rationale verified).

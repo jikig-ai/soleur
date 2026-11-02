@@ -47,12 +47,18 @@ fi
 
 bun_locks=()
 bunfigs=()
+other_locks=()
 pkg_lock_dirs=()
 for f in "${tracked[@]}"; do
   case "$f" in
     bun.lock | */bun.lock | bun.lockb | */bun.lockb) bun_locks+=("$f") ;;
     bunfig.toml | */bunfig.toml | bunfig.local.toml | */bunfig.local.toml) bunfigs+=("$f") ;;
     package-lock.json | */package-lock.json) pkg_lock_dirs+=("$(dirname "$f")") ;;
+    # Non-npm lockfile names are invisible to the drain guard (which reads
+    # package-lock.json only) and to clause (a). npm-shrinkwrap.json is the sharpest:
+    # `npm ci` prefers it OVER package-lock.json, so one would govern installs while
+    # every guard reads a stale file. Flagged by review #11823.
+    yarn.lock | */yarn.lock | pnpm-lock.yaml | */pnpm-lock.yaml | npm-shrinkwrap.json | */npm-shrinkwrap.json) other_locks+=("$f") ;;
   esac
 done
 
@@ -65,6 +71,13 @@ fi
 if [[ ${#bun_locks[@]} -gt 0 ]]; then
   for f in "${bun_locks[@]}"; do
     fail "tracked bun lockfile: ${f}. npm is the single lockfile of record (ADR-191); delete it and install with 'npm ci --ignore-scripts'. Leaving it re-creates the dual-lockfile split that makes every Dependabot PR born red (#7084)."
+  done
+fi
+
+# --- Clause (c): no non-npm lockfile names. ---
+if [[ ${#other_locks[@]} -gt 0 ]]; then
+  for f in "${other_locks[@]}"; do
+    fail "tracked non-npm lockfile: ${f}. package-lock.json is the single lockfile of record (ADR-191); npm-shrinkwrap.json in particular would supersede it for 'npm ci' while the drain guard keeps reading package-lock.json."
   done
 fi
 
@@ -83,7 +96,7 @@ for f in ${bunfigs[@]+"${bunfigs[@]}"}; do
   fi
 done
 
-echo "lint-dual-lockfile: scanned ${#tracked[@]} tracked files; ${#pkg_lock_dirs[@]} package-lock.json director(ies) (floor ${MIN_PACKAGE_LOCK_DIRS}); ${#bunfigs[@]} bunfig.toml; ${#bun_locks[@]} bun lockfile(s)."
+echo "lint-dual-lockfile: scanned ${#tracked[@]} tracked files; ${#pkg_lock_dirs[@]} package-lock.json director(ies) (floor ${MIN_PACKAGE_LOCK_DIRS}); ${#bunfigs[@]} bunfig.toml; ${#bun_locks[@]} bun lockfile(s); ${#other_locks[@]} other lockfile(s)."
 
 if [[ $failures -gt 0 ]]; then
   echo "::error::lint-dual-lockfile: ${failures} violation(s)." >&2
