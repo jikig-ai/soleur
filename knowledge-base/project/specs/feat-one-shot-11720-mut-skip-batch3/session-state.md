@@ -28,3 +28,18 @@ soleur:work → review → fix-round → qa → compound → ship (PR #11885 pla
 - Missing IV axes: BWRAP_/FCSB_/SPEND_/SANDBOX_ALERTS_ need `*_GUARD_IV` added; GHCR_/UNPINNED_ have IV
 - assert_fixture_dir md5-identical across all 7 files (parity pinned)
 - doppler-config-inventory.txt fresh (stamped 2026-11-02) — P16 not an issue this branch
+
+## Work Phase (2026-11-02)
+
+- Six suites ported by four parallel fan-out agents (orchestrator-verified):
+  bwrap 66/66 P32 M34; fcsb 71/71 P44 M27; ghcr 95/95 P44 M51; inngest-524 100/100 P62 M38;
+  sandbox 76/76 P41 M35; web-nic 54/54 P35 M19. All `MUT_SKIP=1` inner runs green.
+- Floor-RED proof per file: +1 PRESENCE_ROWS bump → exit 1 `[FATAL] assertion floor` → reverted.
+- Phantom-span sweep: zero `<<-` opener-regex hits outside real `<<PY`/`<<'ROWS'` heredocs.
+- Meta-guard promotion landed: covered 387→393, fires 370→376, deferred 47→47, unclassified 0,
+  25/25 green; MIN_FIRING_SUITES 65→71; six PROMOTED_FILES entries at live :1096 site + grounds comment.
+- AC6: six suites measured ~142s total (baseline ~64s); serial leg worst ~6.7min + delta → no
+  timeout-minutes bump needed.
+- lint-shell-capture-exit: 0 new findings. GDPR gate: not triggered (no canonical-regex path in diff).
+- Affected-test exit gate queued behind sibling run (feat-prod-readiness-gap-analysis lock).
+- Commits: 6 per-file ports + 1 meta-guard promotion.
