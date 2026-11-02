@@ -251,8 +251,8 @@ if [[ "$FAIL" -ne $((_ff + 1)) ]]; then
 fi
 PASS=$_pf; FAIL=$_ff; WORK=""
 _self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-_runners="$(grep -cE '^[[:space:]]+bash "\$TARGET"( --fixture-seams)? ' "${_self:?}")"
-_captured="$(grep -cE '^[[:space:]]+bash "\$TARGET"( --fixture-seams)? >>"\$\{WORK:\?\}/out\.log" 2>&1 \|\| rc=\$\?$' "${_self:?}")"
+_runners="$(grep -cE '^[[:space:]]+bash "\$TARGET"( --fixture-seams)? ' "${_self:?}" || true)"
+_captured="$(grep -cE '^[[:space:]]+bash "\$TARGET"( --fixture-seams)? >>"\$\{WORK:\?\}/out\.log" 2>&1 \|\| rc=\$\?$' "${_self:?}" || true)"
 if [[ "$_runners" -lt 7 || "$_captured" -ne "$_runners" ]]; then
   printf 'FATAL: the flip-script runner sites do not all capture to "$WORK/out.log" (runners=%s captured=%s, expected >=7 and equal): a /dev/null site blinds the canary scan\n' "$_runners" "$_captured" >&2
   exit 1
