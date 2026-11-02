@@ -322,7 +322,7 @@ This plan ran with `Reviewed-Coverage: sequential-fallback` — Devin depth-1 (s
 
 ## Enhancement Summary
 
-plan run 2026-11-02 (orchestrator-level, Devin depth-1 sequential-fallback).
+plan + deepen-plan run 2026-11-02 (orchestrator-level, Devin depth-1 sequential-fallback — all fan-outs single-process inline; `Reviewed-Coverage: sequential-fallback`).
 
 ### Gate results
 
@@ -344,3 +344,27 @@ plan run 2026-11-02 (orchestrator-level, Devin depth-1 sequential-fallback).
 - 2.10 ADR: no architectural decision — skipped
 - 2.11 Encryption: no new store/connection — skipped
 - 2.12 Guard Contract: 3 guards, matrices ≥3 rows, dispatch + second-member + must-PASS rows present
+
+### deepen-plan halt results (2026-11-02)
+
+- 4.4 Precedent-diff: skipped (no scheduled-work pattern)
+- 4.45 Round-1 realism passes: ran sequentially inline — per-file measured facts in Port Contract (phantom `<<-` site counts, axis sets, floor shapes, exit classes, runtimes)
+- 4.5 Network-outage: skipped (no SSH / terraform-apply / provisioner triggers)
+- 4.55 Downtime & Cutover: skipped (no production-mutating operation)
+- 4.6 User-Brand Impact: PASS (threshold `none` + non-empty scope-out reason)
+- 4.7 Observability: PASS (5 fields populated; `bash` is an allowlisted probe verb; `expected_output` is the literal `"1"`; command verified once — prints `1`)
+- 4.8 PAT-shaped variable: PASS (zero hits)
+- 4.9 UI wireframe: skipped (no UI surface)
+- 4.10 Encryption Posture: skipped (no new store/connection)
+- 4.11 Guard Contract: PASS (`lint-guard-contract.py`: 3 guard entries, zero findings; assemblies name chokepoints, not member lists)
+- 4.12 Scope Check: PASS (exactly one unfenced `## Scope Check`; every ask mapped or justified-descoped; inferred rows carry justifications)
+- 4.13 Task-design: skipped (no new autonomous-task surface)
+- Technical-ruling gate: PASS (`decision-challenges.md` 6 rows — 2 `Ruled by CTO agent` carry-forwards, 3 `taste`, 1 `operator (scope)`; zero unruled-technical)
+- Phase 5 review agents: sequential-fallback — no panel spawned (Devin depth-1); plan self-reviewed against sharp-edges catalogue + batch-2 review-consolidated Port Contract, which already encodes the prior panel's findings for this identical change class
+
+### Key findings (deepen)
+
+- All six targets are phantom-heredoc-hidden today — the `<<-` evasion sweep is load-bearing (moved into Solution step 1 + AC10 + Guard-3 row 2), not polish.
+- ghcr and web-nic already carry `IV` axes + step-anchored registration pins; they need only the literal-absence seam row + IV mutation rows — no new axis.
+- inngest-524 is a middle-generation port (has `mutate_red` without fragments, S1/C1 controls) — its contract entry is the deepest.
+- Live `PROMOTED_FILES` site moved to :1096 since batch-2 (their four entries appended); `MIN_FIRING_SUITES` at :1426.

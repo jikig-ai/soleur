@@ -6,12 +6,12 @@ Planning ran inline (Devin depth-1 — subagents cannot spawn subagents, so no C
 
 | Item | Class | Ruling |
 |---|---|---|
-| env -u vs seam-check for the six ports (issue item 3) | technical | Ruled by CTO agent, 2026-11-02 (batch-2, recorded in archive/20261102-113422-*/decision-challenges.md context + shipped convention): seam-check inside each suite supersedes `env -u` run lines — `env -u` self-reds `registry-clientip`'s `suite-seam-in-workflow` pin and the byte-exact run-line pins in web-nic/ghcr; batch-3 ports the shipped convention |
-| Uniform promotion of all six ported files (vs selective) | technical | Ruled by CTO agent, 2026-11-02 (batch-2 ruling A extended): registering only a subset of identical cases is arbitrary — every ported file whose floor scores FIRES gets a live-site PROMOTED_FILES entry + MIN_FIRING_SUITES +6 (65→71) |
-| inngest-524 `mutate_red` signature widening (add $4 fragment + $5 want) vs keep fragment-less grading | technical | pending - assumed: widen — the WRONG-reason class is otherwise uncovered and every sibling carries the fragment arg |
-| ghcr/web-nic `MUT_ROWS_EXPECTED`→`MUT_ROWS` rename vs keep name | technical | pending - assumed: rename for convention uniformity while keeping the stronger MUT_ROWS_RUN conservation ledger intact |
-| sandbox-alerts DISP/CLS (.ts) canon surface — param-shaped whole-line pins vs extend res_block canon to .ts | technical | pending - assumed: keep whole-line pins on .ts (no HCL blocks to block-scope; canon/block machinery applies to the .tf surface) |
-| PR-body issue linkage at ship (`Closes #11720` vs `Ref #11720`) | technical | pending - assumed: `Ref #11720` with a closing comment — the remainder list is exhausted after this batch except the deliberate registry-clientip descope, so the operator confirms the descope before the issue auto-closes |
+| env -u vs seam-check for the six ports (issue item 3) | technical | Ruled by CTO agent, 2026-11-02: seam-check inside each suite supersedes `env -u` run lines — `env -u` self-reds `registry-clientip`'s `suite-seam-in-workflow` pin and the byte-exact run-line pins in web-nic/ghcr (batch-2 ruling, carried forward from archive/20261102-113422-*; batch-3 ports the shipped convention) |
+| Uniform promotion of all six ported files (vs selective) | technical | Ruled by CTO agent, 2026-11-02: registering only a subset of identical cases is arbitrary — every ported file whose floor scores FIRES gets a live-site PROMOTED_FILES entry + MIN_FIRING_SUITES +6 (65→71) (batch-2 ruling A, extended) |
+| inngest-524 `mutate_red` signature widening (add $4 fragment + $5 want) vs keep fragment-less grading | taste | Convention-prescribed, not a fork — widen: the issue's scope item 1 prescribes the `_red_verdict`/fragment convention verbatim and every shipped sibling carries the fragment arg; the WRONG-reason class is otherwise uncovered |
+| ghcr/web-nic `MUT_ROWS_EXPECTED`→`MUT_ROWS` rename vs keep name | taste | Convention-prescribed — rename: the issue's scope item 1 prescribes `PRESENCE_ROWS`/`MUT_ROWS` constants; keep the stronger `MUT_ROWS_RUN` conservation ledger intact under the renamed constant |
+| sandbox-alerts DISP/CLS (.ts) canon surface — param-shaped whole-line pins vs extend res_block canon to .ts | taste | Keep whole-line pins on .ts — no HCL blocks exist to block-scope; canon/`res_block` machinery applies to the .tf surface only |
+| PR-body issue linkage at ship (`Closes #11720` vs `Ref #11720`) | operator (scope) | Operator-reserved — closing #11720 accepts the registry-clientip descope as final; default behavior `Ref #11720` (matches every prior batch) unless the operator directs `Closes` at ship time |
 
 ## Operator Holds (epic #10390 — carried forward verbatim from batch-2 record)
 
