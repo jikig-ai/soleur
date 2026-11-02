@@ -21,7 +21,7 @@
 // (plugins/soleur/scripts/resolve-regenerable-conflicts.sh). Differences:
 //   - bytes come from GitHub, not the local object store (here the object store
 //     is the tenant's; the resolver's is the operator's own);
-//   - config names are the exact likec4@1.50.0 list (the resolver refuses the
+//   - config names are the exact likec4@1.60.0 list (the resolver refuses the
 //     glob `likec4.config.*`; the parity test pins every name here to it);
 //   - sources under directories likec4 ignores (node_modules, .git, ...) are
 //     skipped, as likec4 itself skips them;
@@ -36,7 +36,7 @@ import { join, resolve, sep } from "node:path";
 import { githubApiGet } from "@/server/github-api";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
-// Copied from the installed likec4@1.50.0 dist (`_chunks/src.mjs`); the version
+// Copied from the installed likec4@1.60.0 dist (`_chunks/src.mjs`); the version
 // is pinned across Dockerfile / ci.yml / render-c4-model.sh by
 // test/c4-likec4-version-pin.test.ts, and the acceptance suite re-reads this
 // list from the installed dist when the binary is present.
@@ -51,7 +51,7 @@ export const LIKEC4_CONFIG_NAMES: readonly string[] = Object.freeze([
   "likec4.config.cts",
   "likec4.config.mts",
 ]);
-// likec4@1.50.0 `_chunks/binary.mjs`.
+// likec4@1.60.0 `_chunks/binary.mjs`.
 export const LIKEC4_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([".c4", ".likec4", ".like-c4"]);
 // Directories likec4's project crawl excludes (`_chunks/binary.mjs`, `ed`).
 // Exported for server/c4-staleness.ts, whose snapshot compare must exclude the

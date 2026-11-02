@@ -33,8 +33,8 @@
     "@codemirror/state": "^6",
     "@codemirror/theme-one-dark": "^6",
     "@codemirror/view": "^6",
-    "@likec4/core": "1.50.0",
-    "@likec4/diagram": "1.50.0",
+    "@likec4/core": "1.60.0",
+    "@likec4/diagram": "1.60.0",
     "@mantine/core": "8.3.15",
     "@mantine/hooks": "8.3.15",
     "@octokit/app": "^16.1.2",
@@ -120,8 +120,23 @@
     "inngest": {
       "zod": "^4.6.6"
     },
-    "@likec4/core": {
-      "zod": "^4.6.6"
+    "@pandacss/core": {
+      "browserslist": "^4.28.7",
+      "postcss": "^8.5.23",
+      "postcss-selector-parser": "^7.1.6"
+    },
+    "@pandacss/generator": {
+      "postcss": "^8.5.23"
+    },
+    "@pandacss/node": {
+      "browserslist": "^4.28.7",
+      "postcss": "^8.5.23"
+    },
+    "@pandacss/plugin-lightningcss": {
+      "browserslist": "^4.28.7"
+    },
+    "@pandacss/postcss": {
+      "postcss": "^8.5.23"
     },
     "rimraf": {
       "glob": "^14.0.2"
