@@ -260,8 +260,6 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
   && no "the predicate carries a host_name conjunct — it would exclude web-2 and web-1's pre-rename host name" \
   || ok "no host_name conjunct: any host's lost deny alerts"
 
-EXPL_QRY="$(awk '/^  query \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
-EXPL_VAR="$(awk '/^  variable \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
 param "$EXPL" 'sql_query' 'replace\(trimspace\(local\.ghcr_hostsfile_deny_lost_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.ghcr_hostsfile_deny_lost_sql as its sql_query"

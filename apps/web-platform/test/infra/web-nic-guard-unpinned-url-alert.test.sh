@@ -184,8 +184,6 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
   && no "the predicate carries a host_name conjunct — it would blind the OTHER web host's refusals (the #8706 trap in reverse)" \
   || ok "no host_name conjunct: a refusal on web-1 or web-2 alerts"
 
-EXPL_QRY="$(awk '/^  query \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
-EXPL_VAR="$(awk '/^  variable \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
 param "$EXPL" 'sql_query' 'replace\(trimspace\(local\.web_nic_guard_unpinned_url_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.web_nic_guard_unpinned_url_sql as its sql_query"

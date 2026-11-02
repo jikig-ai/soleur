@@ -513,7 +513,7 @@ PY
       IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
       *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
-    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp %s failed\n' >&2; exit 2; }
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
