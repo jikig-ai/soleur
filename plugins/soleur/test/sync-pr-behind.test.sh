@@ -89,7 +89,10 @@ make_pair() {
 # `--jq` program the SUT passed over that body. Nothing here knows the verdict labels.
 # Records per call: gql-calls (argv), gql-query (the query text alone), gql-number (the -F
 # number), gql-jq. Modes (gql-mode, re-read every call): queued | notqueued (armed) |
-# entryonly (an entry but no isInMergeQueue) | dequeued (auto-merge disarmed) | merged | prnull | datanull | shapeless | notjson |
+# entryonly (an entry but no isInMergeQueue) | queued_null / entryonly_null (#11789: in the queue with
+# autoMergeRequest=null — the queue owns the merge, so the armed field must not read disarmed) |
+# noqueue_null (no queue fields and autoMergeRequest=null: malformed — unknown, never disarmed) |
+# dequeued (auto-merge disarmed) | merged | prnull | datanull | shapeless | notjson |
 # gqlfail | gqlctl (exit 1 with an ESC sequence and a forged tag line on stderr) | empty | hang | flaky (first call fails, then notqueued) | removed (not queued, auto-merge still
 # armed, a RemovedFromMergeQueueEvent newer than the re-arm) | removed_disarmed | rearmed (removal OLDER than
 # the re-arm: not current) | removed_pushed (removal OLDER than the head commit: a fix was pushed since) |
@@ -131,6 +134,9 @@ case "$mode" in
   queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
   notqueued)  pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
   entryonly)  pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  queued_null) pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  entryonly_null) pr='{"mergeQueueEntry":{"state":"AWAITING_CHECKS"},"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
+  noqueue_null) pr='{"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
   dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
   merged)     pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"MERGED","autoMergeRequest":null,"timelineItems":{"nodes":[]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
   removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}}' ;;
@@ -1030,6 +1036,13 @@ qs_check "not queued, armed" notqueued 0 '^not_queued OPEN armed removal=none$'
 qs_check "dequeued shape (auto-merge disarmed, no removal event, never seen queued)" dequeued 0 '^not_queued OPEN disarmed removal=none$'
 qs_check "merged" merged 0 '^not_queued MERGED disarmed removal=none$'
 qs_check "entry only" entryonly 0 '^queued OPEN armed removal=none$'
+# #11789: a PR in the merge queue reads autoMergeRequest=null (the queue owns the merge), so the armed
+# field gated on autoMergeRequest alone false-reported "disarmed". Queued + null is ARMED (the queue
+# merges it); not-queued + null stays disarmed; a malformed answer is unknown, never a disarmed verdict.
+qs_check "queued + autoMergeRequest null: armed, never disarmed" queued_null 0 '^queued OPEN armed removal=none$'
+qs_check "queued by mergeQueueEntry alone + autoMergeRequest null: armed, never disarmed" entryonly_null 0 '^queued OPEN armed removal=none$'
+qs_check "not queued + autoMergeRequest null: still disarmed" dequeued 0 '^not_queued OPEN disarmed removal=none$'
+qs_check "no queue fields + autoMergeRequest null: unknown (kind=gh), never a disarmed verdict" noqueue_null 4 'kind=gh rc=4 — .*cause=unparseable'
 qs_check "read fails" gqlfail 4 'kind=gh rc=4 — .*cause=gh_error'
 qs_check "unparseable" shapeless 4 'kind=gh rc=4 — .*cause=unparseable'
 # E5: --queue-state alone gets the SAME retry as the --step path (the --help text says so): the default is
@@ -2528,6 +2541,7 @@ fi
 echo "=== $PASS passed, $FAIL failed ==="
 # The pin is an exact equality, not a floor: a row that silently stops running moves the count as surely as one added. 231 rows of #10832 plus the
 # 36 row ids of the #10948 review fold-in (9 rows N3c N5e N13 N14 N15 N16 N17 N18 N19; 26 mutants G1-15..17, G3-1..8, G4-1/2, G5-1..3, G6-1..6, G7-1/2,
-# G8-1/2; 1 control) = 267, plus 5 mutants of the fix round (G3-9, G3-10, G6-7, G6-8, G9-1) = 272. Moved deliberately, in the change that adds or removes a row.
-[[ "$FAIL" -eq 0 && "$PASS" -eq 272 ]]
+# G8-1/2; 1 control) = 267, plus 5 mutants of the fix round (G3-9, G3-10, G6-7, G6-8, G9-1) = 272, plus the 4 armed-classification rows of #11789
+# (queued_null, entryonly_null, the not_queued disarmed control, noqueue_null) = 276. Moved deliberately, in the change that adds or removes a row.
+[[ "$FAIL" -eq 0 && "$PASS" -eq 276 ]]
 exit $?

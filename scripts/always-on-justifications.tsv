@@ -117,3 +117,5 @@ scripts/test-all-fast-tier-budget	always-on class: Round 4 (section 2 of #9307; 
 scripts/test-all-weight-drift	#9814: the local weight-drift detector — its verdict asserts properties of the runner's own wiring (default arm, epilogue emit), a runner-SUT property suite like its sibling above.
 scripts/test-all-corpus-weight-budget	#11662: corpus-wide committed-weight cap — verdict is a property of the committed tables, not any diff edge.
 scripts/always-on-ledger	#11662: always-on justifications parity + non-live membership ceiling — a corpus property, invisible to file-based selection.
+scripts/image-cve-public-claim-guard	#9826: repo-global tripwire — scans the tracked public surfaces (docs site, legal pages, security copy, toggle copy) for a security claim ahead of a measured control; a corpus property, invisible to file-based selection.
+scripts/image-cve-verdict-consumers	#9826: repo-wide consumer sweep — asserts no tracked script or workflow other than the verdict workflow reads the verdict marker; a corpus property, invisible to file-based selection.
