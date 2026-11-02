@@ -224,7 +224,7 @@ Not applicable — no user-facing surface; no `components/**/*.tsx`, `app/**/pag
 - [ ] AC1: All four ported suites exit 0 green on the pristine tree and carry `PRESENCE_ROWS`/`MUT_ROWS` named constants whose `_floor=$((PRESENCE_ROWS + MUT_ROWS))` equals the suite's real assertion count (verified by `mutate_floor_red` going red on +1).
 - [ ] AC2: Each ported suite's mutation battery contains decoy/comment-extraction rows (decoy heredoc with gutted live body, `/* */`-wrapped decoy block, commented pinned line) each driven RED by `mutate_red`, plus a `mutate_green` must-PASS row.
 - [ ] AC3: Each ported suite asserts `MUT_SKIP` and its own `*_GUARD_*` literals absent from `infra-validation.yml` executable text (seam-check row); no `env -u` appears in the workflow.
-- [ ] AC4: All four ported floors classify FIRES (not merely pass on real runs) and all four files are registered at the LIVE `PROMOTED_FILES` site (`scripts/guard-vacuity-floor.test.sh:1089`) with grounds comments + `MIN_FIRING_SUITES` 61→65; egress-gw's old `pass -lt 30` floor is removed. `bash scripts/guard-vacuity-floor.test.sh` exits 0 and its printed counters are diffed before/after — expected movement: `n_deferred` 47→43, `n_def_construct` −3, `n_def_fires` +3, `n_covered` +4, `n_fires` +4. Any other movement is a finding.
+- [ ] AC4: All four ported floors classify FIRES (not merely pass on real runs) and all four files are registered at the LIVE `PROMOTED_FILES` site (`scripts/guard-vacuity-floor.test.sh:1089`) with grounds comments + `MIN_FIRING_SUITES` 61→65; egress-gw's old `pass -lt 30` floor is removed. `bash scripts/guard-vacuity-floor.test.sh` exits 0 and its printed counters are diffed before/after — measured pre-port baseline (this branch, 2026-11-02): `covered 383`, `deferred 47` (`fires 31`, `construct 16`, `nofire 0`), `fires 366`, `construct 17`. Expected post-port movement: `deferred` 47→43, `deferred fires` 31→30, `deferred construct` 16→13, `covered` 383→387, `fires` 366→370. Any other movement is a finding.
 - [ ] AC5: `registry-clientip-not-rfc1918-alert.test.sh` is byte-identical to pre-batch (verify-only) — `git diff` on it is empty.
 - [ ] AC6: The four suites' run lines in `infra-validation.yml` remain plain `run: bash …`; the `deploy-script-tests-fixed` leg is measured on-branch and `timeout-minutes` is bumped only if the measurement approaches the ceiling.
 - [ ] AC7: `assert_fixture_dir` blocks in ported files remain byte-identical to the canonical copy (P1b parity suite green).
@@ -281,7 +281,7 @@ Bindings consolidated from advisor + spec-flow review (2026-11-02); they amend t
 - Canon preserves deliberate order-insensitivity: deadman pins a conjunct SET (reorder is `mutate PASS` today) → use a sorted-conjunct compare or per-conjunct canon, NOT a whole-byte canon; egress's fail predicate carries a scoped OR — same question per predicate.
 - Canonicalization per file: strip-all (`tr -d`) canon needs the `sql_local_raw` companion rows (intra-literal trailing spaces are load-bearing — registry-store/zot currently use collapsed-space `tr -s` and have explicit trailing-space mutations); keep the collapsed-space piece rows or strip-all+raw pair per file.
 - `mutate_floor_red` sed anchor: bare `PRESENCE_ROWS=<n>` line at column 0, adjacent to the floor block; the constant and the anchor bump together (two-write-site trap).
-- Registration: the `PROMOTED_FILES` regex lives at `scripts/guard-vacuity-floor.test.sh:1089` — it is the LAST of four `PROMOTED_FILES=` assignments (:798/:811/:819 are stale snapshots); the egress-gw entry goes there (escaped dots) + grounds comment + `MIN_FIRING_SUITES` 61→62 per the comment convention. Counters are diffed before/after: `n_deferred` 47→46, `n_fires` +1, nothing else.
+- Registration (uniform — all four ported files): the `PROMOTED_FILES` regex lives at `scripts/guard-vacuity-floor.test.sh:1089` — it is the LAST of four `PROMOTED_FILES=` assignments (:798/:811/:819 are stale snapshots). Each ported file gets an entry there (escaped dots) + grounds comment; `MIN_FIRING_SUITES` 61→65 per the comment convention. Measured baseline → expected post-port: `deferred` 47→43, `deferred fires` 31→30, `deferred construct` 16→13, `covered` 383→387, `fires` 366→370. Anything else is a finding.
 - Conditional timeout bump targets `deploy-script-tests-fixed` `timeout-minutes: 15` (`infra-validation.yml:851`), decided by the measured on-branch leg — steps carry no per-step bound.
 
 **Per-file notes:**
@@ -291,8 +291,50 @@ Bindings consolidated from advisor + spec-flow review (2026-11-02); they amend t
 - `egress-gw`: remove `pass -lt 30` floor, port to derived `_ran -lt _floor`; add `IV)` arms to both `mutate` case tables; `EGW_GUARD_*` + `MUT_SKIP` seam literals; named per-predicate region anchors; `MIN_FIRING_SUITES` + PROMOTED_FILES + grounds comment.
 
 **New ACs (review-consolidated):**
-- [ ] AC8: Every ported suite's floor tail is the constructible four-assignment window (no non-assignment inside it) — verified by `bash scripts/guard-vacuity-floor.test.sh` reporting each file's classification; egress-gw scores FIRES via its PROMOTED_FILES membership pin, the other three remain deferred-non-construction.
+- [ ] AC8: Every ported suite's floor tail is the constructible pure-assignment window (no non-assignment inside it) — verified by `bash scripts/guard-vacuity-floor.test.sh` reporting each file's classification; all four score FIRES and all four are promoted via the live `PROMOTED_FILES` site (the three previously DEF_CONSTRUCT files leave both deferred and construct classification; egress-gw leaves deferred-FIRES for covered-FIRES).
 - [ ] AC9: Each ported suite's floor trip exits 1 and each instrument failure exits 2 — `mutate_floor_red` rows grade RED (not UNRESOLVED) on a +1 bump.
 - [ ] AC10: Each ported suite carries an `IV` axis and both `mutate` case tables admit it; the seam-check row is proven red by an IV mutation in the battery.
 - [ ] AC11: deadman's conjunct reorder remains a `mutate PASS` (green) row after the port — the canon is set-tolerant; QP/CK are pinned exactly with `param()` uniqueness.
 - [ ] AC12: `mutate_green` rows are TF-scoped unless the helper is deliberately widened; a `want=wrong` negative-control row exists per battery.
+
+## Port Contract — deepen-plan realism pass refinements (2026-11-02)
+
+Measured per-file facts; amend the per-file notes where more specific.
+
+- **registry-store-not-luks**: existing `EXPECTED_FLAT` whole-predicate byte-compare is KEPT (already canon-strength — augment with derived-literal construction, do not downgrade). `alr_kv` already IS `param()` — extend it to exact-once semantics rather than adding a twin; the `:162-163` awk ranges are `res_block()` — name them. Add `REGSTORE_IV` (+ readability row + own-run-line registration pin) and `REGSTORE_CI` (cloud-init-registry.yml `LINE="SOLEUR_ZOT_DISK …"` emitters); extend `mutate()` copy+dispatch to N axes using ghcr's `env "P_GUARD_${which}=$copy"` indirection (ghcr-blocked:427). Add pristine-child control (absent today). Floor trips → exit 1 (verdict-class; `mutate_floor_red` requires it), instruments → exit 2; the `[ "$rc" -ne 0 ]` grader is replaced by `_red_verdict` so an exit-2 instrument failure can no longer grade RED.
+- **registry-zot-credential-shape**: pin target is a `*_sql` LOCAL not a resource block — needs the `sql_local()` extractor (egress :97-103 shape) plus `res_block`/`block_of` for the EXP/ALR resources. Floors are SLACK today (`20` vs actual `24`, `27` vs actual `31`) — recompute from the ported file. The runbook-existence row reads a hardcoded `$REPO/…` path — wire a `REGCREDSHAPE_RB` override for the RB mutation class. Add `REGCREDSHAPE_IV` + `CI` axes; pristine control absent → add.
+- **workspaces-luks-deadman-fired**: conjunct-set canon (sorted-conjunct compare) preserves the existing shape check's AND/GROUP-BY cardinality and the reorder-green row. QP/CK pinned exactly via `param()` (a duplicated `query_period` line must red, not silently first-hit). Floor/ledger exit 2→ floor trip becomes exit 1 (`mutate_floor_red` needs rc=1; instruments stay 2 — update the `:322` convention comment). `sql_has` here is 1-arg vs egress's 2-arg — reconcile signatures deliberately, do not copy across files. `mutate()` has TWO case sites (:220-225 and :242-246) — both get `IV)` arms.
+- **egress-gw**: `EGW_GUARD_IV` ALREADY exists (:56, readability-checked, drives rows :285/:288) — only the mutate dispatch lacks `IV)` (two case sites :322-328/:345-350 + `egw_replace` hard-anchored; the second table at :345-350 has NO `*)` catch-all — an `IV` row without a dispatch arm falls through silently, so add `*)` → FATAL-2 alongside the `IV)` arm). Existing helpers are the convention under different names: `sql_local()` :97-103, `block_of()` :105-111 ≡ `res_block()`, `line_in` ≡ `param()` — RENAME/extend, never add twins. The floor runs BEFORE the mutation block today and there is no post-mutation floor — the derived `_ran -lt _floor` tail must be `pass+fail` evaluated AFTER mutations (deadman shape) plus the `${#FAILED[@]} == $fail` ledger equality check.
+- **Cross-cutting**: all inputs are already CI-trigger-covered; IV-axis rows assert each suite's existing `run:` registration — no new path entries needed.
+
+## Enhancement Summary
+
+deepen-plan run 2026-11-02 (orchestrator-level fan-out, Devin depth-1).
+
+### Gate results
+- 4.6 User-Brand Impact: PASS (threshold none + scope-out line)
+- 4.7 Observability: PASS (5 fields, allowlisted verb, literal expected_output `1`)
+- 4.8 PAT-shaped variable: PASS (no hits)
+- 4.9 UI wireframe: skipped (no UI surface)
+- 4.10 Encryption Posture: skipped (no new store/connection)
+- 4.11 Guard Contract: PASS (lint-guard-contract.py green, 3 entries, structural assemblies)
+- 4.12 Scope Check: PASS (1 unfenced section, mapped/descoped-with-justification, Recommendation line)
+- 4.13 Task Design: skipped (no new autonomous-task surface)
+- 4.4 Precedent-Diff: the donor pair IS the repo precedent (`inngest-luks-wrong-volume-alert.test.sh`, `inngest-luks-key-probe-alert.test.sh`) — the port binds to it; no new scheduled job (ADR-033 check n/a)
+- 4.5 Network-Outage / 4.55 Downtime: skipped (no triggers)
+
+### Key Improvements
+- **Floor constructibility corrected twice**: the donor shape is CONSTRUCTION-class; the first fix was also non-assignment-contaminated. Final shape is the pure-assignment `_eff=${MUT_SKIP:+0}`/`_eff=${_eff:-$MUT_ROWS}` window (Kieran-verified).
+- **Promotion scope reconciled to uniform all-four** (was egress-only in early drafts and self-contradictory after the DHH amendment): each ported floor gets a live-site `PROMOTED_FILES` entry + grounds comment; `MIN_FIRING_SUITES` 61→65; counters measured against a real baseline run (deferred 47→43, fires 366→370).
+- **`env -u` superseded by seam checks** (shipped batch-1 convention; `env -u` would self-red `registry-clientip:479`); per-suite seam literal sets use axis NAMES not a `_GUARD_` pattern (`REGSTORE_*`/`REGCREDSHAPE_*` lack the substring).
+- **Per-file realism refinements merged**: keep registry-store's whole-predicate FLAT canon; `sql_local()` for zot's local-scoped pin; zot floors were slack (20/27 vs actual 24/31) — recount; deadman `sql_has` signature collision reconciled; egress `EGW_GUARD_IV` exists — only dispatch arms missing; egress floor moves AFTER the mutation block (`pass+fail` form) + ledger equality; second egress `mutate` case gets `*)` → FATAL-2 alongside `IV)`.
+- **Exit-code contract fixed**: floor/ledger trips exit 1 (verdict-class — `mutate_floor_red` requires it); instrument failures exit 2; deadman's `:322` convention comment rewritten.
+- **AC4 measured**: counters asserted against a real baseline run of `scripts/guard-vacuity-floor.test.sh` on this branch (25/25 green).
+
+### New Considerations Discovered
+- `mutate_floor_red` grading requires floor exit 1 — a `mutate`-battery rc-discrimination change in both registry suites (`[ rc -ne 0 ]` → `_red_verdict`) plus pristine-child control.
+- registry-store/zot need new `IV` + `CI` axes (workflow seam + cloud-init emitters); ghcr's `env "P_GUARD_${which}=$copy"` indirection is the dispatch pattern for N-axis mutation.
+- Shared `.tf` baseline race re-probed at Phase-7 sync — canons are per-file and the risk window is one PR.
+
+### Remaining Holds (unchanged)
+Carrier batch / #8839 / #9943 / op=backup / DOPPLER_TOKEN_INFRA_PRIVILEGED seed — see `## Operator Holds`; none touched by this plan.
