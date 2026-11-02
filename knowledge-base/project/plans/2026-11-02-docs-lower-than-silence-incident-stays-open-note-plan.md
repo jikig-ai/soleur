@@ -40,7 +40,7 @@ is no external API, library or UI to research, and every residual risk is a guar
 - The `.tf` extension triggers Phase 4.10 literally; the plan adds a short `## Encryption Posture` section stating that no store
   or connection is introduced (plan Phase 2.11 would skip it silently; the section makes the deepen gate pass without ambiguity).
 - The mirror workflow closes a mirror issue with "resolved upstream" when the incident leaves Better Stack's open list, so the
-  manual resolve test, once the owner authorizes it, closes #11047 / #11869 as a side effect. Neither PR text nor commit may
+  manual resolve test, once the owner authorizes it, will let the mirror close issues 11047 and 11869 as a side effect. Neither PR text nor commit may
   pre-empt that with a closing keyword (already an Acceptance Criterion).
 
 ## Overview
@@ -78,9 +78,11 @@ Better Stack write that needs the owner's per-command go-ahead; it is pending an
     "resolved upstream", which is the retirement of those alerts (the runbook records the luks one as replaced by a heartbeat armed
     2026-10-31, #11631), not an auto-resolve while live.
   - `#11151` (`egress-gw-probe-fail`, the `higher_than` twin) opened and closed on 2026-10-26.
-  - The other closed rows are uptime monitors and heartbeats, not `lower_than` logs alerts.
-  The "30 minutes" figure for the twin and the "healthy data" statements come from the operator brief and the CTO ruling; the work phase
-  re-reads the data with `scripts/betterstack-query.sh` (read only) before the PR body repeats them.
+  - The other closed rows are uptime monitors or heartbeats.
+  The "30 minutes" figure for the twin was verified from the issue timestamps (created 09:16:31Z, closed 09:46:48Z; a mirror-issue
+  lifetime, not an incident duration). The "healthy data" statements were re-read read-only in the work phase on 2026-11-02 (flip: 11
+  object rows in the prior hour; egress: 22 probe rows) and are recorded in `tasks.md` task 3.3. Review also showed the mirror has
+  only run since 2026-10-24, so "never auto-resolved" is stated as "no `lower_than` incident has resolved while its alert was live".
 - Collision pre-check (`collision-precheck.sh 11820` and `11869`): no open PR names either issue; the two foreign hits are
   `test-all.sh` processes of an unrelated worktree (`feat-prod-readiness-gap-analysis`). No duplicate vehicle.
 - ADR corpus: no ADR decides how to document an incident that outlives its signal. `ADR-218` (native Better Stack alerts are
@@ -162,12 +164,9 @@ Insert, wrapped at about 100 columns, before `locals {`:
 ```text
 #
 # INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
-# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
-# Observed 2026-11-02: incident 1045365287 (this alert) and incident 1031046761 (egress_gw_probe_silent, which has no
-# JSONType) are both Started and unresolved with healthy data, the second since 2026-10-12. No `lower_than` logs-alert
-# incident has auto-resolved in the mirror history (the mirror issues of the retired alerts closed only when the alerts
-# were retired), while the `higher_than` twin egress_gw_probe_fail resolved in 30 minutes. CTO ruling 2026-11-02: leave the
-# alert as it is.
+# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
+# this alert and for egress_gw_probe_silent carry the same note; edit all three together.
+# Observed 2026-11-02 (the evidence lines were revised after review; the shipped text in the .tf file is authoritative).
 ```
 
 Rules for the inserted text (each is a guard-safety constraint):
@@ -319,7 +318,7 @@ No `exception` block applies (no plaintext exception, no certificate verificatio
 - [x] Comment-only: the diff filter in Phase 2 prints nothing and `terraform fmt -check` exits 0.
 - [ ] The PR's `plan` job comment shows no resource change for the web-platform root (`No changes` or `0 to add, 0 to change, 0 to destroy`).
 - [x] All Phase 3 suites exit 0, including `inngest-cutover-flip-silent-alert.test.sh` and `inngest-luks-key-probe-alert.test.sh`.
-- [ ] `git diff --name-only origin/main` lists only the runbook, the `.tf`, and files under `knowledge-base/project/{plans,specs}/`.
+- [x] `git diff --name-only origin/main` lists only the runbook, the `.tf`, and files under `knowledge-base/project/{plans,specs}/`.
 - [x] No Better Stack write was made: no incident resolved, no alert paused, no predicate, `query_period`, `operator`, `incident_cause` or other attribute edited.
 - [ ] PR body uses `Ref #11820` and `Ref #11869` (no closing keyword anywhere), cites the evidence, and lists the manual resolve test as pending the owner's per-command go-ahead.
 - [x] `decision-challenges.md` carries a `## Decision Classes` table with the CTO row (`Ruled by CTO agent, 2026-11-02: ...`).

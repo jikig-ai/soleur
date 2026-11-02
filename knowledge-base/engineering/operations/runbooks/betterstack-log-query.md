@@ -330,10 +330,11 @@ Live standing alarms over this source:
   DISTINCT `host_name`s emitted an `egress_gw_probe` row (`SYSLOG_IDENTIFIER=egress-gw-probe`, one
   row per 5 min per host) than the fleet roster over 15+ min — a dead timer, dead Vector pipeline
   (a stale birth-frozen vector.toml allowlist is a measured failure mode), or dead host journal can
-  never read as green, and one host's beats cannot mask the other's silence.
-  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
-  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+  never read as green, and one host's beats cannot mask the other's silence. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
+  Resolve only if every roster host shows an `egress-gw-probe` row in the last 15 minutes; if any host has none, the silence is real, so leave the incident open.
 - **`logtail_exploration_alert.egress_gw_probe_fail`** (#9534 review, `higher_than 0` over 900 s,
   missing data counts as zero): `soleur-egress-gw-probe-fail-prd`. Pages on any `egress-gw-probe`
   row carrying `result=fail` (allow leg refused, or deny leg BYPASSED — Squid accepted a denied
@@ -368,6 +369,7 @@ Live standing alarms over this source:
   invalid flip token) and does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
   emails during an owner-authorized host replace (expected; it clears at the first row after boot).
   A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
+  Resolve only if an object-typed row arrived in the last 15 minutes; none means the silence is real, so leave the incident open and follow the "Flip-token split" runbook.
   To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
   with `--limit 500` (about 160 string rows per hour share the tag, so the default 100 can crowd the object rows out), as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
   (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section

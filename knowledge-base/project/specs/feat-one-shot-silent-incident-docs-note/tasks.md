@@ -19,7 +19,7 @@ Branch: feat-one-shot-silent-incident-docs-note | Refs: #11820, #11869 (never a 
 
 - [x] 3.1 Run `inngest-cutover-flip-silent-alert.test.sh`, `inngest-luks-key-probe-alert.test.sh`, `egress-gw-alert.test.sh`, `logs-alert-query-period-ceiling.test.sh`, `betterstack-alert-structure.test.sh`, and the other alert suites that read the `.tf`.
 - [x] 3.2 Run `bun test plugins/soleur/test/terraform-target-parity.test.ts`.
-- [x] 3.3 Re-measure the data read-only with `scripts/betterstack-query.sh` before the PR body says "healthy".
+- [x] 3.3 Re-measure the data read-only with `scripts/betterstack-query.sh` before the PR body says "healthy". Measured 2026-11-02 ~16:00Z, `--since 1h --limit 500`: flip tag 11 object-typed rows in the hour (about one per 5 min plus transitions), egress tag 22 `egress-gw-probe` rows.
 - 3.4 Read the PR `plan` job comment: no resource change.
 
 ## Phase 4: PR
