@@ -1559,6 +1559,13 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // cert and the three Doppler copies) ARE per-merge targeted.
   "doppler_secret.inngest_link_tls",
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the FLIP token: read/write on the same isolated
+  // soleur-inngest/prd config, consumed as an EnvironmentFile only by inngest-cutover-flip.service (the
+  // redactor also reads it by value) through a cloud-init drop-in. Its `.key` feeds the host's user_data ONLY; it is created as a dependency of
+  // hcloud_server.inngest on the gated inngest-host-replace dispatch (no -target there, CTO R1).
+  // NEVER publish it to a `github_actions_secret`: the #5566 rule below would then force a per-merge
+  // -target, and merging would mint a read/write token with nothing to read it.
+  "doppler_service_token.inngest_flip",
   // #6545 — Grok Build dogfood host (headless Grok 4.5 trial). Gated by
   // `enable_grok_dogfood` (default false). Per-PR CI cannot birth this host
   // (#6416 host_creates tripwire). Provision is operator-local after free-slot
@@ -1596,6 +1603,10 @@ const OPERATOR_APPLIED_TOKEN_EXCLUSIONS = new Set<string>([
   // host's cloud-init (NOT published to a CI github_actions_secret). CI cannot apply it — no host
   // to read it. Same class as doppler_service_token.git_data / .registry.
   "doppler_service_token.inngest",
+  // ADR-282 addendum 2026-10-30 (#9927 item 4) - the on-host flip token. Same class as
+  // doppler_service_token.inngest: consumed by the inngest host's cloud-init only, NOT published to a
+  // CI github_actions_secret (publishing it would void this entry under the #5566 rule above).
+  "doppler_service_token.inngest_flip",
 ]);
 // AUDIT-PENDING (#5577): these are un-targeted today but it is NOT yet confirmed
 // whether that is intentional (operator-applied) or a forgotten allow-list entry
@@ -5738,11 +5749,175 @@ describe("inngest_host dispatch: shape gate wired and allow-set === -target set 
     expect(defAllow).not.toBeNull();
     const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
-    expect(targets.length).toBe(15); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair)
+    expect(targets.length).toBe(16); // non-vacuity floor (#8754 dropped the inngest attachment; #8285 dropped the plaintext pair; the flip-token split added doppler_service_token.inngest_flip)
     expect(allow).toEqual(targets);
     // The passphrase pair is per-merge -targeted and must never join this allow-set.
     expect(allow).not.toContain("random_password.inngest_redis_luks");
     expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4; CTO R1 and N9). Three facts that must
+ * hold together or a gate reds against its twin:
+ *   - the inngest_host job -targets doppler_service_token.inngest_flip (graph-redundant with
+ *     -target=hcloud_server.inngest, but the shape gate's allow set must EQUAL the -target set);
+ *   - the inngest_host_replace job does NOT (it keeps exactly its three -targets; the new token rides
+ *     in as a dependency of the server, like doppler_service_token.inngest does today);
+ *   - the replace job runs the offline user_data budget script BEFORE its plan step, because on the
+ *     first replace both token keys are unknown at plan time, so the hcloud_server.inngest length
+ *     precondition is deferred to APPLY, after the destroy (the 2026-09-08 stranded-host shape).
+ */
+describe("flip-token split: gate lockstep and the pre-destroy size gate", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const FLIP = "doppler_service_token.inngest_flip";
+  const shapeGateAllow = (): string[] => {
+    const lib = readFileSync(join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"), "utf8");
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    return [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  };
+
+  test("the inngest_host job -targets the flip token and the shape gate admits it", () => {
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))]).toContain(FLIP);
+    expect(shapeGateAllow()).toContain(FLIP);
+  });
+
+  test("the flip -target line is annotated as graph-redundant so nobody removes it as such", () => {
+    const job = extractJobBlock(wf, "inngest_host");
+    const at = job.indexOf(`-target='${FLIP}'`);
+    expect(at).toBeGreaterThan(-1);
+    expect(job.slice(Math.max(0, at - 3500), at)).toMatch(/graph-redundant/i);
+  });
+
+  test("mutation: removing the new -target from inngest_host ALONE breaks the allow === -target equality", () => {
+    const mutated = wf.replace(/^\s*-target='doppler_service_token\.inngest_flip' \\\n/m, "");
+    expect(mutated).not.toBe(wf); // the mutation landed
+    const targets = [...extractAllTargets(extractJobBlock(mutated, "inngest_host"))].sort();
+    expect(targets).not.toEqual(shapeGateAllow());
+    // and the pristine tree is equal (non-vacuity of the comparison above)
+    expect([...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort()).toEqual(shapeGateAllow());
+  });
+
+  test("the final -target line still carries the redaction pipe, and only that line (the command ends there)", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host"));
+    const cmd = commandIn(job, /^\s*terraform plan\b.*-out=tfplan/);
+    const lines = cmd.split("\n");
+    expect(lines[lines.length - 1]).toMatch(/-target='doppler_service_token\.inngest' 2>&1 \| tf_redact_random_ids$/);
+    expect(lines.filter((l) => l.includes("tf_redact_random_ids")).length).toBe(1);
+    expect(lines.some((l) => l.includes(`-target='${FLIP}' \\`))).toBe(true);
+  });
+
+  test("the inngest_host_replace job keeps exactly its three -targets and does not target the flip token", () => {
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host_replace"))].sort();
+    expect(targets).toEqual(
+      ["hcloud_server.inngest", "hcloud_server_network.inngest", "hcloud_volume_attachment.inngest_redis_luks"].sort(),
+    );
+    expect(targets).not.toContain(FLIP);
+  });
+
+  // CTO N9 + R9 + R13: the replace job runs the budget script in its `--cap-only` form (over-cap exit 1 and
+  // unmeasurable exit 2 block; the 384 B floor does NOT: it is a PR-visible check in the infra-validation job
+  // `inngest-userdata-budget`, not a required status context (#6480), so not a merge gate). The pins below are STEP-SCOPED on comment-stripped text: a bare-token grep over the job is
+  // satisfied by a nearby comment and by a step that cannot fail (`continue-on-error`, `if: false`).
+  const BUDGET_STEP_TITLE = "- name: Pre-destroy user_data size gate (inngest-userdata-budget.sh)";
+  const BUDGET_RUN_LINE = /^\s*run:\s*bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only\s*$/;
+  /** The budget step out of a (raw or mutated) workflow text: comment-stripped, from its `- name:` line
+   *  to the next sibling step. Throws unless exactly one such step exists. */
+  function budgetStepOf(workflowText: string): { job: string; step: string } {
+    const job = stripComments(extractJobBlock(workflowText, "inngest_host_replace"));
+    const lines = job.split("\n");
+    const starts = lines.map((l, i) => (l.trim() === BUDGET_STEP_TITLE ? i : -1)).filter((i) => i >= 0);
+    if (starts.length !== 1) throw new Error(`budgetStepOf: ${starts.length} budget steps, expected 1`);
+    let end = lines.length;
+    for (let i = starts[0] + 1; i < lines.length; i++) {
+      if (/^\s{6}- /.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return { job, step: lines.slice(starts[0], end).join("\n") };
+  }
+
+  test("the replace job runs inngest-userdata-budget.sh --cap-only after setup-terraform and BEFORE the plan step", () => {
+    const { job, step } = budgetStepOf(wf);
+    const runLines = step.split("\n").filter((l) => /^\s*run:/.test(l));
+    expect(runLines.length).toBe(1);
+    expect(BUDGET_RUN_LINE.test(runLines[0])).toBe(true);
+    // exactly one invocation of the script in the whole job
+    expect([...job.matchAll(/inngest-userdata-budget\.sh(?!\))/g)].length).toBe(1);
+    const stepAt = job.indexOf(BUDGET_STEP_TITLE);
+    const setupAt = job.indexOf("hashicorp/setup-terraform");
+    const planAt = job.indexOf("name: Terraform plan (scoped inngest-host -replace) + destroy-guard");
+    expect(setupAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(stepAt).toBeGreaterThan(setupAt);
+    expect(stepAt).toBeLessThan(planAt);
+  });
+
+  test("the budget step is BLOCKING: no continue-on-error, no `if:`, no `|| true`, and the job has none either", () => {
+    const { job, step } = budgetStepOf(wf);
+    expect(step).not.toMatch(/continue-on-error/);
+    expect(step).not.toMatch(/^\s*if:/m);
+    expect(step).not.toMatch(/\|\|\s*(true|:)/);
+    // KEY WHITELIST: the step carries exactly `name` and `run`. Any other step-level key (`env:` blanking CI so a
+    // missing terraform SKIPs with exit 0, a custom `shell:` template that makes `run` a no-op, `working-directory`,
+    // `timeout-minutes`, `uses`/`with`) can neuter the script while the three forbidden tokens above stay absent.
+    const stepKeys = step
+      .split("\n")
+      .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+      .filter((k): k is string => k !== undefined);
+    expect(stepKeys).toEqual(["name", "run"]);
+    // job-level keys sit at 4-space indent; a job-level continue-on-error would neuter every step
+    expect(job).not.toMatch(/^ {4}continue-on-error:/m);
+  });
+
+  test("mutation: each way of neutering or reshaping the budget step reds a pin", () => {
+    const RUN_FULL = "        run: bash apps/web-platform/infra/inngest-userdata-budget.sh --cap-only\n";
+    expect(wf).toContain(RUN_FULL);
+    const mutations: Array<[string, string]> = [
+      ["drop --cap-only", RUN_FULL.replace(" --cap-only", "")],
+      ["add continue-on-error", RUN_FULL + "        continue-on-error: true\n"],
+      ["add if: false", "        if: false\n" + RUN_FULL],
+      ["add || true", RUN_FULL.replace(" --cap-only", " --cap-only || true")],
+      ["add a stray flag", RUN_FULL.replace(" --cap-only", " --cap-only --x")],
+      ["add env: CI blanked", RUN_FULL + "        env:\n          CI: \"\"\n"],
+      ["add a custom shell", RUN_FULL + "        shell: bash -c \"exit 0\" {0}\n"],
+    ];
+    for (const [label, replacement] of mutations) {
+      const mutated = wf.replace(RUN_FULL, replacement);
+      expect(mutated, label).not.toBe(wf); // the mutation landed
+      const { step } = budgetStepOf(mutated);
+      const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+      const blocking = !/continue-on-error/.test(step) && !/^\s*if:/m.test(step) && !/\|\|\s*(true|:)/.test(step);
+      const keysOk = step
+        .split("\n")
+        .map((l) => /^ {8}([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1] ?? /^ {6}- ([A-Za-z][A-Za-z0-9_-]*):/.exec(l)?.[1])
+        .filter((k) => k !== undefined)
+        .join(",") === "name,run";
+      expect(BUDGET_RUN_LINE.test(runLine) && blocking && keysOk, label).toBe(false);
+    }
+    // pristine control: the same predicate is TRUE on the unmutated tree
+    const { step } = budgetStepOf(wf);
+    const runLine = step.split("\n").find((l) => /^\s*run:/.test(l)) ?? "";
+    expect(BUDGET_RUN_LINE.test(runLine)).toBe(true);
+  });
+
+  test("the mid-replace recovery error points at the runbook matrix and names the owner go; it does not route by server presence", () => {
+    const job = stripComments(extractJobBlock(wf, "inngest_host_replace"));
+    const line = job.split("\n").find((l) => l.includes("failed mid-replace")) ?? "";
+    expect(line).not.toBe("");
+    expect(line).toContain("Recover per the runbook recovery matrix");
+    expect(line).toContain("owner go");
+    expect(line).not.toMatch(/when the server is absent/);
+    expect(line).not.toMatch(/re-dispatch inngest-host-replace/);
+  });
+
+  test("non-vacuity: the order check tells a gated job from an ungated one", () => {
+    const { job } = budgetStepOf(wf);
+    const ungated = job.replace(/bash apps\/web-platform\/infra\/inngest-userdata-budget\.sh --cap-only/, "true");
+    expect(ungated).not.toBe(job);
+    expect(/inngest-userdata-budget\.sh --cap-only/.test(ungated)).toBe(false);
   });
 });
 

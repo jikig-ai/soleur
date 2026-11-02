@@ -64,8 +64,8 @@ _job_body() {
 JOB="$(_job_body inngest_host)"
 TARGETS="$(grep -oE "\-target='[^']+'" <<<"$JOB" | sed -E "s/^-target='([^']+)'$/\1/" | sort)"
 _n_targets="$(grep -c . <<<"$TARGETS" || true)"
-if [[ "$_n_targets" != "15" ]]; then
-  printf '[FATAL] expected the inngest_host job to carry 15 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
+if [[ "$_n_targets" != "16" ]]; then
+  printf '[FATAL] expected the inngest_host job to carry 16 -target= addresses, derived %s — the extraction or the job drifted\n' "$_n_targets" >&2
   exit 2
 fi
 
@@ -137,6 +137,12 @@ build 'doppler_service_token.inngest=["update"]' 'doppler_project.inngest=["upda
   '+{"address":"data.hcloud_image.ubuntu","change":{"actions":["read"]}}' \
   '+{"address":"hcloud_network.main","change":{"actions":["no-op"],"before":{"id":"9"},"after":{}}}'
 check "PASS: Doppler updates + a data read + an untargeted dependency as no-op" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+# Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4): doppler_service_token.inngest_flip is in the
+# same class as the boot token (no-op | create | update), and a rotation is refused like any other delete.
+build 'doppler_service_token.inngest_flip=["create"]'
+check "PASS: the flip token create (the first apply after the split reaches it as a dependency)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
+build 'doppler_service_token.inngest_flip=["update"]'
+check "PASS: the flip token update (mirrors the boot token's update row)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 mk_plan "$PLAN" "[]"
 check "PASS: an EMPTY resource_changes array (nothing to apply; nothing is required)" 0 "$PLAN" "inngest_host_shape_gate: PASS"
 
@@ -194,6 +200,12 @@ red doppler_touched 'doppler_secret.inngest_signing_key_dedicated=["delete"]'
 red doppler_touched 'doppler_project.inngest=["forget"]'
 red doppler_touched 'doppler_service_token.inngest=["delete","create"]'
 red doppler_touched 'doppler_environment.inngest_prd=["delete"]'
+# The flip token: never deleted or replaced through THIS dispatch (a rotation is an owner-run apply plus the gated host replace)
+red doppler_touched 'doppler_service_token.inngest_flip=["delete","create"]'
+red doppler_touched 'doppler_service_token.inngest_flip=["delete"]'
+red doppler_touched 'doppler_service_token.inngest_flip=["forget"]'
+# A lookalike is out of scope, never filed under the flip token's class (exact equality).
+red out_of_scope '+{"address":"doppler_service_token.inngest_flip_x","change":{"actions":["create"],"before":null,"after":{}}}'
 # The LUKS passphrase pair: ABSENT — any entry, a no-op included.
 red luks_passphrase_in_graph '+{"address":"random_password.inngest_redis_luks","change":{"actions":["no-op"],"before":{"id":"1"},"after":{}}}'
 red luks_passphrase_in_graph '+{"address":"doppler_secret.inngest_redis_luks_key","change":{"actions":["no-op"],"before":{"id":"1"},"after":{}}}'
@@ -242,6 +254,18 @@ if cmp -s "${TMP:?}/mutated-partition.sh" "$GATE"; then
 else
   _rc=0; _out="$(bash -c "source '$PREAMBLE'; source '${TMP:?}/mutated-partition.sh'; inngest_host_shape_gate '$PLAN'" 2>&1)" || _rc=$?
   if [[ "$_rc" -eq 1 && "$_out" == *"reason=allow_unpartitioned "* ]]; then pass; else fail "PARTITION: an allow-set address with no class must ABORT allow_unpartitioned on every plan" "$_rc" "$_out"; fi
+fi
+
+# ── PARTITION CLOSURE for the flip token: dropped from def allow but left in its class ──────────────
+# The shipped gate is partitioned; a copy with the flip address removed from the ALLOW list only must
+# abort allow_unpartitioned on every plan (a class address outside the allow-set is unconstrained).
+build
+awk '$0 == "        \"doppler_service_token.inngest_flip\"," { next } { print }' "$GATE" > "${TMP:?}/mutated-flip-allow.sh"
+if cmp -s "${TMP:?}/mutated-flip-allow.sh" "$GATE"; then
+  fail "PARTITION (flip): the allow-drop mutation matched NOTHING in the gate; the flip token's allow entry drifted"
+else
+  _rc=0; _out="$(bash -c "source '$PREAMBLE'; source '${TMP:?}/mutated-flip-allow.sh'; inngest_host_shape_gate '$PLAN'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 1 && "$_out" == *"reason=allow_unpartitioned "* ]]; then pass; else fail "PARTITION (flip): a class address missing from the allow-set must ABORT allow_unpartitioned" "$_rc" "$_out"; fi
 fi
 
 # ── Harness row (a): unreadable / unclassifiable plans RED ────────────────────────
@@ -318,7 +342,7 @@ if [[ "$_pass_arms" =~ ^[0-9]+$ ]] && [[ "$_pass_arms" -ge 6 ]]; then pass; else
 
 # ── H1: anti-vacuity floor ────────────────────────────────────────────────────────
 # Self-contained; reported via printf + exit, never through pass()/fail(). A floor, not equality.
-_floor=74
+_floor=83
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_floor" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_floor" >&2

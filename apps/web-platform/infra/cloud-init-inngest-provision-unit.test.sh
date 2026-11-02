@@ -485,7 +485,10 @@ def cmd_static(render):
     chk("G4: the bootstrap env list passes the resolved \"DOPPLER_CONFIG=prd\" (#9175 — prod renders prd; rehearsal renders rehearsal_<runid>)",
         any(re.search(r'(^|\s)"DOPPLER_CONFIG=prd"(\s|$)', s) for s in envblk), "env lines=%d" % len(envblk))
     guards = [x for x in its if "WRITE_GUARD_EOV" in x and "[!A-Za-z0-9._:/-]" in x and re.search(r"\bexit 1\b", x)]
-    chk("G4: both credential files are charset-guarded before they are written (inngest-doppler, soleur-zot-read)",
+    # The guard COUNT stays two on purpose: the first guard is a loop over BOTH Doppler tokens (boot
+    # and flip, one heredoc line each; inngest-flip-token.test.sh section W proves by behaviour that
+    # an unsafe flip token on the SECOND line is refused), the second is the zot pull values.
+    chk("G4: all Doppler credentials and the zot pull values are charset-guarded before they are written (inngest-doppler + inngest-server + inngest-flip via one guard, soleur-zot-read via the other)",
         len(guards) == 2 and any("zot-read-write-REFUSED" in g for g in guards)
         and any("inngest-doppler-write-REFUSED" in g for g in guards), "guards=%d" % len(guards))
 
@@ -1478,6 +1481,7 @@ echo ""
 echo "--- Tier B: systemd as PID 1 in the pinned ubuntu:24.04 image ---"
 TIERB_RESULT=""
 TB_FAIL=0
+X2_EXECUTED=0
 tb_skip() { echo "  SKIP (Tier B): $1"; TIERB_RESULT="skipped: $1"; }
 # An unbootable systemd container is a named SKIP on a developer machine and a FAIL under CI: the
 # runner is contracted to supply docker that can boot systemd, and a silent skip there would drop
@@ -1777,6 +1781,33 @@ STUB
   x="$(lines_from T11b)"
   tb_ok "$( [ "$(grep -c ' phone provision-attempt-start ' <<<"$x")" = 0 ] && [ "$(X systemctl show -p ConditionResult --value soleur-inngest-provision.service)" = no ] && echo 0 || echo 1)" "T11: after a reboot WITH the latch the unit is condition-skipped and emits zero attempts (ConditionResult=$(X systemctl show -p ConditionResult --value soleur-inngest-provision.service))"
 
+  # ---- X2 (flip-token split, ADR-282 addendum 2026-10-30; CTO N11): ordering and last-wins in REAL systemd ----
+  # The model in inngest-flip-token.test.sh section R says the flip unit's EnvironmentFile list is the baked
+  # server file first and the flip file second. This leg asks systemd itself: swap the stand-in flip unit
+  # for the REAL unit and the RENDERED drop-in, reload, and read the property. `systemctl show` starts
+  # nothing. (`systemctl --root cat` is refused by systemd and is not used; cat-config is a text merge.)
+  # The ordering of two EnvironmentFile= entries IS the last-wins semantics: systemd applies the files in
+  # list order, so a later DOPPLER_TOKEN overrides an earlier one and the earlier file's other variables
+  # survive (measured calibration, not a repo test: `systemd-run --user -p EnvironmentFile=<a> -p
+  # EnvironmentFile=<b> /usr/bin/env` printed the later file's token and kept the other variables).
+  if python3 -I -c "
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+hit = [w for w in d['write_files'] if str(w['path']).endswith('/inngest-cutover-flip.service.d/10-flip-token.conf')]
+sys.stdout.write(str(hit[0]['content'])) if hit else sys.exit(4)
+" "$PRISTINE" > "$W/tb-flip-dropin.conf"; then
+    docker cp "$SCRIPT_DIR/inngest-cutover-flip.service" "$ctr:/etc/systemd/system/inngest-cutover-flip.service"
+    X mkdir -p /etc/systemd/system/inngest-cutover-flip.service.d
+    docker cp "$W/tb-flip-dropin.conf" "$ctr:/etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf"
+    X systemctl daemon-reload
+    x2="$(X systemctl show -p EnvironmentFiles inngest-cutover-flip.service 2>&1)"
+    x2_paths="$(printf '%s\n' "$x2" | grep -oE '/etc/default/[A-Za-z0-9._-]+' | tr '\n' ' ')"
+    X2_EXECUTED=$((X2_EXECUTED + 1))
+    tb_ok "$( [ "$x2_paths" = '/etc/default/inngest-server /etc/default/inngest-flip ' ] && ! grep -qE 'ignore_errors=yes' <<<"$x2" && grep -cE 'ignore_errors=no' <<<"$x2" >/dev/null && echo 0 || echo 1)" "X2: real systemd lists the server file FIRST and the flip file SECOND for the real flip unit + the rendered drop-in, both required (no '-' prefix); got: $(printf '%s' "$x2" | tr '\n' ' ' | head -c 220)"
+  else
+    echo "  FAIL: X2: the render carries no 10-flip-token.conf drop-in"; TB_FAIL=$((TB_FAIL + 1))
+  fi
+
   echo "  --- Tier B call log (timestamped) ---"
   XS "cat $LOGF" | sed 's/^/    /'
   if [ "$TB_FAIL" -eq 0 ]; then TIERB_RESULT="ran: T6 T9 T10 T11 T12 T15 all PASS"; else TIERB_RESULT="ran: $TB_FAIL FAIL"; fi
@@ -1792,6 +1823,13 @@ echo "  C0: $C0_PASS assertions PASS"
 echo "  systemd-analyze verify: $VERIFY_RESULT"
 echo "  rows: executed=$EXEC/$EXPECTED_ROWS (RED $NRED/$EXPECTED_RED, must-PASS $NPASS/$EXPECTED_MUSTPASS), bad=${#BAD[@]}"
 echo "  Tier B: $TIERB_RESULT"
+echo "  X2_EXECUTED=$X2_EXECUTED (flip-token split: ordering of the flip unit's EnvironmentFile list under real systemd)"
+# Executed-leg floor: a Tier B that is skipped locally is a named skip, but under CI Tier B is mandatory
+# (an unbootable container is already a FAIL above), so X2 must have run at least once.
+if [ -n "${CI:-}${GITHUB_ACTIONS:-}" ] && [ "$X2_EXECUTED" -lt 1 ]; then
+  echo "  FAIL: under CI the X2 leg (real-systemd EnvironmentFile ordering) must execute at least once"
+  TB_FAIL=$((TB_FAIL + 1))
+fi
 if [ "$ROWS_OK" -ne 1 ] || [ "$TB_FAIL" -ne 0 ]; then
   echo "FAIL"
   exit 1

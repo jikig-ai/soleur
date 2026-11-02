@@ -145,10 +145,17 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 # whole soleur-inngest/prd config. The proportionate fix is a second, `access = "read"` service
 # token (`doppler_service_token` supports it) published as DOPPLER_TOKEN_INNGEST_FLIP_READ and
 # consumed there instead — which also survives the post-cutover revoke below, where consumer 3
-# otherwise degrades silently and permanently into its "read failed" branch. Tracked as a
-# follow-up because minting and publishing a new service token is a provisioning change with its
-# own apply, not a review edit. RE-EVAL TRIGGER: whichever comes first — the post-cutover revoke
-# of this token, or a FOURTH consumer being added.
+# otherwise degrades silently and permanently into its "read failed" branch. That CI-side read
+# token is STILL UNBUILT AND UNTRACKED: no issue exists for it, and the nearest record is the
+# ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)". Minting and publishing a new
+# service token is a provisioning change with its own apply, not a review edit. RE-EVAL TRIGGER:
+# whichever comes first — the post-cutover revoke of this token, or a FOURTH consumer being added.
+#
+# NOT THE SAME THING as doppler_service_token.inngest_flip (inngest-host.tf), whose name now sits
+# close to FLIP_READ in the eye: that one is the ON-HOST read/WRITE flip credential, written to
+# /etc/default/inngest-flip and consumed as an EnvironmentFile only by inngest-cutover-flip.service, and it is NEVER published
+# to a github_actions_secret. DOPPLER_TOKEN_INNGEST_FLIP_READ would be a CI-side READ token for
+# consumer 3 and does not exist.
 #
 # Upgrade back to an environment secret if the App is later granted
 # environment-secret write. NO lifecycle.ignore_changes → a `-replace` rotation of the token
