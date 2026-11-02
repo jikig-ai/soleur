@@ -183,7 +183,7 @@ drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 
 drain_sentinel_check() {
   local s_json s_at s_epoch
   s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"
-  s_at="$(jq -r --argjson n "$DRAIN_SENTINEL" 'if type != "object" or .number != $n then error("not the sentinel PR") else (.merged_at // "") end' <<<"$s_json" 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
+  s_at="$(jq -r --argjson n "$DRAIN_SENTINEL" 'if .number != $n then error("not the sentinel PR") else (.merged_at // "") end' <<<"$s_json" 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
   [[ -z "$s_at" || "$s_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain sentinel (parse)"
   [[ -n "$s_at" ]] || return 0
   s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"

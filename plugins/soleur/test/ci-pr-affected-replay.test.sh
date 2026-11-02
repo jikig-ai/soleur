@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=594   # top-level `^mutate ` (470) + `^ow_mutate ` (124) call sites; ctl-* controls run ungated
+DECLARED_TOTAL=596   # top-level `^mutate ` (470) + `^ow_mutate ` (126) call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -3111,6 +3111,7 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
     object) printf '[]' | fx "$sk" ;;
     null) printf 'null' | fx "$sk" ;;
     nonumber) printf '{"merged_at":"2031-02-02T03:30:00Z"}' | fx "$sk" ;;
+    wrongnum) printf '{"number":99999,"merged_at":"2031-02-02T03:30:00Z"}' | fx "$sk" ;;
     *) printf '{"number":11226,"merged_at":"%s"}' "$OW_SENTINEL" | fx "$sk" ;;
   esac
   local r rid rprn rbr rmode rkey   # the commit lookups of the runs whose own pull_requests is empty: "<run id> <pr> <branch> [mode]"
@@ -3251,7 +3252,7 @@ row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$O
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
 row_ow_static() {   # the header states the exit contract and the provisional ceilings; no jq program splices a shell variable; the oracle list is the SUT's
   grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are PROVISIONAL' "$OW_SCRIPT" && grep -q '^P95_MAX=240 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=285 ' "$OW_SCRIPT" || return 1
-  grep -q '^DRAIN_SENTINEL=11226 ' "$OW_SCRIPT" && [[ "$(sed -n 's/^MAX_MAX=\([0-9]*\) .*/\1/p' "$OW_SCRIPT")" -lt "$(sed -n 's/^TIMEOUT_WALL=\([0-9]*\)$/\1/p' "$OW_SCRIPT")" ]] || return 1   # the sentinel PR is pinned, and the max ceiling stays under the timeout class
+  grep -q '^DRAIN_SENTINEL=11226 ' "$OW_SCRIPT" && grep -q '^TIMEOUT_WALL=290$' "$OW_SCRIPT" && [[ "$(sed -n 's/^MAX_MAX=\([0-9]*\) .*/\1/p' "$OW_SCRIPT")" -lt "$(sed -n 's/^TIMEOUT_WALL=\([0-9]*\)$/\1/p' "$OW_SCRIPT")" ]] || return 1   # the sentinel PR is pinned, and the max ceiling stays under the timeout class
   grep -q 'SOAK_FACTS_BUDGET_S:-180' "$OW_SCRIPT" && ! grep -qF '${#PR_EXCLUDED' "$OW_SCRIPT" && grep -q '1,000-result' "$OW_SCRIPT" && ! grep -qE 'evidence latches|oldest runs never change|names no PR' "$OW_SCRIPT" || return 1
   ! grep -qF "\"'\"\$merged_at\"'\"" "$OW_SCRIPT" && grep -qF -- '--arg m "$merged_at"' "$OW_SCRIPT" || return 1
   local line list; line="$(sed -n 's/^ORACLE=(\(.*\))$/\1/p' "$OW_SCRIPT")"; [[ -n "$line" ]] || return 1
@@ -3659,7 +3660,7 @@ row_ow_sentinel_applied() {   # a list whose newest drain equals, or is later th
 }
 row_ow_sentinel_errors() {   # a failed, non-object or malformed sentinel read is CANNOT ESTABLISH with one fixed line, never a pass
   local m want
-  for m in fail object null nonumber 2031-02-02T03:30:00+01:00 2031-13-45T25:61:61Z; do
+  for m in fail object null nonumber wrongnum 2031-02-02T03:30:00+01:00 2031-13-45T25:61:61Z; do
     ow_case; OW_SENTINEL="$m"; ow_write; ow_probe
     case "$m" in fail) want='CANNOT ESTABLISH: GitHub API read failed (s4-drain sentinel 11226)' ;; *) want='CANNOT ESTABLISH: GitHub API read failed (s4-drain sentinel (parse))' ;; esac
     [[ "$RC" -eq 3 ]] && grep -qxF "$want" <<<"$OWOUT" || return 1
@@ -3886,15 +3887,17 @@ ow_mutate drain-array-guard-dropped $'if type != "array" then error("not an arra
 ow_mutate drain-full-page-guard-dropped $'elif length >= 100 then error("full page")' $'elif false then error("full page")' row_ow_drain_errors
 ow_mutate drain-timestamp-regex-broad $'"$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' $'"$drain_at" =~ .* ]]' row_ow_drain_errors
 ow_mutate sentinel-disarmed $'  if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then' $'  if false; then' row_ow_sentinel_trips
-ow_mutate sentinel-read-removed $'  s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'  s_json=\'{"merged_at":null}\'' row_ow_sentinel_trips
+ow_mutate sentinel-read-removed $'  s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'  s_json=\'{"number":11226,"merged_at":null}\'' row_ow_sentinel_trips
 ow_mutate sentinel-empty-list-only $'  if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then' $'  if [[ -z "$drain_at" ]]; then' row_ow_sentinel_older_list
 ow_mutate sentinel-after-listing $'\ndrain_sentinel_check\n' $'\ntrap \'drain_sentinel_check\' EXIT\n' row_ow_sentinel_trips
-ow_mutate sentinel-error-ignored $'|| fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'|| s_json=\'{"merged_at":null}\'' row_ow_sentinel_errors
+ow_mutate sentinel-error-ignored $'|| fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'|| s_json=\'{"number":11226,"merged_at":null}\'' row_ow_sentinel_errors
 ow_mutate sentinel-timestamp-unvalidated $'  [[ -z "$s_at" || "$s_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain sentinel (parse)"' $'  true' row_ow_sentinel_errors
 ow_mutate sentinel-equal-trips $'(( drain_epoch < s_epoch ))' $'(( drain_epoch <= s_epoch ))' row_ow_sentinel_applied
 ow_mutate ceiling-p95-raised $'P95_MAX=240 ' $'P95_MAX=250 ' row_ow_slow
 ow_mutate ceiling-max-raised $'MAX_MAX=285 ' $'MAX_MAX=290 ' row_ow_max
 ow_mutate sentinel-epoch-failure-ignored $'  s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"' $'  s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || s_epoch=0' row_ow_sentinel_errors
+ow_mutate sentinel-number-weakened $'if .number != $n then error("not the sentinel PR")' $'if .number == null then error("not the sentinel PR")' row_ow_sentinel_errors
+ow_mutate sentinel-number-unchecked $'if .number != $n then error("not the sentinel PR")' $'if false then error("not the sentinel PR")' row_ow_sentinel_errors
 ow_mutate ceiling-p95-lt $'(( p95 <= P95_MAX ))' $'(( p95 < P95_MAX ))' row_ow_edge_pass
 ow_mutate ceiling-max-lt $'(( max <= MAX_MAX ))' $'(( max < MAX_MAX ))' row_ow_edge_pass
 ow_mutate retry-deadline-never $'(( SECONDS - T0 < BUDGET ))' $'(( SECONDS - T0 < 0 ))' row_ow_retry
@@ -5194,7 +5197,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1305   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1307   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
@@ -5211,8 +5214,8 @@ fi
 if (( SITES_MUTATE + OW_SITES != DECLARED_TOTAL )); then
   printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 2
 fi
-if (( OW_SITES < 124 || OW_MUT_KILLED != OW_MUT_RUN )); then
-  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=124 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 2
+if (( OW_SITES < 126 || OW_MUT_KILLED != OW_MUT_RUN )); then
+  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=126 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 2
 fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
