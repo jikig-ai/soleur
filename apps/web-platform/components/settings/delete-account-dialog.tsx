@@ -3,6 +3,11 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import {
+  ERASURE_RETRY_QUALIFIER,
+  PRIVACY_POLICY_CITATION,
+  PRIVACY_POLICY_URL,
+} from "@/lib/legal/account-deletion-copy";
 
 interface DeleteAccountDialogProps {
   userEmail: string;
@@ -86,9 +91,24 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       <h3 className="mb-2 text-lg font-semibold text-red-400">
         Permanently delete your account
       </h3>
+      {/*
+        Copy PENDING CLO SIGN-OFF (#8211 / #9066, lib/legal/account-deletion-copy.ts). The dialog
+        cannot know the repository-erasure outcome before the call, so the qualifier is stated
+        up front; the outcome itself rides the post-delete URL (?erasure=pending, see
+        handleDelete). Never say the repository copy is erased/deleted without the qualifier.
+      */}
       <p className="mb-4 text-sm text-soleur-text-secondary">
         This action cannot be undone. All your data, API keys, conversations,
-        and workspace files will be permanently deleted.
+        and workspace files will be deleted. {ERASURE_RETRY_QUALIFIER} (
+        <a
+          href={PRIVACY_POLICY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-soleur-text-primary"
+        >
+          {PRIVACY_POLICY_CITATION}
+        </a>
+        )
       </p>
 
       <label className="mb-2 block text-sm text-soleur-text-secondary">
