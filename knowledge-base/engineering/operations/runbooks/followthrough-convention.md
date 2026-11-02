@@ -369,6 +369,37 @@ A probe whose exit 0 closes the issue after a window of recurring check-ins must
 - **Judge one JSON document** (`jq -s`, exactly one array), cap the reply (`--max-filesize` plus `--max-time`), and never echo the body.
 - Reference implementation and its mutation-proven suite: `scripts/followthroughs/git-data-rehearsal-evidence.test.sh` (the retired `orphan-sweeps-relook-10972` pair, deleted by the #6590 PR-B prune, was the prior reference — see git history for its curl-shim clock-injection pattern).
 
+## Relayed records (owner-knowledge acts, 2026-11-02)
+
+A marker probe whose act only the owner can complete (a knowledge claim, a risk acceptance) cannot tell an agent's post from the owner's:
+both come from the owner's login and `scripts/lib/trusted-verdict.sh` checks permission only. So the agent never writes the owner's DONE
+marker; it posts a sibling `<marker>-RELAYED:` record, in one unfenced comment, after the owner's one in-session reply
+(`technical-ruling-delegation.md`, section 9):
+
+```text
+<MARKER>-RELAYED: <UTC time ending in Z>
+relayed-by: agent
+owner-words: «the owner's sentence, verbatim»
+owner-reply-at: <UTC time ending in Z>
+run=<id>
+```
+
+The parser is `scripts/lib/relayed-verdict.sh` (`relayed_verdict_state <marker> <text> <verifier> <now_epoch>`), fed the text from
+`trusted_verdict_bodies`; its header is the one description of the format. In short: the lines after the marker are read up to the next
+marker line or 8 non-blank lines; each label may occur once (a repeat makes the block malformed, never last-wins); the quote is in
+`« »` or straight double quotes and not empty; `owner-reply-at` is a real time, not later than the post and not in the future; the marker is
+case-sensitive; the first well-formed block wins. `run=` is required only when the probe passes a verifier, a function the probe keeps (the
+artifact check is the probe's, not the lib's): it is called with the id and the reply epoch, and returns 0 qualifies, 1 refused, 2 read failed.
+A failed or empty read is CANNOT ESTABLISH (exit 3), never a malformed record and never an ask. A probe that accepts a relayed record
+names a malformed one in the ask that waits for it (as for a malformed DONE line), lets the trusted-verdict lib drop a fenced or
+HTML-commented one, and says in its output that the act was recorded by relay. The probe checks shape and artifact, never the truth of the
+owner's words. It cannot tell who typed a DONE line either, so "an agent-posted DONE line does not count" rests on agents never writing
+one; the asks say so.
+
+Worked example: `scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh` and its suite. Its verifier reads the run with `gh run view` and
+accepts a completed, successful `workflow_dispatch` run of the Inngest Key Rotate workflow on `main`, titled as a rotate or converge of
+the signing key (`keys` signing or both), that finished no later than `owner-reply-at`.
+
 ## Retiring a probe
 
 - **Deleting a probe script leaves live GitHub state behind.** The sweeper re-scans CLOSED `follow-through` issues for 14 days, so a closed *promotion* tracker (not just the tracker the probe is named for) whose directive names the deleted script logs a `missing in repo HEAD` ERROR on every daily sweep until the window lapses. Before merging a deletion, `gh issue list --state closed --label follow-through -L 200 --search "closed:>=<14 days ago>" --json number,body` and `grep` the directive for the script name; after merge, remove the `follow-through` label from any hit (reversible, closed body untouched). Found on G1 PR-4a, where the plan checked the named tracker (#2640) and missed its promotion tracker (#9888).

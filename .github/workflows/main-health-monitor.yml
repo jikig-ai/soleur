@@ -167,7 +167,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-webplat:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -207,11 +207,12 @@ jobs:
           sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
 
-      # 10-min step ceiling: leg p90 ~4.37 min (ci.yml's test-webplat measure)
-      # x1.5 = 6.6 -> floor 10. See the TIMEOUT BUDGET block on test-infra.
+      # 30-min step ceiling: measured leg_max ~17.2 min (uncensored ci.yml run
+      # 41408788451, webplat 2/2 — the suite set outgrew the 4.37-min p90 this
+      # used to cite) x1.5 = 25.8 -> roundup5 30; job = step + 20 = 50 (#9457).
       - name: Run test suite
         id: suite
-        timeout-minutes: 10
+        timeout-minutes: 30
         env:
           TEST_GROUP: webplat
           VITEST_SHARD: ${{ matrix.shard }}
@@ -348,7 +349,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-scripts:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -388,11 +389,12 @@ jobs:
       - name: Allow unprivileged user namespaces (read-recorder network-namespace rows)
         run: sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
-      # 15-min step ceiling: ~9.5 min predicted suite time per leg at K=8 (every
-      # leg under 600 s, #9307) x1.5 = 14.25 -> roundup5 15.
+      # 60-min step ceiling: measured leg_max ~37.6 min (uncensored ci.yml run
+      # 41408788451, scripts shard 5/8 — legs were being killed at the old
+      # 15-min ceiling, #9457) x1.5 = 56.4 -> roundup5 60; job = step + 20 = 80.
       - name: Run test suite
         id: suite
-        timeout-minutes: 15
+        timeout-minutes: 60
         env:
           TEST_GROUP: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -788,6 +790,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
+          REPO_FULL: ${{ github.repository }}
           R_WEBPLAT: ${{ needs.test-webplat.result }}
           R_BUN: ${{ needs.test-bun.result }}
           R_SCRIPTS: ${{ needs.test-scripts.result }}
@@ -1157,6 +1160,18 @@ jobs:
             -e 's/([Aa]uthorization: *)(Basic|Bearer) +[A-Za-z0-9._~+\/=-]+/\1\2 <redacted>/g' \
             -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g')
 
+          # Rolling push-run red rate on main (#9830): last 50 COMPLETED ci.yml
+          # push runs — the queue-vs-push gap this tracker exists to watch.
+          # CTO-ruled target: ≤2%. One gh call; a blip degrades to the
+          # literal `unavailable`, never an invented number.
+          # `-L 100` is the fetch bound the #8593 enumeration gate reads
+          # (`--paginate`/`-L ≥100`); the jq slice then keeps the LAST 50
+          # COMPLETED runs — the rolling window the rate is defined on.
+          RED_RATE=$(gh run list -R "$REPO_FULL" --workflow ci.yml --branch main --event push -L 100 \
+            --json status,conclusion \
+            --jq '[.[] | select(.status == "completed")][0:50] as $c | "\([$c[] | select(.conclusion == "failure")] | length)/\($c | length)"' \
+            2>/dev/null || echo "unavailable")
+
           # A longer fence than any the captured output can contain, so a triple
           # backtick in a test's own output cannot terminate the block early and
           # corrupt the region an agent parses.
@@ -1168,6 +1183,7 @@ jobs:
             echo "${LEDE}"
             echo ""
             echo "Step outcomes: \`webplat=${R_WEBPLAT:-<never ran>}\` \`bun=${R_BUN:-<never ran>}\` \`scripts=${R_SCRIPTS:-<never ran>}\` \`heavy=${R_HEAVY:-<never ran>}\` \`infra=${R_INFRA:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\` \`legs=${N_REPORTED} reported\`"
+            echo "Main-branch push red rate (rolling 50 completed ci.yml push runs, target ≤2%): \`${RED_RATE}\`"
             echo ""
             echo "### ${HEADING}"
             echo ""

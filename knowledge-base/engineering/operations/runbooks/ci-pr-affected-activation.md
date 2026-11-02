@@ -248,6 +248,10 @@ PR4 (#10860), its continuations PR4b and PR4c (both tracked on #10959) and PR5 (
 comment on #10448 (`gh pr list --label s4-drain --state open` must be empty before a second is started). A second PR rebases and regenerates with the prune-only `--print-baseline` until the diff to main is empty, never by hand. A drain PR merged inside the PR3b observation window
 changes the baseline, the live set and the runner oracle, so it restarts the window count: the probe enforces that itself (#10949), counting only runs created after the LATER of the PR3a merge and the latest merged `s4-drain` PR, so the restart needs no hand-recorded SHA (recording the merge SHA on #10865 stays good practice, and the status line's `window opened=` and `floor=pr3a|s4-drain` name the floor in use). The floor follows the LABEL: an oracle change merged without the `s4-drain` claim does not move it (a PR touching an oracle input is still excluded from the counts), and a page of 100 labelled items is refused rather than trusted. The default order was PR3a, the window, PR3b, PR4; PR4 was not delayed, which is the owner's schedule call.
 
+**Completion schedule.** The audit re-measured the remaining live set on 2026-11-02 at 279 suites and 1,697 refs before exemptions.
+That remainder is mapped, in drain order, onto the open slices #10860 (PR4), #10959 (PR4b/PR4c) and #10861 (PR5); the ordered
+slice-map lives in the schedule comment on #11776.
+
 ### The drain rubric
 
 One home for the bar PR4 applied, so PR4b, PR5 and later authors apply the same one (evidence for each pair: `knowledge-base/project/specs/archive/20261025-151757-feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv`).
