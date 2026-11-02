@@ -103,9 +103,9 @@ RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
 # KEEP IN SYNC with the lockfile's node_modules/vitest version: the pin is
 # asserted by test/dockerfile-vitest-version-pin.test.ts so the canary runs the
 # vitest the suite was authored against. `--before` bounds the floating
-# transitive tree to the day after vitest 4.1.11's publish date (2026-08-18);
+# transitive tree to the day after vitest 4.1.12's publish date (2026-10-15);
 # `--ignore-scripts` matches the likec4 install mode.
-RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
+RUN npm install -g vitest@4.1.12 --before=2026-10-16 --ignore-scripts
 
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner
