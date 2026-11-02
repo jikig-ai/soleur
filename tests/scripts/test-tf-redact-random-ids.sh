@@ -130,5 +130,128 @@ clean "$ABOUT"; check "ansi plan block: no key token survives" "$?"
 contains "$ABOUT" '        id        = "12345"'; check "ansi plan block: the next resource's id line is NOT redacted" "$?"
 NOCSI="$(printf 'plain %s text, no escapes\n' "[ok]" | tf_redact_random_ids)"; [ "$NOCSI" = 'plain [ok] text, no escapes' ]; check "ansi: a line with brackets but no escape sequence is byte-identical" "$?"
 
+# --- every header shape that prints a random_* block (#11294 PR-F) ---------------------------------------------------
+# The block-start used to need `will be|must be` right after the address, so `is tainted, so must be replaced`,
+# `(deposed object ...) will be destroyed` and the `has changed` drift blocks printed old AND new key bytes in the clear.
+# Each row has a STABLE LABEL: the key-rotate workflow's guard job greps this suite's output for these labels before it
+# dispatches anything, so renaming one is a contract change. Values are synthesized, built by concatenation.
+N22="${K22%a}b"
+OLD_HEX="${HEX32}"
+NEW_HEX="ffeeddccbbaa99887766554433221100"
+OLD_DEC="123456789012345678901234567890123456789"
+NEW_DEC="987654321098765432109876543210987654321"
+[ "${#N22}" -eq 22 ] && [ "$N22" != "$K22" ] || { printf 'FAIL SETUP: N22\n' >&2; exit 2; }
+
+# mkblock <header-without-leading-comment-marker> <mode>   mode: pair (old -> new) | null (old -> null) | plus (new only)
+mkblock() {
+  local hdr="$1" mode="$2" a
+  printf '  # %s\n' "$hdr"
+  printf '  ~ resource "random_id" "k" {\n'
+  for a in b64_std b64_url id; do
+    case "$mode" in
+      pair) printf '      ~ %-10s = "%s" -> "%s"\n' "$a" "$K22" "$N22" ;;
+      null) printf '      - %-10s = "%s" -> null\n' "$a" "$K22" ;;
+      plus) printf '      + %-10s = "%s"\n' "$a" "$N22" ;;
+    esac
+  done
+  case "$mode" in
+    pair) printf '      ~ hex         = "%s" -> "%s"\n      ~ dec         = "%s" -> "%s"\n' "$OLD_HEX" "$NEW_HEX" "$OLD_DEC" "$NEW_DEC" ;;
+    null) printf '      - hex         = "%s" -> null\n      - dec         = "%s" -> null\n' "$OLD_HEX" "$OLD_DEC" ;;
+    plus) printf '      + hex         = "%s"\n      + dec         = "%s"\n' "$NEW_HEX" "$NEW_DEC" ;;
+  esac
+  printf '        byte_length = 16\n    }\n\n'
+  printf '  # hcloud_volume.v will be updated in-place\n  ~ resource "hcloud_volume" "v" {\n        id        = "12345"\n    }\nPlan: 1 to add, 1 to change, 1 to destroy.\n'
+}
+
+# shape_row <LABEL> <header> <mode>
+shape_row() {
+  local label="$1" raw out
+  raw="$(mkblock "$2" "$3")"
+  leaks "$raw" && contains "$raw" "$([ "$3" = plus ] && printf %s "$NEW_HEX" || printf %s "$OLD_HEX")"; check "$label: detector flags the raw block (live positive control)" "$?"
+  out="$(tf_redact_random_ids <<<"$raw")"
+  clean "$out"; check "$label: no 22- or 43-char key token survives (b64_std/b64_url/id)" "$?"
+  if [ "$3" = plus ]; then
+    absent "$out" "$NEW_HEX"; check "$label: hex redacted" "$?"
+    absent "$out" "$NEW_DEC"; check "$label: dec redacted" "$?"
+  else
+    absent "$out" "$OLD_HEX"; check "$label: hex redacted on the left of ->" "$?"
+    absent "$out" "$OLD_DEC"; check "$label: dec redacted on the left of ->" "$?"
+    absent "$out" "$K22"; check "$label: old b64/id value redacted on the left of ->" "$?"
+  fi
+  if [ "$3" = pair ]; then
+    absent "$out" "$NEW_HEX"; check "$label: hex redacted on the right of ->" "$?"
+    absent "$out" "$NEW_DEC"; check "$label: dec redacted on the right of ->" "$?"
+    absent "$out" "$N22"; check "$label: new b64/id value redacted on the right of ->" "$?"
+  fi
+  contains "$out" "# $2"; check "$label: header text and address kept" "$?"
+  contains "$out" 'byte_length = 16'; check "$label: non-secret attribute kept" "$?"
+  contains "$out" '        id        = "12345"'; check "$label: the next resource's id line is NOT redacted (block ends at its closer)" "$?"
+  contains "$out" 'Plan: 1 to add, 1 to change, 1 to destroy.'; check "$label: Plan summary kept" "$?"
+  [ "$(nlines "$out")" = "$(nlines "$raw")" ]; check "$label: line count preserved" "$?"
+}
+
+shape_row tainted-must-be-replaced   'random_id.k is tainted, so must be replaced' pair
+shape_row replaced-as-requested      'random_id.k will be replaced, as requested' pair
+shape_row destroyed                  'random_id.k will be destroyed' null
+shape_row created                    'random_id.k will be created' plus
+shape_row deposed-will-be-destroyed  'random_id.k (deposed object abc12345) will be destroyed' null
+shape_row drift-has-changed          'random_id.k has changed' pair
+shape_row module-tainted             'module.m.random_password.k is tainted, so must be replaced' pair
+
+# --- regression: widening the block-start must not reach other resources or change the shape of the log ------------------
+HZ="hcloud_server.web: Refreshing state... [id=12345]
+  # hcloud_server.web is tainted, so must be replaced
+  -/+ resource \"hcloud_server\" \"web\" {
+      ~ id          = \"12345\" -> (known after apply)
+        name        = \"web\"
+    }
+  # hcloud_server.web has changed
+  ~ resource \"hcloud_server\" \"web\" {
+      ~ id          = \"12345\" -> \"67890\"
+    }
+  # hcloud_volume.v (deposed object abc12345) will be destroyed
+  - resource \"hcloud_volume\" \"v\" {
+      - id          = \"12345\" -> null
+    }"
+HZOUT="$(tf_redact_random_ids <<<"$HZ")"
+[ "$HZOUT" = "$HZ" ]; check "regression: tainted, drift and deposed blocks of a NON-random resource (hetzner [id=12345]) are byte-identical" "$?"
+
+# --- stuck states: the widened block-start applies to every Terraform job, so a malformed log must stay a log ---------------
+UNTERM="  # random_id.k is tainted, so must be replaced
+  -/+ resource \"random_id\" \"k\" {
+      ~ id          = \"$K22\" -> \"$N22\"
+      ~ hex         = \"$OLD_HEX\" -> \"$NEW_HEX\"
+Error: Invalid provider configuration
+  with provider[\"registry.terraform.io/hetznercloud/hcloud\"],
+The diagnostic text after an unterminated block stays readable."
+UTOUT="$(tf_redact_random_ids <<<"$UNTERM")"; rc=$?
+[ "$rc" = "0" ]; check "stuck-state unterminated block: filter exits 0" "$?"
+clean "$UTOUT"; check "stuck-state unterminated block: key tokens inside it are still redacted" "$?"
+absent "$UTOUT" "$OLD_HEX"; check "stuck-state unterminated block: hex still redacted" "$?"
+contains "$UTOUT" 'Error: Invalid provider configuration'; check "stuck-state unterminated block: the later Error line is readable" "$?"
+contains "$UTOUT" 'The diagnostic text after an unterminated block stays readable.'; check "stuck-state unterminated block: the later prose line is readable" "$?"
+[ "$(nlines "$UTOUT")" = "$(nlines "$UNTERM")" ]; check "stuck-state unterminated block: line count preserved" "$?"
+
+EOIN="  # random_id.k (deposed object abc12345) will be destroyed
+  - resource \"random_id\" \"k\" {
+      - hex         = \"$OLD_HEX\" -> null
+      - id          = \"$K22\" -> null"
+EOUT="$(printf '%s' "$EOIN" | tf_redact_random_ids; printf x)"
+case "$EOUT" in *x) EOUT="${EOUT%x}" ;; esac
+clean "$EOUT"; check "stuck-state end-of-input mid-block: key token redacted" "$?"
+absent "$EOUT" "$OLD_HEX"; check "stuck-state end-of-input mid-block: hex redacted" "$?"
+[ "$(nlines "$EOUT")" = "$(nlines "$EOIN")" ]; check "stuck-state end-of-input mid-block: no trailing newline invented, line count kept" "$?"
+
+LATER="$(mkblock 'random_id.k is tainted, so must be replaced' pair)
+Error: Unsupported argument
+  on main.tf line 7, in resource \"hcloud_volume\" \"v\":
+ This line mentions random_id.k and stays readable."
+LOUT="$(tf_redact_random_ids <<<"$LATER")"
+clean "$LOUT"; check "stuck-state later diagnostic: block redacted" "$?"
+contains "$LOUT" 'Error: Unsupported argument'; check "stuck-state later diagnostic: Error line readable" "$?"
+contains "$LOUT" '  on main.tf line 7, in resource "hcloud_volume" "v":'; check "stuck-state later diagnostic: location line readable" "$?"
+contains "$LOUT" ' This line mentions random_id.k and stays readable.'; check "stuck-state later diagnostic: prose naming a random_* address readable" "$?"
+[ "$(nlines "$LOUT")" = "$(nlines "$LATER")" ]; check "stuck-state later diagnostic: line count preserved" "$?"
+
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
 [ "$FAILS" -eq 0 ] && [ "$PASSES" -ge 25 ] || exit 1

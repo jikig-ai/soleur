@@ -11,8 +11,11 @@
 # runner), and the fix cannot be a -target change (a targeted plan refreshes the dependency).
 #
 # WHAT. On a line naming a random_* address: `[id=...]` -> `[id=<redacted>]` and `id = "..."` ->
-# `id = "<redacted>"`. Inside a `# random_*.X will be/must be ...` plan block (modify/destroy
-# diffs print the attributes un-redacted, and random_id's b64_*/hex/dec are NOT sensitive):
+# `id = "<redacted>"`. Inside a plan block opened by ANY plan comment line that names a random_* address
+# followed by a space (`will be destroyed/replaced/created`, `is tainted, so must be replaced`,
+# `(deposed object ...) will be destroyed`, `has changed`; do not enumerate verbs) and closed by the
+# existing `    }` (modify/destroy/drift diffs print the attributes un-redacted, and random_id's
+# b64_*/hex/dec are NOT sensitive):
 # every quoted value of an id/b64_std/b64_url/hex/dec/result/base64/b64 attribute, both sides of
 # `->`. The address, the surrounding text and the line count are kept; other resources' ids
 # (hetzner `[id=12345]`) are untouched. Input is `-no-color` output (no ANSI handling).
@@ -37,7 +40,7 @@ tf_redact_random_ids() {
       s/\[id=[^]]*\]/[id=<redacted>]/g
       s/(\<id[[:space:]]+=[[:space:]]+)"[^"]*"/\1"<redacted>"/g
     }' \
-    -e '/^[[:space:]]*# .*random_(id|password|string|uuid|bytes)\.[^[:space:]]+ (will|must) be/,/^    \}/{
+    -e '/^[[:space:]]*# .*random_(id|password|string|uuid|bytes)\.[^[:space:]]+ /,/^    \}/{
       /^[^"]*[[:space:]](id|b64_std|b64_url|hex|dec|result|base64|b64)[[:space:]]+=/s/"[^"]*"/"<redacted>"/g
     }'
 }
