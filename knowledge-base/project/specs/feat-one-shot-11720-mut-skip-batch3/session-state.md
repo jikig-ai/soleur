@@ -43,3 +43,24 @@ soleur:work → review → fix-round → qa → compound → ship (PR #11885 pla
 - lint-shell-capture-exit: 0 new findings. GDPR gate: not triggered (no canonical-regex path in diff).
 - Affected-test exit gate queued behind sibling run (feat-prod-readiness-gap-analysis lock).
 - Commits: 6 per-file ports + 1 meta-guard promotion.
+
+## Review Phase (2026-11-02) — dedup ledger
+
+| raw finding | canonical defect key | reporting seat(s) | disposition |
+|---|---|---|---|
+| web-nic EM needle satisfiable by #-commented decoy | dead-text emitter needle | security-sentinel | FIXED (comment-filter selector + EM mutate_red row; MUT_ROWS 20) |
+| inngest-524 -target= scans whole workflow not MAIN_PLAN | allowlist scope too wide | security-sentinel | FIXED (main_plan slice, sibling-parity) |
+| AC6 timeout evidence cites matrix job not fixed leg | evidence mis-attribution | performance-oracle | FIXED (session-state + ship checks PR's own leg timing) |
+| $$escaped expands to PID in 5 files | planted-text mismatch | pattern-recognition | FIXED (\\x24\\x24escaped) |
+| command -v python3 missing ghcr/web-nic | missing FATAL parity | pattern/code-quality | FIXED |
+| dead EXPL_QRY/EXPL_VAR + printf arg | dead code/format defect | shellcheck lint | FIXED |
+| inngest EMIT_PROBE/probe_ts dead read; thin attr pins; stale "TWO units"/fixture-count comments | pre-existing inngest-524 defects | code-quality/test-design | DEFERRED → family cleanup issue (pre-existing on main) |
+| pre-battery fail>0 gate absent in 5/6; MUT_ROWS_RUN asymmetry; SELF relative form in 2 | convention-internal asymmetries (also in merged batch-2) | code-quality/pattern | DEFERRED → family cleanup issue |
+| seam greps cover literal text only (constructed env names evade) | seam coverage limit — affects ALL convention suites incl. merged donors | security/architecture | DEFERRED → family cleanup issue |
+| if:/continue-on-error: pins only ghcr/web-nic | family parity gap | security | DEFERRED → family cleanup issue |
+| floor self-reference (-1 alongside deletion) | documented accepted anchor gap | security | DOCUMENTED in plan Anchor (accepted) |
+| JQ_DIR trap; EXPECT_1 vestigial; sandbox >=1 anchor; census vocab drift | cosmetic/pre-existing | code-quality/pattern | DEFERRED → family cleanup issue |
+| PROMOTED_FILES 4-site staleness | meta-guard design | architecture | DEFERRED → separate concern (pre-existing) |
+
+Panel: 8 seats (class=code, tier=none, design-risk unset) — git-history, pattern, architecture,
+security, code-quality, performance, test-design, shellcheck-lint. All SHIP, 0 P1.
