@@ -1161,10 +1161,14 @@ jobs:
 
           # Rolling push-run red rate on main (#9830): last 50 COMPLETED ci.yml
           # push runs — the queue-vs-push gap this tracker exists to watch.
-          # CTO-ruled target: ≤2%. One gh api call; a blip degrades to the
+          # CTO-ruled target: ≤2%. One gh call; a blip degrades to the
           # literal `unavailable`, never an invented number.
-          RED_RATE=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=50" \
-            --jq '[.workflow_runs[] | select(.status == "completed")] as $c | "\([$c[] | select(.conclusion == "failure")] | length)/\($c | length)"' \
+          # `-L 100` is the fetch bound the #8593 enumeration gate reads
+          # (`--paginate`/`-L ≥100`); the jq slice then keeps the LAST 50
+          # COMPLETED runs — the rolling window the rate is defined on.
+          RED_RATE=$(gh run list -R "${{ github.repository }}" --workflow ci.yml --branch main --event push -L 100 \
+            --json status,conclusion \
+            --jq '[.[] | select(.status == "completed")][0:50] as $c | "\([$c[] | select(.conclusion == "failure")] | length)/\($c | length)"' \
             2>/dev/null || echo "unavailable")
 
           # A longer fence than any the captured output can contain, so a triple
