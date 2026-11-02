@@ -82,7 +82,7 @@ MUT_TAG="$(sed -n 's/^[^#]*ship "\(SOLEUR_ZOT_LOG\) .*/\1/p' "$CI" | head -1)"
 
 # ── Extraction helpers ───────────────────────────────────────────────────────────────────────
 sql_local() {
-  awk '/registry_zot_log_credential_shape_sql = <<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+  awk '/registry_zot_log_credential_shape_sql = <<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
 }
 res_block() {
   awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
@@ -103,7 +103,7 @@ else
 fi
 
 # Opener counts — unanchored, file-wide, exactly once (a decoy opener still counts and goes red).
-_n_sql_openers="$(grep -cE 'registry_zot_log_credential_shape_sql = <<-SQL' "$TF")"
+_n_sql_openers="$(grep -cE 'registry_zot_log_credential_shape_sql = <<[-]SQL' "$TF")"
 [ "$_n_sql_openers" -eq 1 ] \
   && ok "exactly one registry_zot_log_credential_shape_sql heredoc opener in the file" \
   || no "registry_zot_log_credential_shape_sql opener count is $_n_sql_openers, want 1 — a decoy local exists"
@@ -272,7 +272,7 @@ def edit(s, anchor, old, new, end="\n}\n"):
     region = s[i:j]
     assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
     return s[:i] + region.replace(old, new) + s[j:]
-SQLLOC = "registry_zot_log_credential_shape_sql = <<-SQL"
+SQLLOC = "registry_zot_log_credential_shape_sql = <<\x2dSQL"
 SQLEND = "\n  SQL\n"
 EXPRES = "resource \"logtail_exploration\" \"registry_zot_log_credential_shape\" {"
 ALRRES = "resource \"logtail_exploration_alert\" \"registry_zot_log_credential_shape\" {"'
@@ -360,11 +360,11 @@ PY
   mutate_red "a /* */-wrapped decoy heredoc sits before the live local while the live body is gutted" TF \
     's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
 i = s.index(SQLLOC)
-s = s[:i] + "/*\n  registry_zot_log_credential_shape_sql = <<-SQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+s = s[:i] + "/*\n  registry_zot_log_credential_shape_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a #-commented decoy opener line sits above the live local" TF \
     'i = s.index(SQLLOC)
-s = s[:i] + "  # registry_zot_log_credential_shape_sql = <<-SQL\n" + s[i:]' \
+s = s[:i] + "  # registry_zot_log_credential_shape_sql = <<\x2dSQL\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
@@ -414,7 +414,7 @@ s = s.replace(old, ")) >= 0")' \
     "value is not 0"
   mutate_red "the heredoc the extractor reads is renamed (extracted SQL empty)" TF \
     'assert s.count(SQLLOC) == 1
-s = s.replace(SQLLOC, "registry_zot_log_credential_shape_sql_v2 = <<-SQL")' \
+s = s.replace(SQLLOC, "registry_zot_log_credential_shape_sql_v2 = <<\x2dSQL")' \
     "heredoc not found"
   mutate_red "the count = 0 mute knob is added inside the alert resource" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
@@ -459,8 +459,14 @@ _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
 [ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); REGCREDSHAPE_{TF,WF,CI,IV,RB}=%s,%s,%s,%s,%s\n' "$_floor" "${REGCREDSHAPE_TF:-unset}" "${REGCREDSHAPE_WF:-unset}" "${REGCREDSHAPE_CI:-unset}" "${REGCREDSHAPE_IV:-unset}" "${REGCREDSHAPE_RB:-unset}"
 printf '\n=== registry-zot-credential-shape-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]

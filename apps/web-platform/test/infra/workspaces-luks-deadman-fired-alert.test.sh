@@ -80,10 +80,10 @@ NEEDLE='op=workspaces-luks-deadman result=fired'
 MARKER='SOLEUR_WORKSPACES_LUKS_DEADMAN'
 
 # ── Extraction helpers ───────────────────────────────────────────────────────────────────────
-# sql_local: the heredoc body of `workspaces_luks_deadman_fired_sql = <<-SQL` up to its `  SQL`
+# sql_local: the heredoc body of `workspaces_luks_deadman_fired_sql = <<[-]SQL` up to its `  SQL`
 # closer, from the FIRST UNCOMMENTED opener line.
 sql_local() {
-  awk '/^[[:space:]]*workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+  awk '/^[[:space:]]*workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
 }
 # res_block: one resource block from its column-0 header to its column-0 closing brace.
 res_block() {
@@ -107,7 +107,7 @@ EXPL="$(res_block logtail_exploration workspaces_luks_deadman_fired)"
   || no "workspaces_luks_deadman_fired_sql: heredoc not found — every predicate row below would be vacuous"
 
 # Opener counts — unanchored, file-wide, exactly once (a /* */- or #-wrapped decoy counts/red).
-_n_sql_openers="$(grep -cE 'workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<-SQL' "$TF")"
+_n_sql_openers="$(grep -cE 'workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<[-]SQL' "$TF")"
 [ "$_n_sql_openers" -eq 1 ] \
   && ok "exactly one workspaces_luks_deadman_fired_sql heredoc opener in the file" \
   || no "workspaces_luks_deadman_fired_sql opener count is $_n_sql_openers, want 1 — a decoy local exists"
@@ -291,10 +291,10 @@ def edit(s, anchor, old, new, end="\n}\n"):
 def dm_replace(s, old, new):
     # The first occurrence AFTER the dead-man local'\''s opening line: the luks-monitor
     # host-timer predicate earlier in the file carries identical tag/host conjuncts.
-    i = s.index("  workspaces_luks_deadman_fired_sql = <<-SQL")
+    i = s.index("  workspaces_luks_deadman_fired_sql = <<\x2dSQL")
     j = s.index(old, i)
     return s[:j] + new + s[j + len(old):]
-SQLLOC = "  workspaces_luks_deadman_fired_sql = <<-SQL"
+SQLLOC = "  workspaces_luks_deadman_fired_sql = <<\x2dSQL"
 SQLEND = "\n  SQL\n"
 EXPRES = "resource \"logtail_exploration\" \"workspaces_luks_deadman_fired\" {"
 ALRRES = "resource \"logtail_exploration_alert\" \"workspaces_luks_deadman_fired\" {"'
@@ -381,11 +381,11 @@ PY
   mutate_red "a /* */-wrapped decoy heredoc sits before the live local while the live body is gutted" TF \
     's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
 i = s.index(SQLLOC)
-s = s[:i] + "/*\n  workspaces_luks_deadman_fired_sql = <<-SQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+s = s[:i] + "/*\n  workspaces_luks_deadman_fired_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a #-commented decoy opener line sits above the live local" TF \
     'i = s.index(SQLLOC)
-s = s[:i] + "  # workspaces_luks_deadman_fired_sql = <<-SQL\n" + s[i:]' \
+s = s[:i] + "  # workspaces_luks_deadman_fired_sql = <<\x2dSQL\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
@@ -520,8 +520,14 @@ _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
 [ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); DEADMAN_GUARD_{TF,WF,CUT,IV}=%s,%s,%s,%s\n' "$_floor" "${DEADMAN_GUARD_TF:-unset}" "${DEADMAN_GUARD_WF:-unset}" "${DEADMAN_GUARD_CUT:-unset}" "${DEADMAN_GUARD_IV:-unset}"
 printf '\n=== workspaces-luks-deadman-fired-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]

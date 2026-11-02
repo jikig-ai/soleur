@@ -86,9 +86,9 @@ MUT_ERR_F="$(printf '%s' "$EMIT_LINE" | grep -oE ' [a-z_]+=\$ZOT_LAST_ERR' | hea
 [ -n "$MUT_ERR_F" ] || { printf '[FATAL] no <field>=$ZOT_LAST_ERR tail field in emitter line\n' >&2; exit 2; }
 
 # ── Extraction helpers ───────────────────────────────────────────────────────────────────────
-# sql_local: the heredoc body of `registry_store_not_luks_sql = <<-SQL` up to its `  SQL` closer.
+# sql_local: the heredoc body of `registry_store_not_luks_sql = <<[-]SQL` up to its `  SQL` closer.
 sql_local() {
-  awk '/registry_store_not_luks_sql = <<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+  awk '/registry_store_not_luks_sql = <<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
 }
 # res_block: one resource block from its column-0 header to its column-0 closing brace.
 res_block() {
@@ -113,7 +113,7 @@ fi
 
 # Opener counts — an unanchored file-wide count must equal exactly 1, so a /* */- or #-wrapped
 # decoy opener still counts and goes red.
-_n_sql_openers="$(grep -cE 'registry_store_not_luks_sql = <<-SQL' "$TF")"
+_n_sql_openers="$(grep -cE 'registry_store_not_luks_sql = <<[-]SQL' "$TF")"
 [ "$_n_sql_openers" -eq 1 ] \
   && ok "exactly one registry_store_not_luks_sql heredoc opener in the file (decoy copies count)" \
   || no "registry_store_not_luks_sql opener count is $_n_sql_openers, want 1 — a decoy local exists"
@@ -314,7 +314,7 @@ def edit(s, anchor, old, new, end="\n}\n"):
     region = s[i:j]
     assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
     return s[:i] + region.replace(old, new) + s[j:]
-SQLLOC = "registry_store_not_luks_sql = <<-SQL"
+SQLLOC = "registry_store_not_luks_sql = <<\x2dSQL"
 SQLEND = "\n  SQL\n"
 EXPRES = "resource \"logtail_exploration\" \"registry_store_not_luks\" {"
 ALRRES = "resource \"logtail_exploration_alert\" \"registry_store_not_luks\" {"'
@@ -411,11 +411,11 @@ PY
   mutate_red "a /* */-wrapped decoy heredoc carrying a verbatim conjunct copy sits before the live local while the live body is gutted" TF \
     's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
 i = s.index(SQLLOC)
-s = s[:i] + "/*\n  registry_store_not_luks_sql = <<-SQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+s = s[:i] + "/*\n  registry_store_not_luks_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
     "count is"
   mutate_red "a #-commented decoy opener line sits above the live local" TF \
     'i = s.index(SQLLOC)
-s = s[:i] + "  # registry_store_not_luks_sql = <<-SQL\n" + s[i:]' \
+s = s[:i] + "  # registry_store_not_luks_sql = <<\x2dSQL\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
@@ -476,7 +476,7 @@ s = s[:i] + blk.replace("JSONExtractString(raw, \x27message\x27)", "msg") + s[j:
     "drifted from the pinned"
   mutate_red "the heredoc the extractor reads is renamed (extracted SQL empty)" TF \
     'assert s.count(SQLLOC) == 1
-s = s.replace(SQLLOC, "registry_store_not_luks_sql_v2 = <<-SQL")' \
+s = s.replace(SQLLOC, "registry_store_not_luks_sql_v2 = <<\x2dSQL")' \
     "heredoc not found"
 
   # ── Emitter/wiring rows ────────────────────────────────────────────────────────────────────
@@ -533,8 +533,14 @@ _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
 [ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); REGSTORE_{TF,WF,CI,IV}=%s,%s,%s,%s\n' "$_floor" "${REGSTORE_TF:-unset}" "${REGSTORE_WF:-unset}" "${REGSTORE_CI:-unset}" "${REGSTORE_IV:-unset}"
 printf '\n=== registry-store-not-luks-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]

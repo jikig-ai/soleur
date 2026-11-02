@@ -93,10 +93,10 @@ done
 line_in() {  # line_in <text> <ERE for the whole line, without anchors>
   grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
 }
-# Extract a <<-SQL heredoc local by name: first line after `name = <<-SQL` to its `  SQL` terminator.
+# Extract a <<[-]SQL heredoc local by name: first line after `name = <<[-]SQL` to its `  SQL` terminator.
 sql_local() {  # sql_local <local-name>
   awk -v n="$1" '
-    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<-SQL" { f=1; next }
+    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<\x2dSQL" { f=1; next }
     f && /^  SQL$/ { f=0 }
     f { print }
   ' "$TF"
@@ -125,7 +125,7 @@ DENY_EXPL="$(block_of logtail_exploration egress_gw_deny_spike)"
 
 # Opener/header counts — unanchored, file-wide, exactly once each. A /* */- or #-wrapped
 # decoy opener still counts and goes red; dead text can never satisfy the live local.
-for _o in   "egress_gw_deny_spike_sql[[:space:]]*=[[:space:]]*<<-SQL"   "egress_gw_probe_silent_sql[[:space:]]*=[[:space:]]*<<-SQL"   "egress_gw_probe_fail_sql[[:space:]]*=[[:space:]]*<<-SQL"; do
+for _o in   "egress_gw_deny_spike_sql[[:space:]]*=[[:space:]]*<<[-]SQL"   "egress_gw_probe_silent_sql[[:space:]]*=[[:space:]]*<<[-]SQL"   "egress_gw_probe_fail_sql[[:space:]]*=[[:space:]]*<<[-]SQL"; do
   _n="$(grep -cE "$_o" "$TF")"
   [ "$_n" -eq 1 ]     && ok "exactly one ${_o%%[*]} heredoc opener in the file (decoy copies count)"     || no "${_o%%[*]} opener count is $_n, want 1 — a decoy local exists"
 done
@@ -364,11 +364,11 @@ def edit(s, anchor, old, new, end="\n}\n"):
 def egw_replace(s, old, new):
     # Occurrence AFTER the fail local'"'"'s opening line, when a needle could
     # legitimately appear in an earlier local (silent'"'"'s tag conjunct).
-    i = s.index("  egress_gw_probe_fail_sql = <<-SQL")
+    i = s.index("  egress_gw_probe_fail_sql = <<\x2dSQL")
     j = s.index(old, i)
     return s[:j] + new + s[j + len(old):]
-FAILLOC = "  egress_gw_probe_fail_sql = <<-SQL"
-SILLOC = "  egress_gw_probe_silent_sql = <<-SQL"
+FAILLOC = "  egress_gw_probe_fail_sql = <<\x2dSQL"
+SILLOC = "  egress_gw_probe_silent_sql = <<\x2dSQL"
 SQLEND = "\n  SQL\n"
 FAILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_fail\" {"
 SILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent\" {"'
@@ -456,17 +456,17 @@ PY
   mutate_red "a /* */-wrapped decoy heredoc sits before the fail local while the live body is gutted" TF \
     's = edit(s, FAILLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
 i = s.index(FAILLOC)
-s = s[:i] + "/*\n  egress_gw_probe_fail_sql = <<-SQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+s = s[:i] + "/*\n  egress_gw_probe_fail_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a #-commented decoy opener line sits above the silent local" TF \
     'i = s.index(SILLOC)
-s = s[:i] + "  # egress_gw_probe_silent_sql = <<-SQL\n" + s[i:]' \
+s = s[:i] + "  # egress_gw_probe_silent_sql = <<\x2dSQL\n" + s[i:]' \
     "decoy local exists"
   mutate_red "a commented-out paused=false decoy line appears inside the fail alert block" TF \
     's = edit(s, FAILRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
     "decoy exists"
   mutate_red "an inline tautology is appended inside the deny predicate" TF \
-    'i = s.index("  egress_gw_deny_spike_sql = <<-SQL"); j = s.index(SQLEND, i)
+    'i = s.index("  egress_gw_deny_spike_sql = <<\x2dSQL"); j = s.index(SQLEND, i)
 blk = s[i:j]
 old = "GROUP BY time"
 assert blk.count(old) == 1
@@ -574,7 +574,7 @@ s = s.replace(old, "")' \
   mutate_green "a comment-only edit to the tf" \
     's = s + "\n# control comment\n"'
   mutate_green "whitespace reflow of the deny heredoc" \
-    'i = s.index("  egress_gw_deny_spike_sql = <<-SQL"); j = s.index(SQLEND, i)
+    'i = s.index("  egress_gw_deny_spike_sql = <<\x2dSQL"); j = s.index(SQLEND, i)
 blk = s[i:j]
 old = "\n      AND position("
 assert blk.count(old) == 1
@@ -591,8 +591,14 @@ _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
 [ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); EGW_GUARD_{TF,WF,RB,CR,IV}=%s,%s,%s,%s,%s\n' "$_floor" "${EGW_GUARD_TF:-unset}" "${EGW_GUARD_WF:-unset}" "${EGW_GUARD_RB:-unset}" "${EGW_GUARD_CR:-unset}" "${EGW_GUARD_IV:-unset}"
 printf '\n=== egress-gw-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]
