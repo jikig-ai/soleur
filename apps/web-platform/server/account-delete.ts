@@ -284,7 +284,10 @@ export async function deleteAccount(
   // deleteWorkspace above reaps only the host-local working tree; when the multi-host
   // git-data split is live the workspace's refs also live in a bare repo on the git-data
   // host, which must be erased too. Keyed on userId (=== workspaces.id, mig 053 N2 —
-  // the sole-owned workspace's git-data repo id). NO-OP at flag-off (inside the call).
+  // the sole-owned workspace's git-data repo id). Gated on arming, not on the live flag:
+  // no REMOVE key and nothing armed gives `skipped` (no-op, no ledger row). An armed env
+  // attempts the erase regardless of GIT_DATA_STORE_ENABLED, and any non-erased outcome or
+  // throw is ledgered for the re-drive (#8211).
   // Best-effort, mirroring the attachments/logo purges: reports, never throws — a
   // reachability blip must not abort the auth-user deletion that follows.
   // (#8094) The OUTCOME is consumed, not discarded. `removeGitDataRepo` used to return
