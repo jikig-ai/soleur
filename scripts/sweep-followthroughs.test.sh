@@ -1731,6 +1731,40 @@ t_pto_7_default_is_300_and_job_ceiling_covers_it() {
   assert_eq "PTO-7 the job ceiling is above one probe cap with room for several slow probes (>= 5 caps)" "1" "$(( mins * 60 >= 5 * 300 ? 1 : 0 ))"
 }
 
+# wf_pr_read <workflow file>: 0 when the TOP-LEVEL permissions block (comment lines stripped) grants `pull-requests: read` AND no job
+# declares its own `permissions:` key (a job-level block would make the top-level line decorative). The probe's restart floor needs it (#10865).
+wf_pr_read() {
+  local f="$1"
+  grep -v '^[[:space:]]*#' "$f" | awk '
+    /^permissions:[[:space:]]*$/ { top = 1; next }
+    top && /^[^[:space:]]/ { top = 0 }
+    top && /^[[:space:]]+pull-requests:[[:space:]]*read[[:space:]]*$/ { ok = 1 }
+    /^[[:space:]]+permissions:/ { nested = 1 }
+    END { exit (ok && !nested) ? 0 : 1 }'
+}
+t_perm_1_sweeper_token_reads_pull_requests() {
+  local wf="$SCRIPT_DIR/../.github/workflows/scheduled-followthrough-sweeper.yml" d rc
+  d="$(mktemp -d "${TMPDIR:-/var/tmp}/sweep-perm.XXXXXXXX")"; assert_fixture_dir "$d"
+  rc=0; wf_pr_read "$wf" || rc=$?
+  assert_eq "PERM-1 the real sweeper workflow grants pull-requests: read at the top level" "0" "$rc"
+  grep -v '^[[:space:]]*pull-requests:' "$wf" > "$d/removed.yml"
+  rc=0; wf_pr_read "$d/removed.yml" || rc=$?
+  assert_eq "PERM-1 a copy without the line FAILS the pin" "1" "$rc"
+  sed 's/^  pull-requests: read$/  # pull-requests: read/' "$wf" > "$d/commented.yml"
+  rc=0; wf_pr_read "$d/commented.yml" || rc=$?
+  assert_eq "PERM-1 a commented-out line FAILS the pin (a bare grep would pass on the comment)" "1" "$rc"
+  sed 's/^  pull-requests: read$/  pull-requests: none/' "$wf" > "$d/none.yml"
+  rc=0; wf_pr_read "$d/none.yml" || rc=$?
+  assert_eq "PERM-1 pull-requests: none FAILS the pin" "1" "$rc"
+  awk '{ print } /^  sweep:[[:space:]]*$/ { print "    permissions:"; print "      contents: read" }' "$wf" > "$d/jobperm.yml"
+  rc=0; wf_pr_read "$d/jobperm.yml" || rc=$?
+  assert_eq "PERM-1 a job-level permissions block FAILS the pin (it would make the top-level line decorative)" "1" "$rc"
+  awk '/^  pull-requests: read$/ { next } { print } /^permissions:[[:space:]]*$/ { print "  pull-requests: read" }' "$wf" > "$d/reordered.yml"
+  rc=0; wf_pr_read "$d/reordered.yml" || rc=$?
+  assert_eq "PERM-1 the same scopes in a different order PASS the pin" "0" "$rc"
+  rm -rf "$d"
+}
+
 t_pto_8_mutations() {
   local root mut
   # (a) DELETE the timeout wrapper: a slow probe now runs to completion and its own verdict stands.
@@ -2226,6 +2260,7 @@ t_pto_6_invalid_cap_is_refused
 t_pto_7_default_is_300_and_job_ceiling_covers_it
 t_pto_9_term_ignoring_probe_is_killed_and_still_mapped
 t_pto_10_a_probes_own_124_or_137_is_not_relabelled
+t_perm_1_sweeper_token_reads_pull_requests
 t_pto_8_mutations
 
 echo
@@ -2335,7 +2370,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=329
+MIN_ASSERTIONS=335
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

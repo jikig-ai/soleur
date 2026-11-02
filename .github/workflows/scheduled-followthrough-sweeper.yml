@@ -52,6 +52,11 @@ permissions:
   # verdict) through `gh api`; under the explicit-permissions rule (#8450) an unlisted scope is `none` and 403s.
   # Retire this line with the probe.
   checks: read
+  # (#10865) the observation-window probe reads the `s4-drain` label list through the mixed issues endpoint, which GitHub
+  # filters to issues when the token has no pull-requests scope; without this line the restart floor silently stays at the
+  # PR3a merge (both 2026-11-01 outputs printed floor=pr3a). Read only; the token reaches only probes declaring secrets=GH_TOKEN.
+  # Retire this line with the probe.
+  pull-requests: read
 
 jobs:
   sweep:
