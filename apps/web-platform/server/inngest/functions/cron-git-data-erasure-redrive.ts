@@ -30,10 +30,11 @@
 //     because a row whose owner still exists is an aborted deletion that must NOT be erased: it gets its
 //     own warn after LIVE_OWNER_WARN_AFTER_SECONDS ("deletion aborted? owner still exists, do not
 //     erase"). At 20 days a
-//     Sentry ERROR issue is raised (escalation=20d), at 28 days a second one (escalation=28d). THERE IS
-//     NO PAGING RULE for either yet (no sentry_alert matches feature=cron-git-data-erasure-redrive or
-//     the escalation tag): they are Sentry issues someone must look at, tracked in #10914, and a paging
-//     rule is a hard precondition of the real flip. Art. 12(3) allows one calendar month, which can be
+//     Sentry ERROR issue is raised (escalation=20d), at 28 days a second one (escalation=28d). The
+//     sentry_alert git_data_erasure_redrive_escalation (feature=cron-git-data-erasure-redrive AND
+//     escalation in 20d,28d, infra/sentry/issue-alerts.tf, #10914) that emails them; it is a hard
+//     precondition of the real flip. Until that rule is applied and sentry-alert-live-fidelity.sh passes,
+//     they are only Sentry issues someone must look at. Art. 12(3) allows one calendar month, which can be
 //     as short as 28 days (February): the 28-day event is therefore the LAST warning, not a margin.
 //     Each tier re-emits at most once per hour per process, not on every 15-minute run.
 //   - A malformed (non-UUID) id is quarantined: never passed to the host wrapper, left in place,
@@ -83,9 +84,9 @@ export const CLAIM_MIN_INTERVAL = "1 hour";
 export const MAX_SEED_IDS = 500;
 
 const DAY_S = 86_400;
-/** Sentry ERROR issue (no paging rule yet, #10914): well ahead of the Art. 12(3) one-month limit. */
+/** Sentry ERROR issue (emailed by sentry_alert git_data_erasure_redrive_escalation, #10914): well ahead of the Art. 12(3) one-month limit. */
 export const ESCALATE_AFTER_SECONDS = 20 * DAY_S;
-/** Second, louder Sentry ERROR issue (no paging rule yet, #10914): the shortest calendar month. */
+/** Second, louder Sentry ERROR issue (same alert, #10914): the shortest calendar month. */
 export const HARD_STOP_AFTER_SECONDS = 28 * DAY_S;
 /** A row whose owner STILL EXISTS this long is an aborted deletion worth a human look (never erased). */
 export const LIVE_OWNER_WARN_AFTER_SECONDS = 3 * DAY_S;
@@ -465,8 +466,8 @@ export async function cronGitDataErasureRedriveHandler({
         tags: { escalation: tier },
         message:
           tier === "28d"
-            ? "a git-data erasure whose owner is gone has been pending for 28 days or more — the Art. 12(3) one-month limit can be only 28 days away; confirm git_data_erasure_owner_gone first, then erase by hand now (Sentry error only, no paging rule yet, #10914)"
-            : "a git-data erasure whose owner is gone has been pending for 20 days or more — ahead of the Art. 12(3) one-month limit; confirm git_data_erasure_owner_gone first, then find out why the host refuses (Sentry error only, no paging rule yet, #10914)",
+            ? "a git-data erasure whose owner is gone has been pending for 28 days or more — the Art. 12(3) one-month limit can be only 28 days away; confirm git_data_erasure_owner_gone first, then erase by hand now (emailed by the git-data-erasure-redrive-escalation Sentry alert, #10914)"
+            : "a git-data erasure whose owner is gone has been pending for 20 days or more — ahead of the Art. 12(3) one-month limit; confirm git_data_erasure_owner_gone first, then find out why the host refuses (emailed by the git-data-erasure-redrive-escalation Sentry alert, #10914)",
         extra: { fn: CRON_NAME, oldestPendingAgeSeconds: gone },
       });
     }

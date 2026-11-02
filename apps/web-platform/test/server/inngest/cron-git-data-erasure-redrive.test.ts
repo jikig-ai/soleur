@@ -502,7 +502,8 @@ describe("age gauge and escalation (owner-gone rows only)", () => {
     expect(e).toHaveLength(1);
     expect(e[0][1]).toMatchObject({ feature: "cron-git-data-erasure-redrive", op: REDRIVE_OP, tags: { escalation: tier } });
     const msg = (e[0][1] as { message: string }).message;
-    expect(msg).toMatch(/no paging rule yet/);
+    expect(msg).toMatch(/git-data-erasure-redrive-escalation/);
+    expect(msg).not.toMatch(/no paging rule yet/);
     expect(msg).toMatch(/confirm git_data_erasure_owner_gone first/);
     expect(msg).not.toMatch(/hard-stop page|\bpage\b(?! rule| ing)/i);
   });
@@ -614,13 +615,14 @@ describe("registration", () => {
     expect(src).toMatch(/\{ scope: "fn", limit: 1 \}/);
   });
 
-  it("never claims a hard-stop PAGE it does not have", () => {
+  it("names the Sentry alert that routes the escalation, and never claims a hard-stop page of its own", () => {
     const src = readFileSync(
       path.join(__dirname, "../../../server/inngest/functions/cron-git-data-erasure-redrive.ts"),
       "utf8",
     );
     expect(src).not.toMatch(/hard-stop page/i);
-    expect(src).toMatch(/NO PAGING RULE/);
+    expect(src).not.toMatch(/NO PAGING RULE/);
+    expect(src).toContain("git_data_erasure_redrive_escalation");
     expect(src).toContain("#10914");
   });
 });

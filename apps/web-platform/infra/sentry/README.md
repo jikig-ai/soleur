@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **52 `sentry_alert` rules** (52 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672. 50 are
-  fully Terraform-owned (49 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **54 `sentry_alert` rules** (54 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672, #10914. 52 are
+  fully Terraform-owned (51 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -333,6 +333,19 @@ doppler run --project soleur --config prd --command '
 
 `lastTriggered` is the only evidence the route fires; nothing reads it on a
 schedule (decision DC-5 in the #8630 spec).
+
+### Git-data erasure re-drive paging (#10914)
+
+Two rules in `issue-alerts.tf` email the cron's Art. 17 signals: `git-data-erasure-redrive-escalation`
+(`feature=cron-git-data-erasure-redrive` AND `escalation` in `20d,28d`, `frequency_minutes = 360`) and
+`git-data-erasure-redrive-no-progress` (`reason=no_erasure_progress`, `frequency_minutes = 720`). Both bind the project
+issue stream, whose detector already exists, so the rules and their `alert-reference.json` entries land in ONE PR. What
+they cannot cover is a dead cron (no event, no page): that is the cron monitor's job, and its detector id does not exist
+until `sentry_cron_monitor.scheduled_git_data_erasure_redrive` has been applied, so routing it is the second PR of the rule
+above: move `scheduled_git_data_erasure_redrive` from `cron_monitor_alert_unrouted` into
+`sentry_alert.cron_monitor_failure.monitor_ids`, regenerate `alert-reference.json` from the `plan_pr` artifact, and do it
+only after the monitor's first measured check-in. The rules are not live until `apply-sentry-infra.yml` has applied them;
+the issue closes on `scripts/sentry-alert-live-fidelity.sh` PASS against the live org plus a forced test event.
 
 ## Audit
 

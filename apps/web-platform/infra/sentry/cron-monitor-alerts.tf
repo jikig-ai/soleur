@@ -64,9 +64,11 @@ locals {
     # #8211 PR-B2 — the git-data erasure re-drive's liveness monitor, added under the two-PR rule: a
     # monitor id that does not exist yet must not appear in monitor_ids (the plan projection errors).
     # Real cover meanwhile: the oldest-pending-age gauge and the 20/28-day Sentry error issues the
-    # handler raises itself, and the unrouted monitor still opens a Sentry issue on a missed check-in.
-    # Routing it, and the paging rule for the escalation events, are tracked in #10914.
-    scheduled_git_data_erasure_redrive = "handler raises its own 20/28-day Sentry error issues; routing this monitor and the escalation paging rule follow after the first measured check-in (#10914)"
+    # handler raises itself (emailed by sentry_alert.git_data_erasure_redrive_escalation, #10914), and
+    # the unrouted monitor still opens a Sentry issue on a missed check-in. Routing THIS monitor is PR 2
+    # of the two-PR rule (README): move the label into monitor_ids and regenerate alert-reference.json
+    # after #10905's apply and the first measured check-in. Until then a stopped cron emails nobody.
+    scheduled_git_data_erasure_redrive = "the escalation events are emailed by git-data-erasure-redrive-escalation; routing this monitor follows after the first measured check-in (#10914)"
   }
 }
 
