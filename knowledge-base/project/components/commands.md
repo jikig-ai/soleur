@@ -1,7 +1,8 @@
 ---
 component: commands
-updated: 2026-02-22
-primary_location: plugins/soleur/commands/soleur/
+updated: 2026-11-02
+primary_location: plugins/soleur/commands/
+dependencies: [skills, agents]
 ---
 
 # Commands
@@ -57,7 +58,7 @@ graph LR
 4. Skill reads/writes knowledge base files
 5. Results returned to user
 
-## Commands (3)
+## Commands (4)
 
 All commands use the `soleur:` prefix to avoid collisions with built-in commands. Workflow stages were migrated from commands to skills in v2.37.0 for agent discoverability.
 
@@ -66,6 +67,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `/soleur:go` | Unified entry point that routes to workflow skills |
 | `/soleur:sync` | Populate knowledge base from existing codebase |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:version` | Report the installed Soleur plugin version |
 
 **Workflow skills** (invoked via `/soleur:go` or directly):
 
@@ -109,7 +111,7 @@ sequenceDiagram
 
 ## Dependencies
 
-- **Internal**: Skills (workflow stages), Agents (invoked by skills via Task tool)
+- **Internal**: [skills](skills.md) (workflow stages), [agents](agents.md) (invoked by skills via Task tool)
 - **External**: Claude Code CLI, GitHub CLI (for PR operations)
 
 ## Examples

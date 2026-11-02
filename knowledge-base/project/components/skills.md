@@ -1,7 +1,8 @@
 ---
 component: skills
-updated: 2026-03-03
+updated: 2026-11-02
 primary_location: plugins/soleur/skills/
+dependencies: [agents, knowledge-base]
 ---
 
 # Skills
@@ -65,7 +66,7 @@ graph LR
 4. Claude's capabilities enhanced for the domain
 5. Higher quality output in that domain
 
-## Categories (60+ skills)
+## Categories (100+ skills; 106 as of 2026-11-02)
 
 ### Core Workflow (6)
 

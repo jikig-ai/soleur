@@ -1,7 +1,8 @@
 ---
 component: agents
-updated: 2026-03-03
+updated: 2026-11-02
 primary_location: plugins/soleur/agents/
+dependencies: []
 ---
 
 # Agents
@@ -51,7 +52,7 @@ graph LR
 3. Agent reads relevant files, analyzes, and returns findings
 4. Parent command consolidates results
 
-## Categories (60+ agents across 8 departments)
+## Categories (67 agents across 8 departments, as of 2026-11-02)
 
 ### Engineering (27 agents)
 
@@ -190,7 +191,7 @@ Code review specialists that catch issues before PR:
 
 ## Dependencies
 
-- **Internal**: None (agents are standalone)
+- **Internal**: None (agents are standalone; `dependencies: []`)
 - **External**: Claude Code Task tool, various CLI tools per agent
 
 ## Related Files
