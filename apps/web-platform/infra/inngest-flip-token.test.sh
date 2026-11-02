@@ -860,6 +860,9 @@ else
     python3 -I "$PY" dropin "$PRISTINE" > "$XR/etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf"
     X_OK="$(systemd-analyze verify --root="$XR" "$UNIT_IN_ROOT" 2>&1)"
     X_EXECUTED=$((X_EXECUTED + 1))
+    # the isolated --root has no sysinit.target etc.: "Failed to create <unit>/start: Unit X not found" is transaction
+    # noise about the stub root, not a directive warning, so drop exactly that line shape before judging
+    X_OK="$(grep -vE "Failed to create .*/start: Unit .* not found" <<<"$X_OK" || true)"
     if grep -qiE "Unknown (key|section)|Failed to|Invalid" <<<"$X_OK"; then
       echo "  FAIL: X1 — systemd-analyze verify flags the real unit + rendered drop-in: $(head -c 300 <<<"$X_OK" | tr '\n' ' ')"; X_FAIL=$((X_FAIL + 1))
     else
