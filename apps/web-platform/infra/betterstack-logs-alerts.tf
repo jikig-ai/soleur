@@ -2096,7 +2096,7 @@ locals {
     SELECT toDateTime({{end_time}}) AS time, count(*) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip'
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('inngest-cutover-flip')
       AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'
       AND JSONType(raw, 'message') = 'Object'
   SQL

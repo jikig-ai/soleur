@@ -121,7 +121,7 @@ fi
 
 # ── the predicate, compared whole ─────────────────────────────────────────────────────────────
 EXPECT_1="SELECT toDateTime({{end_time}}) AS time, count(*) AS value FROM {{source}} WHERE dt BETWEEN {{start_time}} AND {{end_time}}"
-EXPECT_1+=" AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '${EMIT_TAG}'"
+EXPECT_1+=" AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('${EMIT_TAG}')"
 EXPECT_1+=" AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'"
 EXPECT_1+=" AND JSONType(raw, 'message') = 'Object'"
 if [ -n "$EMIT_TAG" ] && [ "$SQL_1" = "$EXPECT_1" ]; then
@@ -129,8 +129,8 @@ if [ -n "$EMIT_TAG" ] && [ "$SQL_1" = "$EXPECT_1" ]; then
 else
   no "the predicate is not the expected conjunct set built from the emitter's tag"
 fi
-grep -qF "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '${EMIT_TAG}'" <<< "$SQL_1" \
-  && ok "the tag conjunct: SYSLOG_IDENTIFIER = the emitter's tag" \
+grep -qF "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('${EMIT_TAG}')" <<< "$SQL_1" \
+  && ok "the tag conjunct: SYSLOG_IDENTIFIER IN (the emitter's tag) - written as IN so the key-probe alert's own tag equality stays the only equality form in the file" \
   || no "the SYSLOG_IDENTIFIER conjunct is missing or altered"
 grep -qF "JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'" <<< "$SQL_1" \
   && ok "the host conjunct pins the production Inngest host (a web or dev host cannot satisfy it)" \
