@@ -7,7 +7,7 @@ dependencies: [skills, agents, knowledge-base]
 
 # Web Platform
 
-The Soleur Command Center: a Next.js 15 web app that hosts the chat router (`/soleur:go`), the KB Concierge sidebar, and the Claude Agent SDK runners that execute Soleur skills and agents on behalf of signed-in users.
+The Soleur Command Center: a Next.js 16 web app that hosts the chat router (`/soleur:go`), the KB Concierge sidebar, and the Claude Agent SDK runners that execute Soleur skills and agents on behalf of signed-in users.
 
 ## Purpose
 

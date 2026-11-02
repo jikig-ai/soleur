@@ -11,13 +11,14 @@ Slash commands that users invoke as entry points to the development workflow. Co
 
 ## Purpose
 
-Provide user-facing entry points for routing, knowledge-base sync, and help. Workflow stages (brainstorm, plan, work, review, compound, one-shot) have been migrated to skills for agent discoverability and Skill tool invocation.
+Provide user-facing entry points for routing, knowledge-base sync, help, and version reporting. Workflow stages (brainstorm, plan, work, review, compound, one-shot) have been migrated to skills for agent discoverability and Skill tool invocation.
 
 ## Responsibilities
 
 - Accept user input and route to the appropriate workflow skill
 - Manage the knowledge base (sync)
 - Provide help and orientation
+- Report the installed plugin version
 
 ## Key Interfaces
 
@@ -67,7 +68,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `/soleur:go` | Unified entry point that routes to workflow skills |
 | `/soleur:sync` | Populate knowledge base from existing codebase |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:version` | Report the installed Soleur plugin version |
+| `/soleur:version` | Show the installed Soleur plugin version and whether a newer release exists |
 
 **Workflow skills** (invoked via `/soleur:go` or directly):
 
@@ -136,7 +137,7 @@ sequenceDiagram
 
 ## Related Files
 
-- `plugins/soleur/commands/soleur/` - Command definitions (go, sync, help)
+- `plugins/soleur/commands/` - Command definitions (go, sync, help, version)
 - `plugins/soleur/skills/` - Workflow skill definitions
 
 ## See Also

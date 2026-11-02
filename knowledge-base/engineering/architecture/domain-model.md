@@ -66,7 +66,8 @@
 
 ## Auto-inferred (unreviewed)
 
-> Rows proposed by `/soleur:sync domain-model` (operator-approved, not yet curated).
+> Rows proposed by `/soleur:sync domain-model` (operator-approved, or appended headlessly by `/soleur:sync all`; not yet curated).
+> Counts are what the static extractor sees. "0 RLS policies" does not mean unprotected: every listed table has RLS enabled, so 0 policies is deny-by-default for client roles. Dynamic SQL is not analyzed (see the drift report blind spots).
 > This section is **machine-appended** and is NEVER a source of truth. Promote a row
 > to a curated `## Business Rules` rule by a deliberate human edit: assign a `BR-*`
 > id, refine the statement, and keep the source anchor (the anchor is the dedup key,
@@ -80,7 +81,7 @@
 | 075_workspace_invitations.sql › workspace_invitations.invitations_select_for_invitee | Table workspace_invitations carries 2 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
 | 162_workspace_egress_audit_rollup.sql › workspace_egress_audit_rollup.workspace_egress_audit_rollup_check | Table workspace_egress_audit_rollup carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
 | 076_workspace_activity.sql › workspace_activity.workspace_activity_jti_not_denied | Table workspace_activity carries 2 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
-| 176_users_restrictive_policy_subqueries.sql › users_own_github_username.statements | Table users_own_github_username carries 1 RLS policy and 0 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
+| 176_users_restrictive_policy_subqueries.sql › users_own_github_username.statements | Extractor artifact: users_own_github_username is a SECURITY DEFINER function, not a table. The 3 RESTRICTIVE UPDATE policies in this migration are on public.users (they block direct client updates of github_username, kb_sync_history and health_snapshot) (auto-inferred, unreviewed). |
 | 059_workspace_keyed_rls_sweep.sql › user_concurrency_slots.user_concurrency_slots_workspace_member_select | Table user_concurrency_slots carries 1 RLS policy and 0 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |
 | 118_tool_attempts.sql › tool_attempts.tool_attempts_pkey | Table tool_attempts carries 0 RLS policies and 1 constraint in migrations (auto-inferred, unreviewed; needs a curated business rule). |
 | 043_tenant_deploy_audit.sql › tenant_deploy_audit.tenant_deploy_audit_check | Table tenant_deploy_audit carries 0 RLS policies and 2 constraints in migrations (auto-inferred, unreviewed; needs a curated business rule). |

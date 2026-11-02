@@ -91,10 +91,11 @@ Workflow stages are skills, invocable directly or via `/soleur:go`:
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 61 | AI agents for specialized tasks |
-| [Commands](./components/commands.md) | 3 | Slash commands for entry points |
-| [Skills](./components/skills.md) | 55 | Specialized capabilities |
+| [Agents](./components/agents.md) | 67 | AI agents for specialized tasks |
+| [Commands](./components/commands.md) | 4 | Slash commands for entry points |
+| [Skills](./components/skills.md) | 105 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
+| [Web Platform](./components/web-platform.md) | 1 | Next.js Command Center app |
 
 Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.
 
@@ -112,7 +113,7 @@ Rules enforced by PreToolUse hooks are annotated with `[hook-enforced: <script>]
 soleur/
   apps/                     # Standalone applications
   plugins/soleur/           # The Claude Code plugin
-    agents/                 # AI agents by domain (60+ agents)
+    agents/                 # AI agents by domain (67 agents)
       engineering/          # review/, design/, discovery/, infra/, research/, workflow/
       finance/              # CFO, budget, revenue, reporting
       legal/                # CLO, compliance auditor, document generator
@@ -122,8 +123,7 @@ soleur/
       sales/                # CRO, deal architect, outbound, pipeline
       support/              # CCO, community manager, ticket triage
     commands/               # Slash commands
-      soleur/               # Core workflow commands (go, sync, help)
-    skills/                 # Specialized capabilities (60+ skills)
+    skills/                 # Specialized capabilities (105 skills)
     .claude-plugin/         # Plugin manifest
   docs/                     # Documentation and legal content
     legal/                  # Legal documents (ToS, privacy, GDPR, CLA)
@@ -147,11 +147,11 @@ Every solved problem contributes to the knowledge base. Future similar problems 
 
 Agents are organized by domain first, then by function. Each business domain has a domain leader (C-level agent) that orchestrates specialists:
 
-- **Engineering** (27): CTO + review, design, discovery, infra, research, workflow agents
+- **Engineering** (31): CTO + review, design, discovery, infra, research, workflow agents
 - **Finance** (4): CFO + budget, revenue, reporting agents
 - **Legal** (3): CLO + compliance auditor, document generator
-- **Marketing** (11): CMO + brand, SEO, content, conversion, paid, pricing, retention agents
-- **Operations** (4): COO + ops advisor, research, provisioner
+- **Marketing** (12): CMO + brand, SEO, content, conversion, paid, pricing, retention agents
+- **Operations** (5): COO + ops advisor, research, provisioner
 - **Product** (5): CPO + business validator, competitive intel, spec flow, UX design
 - **Sales** (4): CRO + deal architect, outbound, pipeline
 - **Support** (3): CCO + community manager, ticket triage
@@ -188,5 +188,6 @@ claude plugin install soleur@soleur-marketplace
 - [Commands](./components/commands.md) - Slash command reference
 - [Skills](./components/skills.md) - Specialized capabilities
 - [Knowledge Base](./components/knowledge-base.md) - Documentation system structure
+- [Web Platform](./components/web-platform.md) - Next.js Command Center app
 - [Plugin README](../../plugins/soleur/README.md) - Full component reference
 - [Installation](../../README.md) - Setup instructions
