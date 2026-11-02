@@ -174,6 +174,7 @@ age_days=$(( (NOW - merged_epoch) / 86400 ))
 # --- the restart floor: the window counts from the LATER of the PR3a merge and the latest merged `s4-drain` PR (a drain PR changes the baseline, the live set and the oracle; until now the closer applied
 # this by hand, #10949). One read of the (small) label list, REFUSED when it is a full page (100 = the URL's per_page: the latest merge could be off the page); `merged_at` is the floor from here on, so the run listing, the units and the status line all start there. age_days stays PR3a-based above.
 floor_src="pr3a"   # which merge the floor came from, printed on the status line
+drain_epoch=0      # read by drain_sentinel_check (with drain_at); set to the label list's newest merge below when there is one
 drain_json="$(api "repos/$REPO/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100")" || fail_api "s4-drain pulls"
 drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 100 then error("full page") else ([.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // "") end' <<<"$drain_json" 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
 # --- the floor sentinel (2026-11-02): the label list is read through the MIXED issues endpoint, which GitHub filters to issues when the token has no pull-requests scope, so an unscoped token reads [] and the floor
@@ -182,17 +183,16 @@ drain_at="$(jq -r 'if type != "array" then error("not an array") elif length >= 
 drain_sentinel_check() {
   local s_json s_at s_epoch
   s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"
-  s_at="$(jq -r 'if type != "object" then error("not an object") else (.merged_at // "") end' <<<"$s_json" 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
+  s_at="$(jq -r --argjson n "$DRAIN_SENTINEL" 'if type != "object" or .number != $n then error("not the sentinel PR") else (.merged_at // "") end' <<<"$s_json" 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
   [[ -z "$s_at" || "$s_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain sentinel (parse)"
   [[ -n "$s_at" ]] || return 0
   s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"
   if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then
-    echo "CANNOT ESTABLISH: s4-drain floor not applied: the label list does not carry sentinel PR $DRAIN_SENTINEL (check the sweeper token's pull-requests scope)"
+    echo "CANNOT ESTABLISH: s4-drain floor not applied: the label list does not carry sentinel PR $DRAIN_SENTINEL (check the sweeper token's pull-requests scope and that the sentinel still carries the s4-drain label)"
     exit 3
   fi
 }
 [[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain pulls (parse)"
-drain_epoch=0
 if [[ -n "$drain_at" ]]; then
   drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"
   if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; floor_src="s4-drain"; fi

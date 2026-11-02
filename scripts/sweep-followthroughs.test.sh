@@ -1731,16 +1731,18 @@ t_pto_7_default_is_300_and_job_ceiling_covers_it() {
   assert_eq "PTO-7 the job ceiling is above one probe cap with room for several slow probes (>= 5 caps)" "1" "$(( mins * 60 >= 5 * 300 ? 1 : 0 ))"
 }
 
-# wf_pr_read <workflow file>: 0 when the TOP-LEVEL permissions block (comment lines stripped) grants `pull-requests: read` AND no job
-# declares its own `permissions:` key (a job-level block would make the top-level line decorative). The probe's restart floor needs it (#10865).
+# wf_pr_read <workflow file>: 0 when the TOP-LEVEL permissions block grants `pull-requests: read` (and no other pull-requests value) AND no job declares its
+# own `permissions:` key in any spelling (a job-level block would make the top-level line decorative). Comment lines never match: each pattern needs a
+# non-`#` first character. Known limits, not covered: a reusable-workflow caller, and the token the sweep step actually passes. The probe's restart floor needs the scope (#10865).
 wf_pr_read() {
   local f="$1"
-  grep -v '^[[:space:]]*#' "$f" | awk '
+  awk '
     /^permissions:[[:space:]]*$/ { top = 1; next }
     top && /^[^[:space:]]/ { top = 0 }
-    top && /^[[:space:]]+pull-requests:[[:space:]]*read[[:space:]]*$/ { ok = 1 }
-    /^[[:space:]]+permissions:/ { nested = 1 }
-    END { exit (ok && !nested) ? 0 : 1 }'
+    top && /^[[:space:]]+pull-requests:/ { if ($0 ~ /^[[:space:]]+pull-requests:[[:space:]]*read[[:space:]]*$/) ok = 1; else bad = 1 }
+    /^[[:space:]]+["\047]?permissions["\047]?[[:space:]]*:/ { nested = 1 }
+    /[{,][[:space:]]*["\047]?permissions["\047]?[[:space:]]*:/ { nested = 1 }
+    END { exit (ok && !bad && !nested) ? 0 : 1 }' "$f"
 }
 t_perm_1_sweeper_token_reads_pull_requests() {
   local wf="$SCRIPT_DIR/../.github/workflows/scheduled-followthrough-sweeper.yml" d rc
@@ -1762,6 +1764,18 @@ t_perm_1_sweeper_token_reads_pull_requests() {
   awk '/^  pull-requests: read$/ { next } { print } /^permissions:[[:space:]]*$/ { print "  pull-requests: read" }' "$wf" > "$d/reordered.yml"
   rc=0; wf_pr_read "$d/reordered.yml" || rc=$?
   assert_eq "PERM-1 the same scopes in a different order PASS the pin" "0" "$rc"
+  awk '/^  pull-requests: read$/ { next } { print } END { print "x-note:"; print "  pull-requests: read" }' "$wf" > "$d/outside.yml"
+  rc=0; wf_pr_read "$d/outside.yml" || rc=$?
+  assert_eq "PERM-1 the line outside the top-level permissions block FAILS the pin (the block-end rule)" "1" "$rc"
+  awk '{ print } /^  sweep:[[:space:]]*$/ { print "    permissions: {contents: read}" }' "$wf" > "$d/inline.yml"
+  rc=0; wf_pr_read "$d/inline.yml" || rc=$?
+  assert_eq "PERM-1 an inline job-level permissions map FAILS the pin" "1" "$rc"
+  awk '{ print } /^  sweep:[[:space:]]*$/ { print "    \"permissions\":"; print "      contents: read" }' "$wf" > "$d/quoted.yml"
+  rc=0; wf_pr_read "$d/quoted.yml" || rc=$?
+  assert_eq "PERM-1 a quoted job-level permissions key FAILS the pin" "1" "$rc"
+  awk '{ print } /^permissions:[[:space:]]*$/ { print "  pull-requests: write" }' "$wf" > "$d/dup.yml"
+  rc=0; wf_pr_read "$d/dup.yml" || rc=$?
+  assert_eq "PERM-1 a second, wider pull-requests value in the block FAILS the pin" "1" "$rc"
   rm -rf "$d"
 }
 
@@ -2370,7 +2384,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=335
+MIN_ASSERTIONS=339
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
