@@ -67,6 +67,7 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
   printf '[FATAL] instrument self-test: ok()/no() did not each move their counter\n' >&2; exit 2
 fi
 pass=$_p0; fail=$_f0; FAILED=()
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CI"; assert_fixture_dir "$IV"; assert_fixture_dir "$RB"
 
 command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing\n' >&2; exit 2; }
 for f in "$TF" "$WF" "$CI" "$IV" "$RB"; do
@@ -82,7 +83,7 @@ MUT_TAG="$(sed -n 's/^[^#]*ship "\(SOLEUR_ZOT_LOG\) .*/\1/p' "$CI" | head -1)"
 
 # ── Extraction helpers ───────────────────────────────────────────────────────────────────────
 sql_local() {
-  awk '/registry_zot_log_credential_shape_sql = <<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+  awk '/^[[:space:]]*registry_zot_log_credential_shape_sql[[:space:]]*=[[:space:]]*<<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
 }
 res_block() {
   awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
@@ -90,6 +91,10 @@ res_block() {
 # param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
 # both ends, required EXACTLY ONCE.
 param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
   [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
 }
 
@@ -218,9 +223,9 @@ grep -qF 'registry_zot_log_credential_shape_runbook_url = "https://github.com/ji
   && ok "the incident carries a clickable runbook URL" \
   || no "no clickable runbook URL on the incident"
 
-[ -r "$RB" ] \
-  && ok "the runbook the incident links to exists in the repo" \
-  || no "runbook $(basename "$RB") missing — the incident link would 404"
+[ -s "$RB" ] \
+  && ok "the runbook the incident links to exists (non-empty) in the repo" \
+  || no "runbook $(basename "$RB") missing or empty — the incident link would 404"
 
 # NEGATIVE row: no count/for_each/lifecycle/ignore_changes token inside EITHER resource block.
 if [ "$(printf '%s\n%s\n' "$EXP_BLOCK" "$ALR_BLOCK" | grep -cE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)[[:space:]]*[= {]')" -eq 0 ]; then
@@ -420,6 +425,10 @@ s = s.replace(SQLLOC, "registry_zot_log_credential_shape_sql_v2 = <<\x2dSQL")' \
     's = edit(s, ALRRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
     "mute knob"
 
+  mutate_red "the linked runbook is emptied (the incident link would 404)" RB \
+    's = ""' \
+    "runbook"
+
   # ── Workflow seam rows ─────────────────────────────────────────────────────────────────────
   mutate_red "a MUT_SKIP literal reaches the workflow's executable text" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
@@ -454,7 +463,7 @@ fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 PRESENCE_ROWS=32
-MUT_ROWS=20
+MUT_ROWS=21
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

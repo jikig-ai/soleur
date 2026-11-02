@@ -35,6 +35,18 @@
 #     cron-egress-blocked.md, and that runbook is in infra-validation.yml's
 #     pull_request paths; this guard itself is registered as a step there.
 #
+# WHAT THIS FILE NOW PROVES (post-#11720 convention):
+#   * CANONICAL EQUALITY — each flattened heredoc must EQUAL its pinned canon
+#     (DENY/SILENT/FAIL *_FLAT), so dead text and arithmetic edits go red;
+#     decoy heredoc/resource openers are counted file-wide and red.
+#   * BLOCK-SCOPED EXACTLY-ONCE PINS — every alert attribute is asserted inside
+#     its own resource block by param(), whole value line anchored both ends.
+#   * THE BATTERY CANNOT BE MUTED — MUT_SKIP skips mutation rows on an inner run
+#     only; the pristine-child control FATALs (rc 2) otherwise; EGW_GUARD_/MUT_SKIP
+#     literals may not reach the workflow's executable text (the seam check).
+#   * RC DISCRIMINATION — only rc=1 (a real [FAIL] verdict) is a caught mutation;
+#     instrument failures (rc>=2) are UNRESOLVED. Floor/ledger trips exit 1.
+#
 # WHAT THIS FILE DOES NOT PROVE: that the alerts are armed IN PRODUCTION (the
 # twice-daily logs_alert reconciler arm reads the live world), nor that a real
 # probe row reaches Better Stack (the Vector allowlist is pinned in
@@ -61,7 +73,8 @@ no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
 # P1b (#7708) — byte-identical to every other tracked copy; the P1a suite pins that.
 # `$(cd X && pwd)` prints an absolute path but yields EMPTY when the cd fails, which would root
-# $TF at `/` — and mutate() below writes to $TF on every row.
+# $TF at `/` — every path this file READS is checked through it, and so is the scratch dir
+# the mutation battery WRITES to.
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -82,32 +95,23 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
+command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing — the mutation battery needs it
+' >&2; exit 2; }
 for f in "$TF" "$WF" "$RB" "$CR" "$IV"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
-# Whole-line assertions anchored at both ends: a bare substring grep is satisfied by the same text
-# inside a comment, or with a suffix that inverts it (`paused = false || true`).
-# Every grep reads a HERE-STRING, never `printf … | grep -q`: under pipefail, grep -q exiting on its
-# first match can SIGPIPE the writer and fail the pipeline, which fails a negated check OPEN.
-line_in() {  # line_in <text> <ERE for the whole line, without anchors>
-  grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
-}
 # Extract a <<[-]SQL heredoc local by name: first line after `name = <<[-]SQL` to its `  SQL` terminator.
 sql_local() {  # sql_local <local-name>
   awk -v n="$1" '
-    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<\x2dSQL" { f=1; next }
+    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<[-]SQL" { f=1; next }
     f && /^  SQL$/ { f=0 }
     f { print }
   ' "$TF"
 }
-# Extract a resource block by exact header to the first column-0 `}`.
-block_of() {  # block_of <type> <name>
-  awk -v t="$1" -v n="$2" '
-    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { f=1 }
-    f { print }
-    f && /^}/ { exit }
-  ' "$TF"
+# res_block: one resource block from its column-0 header to its column-0 closing brace.
+res_block() {  # res_block <type> <name>
+  awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
 }
 sql_has() {  # sql_has <sql-text> <ERE substring>
   grep -qE "$2" <<< "$1"
@@ -115,13 +119,17 @@ sql_has() {  # sql_has <sql-text> <ERE substring>
 # param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
 # both ends, required EXACTLY ONCE — a decoy or duplicated line is a red, not a shrug.
 param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
   [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
 }
 
 # ── G1: egress_gw_deny_spike (unchanged shape, pinned so the set has one guard) ────────────
 DENY_SQL="$(sql_local egress_gw_deny_spike_sql)"
-DENY_ALERT="$(block_of logtail_exploration_alert egress_gw_deny_spike)"
-DENY_EXPL="$(block_of logtail_exploration egress_gw_deny_spike)"
+DENY_ALERT="$(res_block logtail_exploration_alert egress_gw_deny_spike)"
+DENY_EXPL="$(res_block logtail_exploration egress_gw_deny_spike)"
 
 # Opener/header counts — unanchored, file-wide, exactly once each. A /* */- or #-wrapped
 # decoy opener still counts and goes red; dead text can never satisfy the live local.
@@ -151,22 +159,36 @@ sql_has "$DENY_SQL" "GROUP BY time" \
 [ "$DENY_FLAT" = "SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-egress-gw' AND position(JSONExtractString(raw, 'message'), 'TCP_DENIED') > 0 GROUP BY time" ] \
   && ok "G1: deny predicate is byte-exact (container conjunct, TCP_DENIED needle, GROUP BY)" \
   || no "G1: deny predicate drifted from the pinned text — diff DENY_FLAT against the canon"
-param "$DENY_ALERT" 'operator' '"higher_than"' \
+param "$DENY_ALERT" 'exploration_id' 'logtail_exploration\.egress_gw_deny_spike\.id' \
+  && param "$DENY_ALERT" 'operator' '"higher_than"' \
   && param "$DENY_ALERT" 'value' '20' \
-  && ok "G1: deny alert pages higher_than 20" \
-  || no "G1: deny alert is not higher_than/20"
+  && ok "G1: deny alert watches its own exploration and pages higher_than 20" \
+  || no "G1: deny alert exploration_id/operator/value drifted (not higher_than/20)"
+param "$DENY_ALERT" 'paused' 'false' \
+  && ok "G1: deny alert is not paused (it arms at merge)" \
+  || no "G1: deny alert is paused — it would exist and never page"
+[ "$(printf '%s\n' "$DENY_ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "G1: the string 'paused' occurs exactly once in the deny alert block (a commented or duplicated decoy counts)" \
+  || no "G1: 'paused' occurs !=1 time in the deny alert block — a commented pinned-line decoy exists"
+param "$DENY_ALERT" 'check_period' '300' \
+  && param "$DENY_ALERT" 'query_period' '300' \
+  && param "$DENY_ALERT" 'confirmation_period' '0' \
+  && param "$DENY_ALERT" 'recovery_period' '1800' \
+  && ok "G1: deny alert's cadence is exactly 300/300/0/1800 (exactly-once pins)" \
+  || no "G1: deny alert check/query/confirmation/recovery periods are not exactly 300/300/0/1800"
 param "$DENY_EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "G1: deny exploration reads the prd Vector source" \
   || no "G1: deny exploration source is not local.vector_prd_source_id"
-grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_deny_spike \\$' "$WF" \
-  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_deny_spike \\$' "$WF" \
+APPLY_JOB="$(awk '/^  apply:$/{f=1; print; next} f && /^  [A-Za-z0-9_-]+:$/{f=0} f' "$WF")"
+grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_deny_spike \\$' <<< "$APPLY_JOB" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_deny_spike \\$' <<< "$APPLY_JOB" \
   && ok "G1: both deny -target lines in the apply allowlist" \
   || no "G1: a deny -target line is missing — the alert would never apply"
 
 # ── G2: egress_gw_probe_silent — host-attributed (the review fix this guard exists for) ───
 SILENT_SQL="$(sql_local egress_gw_probe_silent_sql)"
-SILENT_ALERT="$(block_of logtail_exploration_alert egress_gw_probe_silent)"
-SILENT_EXPL="$(block_of logtail_exploration egress_gw_probe_silent)"
+SILENT_ALERT="$(res_block logtail_exploration_alert egress_gw_probe_silent)"
+SILENT_EXPL="$(res_block logtail_exploration egress_gw_probe_silent)"
 
 [ -n "$SILENT_SQL" ] \
   && ok "G2: egress_gw_probe_silent_sql heredoc is readable" \
@@ -197,6 +219,9 @@ param "$SILENT_ALERT" 'on_missing_data' '"treat_as_zero"' \
   && param "$SILENT_ALERT" 'email' 'true' \
   && ok "G2: silence keeps treat_as_zero / unpaused / email (absence pages)" \
   || no "G2: the silent alert lost treat_as_zero, is paused, or stopped emailing"
+[ "$(printf '%s\n' "$SILENT_ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "G2: the string 'paused' occurs exactly once in the silent alert block (a commented or duplicated decoy counts)" \
+  || no "G2: 'paused' occurs !=1 time in the silent alert block — a commented pinned-line decoy exists"
 param "$SILENT_EXPL" 'sql_query' 'replace\(trimspace\(local\.egress_gw_probe_silent_sql\), "/\\\\s\+/", " "\)' \
   && param "$SILENT_EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "G2: silent exploration carries its own local + the prd source" \
@@ -204,15 +229,15 @@ param "$SILENT_EXPL" 'sql_query' 'replace\(trimspace\(local\.egress_gw_probe_sil
 param "$SILENT_ALERT" 'exploration_id' 'logtail_exploration\.egress_gw_probe_silent\.id' \
   && ok "G2: silent alert watches ITS OWN exploration" \
   || no "G2: silent alert's exploration_id re-pointed"
-grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_silent \\$' "$WF" \
-  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_silent \\$' "$WF" \
+grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
   && ok "G2: both silent -target lines in the apply allowlist" \
   || no "G2: a silent -target line is missing"
 
 # ── G3: egress_gw_probe_fail — the previously-Sentry-only verdict failure ────────────────
 FAIL_SQL="$(sql_local egress_gw_probe_fail_sql)"
-FAIL_ALERT="$(block_of logtail_exploration_alert egress_gw_probe_fail)"
-FAIL_EXPL="$(block_of logtail_exploration egress_gw_probe_fail)"
+FAIL_ALERT="$(res_block logtail_exploration_alert egress_gw_probe_fail)"
+FAIL_EXPL="$(res_block logtail_exploration egress_gw_probe_fail)"
 
 [ -n "$FAIL_SQL" ] \
   && ok "G3: egress_gw_probe_fail_sql heredoc is readable" \
@@ -275,10 +300,17 @@ param "$FAIL_EXPL" 'sql_query' 'replace\(trimspace\(local\.egress_gw_probe_fail_
   && param "$FAIL_EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "G3: fail exploration carries its own local + the prd source" \
   || no "G3: fail exploration's sql_query or source drifted"
-grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_fail \\$' "$WF" \
-  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_fail \\$' "$WF" \
+grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_fail \\$' <<< "$APPLY_JOB" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_fail \\$' <<< "$APPLY_JOB" \
   && ok "G3: both fail -target lines in the apply allowlist" \
   || no "G3: a fail -target line is missing — the alert would never apply"
+
+# NEGATIVE row: no count/for_each/lifecycle/ignore_changes token inside ANY resource block.
+if [ "$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$DENY_EXPL" "$DENY_ALERT" "$SILENT_EXPL" "$SILENT_ALERT" "$FAIL_EXPL" "$FAIL_ALERT" | grep -cE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)[[:space:]]*[= {]')" -eq 0 ]; then
+  ok "no count/for_each/lifecycle/ignore_changes mute knob inside any of the six resource blocks"
+else
+  no "a count/for_each/lifecycle/ignore_changes token sits inside a resource block — a mute knob the provider would honor silently"
+fi
 
 # ── G4: emitter needles + runbook anchor + CI registration ───────────────────────────────
 # The alert's needles must be text the resolver actually emits. On the shipped
@@ -312,13 +344,13 @@ for line in open(sys.argv[1], encoding="utf-8"):
 print("yes" if "egress-gateway-better-stack-alerts" in slugs else "no")
 PY
 )"
+IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 grep -qE 'egress_gw_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked\.md#egress-gateway-better-stack-alerts"' "$TF" \
   && [ "$ANCHOR_OK" = "yes" ] \
-  && grep -n 'cron-egress-blocked\.md' "$IV" >/dev/null \
+  && grep -n 'cron-egress-blocked\.md' <<< "$IV_CODE" >/dev/null \
   && ok "G4: runbook URL + slugified anchor heading + runbook-in-CI-paths chain intact" \
   || no "G4: runbook URL, the egress-gateway-better-stack-alerts anchor heading, or the runbook's path entry in infra-validation.yml drifted"
 REG_RUN='        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh'
-IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 [ "$n_run" -eq 1 ] \
   && ok "G4: this guard's run line is registered in infra-validation.yml exactly once" \
@@ -340,7 +372,7 @@ fi
 # ── Mutation rows: each must make a row above RED ────────────────────────────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching EGW_GUARD_* override pointing at the copy.
-SELF="${BASH_SOURCE[0]}"
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t egressgwalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -562,6 +594,10 @@ assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
 
+  mutate_red "the count = 0 mute knob is added inside the fail alert resource" TF \
+    's = edit(s, FAILRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
+    "mute knob"
+
   # ── Scorer negative control ────────────────────────────────────────────────────────────────
   mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
     's = edit(s, FAILRES, "  paused = false\n", "  paused = true\n")' \
@@ -585,8 +621,8 @@ s = s[:i] + blk.replace(old, " AND\n          position(") + s[j:]'
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
-PRESENCE_ROWS=49
-MUT_ROWS=28
+PRESENCE_ROWS=54
+MUT_ROWS=29
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

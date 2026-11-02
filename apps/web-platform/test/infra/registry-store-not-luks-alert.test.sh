@@ -44,7 +44,8 @@ no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
 # P1b (#7708) — byte-identical to every other tracked copy; the P1a suite pins that.
 # `$(cd X && pwd)` prints an absolute path but yields EMPTY when the cd fails, which would root
-# $TF at `/` — and mutate_red() below writes to $TF on every row.
+# $TF at `/` — every path this file READS is checked through it, and so is the scratch dir
+# the mutation battery WRITES to.
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -63,6 +64,7 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
   printf '[FATAL] instrument self-test: ok()/no() did not each move their counter\n' >&2; exit 2
 fi
 pass=$_p0; fail=$_f0; FAILED=()
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CI"; assert_fixture_dir "$IV"
 
 command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing — the arm parser needs it\n' >&2; exit 2; }
 for f in "$TF" "$WF" "$CI" "$IV"; do
@@ -88,7 +90,7 @@ MUT_ERR_F="$(printf '%s' "$EMIT_LINE" | grep -oE ' [a-z_]+=\$ZOT_LAST_ERR' | hea
 # ── Extraction helpers ───────────────────────────────────────────────────────────────────────
 # sql_local: the heredoc body of `registry_store_not_luks_sql = <<[-]SQL` up to its `  SQL` closer.
 sql_local() {
-  awk '/registry_store_not_luks_sql = <<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+  awk '/^[[:space:]]*registry_store_not_luks_sql[[:space:]]*=[[:space:]]*<<[-]SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
 }
 # res_block: one resource block from its column-0 header to its column-0 closing brace.
 res_block() {
@@ -97,6 +99,10 @@ res_block() {
 # param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
 # both ends, required EXACTLY ONCE — a decoy or duplicated line is a red, not a shrug.
 param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
   [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
 }
 
@@ -412,7 +418,7 @@ PY
     's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
 i = s.index(SQLLOC)
 s = s[:i] + "/*\n  registry_store_not_luks_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
-    "count is"
+    "decoy local exists"
   mutate_red "a #-commented decoy opener line sits above the live local" TF \
     'i = s.index(SQLLOC)
 s = s[:i] + "  # registry_store_not_luks_sql = <<\x2dSQL\n" + s[i:]' \

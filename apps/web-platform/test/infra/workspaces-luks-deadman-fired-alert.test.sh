@@ -51,7 +51,8 @@ no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
 # P1b (#7708) — byte-identical to every other tracked copy; the P1a suite pins that.
 # `$(cd X && pwd)` prints an absolute path but yields EMPTY when the cd fails, which would root
-# $TF at `/` — and mutate_red() below writes to $TF on every row.
+# $TF at `/` — every path this file READS is checked through it, and so is the scratch dir
+# the mutation battery WRITES to.
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -92,9 +93,13 @@ res_block() {
 # param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
 # both ends, required EXACTLY ONCE.
 param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
   [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
 }
-sql_has() {  # sql_has <fixed conjunct text, one line of the heredoc>
+conj_has() {  # conj_has <fixed conjunct text, one line of the heredoc>
   grep -qxF -- "      AND $1" <<< "$LOCAL_SQL"
 }
 
@@ -125,19 +130,19 @@ grep -qxF 'SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time
   && ok "the head is the per-bucket count shape monitor_send_failed uses (ADR-218)" \
   || no "the predicate head is not SELECT {{time}} … count(*) … WHERE time BETWEEN {{start_time}} AND {{end_time}}"
 
-sql_has "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'" \
+conj_has "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'" \
   && ok "the tag conjunct: SYSLOG_IDENTIFIER = 'luks-monitor' (the fire command's logger -t)" \
   || no "the SYSLOG_IDENTIFIER='luks-monitor' conjunct is missing or altered"
 
-sql_has "JSONExtractString(raw, 'host_name') = 'soleur-web-platform'" \
+conj_has "JSONExtractString(raw, 'host_name') = 'soleur-web-platform'" \
   && ok "the host conjunct: host_name = 'soleur-web-platform' (web-2 ships to the same source)" \
   || no "the host_name='soleur-web-platform' conjunct is missing or altered"
 
-sql_has "position(JSONExtractString(raw, 'message'), '$NEEDLE') > 0" \
+conj_has "position(JSONExtractString(raw, 'message'), '$NEEDLE') > 0" \
   && ok "the result=fired conjunct: the message contains '$NEEDLE'" \
   || no "the '$NEEDLE' conjunct is missing or altered"
 
-sql_has "startsWith(JSONExtractString(raw, 'message'), '$MARKER ')" \
+conj_has "startsWith(JSONExtractString(raw, 'message'), '$MARKER ')" \
   && ok "the marker anchor: the message STARTS with the dead-man marker (a row merely quoting it cannot page)" \
   || no "the startsWith '$MARKER ' anchor is missing"
 
@@ -194,8 +199,6 @@ param "$EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "the exploration reads the prd Vector source" \
   || no "the exploration's source variable is not local.vector_prd_source_id"
 
-[ -n "$ALERT" ] && ok "logtail_exploration_alert.workspaces_luks_deadman_fired exists (exact header)" \
-  || no "logtail_exploration_alert.workspaces_luks_deadman_fired is missing"
 param "$ALERT" 'exploration_id' 'logtail_exploration\.workspaces_luks_deadman_fired\.id' \
   && ok "the alert watches ITS OWN exploration" \
   || no "the alert's exploration_id is not logtail_exploration.workspaces_luks_deadman_fired.id"
@@ -514,7 +517,7 @@ fi
 # one row per mutation. The instrument control is what catches a floor drifting past the rows.
 # Floor/ledger trips exit 1 (verdict-class: the battery grades inner rc 1 as a CAUGHT mutation);
 # instrument failures exit 2.
-PRESENCE_ROWS=30
+PRESENCE_ROWS=29
 MUT_ROWS=28
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
