@@ -13,6 +13,53 @@ brand_survival_threshold: aggregate pattern
 
 # fix: cloudflare_notification_policy.web_lb_health new_health — Down → Unhealthy
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02 (soleur:deepen-plan, inline — no Task/Agent tool on this harness;
+the per-section research fan-out, all review agents, and the merge pass were assessed and
+applied in-process. **Reviewed-Coverage: sequential-fallback** — no independent review ran.)
+**Sections enhanced:** gate-verification pass across all halt gates; 4 plan-text corrections.
+**Research agents used:** none spawnable — inline equivalents (CF docs verification, repo
+greps, gate-script/preflight-SKILL reads, sharp-edges catalogue pass at plan time).
+
+### Key Improvements
+
+1. **`var.`-prefixed `cf_api_token` → bare `cf_api_token` rewording** — the Phase 4.8 PAT-halt
+   regex `var\.[a-z_]*_(pat|token)` byte-matched the Cloudflare variable reference (a CF API
+   token, not a GitHub PAT). Reworded to name the variable without the `var.` prefix; the gate
+   now reports zero hits. The token's real auth property (Notifications Edit) is unchanged.
+2. **`expected_output` tightened to the literal `enabled=true`** — the original value
+   `GA LB pool health (app.soleur.ai) enabled=true` tokenizes under Check 10's splitter as a
+   whitespace-bearing string (the prose-detection proxy); the literal `enabled=true` is a
+   guaranteed stdout substring. The probe command is unchanged.
+3. **AC numbering made sequential** (Pre-merge AC-1..AC-5 / Post-merge AC-6..AC-7) and split
+   per the post-merge-operator-actions sharp edge.
+4. **`BASELINE_DECLARED_PROBES` 92→93 ratchet folded into Files-to-Edit + AC-4** — found at
+   the sharp-edges pass; every new `credentials_required` declaration moves the corpus
+   baseline (test G1) and must bump it in the same PR.
+
+### Gate Verdicts (all halt gates executed inline)
+
+- **4.6 User-Brand Impact** — PASS (section present, threshold `aggregate pattern`, no scope-out needed).
+- **4.7 Observability** — PASS (all 5 fields non-placeholder; `command` verb `bash` ∈ allowlist; no `ssh`; `credentials_required` non-placeholder → SKIP-DECLARED at Check 10 row 4, which precedes the verb gate and the shell-active byte reject — verified at `preflight/SKILL.md:988-1000`).
+- **4.8 PAT-shaped variable** — PASS after the rewording in improvement 1 (regex re-run: zero hits).
+- **4.9 UI-wireframe** — SKIP (no UI surface in Files lists).
+- **4.10 Encryption Posture** — PASS (named attestation mechanism; `does_not_defend` non-empty both rows; no exception needed — cert verification on).
+- **4.11 Guard Contract** — SKIP (deliverable authors no guard; the test-file edit bumps a baseline constant *inside* the existing `#7393 G` guard — no guard's property/assembly/window changes).
+- **4.12 Scope Check** — PASS (one unfenced section; all asks `mapped`; every `inferred` row carries a named enforcement-contract justification; `Recommendation: single PR`).
+- **4.13 Task Design** — SKIP (no new autonomous task).
+- **4.4 Precedent-diff** — sibling precedent exists: `cloudflare_notification_policy` blocks in `uptime-alerts.tf` (different alert_type — `http_alert_*`, Enterprise-gated; vocabulary precedent is the CF docs quote in External Documentation, not a sibling block).
+- **4.45 verify-negative + self-audit** — negative claims re-verified inline: no open PR touches `cloudflare-lb.tf` (`gh pr view --json files` ×3); the remnant `{policy:create}` admission is literal in the gate's "no pool change" branch; `["Down"]` absence AC scoped to the bracketed value form so the comment's history sentence cannot false-fail.
+- **4.5 / 4.55** — SKIP (no SSH/network-outage trigger tokens; no downtime-inducing operation — the change is a CF control-plane enum, and its apply path is the already-gated dispatch arm).
+
+### New Considerations Discovered
+
+- The post-merge dispatch is recorded as `### Post-merge (operator)` with an explicit
+  `Automation: not feasible` justification (the dispatch IS the per-command authorization;
+  automating it would change the authorization model the ask forbids touching).
+- PR body must use `Ref #6027` (never `Closes`) — the remediation dispatch and the #6027
+  window flip remain open at merge (AC-5).
+
 ## Overview
 
 PR #11766 (merged 2026-11-02T16:27:45Z, epic #6027 follow-through) added
@@ -169,7 +216,7 @@ logs:
 discoverability_test:
   command: >-
     bash -c 'TOK=$(doppler secrets get CF_API_TOKEN -p soleur -c prd_terraform --plain) && ACCT=$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain) && curl --disable --noproxy "*" -s --max-time 10 "https://api.cloudflare.com/client/v4/accounts/${ACCT}/alerting/v3/policies" --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${TOK}") | jq -r ".result[] | select(.alert_type==\"load_balancing_health_alert\") | .name + \" enabled=\" + (.enabled|tostring)"'
-  expected_output: GA LB pool health (app.soleur.ai) enabled=true
+  expected_output: enabled=true
   credentials_required: Doppler read on soleur/prd_terraform (CF_API_TOKEN + CF_ACCOUNT_ID) — the Cloudflare alerting API has no unauthenticated form; an anonymous probe cannot verify the policy exists.
 ```
 
@@ -198,7 +245,7 @@ in_transit:
 
 ### Terraform changes
 
-- `apps/web-platform/infra/cloudflare-lb.tf` — one enum value + comment inside an existing resource (`cloudflare_notification_policy.web_lb_health`). Provider `cloudflare/cloudflare` pinned 4.52.7 (`~> 4.0`) at `main.tf:24`; token `var.cf_api_token` ("Tunnel, Access, DNS, Notifications permissions") already carries Notifications Edit.
+- `apps/web-platform/infra/cloudflare-lb.tf` — one enum value + comment inside an existing resource (`cloudflare_notification_policy.web_lb_health`). Provider `cloudflare/cloudflare` pinned 4.52.7 (`~> 4.0`) at `main.tf:24`; the `cf_api_token` variable ("Tunnel, Access, DNS, Notifications permissions") already carries Notifications Edit.
 
 ### Apply path
 
@@ -224,7 +271,7 @@ in_transit:
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 | "Required change: `new_health = [\"Unhealthy\"]` (page on origin-down only — recovery paging stays deliberately out of scope) and correct the adjacent comment, which asserts the wrong vocabulary" | Phase 1 / Files-to-Edit `cloudflare-lb.tf` / AC-1, AC-2 | mapped |
-| 2 | "After merge, the cf-lb-overlay.yml arm=ga-pool-update mode=drain re-dispatch completes AC4" | Phase 2 / AC-4 | mapped |
+| 2 | "After merge, the cf-lb-overlay.yml arm=ga-pool-update mode=drain re-dispatch completes AC4" | Phase 2 / AC-6 | mapped |
 | 3 | "Scope is ONLY this value + comment — do not widen" | Files-to-Edit (single entry); descope of everything else | mapped |
 
 ### Plan-Item Provenance
@@ -253,13 +300,13 @@ in_transit:
 - [ ] **AC-1** `rg 'new_health' apps/web-platform/infra/cloudflare-lb.tf` prints `new_health = ["Unhealthy"]` and `rg '\["Down"\]' apps/web-platform/infra/cloudflare-lb.tf` exits 1 (the bracketed value form is gone; a bare `"Down"` mention inside the history sentence of the new comment is permitted).
 - [ ] **AC-2** The adjacent comment names the verified vocabulary (`Unhealthy`/`Healthy`) and states that recovery paging is deliberately out of scope — no remaining text presents `Down`/`Up` as a valid `new_health` value.
 - [ ] **AC-3** `terraform fmt -check apps/web-platform/infra/cloudflare-lb.tf` exits 0, and `bash tests/scripts/test-cf-lb-overlay-gate.sh` is green.
-- [ ] **AC-6** `plugins/soleur/test/preflight-discoverability-test.test.ts` carries `BASELINE_DECLARED_PROBES = 93` with a PLACEMENT/TRUTH/NO SUBSTITUTE entry for this plan, and `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` is green.
-- [ ] **AC-7** The PR body references the epic as `Ref #6027`, not `Closes #6027` — the remediation (Phase 2 dispatch) and the window flip are still open, so auto-closing the epic at merge would false-resolve it.
+- [ ] **AC-4** `plugins/soleur/test/preflight-discoverability-test.test.ts` carries `BASELINE_DECLARED_PROBES = 93` with a PLACEMENT/TRUTH/NO SUBSTITUTE entry for this plan, and `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` is green.
+- [ ] **AC-5** The PR body references the epic as `Ref #6027`, not `Closes #6027` — the remediation (Phase 2 dispatch) and the window flip are still open, so auto-closing the epic at merge would false-resolve it.
 
 ### Post-merge (operator)
 
-- [ ] **AC-4** `cf-lb-overlay.yml arm=ga-pool-update mode=drain` re-dispatch plans `{notification_policy.web_lb_health: create}` only, passes `cf_lb_gate_ga_pool_update`, applies green, and the `alerting/v3/policies` read shows the policy `enabled=true` — epic #6027's AC4 leg complete.
-- [ ] **AC-5** No other resource changes in the remnant plan — the gate's allow-set enforces this, and the dispatch's grading output shows zero non-policy changes.
+- [ ] **AC-6** `cf-lb-overlay.yml arm=ga-pool-update mode=drain` re-dispatch plans `{notification_policy.web_lb_health: create}` only, passes `cf_lb_gate_ga_pool_update`, applies green, and the `alerting/v3/policies` read shows the policy `enabled=true` — epic #6027's AC4 leg complete.
+- [ ] **AC-7** No other resource changes in the remnant plan — the gate's allow-set enforces this, and the dispatch's grading output shows zero non-policy changes.
 
 ## Domain Review
 
