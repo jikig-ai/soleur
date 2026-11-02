@@ -448,7 +448,7 @@
 "external"
 ],
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "title": "Anchore Grype (public release + vulnerability DB)",
 "kind": "system",
@@ -2641,8 +2641,8 @@
 "id": "a2e091"
 },
 "zw4k7r": {
-"title": "image-cve-scan.yml (W3, epic #9601, ADVISORY — nothing in the release or deploy path depends on it) downloads the pinned Grype release tarball (SHA256-literal verify) and lets the scanner fetch its vulnerability DB from grype.anchore.io over TLS",
-"technology": "HTTPS (release tarball + vulnerability DB)",
+"title": "image-cve-scan.yml (W3, epic #9601, ADVISORY — nothing in the release or deploy path depends on it) downloads the pinned Grype release tarball (SHA256-literal verify) and fetches the vulnerability DB listing and archive from grype.anchore.io over TLS, requiring the archive sha256 to equal the listing checksum (integrity pin, auto-update off; slice 2a); the report-only verdict workflow does the same",
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)",
 "source": {
 "model": "github"
 },
@@ -2663,7 +2663,7 @@
 "id": "17q15nn"
 },
 "zs2c58": {
-"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image",
+"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a deploy chain",
 "technology": "HTTPS GET /health",
 "source": {
 "model": "github"
@@ -2685,7 +2685,7 @@
 "id": "11ved1y"
 },
 "6z4z0p": {
-"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public)",
+"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public); the v2 marker also carries the whole gating set's per-type and per-family group counts, and the report-only verdict workflow ships one SOLEUR_IMAGE_CVE_VERDICT row per deploy chain (would_block is measured, never enforced)",
 "technology": "HTTPS (Logs ingest, bearer token)",
 "source": {
 "model": "github"
@@ -4252,7 +4252,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -8751,7 +8751,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 6313,
@@ -8795,7 +8795,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "pkkgzf",
@@ -10883,7 +10883,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -14773,7 +14773,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 9049,
@@ -14817,7 +14817,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "1dmg01n",
@@ -17745,7 +17745,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -24758,7 +24758,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 13501,
@@ -24802,7 +24802,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "y5ykmz",
@@ -35604,7 +35604,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -36740,7 +36740,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 3729,
@@ -36784,7 +36784,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "pkkgzf",
@@ -40330,7 +40330,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -40354,7 +40354,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 177,
@@ -40386,7 +40386,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 }
 ]
 },
