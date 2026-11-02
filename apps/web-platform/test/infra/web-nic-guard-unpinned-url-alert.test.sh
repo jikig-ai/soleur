@@ -29,6 +29,18 @@
 #     and infra-validation.yml runs this guard in a blocking step with the runbook path in
 #     pull_request paths.
 #
+# WHAT THIS FILE NOW PROVES (post-#11720 convention):
+#   * CANONICAL EQUALITY — the flattened heredoc must EQUAL the string built from the emitter's
+#     own needle (derived, never re-pinned), so dead text and arithmetic edits go red; decoy
+#     heredoc and resource openers are counted file-wide and red.
+#   * BLOCK-SCOPED EXACTLY-ONCE PINS — every alert attribute is asserted inside its own resource
+#     block by param(), whole value line anchored both ends, required exactly once.
+#   * THE BATTERY CANNOT BE MUTED — MUT_SKIP skips mutation rows on an inner run only; the
+#     pristine-child control FATALs (rc 2) otherwise; UNPINNED_GUARD_/MUT_SKIP literals may not
+#     reach the workflow's executable text (the seam check).
+#   * RC DISCRIMINATION — only rc=1 (a real [FAIL] verdict) is a caught mutation; instrument
+#     failures (rc>=2) are UNRESOLVED. Floor/ledger trips exit 1.
+#
 # WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (created by an apply; the
 # reconciler's `logs_alert` arm reads the live world twice daily), nor that a real row reaches
 # Better Stack. It compares values one diff can edit together — consistency, not integrity; the
@@ -42,6 +54,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing — the mutation battery needs it\n' >&2; exit 2; }
 REPO="$(cd "$DIR/../../../.." && pwd)"
 TF="${UNPINNED_GUARD_TF:-$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf}"
 WF="${UNPINNED_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
@@ -80,20 +93,49 @@ for f in "$TF" "$WF" "$EM"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
+# Extract a <<[-]SQL heredoc local by name: first line after `name = <<[-]SQL` to its `  SQL` terminator.
+sql_local() {  # sql_local <local-name>
+  awk -v n="$1" '
+    $0 ~ "^[[:space:]]*" n "[[:space:]]*=[[:space:]]*<<[-]SQL" { f=1; next }
+    f && /^  SQL$/ { f=0 }
+    f { print }
+  ' "$TF"
+}
+# res_block: one resource block from its column-0 header to its column-0 closing brace.
+res_block() {  # res_block <type> <name>
+  awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
+}
+# param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
+# both ends, required EXACTLY ONCE — a decoy or duplicated line is a red, not a shrug.
+param() {
+  # Value-matching exactly-once. Residual gap (accepted): a planted same-attr/different-value
+  # line does not move this count — attr-name cardinality cannot apply here because blocks
+  # legitimately nest a second `name` (explorations' `variable { name = "source" }`), and HCL
+  # itself rejects duplicate attributes at validate. Mute/deletion classes are still covered.
+  [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
+}
+
 # The predicate heredoc, from the FIRST UNCOMMENTED opening line to its own terminator.
-LOCAL_SQL="$(awk '/^[[:space:]]*web_nic_guard_unpinned_url_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^[[:space:]]*SQL$/{exit} f' "$TF")"
+LOCAL_SQL="$(sql_local web_nic_guard_unpinned_url_sql)"
 # Layout-independent view: every run of whitespace is one space, and no space sits inside a
 # parenthesis pair (the resource collapses it the same way).
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
-ALERT="$(awk '/^resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-EXPL="$(awk '/^resource "logtail_exploration" "web_nic_guard_unpinned_url" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
+ALERT="$(res_block logtail_exploration_alert web_nic_guard_unpinned_url)"
+EXPL="$(res_block logtail_exploration web_nic_guard_unpinned_url)"
 MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=\$\?/{exit}' "$WF")"
 
-# Whole-line assertions anchored at both ends; greps over captured variables read HERE-STRINGS,
-# never `printf … | grep -q` (pipefail + early-match SIGPIPE fails a negated check OPEN).
-line_in() { grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"; }
-top_in() { grep -qE "^  $2[[:space:]]*(#.*)?$" <<< "$1"; }
-blk_in() { grep -qE "^    $2[[:space:]]*(#.*)?$" <<< "$1"; }
+# Opener/header counts — unanchored, file-wide, exactly once each. A /* */- or #-wrapped
+# decoy opener still counts and goes red; dead text can never satisfy the live local.
+_n="$(grep -cE 'web_nic_guard_unpinned_url_sql[[:space:]]*=[[:space:]]*<<[-]SQL' "$TF")"
+[ "$_n" -eq 1 ] \
+  && ok "exactly one web_nic_guard_unpinned_url_sql heredoc opener in the file (decoy copies count)" \
+  || no "web_nic_guard_unpinned_url_sql opener count is $_n, want 1 — a decoy local exists"
+for _r in "logtail_exploration web_nic_guard_unpinned_url" "logtail_exploration_alert web_nic_guard_unpinned_url"; do
+  _n="$(grep -cE "resource \"${_r%% *}\" \"${_r##* }\"" "$TF")"
+  [ "$_n" -eq 1 ] \
+    && ok "exactly one resource ${_r} header in the file" \
+    || no "resource ${_r} header count is $_n, want 1 — a decoy resource exists"
+done
 
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
@@ -103,7 +145,7 @@ blk_in() { grep -qE "^    $2[[:space:]]*(#.*)?$" <<< "$1"; }
 # The refusal line is `echo "[nic] unpinned_url: refusing to send the Better Stack token to an
 # unpinned destination — …"` on stderr in the unpinned arm. The needle the alert matches is the
 # `unpinned_url` literal INSIDE that line; a reworded emitter (or a reworded .tf) reds below.
-EMIT_LINE="$(grep -nE 'unpinned_url' "$EM" | grep 'echo' | head -1)"
+EMIT_LINE="$(grep -nE 'unpinned_url' "$EM" | grep 'echo' | grep -vE '^[0-9]+:[[:space:]]*#' | head -1)"
 EMIT_NEEDLE="$(sed -n 's/.*\[nic\] \([a-z_]*\):.*/\1/p' <<< "$EMIT_LINE" | head -1)"
 if [ -n "$EMIT_LINE" ] && [ "$EMIT_NEEDLE" = "unpinned_url" ]; then
   ok "web-private-nic-guard.sh emits exactly the '[nic] unpinned_url:' refusal line; needle captured from it"
@@ -143,52 +185,53 @@ grep -qi 'host_name' <<< "$LOCAL_SQL" \
   && no "the predicate carries a host_name conjunct — it would blind the OTHER web host's refusals (the #8706 trap in reverse)" \
   || ok "no host_name conjunct: a refusal on web-1 or web-2 alerts"
 
-EXPL_QRY="$(awk '/^  query \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
-EXPL_VAR="$(awk '/^  variable \{/{f=1} f{print} f&&/^  \}/{exit}' <<< "$EXPL")"
-blk_in "$EXPL_QRY" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.web_nic_guard_unpinned_url_sql\), "/\\\\s\+/", " "\)' \
+param "$EXPL" 'sql_query' 'replace\(trimspace\(local\.web_nic_guard_unpinned_url_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.web_nic_guard_unpinned_url_sql as its sql_query"
-blk_in "$EXPL_VAR" 'values[[:space:]]*=[[:space:]]*\[local\.vector_prd_source_id\]' \
+param "$EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "the exploration reads the prd Vector source" \
   || no "the exploration's source variable is not local.vector_prd_source_id"
 [ "$(grep -cE '^  query \{' <<< "$EXPL")" -eq 1 ] && [ "$(grep -cE '^  variable \{' <<< "$EXPL")" -eq 1 ] \
-  && blk_in "$EXPL_QRY" 'source_variable[[:space:]]*=[[:space:]]*"source"' \
-  && blk_in "$EXPL_QRY" 'query_type[[:space:]]*=[[:space:]]*"sql_expression"' \
-  && blk_in "$EXPL_VAR" 'name[[:space:]]*=[[:space:]]*"source"' \
+  && param "$EXPL" 'source_variable' '"source"' \
+  && param "$EXPL" 'query_type' '"sql_expression"' \
+  && param "$EXPL" 'name' '"source"' \
   && ok "the exploration has exactly one query and one variable block, wired source_variable=source -> variable source" \
   || no "the exploration's query/variable wiring is not exactly one sql_expression query reading variable \"source\""
 
 [ -n "$ALERT" ] && ok "logtail_exploration_alert.web_nic_guard_unpinned_url exists (exact header)" \
   || no "logtail_exploration_alert.web_nic_guard_unpinned_url is missing"
-top_in "$ALERT" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.web_nic_guard_unpinned_url\.id' \
+param "$ALERT" 'exploration_id' 'logtail_exploration\.web_nic_guard_unpinned_url\.id' \
   && ok "the alert watches ITS OWN exploration" \
   || no "the alert's exploration_id is not logtail_exploration.web_nic_guard_unpinned_url.id"
-top_in "$ALERT" 'name[[:space:]]*=[[:space:]]*"soleur-web-nic-guard-unpinned-url-prd"' \
-  && top_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"soleur-web-nic-guard-unpinned-url-prd"' \
+param "$ALERT" 'name' '"soleur-web-nic-guard-unpinned-url-prd"' \
+  && param "$EXPL" 'name' '"soleur-web-nic-guard-unpinned-url-prd"' \
   && ok "both are named soleur-web-nic-guard-unpinned-url-prd" \
   || no "the exploration/alert name drifted from soleur-web-nic-guard-unpinned-url-prd"
-top_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
-  && top_in "$ALERT" 'operator[[:space:]]*=[[:space:]]*"higher_than"' \
-  && top_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
+param "$ALERT" 'alert_type' '"threshold"' \
+  && param "$ALERT" 'operator' '"higher_than"' \
+  && param "$ALERT" 'value' '0' \
   && ok "threshold, higher_than 0: ONE unpinned_url row alerts" \
   || no "the alert is not threshold/higher_than/0 — a single refusal row would not alert"
-top_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
+param "$ALERT" 'on_missing_data' '"treat_as_zero"' \
   && ok "treat_as_zero, so an open incident can observe recovery" \
   || no "on_missing_data is not treat_as_zero"
-top_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
+param "$ALERT" 'paused' 'false' \
   && ok "paused = false on its own line" \
   || no "the alert is paused (or paused carries a suffix)"
-top_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
-  && top_in "$ALERT" 'push[[:space:]]*=[[:space:]]*false' \
-  && top_in "$ALERT" 'call[[:space:]]*=[[:space:]]*false' \
-  && top_in "$ALERT" 'sms[[:space:]]*=[[:space:]]*false' \
-  && top_in "$ALERT" 'critical_alert[[:space:]]*=[[:space:]]*false' \
+[ "$(printf '%s\n' "$ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "the string 'paused' occurs exactly once in the alert block (a commented or duplicated decoy counts)" \
+  || no "'paused' occurs !=1 time in the alert block — a commented pinned-line decoy exists"
+param "$ALERT" 'email' 'true' \
+  && param "$ALERT" 'push' 'false' \
+  && param "$ALERT" 'call' 'false' \
+  && param "$ALERT" 'sms' 'false' \
+  && param "$ALERT" 'critical_alert' 'false' \
   && ok "email = true, push/call/sms/critical_alert = false (the free-tier sibling channel set)" \
   || no "the channel set drifted from the sibling shape (email-only, critical_alert=false)"
-top_in "$ALERT" 'confirmation_period[[:space:]]*=[[:space:]]*0' \
-  && top_in "$ALERT" 'check_period[[:space:]]*=[[:space:]]*60' \
-  && top_in "$ALERT" 'query_period[[:space:]]*=[[:space:]]*300' \
-  && top_in "$ALERT" 'recovery_period[[:space:]]*=[[:space:]]*600' \
+param "$ALERT" 'confirmation_period' '0' \
+  && param "$ALERT" 'check_period' '60' \
+  && param "$ALERT" 'query_period' '300' \
+  && param "$ALERT" 'recovery_period' '600' \
   && ok "check 60 / query 300 / recovery 600 with no confirmation delay (monitor_send_failed's combination)" \
   || no "the paging windows drifted from check 60 / query 300 / confirmation 0 / recovery 600"
 if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALERT"$'\n'"$EXPL"; then
@@ -196,8 +239,8 @@ if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALE
 else
   ok "no count/for_each/lifecycle/ignore_changes on the alert or exploration (the resource exists and reconciles)"
 fi
-line_in "$ALERT" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
-  && line_in "$ALERT" 'team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"' \
+param "$ALERT" 'policy_id' 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
+  && param "$ALERT" 'team_name' 'var\.betterstack_paid_tier \? null : "Your team"' \
   && ok "the escalation target is the free/paid ternary every sibling uses (ADR-218)" \
   || no "the escalation_target drifted from the sibling ternary"
 # The incident text must not claim resolution means a fix: the alert auto-resolves after quiet minutes.
@@ -207,7 +250,7 @@ grep -qE '^  incident_cause[[:space:]]*=.*does NOT mean' <<< "$ALERT" \
 
 RB_URL_RE='^[[:space:]]*web_nic_guard_unpinned_url_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/web-nic-guard-unpinned-url-alert\.md"'
 grep -qE '^  incident_cause[[:space:]]*=.*[Rr]unbook: \$\{local\.web_nic_guard_unpinned_url_runbook_url\}"[[:space:]]*$' <<< "$ALERT" \
-  && blk_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.web_nic_guard_unpinned_url_runbook_url' \
+  && param "$ALERT" 'runbook' 'local\.web_nic_guard_unpinned_url_runbook_url' \
   && grep -qE "$RB_URL_RE" "$TF" \
   && ok "incident_cause and metadata.runbook carry the alert's runbook URL (the email is what a reader acts on)" \
   || no "the incident has no clickable web-nic-guard-unpinned-url runbook URL"
@@ -253,12 +296,24 @@ else
   no "infra-validation.yml no longer wires this guard: runbook or apply-workflow path missing from pull_request paths, the step missing/conditional/non-blocking, or its job conditional/non-blocking"
 fi
 
+# ── Workflow seam — registered exactly once, and no env axis reaches executable text ─────────
+IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
+REG_RUN='        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh'
+n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
+[ "$n_run" -eq 1 ] \
+  && ok "this suite's run line is registered in infra-validation.yml exactly once" \
+  || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+seam_bad=""
+printf '%s\n' "$IV_CODE" | grep -nE 'UNPINNED_GUARD_' >/dev/null && seam_bad="$seam_bad UNPINNED_GUARD_-literal"
+printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+[ -z "$seam_bad" ] \
+  && ok "no UNPINNED_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching UNPINNED_GUARD_* override pointing at the copy.
 SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=29
-MUT_ROWS_EXPECTED=8
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t unpinnedalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -272,9 +327,35 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|EM|RB|LQ|IV> <expected [FAIL] substring, "" for PASS> <python-program-on-s>
-    local want="$1" label="$2" which="$3" expect="$4" prog="$5" src copy rc=0
-    local ilog="$MUT_DIR/inner.log"
+  PRELUDE='Q = chr(39)
+def edit(s, anchor, old, new, end="\n}\n"):
+    i = s.index(anchor)
+    j = s.index(end, i)
+    region = s[i:j]
+    assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
+    return s[:i] + region.replace(old, new) + s[j:]
+def sql_replace(s, old, new):
+    # The first occurrence AFTER the predicate local opener: other alerts in this file carry
+    # identical conjuncts earlier on.
+    i = s.index("  web_nic_guard_unpinned_url_sql = <<\x2dSQL")
+    j = s.index(old, i)
+    return s[:j] + new + s[j + len(old):]
+SQLLOC = "  web_nic_guard_unpinned_url_sql = <<\x2dSQL"
+SQLEND = "\n  SQL\n"
+ALRRES = "resource \"logtail_exploration_alert\" \"web_nic_guard_unpinned_url\" {"'
+
+  _red_verdict() {
+    case "$1" in
+      1) if [ -z "$3" ] || { grep -F '[FAIL]' "$2" | grep -F -- "$3" >/dev/null; }; then echo red; else echo wrong; fi ;;
+      0) echo survived ;;
+      *) echo unresolved ;;
+    esac
+  }
+
+  # mutate_red <label> <TF|WF|EM|RB|LQ|IV> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  mutate_red() {
+    local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
+    MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
     case "$which" in
       TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
@@ -282,97 +363,197 @@ if [ -z "${MUT_SKIP:-}" ]; then
       RB) src="$RB"; copy="$MUT_DIR/web-nic-guard-unpinned-url-alert.md" ;;
       LQ) src="$LQ"; copy="$MUT_DIR/betterstack-log-query.md" ;;
       IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
-      *) printf '[FATAL] mutate: unknown target %s\n' "$which" >&2; exit 2 ;;
+      *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
-    cp "$src" "$copy" || { printf '[FATAL] mutate: cp %s failed\n' "$src" >&2; exit 2; }
-    MUT_PROG="$prog" python3 - "$copy" <<'PY' || { no "mutation '$label' did not land (anchor drifted)"; MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1)); return 0; }
-import os, sys
+    cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "mutation '$label' did not land (anchor drifted)"; return 0; }
+import sys
 p = sys.argv[1]
+$PRELUDE
 orig = open(p, encoding="utf-8").read()
 s = orig
-def sql_replace(s, old, new):
-    # The first occurrence AFTER the predicate local's opening line: other alerts in this file carry
-    # identical conjuncts earlier on.
-    i = s.index("  web_nic_guard_unpinned_url_sql = <<-SQL")
-    j = s.index(old, i)
-    return s[:j] + new + s[j + len(old):]
-exec(os.environ["MUT_PROG"])
+$prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "UNPINNED_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$ilog" 2>&1 || rc=$?
-    case "$want:$rc" in
-      RED:1)
-        if grep -qF -- "[FAIL] $expect" "$ilog"; then
-          ok "mutation RED: $label"
-        else
-          no "mutation RED for the WRONG reason (no '[FAIL] $expect' line): $label"
-        fi ;;
-      RED:0)  no "mutation SURVIVED: $label — the rows above pin nothing" ;;
-      PASS:0) ok "must-PASS edit stays green: $label" ;;
-      PASS:*) no "must-PASS edit went red (inner rc=$rc): $label — the guard over-fits" ;;
-      *)      no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
+    env "UNPINNED_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
+    case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
+      red:red) ok "mutation RED: $label" ;;
+      wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
+      wrong:red) no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label" ;;
+      red:wrong) no "scorer control: the wrong-reason mutant was graded RED (the fragment check accepts anything): $label" ;;
+      survived:*) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
     esac
+  }
+
+  mutate_green() {
+    local label="$1" prog="$2" copy rc=0
     MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
+    copy="$MUT_DIR/betterstack-logs-alerts.tf"
+    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
+import sys
+p = sys.argv[1]
+$PRELUDE
+orig = open(p, encoding="utf-8").read()
+s = orig
+$prog
+assert s != orig, "mutation produced no change"
+open(p, 'w', encoding="utf-8").write(s)
+PY
+    UNPINNED_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    case "$rc" in
+      0) ok "must-PASS edit stays green: $label" ;;
+      1) no "legitimate edit went RED: $label" ;;
+      *) no "must-PASS UNRESOLVED (inner rc=$rc): $label - instrument, not evidence" ;;
+    esac
+  }
+
+  mutate_floor_red() {
+    local label="$1" copy rc=0 cur
+    MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
+    copy="$MUT_DIR/floor-mutated.test.sh"
+    cur="$(grep -oE '^PRESENCE_ROWS=[0-9]+$' "$SELF" | cut -d= -f2)"
+    [ -n "$cur" ] || { no "mutation '$label' did not land (no PRESENCE_ROWS declaration)"; return 0; }
+    sed -e "s/^PRESENCE_ROWS=${cur}$/PRESENCE_ROWS=$((cur + 1))/" \
+        -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
+    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      1) ok "mutation RED: $label" ;;
+      0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label - instrument, not evidence" ;;
+    esac
   }
   MUT_ROWS_RUN=0
 
   # A1 — the tag conjunct is dropped: unpinned_url rows under ANY identifier could alert.
-  mutate RED "A1 the SYSLOG_IDENTIFIER conjunct is dropped (rows from any identifier could alert)" TF \
-    "the SYSLOG_IDENTIFIER='web-nic-guard' conjunct is missing" \
-    's = sql_replace(s, "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27web-nic-guard\x27\n      AND ", "")'
+  mutate_red "A1 the SYSLOG_IDENTIFIER conjunct is dropped (rows from any identifier could alert)" TF \
+    's = sql_replace(s, "JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27web-nic-guard\x27\n      AND ", "")' \
+    "the SYSLOG_IDENTIFIER='web-nic-guard' conjunct is missing"
   # A2 — the needle is reworded in the .tf while the emitter's line is untouched.
-  mutate RED "A2 the needle is reworded in the .tf only (the alert would silently disarm)" TF \
-    "the unpinned_url needle conjunct is missing" \
-    's = sql_replace(s, "\x27unpinned_url\x27", "\x27unpinned_dest\x27")'
+  mutate_red "A2 the needle is reworded in the .tf only (the alert would silently disarm)" TF \
+    's = sql_replace(s, "\x27unpinned_url\x27", "\x27unpinned_dest\x27")' \
+    "the unpinned_url needle conjunct is missing"
   # A3 — a -target= line is dropped from the apply allowlist.
-  mutate RED "A3 the alert is dropped from the apply allowlist" WF \
-    "one or both -target= lines are missing" \
+  mutate_red "A3 the alert is dropped from the apply allowlist" WF \
     'old = "              -target=logtail_exploration_alert.web_nic_guard_unpinned_url \\\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
+s = s.replace(old, "")' \
+    "one or both -target= lines are missing"
   # A4 — on_missing_data is no longer treat_as_zero: an open incident can never observe recovery.
-  mutate RED "A4 on_missing_data is no longer treat_as_zero" TF \
-    "on_missing_data is not treat_as_zero" \
+  mutate_red "A4 on_missing_data is no longer treat_as_zero" TF \
     'import re
 m = re.search(r"(resource \"logtail_exploration_alert\" \"web_nic_guard_unpinned_url\" \{.*?\n  on_missing_data\s*=\s*)\"treat_as_zero\"", s, re.S)
 assert m
-s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]'
+s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]' \
+    "on_missing_data is not treat_as_zero"
   # A5 — the guard's OWN dispatch: the run: step goes non-blocking in infra-validation.yml.
-  mutate RED "A5 the guard step becomes non-blocking (continue-on-error)" IV \
-    "infra-validation.yml no longer wires this guard" \
+  mutate_red "A5 the guard step becomes non-blocking (continue-on-error)" IV \
     'old = "        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh\n"
 assert s.count(old) == 1
-s = s.replace(old, "        continue-on-error: true\n" + old)'
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "infra-validation.yml no longer wires this guard"
   # A6 — the alert's exploration_id is repointed to another exploration.
-  mutate RED "A6 the alert's exploration_id is repointed (identity row)" TF \
-    "the alert's exploration_id is not" \
+  mutate_red "A6 the alert's exploration_id is repointed (identity row)" TF \
     'old = "  exploration_id = logtail_exploration.web_nic_guard_unpinned_url.id"
 assert s.count(old) == 1
-s = s.replace(old, "  exploration_id = logtail_exploration.monitor_send_failed.id")'
+s = s.replace(old, "  exploration_id = logtail_exploration.monitor_send_failed.id")' \
+    "the alert's exploration_id is not"
   # A7 — a host_name conjunct is added: the OTHER web host's refusals go silent.
-  mutate RED "A7 a host_name conjunct is added (web-2's refusals would go silent)" TF \
-    "the predicate carries a host_name conjunct" \
-    's = sql_replace(s, "\n    GROUP BY time", "\n      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n    GROUP BY time")'
+  mutate_red "A7 a host_name conjunct is added (web-2's refusals would go silent)" TF \
+    's = sql_replace(s, "\n    GROUP BY time", "\n      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n    GROUP BY time")' \
+    "the predicate carries a host_name conjunct"
   # Must-PASS: layout is not part of the contract (the resource flattens the predicate with
   # replace(…, "/\\s+/", " ")).
-  mutate PASS "A8 every heredoc line is re-indented far deeper (layout is not part of the contract)" TF \
-    "" \
+  mutate_green "A8 every heredoc line is re-indented far deeper (layout is not part of the contract)" \
     'import re
-i = s.index("  web_nic_guard_unpinned_url_sql = <<-SQL")
+i = s.index(SQLLOC)
 j = s.index("\n  SQL\n", i)
 head, rest = s[i:j].split("\n", 1)
 s = s[:i] + head + "\n" + re.sub(r"(?m)^\s+", "                    ", rest) + s[j:]'
+
+  # ── Dead-text / extraction-class rows ──────────────────────────────────────────────────────────
+  mutate_red "a /* */-wrapped decoy heredoc sits before the live local while the live body is gutted" TF \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
+i = s.index(SQLLOC)
+s = s[:i] + "/*\n  web_nic_guard_unpinned_url_sql = <<\x2dSQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+    "decoy local exists"
+  mutate_red "a #-commented decoy opener line sits above the live local" TF \
+    'i = s.index(SQLLOC)
+s = s[:i] + "  # web_nic_guard_unpinned_url_sql = <<\x2dSQL\n" + s[i:]' \
+    "decoy local exists"
+  # EM dead-text row: a #-commented copy of the live refusal echo must NOT satisfy the needle —
+  # the selector above filters `^[0-9]+:[[:space:]]*#` lines, so a silenced emitter reads as absent.
+  mutate_red "the live refusal echo is commented out (dead-text disarm of the emitter needle)" EM \
+    'hits = [l for l in s.splitlines(keepends=True) if "unpinned_url" in l and "echo" in l and not l.lstrip().startswith("#")]
+assert hits, "no live echo needle line"
+s = "".join("# " + l if l in hits else l for l in s.splitlines(keepends=True))' \
+    "no longer emits a '[nic] unpinned_url:' refusal line"
+  mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
+    "decoy exists"
+  mutate_red "an inline tautology is appended inside the predicate" TF \
+    's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
+    "the predicate is not the expected conjunct pair"
+  mutate_red "a doubled-dollar escape literal appears inside the heredoc" TF \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* \x24\x24escaped */", SQLEND)' \
+    "the predicate is not the expected conjunct pair"
+  mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
+    'i = s.index(SQLLOC); j = s.index(SQLEND, i)
+blk = s[i:j]
+assert "count(*) AS value" in blk
+s = s[:i] + SQLLOC + "\n    SELECT 1" + s[j:]' \
+    "the predicate is not the expected conjunct pair"
+
+  # ── Workflow seam rows ────────────────────────────────────────────────────────────────────────
+  mutate_red "a MUT_SKIP literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
+    "workflow seam"
+  mutate_red "a UNPINNED_GUARD_ literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          UNPINNED_GUARD_TF: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "the suite's own run line is dropped from the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "unregistered or double-registered"
+
+  # ── Scorer negative control ────────────────────────────────────────────────────────────────────
+  mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = true\n")' \
+    "this-fragment-does-not-exist" wrong
+
+  # ── Floor row ────────────────────────────────────────────────────────────────────────────────
+  mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 fi
 
-if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
-  printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS_EXPECTED\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS_EXPECTED" >&2; exit 2
-fi
-_floor=$((PRESENCE_ROWS))
-[ -z "${MUT_SKIP:-}" ] && _floor=$((PRESENCE_ROWS + MUT_ROWS_EXPECTED))
+# ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────────
+# Instrument failures exit 2 (the MUT_ROWS_RUN conservation ledger); floor/ledger trips exit 1 —
+# the battery grades an inner rc 1 as a CAUGHT mutation.
+PRESENCE_ROWS=35
+MUT_ROWS=20
+_eff=${MUT_SKIP:+0}
+_eff=${_eff:-$MUT_ROWS}
+_floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-# Instrument failures exit 2, never 1: the battery grades an inner rc 1 as a CAUGHT mutation.
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi
+if [ "$_ran" -lt "$_floor" ]; then
+  printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2
+  exit 1
+fi
+if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS" ]; then
+  printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS" >&2
+  exit 2
+fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then
+  printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
+  exit 1
+fi
+[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); UNPINNED_GUARD_{TF,WF,EM,RB,LQ,IV}=%s,%s,%s,%s,%s,%s\n' "$_floor" "${UNPINNED_GUARD_TF:-unset}" "${UNPINNED_GUARD_WF:-unset}" "${UNPINNED_GUARD_EM:-unset}" "${UNPINNED_GUARD_RB:-unset}" "${UNPINNED_GUARD_LQ:-unset}" "${UNPINNED_GUARD_IV:-unset}"
 printf '\n=== web-nic-guard-unpinned-url-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]
