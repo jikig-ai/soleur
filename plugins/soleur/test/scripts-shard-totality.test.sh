@@ -761,7 +761,7 @@ _rows_tile_check() {
 
 # --- The mutation battery's CI row ranges must TILE 1..DECLARED_TOTAL --------------------------
 #
-# The battery's own accounting is per-leg: every matrix leg asserts _row_seq reached
+# The battery's own accounting is per-leg: every matrix leg asserts _site_seq reached
 # DECLARED_TOTAL and EXECUTED == its in-range count. What per-leg accounting cannot see is a
 # GAP between the legs' ranges — a new mutation row plus a bumped DECLARED_TOTAL without a
 # matrix re-split executes in NO CI leg while every leg's own checks stay green (shrink
