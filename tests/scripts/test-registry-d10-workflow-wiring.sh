@@ -494,6 +494,12 @@ elif k == "drop1": once("\n" + re.search(r'\n( *1\) echo [^\n]*)', seg).group(1)
 elif k == "manifest":
     a1 = re.search(r'\n( *1\) echo [^\n]*)', seg).group(1)
     once(a1, re.sub("(?i)manifest", "pin set", a1))
+elif k == "unv6":
+    a6 = re.search(r'\n( *6\) echo [^\n]*)', seg).group(1)
+    once(a6, re.sub("(?i)unverified", "unchecked", a6))
+elif k == "nodeploy":
+    a6 = re.search(r'\n( *6\) echo [^\n]*)', seg).group(1)
+    once(a6, a6.replace("do not deploy", "proceed"))
 elif k == "envextra": once("GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}", "GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}\n          SHELLOPTS: xtrace")
 elif k == "envswap": once("DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}", "DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}")
 elif k == "dead": once("\n" + arm, ""); once('\n          case "$rc" in', '\n          if false; then echo "::error::restore FAILED exit 78 (TRACED INVOCATION)"; fi\n          case "$rc" in')
@@ -666,6 +672,8 @@ w9_check() { # <workflow text> <engine text>: prints one problem per line; no ou
       2|5) grep -qiF 'failed locally' <<<"$line" || w9_add "the annotation for exit ${code} does not name the local login failure" ;;
       1)   grep -qiF 'manifest' <<<"$line" || w9_add "the annotation for exit 1 does not name the manifest fault" ;;
       78)  grep -qiF 'traced invocation' <<<"$line" || w9_add "the annotation for exit 78 does not say traced invocation" ;;
+      6)   grep -qiF 'unverified' <<<"$line" || w9_add "the annotation for exit 6 does not say unverified"
+           grep -qF 'do not deploy' <<<"$line" || w9_add "the annotation for exit 6 does not say do not deploy" ;;
     esac
   done
   w9_parse "$(w9_run "$body" "3 3 0")"
@@ -692,7 +700,7 @@ w9_drop1_mut=""; w9_drop1_out=""
 for w9_c in "drop78|exit 78 fell" "dead|exit 78 fell" "nested|exit 78 fell" "subject|fell to the *) arm" \
   "clobber|step exited 0" "sticky3|recovered retry" "exit0|step exited 0" "trap|step exited 0" "max0|recovered retry" \
   "wrongscript|engine called 0 times" "dopabort|doppler failure" "traced|invoked traced" "args|wrong arguments" "stepkeys|step keys" \
-  "drop1|exit 1 fell" "manifest|does not name the manifest fault" "envswap|credential env" "envextra|credential env drifted" \
+  "drop1|exit 1 fell" "manifest|does not name the manifest fault" "unv6|unverified" "nodeploy|do not deploy" "envswap|credential env" "envextra|credential env drifted" \
   "jobif|job-level if" "ifor|job-level if" "jobcoe|job-level keys" "jobctr|job-level keys"; do
   w9_mut="$(timeout 30 python3 -I -c "$W9_PY" "mutate:${w9_c%%|*}" "$RESTORE_STEP" <<<"$RESTORE_WF_TEXT")"
   if [[ -z "$w9_mut" || "$w9_mut" == "$RESTORE_WF_TEXT" ]]; then
@@ -827,7 +835,7 @@ else _report "W9v meta-control: a drop1 workflow makes the real W9 row print its
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=91
+EXPECTED_ASSERTIONS=93
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"
