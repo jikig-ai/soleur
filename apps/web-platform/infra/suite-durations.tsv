@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
 # default-weight-ms=4000
-# generated-at=2026-10-31T23:54:22Z
+# generated-at=2026-11-02T23:31:43Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -117,6 +117,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	1000	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	3500	measured
 apps/web-platform/infra/inngest.test.sh	9500	measured
 apps/web-platform/infra/journald-config.test.sh	1000	measured
+apps/web-platform/infra/key-rotate-workflow.test.sh	150000	floor
 apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	9000	measured
 apps/web-platform/infra/lb-weight-gate.test.sh	2000	measured
 apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh	29500	measured

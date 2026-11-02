@@ -350,7 +350,8 @@ PRE_LN="$(grep -n 'compgen -v' "$BODY" | head -1 | cut -d: -f1)"
 eq "B6 the ^K[RK]_ refusal runs BEFORE the source (the loader exports a whole Doppler project and the sourced file assigns KR_*)" "$([[ -n "$PRE_LN" && "$PRE_LN" -lt "$SRC_LN" ]] && echo before)" 'before'
 pre_rc() { env -i PATH="$PATH" HOME="$TMP" GITHUB_ACTIONS=true "$@" bash "$BODY" --print-contract >"$TMP/pre.out" 2>&1; echo $?; }
 eq "B7 under GITHUB_ACTIONS=true a stray KR_ name, a stray KK_ name each exit 78; a clean environment does not" "$(pre_rc KR_STRAY=1)|$(pre_rc KK_STRAY=1)|$(pre_rc A_OTHER=1)" '78|78|0'
-check "B7b the refusal names the variable and prints no value" bash -c "env -i PATH='$PATH' HOME='$TMP' GITHUB_ACTIONS=true KR_STRAY=sekret-value bash '$BODY' --print-contract 2>&1 | grep -q 'KR_STRAY' && ! env -i PATH='$PATH' HOME='$TMP' GITHUB_ACTIONS=true KR_STRAY=sekret-value bash '$BODY' --print-contract 2>&1 | grep -q 'sekret-value'"
+B7_OUT="$(env -i PATH="$PATH" HOME="$TMP" GITHUB_ACTIONS=true KR_STRAY=sekret-value bash "$BODY" --print-contract 2>&1)"
+eq "B7b the refusal names the variable and prints no value" "$(grep -c 'KR_STRAY' <<<"$B7_OUT")|$(grep -c 'sekret-value' <<<"$B7_OUT")" '1|0'
 eq "B8 no set -e in any form and no trap in the script (the sourced kr_init owns the EXIT trap that removes the key-bearing temp files)" "$(code_only "$BODY" | grep -Ec '(^|[[:space:];])set +-[a-zA-Z]*e|(^|[[:space:];])trap ')" '0'
 eq "B9 no terraform command anywhere in the script: the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | grep -Ec '(^|[^_a-zA-Z-])terraform[[:space:]]+(init|plan|apply|show|state|output|refresh|destroy|import|console)')|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
 eq "B10 kr_tf is called for plan, show and apply only" "$(code_only "$BODY" | grep -oE 'kr_tf +"?(plan|show|apply)' | sed -E 's/kr_tf +"?//' | sort | tr '\n' ' ')" 'apply plan show '

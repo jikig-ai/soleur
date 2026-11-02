@@ -940,6 +940,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/cf-lb-overlay.yml"
   # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
   ".github/workflows/inngest-key-rotate.yml"
+  # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
+  ".github/workflows/key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -982,6 +984,9 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "packages/opencode-plugin/"
   "scripts/check-adr-ordinals.sh"
+  # #11294: terraform-target-parity.test.ts SOURCES scripts/key-rotate.sh and the sibling it sources to read their gate tables (Guard 5).
+  "scripts/inngest-key-rotate.sh"
+  "scripts/key-rotate.sh"
   "scripts/lib/git-data-boot-signal-poll.sh"
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/git-data-store-dirty-scan.sh"
