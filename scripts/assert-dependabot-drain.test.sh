@@ -528,6 +528,22 @@ else
 fi
 build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
 
+# A file: spec's vendor target lives at a bare path key with real name+version — the
+# sharpest shape, because it needs no hand-edited lockfile, only a "file:vendor/min" dep.
+asserted=$((asserted + 1))
+if build_fixture '{"vendor/min": {"name": "minimatch", "version": "9.0.0"}, "node_modules/helper": {"resolved": "vendor/min", "link": true}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a vendored watched package behind a file: spec exited 0 — vendor targets escape the census"
+  elif ! grep -qE "no row covers|carries no 'version'|name disagreement" "$SANDBOX/last.out"; then
+    fail "reddened, but not via coverage/versionless/disagreement check"
+  else
+    pass "a file:-vendored watched package is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a vendor-target entry"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
 # --- Accounting. Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -545,7 +561,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=46
+MIN_ASSERTIONS=47
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

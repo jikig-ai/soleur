@@ -313,6 +313,16 @@ def tracked_lockfiles():
         dirnames[:] = [d for d in dirnames if d not in skip]
         if "package-lock.json" in filenames:
             found.add(os.path.relpath(os.path.join(dirpath, "package-lock.json")))
+    # Union with the TRACKED set when CWD is a repo: the basename skip-set prunes
+    # `dist/`/`out/` at any depth, which a committed lockfile could otherwise hide
+    # behind (git ignores nothing the suite fixture plants). In the fixture trees --
+    # plain dirs -- this arm is absent and the walk carries the census alone.
+    import subprocess
+    if os.path.exists(".git"):
+        out = subprocess.run(["git", "ls-files", "--", "*package-lock.json"],
+                             capture_output=True, text=True)
+        if out.returncode == 0:
+            found |= {l for l in out.stdout.splitlines() if l}
     return found
 
 
@@ -461,7 +471,12 @@ def main():
     for manifest, pkgs in packages.items():
         for key, meta in pkgs.items():
             if "node_modules/" not in key:
-                continue
+                # A file:/link: spec's vendor TARGET sits at a bare path key with a
+                # real name+version -- a watched package vendored that way used to
+                # exit the census at this line. Evaluate it like any other entry;
+                # a versionless or rowless one REDs below.
+                if meta.get("name") not in watched or key == "":
+                    continue
             all_names = {key.split("node_modules/")[-1]}
             if meta.get("name"):
                 all_names.add(meta["name"])
