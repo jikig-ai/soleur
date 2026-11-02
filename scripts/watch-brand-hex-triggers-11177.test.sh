@@ -593,6 +593,7 @@ SHIM
   RUN_ENV=(WATCH_GATE_X_FORCE=allow GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/nonexistent "GIT_CONFIG_PARAMETERS='core.abbrev'='4'" GIT_CEILING_DIRECTORIES=/ "GH_ACCESS_TOKEN=$DUMMY_TOKEN"); run
   need '[[ "$RC" -eq 0 && "$OUT" == *"examined=2"* && "$(gate_runs)" -eq 2 ]]' || return 1
   need '[[ "$(grep -c " worktree add " "$MOCKD/gitenv")" -ge 1 && "$(grep -c " update-ref --no-deref HEAD " "$MOCKD/gitenv")" -ge 2 && "$(grep -c " read-tree " "$MOCKD/gitenv")" -ge 3 ]]' || return 1
+  need '[[ "$ERR" != *"does not clear"* && "$ERR" != *"RED RUN"* ]]' || return 1
   need '[[ "$(grep -c "^leak=" "$MOCKD/gitenv" || true)" -eq 0 && "$(grep -c "^leaked=" "$MOCKD/gateenv" || true)" -eq 0 && "$(grep -c "^recorded=1$" "$MOCKD/gateenv")" -eq 2 ]]'
 }
 chk_forged_header() { # a tracked path named like a commit header (control char + 40 hex) must not hide the real commit
@@ -600,7 +601,70 @@ chk_forged_header() { # a tracked path named like a commit header (control char 
   local forged; forged=$'\x01'"$(printf 'a%.0s' $(seq 1 40))"
   put "$forged" "x"; put apps/web-platform/app/zz-forge.tsx "$OFF_TSX"
   g add -- "$forged" apps/web-platform/app/zz-forge.tsx || fatal "forge add failed"; gcommit "path forged as a header"; use_wrapper; run
-  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"::error::the commit stream does not match the first-parent list"* ]]'
+  # The remedy wording rides on the SAME line (re-run once; rename or delete does not clear it; trigger 1 is held;
+  # a real follow-up number, never a placeholder; a pointer to the workflow note).
+  local hl; hl="$(grep -m1 'does not match the first-parent list' <<<"$ERR" || true)"
+  need '[[ "$hl" == *"re-run"* && "$hl" == *"does not clear"* && "$hl" == *"trigger 1"* && "$hl" == *"RED RUN"* ]]' || return 1
+  # the follow-up number is a real issue other than the tracker itself (#11177 also appears on this line)
+  need '[[ -n "$(grep -oE "#[0-9]{4,}" <<<"$hl" | grep -vxF "#11177" | head -1)" ]]' || return 1
+  need '[[ "$hl" == *"never edit or forge a sentinel"* && "$hl" == *"retirement criteria"* ]]' || return 1
+}
+REAL_ENV="$(command -v env)"; [[ "$REAL_ENV" == /* ]] || fatal "env is not an absolute path"
+# envshim MODE: install an `env` shim in $MOCKD/shim that serves `env -0` three ways and otherwise execs the
+# real env by its absolute path. reject = GNU-less env (exit 2, the BSD message); pass = real env; pathonly =
+# a single NUL-terminated PATH= record.
+envshim() {
+  local mode="$1" shim="$MOCKD/shim"
+  assert_fixture_dir "$shim"; mkdir -p "$shim" || fatal "shim mkdir failed"
+  case "$mode" in
+    reject) cat > "$shim/env" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = "-0" ]; then echo "env: invalid option -- '0'" >&2; exit 2; fi
+exec $REAL_ENV "\$@"
+SHIM
+    ;;
+    pathonly) cat > "$shim/env" <<SHIM
+#!/usr/bin/env bash
+if [ "\${1:-}" = "-0" ]; then printf 'PATH=%s\\0' "\$PATH"; exit 0; fi
+exec $REAL_ENV "\$@"
+SHIM
+    ;;
+    pass) cat > "$shim/env" <<SHIM
+#!/usr/bin/env bash
+exec $REAL_ENV "\$@"
+SHIM
+    ;;
+    *) fatal "bad envshim mode $mode" ;;
+  esac
+  chmod +x "$shim/env" || fatal "shim chmod failed"
+}
+chk_envfail_a() { # an env that rejects -0: exit 3 BEFORE any git call or post, with the cause named
+  mkrepo; clean
+  local shim="$MOCKD/shim" real_git; real_git="$(command -v git)"
+  envshim reject
+  assert_fixture_dir "$MOCKD"; : > "$MOCKD/gitcalls"
+  assert_fixture_dir "$shim"
+  cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+printf 'call %s\n' "\$*" >> "$MOCKD/gitcalls"
+exec "$real_git" "\$@"
+SHIM
+  chmod +x "$shim/git" || fatal "shim chmod failed"
+  RUN_PATH="$shim:$MOCKD:$PATH"; run
+  need '[[ "$RC" -eq 3 && "$(posted)" -eq 0 && "$ERR" == *"::error::"* && "$ERR" == *"env -0"* ]]' || return 1
+  need '[[ ! -s "$MOCKD/gitcalls" && ! -s "$MOCKD/calls" && -z "$(ls -A "$MOCKD/tmp")" ]]'
+}
+chk_envfail_b() { # instrument control: a pass-through env on a one-commit clean repo is NOT exit 3
+  mkrepo; clean; envshim pass; RUN_PATH="$MOCKD/shim:$MOCKD:$PATH"; run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"examined=1"* && "$ERR" != *"env -0 produced no output"* ]]'
+}
+chk_envfail_c() { # any record counts: a single PATH= record is enough (the rule is "some output", not "a matching record")
+  mkrepo; clean; envshim pathonly; RUN_PATH="$MOCKD/shim:$MOCKD:$PATH"; run
+  need '[[ "$RC" -eq 0 && "$OUT" == *"examined=1"* && "$ERR" != *"env -0 produced no output"* ]]'
+}
+chk_sibling_pin() { # the sibling "ended before the window base" message keeps its text and gains no hint (different root cause)
+  grep -qF 'echo "::error::the commit stream ended before the window base of the first-parent list; cannot establish trigger 2" >&2' "$SUT_UNDER" \
+    || { DIAG="the sibling message text changed or carries the hint"; return 1; }
 }
 chk_hook_unreadable() { # an unreadable tracked hook is exit 3 and its name is printed inert (no ESC, no @)
   mkrepo; clean; local esc=$'\x1b' p
@@ -855,6 +919,10 @@ scenario "gitx: an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE never touches 
 scenario "G4 budget: an exhausted budget still judges the first candidate" chk_budget_first
 scenario "gitx: a GIT_CONFIG_* injection reaches neither a write-capable git call nor the gate child" chk_gitconf
 scenario "G4 forge: a tracked path named like a commit header is exit 3, never a silent drop" chk_forged_header
+scenario "env -0 failure: an env that rejects -0 is exit 3 before any git call or post, cause named" chk_envfail_a
+scenario "env -0 control: a pass-through env shim does not exit 3 (examined=1)" chk_envfail_b
+scenario "env -0 any record: a single PATH= record does not exit 3" chk_envfail_c
+scenario "G4 forge: the sibling 'ended before the window base' message is unchanged" chk_sibling_pin
 scenario "an unreadable tracked hook is exit 3 and its name is printed inert" chk_hook_unreadable
 scenario "--dry-run with an unreadable tracker warns and goes on" chk_dry_readfail
 scenario "G4 canary: a gate that always allows is exit 3 with the canary message" chk_canary_allow
@@ -1077,6 +1145,26 @@ if [[ -s "$SUT" ]]; then
 WN_ERR_HTTP=""' 'WN_ERR_HTTP=""'
   mutation_row "G1-r2" "tracker state check removed: a CLOSED tracker is commented on" chk_closed \
     sut '[[ "$WN_STATE" != "OPEN" ]]' 'false'
+  # read the check line from the SUT itself (a retyped copy drifts with every wording fix); it must be exactly one line
+  ENVCHK="$(grep -F '[[ "$_envn" -gt 0 ]] ||' "$SUT")"
+  [[ -n "$ENVCHK" && "$ENVCHK" != *$'\n'* ]] || fatal "expected exactly one env -0 emptiness check line in the SUT"
+  mutation_row "G3-env-del" "the env -0 emptiness check is deleted" chk_envfail_a \
+    sut "$ENVCHK"$'\n' ''
+  mutation_row "G3-env-order" "the env -0 check runs after the first git call instead of before any" chk_envfail_a \
+    sut "$ENVCHK"$'\n' '' \
+    sut 'wn_preflight || exit 3' "$ENVCHK"$'\n''wn_preflight || exit 3'
+  # chk_envfail_c (one PATH= record, matched by no case arm) kills this on any host; chk_envfail_b (the real env) does not, because a
+  # runner that exports GIT_CONFIG_KEY_n / VALUE_n hands the mutant a matched record to count (CI did exactly that).
+  mutation_row "G3-env-arm" "only records matched by the GIT_CONFIG case arm are counted" chk_envfail_c \
+    sut '  _envn=$((_envn + 1))
+' '' \
+    sut 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n") ;;' 'GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) GIT_UNSET+=(-u "$_n"); _envn=$((_envn + 1)) ;;'
+  mutation_row "G3-env-two" "the check needs two records instead of one" chk_envfail_c \
+    sut '[[ "$_envn" -gt 0 ]]' '[[ "$_envn" -gt 1 ]]'
+  mutation_row "G4-hint-del" "the mismatch message loses its remedy hint" chk_forged_header \
+    sut 'cannot establish trigger 2 - ${T2_STREAM_HINT}" >&2' 'cannot establish trigger 2" >&2'
+  mutation_row "G4-sibling" "the hint is appended to the sibling window-base message" chk_sibling_pin \
+    sut 'window base of the first-parent list; cannot establish trigger 2" >&2' 'window base of the first-parent list; cannot establish trigger 2 - ${T2_STREAM_HINT}" >&2'
   # G1 row 2 (the recorder goes dead): a posting scenario must notice the empty call log.
   MOCK_DEAD=0; DIAG=""
   if chk_g3_r1; then
@@ -1194,6 +1282,55 @@ else
   fail "workflow facets: $WF does not exist"
 fi
 
+# ------------------------------------------------------------ hint / workflow parity ----
+# The forged-header exit-3 line points at a `RED RUN` paragraph in the workflow header. Documentation
+# parity only (one diff can edit both sides); it proves consistency, and it cannot be vacuous: exactly one
+# T2_STREAM_HINT= definition, a non-empty upper-case pointer token, a workflow file that exists, a paragraph
+# (heading line through the next bare `#` line) that carries the clauses, and a real follow-up number.
+wf_hint_parity() { # SUTFILE WFFILE (sets DIAG)
+  local s="$1" w="$2" n line tok para fu
+  [[ -f "$s" ]] || { DIAG="parity: SUT file missing"; return 1; }
+  [[ -f "$w" ]] || { DIAG="parity: workflow file missing"; return 1; }
+  n="$(grep -c '^T2_STREAM_HINT=' "$s" || true)"
+  [[ "$n" -eq 1 ]] || { DIAG="parity: expected exactly one T2_STREAM_HINT= definition, found $n"; return 1; }
+  line="$(grep -m1 '^T2_STREAM_HINT=' "$s")"
+  tok="$(sed -nE 's/.* see ([A-Z ]+) in code-quality-followups-watch\.yml.*/\1/p' <<<"$line")"
+  [[ -n "$tok" && "$tok" =~ ^[A-Z\ ]+$ ]] || { DIAG="parity: no usable pointer token in the hint"; return 1; }
+  fu="$(grep -oE '#[0-9]{4,}' <<<"$line" | grep -vxF '#11177' | head -1 || true)"
+  [[ -n "$fu" ]] || { DIAG="parity: the hint carries no follow-up issue number besides the tracker"; return 1; }
+  para="$(awk -v t="# $tok:" 'index($0, t) == 1 { f = 1; print; next } f { if ($0 == "#") exit; print }' "$w")"
+  [[ -n "$para" ]] || { DIAG="parity: no '# $tok:' paragraph in the workflow"; return 1; }
+  [[ "$para" == *"trigger 1"* && "$para" == *"does not clear"* && "$para" == *"Never edit or forge a sentinel"* ]] || { DIAG="parity: the '$tok' paragraph lost its clauses"; return 1; }
+  grep -qF -- "$fu" <<<"$para" || { DIAG="parity: the '$tok' paragraph does not carry the hint's follow-up number $fu"; return 1; }
+  return 0
+}
+# par_row ID DESC TARGET(sut|wf) SED-EXPR: a mutated copy of one side must break the parity.
+par_row() {
+  local id="$1" desc="$2" tgt="$3" expr="$4" c="$PD/$1.copy"
+  DIAG=""
+  if ! wf_hint_parity "$SUT" "$WF"; then fail "$id control (unmutated pair) is not green [$DIAG]"; return; fi
+  assert_fixture_dir "$c"
+  if [[ "$tgt" == sut ]]; then sed -E "$expr" "$SUT" > "$c"; else sed -E "$expr" "$WF" > "$c"; fi
+  if [[ "$tgt" == sut ]] && cmp -s "$SUT" "$c"; then fail "$id mutation did not land - $desc"; return; fi
+  if [[ "$tgt" == wf ]] && cmp -s "$WF" "$c"; then fail "$id mutation did not land - $desc"; return; fi
+  DIAG=""
+  if [[ "$tgt" == sut ]]; then
+    if wf_hint_parity "$c" "$WF"; then fail "$id mutated pair stayed GREEN: $desc"; else pass "$id RED under mutation: $desc"; fi
+  else
+    if wf_hint_parity "$SUT" "$c"; then fail "$id mutated pair stayed GREEN: $desc"; else pass "$id RED under mutation: $desc"; fi
+  fi
+}
+PD="$ROOT/parity"; assert_fixture_dir "$PD"; mkdir -p "$PD" || fatal "parity mkdir failed"
+DIAG=""
+if wf_hint_parity "$SUT" "$WF"; then pass "G4 parity: the hint's pointer, clauses and follow-up number match the workflow RED RUN paragraph"; else fail "G4 parity [$DIAG]"; fi
+DIAG=""
+if wf_hint_parity "$SUT" "$PD/absent.yml"; then fail "G4 parity: an absent workflow file stayed GREEN"; else pass "G4 parity: an absent workflow file is a failure, never a skip"; fi
+par_row "G4-par-head" "the workflow loses its RED RUN heading" wf '/^# RED RUN:/d'
+par_row "G4-par-body" "the workflow keeps the heading but guts the paragraph clauses" wf '/^# RED RUN:/,/^#$/{s/trigger 1/trigger one/g;s/does not clear/may clear/g}'
+par_row "G4-par-token" "the SUT pointer token disagrees with the workflow heading" sut 's/ see RED RUN in / see GREEN RUN in /'
+par_row "G4-par-num" "the workflow paragraph names a placeholder instead of the hint's follow-up number" wf '/^# RED RUN:/,/^#$/s/#11864/#TBD/g'
+par_row "G4-par-never" "the workflow paragraph drops the prohibition on touching a sentinel" wf '/^# RED RUN:/,/^#$/s/Never edit or forge a sentinel/Edit a sentinel/'
+
 # Exit-gate check (behavioural): this same suite, re-run with ONE injected failing SCENARIO (it goes
 # through scenario(), so a disarmed scenario() is caught too), must exit EXACTLY 1. An `exit 0`
 # placed before the gate, a reset FAIL counter, a neutered scenario() or exit path would all give 0
@@ -1208,7 +1345,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY above the
 # `if`, not with the other constants: guard-vacuity-floor builds its mutant by slicing the floor
 # block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=157
+MIN_ASSERTIONS=174
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2
