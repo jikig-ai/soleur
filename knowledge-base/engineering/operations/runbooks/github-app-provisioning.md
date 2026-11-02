@@ -183,6 +183,10 @@ computes; signature verification silently fails-closed 401 on every delivery.
 
 Two options:
 
+> **Rotation of the webhook secret** (a new value for `GITHUB_APP_WEBHOOK_SECRET`) runs through the
+> dispatch-only `key-rotate.yml` workflow, which ends with this step as the single OWNER step
+> (`owner_step_pending`); see [key-rotation.md](./key-rotation.md). This section is the procedure for the update itself.
+
 **Option A — Manual paste (fallback)**:
 
 ```bash
@@ -200,8 +204,11 @@ Until a `bin/mint-app-jwt.sh` helper lands (deferred), the simplest path is
 inline JWT mint:
 
 ```bash
-# 1. Fetch the PEM and App ID:
-doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur -c prd \
+# 1. Fetch the PEM and App ID. Since #8609 / ADR-241 D10 the runtime App key lives in the
+#    isolated project soleur-github-app (config prd), NOT in soleur/prd (which holds an
+#    EVICTED marker after R-step 6); the App ID is not a secret and stays in soleur/prd.
+#    (Re-verified against github-app.tf `removed {}` blocks and ci-deploy.sh on 2026-11-02, #11294.)
+doppler secrets get GITHUB_APP_PRIVATE_KEY --plain -p soleur-github-app -c prd \
   | base64 -d > /tmp/app.pem
 chmod 600 /tmp/app.pem
 APP_ID=$(doppler secrets get GITHUB_APP_ID --plain -p soleur -c prd)
