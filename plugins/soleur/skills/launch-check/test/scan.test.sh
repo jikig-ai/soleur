@@ -57,4 +57,15 @@ check "missing gitleaks: exit 2 with reason=scanner-missing" bash -c '[ "$1" = 2
 check "missing gitleaks: nothing was read or written" test ! -e "$SCRATCH/x.tsv"
 lc scan --target "$SCRATCH" --facts "$SCRATCH/y.tsv" > "$SCRATCH/y.out" 2>&1; rc=$?
 check "target that is not a git repo: exit 2" test "$rc" = 2
-finish 40
+# Triage fixes found by the self-test (Phase 3): public certs are not credentials; monorepo Next.js; original-form guards.
+C=$(fx_minimal certs); put "$C/certs/cacert.pem" 'public CA'; commit_all "$C"; scan_to "$C" "$SCRATCH/c.tsv"
+check "a public CA certificate (cacert.pem) is not a credential-bearing file" test "$(fact "$SCRATCH/c.tsv" SEC-02)" = ok
+C2=$(fx_minimal keys); put "$C2/deploy-key.pem" 'x'; commit_all "$C2"; scan_to "$C2" "$SCRATCH/c2.tsv"
+check "a key-named .pem is a credential-bearing file" test "$(fact "$SCRATCH/c2.tsv" SEC-02)" = gap
+MO=$(fx_minimal mono); put "$MO/apps/web/package.json" '{"dependencies":{"next":"1"}}'; commit_all "$MO"; scan_to "$MO" "$SCRATCH/mo.tsv"
+check "monorepo: nested Next.js package without a gate is a DEBT-05 gap" test "$(fact "$SCRATCH/mo.tsv" DEBT-05)" = gap
+put "$MO/apps/web/.dependency-cruiser.cjs" 'module.exports = {}'; commit_all "$MO"; scan_to "$MO" "$SCRATCH/mo2.tsv"
+check "monorepo: a nested dependency-cruiser config clears DEBT-05" test "$(fact "$SCRATCH/mo2.tsv" DEBT-05)" = ok
+OG=$(fx_minimal orig); put "$OG/.claude/hooks/git-commit-secret-scan.sh" '#!/bin/sh'; commit_all "$OG"; scan_to "$OG" "$SCRATCH/og.tsv"
+check "original-form guard (the source repo's own hook) counts as present, still advisory/unverified" grep -qE '^BASE-secret-scan	ok	original form present, advisory/unverified' "$SCRATCH/og.tsv"
+finish 45
