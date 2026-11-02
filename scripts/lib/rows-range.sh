@@ -91,7 +91,7 @@ rows_parse_args() {
     echo "ERROR(harness): a positive-integer DECLARED_TOTAL must be declared before rows_parse_args runs — each battery pins its own declared count; the lib only reads it" >&2
     exit 2
   fi
-  DECLARED_TOTAL=$((10#$DECLARED_TOTAL))   # 10# pins decimal: a 0N declaration is octal-ambiguous to arithmetic, which would silently skip the gate
+  : $(( DECLARED_TOTAL = 10#$DECLARED_TOTAL ))   # 10# pins decimal (a 0N decl is octal-ambiguous and would silently skip the gate); the mid-line : $((x=y)) form keeps DECLARED_TOTAL= off line-start (Direction-2 census)
   if (( DECLARED_TOTAL < 1 )); then
     echo "ERROR(harness): a positive-integer DECLARED_TOTAL must be declared before rows_parse_args runs — each battery pins its own declared count; the lib only reads it" >&2
     exit 2
