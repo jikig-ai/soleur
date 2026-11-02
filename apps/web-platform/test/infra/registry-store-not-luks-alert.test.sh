@@ -417,7 +417,7 @@ s = s[:i] + "/*\n  registry_store_not_luks_sql = <<-SQL\n  SELECT legit\n  SQL\n
     'i = s.index(SQLLOC)
 s = s[:i] + "  # registry_store_not_luks_sql = <<-SQL\n" + s[i:]' \
     "decoy local exists"
-  mutate_red "a commented-out `paused = false` decoy line appears inside the alert block" TF \
+  mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
     's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
     "decoy exists"
   mutate_red "an inline tautology disjunct is appended inside the predicate" TF \

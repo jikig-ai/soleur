@@ -12,26 +12,29 @@
 # (#6812). The fire command's FIRST act is a `logger -t luks-monitor` marker carrying
 # `op=workspaces-luks-deadman result=fired`; this alert pages on that row.
 #
-# WHAT THIS FILE PROTECTS, and why each row exists:
-#   * The needle is the literal the fire command logs, read from workspaces-cutover.sh itself, so a
-#     reworded marker reds here instead of silencing the page.
-#   * The predicate carries the tag (SYSLOG_IDENTIFIER='luks-monitor'), the host
-#     (host_name='soleur-web-platform' — web-2 ships to the same source) and the result=fired
-#     conjunct, ANDed, with no OR and no negation. Dropping any one of them reds (mutation rows).
-#   * The paging semantics are monitor_send_failed's (ADR-218): threshold, higher_than 0,
-#     treat_as_zero, unpaused, email, and the free/paid escalation ternary.
-#   * Both resources are in the apply workflow's MAIN plan -target= allowlist (#5566: an untargeted
-#     resource is never applied and never exists).
+# WHAT THIS FILE NOW PROVES (post-#11720 convention):
+#   * CONJUNCT-SET CANON — the predicate is exactly the head + four named AND conjuncts +
+#     GROUP BY time, compared as a SET: reordering the conjuncts is a must-PASS edit (the
+#     alert's own semantic is order-insensitive), while dropping, weakening, or adding a
+#     clause goes red. A /* */- or #-wrapped decoy opener/resource counts and goes red.
+#   * BLOCK-SCOPED EXACTLY-ONCE PINS — every alert attribute is asserted inside its own
+#     resource block by param(), whole value line anchored both ends, required exactly once.
+#     QP/CK are pinned EXACTLY (a duplicated query_period line earlier in the block can no
+#     longer steer a first-hit extraction).
+#   * THE FIRE COMMAND IS PINNED AT ITS EMITTER — the needle the predicate matches is the
+#     literal workspaces-cutover.sh's arm_dead_man logs FIRST; a commented decoy inside the
+#     function, a quoting copy outside it, or an uncommented fire-prefixed line planted
+#     before the real one all go red.
+#   * THE BATTERY CANNOT BE MUTED — MUT_SKIP skips mutation rows on an inner run only; the
+#     pristine-child control FATALs (rc 2) if the un-mutated inner run is not green;
+#     DEADMAN_GUARD_/MUT_SKIP literals may not reach the workflow's executable text (the
+#     seam check below); mutate_floor_red proves the assertion floor fires.
+#   * RC DISCRIMINATION — only rc=1 (a real [FAIL] verdict) is a caught mutation;
+#     instrument failures (rc>=2) are UNRESOLVED. Floor/ledger trips exit 1;
+#     instrument failures exit 2.
 #
-# WHAT THIS FILE DOES NOT PROVE: that the alert is armed IN PRODUCTION (the reconciler's `logs_alert`
-# arm, plugins/soleur/lib/heartbeat-live-reconcile.ts, reads the world twice daily), nor that a real
-# fire's row reaches Better Stack (Vector allowlists the luks-monitor tag; the nightly
-# `OK: /mnt/data is LUKS-backed` row proves that path live).
-#
-# Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates the
-# COPY, and re-runs this guard against it through the DEADMAN_GUARD_* overrides. No tracked file is
-# ever written (the sibling inngest-luks-wrong-volume-alert.test.sh records why in-place mutation
-# was abandoned).
+# Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates
+# the COPY, and re-runs this guard against it through DEADMAN_GUARD_{TF,WF,CUT,IV} overrides.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -40,6 +43,7 @@ REPO="$(cd "$DIR/../../../.." && pwd)"
 TF="${DEADMAN_GUARD_TF:-$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf}"
 WF="${DEADMAN_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 CUT="${DEADMAN_GUARD_CUT:-$REPO/apps/web-platform/infra/workspaces-cutover.sh}"
+IV="${DEADMAN_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -58,7 +62,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CUT"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$CUT"; assert_fixture_dir "$IV"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -68,33 +72,53 @@ if [ "$pass" -ne $((_p0 + 1)) ] || [ "$fail" -ne $((_f0 + 1)) ] || [ "${#FAILED[
 fi
 pass=$_p0; fail=$_f0; FAILED=()
 
-for f in "$TF" "$WF" "$CUT"; do
+for f in "$TF" "$WF" "$CUT" "$IV"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
 NEEDLE='op=workspaces-luks-deadman result=fired'
 MARKER='SOLEUR_WORKSPACES_LUKS_DEADMAN'
 
-# The predicate heredoc, from the FIRST UNCOMMENTED opening line to its own terminator.
-LOCAL_SQL="$(awk '/^[[:space:]]*workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF")"
-# The alert and exploration blocks, from their exact header to the first column-0 "}".
-ALERT="$(awk '/^resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-EXPL="$(awk '/^resource "logtail_exploration" "workspaces_luks_deadman_fired" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-
-# Whole-line assertions anchored at both ends: a bare substring grep is satisfied by the same text
-# inside a comment, or with a suffix that inverts it (`paused = false || true`).
-# Every grep reads a HERE-STRING, never `printf … | grep -q`: under pipefail, grep -q exiting on its
-# first match can SIGPIPE the writer and fail the pipeline, which fails a negated check OPEN.
-line_in() {  # line_in <text> <ERE for the whole line, without anchors>
-  grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"
+# ── Extraction helpers ───────────────────────────────────────────────────────────────────────
+# sql_local: the heredoc body of `workspaces_luks_deadman_fired_sql = <<-SQL` up to its `  SQL`
+# closer, from the FIRST UNCOMMENTED opener line.
+sql_local() {
+  awk '/^[[:space:]]*workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<-SQL/{f=1;next} f&&/^  SQL$/{f=0} f' "$TF"
+}
+# res_block: one resource block from its column-0 header to its column-0 closing brace.
+res_block() {
+  awk -v h="resource \"$1\" \"$2\" {" '$0 == h {f=1} f{print} f && /^}/{exit}' "$TF"
+}
+# param <block> <attr> <value-ERE>: whole-line attribute assertion INSIDE a block, anchored
+# both ends, required EXACTLY ONCE.
+param() {
+  [ "$(printf '%s\n' "$1" | grep -cE "^[[:space:]]*$2[[:space:]]*=[[:space:]]*$3[[:space:]]*(#.*)?$")" -eq 1 ]
 }
 sql_has() {  # sql_has <fixed conjunct text, one line of the heredoc>
   grep -qxF -- "      AND $1" <<< "$LOCAL_SQL"
 }
 
+LOCAL_SQL="$(sql_local)"
+ALERT="$(res_block logtail_exploration_alert workspaces_luks_deadman_fired)"
+EXPL="$(res_block logtail_exploration workspaces_luks_deadman_fired)"
+
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
   || no "workspaces_luks_deadman_fired_sql: heredoc not found — every predicate row below would be vacuous"
+
+# Opener counts — unanchored, file-wide, exactly once (a /* */- or #-wrapped decoy counts/red).
+_n_sql_openers="$(grep -cE 'workspaces_luks_deadman_fired_sql[[:space:]]*=[[:space:]]*<<-SQL' "$TF")"
+[ "$_n_sql_openers" -eq 1 ] \
+  && ok "exactly one workspaces_luks_deadman_fired_sql heredoc opener in the file" \
+  || no "workspaces_luks_deadman_fired_sql opener count is $_n_sql_openers, want 1 — a decoy local exists"
+_n_exp="$(grep -cE 'resource "logtail_exploration" "workspaces_luks_deadman_fired"' "$TF")"
+[ "$_n_exp" -eq 1 ] \
+  && ok "exactly one logtail_exploration.workspaces_luks_deadman_fired resource header" \
+  || no "logtail_exploration header count is $_n_exp, want 1 — a decoy resource exists"
+_n_alr="$(grep -cE 'resource "logtail_exploration_alert" "workspaces_luks_deadman_fired"' "$TF")"
+[ "$_n_alr" -eq 1 ] \
+  && ok "exactly one logtail_exploration_alert.workspaces_luks_deadman_fired resource header" \
+  || no "logtail_exploration_alert header count is $_n_alr, want 1 — a decoy resource exists"
 
 _head="$(head -3 <<< "$LOCAL_SQL" | tr -s ' ' | sed 's/^ //' | paste -sd' ')"
 grep -qxF 'SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}}' <<< "$_head" \
@@ -117,22 +141,30 @@ sql_has "startsWith(JSONExtractString(raw, 'message'), '$MARKER ')" \
   && ok "the marker anchor: the message STARTS with the dead-man marker (a row merely quoting it cannot page)" \
   || no "the startsWith '$MARKER ' anchor is missing"
 
-# Exactly the head, four AND conjuncts and GROUP BY: no OR, no negation, no fifth clause that could
-# narrow the rule to nothing.
+# CONJUNCT-SET CANON — exactly the head, the four named conjuncts and GROUP BY time, compared
+# as a SET: conjunct order is deliberately irrelevant (the alert's own semantic), so the canon
+# sorts the AND lines; a reordered predicate stays green while any added/dropped/altered clause
+# goes red. Dead text cannot satisfy it — the set is over the live extraction only.
 _body="$(sed -n '4,$p' <<< "$LOCAL_SQL")"
-if [ "$(grep -c '^      AND ' <<< "$_body")" -eq 4 ] \
+_conj="$(grep '^      AND ' <<< "$_body" | sort)"
+_conj_expected="$(printf '%s\n' \
+  "      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'" \
+  "      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'" \
+  "      AND position(JSONExtractString(raw, 'message'), '$NEEDLE') > 0" \
+  "      AND startsWith(JSONExtractString(raw, 'message'), '$MARKER ')" | sort)"
+if [ "$_conj" = "$_conj_expected" ] \
    && [ "$(grep -vc '^      AND ' <<< "$_body")" -eq 1 ] \
    && [ "$(tail -1 <<< "$_body")" = '    GROUP BY time' ] \
    && ! grep -qiE '(^|[^A-Za-z_])(OR|NOT)([^A-Za-z_]|$)|!=|<>' <<< "$LOCAL_SQL"; then
-  ok "the predicate is exactly four ANDed conjuncts and GROUP BY time (no OR, no negation)"
+  ok "the predicate is exactly the four named ANDed conjuncts and GROUP BY time (order-insensitive canon)"
 else
-  no "the predicate carries an OR, a negation or an extra clause"
+  no "the predicate carries an OR, a negation, an extra clause, or a conjunct outside the named set"
 fi
 
 # The needle must be what the fire command actually logs: the systemd-run inline command's first
 # logger call, on the luks-monitor tag. Read ONLY from arm_dead_man's body, full-line comments
-# dropped, and only a line that STARTS with the /bin/sh -c argument: the same text in a comment, in
-# another function or after other code on a line is not the fire command.
+# dropped, and only a line that STARTS with the /bin/sh -c argument: the same text in a comment,
+# in another function or after other code on a line is not the fire command.
 FIRE_PFX="/bin/sh -c \"logger -t \${LUKS_LOG_TAG} -- '$MARKER feature=workspaces-luks $NEEDLE "
 FIRE_LINE="$(awk -v pfx="$FIRE_PFX" '
   /^arm_dead_man\(\)[[:space:]]*\{/ { f = 1; next }
@@ -141,67 +173,101 @@ FIRE_LINE="$(awk -v pfx="$FIRE_PFX" '
 [ -n "$FIRE_LINE" ] \
   && ok "workspaces-cutover.sh's fire command logs '$MARKER … $NEEDLE ' first, on \${LUKS_LOG_TAG}" \
   || no "the fire command no longer logs '$MARKER … $NEEDLE ' as its first act — the alert would never page"
+# FIRE_LINE cardinality: exactly one UNCOMMENTED line inside arm_dead_man may start with the
+# fire prefix — an uncommented copy planted BEFORE the real one steers the first-hit read.
+_n_fire="$(awk -v pfx="/bin/sh -c \"logger -t " '
+  /^arm_dead_man\(\)[[:space:]]*\{/ { f = 1; next }
+  f && /^\}/ { exit }
+  f { l = $0; sub(/^[[:space:]]+/, "", l); if (l ~ /^#/) next; if (index(l, pfx) == 1) n++ }
+  END { print n+0 }' "$CUT")"
+[ "$_n_fire" -eq 1 ] \
+  && ok "exactly one uncommented logger line inside arm_dead_man (a planted fire-prefixed decoy counts)" \
+  || no "arm_dead_man carries $_n_fire uncommented logger lines (want 1) — a decoy fire command exists"
 grep -qE '^LUKS_LOG_TAG="\$\{WORKSPACES_LUKS_LOG_TAG:-luks-monitor\}"' "$CUT" \
   && ok "LUKS_LOG_TAG defaults to luks-monitor (the tag the predicate matches, Vector-allowlisted)" \
   || no "LUKS_LOG_TAG no longer defaults to luks-monitor"
 
-line_in "$EXPL" 'sql_query[[:space:]]*=[[:space:]]*replace\(trimspace\(local\.workspaces_luks_deadman_fired_sql\), "/\\\\s\+/", " "\)' \
+param "$EXPL" 'sql_query' 'replace\(trimspace\(local\.workspaces_luks_deadman_fired_sql\), "/\\\\s\+/", " "\)' \
   && ok "the exploration carries THIS predicate, collapsed to one line (the sibling's perpetual-diff rule)" \
   || no "the exploration does not carry local.workspaces_luks_deadman_fired_sql as its sql_query"
-line_in "$EXPL" 'values[[:space:]]*=[[:space:]]*\[local\.vector_prd_source_id\]' \
+param "$EXPL" 'values' '\[local\.vector_prd_source_id\]' \
   && ok "the exploration reads the prd Vector source" \
   || no "the exploration's source variable is not local.vector_prd_source_id"
 
 [ -n "$ALERT" ] && ok "logtail_exploration_alert.workspaces_luks_deadman_fired exists (exact header)" \
   || no "logtail_exploration_alert.workspaces_luks_deadman_fired is missing"
-line_in "$ALERT" 'exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.workspaces_luks_deadman_fired\.id' \
+param "$ALERT" 'exploration_id' 'logtail_exploration\.workspaces_luks_deadman_fired\.id' \
   && ok "the alert watches ITS OWN exploration" \
   || no "the alert's exploration_id is not logtail_exploration.workspaces_luks_deadman_fired.id"
-line_in "$ALERT" 'name[[:space:]]*=[[:space:]]*"soleur-workspaces-luks-deadman-fired-prd"' \
-  && line_in "$EXPL" 'name[[:space:]]*=[[:space:]]*"soleur-workspaces-luks-deadman-fired-prd"' \
+param "$ALERT" 'name' '"soleur-workspaces-luks-deadman-fired-prd"' \
+  && param "$EXPL" 'name' '"soleur-workspaces-luks-deadman-fired-prd"' \
   && ok "both are named soleur-workspaces-luks-deadman-fired-prd" \
   || no "the exploration/alert name drifted from soleur-workspaces-luks-deadman-fired-prd"
-line_in "$ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
-  && line_in "$ALERT" 'operator[[:space:]]*=[[:space:]]*"higher_than"' \
-  && line_in "$ALERT" 'value[[:space:]]*=[[:space:]]*0' \
+param "$ALERT" 'alert_type' '"threshold"' \
+  && param "$ALERT" 'operator' '"higher_than"' \
+  && param "$ALERT" 'value' '0' \
   && ok "threshold, higher_than 0: ONE fired row pages (monitor_send_failed's semantics)" \
   || no "the alert is not threshold/higher_than/0 — a single fire would not page"
-line_in "$ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
+param "$ALERT" 'on_missing_data' '"treat_as_zero"' \
   && ok "treat_as_zero, so an open incident can observe recovery" \
   || no "on_missing_data is not treat_as_zero"
-line_in "$ALERT" 'paused[[:space:]]*=[[:space:]]*false' \
+param "$ALERT" 'paused' 'false' \
   && ok "paused = false on its own line" \
   || no "the alert is paused (or paused carries a suffix)"
-line_in "$ALERT" 'email[[:space:]]*=[[:space:]]*true' \
+[ "$(printf '%s\n' "$ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "the string 'paused' occurs exactly once in the alert block (a commented or duplicated decoy counts)" \
+  || no "'paused' occurs !=1 time in the alert block — a commented pinned-line decoy exists"
+param "$ALERT" 'email' 'true' \
   && ok "email = true (the free-tier paging surface)" \
   || no "email is not true"
-QP="$(grep -oE '^[[:space:]]*query_period[[:space:]]*=[[:space:]]*[0-9]+' <<< "$ALERT" | grep -oE '[0-9]+$')"
-CK="$(grep -oE '^[[:space:]]*check_period[[:space:]]*=[[:space:]]*[0-9]+' <<< "$ALERT" | grep -oE '[0-9]+$')"
-if [ -n "$QP" ] && [ -n "$CK" ] && [ "$CK" -ge 1 ] && [ "$QP" -ge "$CK" ] && [ "$CK" -le 300 ]; then
-  ok "evaluated at least every 5 min (check_period ${CK}s) over a window that covers it (query_period ${QP}s)"
-else
-  no "the evaluation cadence is too slow or the window misses buckets (check_period=${CK:-?} query_period=${QP:-?})"
-fi
-line_in "$ALERT" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
-  && line_in "$ALERT" 'team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"' \
+param "$ALERT" 'query_period' '300' \
+  && param "$ALERT" 'check_period' '60' \
+  && param "$ALERT" 'confirmation_period' '0' \
+  && param "$ALERT" 'recovery_period' '600' \
+  && ok "evaluated every 60s over a 300s window (confirm 0, recovery 600) — exact pins, not first-hit ranges" \
+  || no "query/check/confirmation/recovery periods are not exactly 300/60/0/600 (exactly once each)"
+param "$ALERT" 'policy_id' 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
+  && param "$ALERT" 'team_name' 'var\.betterstack_paid_tier \? null : "Your team"' \
   && ok "the escalation target is the free/paid ternary every sibling uses (ADR-218)" \
   || no "the escalation_target drifted from the sibling ternary"
 grep -qF 'Runbook: ${local.workspaces_luks_deadman_runbook_url}' <<< "$ALERT" \
-  && line_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.workspaces_luks_deadman_runbook_url' \
+  && param "$ALERT" 'runbook' 'local\.workspaces_luks_deadman_runbook_url' \
   && grep -qE '^[[:space:]]*workspaces_luks_deadman_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604\.md[#"]' "$TF" \
   && ok "incident_cause and metadata.runbook carry the cutover runbook URL (the email is what a reader acts on)" \
   || no "the incident has no clickable cutover-runbook URL"
 
-grep -qE '^[[:space:]]*-target=logtail_exploration\.workspaces_luks_deadman_fired \\$' "$WF" \
-  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.workspaces_luks_deadman_fired \\$' "$WF" \
-  && ok "both resources are in an apply allowlist (#5566: an untargeted resource is never applied)" \
+# NEGATIVE row: no count/for_each/lifecycle/ignore_changes token inside EITHER resource block.
+if [ "$(printf '%s\n%s\n' "$EXPL" "$ALERT" | grep -cE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)[[:space:]]*[= {]')" -eq 0 ]; then
+  ok "no count/for_each/lifecycle/ignore_changes mute knob inside either resource block"
+else
+  no "a count/for_each/lifecycle/ignore_changes token sits inside a resource block — a mute knob the provider would honor silently"
+fi
+
+APPLY_JOB="$(awk '/^  apply:$/{f=1; print; next} f && /^  [A-Za-z0-9_-]+:$/{f=0} f' "$WF")"
+grep -qE '^[[:space:]]*-target=logtail_exploration\.workspaces_luks_deadman_fired \\$' <<< "$APPLY_JOB" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.workspaces_luks_deadman_fired \\$' <<< "$APPLY_JOB" \
+  && ok "both resources are in the push-triggered apply job's -target allowlist (#5566)" \
   || no "one or both -target= lines are missing — the alert would never exist in Better Stack"
 
-# ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
-# OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
-# guard with MUT_SKIP=1 and the matching DEADMAN_GUARD_* override pointing at the copy.
-SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=22
+# ── Workflow seam — registered exactly once, and no env axis reaches executable text ─────────
+REG_RUN='        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh'
+IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
+n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
+[ "$n_run" -eq 1 ] \
+  && ok "this suite's run line is registered in infra-validation.yml exactly once" \
+  || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+
+seam_bad=""
+printf '%s\n' "$IV_CODE" | grep -nE 'DEADMAN_GUARD_' >/dev/null && seam_bad="$seam_bad DEADMAN_GUARD_-literal"
+printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+[ -z "$seam_bad" ] \
+  && ok "no DEADMAN_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+
+# ── Mutation rows: each must make a row above RED (must-PASS rows stay GREEN) ─────────────────
+# OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs
+# this guard with MUT_SKIP=1 and the matching DEADMAN_GUARD_* override pointing at the copy.
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t deadmanalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -215,112 +281,247 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  mutate() {  # mutate <want: RED|PASS> <label> <TF|WF|CUT> <python-program-on-s>
-    local want="$1" label="$2" which="$3" prog="$4" src copy rc=0
+  PRELUDE='Q = chr(39)
+def edit(s, anchor, old, new, end="\n}\n"):
+    i = s.index(anchor)
+    j = s.index(end, i)
+    region = s[i:j]
+    assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
+    return s[:i] + region.replace(old, new) + s[j:]
+def dm_replace(s, old, new):
+    # The first occurrence AFTER the dead-man local'\''s opening line: the luks-monitor
+    # host-timer predicate earlier in the file carries identical tag/host conjuncts.
+    i = s.index("  workspaces_luks_deadman_fired_sql = <<-SQL")
+    j = s.index(old, i)
+    return s[:j] + new + s[j + len(old):]
+SQLLOC = "  workspaces_luks_deadman_fired_sql = <<-SQL"
+SQLEND = "\n  SQL\n"
+EXPRES = "resource \"logtail_exploration\" \"workspaces_luks_deadman_fired\" {"
+ALRRES = "resource \"logtail_exploration_alert\" \"workspaces_luks_deadman_fired\" {"'
+
+  _red_verdict() {
+    case "$1" in
+      1) if [ -z "$3" ] || { grep -F '[FAIL]' "$2" | grep -F -- "$3" >/dev/null; }; then echo red; else echo wrong; fi ;;
+      0) echo survived ;;
+      *) echo unresolved ;;
+    esac
+  }
+
+  # mutate_red <label> <TF|WF|CUT|IV> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  mutate_red() {
+    local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
     case "$which" in
       TF)  src="$TF";  copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
       WF)  src="$WF";  copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
       CUT) src="$CUT"; copy="$MUT_DIR/workspaces-cutover.sh" ;;
-      *) printf '[FATAL] mutate: unknown target %s\n' "$which" >&2; exit 2 ;;
+      IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
-    cp "$src" "$copy" || { printf '[FATAL] mutate: cp %s failed\n' "$src" >&2; exit 2; }
+    cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
     python3 - "$copy" <<PY || { no "mutation '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
+$PRELUDE
 orig = open(p, encoding="utf-8").read()
 s = orig
-def dm_replace(s, old, new):
-    # The first occurrence AFTER the dead-man local's opening line: the luks-monitor host-timer
-    # predicate earlier in the file carries identical tag/host conjuncts.
-    i = s.index("  workspaces_luks_deadman_fired_sql = <<-SQL")
-    j = s.index(old, i)
-    return s[:j] + new + s[j + len(old):]
 $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    case "$which" in
-      TF)  DEADMAN_GUARD_TF="$copy"  MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
-      WF)  DEADMAN_GUARD_WF="$copy"  MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
-      CUT) DEADMAN_GUARD_CUT="$copy" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || rc=$? ;;
-    esac
-    # Only rc=1 (an assertion went red) is a caught mutation; rc>=2 is this guard's own FATAL class.
-    case "$want:$rc" in
-      RED:1)  ok "mutation RED: $label" ;;
-      RED:0)  no "mutation SURVIVED: $label — the rows above pin nothing" ;;
-      PASS:0) ok "must-PASS edit stays green: $label" ;;
-      PASS:*) no "must-PASS edit went red (inner rc=$rc): $label — the guard over-fits" ;;
-      *)      no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
+    env "DEADMAN_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
+    case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
+      red:red) ok "mutation RED: $label" ;;
+      wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
+      wrong:red) no "mutation went red for the WRONG reason (no [FAIL] line contains '$tag'): $label" ;;
+      red:wrong) no "scorer control: the wrong-reason mutant was graded RED (the fragment check accepts anything): $label" ;;
+      survived:*) no "mutation SURVIVED: $label — the rows above pin nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label — instrument, not evidence" ;;
     esac
   }
 
-  mutate RED "the tag conjunct is dropped" TF \
-    's = dm_replace(s, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n", "")'
-  mutate RED "the host conjunct is dropped (web-2 rows would page)" TF \
-    's = dm_replace(s, "      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n", "")'
-  mutate RED "the result=fired conjunct is dropped (every dead-man row would page)" TF \
+  mutate_green() {
+    local label="$1" prog="$2" copy rc=0
+    copy="$MUT_DIR/betterstack-logs-alerts.tf"
+    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
+import sys
+p = sys.argv[1]
+$PRELUDE
+orig = open(p, encoding="utf-8").read()
+s = orig
+$prog
+assert s != orig, "mutation produced no change"
+open(p, 'w', encoding="utf-8").write(s)
+PY
+    DEADMAN_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    case "$rc" in
+      0) ok "must-PASS stays green: $label" ;;
+      1) no "legitimate edit went RED: $label" ;;
+      *) no "must-PASS UNRESOLVED (inner rc=$rc): $label - instrument, not evidence" ;;
+    esac
+  }
+
+  mutate_floor_red() {
+    local label="$1" copy rc=0 cur
+    copy="$MUT_DIR/floor-mutated.test.sh"
+    cur="$(grep -oE '^PRESENCE_ROWS=[0-9]+$' "$SELF" | cut -d= -f2)"
+    [ -n "$cur" ] || { no "mutation '$label' did not land (no PRESENCE_ROWS declaration)"; return 0; }
+    sed -e "s/^PRESENCE_ROWS=${cur}$/PRESENCE_ROWS=$((cur + 1))/" \
+        -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
+    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      1) ok "mutation RED: $label" ;;
+      0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc, not an assertion): $label - instrument, not evidence" ;;
+    esac
+  }
+
+  # ── Dead-text / extraction-class rows ──────────────────────────────────────────────────────
+  mutate_red "a /* */-wrapped decoy heredoc sits before the live local while the live body is gutted" TF \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) * 0 AS value", SQLEND)
+i = s.index(SQLLOC)
+s = s[:i] + "/*\n  workspaces_luks_deadman_fired_sql = <<-SQL\n  SELECT legit\n  SQL\n*/\n" + s[i:]' \
+    "decoy local exists"
+  mutate_red "a #-commented decoy opener line sits above the live local" TF \
+    'i = s.index(SQLLOC)
+s = s[:i] + "  # workspaces_luks_deadman_fired_sql = <<-SQL\n" + s[i:]' \
+    "decoy local exists"
+  mutate_red "a commented-out paused=false decoy line appears inside the alert block" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = false\n  # paused = false\n")' \
+    "decoy exists"
+  mutate_red "an inline tautology is appended inside the predicate" TF \
+    's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
+    "carries an OR"
+  mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
+    's = edit(s, SQLLOC, "SELECT {{time}} AS time, count(*) AS value", "SELECT 1", SQLEND)' \
+    "predicate head"
+  mutate_red "an uncommented fire-prefixed logger line is planted BEFORE the real one inside arm_dead_man" CUT \
+    'i = s.index("arm_dead_man() {")
+j = s.index("/bin/sh -c", i)
+line_start = s.rindex("\n", 0, j) + 1
+line_end = s.index("\n", j) + 1
+s = s[:line_start] + s[line_start:line_end] + s[line_start:]' \
+    "decoy fire command"
+
+  # ── Conjunct-set canon rows ────────────────────────────────────────────────────────────────
+  mutate_red "the tag conjunct is dropped" TF \
+    's = dm_replace(s, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n", "")' \
+    "missing or altered"
+  mutate_red "the host conjunct is dropped (web-2 rows would page)" TF \
+    's = dm_replace(s, "      AND JSONExtractString(raw, \x27host_name\x27) = \x27soleur-web-platform\x27\n", "")' \
+    "missing or altered"
+  mutate_red "the result=fired conjunct is dropped (every dead-man row would page)" TF \
     'old = "      AND position(JSONExtractString(raw, \x27message\x27), \x27op=workspaces-luks-deadman result=fired\x27) > 0\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "the needle is reworded to result=ok (pages on the recovery, never on the fire)" TF \
+s = s.replace(old, "")' \
+    "missing or altered"
+  mutate_red "the needle is reworded to result=ok (pages on the recovery, never on the fire)" TF \
     'old = "\x27op=workspaces-luks-deadman result=fired\x27"
 assert s.count(old) == 1
-s = s.replace(old, "\x27op=workspaces-luks-deadman result=ok\x27")'
-  mutate RED "a conjunct is OR-joined (the predicate widens to every luks-monitor row)" TF \
-    's = dm_replace(s, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n", "      OR JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n")'
-  mutate RED "the fire command's marker is reworded in workspaces-cutover.sh only" CUT \
+s = s.replace(old, "\x27op=workspaces-luks-deadman result=ok\x27")' \
+    "result=fired"
+  mutate_red "a conjunct is OR-joined (the predicate widens to every luks-monitor row)" TF \
+    's = dm_replace(s, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n", "      OR JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n")' \
+    "carries an OR"
+  mutate_red "the marker anchor loses its trailing space (SOLEUR_WORKSPACES_LUKS_DEADMAN_X rows would page)" TF \
+    's = dm_replace(s, "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN \x27)", "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN\x27)")' \
+    "anchor is missing"
+
+  # ── Emitter rows (workspaces-cutover.sh) ──────────────────────────────────────────────────
+  mutate_red "the fire command's marker is reworded in workspaces-cutover.sh only" CUT \
     'old = "op=workspaces-luks-deadman result=fired reason=timer_elapsed"
 assert s.count(old) == 1
-s = s.replace(old, "op=workspaces-luks-deadman result=engaged reason=timer_elapsed")'
-  mutate RED "the alert is paused" TF \
-    'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"workspaces_luks_deadman_fired\" \{.*?\n  paused = )false", s, re.S)
-assert m
-s = s[:m.end(1)] + "true" + s[m.end():]'
-  mutate RED "on_missing_data is no longer treat_as_zero" TF \
-    'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"workspaces_luks_deadman_fired\" \{.*?on_missing_data\s*=\s*)\"treat_as_zero\"", s, re.S)
-assert m
-s = s[:m.end(1)] + "\"keep_last_value\"" + s[m.end():]'
-  mutate RED "the operator flips to lower_than (silence pages, a fire does not)" TF \
-    'import re
-m = re.search(r"(resource \"logtail_exploration_alert\" \"workspaces_luks_deadman_fired\" \{.*?operator\s*=\s*)\"higher_than\"", s, re.S)
-assert m
-s = s[:m.end(1)] + "\"lower_than\"" + s[m.end():]'
-  mutate RED "the alert watches another exploration" TF \
-    'old = "exploration_id = logtail_exploration.workspaces_luks_deadman_fired.id"
-assert s.count(old) == 1
-s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id")'
-  mutate RED "the alert is dropped from the apply allowlist" WF \
-    'old = "            -target=logtail_exploration_alert.workspaces_luks_deadman_fired \\\n"
-assert s.count(old) == 1
-s = s.replace(old, "")'
-  mutate RED "the marker anchor loses its trailing space (SOLEUR_WORKSPACES_LUKS_DEADMAN_X rows would page)" TF \
-    's = dm_replace(s, "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN \x27)", "\x27SOLEUR_WORKSPACES_LUKS_DEADMAN\x27)")'
-  mutate RED "the fire line survives only as a COMMENT inside arm_dead_man (the real one reworded)" CUT \
+s = s.replace(old, "op=workspaces-luks-deadman result=engaged reason=timer_elapsed")' \
+    "fire command"
+  mutate_red "the fire line survives only as a COMMENT inside arm_dead_man (the real one reworded)" CUT \
     'import re
 m = re.search(r"(?m)^([ \t]*)(/bin/sh -c \"logger -t \$\{LUKS_LOG_TAG\} -- \x27SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed\x27;.*)$", s)
 assert m and s.count("result=fired reason=timer_elapsed") == 1
 real = m.group(0)
-s = s.replace(real, m.group(1) + "# " + m.group(2) + "\n" + real.replace("result=fired reason=timer_elapsed", "result=engaged reason=timer_elapsed"), 1)'
-  mutate RED "the fire text is quoted OUTSIDE arm_dead_man (the real one reworded)" CUT \
+s = s.replace(real, m.group(1) + "# " + m.group(2) + "\n" + real.replace("result=fired reason=timer_elapsed", "result=engaged reason=timer_elapsed"), 1)' \
+    "fire command"
+  mutate_red "the fire text is quoted OUTSIDE arm_dead_man (the real one reworded)" CUT \
     'old = "result=fired reason=timer_elapsed"
 assert s.count(old) == 1
-s = s.replace(old, "result=engaged reason=timer_elapsed") + "\n_fire_doc() {\n    /bin/sh -c \"logger -t ${LUKS_LOG_TAG} -- \x27SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed\x27\"\n}\n"'
-  mutate PASS "the four conjuncts reordered" TF \
-    'a = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n"
+s = s.replace(old, "result=engaged reason=timer_elapsed") + "\n_fire_doc() {\n    /bin/sh -c \"logger -t ${LUKS_LOG_TAG} -- \x27SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed\x27\"\n}\n"' \
+    "fire command"
+
+  # ── Alert-attribute rows ──────────────────────────────────────────────────────────────────
+  mutate_red "the alert is paused" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = true\n")' \
+    "paused"
+  mutate_red "on_missing_data is no longer treat_as_zero" TF \
+    's = edit(s, ALRRES, "on_missing_data     = \"treat_as_zero\"", "on_missing_data     = \"keep_last_value\"")' \
+    "treat_as_zero"
+  mutate_red "the operator flips to lower_than (silence pages, a fire does not)" TF \
+    's = edit(s, ALRRES, "operator            = \"higher_than\"", "operator            = \"lower_than\"")' \
+    "higher_than"
+  mutate_red "the alert watches another exploration" TF \
+    'old = "exploration_id = logtail_exploration.workspaces_luks_deadman_fired.id"
+assert s.count(old) == 1
+s = s.replace(old, "exploration_id = logtail_exploration.monitor_send_failed.id")' \
+    "exploration_id"
+  mutate_red "a duplicated query_period line is planted inside the alert block" TF \
+    's = edit(s, ALRRES, "  query_period        = 300\n", "  query_period        = 300\n  query_period        = 300\n")' \
+    "exactly once each"
+  mutate_red "the count = 0 mute knob is added inside the alert resource" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
+    "mute knob"
+  mutate_red "the alert is dropped from the apply allowlist" WF \
+    'old = "            -target=logtail_exploration_alert.workspaces_luks_deadman_fired \\\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "-target= lines are missing"
+
+  # ── Workflow seam rows ─────────────────────────────────────────────────────────────────────
+  mutate_red "a MUT_SKIP literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
+    "workflow seam"
+  mutate_red "a DEADMAN_GUARD_ literal reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          DEADMAN_GUARD_TF: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "the suite's own run line is dropped from the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "unregistered or double-registered"
+
+  # ── Scorer negative control ────────────────────────────────────────────────────────────────
+  mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
+    's = edit(s, ALRRES, "  paused = false\n", "  paused = true\n")' \
+    "this-fragment-does-not-exist" wrong
+
+  # ── Floor row ──────────────────────────────────────────────────────────────────────────────
+  mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
+
+  # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
+  mutate_green "the four conjuncts reordered (the canon is a set, order-insensitive by design)" \
+    'i = s.index(SQLLOC); j = s.index(SQLEND, i)
+blk = s[i:j]
+a = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27luks-monitor\x27\n"
 b = "      AND position(JSONExtractString(raw, \x27message\x27), \x27op=workspaces-luks-deadman result=fired\x27) > 0\n"
-assert s.count(b) == 1
-s = dm_replace(s, a, "@@A@@").replace(b, a).replace("@@A@@", b)'
+assert blk.count(a) == 1 and blk.count(b) == 1
+s = s[:i] + blk.replace(a, "@@A@@").replace(b, a).replace("@@A@@", b) + s[j:]'
 fi
 
-# 37 = 22 presence rows + 15 mutation rows. The MUT_SKIP floor is exactly the presence-row count;
-# the instrument control above is what catches a floor that drifts past them.
-_floor=37
-[ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
+# ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
+# PRESENCE_ROWS is exactly the count of rows an inner (MUT_SKIP) run asserts; the outer run adds
+# one row per mutation. The instrument control is what catches a floor drifting past the rows.
+# Floor/ledger trips exit 1 (verdict-class: the battery grades inner rc 1 as a CAUGHT mutation);
+# instrument failures exit 2.
+PRESENCE_ROWS=30
+MUT_ROWS=28
+_eff=${MUT_SKIP:+0}
+_eff=${_eff:-$MUT_ROWS}
+_floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
-# Instrument failures exit 2, never 1: the battery grades an inner rc 1 as a CAUGHT mutation.
-if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
-if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi
+if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 1; fi
+if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
+[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); DEADMAN_GUARD_{TF,WF,CUT,IV}=%s,%s,%s,%s\n' "$_floor" "${DEADMAN_GUARD_TF:-unset}" "${DEADMAN_GUARD_WF:-unset}" "${DEADMAN_GUARD_CUT:-unset}" "${DEADMAN_GUARD_IV:-unset}"
 printf '\n=== workspaces-luks-deadman-fired-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]
