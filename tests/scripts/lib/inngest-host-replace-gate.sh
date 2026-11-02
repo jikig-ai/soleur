@@ -69,6 +69,9 @@
 #   doppler_service_token.inngest / doppler_service_token.inngest_flip
 #                                               no-op | create | replace (delete+create, either order)
 #                                                                     → doppler_token_touched
+#                                               and, on any entry that creates the token, after.access ==
+#                                               "read" (boot) / "read/write" (flip); a missing after.access
+#                                               fails closed (#11831)             → doppler_token_access_wrong
 #   hcloud_server.inngest (its create)          after.firewall_ids == [id of hcloud_firewall.inngest]
 #                                                                     → firewall_not_bound (#8754)
 #
@@ -97,7 +100,7 @@ fi
 
 inngest_host_replace_gate() {
   local plan_json="$1"
-  local counts oos rdel ldel replaced rvt lvt att dtt lpig fnb reason
+  local counts oos rdel ldel replaced rvt lvt att dtt dta lpig fnb reason
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
@@ -170,6 +173,21 @@ inngest_host_replace_gate() {
               | select(.change.actions as $a | ([["no-op"], ["create"], ["delete", "create"], ["create", "delete"]] | index([$a])) == null) ]
             | length
           ),
+          doppler_token_access_wrong: (
+            # #11831: the ACCESS level is pinned on any plan entry that CREATES a token (create,
+            # delete+create, create+delete): the flip token is the read/write one, the boot token the
+            # read one. `access` is a configured literal in inngest-host.tf, so it is present in
+            # .change.after at plan time even on a first replace. A missing or unreadable after.access
+            # reads as "" and equals neither, so it fails closed. A no-op token creates nothing and is
+            # not judged. The flip token is picked by suffix so this stays a different line from the
+            # allow-set entry the T1h mutation deletes.
+            [ $plan.resource_changes[]?
+              | select(IN(.address; ["doppler_service_token.inngest", "doppler_service_token.inngest_flip"][]))
+              | select(.change.actions? | any(. == "create"))
+              | (if (.address | endswith("_flip")) then "read/write" else "read" end) as $want
+              | select((.change.after.access? // "") != $want) ]
+            | length
+          ),
           luks_passphrase_in_graph: (
             [ $plan.resource_changes[]? | select(IN(.address; pair[])) ] | length
           ),
@@ -223,6 +241,7 @@ inngest_host_replace_gate() {
   lvt=$(echo "$counts" | jq -r '.luks_volume_touched')
   att=$(echo "$counts" | jq -r '.attachment_touched')
   dtt=$(echo "$counts" | jq -r '.doppler_token_touched')
+  dta=$(echo "$counts" | jq -r '.doppler_token_access_wrong')
   lpig=$(echo "$counts" | jq -r '.luks_passphrase_in_graph')
   fnb=$(echo "$counts" | jq -r '.firewall_not_bound')
 
@@ -231,10 +250,10 @@ inngest_host_replace_gate() {
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
   plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "luks_volume_destroyed=${ldel}" "inngest_server_replaced=${replaced}" \
-    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "doppler_token_touched=${dtt}" "luks_passphrase_in_graph=${lpig}" "firewall_not_bound=${fnb}" || return 1
+    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "doppler_token_touched=${dtt}" "doppler_token_access_wrong=${dta}" "luks_passphrase_in_graph=${lpig}" "firewall_not_bound=${fnb}" || return 1
 
-  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} doppler_token_touched=${dtt} luks_passphrase_in_graph=${lpig} firewall_not_bound=${fnb}"
-  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$dtt" -eq 0 && "$lpig" -eq 0 && "$fnb" -eq 0 ]]; then
+  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} doppler_token_touched=${dtt} doppler_token_access_wrong=${dta} luks_passphrase_in_graph=${lpig} firewall_not_bound=${fnb}"
+  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$dtt" -eq 0 && "$dta" -eq 0 && "$lpig" -eq 0 && "$fnb" -eq 0 ]]; then
     echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 3 dependents replace; BOTH the Redis AOF volume and the ADR-142 additive target preserved)"
     return 0
   fi
@@ -247,10 +266,11 @@ inngest_host_replace_gate() {
   elif [[ "$lvt"  -ne 0 ]]; then reason=luks_volume_touched
   elif [[ "$att"  -ne 0 ]]; then reason=attachment_touched
   elif [[ "$dtt"  -ne 0 ]]; then reason=doppler_token_touched
+  elif [[ "$dta"  -ne 0 ]]; then reason=doppler_token_access
   elif [[ "$oos"  -ne 0 ]]; then reason=inngest_out_of_scope_changes
   elif [[ "$replaced" -ne 1 ]]; then reason=server_not_replaced
   elif [[ "$fnb"  -ne 0 ]]; then reason=firewall_not_bound
   fi
-  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, a bare update/delete/forget of either Doppler service token, the LUKS passphrase pair in the plan, no server replace, or a replacement not born bound to hcloud_firewall.inngest)"
+  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, a bare update/delete/forget of either Doppler service token, a created token minted with the wrong access (flip must be read/write, boot must be read), the LUKS passphrase pair in the plan, no server replace, or a replacement not born bound to hcloud_firewall.inngest)"
   return 1
 }
