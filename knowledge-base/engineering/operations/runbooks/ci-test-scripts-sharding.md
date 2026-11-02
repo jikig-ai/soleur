@@ -184,6 +184,60 @@ are one generator. `bash scripts/watch-shard-balance-11564.sh --dry-run`
 prints findings and posts nothing; `--print-report` prints the raw rows.
 Retirement checklist: the workflow header.
 
+## The wall-clock ratchet (`wallclock-p90-watch`, #11774)
+
+A weekly RATCHET (`Sat 10:07 UTC` + `workflow_dispatch`) — the standing
+instrument for epic #11556's 20-min/15-min required-check wall-clock goals.
+`scripts/watch-wallclock-p90-11774.sh` samples the last 30 completed,
+conclusion=success `ci.yml` runs per surface (`pull_request` AND
+`merge_group`), and per run makes ONE
+`repos/{r}/commits/{head_sha}/check-runs` call that covers every required
+context across all workflows. The measured population is DERIVED from the
+non-comment rows of `scripts/required-checks.txt` — a required check added
+later is measured with no code change, and a required context with no row
+in `scripts/required-check-wallclock-bounds.tsv` is itself a finding (the
+untracked-member class).
+
+Metric: `latency_s = check.completed_at − run.created_at` — queue wait +
+runner acquisition + every serialized predecessor + execution, i.e. the
+wall clock a PR or merge-queue entry actually experiences (the cohort
+model in "Runner-availability data" below); `duration_s` p90 is carried
+only as an execution-isolating diagnostic column. Success-only sampling
+keeps the percentile an honest green-path figure; a timeout-cancelled or
+skipped check run contributes no sample and the row's `n` shows the
+surviving count. Same-sha suites (push + pull_request + retry on one sha)
+resolve by own-`check_suite.id` match, else nearest `started_at` to the
+run's `created_at` — a check run that completed BEFORE the sampled run was
+created belongs to an earlier trigger batch and is dropped, never
+misattributed.
+
+Verdict: nearest-rank p50/p90 of latency per (check, surface); breach iff
+p90 > bound × (1 + margin). Exit `1` on a breach, an unbound required
+context, or a required context unmeasured on a live surface — the run goes
+red and the offenders are named; `0` ok/no-data (zero qualifying samples
+is a reported state, never a ratchet failure); `3` cannot-establish (gh
+API failure, empty derived population, malformed bounds TSV). The report
+home is ONE standing tracker, `ci-wallclock-p90: required-check wall-clock
+report`, whose body the watch rewrites in place every run — it is also the
+sixth source the weekly operator digest reads (aggregate-only, ADR-057) —
+and it NEVER auto-closes (the deliberate divergence from
+shard-balance-watch: standing report, not episode tracker). Drift comments
+post only on flagged-set identity change (sentinel
+`<!-- wallclock-p90-watch:v1 drift=<sha1> -->`).
+
+Bounds seeding method: `bound = measured p90 latency rounded up to the
+next minute`, margin `0.30`, seeded from the 2026-11-02 measured baseline
+in Measured history below — NOT the epic target (seeding `test` at the
+20-min goal would have fired immediately at a measured p90 of ~51 min).
+Re-derive a row when a required check is added (in the same change as the
+required-checks.txt row) or when a sustained improvement justifies a
+tighter bound; record the measurement that moved a bound here.
+
+`bash scripts/watch-wallclock-p90-11774.sh --dry-run` prints the would-be
+table/comments and posts nothing; `--print-report` prints the derived
+population + raw rows + flagged set. Retirement checklist: the workflow
+header.
+
 ## Why the OLD positional method is retained
 
 `SCRIPTS_SHARD=k/K` keeps suites whose registration ordinal ≡ k−1 (mod K)
@@ -305,6 +359,21 @@ span to the NEXT registered mark.
   `suite-timings-*` artifacts carry the real arm prices and are the
   `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
   artifact runs — main `push` runs elide the shards job).
+- **2026-11-02 wallclock-p90 baseline (#11774 seed):** last 30
+  completed+success `ci.yml` runs per surface (30 `pull_request` head SHAs
+  + 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run,
+  latency = check.completed_at − run.created_at, nearest-rank percentiles.
+  **`test` required-check p90: 3036 s pull_request / 2798 s merge_group**
+  (p50 2364 / 2425 s — the aggregate `test` job's own execution is ~3 s,
+  so the figure IS pipeline depth); next-slowest p90s (s): `e2e` 700/366,
+  `Bash fixture tests` 503/254, `lockfile-sync` 418/295, `adr-ordinals`
+  379/209, `grok-fidelity` 374/373, `service-role-allowlist-gate` 338/362;
+  every other required context p90 ≤ 358/373 on both surfaces; every
+  context n ≥ 29/30 per surface. These p90s (rounded up to the minute)
+  seed `scripts/required-check-wallclock-bounds.tsv` at margin 0.30.
+  Reproduced by `bash scripts/watch-wallclock-p90-11774.sh --dry-run` —
+  the standing tracker's report body carries the same aggregate table
+  (per-check percentiles only, no per-run rows, ADR-057).
 - **2026-10-31 post-merge re-price (#11562 ownership checkpoint, CLOSED):**
   8 green post-merge ci.yml runs carried the arm timings — merge_group
   41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
