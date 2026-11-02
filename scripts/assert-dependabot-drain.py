@@ -299,7 +299,11 @@ def tracked_lockfiles():
     Filesystem walk (not `git ls-files`) so the suite's fixture trees -- plain
     directories, not git repos -- exercise the same census. node_modules and the
     worktree/.claude dirs are skipped: vendored trees and sibling worktrees are not
-    this manifest's business.
+    this manifest's business. Two known residuals, accepted for the docstring's
+    "committed anywhere" contract: the walk also sees UNTRACKED lockfiles in a
+    developer tree (local noise, never a CI false-positive), and the skip set prunes
+    by basename at any depth, so a committed e.g. `test/dist/package-lock.json`
+    would be invisible -- a deliberately narrow blind spot disclosed here.
     """
     import os
     skip = {".git", ".claude", ".worktrees", "node_modules", ".next", "dist",
@@ -308,8 +312,7 @@ def tracked_lockfiles():
     for dirpath, dirnames, filenames in os.walk("."):
         dirnames[:] = [d for d in dirnames if d not in skip]
         if "package-lock.json" in filenames:
-            found.add(os.path.normpath(
-                os.path.relpath(os.path.join(dirpath, "package-lock.json"))))
+            found.add(os.path.relpath(os.path.join(dirpath, "package-lock.json")))
     return found
 
 
@@ -383,8 +386,8 @@ def main():
             f"below the RESOLVED-ROW floor of {MIN_RESOLVED}. A row that matches nothing prints "
             f"'(absent)' and would otherwise pass -- check for a renamed or mistyped package.")
     # `checked != len(REQUIRED)` used to sit here. It was the exact tautology the MIN_ROWS
-    # comment fourteen lines above mocks: `checked` is incremented unconditionally once per
-    # iteration over REQUIRED and nothing breaks out of the loop, so it could not fail.
+    # comment fourteen lines above mocks: `checked` feeds only the success-path summary,
+    # which is unreachable once any failure is appended, so it could not fail.
     # MIN_ROWS and MIN_RESOLVED carry the real load.
     for pkg_major, anchor in sorted(FLOOR_ANCHORS.items()):
         pkg, major = pkg_major
@@ -464,6 +467,16 @@ def main():
                 all_names.add(meta["name"])
             hit = all_names & watched
             if not hit:
+                continue
+            if len(all_names) > 1:
+                # path name and meta `name` disagree while at least one is watched --
+                # a foreign `name` field hides a watched package from the census either
+                # way (npm never emits this; a hand-edit could, including a
+                # watched-name disguised as ANOTHER watched name).
+                failures.append(
+                    f"{manifest}: {key} has path/meta name disagreement "
+                    f"{sorted(all_names)} -- a hand-edit can hide a watched package "
+                    f"from the census behind either a foreign or a covered name.")
                 continue
             name = entry_name(key, meta)
             if name not in hit:

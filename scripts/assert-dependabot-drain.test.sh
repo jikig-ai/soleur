@@ -447,10 +447,10 @@ build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2;
 # the fixture's resolved count and this arm reds -- restoring the per-row mirror
 # guarantee the header contract states. ---
 asserted=$((asserted + 1))
-if run_mutant "$SANDBOX/pristine.py" && grep -qF "41 resolved to an installed version" "$SANDBOX/last.out"; then
-  pass "fixture mirror: all 41 REQUIRED rows resolve in the fixture (a row without a fixture entry would drop the count)"
+if run_mutant "$SANDBOX/pristine.py" && grep -qF "41 rows evaluated, 41 resolved" "$SANDBOX/last.out"; then
+  pass "fixture mirror: all 41 REQUIRED rows evaluate AND resolve in the fixture (an unmirrored table addition prints '42 evaluated, 41 resolved' and reds here)"
 else
-  fail "control did not report '41 resolved' -- a REQUIRED row has no fixture entry or the summary text drifted"
+  fail "control did not report '41 rows evaluated, 41 resolved' -- a REQUIRED row has no fixture entry or the summary text drifted"
 fi
 
 # REQUIRED-loop manifest-membership check: a row naming a manifest not in LOCKS is a
@@ -465,7 +465,7 @@ sys.stdout.write(s.replace("(" + chr(34) + "web-platform" + chr(34) + ", " + chr
 # Tree-side: a lockfile LOCKS does not read must RED the census -- MIN_LOCKS is a floor,
 # not an equivalence, and a sixth package-lock.json was asserted clean by nobody.
 asserted=$((asserted + 1))
-if build_fixture && mkdir -p "$FIX/tools/rogue"    && printf '%s' '{"packages":{}}' > "$FIX/tools/rogue/package-lock.json"; then
+if build_fixture && mkdir -p "$FIX/tools/rogue" && printf '%s' '{"packages":{}}' > "$FIX/tools/rogue/package-lock.json"; then
   if run_mutant "$SANDBOX/pristine.py"; then
     fail "a package-lock.json outside LOCKS exited 0 — the census is floor-only, not exhaustive"
   elif ! grep -qF "LOCKS does not read" "$SANDBOX/last.out"; then
@@ -511,6 +511,23 @@ else
 fi
 build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
 
+# The sharpest disguise: path names a watched package while meta `name` names a
+# DIFFERENT watched package — the entry would be evaluated under the covered alias
+# and produce no signal at all without the disagreement check.
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/evil/node_modules/minimatch": {"name": "zod", "version": "4.6.6"}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a watched<->watched name swap exited 0 — one watched package hid behind another's row"
+  elif ! grep -qF "path/meta name disagreement" "$SANDBOX/last.out"; then
+    fail "reddened, but not via the name-disagreement check (no 'path/meta name disagreement' in output)"
+  else
+    pass "a watched<->watched name swap is seen and flagged"
+  fi
+else
+  fail "could not rebuild the fixture with a watched<->watched swap"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
 # --- Accounting. Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -528,7 +545,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=46
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

@@ -2,8 +2,10 @@
 # Guard 1 — the npm lockfile is the single lockfile of record.
 #
 # Property (deliberately an EXISTENCE property, not a co-location one):
-#   (a) no tracked `bun.lock` / `bun.lockb` exists anywhere in the repository, and
-#   (b) no tracked `bunfig.toml` declares an `[install]` section.
+#   (a) no tracked `bun.lock` / `bun.lockb` exists anywhere in the repository,
+#   (b) no tracked `bunfig.toml` declares an `[install]` section, and
+#   (c) no tracked non-npm lockfile name (`yarn.lock`, `pnpm-lock.yaml`,
+#   `npm-shrinkwrap.json` — the last supersedes package-lock.json for `npm ci`).
 #
 # Why existence rather than "no directory carries both": bun stays installed as the test
 # runner, so a habitual `bun install` silently recreates `bun.lock` and a routine commit
