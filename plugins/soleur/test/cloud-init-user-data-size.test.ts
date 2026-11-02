@@ -2286,15 +2286,16 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
   });
 
   test("the floor is ONE literal: FLOOR_MIN=384 defaults it, clamps the seam up, and the comparison is -lt", () => {
-    expect(budgetSrc).toMatch(/^FLOOR_MIN=384$/m);
-    expect(budgetSrc).toContain('floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-$FLOOR_MIN}"');
-    expect(budgetSrc).toContain('[ "$floor_bytes" -lt "$FLOOR_MIN" ] && floor_bytes="$FLOOR_MIN"');
-    // seam hardening: digits only, 10+ characters fall back to the default, leading zeros stripped via 10#
-    expect(budgetSrc).toContain("''|*[!0-9]*|??????????*) floor_bytes=\"$FLOOR_MIN\" ;; esac");
-    expect(budgetSrc).toContain('floor_bytes=$(( 10#$floor_bytes ))');
-    expect(budgetSrc).toContain('if [ "$CAP_ONLY" -eq 0 ] && [ "$headroom" -lt "$floor_bytes" ]; then');
-    // No second numeric floor literal anywhere in code (comments excluded).
+    // Comment-stripped: a comment that quotes one of these lines must not satisfy its pin.
     const code = budgetSrc.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(code).toMatch(/^FLOOR_MIN=384$/m);
+    expect(code).toContain('floor_bytes="${INNGEST_BUDGET_FLOOR_BYTES:-$FLOOR_MIN}"');
+    expect(code).toContain('[ "$floor_bytes" -lt "$FLOOR_MIN" ] && floor_bytes="$FLOOR_MIN"');
+    // seam hardening: digits only, 10+ characters fall back to the default, leading zeros stripped via 10#
+    expect(code).toContain("''|*[!0-9]*|??????????*) floor_bytes=\"$FLOOR_MIN\" ;; esac");
+    expect(code).toContain('floor_bytes=$(( 10#$floor_bytes ))');
+    expect(code).toContain('if [ "$CAP_ONLY" -eq 0 ] && [ "$headroom" -lt "$floor_bytes" ]; then');
+    // No second numeric floor literal anywhere in code (comments excluded).
     expect(code.match(/\b(384|512)\b/g)?.length ?? 0).toBe(1);
   });
 

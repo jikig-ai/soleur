@@ -1720,7 +1720,7 @@ Built and merged but NOT delivered to any host until the owner-gated A1-class `a
   | Server destroyed, boot-token delete failed (Doppler error) or the apply interrupted or cancelled after the server destroy | boot token `-/+`, server `create` | Neither dispatch (`inngest-host` aborts `doppler_touched`; `inngest-host-replace` aborts `server_not_replaced`). Run the owner-run token apply, then follow the row below | Owner-run only |
   | Token(s) partly created (boot absent or flip absent), server absent | token `create`, server `create` | Dispatch `inngest-host` | Owner go |
   | Both tokens in state (`no-op`), server absent (stock, cap or Hetzner error) | server `create` | Dispatch `inngest-host` (`inngest-host-replace` refuses with `server_not_replaced`) | Owner go |
-  | Host exists but never armed, or guard refusal, or revoked flip token | tokens `no-op` | Owner-run flip rotation, then `inngest-host-replace` straight away. Re-dispatching alone re-embeds the dead key | Owner-run, then owner go |
+  | Host exists, and the flip token is revoked or rejected, or the write guard refused a flip-token value | tokens `no-op` | Owner-run flip rotation, then `inngest-host-replace` straight away. Re-dispatching alone re-embeds the dead key. A host that never armed for ANY OTHER cause is not fixed by rotation: remove that cause, then take the first row | Owner-run, then owner go |
   | Pending replace, host lost out of band | boot token `-/+` | The same owner-run token apply, then `inngest-host` | Owner-run, then owner go |
   | Flag `aborted` after an `unexpected-exit` (step 7 above) | tokens `no-op`, host present | No dispatch and no owner-run route known: STOP and escalate to the CTO (a replace does not obviously help, UNVERIFIED) | CTO call |
 
