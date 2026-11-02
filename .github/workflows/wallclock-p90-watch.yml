@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read   # actions/workflows/{wf}/runs is the Actions API (the token 403s without it)
-      checks: read    # commits/{sha}/check-runs is the Checks API — needs its own scope (precedent: codeql-main-alert-gate)
+      checks: read    # commits/{sha}/check-runs is the Checks API — needs its own scope
       contents: read
       issues: write
     steps:

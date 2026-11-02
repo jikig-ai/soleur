@@ -258,8 +258,7 @@ under the in-action App token, exactly as noted in §1; a false-empty would sile
 pipeline data" every week:
 
 ```bash
-gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 \
-  --json number,title,body,updatedAt,author --limit 50
+gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 --json number,title,body,updatedAt,author --limit 50
 # keep ONLY issues whose author.login is github-actions[bot] (also accept
 # github-actions / app/github-actions — mirrors the watch's own predicate); a
 # same-label issue filed by anyone else is not the watch's report. Among
