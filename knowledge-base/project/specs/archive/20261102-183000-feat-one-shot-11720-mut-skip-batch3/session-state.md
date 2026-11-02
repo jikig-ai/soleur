@@ -64,3 +64,13 @@ soleur:work → review → fix-round → qa → compound → ship (PR #11885 pla
 
 Panel: 8 seats (class=code, tier=none, design-risk unset) — git-history, pattern, architecture,
 security, code-quality, performance, test-design, shellcheck-lint. All SHIP, 0 P1.
+
+## Ship Phase (2026-11-02)
+
+- PR #11885 marked ready; KB archived in-PR; body set (Ref #11720 — operator-reserved Closes ruling).
+- Panel: 8 seats, class=code tier=none — all SHIP, 0 P1; fix-round: 5 seats + shellcheck, all clean.
+- Two P2s fixed pre-merge (web-nic EM dead-text needle + EM row; inngest-524 -target= main_plan slice).
+- Deferred family-wide P3s → issue #11899 (meta/machinery).
+- enqueuePullRequest blocked: required `test` check-run not yet CREATED on head ab7143ce — watch armed
+  (subagent b2e6b386, 75min deadline); enqueue once it registers, then poll state until MERGED.
+- Perf AC6 follow-up: read PR's own deploy-script-tests-fixed leg timing post-merge; six-suite sum ~81-142s.
