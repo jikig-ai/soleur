@@ -6245,7 +6245,8 @@ if want_scripts; then
   # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
   run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
   # #11218 owner-ask probe for A5/A6 of the Inngest TLS arc (#10136). Notify-only (never exits 0 or 1): drives the 7-row
-  # decision table through a gh shim and the REAL trusted-verdict lib (untrusted-author and fenced-anchor rows included).
+  # decision table through a gh shim and the REAL trusted-verdict and relayed-verdict libs (untrusted-author, fenced-anchor and
+  # RELAYED-record rows included; the relayed-verdict lib has no suite of its own, this one drives it).
   run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
