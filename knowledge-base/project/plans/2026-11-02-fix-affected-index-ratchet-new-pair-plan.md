@@ -14,6 +14,59 @@ brand_survival_threshold: none
 
 Spec lacks valid `lane:` (no spec.md exists for this one-shot branch) — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-02
+**Sections enhanced:** Observability (added under deepen-plan §4.7 mechanical trigger);
+Acceptance Criteria literal corrections.
+**Research agents used:** none — this harness exposes no agent-spawn tool; all gate
+evaluations, verification probes, and the review pass ran inline and are cited by
+command/output below.
+
+### Key Improvements (deepen pass)
+
+1. **AC-3 literal corrected:** the ratchet's clean-exit marker is
+   `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass` (script `ratchet_marker(0, "pass", st)`),
+   not `reason=clean` — caught by reading the marker source, not memory. Counts relaxed to
+   live=baseline equality (main can move under the PR).
+2. **`## Observability` added:** §4.7's Step-1 filter fires on any non-docs Files-to-Edit path
+   even though the Phase-2.9 semantic trigger set (`apps/*/server|src|infra`,
+   `plugins/*/scripts/`) does not cover `scripts/lib/` — added a compact honest block; the
+   `discoverability_test` probe (`grep -c` → `2`) is allowlisted and sub-second.
+3. **Issue-verification sweep:** all cited issue/PR numbers resolved live — #11848 OPEN,
+   #10865 OPEN, #11556 OPEN, #11815 MERGED (`b9deac6de5`), #11781 MERGED, #11771 CLOSED,
+   #10859 OPEN (the PR3b lever — pending, which is why a false-negative accept row would
+   later go live), #10448 OPEN, ADR-276 file present.
+
+### Gate evaluations (deepen-plan §§4.5–4.13)
+
+- §4.5 network-outage: `timeout` substring matches only inside `PR_AFFECTED_REPLAY_SELECT_TIMEOUT`
+  (an env-var name in a verification command), not a connectivity symptom — telemetry emitted,
+  deep-dive not spawned; no SSH/network hypotheses exist in this plan.
+- §4.6 User-Brand Impact: present, threshold `none`, no sensitive-path match. PASS.
+- §4.7 Observability: added (see above). PASS.
+- §4.8 PAT sweep: zero hits. PASS.
+- §4.9 UI wireframe: no UI-surface files. SKIP.
+- §4.10 Encryption Posture: no `.tf`/`.sql`/`cloud-init*`/`docker-compose*` file, no store class
+  or new cross-component connection. SKIP.
+- §4.11 Guard Contract: deliverable is an edge row consumed by a pre-existing guard
+  (the affected-index audit), not a new guard/gate/lint. SKIP.
+- §4.12 Scope Check: exactly one unfenced section, all three subsections, no `unmapped` cells,
+  all `descoped`/`inferred` rows carry non-empty justifications, `Recommendation:` present,
+  no `status: BLOCKED`. PASS.
+- §4.13 Task Design: no new autonomous-task surface. SKIP.
+- §4.55 Downtime & Cutover: no downtime-inducing operation. SKIP.
+- §4.4 precedent-diff: the edge array IS the canonical form — 19 sibling
+  `apps/web-platform/infra/*.sh` entries for this suite verified at lines ~943-961.
+- §4.45 verify-the-negative: the plan's own negative claims were re-probed — zero literal
+  tracked-path mentions in the script's non-comment lines (`grep` returned empty); the issue's
+  "never reads" claim is the one item the pass INVERTED (see Research Reconciliation).
+- Quality checks: every cited issue/PR resolved live; attribution `b9deac6de5 → #11815`
+  confirmed via `git log -S BUDGET_SH`; anchor `ef13fc106737` recomputed from line 5876;
+  clean-exit token `pass` read from script source; no AGENTS rule IDs cited.
+
+
+
 ## Overview
 
 `affected-index-ratchet` (advisory, S4 PR3a, ADR-276 amendment) is red on main merge_group runs:
@@ -135,6 +188,38 @@ Single phase. This is `Fix-Size: XS`.
 - **Threshold decision (challengeable):** CI-internal tooling repair; no user-facing surface,
   no sensitive-path match under the canonical `SENSITIVE_PATH_RE` (`scripts/lib/` is not
   `apps/*/infra/`, not Doppler/workflow-scoped).
+
+## Observability
+
+The changed file is the affected-index oracle itself; the observable surface is the
+`affected-index-ratchet` job verdict this repair restores.
+
+```yaml
+liveness_signal:
+  what: "SOLEUR_PR_AFFECTED_RATCHET exit=0 marker line on the advisory job's stdout"
+  cadence: "every pull_request and merge_group run of the affected-index-ratchet job"
+  alert_target: "red job conclusion + ::error annotation; the #10865 observation-window probe pauses while red"
+  configured_in: ".github/workflows/ci.yml job affected-index-ratchet (lines ~417-468)"
+error_reporting:
+  destination: "job log + GITHUB_STEP_SUMMARY (the --report file rendered at <900000 bytes)"
+  fail_loud: "job conclusion failure (advisory: continue-on-error, not a required context)"
+failure_modes:
+  - mode: "new-pair (a suite names an undeclared tracked path)"
+    detection: "SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair"
+    alert_route: "::error annotation + #10865 probe pause"
+  - mode: "stale/invalid accept row or baseline drift"
+    detection: "SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=stale-*|baseline-*"
+    alert_route: "::error annotation + #10865 probe pause"
+  - mode: "selector/infrastructure failure"
+    detection: "SOLEUR_PR_AFFECTED_RATCHET exit=2 reason=<token>"
+    alert_route: "::error annotation"
+logs:
+  where: "GitHub Actions job log for affected-index-ratchet plus the run's step summary"
+  retention: "GitHub Actions default"
+discoverability_test:
+  command: "grep -c 'inngest-userdata-budget\\.sh' scripts/lib/test-affected-paths.sh"
+  expected_output: "2"
+```
 
 ## Domain Review
 
