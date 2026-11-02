@@ -2093,7 +2093,7 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
 # Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
 # this alert and for egress_gw_probe_silent carry the same three sentences, each followed by a per-alert resolve rule;
-# edit all three together.
+# edit the two bullets and this comment together.
 # Observed 2026-11-02, re-read with betterstack-query.sh (read only): incident 1031046761 (egress_gw_probe_silent, whose
 # SQL has no JSONType, so this is not a JSONType artefact) is Started and unresolved since 2026-10-12 while probe rows
 # keep arriving (22 in the last hour). Incident 1045365287 (this alert) started at 14:00Z, so it was only hours old at
