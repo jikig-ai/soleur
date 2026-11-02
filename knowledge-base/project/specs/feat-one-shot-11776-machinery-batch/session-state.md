@@ -22,3 +22,9 @@
 - soleur:deepen-plan SKILL.md (halt gates verified mechanically — lint-guard-contract.py green, scope-check unfenced count=1)
 - Repo probes: `ci-pr-affected-replay.py audit`/`ratchet --report`, `ratchet-observation-window-10865.sh`, `gh issue view`/`gh run list`/`gh run view --log` across all 7 issues + related runs
 - cto_spawns=1 — one batched `soleur:engineering:cto` spawn from the pipeline session ruled all six `pending - assumed` rows (see decision-challenges.md): #10865 ceiling raise NOW (P95_MAX=240/MAX_MAX=285, ratifies on-issue ruling), #11776 slice-map-not-drain, #11789 chokepoints-not-new-watch, #9457 concrete realignment (scripts 15→60/35→80, webplat 10→30/30→50), #9830 ≤2% rolling-50 target, #3926 `gh label create || true`. Plan + tasks.md amended for the rulings that exceeded assumptions (new constants diff, concrete ceiling numbers).
+
+## Work / Review / QA Phases
+- Work: Tier B fan-out (4 groups); 3 of 4 agents died on free-model rate limit — completed inline per Tier B fallback. All fixes landed, committed, pushed.
+- Review: class=code (8 agents expected); spawning unreliable → inline review per Gate 2a fallback, 0 findings. Trailer emitted: `Reviewed-Coverage: inline-fallback 0/8 agents`.
+- QA: all plan Test Scenarios green (sync-pr-behind 276/0, monitor-pr-checks 71/0, cmo-gate 12/12, monitor-workflow 156/0, ratchet exit=0); e2e arm is post-merge dispatch by design.
+- Issue comments posted: #11776 schedule, #10859 hold, #9457 findings, #9830 classification.
