@@ -4,7 +4,7 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 check "instrument self-test" selftest
 command -v gitleaks >/dev/null 2>&1 || { echo "FAIL - gitleaks is required for this suite"; exit 1; }
-REPORT_REL=knowledge-base/engineering/readiness/launch-check.md
+REPORT_REL=$(bash "$LC" report-path)
 
 M=$(fx_minimal rmin); scan_to "$M" "$SCRATCH/m.tsv"
 lc render --target "$M" --facts "$SCRATCH/m.tsv" --dry-run > "$SCRATCH/dry.out" 2>"$SCRATCH/dry.err"; rc=$?

@@ -4,6 +4,7 @@
 #   scan          --target <repo> --facts <file> [--files-out <file>] [--show-secrets]
 #   render        --target <repo> --facts <file> [--judged <file>] [--dry-run]
 #   verify-report --file <report.md>
+#   report-path   (prints the report's repo-relative path)
 #
 # The analysis writes nothing but the report file. No network, no telemetry. Exit codes:
 #   0 ok · 1 redaction hit (render) / invalid report (verify-report) · 2 preflight or scanner failure.
@@ -126,7 +127,8 @@ main() {
     scan) cmd_scan "$@" ;;
     render) cmd_render "$@" ;;
     verify-report) cmd_verify "$@" ;;
-    *) printf 'usage: launch-check.sh scan|render|verify-report [options]\n' >&2; exit 2 ;;
+    report-path) printf '%s\n' "$REPORT_REL" ;;
+    *) printf 'usage: launch-check.sh scan|render|verify-report|report-path [options]\n' >&2; exit 2 ;;
   esac
 }
 main "$@"

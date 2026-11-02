@@ -4021,15 +4021,3 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "scripts/lint-gh-argv-arg.py"
   "scripts/lib/test-affected-paths.sh"
 )
-
-# plugins/soleur/skills/launch-check/test/render.test.sh — the kb-consumer census flagged the
-# `knowledge-base/engineering/readiness/launch-check.md` report path the suite asserts on: that path is
-# written inside hermetic mktemp fixture repos (a synthesized corpus), never read from the tracked tree.
-# Declared from what the suite drives: the skill's scripts, references and tests, plus the shared
-# checks/baseline sources it renders from.
-AFFECTED_PLUGINS_SOLEUR_SKILLS_LAUNCH_CHECK_TEST_RENDER_TEST_SH_PATHS=(
-  "plugins/soleur/skills/launch-check/"
-  "plugins/soleur/skills/verification-scaffold/references/guards.tsv"
-  "scripts/lib/test-affected-paths.sh"
-  "scripts/test-all.sh"
-)
