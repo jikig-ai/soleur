@@ -1,8 +1,9 @@
-# generated: 2026-08-03T08:35:38Z
+# generated: 2026-11-02T09:50:00Z
 # command: doppler configs -p soleur --json | python3 -c 'import json,sys; [print(c["name"]) for c in json.load(sys.stdin)]' | sort
 #
 # The live config names of the Doppler `soleur` project, measured by probe G of the #7159 plan
-# (2026-08-03).
+# (2026-08-03); re-measured 2026-11-02 via the header command above (16 names: +prd_git_data,
+# +prd_workspaces_luks_marker, +prd_workspaces_luks_web).
 #
 # NO COUNTS IN THIS HEADER. It used to read "13 configs across 4 environments — dev 3, ci 1,
 # prd 7, cli 2". Nothing pinned any of those five numbers: the CI check counts the bare name
@@ -125,7 +126,10 @@ dev_scheduled
 prd
 prd_cla
 prd_ghcr
+prd_git_data
 prd_kb_drift_walker
 prd_scheduled
 prd_terraform
 prd_workspaces_luks
+prd_workspaces_luks_marker
+prd_workspaces_luks_web
