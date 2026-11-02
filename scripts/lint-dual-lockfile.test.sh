@@ -158,6 +158,18 @@ printf 'lockfile\n' > "$R5/lonely/bun.lock"
 git -C "$R5" add -A
 expect_red "$R5" "row5 bun.lock with no sibling package-lock.json" "lonely/bun.lock"
 
+# --- Rows 5b-5d: clause (c) non-npm lockfile names. npm-shrinkwrap.json is the sharpest:
+# `npm ci` prefers it over package-lock.json, so one would govern installs while the
+# drain guard reads a stale file. ---
+for spec in "yarn.lock" "pnpm-lock.yaml" "npm-shrinkwrap.json"; do
+  RC=$(make_repo "row5c-${spec%%.*}" 5)
+  : "${RC:?fixture dir is empty; git -C <empty> would retarget this write}"
+  printf 'lockfile
+' > "$RC/$spec"
+  git -C "$RC" add -A
+  expect_red "$RC" "row5c tracked $spec is seen" "tracked non-npm lockfile: $spec"
+done
+
 # --- Row 6: reintroduce [install] into a bunfig.toml ---
 R6=$(make_repo row6 5)
 : "${R6:?fixture dir is empty; git -C <empty> would retarget this write}"
@@ -283,7 +295,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   fi
   exit 1
 fi
-MIN_ASSERTIONS=21
+MIN_ASSERTIONS=24
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
   exit 1

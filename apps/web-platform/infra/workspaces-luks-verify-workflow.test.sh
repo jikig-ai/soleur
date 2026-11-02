@@ -1963,11 +1963,16 @@ PY
     no "G3 census: $(printf '%s' "$g3_c" | tr '\n' ' ')"
   fi
 
-  # --- the token census: the secret that carries the marker's write authority is bound by exactly ONE workflow ----
-  # The key census above matches the marker KEY, not the secret that authorises writing it, so a second workflow could
+  # --- the token census: the secret that carries the marker's write authority is bound by an EXACT SET of two ----
+  # The key census above matches the marker KEY, not the secret that authorises writing it, so a third workflow could
   # bind DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER (and write the key under any spelling the key census does not know) without
-  # tripping it. The single-use rebirth workflow, which used to be the one other holder, is retired (#9372); this row
-  # pins that the holder stays this job alone. Occurrence-based over every file under .github/workflows and .github/actions,
+  # tripping it. The single-use rebirth workflow, which used to be the one other holder, is retired (#9372). The
+  # JUSTIFIED second holder is cf-lb-overlay.yml (#11766): its serve-mode §(c) gate chain hands the token to
+  # lb-weight-gate-with-marker.sh as DOPPLER_TOKEN for marker-config READ reach ONLY — the wrapper consumes it for
+  # `secrets --only-names`/`secrets get` reads of prd_workspaces_luks_marker, never writes. No read-only token exists
+  # on that config today (lb-weight-gate-with-marker.sh:15); minting one is tracked at #9358. The census is an exact
+  # set: a THIRD holder refuses, and either member dropping out refuses. Occurrence-based over every file under
+  # .github/workflows and .github/actions,
   # whole-line comments dropped, the name matched in upper case anywhere and in any case through the `secrets` context (GitHub secret names are case-insensitive); the second value
   # is how many files were scanned, so an empty file list cannot read as clean. SCOPE: it pins the NAME of the secret in a
   # workflow or composite-action file. It does not model reachability without the name: `toJSON(secrets)`, `secrets: inherit`
@@ -1987,9 +1992,10 @@ PY
     printf '%s|%s' "${hits[*]:-}" "$n"
   }
   g3_th="$(g3_token_holders "$PWD")"
-  # the floor is a non-vacuity bound (the real tree carries ~100 files), not a count of them
-  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" && "${g3_th##*|}" -ge 5 ]]; then
-    ok "G3 token census: DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER is bound by exactly one workflow, the verify job (${g3_th##*|} files scanned)"
+  # the floor is a non-vacuity bound (the real tree carries ~100 files), not a count of them; the holder list is
+  # LC_ALL=C-sorted, so cf-lb-overlay.yml precedes workspaces-luks-verify.yml in the exact-set comparison
+  if [[ "${g3_th%%|*}" == ".github/workflows/cf-lb-overlay.yml,.github/workflows/workspaces-luks-verify.yml" && "${g3_th##*|}" -ge 5 ]]; then
+    ok "G3 token census: DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER is bound by exactly the verify job + the cf-lb-overlay §(c) reader (${g3_th##*|} files scanned)"
   else
     no "G3 token census: holders|files scanned = ${g3_th}"
   fi
