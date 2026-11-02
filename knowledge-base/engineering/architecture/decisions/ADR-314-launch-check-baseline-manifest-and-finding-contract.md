@@ -3,8 +3,8 @@ title: launch-check — a read-only skill whose Soleur baseline is derived from 
 status: adopting
 date: 2026-11-02
 supersedes: none
-issue: 11867
-related: [7442, 7452]
+issue: 11910
+related: [7442, 7452, 11867]
 related_adrs: [ADR-178, ADR-193, ADR-236, ADR-295]
 tags: [plugin, customer-repo, redaction, baseline]
 ---

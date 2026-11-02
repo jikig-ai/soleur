@@ -3,7 +3,7 @@ title: "feat: customer-repo production-readiness and Soleur best-practice gap an
 date: 2026-11-02
 slug: customer-repo-readiness-gap-analysis
 branch: feat-prod-readiness-gap-analysis
-issue: 11867
+issue: 11910
 type: feat
 priority: p2
 domain: engineering
