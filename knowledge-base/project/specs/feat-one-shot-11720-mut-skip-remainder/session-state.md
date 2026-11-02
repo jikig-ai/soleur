@@ -22,3 +22,26 @@ run_subagent: repo-research-analyst, learnings-researcher, functional-discovery,
 
 ## Next
 deepen-plan → technical-ruling gate → soleur:work → review → fix-round → qa → compound → ship (PR #11849) → postmerge → DONE
+
+## Implementation log (2026-11-02, work phase)
+
+- All four ports landed and are green: registry-store 55/55, registry-zot 52/52,
+  deadman 58/58, egress-gw 77/77. Commits: 09eb4b6a6d, 0adf2c1562+5d4b2f653e,
+  91aabdb5ca, 55da4cdcc3, 6182204715.
+- Floor discovery during implementation: a literal `<<-SQL` inside extractor/mutation
+  text opens a PHANTOM heredoc span in the meta-guard's heredoc_lines_of — every later
+  line (including the floor) counts as heredoc body and is invisible. The four files
+  were NEVER floor-bearing before; this is why covered-fires moved 366->370 with the
+  deferred ledger untouched at 47 (not 43). Evasion: `<<[-]SQL` in awk/grep/comments,
+  `<<\x2dSQL` inside python strings.
+- Second floor-discovery: build_mutant needs a standalone column-0 `fi` — one-line
+  `if ... fi` floor/ledger blocks were rewritten multi-line.
+- Floor shape uses the constructible `_eff=${MUT_SKIP:+0}` window (not the donor's
+  `[ -n ] &&` rebind); deadman floor exit normalized 2 -> 1.
+- Meta-guard: all four added to the LIVE PROMOTED_FILES regex (line ~1089) + grounds
+  paragraph; MIN_FIRING_SUITES 61 -> 65. Full run: 25/25 green, covered 387,
+  fires 370, deferred 47/31/16, all four PROMOTED entries score FIRES.
+- Runtime: four suites measure ~4-9s each (~24s added to the serial leg); the
+  15-minute deploy-script-tests-fixed ceiling is not approached — no timeout bump.
+- Acceptance: no env -u in infra-validation.yml; run lines plain `run: bash`;
+  registry-clientip byte-identical; fixture parity suite 71/71 green.
