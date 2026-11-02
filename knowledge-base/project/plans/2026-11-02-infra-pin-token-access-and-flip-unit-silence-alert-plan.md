@@ -128,7 +128,7 @@ Two open code-review issues name `.github/workflows/infra-validation.yml`: #8735
 
 The address-to-access mapping in the gate must sit on a line the existing T1h `sed '/"doppler_service_token\.inngest_flip"/d'` cannot match (select the flip token with `endswith("_flip")` or equivalent, never a second quoted literal of the full address), or T1h would abort on a jq parse error and pass for the wrong reason.
 
-**Harness rows.** (a) Edit the SUITE, not the gate: delete the `read/write` PASS row for the flip token in a copy of the test and assert the suite's own anti-vacuity pass-count floor (the literal expected count near the end of `test-inngest-host-replace-gate.sh`) reds; the floor's literal moves with this change and is part of the diff. (b) Must-PASS inputs that are NOT the canonical: a flip token `["create","delete"]` with `read/write` (the other replace order), and a boot token that is `no-op` with no `after` at all.
+**Harness rows.** Harness row (a) (edit the suite, expect the anti-vacuity floor to red) was CUT at implementation: an inner copy of the suite either carries its own harness block, so its count differs from the floor, or skips it, so it reds regardless; the row would be vacuous. The floor itself is tight (it moved 67 to 76 in the same edit that added the nine new assertions), which is what makes a deleted row visible. Must-PASS inputs that are NOT the canonical stay: a flip token `["create","delete"]` with `read/write` (T1o3, the other replace order), a boot token `create` minted `read` (T1x), and a boot token that is `no-op` with no `after` at all (T1p).
 
 **Anchor.** The expected strings live in the gate and in `inngest-host.tf` (lines `access = "read"` and `access = "read/write"`); a diff that edits both would agree with itself. The independent anchor is the runbook's owner pre-go read of the two literals at the dispatch SHA, which stays in step 1 as a cross-check, and the ADR-282 build record, which names the access of each token.
 
@@ -223,16 +223,16 @@ discoverability_test:
 
 ## Acceptance Criteria
 
-- [ ] AC1: Gate aborts with `reason=doppler_token_access` for flip-token create with `read`, boot-token replace with `read/write`, and a created token with no `after.access`. Pointer: `tests/scripts/lib/inngest-host-replace-gate.sh` (counter beside `doppler_token_touched`), `tests/scripts/test-inngest-host-replace-gate.sh`.
-- [ ] AC2: Gate still passes the existing shapes (first replace, flip rotation, no-op boot token without `after`).
-- [ ] AC3: `bash tests/scripts/test-inngest-host-replace-gate.sh` and `shellcheck` on both files are green; the mutation rows M3 and M5 go RED when applied to copies, and T1h still fails for the intended reason (the mutation lands on the `def allow` line only).
-- [ ] AC4: `logtail_exploration.inngest_cutover_flip_silent` and its alert exist with the CTO-ruled settings; both `-target` lines are in `apply-web-platform-infra.yml` (`betterstack-logs-alerts.tf`, `apply-web-platform-infra.yml`).
-- [ ] AC5: The new alert test, `betterstack-alert-structure.test.sh`, `logs-alert-query-period-ceiling.test.sh` and `betterstack-send-failed-alert-mutation.test.sh` (count 18) are green, and `infra-validation.yml` runs the new test in a blocking step.
-- [ ] AC6: Runbook step 1 and bullet (3) no longer say the gate does not read `.after`; the replace-window email expectation is stated once in the runbook and once in the alert's `incident_cause`.
-- [ ] AC7: ADR-282 gains one append-only addendum line (0 removed lines in its diff); `betterstack-log-query.md` names the alert.
-- [ ] AC8: The repo-global ratchets (grep-q-pipe-guard, PJ_TRIPLES, suite-shard-legs parity, fixture-relative-assert, capture lint) are green before the first push; `affected-index-ratchet` has the accept row.
+- [x] AC1: Gate aborts with `reason=doppler_token_access` for flip-token create with `read`, boot-token replace with `read/write`, and a created token with no `after.access`. Pointer: `tests/scripts/lib/inngest-host-replace-gate.sh` (counter beside `doppler_token_touched`), `tests/scripts/test-inngest-host-replace-gate.sh`.
+- [x] AC2: Gate still passes the existing shapes (first replace, flip rotation, no-op boot token without `after`).
+- [x] AC3: `bash tests/scripts/test-inngest-host-replace-gate.sh` and `shellcheck` on both files are green; the mutation rows M3 and M5 go RED when applied to copies, and T1h still fails for the intended reason (the mutation lands on the `def allow` line only).
+- [x] AC4: `logtail_exploration.inngest_cutover_flip_silent` and its alert exist with the CTO-ruled settings; both `-target` lines are in `apply-web-platform-infra.yml` (`betterstack-logs-alerts.tf`, `apply-web-platform-infra.yml`).
+- [x] AC5: The new alert test, `betterstack-alert-structure.test.sh`, `logs-alert-query-period-ceiling.test.sh` and `betterstack-send-failed-alert-mutation.test.sh` (count 18) are green, and `infra-validation.yml` runs the new test in a blocking step.
+- [x] AC6: Runbook step 1 and bullet (3) no longer say the gate does not read `.after`; the replace-window email expectation is stated once in the runbook and once in the alert's `incident_cause`.
+- [x] AC7: ADR-282 gains one append-only addendum line (0 removed lines in its diff); `betterstack-log-query.md` names the alert.
+- [x] AC8: The repo-global ratchets (grep-q-pipe-guard, PJ_TRIPLES, suite-shard-legs parity, fixture-relative-assert, capture lint) are green before the first push; `affected-index-ratchet` has the accept row.
 - [ ] AC9: PR body says `Closes #11831` and `Ref #11820`, names what remains for #11820 (replace-window suppression via the #11266 feeder dead-man), and states that the alert will email during an owner-authorized replace and that a rejected `JSONType` query would fail the per-merge apply and be reverted.
-- [ ] AC10: No change to `user_data`, `cloud-init*.yml` or `inngest-host.tf`; `inngest-userdata-budget.sh --cap-only` is untouched and green.
+- [x] AC10: No change to `user_data`, `cloud-init*.yml` or `inngest-host.tf`; `inngest-userdata-budget.sh --cap-only` is untouched and green.
 
 ## Encryption Posture
 
