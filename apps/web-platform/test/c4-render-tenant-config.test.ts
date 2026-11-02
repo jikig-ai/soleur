@@ -280,7 +280,8 @@ describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", ()
     let dir = dirname(realpathSync(BIN!));
     let chunk: string | null = null;
     for (let i = 0; i < 6 && !(chunk = distFile(dir)); i++) dir = dirname(dir);
-    const src = readFileSync(chunk!, "utf8");
+    if (!chunk) throw new Error(`likec4 dist chunk not found within 6 parents of ${BIN} (checked dist/_chunks/src.mjs and dist/chunks/filenames.mjs)`);
+    const src = readFileSync(chunk, "utf8");
     const declared = new Set(
       // The dist quotes these as template literals (backticks); accept either.
       [...src.matchAll(/[`"]((?:\.likec4rc)|(?:\.?likec4\.config\.(?:json|js|cjs|mjs|ts|cts|mts)))[`"]/g)].map((m) => m[1]),

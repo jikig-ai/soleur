@@ -396,7 +396,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 41  # prior 36 + the five rows of the 2026-11-01 medium/low batch (minimatch x3, glob, @vitest/mocker)
+    MIN_ROWS = 44  # prior 41 + the three likec4-1.60 @pandacss-transitive rows (browserslist, postcss, postcss-selector-parser)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -404,7 +404,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 38  # prior 36 + the five rows of the 2026-11-01 batch, minus three net:
+    MIN_RESOLVED = 41  # prior 38 + the three likec4-1.60 @pandacss-transitive rows, all resolved:
                        # brace-expansion 1.x/2.x went legitimately '(absent)' in BOTH
                        # web-platform and root-1.x when minimatch consolidated on 11.x
                        # (no consumer left); root's major-5 row re-resolved under
