@@ -13,3 +13,5 @@
   have zero Inngest reach; the app holds no Inngest-project credential;
   clause census = register ×6 (PA-13/21/22/27×2/31) + PA-14 sibling +
   DPD ×2 + privacy + gdpr + mirrors ×4 + posture + ADR-030 (left as record).
+
+- cto_spawns=1 (technical-ruling gate: plan-review re-run row ruled 2026-11-02).
