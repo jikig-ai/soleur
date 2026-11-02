@@ -1,0 +1,7 @@
+first_run=First run: no earlier report to compare.
+none=None.
+no_open=No open findings in the files read.
+partial_stack=_Coverage for this stack is partial: stack-specific checks are reported as unsupported-stack._
+not_refreshed=_AI-assisted review items from the previous run were not refreshed in this run._
+v2_intro=Soleur guards not yet installable by verification-scaffold (information only, not gaps):
+retired_default=no longer in the catalog
