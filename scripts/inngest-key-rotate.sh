@@ -343,6 +343,7 @@ kr_read_host() {
   KR_HS_BOOT="$(sed -n -E 's/^  boot_id        ([0-9a-f-]{8,36})$/\1/p' "$f" | head -1)"
   KR_HS_BOOT="${KR_HS_BOOT//-/}"
   KR_HS_BOOT="${KR_HS_BOOT:0:8}"
+  [[ "$KR_HS_BOOT" =~ ^[0-9a-f]{8}$ ]] || KR_HS_BOOT=""
   obs="$(sed -n -E 's/^  observed_at    ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}).*$/\1/p' "$f" | head -1)"
   [[ -n "$obs" ]] && KR_HS_OBS="$(kr_epoch "${obs/ /T}Z")"
   return 0

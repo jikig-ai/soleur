@@ -944,6 +944,16 @@ hs_set_in "$D" 1 4 x yes 0; hs_set_in "$D" 2 4 x yes 0; hs_set_in "$D" 3 0 beef5
 bs_set_in "$D" 1 "$OLDROW"; bs_set_in "$D" 2 "$OLDROW"; bs_set_in "$D" 3 "$OLDROW" "$(bs_row $((NOW0 + 150)) beef5678 1)"
 run_script verify "${VF[@]}"
 [[ "$RC" == 0 && "$(verdict_of)" == reboot_ok && "$ALL" == *"new_boot_id_seen=true serving=true tls_listener=1"* && "$(out_of "$D" boot_new)" == beef5678 ]] && ok "G17b the host-state probe prints boot_id as the full hyphenated /proc UUID (the real shape, 2026-11-02 run 41411331535 read SERVING=unknown from it): verify still reads SERVING=yes and the 8-hex new boot" || bad "G17b rc=$RC verdict=$(verdict_of)" "$OUT"
+fresh
+hs_set_in "$D" 1 4 x yes 0; hs_set_in "$D" 2 4 x yes 0; hs_set_in "$D" 3 0 beef-5678-1111-4222-8333-94445555 yes $((NOW0 + 200))
+bs_set_in "$D" 1 "$OLDROW"; bs_set_in "$D" 2 "$OLDROW"; bs_set_in "$D" 3 "$OLDROW" "$(bs_row $((NOW0 + 150)) beef5678 1)"
+run_script verify "${VF[@]}"
+[[ "$RC" == 0 && "$(verdict_of)" == reboot_ok && "$(out_of "$D" boot_new)" == beef5678 ]] && ok "G17c hyphens inside the first 8 characters are stripped BEFORE the 8-hex slice (a non-canonical id still yields the 8-hex boot, so the strip is load-bearing and not dead code for canonical UUIDs)" || bad "G17c rc=$RC verdict=$(verdict_of)" "$OUT"
+fresh
+hs_set_in "$D" 1 4 x yes 0; hs_set_in "$D" 2 4 x yes 0; hs_set_in "$D" 3 0 zzzzzzzz-1111-4222-8333-944455556666 yes $((NOW0 + 200))
+bs_set_in "$D" 1 "$OLDROW"; bs_set_in "$D" 2 "$OLDROW"; bs_set_in "$D" 3 "$OLDROW" "$(bs_row $((NOW0 + 150)) beef5678 1)"
+run_script verify "${VF[@]}"
+[[ "$RC" != 0 && "$(verdict_of)" != reboot_ok ]] && ok "G17d a non-hex boot_id from the probe is rejected (the value must be 8 hex after the strip): verify does not pass on it" || bad "G17d rc=$RC verdict=$(verdict_of)" "$OUT"
 fresh; hs_set_in "$D" 1 4 x yes 0; bs_set_in "$D" 1 "$OLDROW"
 run_script verify "${VF[@]}"; EL=$(( $(cat "$D/state/now") - NOW0 ))
 [[ "$RC" != 0 && "$(verdict_of)" == host_silent && "$EL" -ge 600 && "$EL" -le 660 && "$ALL" == *"STOP: do not retry"* && "$ALL" == *"No hard reset"* && -s "$D/issues_created.log" ]] && ok "G18 no new boot_id within 10 minutes is host_silent (elapsed ${EL}s): stop sentence, no hard reset, one action-required issue" || bad "G18 rc=$RC elapsed=$EL" "$OUT"
@@ -1784,7 +1794,7 @@ REFUSED_ANY=""; for ((i = 1; i <= NONMUT_N; i++)); do [[ -s "$TMP/s$i/refusals.l
 [[ -z "$(ls -d "$TMP"/s*/rt/inngest-key-rotate.* 2>/dev/null)" ]] && ok "J2 no scenario left its private temp dir (and so no plan JSON) behind" || bad "J2 leftover temp dir"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=473
+FLOOR=475
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
