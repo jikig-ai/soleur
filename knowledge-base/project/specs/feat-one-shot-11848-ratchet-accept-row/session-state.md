@@ -18,3 +18,7 @@ None blocking. Planning subagent had no agent-spawn tool on this harness (depth-
 - soleur:plan, soleur:deepen-plan (inline by planning subagent)
 - soleur:engineering:cto (Rule interface, spawned by pipeline parent)
 - scripts/ci-pr-affected-replay.py, scripts/test-all.sh --print-selection
+
+## Work Phase
+- Edge declared (commit 86d3819cd3); AC-1/AC-2/AC-3 verified; reveal clean; GDPR pass; guard suite 31/31; bash -n OK.
+- Phase-2 exit gate: `affected-tests.sh` refused rc=4 `AFFECTED_GATE_REFUSED reason=runner-refused` — degraded to full (runner-changed) with 2 sibling full-gate runs in flight. Coverage evidence for this 2-line declaration: ratchet replay exit=0 pass + selector `edge:declared` + consumer suite green. Full battery deferred to ship Phase 4 / CI required `test` context.
