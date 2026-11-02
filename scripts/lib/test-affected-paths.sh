@@ -3338,6 +3338,20 @@ AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/inngest-a5-a6-owner-ask-10136 — the #11218 owner-ask probe suite execs the REAL
+# trusted-verdict lib through its SUT: the probe sources $libdir/trusted-verdict.sh
+# (scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh:177), a computed path no derivation
+# channel reaches; the test header pins "the real trusted-verdict lib therefore runs
+# unmodified". Derivation reaches relayed-verdict.sh via the $REPO_ROOT cp literal (:737) but
+# the only trusted-verdict literal is the $FORCED scratch write (:739).
+AFFECTED_SCRIPTS_INNGEST_A5_A6_OWNER_ASK_10136_PATHS=(
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh"
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh"
+  "scripts/lib/trusted-verdict.sh"
+  "scripts/lib/relayed-verdict.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/betterstack-incident-mirror — the #10390 incident-mirror battery. Beyond the SUT
 # it READS the shipping workflow (parsed-YAML wiring rows + the verbatim run-block replay),
 # the watchdog dispatch table (the row pin), cron-monitors.tf (the monitor declaration row)
