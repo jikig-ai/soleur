@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=578 → 1-193/194-386/387-578) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=582 → 1-193/194-386/387-582) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -167,7 +167,7 @@ and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
 `FLOOR_UNMEASURED` counts both src classes; the token stays literal because
 the watcher greps it), `LEG_PREDICTED`,
 `LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
-`BOUND_PERFECT`, and `FLOOR_UNMEASURED` rows against the committed tables.
+`BOUND_PERFECT` (light only), and `FLOOR_UNMEASURED` rows against the committed tables.
 `scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
 leg ratio > 1.30) and manages ONE watch-owned tracker issue
 (`ci-shard-balance-watch: manifest drift findings`, sentinel
@@ -410,8 +410,9 @@ cannot execute.
    line, and `_relevance_declined` counts stay in step (pr-gated arms only).
    A `ci.yml` `rows:` matrix is the other style — its run step consumes
    `--rows "${{ matrix.rows }}"`.
-2. **Relevance**: shared `<NAME>_PATHS` array + `RELEVANCE_ARRAYS` row in
-   `scripts/lib/test-relevance-paths.sh`; `AFFECTED_CONSUMED_EDGES` rows per
+2. **Relevance**: shared `<NAME>_PATHS` array in
+   `scripts/lib/test-relevance-paths.sh` + `RELEVANCE_ARRAYS` row in
+   `scripts/lint-orphan-test-suites.sh`; `AFFECTED_CONSUMED_EDGES` rows per
    arm label in `scripts/lib/test-affected-paths.sh`; `is_pr_gated_decline`
    in `scripts/ci-pr-selection.sh`; `GATED` rows in
    `scripts/test-all-infra-coverage-notice.test.sh`; pr-battery-gate

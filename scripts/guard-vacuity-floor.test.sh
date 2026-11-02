@@ -1313,7 +1313,7 @@ fi
 #
 # 15 -> 17 (#11562): the two new `--rows` batteries — the test-all-affected arm
 # battery and the ci-pr-affected replay arm battery — gained ranged floors
-# (`cases < MIN_ARM_CASES`, `total -lt _expected_total`, the `OW_SITES < 108`
+# (`cases < MIN_ARM_CASES`, `total -lt _expected_total`, the `OW_SITES < 112`
 # observation-window check) whose thresholds derive from argv state (ROWS_HI/
 # ROWS_LO/DECLARED_TOTAL bound at arg-parse, ~4k lines from the floor), so no
 # contiguous simple-assignment window exists for the mutant slice to bind —

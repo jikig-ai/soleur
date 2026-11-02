@@ -135,6 +135,10 @@ in_range() {
   # S4: snapshot the caller's counter at this gate so rows_gate_floor can
   # floor each dispatched block's marked delta individually. Skipped blocks
   # mark too — a skipped block's delta is zero and is never floored.
+  if [[ -z "${ROWS_COUNT_VAR:-}" && "$(declare -p ROWS_BLOCK_CASES 2>/dev/null)" == "declare -a "* ]]; then
+    printf 'FATAL: ROWS_BLOCK_CASES is declared but ROWS_COUNT_VAR is unset — a floor map without its counter silently disables the per-block floor\n' >&2
+    exit 2
+  fi
   if [[ -n "${ROWS_COUNT_VAR:-}" ]]; then
     _ROWS_MARK[_site_seq]="${!ROWS_COUNT_VAR:-0}"
   fi
@@ -167,7 +171,7 @@ rows_gate_floor() {
   # gated ordinal. Only DISPATCHED blocks are floored: a skipped block's
   # zero delta is legitimate on the other arms.
   if [[ -n "${ROWS_COUNT_VAR:-}" ]]; then
-    if ! declare -p ROWS_BLOCK_CASES 2>/dev/null | grep -q '^declare \-a'; then
+    if [[ "$(declare -p ROWS_BLOCK_CASES 2>/dev/null)" != "declare -a "* ]]; then
       printf 'FATAL: ROWS_COUNT_VAR is set but ROWS_BLOCK_CASES is not a declared indexed array — the per-block floor map must be spelled out beside the declared total\n' >&2
       exit 2
     fi
@@ -185,7 +189,11 @@ rows_gate_floor() {
         _hi="${!ROWS_COUNT_VAR:-0}"
       fi
       _actual=$(( _hi - _lo ))
-      _declared="${ROWS_BLOCK_CASES[$((_i - 1))]}"
+      _declared="${ROWS_BLOCK_CASES[$((_i - 1))]:-}"
+      if ! [[ "$_declared" =~ ^[0-9]+$ ]]; then
+        printf 'FATAL: ROWS_BLOCK_CASES[%d] is unset or non-numeric — the floor map must cover every ordinal 1..DECLARED_TOTAL\n' "$((_i - 1))" >&2
+        exit 2
+      fi
       if (( _actual < _declared )); then
         printf 'FATAL: block %d emitted %d case(s), declared minimum %d — the block was hollowed below its declared floor and a sibling cannot subsidize it\n' \
           "$_i" "$_actual" "$_declared" >&2

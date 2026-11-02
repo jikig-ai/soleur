@@ -1,11 +1,11 @@
 ---
-title: The --rows arm-split convention — boundary in the flag, letter in the label
+title: The `--rows` arm-split convention — the boundary lives in the flag argument, never the label
 status: adopting
 date: 2026-11-01
 supersedes: none
 issue: 11647
 related: [11562, 11556]
-related_adrs: [ADR-240, ADR-276]
+related_adrs: [ADR-240, ADR-262, ADR-276]
 tags: [test-runner, ci, sharding]
 ---
 

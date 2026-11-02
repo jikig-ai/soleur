@@ -113,29 +113,29 @@ Never `git stash`. Read every file before editing it.
 
 ## Phase 4 — per-block declared case floors (S4)
 
-- [ ] 4.1 `scripts/test-all-affected.test.sh`: declare `ROWS_COUNT_VAR=cases`
+- [x] 4.1 `scripts/test-all-affected.test.sh`: declare `ROWS_COUNT_VAR=cases`
       and `ROWS_BLOCK_CASES=( <38 declared minimums> )` beside
       `DECLARED_TOTAL` with a comment mapping ordinals to block letters;
       count each block's `cases+=` sites; loop-driven blocks get their
       structural minimum
-- [ ] 4.2 `scripts/lib/rows-range.sh`: `in_range` snapshots
+- [x] 4.2 `scripts/lib/rows-range.sh`: `in_range` snapshots
       `${!ROWS_COUNT_VAR}` per call when set; `rows_gate_floor` closes the
       last block and `FATAL exit 2`s any dispatched block with
       `actual < declared`, naming the ordinal
-- [ ] 4.3 Proof: hollow one block to fewer cases → the covering arm reds with
+- [x] 4.3 Proof: hollow one block to fewer cases → the covering arm reds with
       the block ordinal in the message; restore
-- [ ] 4.4 Verify: `bash scripts/test-all-affected.test.sh --rows <each arm>`
+- [x] 4.4 Verify: `bash scripts/test-all-affected.test.sh --rows <each arm>`
       green on the intact tree
-- [ ] 4.5 `git commit` Phase 4 alone
+- [x] 4.5 `git commit` Phase 4 alone
 
 ## Phase 5 — ADR + checklist (S5)
 
-- [ ] 5.1 `knowledge-base/engineering/architecture/decisions/ADR-313-<slug>.md`
+- [x] 5.1 `knowledge-base/engineering/architecture/decisions/ADR-313-<slug>.md`
       (next free ordinal — ADR-312 is top): `-<letter>` arm convention —
       boundary in the flag argument, distinct-legs post-pass, tiling +
       label-shape + literal-census + DECLARED_TOTAL-census arms, same-commit
       re-split rule, both split styles (run_suite arms, ci.yml `rows:` matrix)
-- [ ] 5.2 `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`:
+- [x] 5.2 `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`:
       arm-split checklist — run_suite/skip_suite pairs +
       `_relevance_declined` count; shared `<NAME>_PATHS` array +
       `RELEVANCE_ARRAYS` row; `AFFECTED_CONSUMED_EDGES` per arm;
@@ -144,13 +144,13 @@ Never `git stash`. Read every file before editing it.
       `--incremental --write` regen (distinct legs); totality-mutations
       verbatim-anchor re-pin; ratchet pair check — plus the `estimate`
       seeding rule (seed → `estimate`, never `measured`)
-- [ ] 5.3 Verify: `grep -n 'ADR-313' knowledge-base/engineering/architecture/decisions/`;
+- [x] 5.3 Verify: `grep -n 'ADR-313' knowledge-base/engineering/architecture/decisions/`;
       ADR lint/`lint-adr-*` suites if present green
-- [ ] 5.4 `git commit` Phase 5 alone
+- [x] 5.4 `git commit` Phase 5 alone
 
 ## Phase 6 — decision row 12 (optional, only if ruled)
 
-- [ ] 6.1 `scripts/lib/rows-range.test.sh` — parse-edge unit suite (repeat,
+- [x] 6.1 `scripts/lib/rows-range.test.sh` — parse-edge unit suite (repeat,
       malformed, bounds, ordinal mismatch, per-block floor). If added:
       auto-globbed registration; `python3
       scripts/regenerate-shard-manifest.py --incremental --write` for both
@@ -163,14 +163,14 @@ Never `git stash`. Read every file before editing it.
       `_lit_n > _emit_n`; (b) **Direction-2** — repo-wide, so NO
       line-start `DECLARED_TOTAL=` spelling anywhere in the file — use
       subshell-scoped `( export DECLARED_TOTAL=N; … )` forms only.
-- [ ] 6.2 `git commit` separately
+- [x] 6.2 `git commit` separately
 
 ## Phase 7 — final verification
 
-- [ ] 7.1 All eight verification batteries from 2.7/4.4 green on the final tree
-- [ ] 7.2 `bash plugins/soleur/test/scripts-shard-totality.test.sh` +
+- [x] 7.1 All eight verification batteries from 2.7/4.4 green on the final tree
+- [x] 7.2 `bash plugins/soleur/test/scripts-shard-totality.test.sh` +
       `scripts-shard-manifest.test.sh` + `lint-orphan-test-suites.sh` green
-- [ ] 7.3 `git status --porcelain` clean of scratch files; diff review: no
+- [x] 7.3 `git status --porcelain` clean of scratch files; diff review: no
       `DECLARED_TOTAL=` outside the four batteries, no `--rows N-M` literal in
       the lib, no secrets
 

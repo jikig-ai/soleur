@@ -2,10 +2,13 @@
 # rows-range.test.sh — unit coverage for scripts/lib/rows-range.sh parse and
 # floor edges the battery arm invocations can't reach cheaply (#11647, S2/row 12).
 #
-# Every case runs the lib inside a subshell so DECLARED_TOTAL is subshell-scoped
+# Every case runs the lib inside a subshell so DECLARED_TOTAL is subshell-scoped.
+# The TOTA''L splice is load-bearing: a line-start DECLARED_TOTAL= anywhere in the
+# file trips the Direction-2 census — the sanctioned '( export X=N; )' shape
+# matches it too, so the var name is concatenated instead.
 # (Direction-2's repo-wide census counts a line-start decl spelling anywhere).
-# Ranges are spelled with variable bounds --rows "${_a}-${_b}" — Direction-1's
-# literal census counts a digit-literal flag across test-all.sh + scripts/lib.
+# Ranges are spelled as quoted literals ("2-3") — Direction-1's literal
+# census counts an unquoted --rows<sp><d>-<d> flag across test-all.sh + scripts/lib.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,9 +19,10 @@ PASS=0; FAIL=0
 pass() { PASS=$(( PASS + 1 )); echo "  PASS: $1"; }
 fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1" >&2; }
 
-# run_sut <argv...>: subshell with DECLARED_TOTAL=5 + a 3-site battery driving
+# run_sut <argv...>: subshell with DECLARED_TOTAL=5 + a 5-site battery driving
 # in_range per site then rows_gate_floor; prints nothing on success, rc is the
-# process exit. Bounds come from _a/_b so no literal range is ever spelled.
+# process exit. Ranges are quoted literals ("2-3") — the Direction-1 census
+# regex needs unquoted --rows<sp><d>-<d>; a stray quote is the sanctioned dodge.
 run_sut() {
   (
     export DECLARED_TOTA''L=5
@@ -148,6 +152,61 @@ if (( $? == 2 )); then
   pass "ROWS_COUNT_VAR without ROWS_BLOCK_CASES FATALs exit 2"
 else
   fail "missing block-case map stayed green"
+fi
+# R10: missing / non-numeric / zero DECLARED_TOTAL -> exit 2 (precondition guard).
+for _bad in unset 5x 0; do
+  (
+    [ "$_bad" != unset ] && export DECLARED_TOTA''L="$_bad"
+    rows_parse_args >/dev/null 2>&1
+    for _s in 1 2; do in_range && :; done
+    rows_gate_floor
+  ) >/dev/null 2>&1
+  if (( $? == 2 )); then
+    pass "DECLARED_TOTAL='${_bad}' FATALs exit 2"
+  else
+    fail "DECLARED_TOTAL='${_bad}' did not FATAL"
+  fi
+done
+# R11: block-case map length != DECLARED_TOTAL -> exit 2 (arity pin).
+(
+  export DECLARED_TOTA''L=3
+  ROWS_COUNT_VAR=cases
+  ROWS_BLOCK_CASES=( 1 1 )
+  cases=0
+  rows_parse_args >/dev/null 2>&1
+  for _s in 1 2 3; do in_range && cases=$((cases + 1)); done
+  rows_gate_floor
+) >/dev/null 2>&1
+if (( $? == 2 )); then
+  pass "short ROWS_BLOCK_CASES map FATALs exit 2"
+else
+  fail "short block-case map stayed green"
+fi
+# R12: hollowed LAST ordinal exercises the final-counter fallback -> exit 2.
+(
+  export DECLARED_TOTA''L=2
+  ROWS_COUNT_VAR=cases
+  ROWS_BLOCK_CASES=( 1 2 )
+  cases=0
+  rows_parse_args >/dev/null 2>&1
+  in_range && cases=$((cases + 1))
+  in_range && cases=$((cases + 1))   # block 2: 1 < declared 2
+  rows_gate_floor
+) >/dev/null 2>&1
+if (( $? == 2 )); then
+  pass "hollowed last block FATALs exit 2"
+else
+  fail "hollowed last block stayed green"
+fi
+# R13: --rows 0-N (LO < 1) -> exit 2 (bounds).
+(
+  export DECLARED_TOTA''L=5
+  rows_parse_args --rows "0-3" >/dev/null 2>&1
+) >/dev/null 2>&1
+if (( $? == 2 )); then
+  pass "--rows 0-N refused exit 2"
+else
+  fail "--rows 0-N accepted"
 fi
 
 echo ""

@@ -344,7 +344,7 @@ ROWS_UNIT=blocks
 # 20 q, 21 r, 22 s, 23 t, 24 u, 25 x, 26 w, 27 v, 28 y/z, 29 z8, 30 sc, 31 sc9,
 # 32 t1-t10/m*, 33 p1-p6/m4, 34 q1-q4/m6, 35 q7-q9, 36 tg, 37 th, 38 th6*/th8.
 ROWS_COUNT_VAR=cases
-ROWS_BLOCK_CASES=( 1 1 1 1 1 1 1 1 1 1 1 2 1 19 2 3 1 1 1 1 1 2 1 2 1 2 2 11 1 8 1 18 7 5 3 5 4 4 )
+ROWS_BLOCK_CASES=( 1 1 1 1 1 1 1 1 1 1 1 4 1 19 2 3 1 1 1 1 1 2 1 2 1 2 2 11 1 8 1 18 7 5 3 5 4 4 )
 # shellcheck source=scripts/lib/rows-range.sh
 source "$REPO_ROOT/scripts/lib/rows-range.sh"
 rows_parse_args "$@"
