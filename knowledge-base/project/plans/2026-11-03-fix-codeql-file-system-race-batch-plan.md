@@ -23,6 +23,33 @@ each path once, then derive kind/mode/bytes from the same descriptor — `fstatS
 object can be swapped between check and use. One production script and four test files;
 one PR closes all five tracker issues.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Research Insights, Context (per-alert disposition), Implementation Phases
+**Research agents used:** sequential in-process deepen pass (no Task-subagent tool in
+this harness) — precedent-diff vs `1b60715d80`/`7a3f264e0e`, external CodeQL docs,
+verify-the-negative + self-audit passes, all deepen-plan halt gates (4.6–4.13) executed
+mechanically and passed.
+
+### Key Improvements
+
+1. Per-site check→use pairings verified on disk and each site pinned to a concrete
+   one-descriptor edit (including the `/proc/self/fd` two-consumer shape for #258,
+   verified live before planning).
+2. Per-alert dispositions decided up front — all five fixed, none dismissed — so no
+   operator sign-off is needed and the PR body's required `Closes #N` lines close all
+   five trackers.
+
+### New Considerations Discovered
+
+- Open PR #10926 rewrites `install-opencode-adapter.ts` (different scope) — whoever
+  merges second rebases; our edit is confined to `walkPayloadFiles`.
+- Two sibling sessions run `test-all.sh` concurrently — verification stays on
+  affected-file test runs only (shared TMPDIR false-red risk).
+- Node exposes no lseek: two children reading one payload need independent file
+  descriptions; `open("/proc/self/fd/N", "r")` mints one per call on the same inode.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
