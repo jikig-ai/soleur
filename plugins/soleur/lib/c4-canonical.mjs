@@ -20,6 +20,76 @@
 // @likec4/diagram, LikeC4Model or this repo reads, and the likec4 CLI never
 // reads the exported artifact back. The key is kept (value "") because the
 // ViewWithHash type declares it.
+//
+// Relation IDs are additionally RE-KEYED to a content hash and the map is
+// emitted SORTED by the new key. Since likec4 1.60 the CLI derives relation
+// ids — and the `relations` map's emission order with them — from the absolute
+// workspace path, so two renders of identical .c4 sources at different roots
+// differ on every relation id AND on map order; the only other movers are
+// each relation's `id` field and `views[*].edges[*].relations[]` referents
+// (element ids, edge ids, and view/node/edge ordering are content-stable).
+// Without a re-key + sort the committed artifact can never byte-match a render
+// at CI's checkout path (#11915). The new id is a 64-bit FNV-1a hash (base36)
+// of the relation's content minus `id`; `edges[].relations` is sorted after
+// rewriting — it is a referent set, not an ordering. A repeated content hash
+// (duplicate relations, or a freak collision) is disambiguated with a `-N`
+// suffix in insertion order, which is deterministic for a given input.
+
+const FNV_OFFSET = 0xcbf29ce484222325n;
+const FNV_PRIME = 0x100000001b3n;
+const FNV_MASK = 0xffffffffffffffffn;
+
+function fnv1a64Base36(str) {
+  let h = FNV_OFFSET;
+  for (let i = 0; i < str.length; i++) {
+    h = (h ^ BigInt(str.charCodeAt(i))) * FNV_PRIME & FNV_MASK;
+  }
+  return h.toString(36);
+}
+
+function rekeyRelations(model) {
+  const relations = model.relations;
+  if (relations === null || typeof relations !== "object" || Array.isArray(relations)) {
+    return;
+  }
+  const idMap = new Map();
+  const seen = new Map();
+  const next = Object.create(null);
+  for (const [oldId, rel] of Object.entries(relations)) {
+    if (rel === null || typeof rel !== "object" || Array.isArray(rel)) {
+      next[oldId] = rel;
+      continue;
+    }
+    const { id: oldRelId, ...content } = rel;
+    const base = fnv1a64Base36(JSON.stringify(content));
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    const newId = n === 1 ? base : `${base}-${n}`;
+    idMap.set(oldId, newId);
+    if (typeof oldRelId === "string") idMap.set(oldRelId, newId);
+    if (Object.prototype.hasOwnProperty.call(rel, "id")) rel.id = newId;
+    next[newId] = rel;
+  }
+  // Upstream emission order follows the path-derived ids, so it drifts across
+  // render roots too; emit the re-keyed map sorted by the new id.
+  const sorted = Object.create(null);
+  for (const k of Object.keys(next).sort()) sorted[k] = next[k];
+  model.relations = sorted;
+  const views = model.views;
+  if (views === null || typeof views !== "object" || Array.isArray(views)) {
+    return;
+  }
+  for (const view of Object.values(views)) {
+    if (view === null || typeof view !== "object" || !Array.isArray(view.edges)) {
+      continue;
+    }
+    for (const edge of view.edges) {
+      if (edge !== null && typeof edge === "object" && Array.isArray(edge.relations)) {
+        edge.relations = edge.relations.map((r) => idMap.get(r) ?? r).sort();
+      }
+    }
+  }
+}
 
 /**
  * @param {string} json raw `likec4 export json` output (or an already-canonical file)
@@ -30,6 +100,7 @@ export function canonicalizeC4Model(json) {
   if (model === null || typeof model !== "object" || Array.isArray(model)) {
     throw new TypeError("c4 model must be a JSON object");
   }
+  rekeyRelations(model);
   const views = model.views;
   if (views !== null && typeof views === "object" && !Array.isArray(views)) {
     for (const view of Object.values(views)) {

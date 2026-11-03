@@ -96,8 +96,9 @@ the walk files of the level by sorted path followed by their closures; the rows 
 accept row's ordinal never depends on the order the selector printed the rows. An edge is credited exactly when the selector would select
 the suite for a diff naming the path (edge_hit mirrors `_diff_touches`).
 DRAIN-REVEAL: reach is frozen as a definition but its result moves through declared edges and through the text of files it reads: declaring
-a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row when the suite does not read or
-execute the file, declare an edge only when it does, and re-run the audit to a fixpoint.
+a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row only when the suite merely names
+the file; declare an edge when the suite reads or executes it — or when the file's state feeds the suite's verdict (an ignore-rules file a
+suite-side `git --exclude-standard` call consults, though the suite's own bytes never open it) — and re-run the audit to a fixpoint.
 DECLARED LIMITS (what no run of this audit proves):
   - literal names only: no computed path, glob expansion or variable-indirect operand;
   - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
@@ -151,7 +152,8 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
          (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
          growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
   The baseline is compared as OPAQUE rendered lines (there is no baseline parser); the failure text names the suite, the path and the referencing file:line, gives the two
-  remedies (declare an edge only when the suite really reads the file; add an anchor-keyed accept row when it merely names it) and never offers a way to add a pair.
+  remedies (declare an edge only when the suite really reads the file or the file's state feeds its verdict; add an anchor-keyed accept row when it
+  merely names it) and never offers a way to add a pair.
   --print-baseline writes ONLY the baseline bytes to stdout (the marker and diagnostics go to stderr, nothing is written to disk): with no baseline file it prints every
   live pair; once one exists it prints only the baseline lines that are still live (prune-only), so a regeneration can shrink the file and never grow it. It refuses
   (exit 2, census-degraded) when the census is degraded (an unaudited suite, a stale or malformed accept row): a file printed from it would lose live pairs.
@@ -1756,13 +1758,14 @@ RATCHET_CAP = 25
 RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE)
 STAR_WHYS = ("star-row-readable-suite", "star-row-unreadable-members", "star-row-tracked-suite")
 RATCHET_REMEDY_NEW = (
-    "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file "
-    "(that is what the selector must know); editing that file runs the full battery once",
+    "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, "
+    "or the file's state feeds its verdict (that is what the selector must know); editing that file runs the full battery once",
     "remedy: or add an anchor-keyed accept row to " + RATCHET_ACCEPT + " only when the suite merely names the file (a message, a fixture it writes "
     "into a scratch tree, a negative-test string); the reason names the line kind",
     "remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)",
-    "remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not "
-    "read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository's ruleset",
+    "remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated "
+    "control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required "
+    "review exists in this repository's ruleset",
     "remedy: a baseline row cannot be added",
 )
 QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")
