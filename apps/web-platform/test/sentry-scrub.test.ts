@@ -212,6 +212,24 @@ describe("scrubSentryEvent — inbound-email routing recipients (ADR-269)", () =
   });
 });
 
+describe("scrubSentryEvent — manual erasure seed ids (#8211 PR-B2)", () => {
+  test("`ids` in Inngest event_data is redacted; requested_at and other keys survive", () => {
+    const seeded = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const event = {
+      extra: {
+        "inngest.event_data": { ids: [seeded, "not-a-uuid"], requested_at: "2026-10-01T00:00:00Z" },
+      },
+    };
+    const result = scrubSentryEvent(event) as {
+      extra: { "inngest.event_data": Record<string, unknown> };
+    };
+    expect(result.extra["inngest.event_data"].ids).toBe("[Redacted]");
+    expect(result.extra["inngest.event_data"].requested_at).toBe("2026-10-01T00:00:00Z");
+    expect(JSON.stringify(result)).not.toContain(seeded);
+    expect(JSON.stringify(result)).not.toContain("not-a-uuid");
+  });
+});
+
 describe("scrubSentryEvent — request URL/query sanitization (#8984 tx envelopes)", () => {
   test("transaction request.url loses query + hash; query_string key dropped", () => {
     // OAuth `?code=` and implicit-flow `#access_token=` ride request.url;

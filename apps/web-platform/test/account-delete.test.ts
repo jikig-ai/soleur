@@ -405,9 +405,9 @@ describe("deleteAccount", () => {
 
     // userId === workspaces.id (mig 053 N2 invariant) → the sole-owned workspace's
     // git-data repo is keyed on userId, mirroring deleteWorkspace(userId). Best-effort
-    // (removeGitDataRepo is a no-op at flag-off), so the reach — not the transport — is
-    // what this asserts; the flag gate + key authority are covered in
-    // git-data-replication.test.ts.
+    // (removeGitDataRepo gates on arming, not the live flag: an unarmed env gets `skipped`),
+    // so the reach — not the transport — is what this asserts; the arming gate + key
+    // authority are covered in git-data-replication.test.ts.
     expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
   });
 

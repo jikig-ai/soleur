@@ -2484,6 +2484,41 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   "glob:*.cjs"
   "glob:*.py"
   "glob:*.md"
+  # --- #11810 verdict-input edges: the suite sweeps with `git grep --no-index
+  # --exclude-standard` and asserts no swept file is ignore-hidden
+  # (`git ls-files -ci --exclude-standard`), so a `.gitignore`-only diff can flip
+  # its verdict while selecting nothing. `.gitignore` carries no CODE_EXT
+  # extension, so these edges never enter the audit's naming walk and mint zero
+  # pairs — the ~442-pair premise recorded at #11779 does not reproduce. NEVER
+  # the recursive `**` spellings: `glob:`-prefixed `**/.gitignore` is malformed
+  # (root-anchored arm, `/`-bearing tail → always-match degrade), while
+  # `glob:`-prefixed `**.gitignore` is well-formed but silently under-covers —
+  # it mints a root-only edge matching dir-less lines, masquerading as coverage.
+  # A `.gitignore` under a NEW
+  # top-level dir stays uncovered until re-enumerated — same residual as the
+  # #11648 enumeration above; the th6 census bounds it.
+  ".gitignore"
+  "glob:.agents/**.gitignore"
+  "glob:.claude/**.gitignore"
+  "glob:.claude-plugin/**.gitignore"
+  "glob:.codex/**.gitignore"
+  "glob:.cursor-plugin/**.gitignore"
+  "glob:.devin/**.gitignore"
+  "glob:.github/**.gitignore"
+  "glob:.grok/**.gitignore"
+  "glob:LICENSES/**.gitignore"
+  "glob:apps/**.gitignore"
+  "glob:bin/**.gitignore"
+  "glob:docs/**.gitignore"
+  "glob:infra/**.gitignore"
+  "glob:knowledge-base/**.gitignore"
+  "glob:packages/**.gitignore"
+  "glob:plugins/**.gitignore"
+  "glob:scripts/**.gitignore"
+  "glob:spike/**.gitignore"
+  "glob:test/**.gitignore"
+  "glob:tests/**.gitignore"
+  "glob:todos/**.gitignore"
 )
 
 # .claude/hooks/stub-argv-fidelity.test.sh — derived edges could not reach its subject; declared from the
