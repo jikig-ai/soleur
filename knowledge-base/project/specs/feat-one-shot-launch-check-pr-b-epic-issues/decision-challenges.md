@@ -57,3 +57,13 @@ The CTO spawn cap for this pipeline run was already used (plan batch and S1-S2),
 - L4: filed issue bodies and the epic carry the standing banner line from `references/banner.txt` (parent Phase 5 + CLO condition); marker identity is read from whole-line markers only; `--create` aborts `epic-ambiguous` when any live issue carries two markers (ignored), instead of reading it as absent.
 - L5 (accepted, not changed): non-secret evidence grammar stays as is (preview shows the full table before the customer's yes; same-user tampering is outside the threat model, D5); no create-time run lock (E8); items are not author-checked (a colleague's earlier run must be adopted, not duplicated); ticked checkboxes survive only in task-list mode (documented).
 - L6: `content-strategy.md` (held row) is NOT edited by this PR per the operator's standing constraint; its "read-only" allowed-wording line goes stale when PR-B ships and is called out in the PR body for the operator.
+
+## Fix-round-2 lead decisions (2026-11-03, FIX_HEAD 3df1caf715)
+
+The verification pass (10 report-only seats against 3df1caf715) reproduced three regressions; these technical calls were made by the lead. They refine, and do not reverse, the rulings above.
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| L7 (refines E5) Origin host must not dead-end | technical | Ruled by lead, 2026-11-03: (a) the origin hosts `ssh.github.com` and `www.github.com` are normalised to `github.com` before comparing; (b) for any other differing host (an ssh alias), an explicit `--repo OWNER/NAME` bypasses the host-differs abort (the owner named the target and `--confirm-repo` still transcribes it); without `--repo` the abort stays and its remedy says "pass --repo OWNER/NAME, or fix the origin remote" and never suggests `--host <alias>`. |
+| L8 (refines E6) Enterprise tokens | technical | Ruled by lead, 2026-11-03: `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` are both scrubbed unconditionally in `lc__gh_exec` (fail closed: a GHES user relies on gh's stored login). The comment, the ADR Guard-1 text and the env test row follow. |
+| L9 (refines L3) Hosted headless override | technical | Ruled by lead, 2026-11-03: the hosted `LAUNCH_CHECK_HEADLESS=1` override is a seatbelt against an ambient or accidental run, not a mechanical gate (a Bash call can set the variable inline). No hosted Bash deny is added in this PR. The wording "enforced, not asserted" in ADR-314 L3 and in `apps/web-platform/server/agent-env.ts` is reworded to say so; headless also makes hosted `render` (report writes) refuse with `headless-write-refused`, and that is recorded. |
