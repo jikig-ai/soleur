@@ -43,6 +43,7 @@ cat > "$TMP/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "configs" ]]; then echo '{"environment":"dev"}'; exit 0; fi
 if [[ "${1:-}" == "run" ]]; then
+  echo x >> "$STUB_DOPPLER_RUNS"
   [[ "${STUB_DOPPLER_DOWN:-0}" == "1" ]] && exit 1
   shift; while [[ "${1:-}" != "--" ]]; do shift; done; shift; exec "$@"
 fi
@@ -81,9 +82,9 @@ STUB
 chmod +x "$TMP/bin/doppler" "$TMP/bin/node"
 
 run_step() {  # env assignments... -> $TMP/out (GITHUB_OUTPUT), $TMP/log, RC
-  : > "$TMP/out"; : > "$TMP/counter"; : > "$TMP/token_seen"
+  : > "$TMP/out"; : > "$TMP/counter"; : > "$TMP/token_seen"; : > "$TMP/doppler_runs"
   env -i PATH="$TMP/bin:/usr/bin:/bin" DOPPLER_TOKEN=dp.st.invalid-fixture GITHUB_OUTPUT="$TMP/out" \
-    STUB_COUNTER="$TMP/counter" STUB_TOKEN_SEEN="$TMP/token_seen" "$@" \
+    STUB_COUNTER="$TMP/counter" STUB_TOKEN_SEEN="$TMP/token_seen" STUB_DOPPLER_RUNS="$TMP/doppler_runs" "$@" \
     bash --noprofile --norc -eo pipefail "$TMP/probe.sh" > "$TMP/log" 2>&1; RC=$?
 }
 mode() { sed -n 's/^failure_mode=//p' "$TMP/out"; }
@@ -120,10 +121,11 @@ G4_OK=1
 for k in 1 2 3 4 5; do
   run_step NODE_OPTIONS="$STEP_NODE_OPTIONS" STUB_POLYFILL_SKIP_ITER="$k"
   [[ "$(mode)" == "probe_contract_drift" ]] && detail | grep -q "Run $k/5" && detail | grep -q "no 'polyfill: applied'" \
+    && [[ "$(cat "$TMP/counter")" == "$k" ]] \
     || { G4_OK=0; echo "    G4 iteration $k: mode='$(mode)' detail='$(detail)'"; }
 done
 [[ "$G4_OK" == 1 ]] \
-  && pass "G4: a missing polyfill line in ANY iteration (1..5) -> drift naming that run" \
+  && pass "G4: a missing polyfill line in ANY iteration (1..5) -> drift naming that run, and the loop stops there" \
   || fail "G4: per-iteration check missed an iteration (see above)"
 run_step NODE_OPTIONS="--no-experimental-websocket --max-old-space-size=512"
 [[ "$RC" -eq 0 && -z "$(mode)" ]] && grep -q 'passed (5/5 SUBSCRIBED)' "$TMP/log" \
@@ -145,9 +147,9 @@ run_step NODE_OPTIONS="$STEP_NODE_OPTIONS"
 
 echo "classification"
 run_step NODE_OPTIONS="$STEP_NODE_OPTIONS" STUB_DOPPLER_DOWN=1
-[[ "$(mode)" == "realtime_join_timeout" ]] \
-  && pass "C1: a Doppler outage that never reaches the script stays realtime_join_timeout, not drift" \
-  || fail "C1: mode='$(mode)'"
+[[ "$(mode)" == "realtime_join_timeout" && "$(wc -l < "$TMP/doppler_runs")" -eq 1 ]] \
+  && pass "C1: a Doppler outage that never reaches the script stays realtime_join_timeout, not drift, and stops at run 1" \
+  || fail "C1: mode='$(mode)' doppler_runs=$(wc -l < "$TMP/doppler_runs")"
 
 # Helper self-test: drive both helpers once and require both to count, then unwind the failure
 # so the verdict stays honest (precedent: registry-host-replace-dispatch-verdict.test.sh).
