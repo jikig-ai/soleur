@@ -19,3 +19,11 @@ None — two recoverable mechanics: (a) initial `git branch --show-current` ran 
 ### Components Invoked
 - `soleur:plan`, `soleur:deepen-plan` (run to completion by the planning subagent)
 - Scripts: `cloud-detect.sh`, `collision-precheck.sh` x2, `technical-ruling-gate.sh --branch`, `lint-guard-contract.py`, `markdownlint-cli2`
+
+## Fix-Round Phase (resumed session)
+- Status: in_progress — resumed at one-shot Step 5 fix-round (ADR-267)
+- Fix range: 21a605e84a..8a6e5c364c (1 commit, 2 files +87/-19)
+- Seats resolved: performance-oracle, test-design-reviewer, shellcheck — PATH-MAPPED ONLY (no persisted dedup ledger; --finding-seats union unavailable, documented fail-safe degradation)
+- security-sentinel: NOT added — no SENSITIVE_PATH_RE hit; fix adds probe verdict arms (rc 2/3), not guard/deny shapes (lead judgment)
+- Combined-tree gate pre-panel: named suite 42/42, shellcheck -S warning clean, 7 followthroughs ratchets green (exec-bit, varq-ban x2, emitter-read x2, predicate-parity, sweep). `--affected` declines to FULL (runner-changed — main diff edits test-all.sh/test-affected-paths.sh)
+- Anomaly: main panel's Reviewed-By-Soleur trailer was never emitted — repair owed (panel ran: tally seats=9, fix commit documents findings)

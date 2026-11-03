@@ -208,11 +208,22 @@ fx="$WORK/fx-runsjunk"; new_fx runsjunk; printf 'not json' > "$fx/runs.json"
 expect "run list not JSON -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "runsjunk" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
 
-# Runs created AT or BEFORE the merge second — the probe's own jq applies the strict `>`
-# filter on the fixture's raw list; either leaking through is a PASS on possibly-pre-merge
-# evidence.
+# A `.workflow_runs` that is an OBJECT, not an array: `(.workflow_runs // [])[]`
+# iterates object VALUES, so a drifted payload emits a phantom run row that a
+# real jobs read would then confirm — the same counted-fault class as `.jobs`.
+fx="$WORK/fx-runsobject"; new_fx runsobject
+printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":91,"created_at":"2026-10-05T09:00:00Z","conclusion":"success"}}}' > "$fx/runs.json"
+expect "non-array .workflow_runs is a counted fault, not phantom runs -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "runsobject" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
+
+# A run carrying a successful replace job but created AT or BEFORE the merge second —
+# the probe's own jq applies the strict `>` filter on the fixture's raw list; either
+# leaking through is a demonstrable false-PASS on possibly-pre-merge evidence (the
+# planted jobs + post-dating health turn a leak into rc 0, not merely rc != 2).
 fx="$WORK/fx-atmerge"; new_fx atmerge
 add_run "$fx" 90 "$MERGED"; add_run "$fx" 89 "2026-09-30T09:00:00Z"
+for r in 90 89; do add_job "$fx" "$r" inngest_host_replace success; done
+add_health "$fx" 95 "$T3" success
 expect "runs AT/before merge second filtered out -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 echo "== per-run jobs reads (#9782)"
@@ -267,6 +278,7 @@ add_run "$fx" 205 "$T1"; add_run "$fx" 206 "$T2"
 jobs_raw "$fx" 205 'garbage not json'
 jobs_raw "$fx" 206 'also garbage'
 expect "malformed jobs payloads are counted reads -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "jobsjunk" "$fx" "CANNOT-ESTABLISH: all 2 per-run job queries failed"
 
 # A `.jobs` that is an OBJECT, not an array: iterating it by value would emit a
 # phantom job — it must be a counted fault (rc 3), never phantom evidence.
@@ -274,6 +286,7 @@ fx="$WORK/fx-jobsobject"; new_fx jobsobject
 add_run "$fx" 207 "$T1"
 jobs_raw "$fx" 207 '{"total_count":1,"jobs":{"a":{"name":"inngest_host_replace","conclusion":"success","status":"completed"}}}'
 expect "non-array .jobs is a counted fault, not phantom evidence -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "jobsobject" "$fx" "CANNOT-ESTABLISH: all 1 per-run job queries failed"
 
 # A dispatch for a different apply_target: jobs exist, none replace-named.
 fx="$WORK/fx-othertarget"; new_fx othertarget
@@ -297,6 +310,26 @@ add_run "$fx" 245 "$T1"
 add_job "$fx" 245 inngest_host_replace null
 expect "replace job still in flight -> NOT YET (never a false FAIL)" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "inflightreplace" "$fx" "still in flight"
+
+# Cross-run precedence: the NEWEST replace-bearing run is the verdict — a still
+# in-flight newest attempt yields NOT-YET even when an older run concluded
+# failure (the retry has not concluded; nothing failed yet).
+fx="$WORK/fx-inflightprecedence"; new_fx inflightprecedence
+add_run "$fx" 246 "$T2"; add_run "$fx" 247 "$T1"
+add_job "$fx" 246 inngest_host_replace in_progress
+add_job "$fx" 247 inngest_host_replace failure
+expect "newest replace in-flight supersedes older concluded -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "inflightprecedence" "$fx" "still in flight"
+
+# Within one run: a success among replace-named jobs beats a coexisting
+# in-flight line — an observed success is evidence (a retry after failure,
+# conversely, is pinned by the in-flight arm above).
+fx="$WORK/fx-jobprecedence"; new_fx jobprecedence
+add_run "$fx" 248 "$T1"
+add_job "$fx" 248 inngest_host_replace in_progress
+add_job "$fx" 248 inngest_host_replace success
+add_health "$fx" 300 "$T3" success
+expect "success among replace jobs beats coexisting in-flight -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 fx="$WORK/fx-pass"; new_fx pass
 add_run "$fx" 260 "$T1"
@@ -355,6 +388,7 @@ add_job "$fx" 292 inngest_host_replace success
 add_health "$fx" 293 "$T3" failure
 add_health "$fx" 294 "$T2" success
 expect "newest post-dating health failed (oldest green is stale) -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "twohealth" "$fx" "FAIL: post-replace health run 293 concluded 'failure'"
 
 fx="$WORK/fx-healthreadfail"; new_fx healthreadfail
 add_run "$fx" 296 "$T1"
@@ -362,6 +396,24 @@ add_job "$fx" 296 inngest_host_replace success
 : > "$fx/health.json.fail"
 expect "health list read fails -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "healthreadfail" "$fx" "CANNOT-ESTABLISH: health run list read failed"
+
+# gh-success / jq-fail on the health list: a malformed payload is the same
+# counted-fault class as a transport failure — never a measured-empty read.
+fx="$WORK/fx-healthjunk"; new_fx healthjunk
+add_run "$fx" 297 "$T1"
+add_job "$fx" 297 inngest_host_replace success
+printf 'not json' > "$fx/health.json"
+expect "health list not JSON -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthjunk" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
+
+# `.workflow_runs` as an OBJECT on the health list: object-value iteration would
+# emit a phantom health row that reaches the verdict case directly.
+fx="$WORK/fx-healthobject"; new_fx healthobject
+add_run "$fx" 298 "$T1"
+add_job "$fx" 298 inngest_host_replace success
+printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":301,"created_at":"2026-10-07T09:00:00Z","conclusion":"success"}}}' > "$fx/health.json"
+expect "non-array .workflow_runs on health list -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthobject" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
 
 printf 'inngest-cli-apply-window-7463.test.sh: %s passed, %s failed\n' "$((total - fails))" "$fails"
 [[ "$fails" -eq 0 ]]
