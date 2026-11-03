@@ -8,25 +8,25 @@ Diff scope: the two ADR files plus this feature's own spec and plan files; nothi
 
 - [ ] 0.1 Ordinal census over every origin ref plus open-PR ADR claims (commands in plan Phase 0 step 1); take the next two above the max of both (315 and 316 at plan time).
 - [ ] 0.2 Overlap state: #9854, PR #9832 (pin its branch sha), PR #11592, any open PR touching ADR-075, ADR-068 or the seccomp profile; if #9854's ADR has merged, ADR-315 stays `proposed` with the topology-of-record Status line (ruling X).
-- [ ] 0.3 Re-verify every row of both claim ledgers (C1-C10, L1-L8): re-find the content anchor and update the coordinate; relabel `unverified` only when the content is gone or changed.
+- [ ] 0.3 Re-verify every row of both claim ledgers (C1-C10, L1-L10): re-find the content anchor and update the coordinate; relabel `unverified` only when the content is gone or changed.
 - [ ] 0.4 Read nfr-register.md and principles-register.md (read-only) and pick the real NFR and AP IDs for the NFR Impacts and Principle Alignment sections.
 
 ## Phase 1: ADR-315 container ADR
 
-- [ ] 1.1 Write `knowledge-base/engineering/architecture/decisions/ADR-315-per-session-ephemeral-containers-recorded-not-adopted.md` (Write tool, whole file): frontmatter per plan (no `adr:`, `amends` or `supersedes` key), `status: proposed`, `related_adrs` with the nine ADRs of ruling Z (one-clause reason each in the body), `related` including #9859.
-- [ ] 1.2 Status section first lines verbatim; relates-to-ADR-075 statement; #9854 owns topology; flip semantics of ruling X (requires #9854's merged decision; P1-P5 necessary not sufficient; cost ceiling and go-ahead operator-class; a decision to plan, not to ship); `not adopted` is not accepted risk.
+- [ ] 1.1 Write `knowledge-base/engineering/architecture/decisions/ADR-315-per-session-ephemeral-containers-recorded-not-adopted.md` (Write tool, whole file): frontmatter per plan (no `adr:`, `amends` or `supersedes` key; title pinned), `status: proposed`, `related_adrs` with the nine ADRs of ruling Z (one-clause reason each in the body), `related` including #9859.
+- [ ] 1.2 Status section first lines verbatim, then the Bash-tier coverage sentence and the residual-risk-owner line; relates-to-ADR-075 statement; #9854 owns topology; flip semantics of ruling X (requires #9854's merged decision; P1-P5 necessary not sufficient; cost ceiling and go-ahead operator-class; a decision to plan, not to ship); `not adopted` is not accepted risk.
 - [ ] 1.3 Context with ledger rows C1-C10 labelled; broker relation (#9543, ADR-311, ADR-272).
 - [ ] 1.4 Considered Options: four options with pros, cons, disposition; option 4 uses the ruling N sentence verbatim and avoids the words rejected, adopted, planned.
-- [ ] 1.5 Decision: "Not adopted now. Adoption is gated on the measured preconditions below." P1-P5 measurements (baseline arm = production today; machine record with each) plus P6 consistency with #9854; ruling P label wording; triggers; no-public-claim clause.
+- [ ] 1.5 Decision: "Not adopted now. Adoption is gated on the measured preconditions below." P1 quotes only the roadmap row 4.6 number (ruling AB; alert and capacity thresholds stay in #9854), P2-P5 measurements (baseline arm = production today; public record = machine class and date, exact kernel release and image digest in a private record cited by opaque id), P6 consistency with #9854; vulnerability-response and estimates-not-commitments sentences; triggers; no-public-claim clause.
 - [ ] 1.6 Consequences, Cost Impacts, NFR Impacts, Principle Alignment with real content (no "None" padding, no Diagram stub).
 - [ ] 1.7 Re-read: line count at least 150, required headings in order.
 
 ## Phase 2: ADR-316 Landlock ADR
 
-- [ ] 2.1 Write `knowledge-base/engineering/architecture/decisions/ADR-316-active-landlock-ruleset-beneath-bwrap-recorded-not-adopted.md`: frontmatter per plan, `status: proposed`, `supersedes: none`, `related_adrs` including ADR-122 (one-clause reason).
-- [ ] 2.2 Status section first lines verbatim; layer beneath bwrap, supersedes nothing.
-- [ ] 2.3 Context with ledger rows L1-L8 labelled; Bash-tier-only coverage stated; run and record the `git grep -il landlock` command and date for L2 as `measured`.
-- [ ] 2.4 Considered Options A-D: B places the ruleset in the sandboxed child after the filesystem view is built and before exec (the shim and the outer-wrap spawn are not candidates, reason stated); option C reasoning labelled `unverified`; OpenShell and sandlock labelled "README-level, unverified, from the #9842 spec"; no CVE text.
+- [ ] 2.1 Write `knowledge-base/engineering/architecture/decisions/ADR-316-active-landlock-ruleset-beneath-bwrap-recorded-not-adopted.md`: frontmatter per plan (pinned title), `status: proposed`, `supersedes: none`, `related_adrs` including ADR-122 (one-clause reason in a Context Relations clause).
+- [ ] 2.2 Status section first lines verbatim, then the Bash-tier coverage sentence; layer beneath bwrap, supersedes nothing; residual-risk-owner line.
+- [ ] 2.3 Context with ledger rows L1-L10 labelled; Bash-tier-only coverage stated; title pinned (`An active Landlock ruleset beneath bwrap is recorded, not adopted`); run and record the `git grep -il landlock` command and date for L2 as `measured`.
+- [ ] 2.4 Considered Options A-D: B places the ruleset in the sandboxed child after the filesystem view is built and before exec (the shim and the outer-wrap spawn are not candidates, reason stated); option C reasoning labelled `unverified`; OpenShell and sandlock only as "candidates named in the #9842 spec; capabilities unverified here; not evaluated by this ADR" (no quoted comparison); no CVE text.
 - [ ] 2.5 Decision: not adopted now; gate G1-G6 (3-5 day spike estimate read from #9602), canary Landlock probe with replay argv unchanged, degrade-and-signal arm G6; ownership sentence from ruling Q; flip semantics of ruling X; no-public-claim clause.
 - [ ] 2.6 Consequences, Cost Impacts, NFR Impacts, Principle Alignment with real content.
 - [ ] 2.7 Re-read: line count at least 150, required headings in order.
@@ -39,7 +39,7 @@ Diff scope: the two ADR files plus this feature's own spec and plan files; nothi
 - [ ] 3.4 `bash scripts/lint-orphan-test-suites.sh`, `bash scripts/guard-vacuity-floor.test.sh`, `bash plugins/soleur/test/fixture-relative-assert.test.sh`, `bash scripts/always-on-ledger.test.sh`.
 - [ ] 3.5 Stale-ghs census via `bash scripts/lint-shell-trace-credential-refusal.test.sh`.
 - [ ] 3.6 `bash plugins/soleur/test/c4-count-parity.test.sh`; paste exit code and output as the no-C4-impact evidence.
-- [ ] 3.7 Vocabulary check against glossary.md; disclosure greps (no CVE identifiers, no exploit-shaped text); AC9 personal-data check.
+- [ ] 3.7 Vocabulary check against glossary.md; AC6 disclosure greps (CVE, kernel versions, host paths, memory numbers, digests, thresholds, branch path or sha); AC9 personal-data check.
 - [ ] 3.8 `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0.
 - [ ] 3.9 Run every acceptance-criterion command (AC1 through AC12) including the AC1 negative control.
 - [ ] 3.10 After any ordinal bump, merge of origin/main or archive commit: re-run the ordinal census, Phase 3 steps 1, 2, 3, 6, AC1, AC2, and re-check #9854, PR #9832, PR #11592.
