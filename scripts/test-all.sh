@@ -4164,7 +4164,8 @@ _aff_runner_banner() {
 # #11648: -8 always-on (the >10s drifted set: test-all-group-affected, lint-ratchet, check-deps-adapter-drift,
 # token-drift-workflow-causes, grep-q-pipe-guard, lint-encryption-posture, gitleaks-merge-commit,
 # lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
-_MIN_ALWAYS_ON_DECLARED=109
+# #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
+_MIN_ALWAYS_ON_DECLARED=111
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5465,6 +5466,13 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Slice 2a (#9826): triage (hermetic, stub query script), public-claim guard (state test over public
+  # surfaces); scripts/*.test.sh is not in SUITE_GLOBS, so each is registered explicitly.
+  run_suite "scripts/image-cve-db-pin" bash scripts/image-cve-db-pin.test.sh
+  run_suite "scripts/image-cve-verdict" bash scripts/image-cve-verdict.test.sh
+  run_suite "scripts/image-cve-verdict-consumers" bash scripts/image-cve-verdict-consumers.test.sh
+  run_suite "scripts/image-cve-triage" bash scripts/image-cve-triage.test.sh
+  run_suite "scripts/image-cve-public-claim-guard" bash scripts/image-cve-public-claim-guard.test.sh
   # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
   # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
@@ -6907,6 +6915,7 @@ if want_scripts; then
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
   run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
+  run_suite "scripts/watch-wallclock-p90-11774" bash scripts/watch-wallclock-p90-11774.test.sh
 fi
 
 # Named bun-test entries — bun shard.
