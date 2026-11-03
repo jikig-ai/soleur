@@ -3476,6 +3476,16 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
   "scripts/test-all.sh"
 )
 
+# plugins/soleur/test/affected-tests-pool-default.test.sh — the #12013 pool-width default suite. It
+# drives plugins/soleur/scripts/affected-tests.sh against a stub runner in its own mktemp world and
+# builds mutants from a copy of that script plus its sourced libs (plugins/soleur/scripts/lib/affected-tests/),
+# so the SUT and those libs are its subject; the stub runner is synthesized, not scripts/test-all.sh.
+AFFECTED_PLUGINS_SOLEUR_TEST_AFFECTED_TESTS_POOL_DEFAULT_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/affected-tests.sh"
+  "plugins/soleur/scripts/lib/affected-tests/"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
 # plugins/soleur/skills/verification-scaffold/test/generator.test.sh — the corpus-walk
 # arm flagged its `grep -rq` for unsubstituted @PLACEHOLDER@s: that scan runs over
 # EMITTED artifacts inside hermetic mktemp fixture repos, a synthesized corpus, not
