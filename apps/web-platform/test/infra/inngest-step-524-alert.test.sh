@@ -21,8 +21,10 @@
 #   * The cost-alert literals are pinned to their TS emitters: component "claude-cost" and the
 #     SOLEUR_CLAUDE_COST:true key in server/claude-cost-marker.ts, the `cron:${cronName}` source in
 #     the substrate.
-#   * The two daily alerts evaluate a 24 h window (query_period 86400) and recovery >= check period;
-#     the burn threshold is local.claude_cost_daily_burn_usd, interpolated into value AND email.
+#   * Every discovered alert's paging windows are pinned exactly (the 524's 900/300/0/1800 and
+#     the burn's 86400/3600/0/3600 — query/check/confirmation/recovery), plus name, alert_type,
+#     email and the escalation ternary on each; the burn threshold is
+#     local.claude_cost_daily_burn_usd, interpolated into value AND email.
 #   * No PRIORITY filter on the 524 query: the live lines are PRIORITY 6.
 #   * Every exploration in the section reads the vector source through the pinned local.
 #   * Every cost-reading exploration reads cost_usd at its NESTED path (raw.message, since #8344)
@@ -34,7 +36,7 @@
 #     so `time BETWEEN …` would be always-true and sum the source's entire history.
 #   * vector.toml's inngest_journald source keeps the exact unit + PRIORITY shape the 524 rows were
 #     OBSERVED to ship through (PRIORITY 6 rows ship despite the {3,4} match, post-#6551 partition); any edit reds (V1/V2).
-#     The source now lists TWO units (inngest-server and the TLS terminator), and its rows reach the PII
+#     The source now lists THREE units (inngest-server, trace-retention and the TLS terminator), and its rows reach the PII
 #     chain only THROUGH the terminator's fail-open filter; that routing is parsed, not matched (V3).
 #   * Every exploration and alert in the section is in the apply workflow's -target= allowlist
 #     (#5566: an untargeted resource is never applied, so the alert never exists).
@@ -109,9 +111,9 @@ command -v python3 >/dev/null || { printf '[FATAL] python3 not found\n' >&2; exi
 
 # The structural checks run in ONE python pass that prints `OK <msg>` / `FAIL <msg>` lines; each
 # line becomes one ok()/no() here. A python crash prints neither, and the floor below catches it.
-EMIT_MARKER="$REPO/apps/web-platform/server/claude-cost-marker.ts"
-EMIT_SUBSTRATE="$REPO/apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts"
-EMIT_PROBE="$REPO/apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts"
+EMIT_MARKER="${SPEND_GUARD_EMIT_MARKER:-$REPO/apps/web-platform/server/claude-cost-marker.ts}"
+EMIT_SUBSTRATE="${SPEND_GUARD_EMIT_SUBSTRATE:-$REPO/apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts}"
+EMIT_PROBE="${SPEND_GUARD_EMIT_PROBE:-$REPO/apps/web-platform/server/inngest/functions/cron-anthropic-credit-probe.ts}"
 for f in "$EMIT_MARKER" "$EMIT_SUBSTRATE" "$EMIT_PROBE"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable emitter: %s\n' "$f" >&2; exit 2; }
 done
@@ -122,9 +124,15 @@ CHECKS="$(python3 - "$TF" "$WF" "$EMIT_MARKER" "$EMIT_SUBSTRATE" "$EMIT_PROBE" "
 import json, re, sys
 tf = open(sys.argv[1], encoding="utf-8").read()
 wf = open(sys.argv[2], encoding="utf-8").read()
-marker_ts = open(sys.argv[3], encoding="utf-8").read()
-substrate_ts = open(sys.argv[4], encoding="utf-8").read()
-probe_ts = open(sys.argv[5], encoding="utf-8").read()
+def ts_code(path):
+    # The graded .ts view strips full-line `//` comments and `/* … */` blocks first, so a
+    # commented-out decoy carrying a needle can never satisfy a re.search below (#11899).
+    s = open(path, encoding="utf-8").read()
+    s = re.sub(r"(?m)^[ \t]*//.*$", "", s)
+    return re.sub(r"/\*.*?\*/", "", s, flags=re.S)
+marker_ts = ts_code(sys.argv[3])
+substrate_ts = ts_code(sys.argv[4])
+probe_ts = ts_code(sys.argv[5])
 vector = open(sys.argv[6], encoding="utf-8").read()
 # The push-triggered MAIN plan only: first `terraform plan -no-color` to its `rc=$?`. The workflow
 # has ~15 plan regions whose -target lists never run on a push to main — the allowlist rows read
@@ -284,10 +292,38 @@ check(alert_attr("claude_cost_daily_burn", "operator") == '"higher_than"'
       "burn: pages above local.claude_cost_daily_burn_usd (= 25) per window")
 check("${local.claude_cost_daily_burn_usd}" in (block("logtail_exploration_alert", "claude_cost_daily_burn") or ""),
       "burn: the email text interpolates the same threshold local (it cannot drift from value)")
-for _n in ("claude_cost_daily_burn",):
-    _qp, _cp, _rp = alert_attr(_n, "query_period"), alert_attr(_n, "check_period"), alert_attr(_n, "recovery_period")
-    check(_qp == "86400" and _cp is not None and _rp is not None and _cp.isdigit() and _rp.isdigit() and int(_rp) >= int(_cp),
-          f"{_n}: evaluates a 24 h window (query_period 86400) and recovery_period >= check_period — got {_qp}/{_cp}/{_rp}")
+# Paging-attribute pins for EVERY discovered alert — not only the first or the convenient
+# subset (#11899): all four periods, name, alert_type, email, and the escalation ternary, each
+# value canon-derived from the .tf blocks, exactly-once via alert_attr/param (a duplicated
+# attr line yields None, never a first-match).
+ALERT_PINS = {
+    "inngest_step_524": {
+        "query_period": "900", "check_period": "300", "confirmation_period": "0", "recovery_period": "1800",
+        "name": '"soleur-inngest-step-524-prd"', "alert_type": '"threshold"', "email": "true",
+    },
+    "claude_cost_daily_burn": {
+        "query_period": "86400", "check_period": "3600", "confirmation_period": "0", "recovery_period": "3600",
+        "name": '"soleur-claude-cost-daily-burn-prd"', "alert_type": '"threshold"', "email": "true",
+    },
+}
+for _n, _pins in ALERT_PINS.items():
+    _alr = block("logtail_exploration_alert", _n) or ""
+    for _attr in ("query_period", "check_period", "confirmation_period", "recovery_period",
+                  "name", "alert_type", "email"):
+        check(alert_attr(_n, _attr) == _pins[_attr],
+              f"{_n}: {_attr} is {_pins[_attr]} (canon-derived, exactly-once)")
+    check(param(_alr, "policy_id", r"var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null")
+          and param(_alr, "team_name", r"var\.betterstack_paid_tier \? null : \"Your team\""),
+          f"{_n}: escalation_target is the free/paid-tier ternary every sibling uses")
+# Emitter contract literals the burn query matches on — SOLEUR_CLAUDE_COST, claude-cost,
+# cost_usd, cron: — asserted across the stripped .ts corpus (they live in the marker and
+# substrate emitters). probe_ts gets its own pin so the read can never go dead: its rows
+# land as source=cron:cron-anthropic-credit-probe through the markerSource hook.
+EMIT_ALL = marker_ts + substrate_ts + probe_ts
+for lit in ("SOLEUR_CLAUDE_COST", "claude-cost", "cost_usd", "cron:"):
+    check(lit in EMIT_ALL, f"the emitter corpus carries '{lit}' (a burn-query contract literal)")
+check("markerSource: CRON_NAME" in probe_ts and 'CRON_NAME = "cron-anthropic-credit-probe"' in probe_ts,
+      "probe: the credit canary still emits via markerSource: CRON_NAME (a dead probe_ts read is now a pin)")
 # Emitter parity: the literals every cost query matches on are the ones the TS emitters write.
 check(re.search(r'pino\(\{ base: \{ component: "claude-cost" \} \}\)', marker_ts) is not None
       and "JSONExtractString(raw, 'message', 'component') = 'claude-cost'" in sqls.get("claude_cost_daily_burn", ""),
@@ -333,10 +369,14 @@ while IFS= read -r line; do
   esac
 done <<<"$CHECKS"
 
-# ── Workflow seam: the battery cannot be muted or redirected from CI ──────────────────────────
-# Comment-stripped executable text of infra-validation.yml: no MUT_SKIP or SPEND_GUARD_* literal
-# may reach it (a step env: entry would mute or redirect this suite's battery without a trace),
-# and this suite's own run line must be registered exactly once.
+# ── Workflow seam — registered, unconditionally blocking, and no env axis may reach it ───────
+# Comment-stripped executable text of infra-validation.yml: this suite's own run line must be
+# registered exactly once, and no env-composition FRAGMENT may reach it — the literal
+# `MUT_SKIP`/`SPEND_GUARD_` greps are subsumed by the fragment set
+# {MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS}, which also bars runtime-composed names
+# ("MUT_""SKIP", any *_GUARD_* prefix — incl. the EMIT_* axes below) and the shell-injection
+# env names a smuggler would use. Whole-line comments are stripped; an inline ` # MUT_SKIP`
+# still reds — deliberate over-caution.
 IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 REG_RUN='        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh'
 n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
@@ -345,10 +385,66 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
   || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
 seam_bad=""
 printf '%s\n' "$IV_CODE" | grep -nE 'SPEND_GUARD_' >/dev/null && seam_bad="$seam_bad SPEND_GUARD_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF -- "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+done
 [ -z "$seam_bad" ] \
-  && ok "no SPEND_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  && ok "no SPEND_GUARD_ literal or env-composition fragment reaches the workflow's executable text (literal, composed or injected env muting is barred)" \
   || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+
+# Enclosing-job slice: the job block containing the pinned run line — walk back to the nearest
+# `^  <job-id>:` header, forward to the next or EOF. Derived from the run line (never a hardcoded
+# job name) and asserted non-empty AND containing the run line, so the env-write ban below can
+# never pass vacuously on an empty or missliced region.
+IV_JOB="$(awk -v run="$REG_RUN" '
+  { L[NR] = $0 }
+  $0 == run { here = NR }
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { hdr[++nh] = NR }
+  END {
+    if (!here) exit 0
+    lo = 0; hi = NR + 1
+    for (i = 1; i <= nh; i++) {
+      if (hdr[i] < here) { lo = hdr[i] } else { hi = hdr[i]; break }
+    }
+    if (lo) for (i = lo; i < hi; i++) print L[i]
+  }
+' <<< "$IV_CODE")"
+if [ -n "$IV_JOB" ] && [ "$(grep -cxF "$REG_RUN" <<< "$IV_JOB")" -eq 1 ]; then
+  ok "the enclosing job block holds this suite's run line (the env-write ban below is never vacuous)"
+else
+  no "the enclosing job slice is empty or misses the run line — the env-write ban below would pass vacuously"
+fi
+job_bad=""
+printf '%s\n' "$IV_JOB" | grep -nE 'GITHUB_(ENV|PATH)' >/dev/null && job_bad="$job_bad GITHUB_ENV/GITHUB_PATH"
+printf '%s\n' "$IV_JOB" | grep -nE '^[[:space:]]*defaults:' >/dev/null && job_bad="$job_bad defaults:"
+[ -z "$job_bad" ] \
+  && ok "no \$GITHUB_ENV/\$GITHUB_PATH write or defaults: inside the enclosing job (the only runtime env-composition channel is barred)" \
+  || no "enclosing-job seam violated:$job_bad — a composed env name could reach this suite's step"
+
+# Step-shape pins — the step block and job header enclosing the run line: no `if:` or
+# `continue-on-error:` at step indent inside IV_STEP; the job's `if:` is the one known literal
+# exactly once; no `continue-on-error:` in IV_HDR (the job header before `steps:`).
+IV_STEP="$(awk -v run="$REG_RUN" '
+  { L[NR] = $0 }
+  $0 == run { here = NR }
+  END {
+    if (!here) exit 0
+    lo = 0; hi = NR + 1
+    for (i = here; i >= 1; i--) { if (L[i] ~ /^      - /) { lo = i; break } }
+    for (i = here + 1; i <= NR; i++) { if (L[i] ~ /^      - / || L[i] ~ /^    [^ ]/) { hi = i; break } }
+    if (lo) for (i = lo; i < hi; i++) print L[i]
+  }
+' <<< "$IV_JOB")"
+IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
+if [ -n "$IV_STEP" ] \
+   && [ "$(grep -cxF "$REG_RUN" <<< "$IV_STEP")" -eq 1 ] \
+   && ! grep -qE '^        (if|continue-on-error):' <<< "$IV_STEP" \
+   && [ "$(grep -cxF "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" <<< "$IV_HDR")" -eq 1 ] \
+   && ! grep -qE '^    continue-on-error:' <<< "$IV_HDR"; then
+  ok "the suite's step is unconditional and blocking (no step if:/continue-on-error:, the job's dedup if: is the one literal, no job continue-on-error:)"
+else
+  no "the suite's step or job is conditional or non-blocking — an if: or continue-on-error: would mute or weaken this suite in CI"
+fi
 
 echo ""
 echo "=== inngest-step-524-alert guard: $pass passed, $fail failed ==="
@@ -387,7 +483,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     esac
   }
 
-  # mutate_red <label> <TF|WF|VEC|IV> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
+  # mutate_red <label> <TF|WF|VEC|IV|EMIT_MARKER|EMIT_SUBSTRATE|EMIT_PROBE> <python-program-on-s> [expected [FAIL] fragment] [red|wrong]
   mutate_red() {
     local label="$1" which="$2" prog="$3" tag="${4:-}" want="${5:-red}" src copy rc=0 olog="$MUT_DIR/inner.log"
     case "$which" in
@@ -395,6 +491,9 @@ if [ -z "${MUT_SKIP:-}" ]; then
       WF)  src="$WF";  copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
       VEC) src="$VEC"; copy="$MUT_DIR/vector.toml" ;;
       IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      EMIT_MARKER)    src="$EMIT_MARKER";    copy="$MUT_DIR/claude-cost-marker.ts" ;;
+      EMIT_SUBSTRATE) src="$EMIT_SUBSTRATE"; copy="$MUT_DIR/_cron-claude-eval-substrate.ts" ;;
+      EMIT_PROBE)     src="$EMIT_PROBE";     copy="$MUT_DIR/cron-anthropic-credit-probe.ts" ;;
       *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
@@ -419,11 +518,19 @@ PY
     esac
   }
 
-  # mutate_green <label> <python-program-on-s> — TF-scoped must-PASS rows.
+  # mutate_green <label> <TF|WF|VEC|IV> <python-program-on-s> — a legitimate edit must NOT red
+  # the guard. Axis-widened past the donor's TF-only shape so the wiring must-PASS controls
+  # ride the same helper.
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" src copy rc=0
+    case "$which" in
+      TF)  src="$TF";  copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      WF)  src="$WF";  copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
+      VEC) src="$VEC"; copy="$MUT_DIR/vector.toml" ;;
+      IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -434,7 +541,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    SPEND_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "SPEND_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -557,7 +664,7 @@ s = s.replace(old, "")' \
   # Window / threshold rows.
   mutate_red "Q1: burn's query_period shrinks to 300 s" TF \
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'query_period        = 86400', 'query_period        = 300')" \
-    "24 h window"
+    "query_period is 86400"
   mutate_red "T1: burn's value is hardcoded apart from the threshold local" TF \
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'value               = local.claude_cost_daily_burn_usd', 'value               = 15')" \
     "pages above"
@@ -588,6 +695,53 @@ s = s.replace(old, old + "        env:\n          SPEND_GUARD_TF: /dev/null\n")'
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+  mutate_red "a runtime-composed MUT_/SKIP name is written to \$GITHUB_ENV inside the job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
+    "workflow seam"
+  mutate_red "a foreign-prefix *_GUARD_* env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO_GUARD_X: /dev/null\n" + old)' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          BASH_ENV: /tmp/x\n" + old)' \
+    "workflow seam"
+  mutate_red "a \$GITHUB_ENV write lands inside the suite's own job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"POISON=1\" >> \"$GITHUB_ENV\"\n")' \
+    "enclosing-job seam"
+
+  # ── Step-shape rows: an if:/continue-on-error: on the step or job would mute this suite ──────
+  mutate_red "the suite's step becomes conditional (if: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "conditional or non-blocking"
+  mutate_red "the suite's step becomes non-blocking (continue-on-error: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-step-524-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "conditional or non-blocking"
+  mutate_red "the suite's job becomes non-blocking (continue-on-error: on the job)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    continue-on-error: true\n")' \
+    "conditional or non-blocking"
+
+  # ── Emitter (comment-strip + provenance) rows ──────────────────────────────────────────────
+  mutate_red "a //-comment decoy carries the marker needle while the real emitter line is gone" EMIT_MARKER \
+    'old = "    log.warn({ SOLEUR_CLAUDE_COST: true, ...m }, \"claude cost\");\n"
+assert s.count(old) == 1
+s = s.replace(old, "    // log.warn({ SOLEUR_CLAUDE_COST: true, ...m }, \"claude cost\");\n")' \
+    "emitter parity"
+  mutate_red "the probe emitter is emptied (a dead probe_ts read must not satisfy the pin)" EMIT_PROBE \
+    's = ""' \
+    "markerSource: CRON_NAME"
 
   # ── Scorer negative control ────────────────────────────────────────────────────────────────
   mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
@@ -598,16 +752,22 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "a comment-only edit to the tf" \
+  mutate_green "a comment-only edit to the tf" TF \
     's = s + "\n# control comment\n"'
-  mutate_green "whitespace reflow of the 524 needle array" \
+  mutate_green "whitespace reflow of the 524 needle array" TF \
     "s = in_block(s, '$H524', \"'invalid status code: 524', 'error parsing stream: error reading response body', 'Your server reset the connection while we were reading the reply'\", \"'invalid status code: 524',\n        'error parsing stream: error reading response body',\n        'Your server reset the connection while we were reading the reply'\", '  SQL\n')"
   # S1 folded into mutate_green (deliberate): a must-PASS row IS the control — a later section
   # appended below this one (the .tf's own recipe) is out of scope, so a future alert with a
   # different select shape cannot trip the discovery slice. The heredoc opener is written as
   # \x2d inside the python string so this file's scanned text carries no literal dash-opener.
-  mutate_green "S1: an appended later alert section is out of this guard's scope" \
+  mutate_green "S1: an appended later alert section is out of this guard's scope" TF \
     's = s + "\n# ── #9999 / ADR-999: a future alert ──\nlocals {\n  future_sql = <<\x2dSQL\n    SELECT {{time}} AS time, countIf(raw LIKE \x27%x%\x27) AS value\n    FROM {{source}}\n    GROUP BY time\n  SQL\n}\n\nresource \"logtail_exploration\" \"future_alert\" {\n}\n"'
+  # Over-breadth control: a $GITHUB_ENV write inside a DIFFERENT job (plan:) is legitimate —
+  # the enclosing-job slice must not reach past this suite's own job block.
+  mutate_green "a \$GITHUB_ENV write inside a different job (the plan: job) stays green" IV \
+    'old = "          printf \x27AWS_SECRET_ACCESS_KEY=%s\\n\x27 \"$SECRET\" >> \"$GITHUB_ENV\"\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"CROSS_JOB=1\" >> \"$GITHUB_ENV\"\n")'
 
   # C1 stays hand-rolled (deliberate): it asserts an instrument-CLASS exit (rc 2), which neither
   # mutate_red (rc 1 only) nor mutate_green (rc 0 only) can grade; its inner log is captured for
@@ -630,8 +790,10 @@ fi
 # shape — a future alert that grows the section is exactly the drift the floor exists to red.
 # Raise both constants in the same edit that adds a row. Floor/ledger trips exit 1 (verdict
 # class, so mutate_floor_red can grade them); instrument failures exit 2.
-PRESENCE_ROWS=62
-MUT_ROWS=38
+# SELF-REFERENCE CAVEAT (#11899 item 8, document-and-keep): a decrement WITH a row deletion stays
+# green+FIRES; PROMOTED_FILES pins floor deletion, review covers decrement-with-deletion drift.
+PRESENCE_ROWS=85
+MUT_ROWS=48
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
@@ -644,6 +806,6 @@ if [ "${#FAILED[@]}" -ne "$fail" ]; then
   printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2
   exit 1
 fi
-[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); SPEND_GUARD_{TF,WF,VEC,IV}=%s,%s,%s,%s\n' "$_floor" "${SPEND_GUARD_TF:-unset}" "${SPEND_GUARD_WF:-unset}" "${SPEND_GUARD_VEC:-unset}" "${SPEND_GUARD_IV:-unset}"
+[ -n "${MUT_SKIP:-}" ] && printf '[note] MUT_SKIP active — mutation rows skipped (floor %s); SPEND_GUARD_{TF,WF,VEC,IV,EMIT_MARKER,EMIT_SUBSTRATE,EMIT_PROBE}=%s,%s,%s,%s,%s,%s,%s\n' "$_floor" "${SPEND_GUARD_TF:-unset}" "${SPEND_GUARD_WF:-unset}" "${SPEND_GUARD_VEC:-unset}" "${SPEND_GUARD_IV:-unset}" "${SPEND_GUARD_EMIT_MARKER:-unset}" "${SPEND_GUARD_EMIT_SUBSTRATE:-unset}" "${SPEND_GUARD_EMIT_PROBE:-unset}"
 printf '\n=== inngest-step-524-alert: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$_ran" "$_floor"
 [ "$fail" -eq 0 ]
