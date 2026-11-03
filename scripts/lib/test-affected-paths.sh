@@ -425,6 +425,15 @@ AFFECTED_SCRIPTS_PROD_VERSION_DRIFT_CHECK_PATHS=(
   "scripts/lib/test-affected-paths.sh"                   # THIS FILE
 )
 
+# scripts/image-cve-triage — the script under test execs the default reader at
+# image-cve-triage.sh:66 (QUERY="${IMAGE_CVE_QUERY_SCRIPT:-$REPO_ROOT/scripts/
+# betterstack-query.sh}"), so a reader change must select the suite.
+AFFECTED_SCRIPTS_IMAGE_CVE_TRIAGE_PATHS=(
+  "scripts/betterstack-query.sh"
+  "scripts/image-cve-triage.sh"                        # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                 # THIS FILE
+)
+
 # tests/hooks/drop-sentinel-parity — parity over the producer/consumer file sets
 # it enumerates internally (PRODUCER_FILES / CONSUMER_FILES).
 AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(

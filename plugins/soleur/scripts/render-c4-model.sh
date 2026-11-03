@@ -21,7 +21,7 @@
 #             to a temp path with identical logic, then byte-diff against the committed
 #             artifact. Default: <root>/.../diagrams/model.likec4.json.
 #
-# Pinned to likec4@1.50.0 — MUST match apps/web-platform/Dockerfile +
+# Pinned to likec4@1.60.0 — MUST match apps/web-platform/Dockerfile +
 # package.json @likec4/core/@likec4/diagram (guarded by c4-likec4-version-pin.test.ts).
 # A CLI/client version skew silently desyncs the rendered diagram.
 #
@@ -70,8 +70,8 @@
 
 set -euo pipefail
 
-LIKEC4_VERSION="1.50.0"
-LIKEC4_BEFORE="2026-09-28"
+LIKEC4_VERSION="1.60.0"
+LIKEC4_BEFORE="2026-10-16"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_CLI="$SCRIPT_DIR/../lib/c4-canonical-cli.mjs"
@@ -150,7 +150,7 @@ if ! ( cd "$DIAGRAMS_DIR" && env -u CI -u FORCE_COLOR NO_COLOR=1 npx -y --ignore
   exit 1
 fi
 
-# exit-0 is NOT proof. likec4@1.50.0 has TWO source-fault modes that both exit 0:
+# exit-0 is NOT proof. likec4@1.60.0 has TWO source-fault modes that both exit 0:
 #   (1) unresolved reference / missing spec.c4 -> an EMPTY-elements model
 #       (the #4966 case; see apps/web-platform/server/c4-render.ts).
 #   (2) a syntax error -> likec4 recovers by dropping the bad fragment, prints
