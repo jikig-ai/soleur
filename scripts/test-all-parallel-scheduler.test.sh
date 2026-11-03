@@ -20,6 +20,11 @@
 #   A6  the serial fallback arms: lock-not-held falls back to serial with a
 #       named banner; --jobs=1 and jobs=0-class requests resolve serial; a
 #       malformed value exits 2.
+#   A8  (#12013) a red is visible at reap: the live `done` line carries the suite's
+#       wall time, a non-zero rc is marked provisional (a signal-shaped one
+#       unresolved), the authoritative [FAIL] verdict is unchanged and still
+#       printed once, after the live line; and the pool width is a runner-only
+#       carrier that no suite the runner spawns inherits.
 #   A7  the in-flight liveness pair `[run] <label> started/done` and the
 #       tmp_delta=unattributed honesty field are emitted in parallel mode.
 #
@@ -45,7 +50,7 @@ dump() { sed 's/^/    /' <<<"${1:-}"; }
 # macOS lacks `date +%N`; EPOCHREALTIME is bash 5+. Fixtures below write
 # nanosecond stamps via `date +%s%N` where GNU coreutils exists — the sandbox
 # arms that need it run on linux only (CI + dev hosts here).
-TARGET="$REPO_ROOT/scripts/test-all.sh"
+TARGET="${TESTALL_TARGET_OVERRIDE:-$REPO_ROOT/scripts/test-all.sh}"  # overridable: point at a mutant to prove the rows red
 [[ -f "$TARGET" ]] || { echo "FATAL: $TARGET not found"; exit 1; }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/t8231.XXXXXX")"
@@ -84,6 +89,13 @@ cat > "$FIXTURES/selfterm.sh" <<'EOF'
 #!/usr/bin/env bash
 kill -TERM $$
 sleep 5
+exit 0
+EOF
+cat > "$FIXTURES/envprobe.sh" <<'EOF'
+#!/usr/bin/env bash
+# Records whether SOLEUR_TEST_JOBS is in this process's environment (#12013).
+if [ -n "${SOLEUR_TEST_JOBS+x}" ]; then own=set; else own=absent; fi
+printf '%s\n' "$own" > "${PROBE_OUT:?PROBE_OUT is not set}"
 exit 0
 EOF
 cat > "$FIXTURES/ok.sh" <<'EOF'
@@ -142,6 +154,7 @@ calls = {
     "star":      [("indA","indA.sh"),("starS","starS.sh"),("indB","indB.sh"),("indC","indC.sh")],
     "order":     [("first","indC.sh"),("second","indB.sh"),("third","indA.sh")],
     "one":       [("okfixture","ok.sh")],
+    "envprobe":  [("envprobe","envprobe.sh")],
 }[arm]
 body = prelude + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -321,6 +334,72 @@ else
   fail "A7 — no tmp_delta fields in $TIMING_FILE"; dump "$(cat "$TIMING_FILE" 2>/dev/null || true)"
 fi
 unset TIMING_FILE
+
+# --- A8: a red is visible at reap (#12013) ------------------------------------
+# The live `[run] <label> done` line is the only signal an operator polling the log sees before
+# the drain replays the verdicts in registration order. It must say how long the suite took, and
+# must not read as the final word on a non-zero rc. The authoritative text — `[FAIL] bad (Nms)` —
+# is untouched and still appears exactly once, after the live line.
+run_arm mixed 4 || true
+if grep -qE '^\[run\] bad done \(rc=1, [0-9]+ms\) — provisional' <<<"$ARM_OUT"; then
+  pass "A8 — a red suite's live line carries its rc, wall time and a provisional marker"
+else
+  fail "A8 — no provisional live line for the failing suite"; dump "$ARM_OUT"
+fi
+if grep -qE '^\[run\] indA done \(rc=0, [0-9]+ms\)$' <<<"$ARM_OUT"; then
+  pass "A8 — a passing suite's live line carries its wall time and no marker"
+else
+  fail "A8 — passing live line wrong"; dump "$ARM_OUT"
+fi
+n_fail="$(grep -cE '^\[FAIL\] ' <<<"$ARM_OUT" || true)"
+if [[ "$n_fail" == "1" ]]; then
+  pass "A8 — exactly one [FAIL] verdict line (the live line did not add a second)"
+else
+  fail "A8 — expected exactly one ^[FAIL] line, got $n_fail"; dump "$ARM_OUT"
+fi
+live_ln="$(grep -nE '^\[run\] bad done ' <<<"$ARM_OUT" | head -1 | cut -d: -f1)"
+verd_ln="$(grep -nE '^\[FAIL\] bad ' <<<"$ARM_OUT" | head -1 | cut -d: -f1)"
+if [[ -n "$live_ln" && -n "$verd_ln" ]] && (( live_ln < verd_ln )); then
+  pass "A8 — the live line precedes the drain verdict"
+else
+  fail "A8 — live line ($live_ln) does not precede the verdict ($verd_ln)"; dump "$ARM_OUT"
+fi
+run_arm killed 4 || true
+if grep -qE '^\[run\] selfterm done \(rc=143, [0-9]+ms\) — signal-shaped, unresolved' <<<"$ARM_OUT"; then
+  pass "A8 — a signal-shaped rc is labelled unresolved, not provisional-failed (ADR-177)"
+else
+  fail "A8 — signal-shaped live line wrong"; dump "$ARM_OUT"
+fi
+# The pool width is consumed by the runner and demoted from the environment, like TEST_GROUP
+# (#11939): a suite that itself runs a nested test-all.sh must not inherit a pool request.
+PROBE_FILE="$TMP/envprobe.reading"; rm -f "$PROBE_FILE"
+export PROBE_OUT="$PROBE_FILE"; run_arm envprobe 4 || true; unset PROBE_OUT
+if [[ "$(cat "$PROBE_FILE" 2>/dev/null)" == "absent" ]]; then
+  pass "A8 — SOLEUR_TEST_JOBS is not in the environment of a suite the runner spawns"
+else
+  fail "A8 — the pool width leaked into a spawned suite: $(cat "$PROBE_FILE" 2>/dev/null || echo '<no reading>')"; dump "$ARM_OUT"
+fi
+if grep -q '\[parallel\] mode engaged' <<<"$ARM_OUT"; then
+  pass "A8 — the demotion did not disarm the pool (mode still engaged)"
+else
+  fail "A8 — the pool did not engage on the probe arm"; dump "$ARM_OUT"
+fi
+
+# Static pins for A8: one writer for the live line, one demotion, and no reintroduced raw print.
+n_helper="$(grep -c '^_pj_fmt_done "\?\$' <(sed 's/^[[:space:]]*//' "$TARGET") || true)"
+n_raw="$(grep -c "printf '\[run\] %s done (rc=%s)" "$TARGET" || true)"
+n_def="$(grep -c '^_pj_fmt_done() {' "$TARGET" || true)"
+n_dem="$(grep -c '^export -n SOLEUR_TEST_JOBS$' "$TARGET" || true)"
+if [[ "$n_def" == "1" && "$n_helper" == "3" && "$n_raw" == "0" ]]; then
+  pass "A8 — the live done line has one definition and exactly three call sites, no raw print survives"
+else
+  fail "A8 — helper defs=$n_def call-sites=$n_helper raw-prints=$n_raw (want 1/3/0)"
+fi
+if [[ "$n_dem" == "1" ]]; then
+  pass "A8 — SOLEUR_TEST_JOBS is demoted from the environment exactly once"
+else
+  fail "A8 — expected one 'export -n SOLEUR_TEST_JOBS', found $n_dem"
+fi
 
 # --- A6: fallback arms --------------------------------------------------------
 run_arm clean "" || true
