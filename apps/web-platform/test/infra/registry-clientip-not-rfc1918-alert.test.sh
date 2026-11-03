@@ -651,14 +651,19 @@ def block(kind, old, new, n=1):
       # AMBIENT SEAMS: the trio set without a valid marker must change NOTHING: [SEAM-IGNORED] is printed, no [NO_MUT] /
       # [REPIN] honoured line, the exact pin reds on the mutated predicate, and the child ran the FULL presence
       # section. Since #11899 the pre-battery fail>0 gate exits a presence-failing child at the `guard:` summary
-      # (the floor line is unreachable by design), so reaching that summary is the full-presence proof.
+      # (the floor line is unreachable by design), so reaching that summary is the full-presence proof — and the
+      # summary's own counts close it: X+Y must equal FLOOR_CHILD (the base/presence rows a seam-honoured child
+      # runs), so a presence row dropped before the gate is a red here, not a quiet pass.
       local alog; alog="$(cat "$MUT_DIR/child.log")"
+      local _gp=0 _gf=0
+      [[ "$alog" =~ guard:\ ([0-9]+)\ passed,\ ([0-9]+)\ failed ]] && { _gp="${BASH_REMATCH[1]}"; _gf="${BASH_REMATCH[2]}"; }
       if [ "$rc" -ne 0 ] && has '[SEAM-IGNORED]' "$alog" && has '[FAIL] the predicate drifted from the pinned text' "$alog" \
          && ! has '[REPIN] honoured' "$alog" && ! has '[NO_MUT]' "$alog" && ! has '[FATAL]' "$alog" \
-         && has "=== registry-clientip-not-rfc1918-alert guard: " "$alog"; then
-        ok "ambient seams ignored, FULL presence ran to the fail>0 gate, exact pin RED ($expect): $label"
+         && has "=== registry-clientip-not-rfc1918-alert guard: " "$alog" \
+         && [ $((_gp + _gf)) -eq "$FLOOR_CHILD" ]; then
+        ok "ambient seams ignored, FULL presence ran to the fail>0 gate ($_gp+$_gf rows), exact pin RED ($expect): $label"
       else
-        no "an ambient/forged seam was honoured, or the child did not run the full presence section: $label (child rc=$rc)"
+        no "an ambient/forged seam was honoured, or the child did not run the full presence section to the gate (guard counts ${_gp}+${_gf}, want $FLOOR_CHILD): $label (child rc=$rc)"
       fi
     elif [ "$expect" = norepin ]; then
       # REGCIP_REPIN WITHOUT MUT_SKIP must be ignored: the exact-pin row still reds on the mutated predicate, and the
