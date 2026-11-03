@@ -17,7 +17,7 @@ SOLEUR_PR_AFFECTED_AUDIT suites=724 always_on=116 audited=608 unaudited=0 gap_su
 
 Baseline file: 1,510 lines. Accept file: 459 rows. Live set = baseline + **2 drift pairs** on main that no drain owns yet (the ratchet is red `new-pair` on a fresh PR today; the first slice absorbs them):
 
-- `scripts/image-cve-triage → scripts/betterstack-query.sh` (`QUERY="${IMAGE_CVE_QUERY_SCRIPT:-$REPO_ROOT/scripts/betterstack-query.sh}"` — probable real read/execute, classify at work time)
+- `scripts/image-cve-triage → scripts/betterstack-query.sh` (`QUERY="${IMAGE_CVE_QUERY_SCRIPT:-$REPO_ROOT/scripts/betterstack-query.sh}"` — deepen evidence, decision-challenges row 12: the no-override arm `image-cve-triage.test.sh:~429` `[[ -f ]]`-stats the real file but never executes it; `edge-real` if the stat counts as a read, and then it rides an edge slice leaving 5a red `new-pair` on it alone — documented exception)
 - `scripts/betterstack-emitter-read → scripts/image-cve-triage.sh` (manifest data row in `lint-betterstack-emitter-read.sh:148` — mention)
 
 ### Pair-class breakdown of the 1,512 live pairs
@@ -60,8 +60,8 @@ The standing policy (PR4b row 6, verbatim in the runbook): a `glob:` edge at `me
 
 **Recommended ruling (the explicit call, recorded per suite in the PR):** per-pair honest dispositions —
 
-1. Non-code deferred-sweep pairs (`plugins/soleur`'s `.json`/`.toml`/`.md`/`.conf`/`.tf` named files): **exact-file edges**. True per-pair reads, reveal-free (non-`^file`-code entries never join the naming walk), zero added selection beyond the named files.
-2. Code deferred-sweep pairs (`plugins/soleur` 6× `.sh`/`.ts`/`.mjs`, `argv-bearer-sweep` 5× `.sh`): trial-declare on a scratch worktree first. Reveal under the per-edge cap → exact-file edge + accept rows. Reveal over the cap, or accept anchors landing on a >8-commits file → **narrow `glob:` spelling** `glob:<dir>/<stem>*.<ext>` covering essentially that file (a `*` tail is required — `tail-no-star` is malformed). A glob entry is never a naming-walk node, so the reveal collapses to zero while the edge stays a true declaration of the file the suite reads.
+1. Non-code named pairs of the sweep suites (`plugins/soleur` 59, `argv-bearer-sweep` 14 — corrected count, decision-challenges row 11; the deferred-sweep tag itself covers only code pairs): **exact-file edges** where they classify edge-real. True per-pair reads, reveal-free (non-`^file`-code entries never join the naming walk), zero added selection beyond the named files.
+2. Code deferred-sweep pairs — **all 21 of them** (`plugins/soleur` 16× `.sh`/`.mjs`/`.ts`/`.py`, `argv-bearer-sweep` 5× `.sh`; there are no non-code deferred-sweep pairs — corrected, row 11): trial-declare on a scratch worktree first. Reveal under the per-edge cap → exact-file edge + accept rows. Reveal over the cap, or accept anchors landing on a >8-commits file → **narrow `glob:` spelling** `glob:<dir>/<stem>*.<ext>` covering essentially that file (a `*` tail is required — `tail-no-star` is malformed). A glob entry is never a naming-walk node, so the reveal collapses to zero while the edge stays a true declaration of the file the suite reads.
 3. The completeness residual — the suite's *unnamed* swept files stay uncovered — is the audit's documented lower bound, unchanged from today; record it on #10448, not in the index.
 
 Reasoning: per-file edges are the only disposition no ruling forbids — accept rows are barred for real whole-tree readers, `ALWAYS_ON_SUITES` is duration-gated out, sweep-scope `glob:` needs qualifying measurements these suites cannot produce, and `baselined` dies with the file. Per-file edges strictly improve on today's state (baseline pairs carry zero selection weight) and keep criterion c's saving intact.
@@ -121,7 +121,7 @@ See `specs/feat-one-shot-10861-pr5-strict-zero/tasks.md` for the numbered list. 
 
 ## Risks
 
-- **Stale anchors mid-drain**: accept rows key on line content; sibling PRs editing named files (hot files: `grep-q-pipe-guard.test.sh` 67/90 d, `guardrails.sh` 13, `rule-metrics-aggregate.sh` 15) churn rows. Mitigate: regenerate `--all-refs` on every rebase; land accept slices fast; narrow-glob the forbidden configs instead of writing rows on hot files.
+- **Stale anchors mid-drain**: accept rows key on line content; sibling PRs editing named files (hot files: `grep-q-pipe-guard.test.sh` 67/90 d, `guardrails.sh` 13, `scripts/rule-metrics-aggregate.sh` 7 — re-measured; was 15 at planning) churn rows. Mitigate: regenerate `--all-refs` on every rebase; land accept slices fast; narrow-glob the forbidden configs instead of writing rows on hot files.
 - **Walk-reveal explosion** on exact-file code edges (the 151-pair file is the extreme): every candidate code edge gets a scratch-worktree trial declaration first; over-cap → narrow glob.
 - **Ruling-gap residual**: if PR4c row 7 is read as forbidding all glob spellings, the narrow-glob fallbacks close and remaining pairs go to an explicit CTO line in PR5d; the deletion is isolated in PR5z so nothing blocks it.
 - **plugins/soleur scale**: 90 pairs / 254 boundary lines on one dir-suite label — classification care (its rows share the label; the audit treats the label once).
