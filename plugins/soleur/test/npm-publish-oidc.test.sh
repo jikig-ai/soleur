@@ -98,7 +98,9 @@ echo "=== npm-publish OIDC wiring ==="
 #   predicate — a file failing ANY member is RED.
 #
 # run bodies are comment-stripped inside the probe: a `# npm install -g npm@^11`
-# line inside a `run:` scalar cannot satisfy the CLI-floor member.
+# line inside a `run:` scalar cannot satisfy the CLI-floor member. The member
+# accepts `npm@^11` or an exact `npm@11.x.y` pin (>= 11.5.1 either way; exactness
+# is the pin-table guard's contract, not this floor's).
 wiring_probe() {
   python3 - "$1" "$2" <<'PYG'
 import os, re, sys, yaml
@@ -207,15 +209,17 @@ if want("npm11-step"):
     install_idx = publish_idx = None
     for i, st in enumerate(steps):
         body = run_body(st)
-        if install_idx is None and re.search(r"npm\s+install\s+-g\s+npm@\^11\b", body):
-            install_idx = i
+        if install_idx is None:
+            m = re.search(r"npm\s+install\s+-g\s+npm@(?:\^(\d+)|(\d+)\.(\d+)\.(\d+))\b", body)
+            if m and (int(m.group(1) or 0) >= 11 or (int(m.group(2) or 0), int(m.group(3) or 0), int(m.group(4) or 0)) >= (11, 5, 1)):
+                install_idx = i
         if publish_idx is None and re.search(r"\bnpm\s+publish\b", body):
             publish_idx = i
     if install_idx is None:
-        violations.append("npm11-step: no step installs npm@^11 (>= 11.5.1 floor)")
+        violations.append("npm11-step: no step installs npm@^11 or exact npm@11.x.y (>= 11.5.1 floor)")
     elif publish_idx is not None and install_idx > publish_idx:
         violations.append(
-            "npm11-step: npm@^11 install runs AFTER npm publish (bundled npm 10.x publishes)")
+            "npm11-step: npm >= 11.5.1 install runs AFTER npm publish (bundled npm 10.x publishes)")
 if want("npm-publish-retained"):
     if not re.search(r"\bnpm\s+publish\b", run_bodies):
         violations.append("npm-publish-retained: no step invokes `npm publish`")
@@ -397,7 +401,7 @@ fi
 # ---------------------------------------------------------------------------
 mutate() { # mutate <variant> <out-file>
   python3 - "$WF" "$1" "$2" <<'PYM'
-import sys, yaml
+import re, sys, yaml
 
 src, variant, out = sys.argv[1], sys.argv[2], sys.argv[3]
 doc = yaml.safe_load(open(src))
@@ -416,10 +420,10 @@ elif variant == "m2":  # re-add NODE_AUTH_TOKEN to a publish step env
     target.setdefault("env", {})["NODE_AUTH_TOKEN"] = "${{ secrets.NPM_TOKEN }}"
 elif variant == "m3":  # file lacks jobs.publish entirely (vacuous dispatch)
     doc["jobs"]["release"] = doc["jobs"].pop("publish")
-elif variant == "m4":  # delete the npm@^11 freshness step
+elif variant == "m4":  # delete the npm>=11.5.1 freshness step
     pub["steps"] = [
         st for st in pub["steps"]
-        if "npm install -g npm@^11" not in str(st.get("run", ""))
+        if not re.search(r"npm\s+install\s+-g\s+npm@(?:\^11|11\.\d+\.\d+)\b", str(st.get("run", "")))
     ]
 elif variant == "m5":  # jobs.publish parses to a non-map
     doc["jobs"]["publish"] = "not-a-map"
@@ -433,11 +437,11 @@ elif variant == "m9":  # job gains environment: (breaks the no-environment OIDC 
     pub["environment"] = "production"
 elif variant == "m10":  # self-hosted runner (trusted publishing unsupported)
     pub["runs-on"] = "self-hosted"
-elif variant == "m11":  # npm@^11 install moved AFTER npm publish
+elif variant == "m11":  # npm>=11.5.1 install moved AFTER npm publish
     install = publish = None
     for i, st in enumerate(pub.get("steps", [])):
         body = str(st.get("run", ""))
-        if install is None and "npm install -g npm@^11" in body:
+        if install is None and re.search(r"npm\s+install\s+-g\s+npm@(?:\^11|11\.\d+\.\d+)\b", body):
             install = i
         if publish is None and "npm publish" in body:
             publish = i
@@ -606,14 +610,14 @@ done
 expect_red "remove id-token: write"                 "$SANDBOX/mutated-m1.yml"
 expect_red "re-add NODE_AUTH_TOKEN env"             "$SANDBOX/mutated-m2.yml"
 expect_red "no publish job (vacuous dispatch)"      "$SANDBOX/mutated-m3.yml"
-expect_red "delete npm@^11 freshness step"          "$SANDBOX/mutated-m4.yml"
+expect_red "delete npm>=11.5.1 freshness step"          "$SANDBOX/mutated-m4.yml"
 expect_red "jobs.publish parses to a non-map"       "$SANDBOX/mutated-m5.yml"
 expect_pass "extra unrelated permission (superset)" "$SANDBOX/mutated-m6.yml"
 expect_red "job-level env carries a token"          "$SANDBOX/mutated-m7.yml"
 expect_red "workflow-level env carries a token"     "$SANDBOX/mutated-m8.yml"
 expect_red "job gains environment: (binding break)" "$SANDBOX/mutated-m9.yml"
 expect_red "self-hosted runner"                     "$SANDBOX/mutated-m10.yml"
-expect_red "npm@^11 install after npm publish"      "$SANDBOX/mutated-m11.yml"
+expect_red "npm>=11.5.1 install after npm publish"      "$SANDBOX/mutated-m11.yml"
 expect_red "npm publish loses flag contract"        "$SANDBOX/mutated-m12.yml"
 expect_red "run-body npm config set _authToken"     "$SANDBOX/mutated-m13.yml"
 
