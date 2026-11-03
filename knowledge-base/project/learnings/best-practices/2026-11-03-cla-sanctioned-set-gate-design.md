@@ -4,7 +4,7 @@ date: 2026-11-03
 problem_type: best_practice
 component: tooling
 symptoms:
-  - "local cla-signed-author-gate denied only the literal noreply@anthropic.com; real-but-wrong -c user.email authors (jean@jikig.ai, ops@jikigai.com) sailed past it to a red cla-check"
+  - "local cla-signed-author-gate denied only the literal noreply@anthropic.com; real-but-wrong -c user.email authors (jean@jikig.ai, ops@jikigai.com) sailed past it to a red cla-check"  # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data
   - "issue #12027's premise — 'devin-ai-integration[bot] is a sanctioned override per git-rules' — was measured FALSE (in neither cla.yml allowlist nor cla.json roster; cannot sign)"
   - "a naive allowlist admit would have admitted the bot whenever the session's own git config user.email equaled it"
 root_cause: missing_validation
@@ -21,8 +21,8 @@ tags: [cla-check, sanctioned-set, deny-overrides-admit, author-vs-committer, pre
 ## Problem
 
 Issue #12027: the local `cla-signed-author-gate.sh` denied only the literal
-`noreply@anthropic.com`, so real-but-wrong `-c user.email` authors
-(`jean@jikig.ai`, `ops@jikigai.com`) passed local review and failed the required
+`noreply@anthropic.com`, so real-but-wrong `-c user.email` authors <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
+(`jean@jikig.ai`, `ops@jikigai.com`) passed local review and failed the required <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 `cla-check` at merge time — a wasted CI cycle each time. Widening the gate to a
 sanctioned-set subset check surfaced four design findings worth keeping.
 
@@ -44,11 +44,11 @@ denies even when it equals the session's configured identity.
 
 **2. Author and committer slots are different properties — evaluate them separately.**
 
-`cla-check` resolves `commit.author.user.login` only. `noreply@github.com` is
+`cla-check` resolves `commit.author.user.login` only. `noreply@github.com` is <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 GitHub's **web-merge COMMITTER** identity: measured 25/25 `origin/main` commits
-carry `%ce=noreply@github.com` (uniform squash-merge web flow), so a
+carry `%ce=noreply@github.com` (uniform squash-merge web flow), so a <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 committer-slot carve-out for it is parity with the CI check — while an
-**author**-slot `noreply@github.com` resolves to the unsigned web-flow login and
+**author**-slot `noreply@github.com` resolves to the unsigned web-flow login and <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 must still deny (fail-closed). Carve-outs are per-slot, never per-email.
 
 **3. Sanction rosters are read at base refs, not the PR head.**
@@ -60,11 +60,11 @@ refs (last fetch); the deny message tells the operator to `git fetch origin` on
 a fresh-roster edge. GitHub logins compare case-insensitively — fold BOTH the
 roster and the extracted login (roster spells `Elvalio`; a noreply can spell
 `elvalio`). Both noreply forms are valid: canonical `<id>+<login>` and the
-pre-2017 bare `login@users.noreply.github.com`.
+pre-2017 bare `login@users.noreply.github.com`. <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 
 **4. Fold every failing class into ONE deny when they share the remedy.**
 
-Stage 1 (specialized `noreply@anthropic.com` message naming the modal
+Stage 1 (specialized `noreply@anthropic.com` message naming the modal <!-- # gitleaks:allow # issue:#12029 documents the gate's real deny/admit literals, not fixture data -->
 subagent-commit class) emits first — order is the property, its remedy would be
 buried under a generic stage-2 deny. But stage-2 offenders are computed BEFORE
 the stage-1 emit and ride along in the same deny/remedy, because the fix for
