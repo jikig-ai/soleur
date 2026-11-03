@@ -19,9 +19,9 @@ Issues: #11775 (Closes), #10865 (Ref — do NOT close), learning 2026-11-02-stem
 
 ## 3. Workstream B — ceiling re-rule (#10865)
 
-- [ ] 3.1 Pull the whole-population series (non-cancelled ci.yml `pull_request`+`merge_group` runs since 2026-10-26T21:59:35Z floor; per `affected-index-ratchet` job `completed_at - started_at`; overall + since-2026-11-02 p95, max, daily p95, mean billed minutes).
-- [ ] 3.2 Inline-CTO ruling on the series; update `decision-challenges.md` row 1 from `pending` to the ruling.
-- [ ] 3.3 `scripts/followthroughs/ratchet-observation-window-10865.sh`: set `P95_MAX`/`MAX_MAX` per ruling; dated comment; drop PROVISIONAL + "re-rule owed" verdict text if final (update verdict strings + header (d)).
+- [ ] 3.1 Pull the whole-population series (non-cancelled ci.yml `pull_request`+`merge_group` runs since 2026-10-26T21:59:35Z floor; per `affected-index-ratchet` job `completed_at - started_at`; overall + since-2026-11-02 p95, max, daily p95, mean billed minutes). Verification pull for the already-landed ruling — the CTO's pull measured p95 237 overall / ~249-250 daily / max 317.
+- [ ] 3.2 Ruling landed 2026-11-03 (spawned CTO, `decision-challenges.md` row 1): keep `240`/`285`. Work-time check: probe status line must still read `wall_p95_s≤240`/`wall_max_s≤285`; on a breach, do NOT change constants — that is the runbook recheck trigger firing; record the breach and escalate to the budget owner (operator item), constants stay.
+- [ ] 3.3 `scripts/followthroughs/ratchet-observation-window-10865.sh`: keep `P95_MAX=240`/`MAX_MAX=285` per ruling; dated comment; drop PROVISIONAL + "re-rule owed" verdict text (update verdict strings + header (d)).
 - [ ] 3.4 `plugins/soleur/test/ci-pr-affected-replay.test.sh`: re-pin `ow_u_*` helpers, `row_ow_*` texts, sentinel greps, `ow_mutate` strings to the ruled values.
 - [ ] 3.5 `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`: dated observation-log row (series + ruling); ceiling mentions updated.
 - [ ] 3.6 `knowledge-base/engineering/architecture/decisions/ADR-276-*.md`: dated amendment recording the re-rule.
