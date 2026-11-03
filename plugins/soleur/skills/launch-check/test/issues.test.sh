@@ -89,7 +89,7 @@ lacks() { ! grep -qF -- "$1" "$OUT"; }
 autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
 autolink_clean() { ! autolink_hits "$@" >/dev/null; }
 file_and_clean() { [ -f "$1" ] && autolink_clean "$1"; }
-gl_only_secret() { printf '%s%s' 'npm_' 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jK5'; }   # matched by gitleaks and NOT by the sentinel
+gl_only_secret() { printf '%s%s' 'glpat-' 'aB3dE5gH7jK9mN1pQ3sT'; }   # matched by gitleaks (gitlab-pat) and NOT by the sentinel (checked: sentinel rc 0, gitleaks rc 1; the npm_ shape the first draft used IS a sentinel hit)
 stub_secret() { printf '%s%s' 'ghp_' 'Q3nW8tY1kD6vB2xM9cL5hZ7pR4aE0sJ2fG1u'; }      # what the stub prints on stderr for GH_STUB_FAIL_KIND=secret
 outside() { awk 'BEGIN { s = 0 } { l = $0; sub(/\r$/, "", l) } l == "<!-- launch-check:begin -->" { s = 1; next } l == "<!-- launch-check:end -->" { s = 0; next } !s { print }' "$1"; }
 export -f outside
@@ -288,7 +288,9 @@ BIGF="$SCRATCH/bigf.tsv"; scan_to "$BIGB" "$BIGF"; lc render --target "$BIGB" --
 cap_case() { N=$((N + 1)); R="$SCRATCH/case$N"; cp -R "$BIGB" "$R"; stub_reset acme/demo private; only_first "$R" "$1"; FACTS="$BIGF" prev "${@:2}"; FACTS="$SCRATCH/facts.tsv"; }
 cap_case 35
 check "cap: 35 open gaps -> create=30 capped=5 in the marker and the plan, and the cap line is printed" bash -c '[ "$1" = 30 ] && [ "$2" = 5 ] && [ "$3" = 30 ] && grep -q "at most 30" "$4"' _ "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN create)" "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN capped)" "$(plan_n)" "$OUT"
-expect_capped=$(awk -F' [|] ' '/^\| [A-Z]+-[A-Za-z0-9-]+ [|] (critical|high|medium|low) [|]/ { id = substr($1, 3); s = $2; r = (s=="critical")?1:(s=="high")?2:(s=="medium")?3:4; print r "\t" id }' "$R/$REPORT_REL" | LC_ALL=C sort -t "$TAB" -k1,1n -k2,2 | tail -n 5 | cut -f2 | LC_ALL=C sort | tr '\n' ' ')
+# only_first edits the state block, not the table: the oracle keeps the table rows whose id is still open in the state block
+open_now=$(awk '/^```launch-check-state$/ {f=1} /^```$/ && f {f=0} f && /^finding [A-Z]+-[A-Za-z0-9-]+ open$/ {printf " %s", $2}' "$R/$REPORT_REL")
+expect_capped=$(awk -F' [|] ' -v open="$open_now " '/^\| [A-Z]+-[A-Za-z0-9-]+ [|] (critical|high|medium|low) [|]/ { id = substr($1, 3); if (index(open, " " id " ") == 0) next; s = $2; r = (s=="critical")?1:(s=="high")?2:(s=="medium")?3:4; print r "\t" id }' "$R/$REPORT_REL" | LC_ALL=C sort -t "$TAB" -k1,1n -k2,2 | tail -n 5 | cut -f2 | LC_ALL=C sort | tr '\n' ' ')
 got_capped=$(awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "capped" {print $1}' "$PLAN/plan.tsv" | LC_ALL=C sort | tr '\n' ' ')
 check "cap: the capped ids are the last five by severity rank then id (independent oracle from the report table)" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$expect_capped" "$got_capped"
 
@@ -410,6 +412,31 @@ EOF
 SB0=$(mk_sbx pristine); inject "$SB0" "$SCRATCH/seams.sh"
 check "sandbox: the pristine copy parses and has the seams injected" bash -c 'bash -n "$1" && grep -q LC_TEST_NOGATE "$1"' _ "$SB0"
 LCS="$SB0"
+# Guard 1 mutation battery: each edit removes one check from the wrapper in a sandbox copy; the matching direct-call row above must
+# then see the write reach the stub (otherwise that row could not fail).
+sbx_lib() { local r; r=$(mk_sbx "$1"); dirname "$(dirname "$r")"; }   # -> the sandbox skill root
+sbx_edit() { # sbx_edit <name> <sed expression>: prints the sandbox skill root, with issues.sh edited
+  local root; root=$(sbx_lib "$1"); sed -e "$2" "$root/scripts/lib/issues.sh" > "$root/scripts/lib/issues.sh.new" && mv "$root/scripts/lib/issues.sh.new" "$root/scripts/lib/issues.sh"; printf '%s' "$root"
+}
+mut_landed() { bash -n "$1/scripts/lib/issues.sh" && ! cmp -s "$1/scripts/lib/issues.sh" "$ISS"; }
+M1=$(sbx_edit nohead '/if lc_is_headless; then lc_abort headless-write-refused/d')
+check "G1 mutation landed (headless check removed from lc_gh_write in the sandbox copy)" mut_landed "$M1"
+stub_reset acme/demo private; probe "$M1" - "CI=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+check "G1 mutation (headless check removed): the CI=1 call now reaches the stub, so the G1.4 row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
+M2=$(sbx_edit nodry '/\[ "\${LC_DRY:-0}" = 1 \] && return 0/d')
+check "G1 mutation landed (dry-run check removed from lc_gh_write in the sandbox copy)" mut_landed "$M2"
+stub_reset acme/demo private; probe "$M2" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+check "G1 mutation (dry-run check removed): the LC_DRY=1 call now reaches the stub, so the G1.4 dry-run row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
+M3=$(sbx_edit nofile 's/lc__file_ok "${val#@}" || lc__refuse file-operand/:/')
+check "G1 mutation landed (@file confinement removed from the sandbox copy)" mut_landed "$M3"
+stub_reset acme/demo private; seed 101 open stub-user lc:launch-check ''; calls_reset
+probe "$M3" - "X=1" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
+check "G1 mutation (@file confinement removed): an operand outside the plan directory now reaches the stub, so the G1.7 row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
+M4=$(sbx_edit nokeys 's/case "$allowed" in \*" $key "\*) ;; \*) lc__refuse field-key ;; esac/:/')
+check "G1 mutation landed (field-key allowlist removed from the sandbox copy)" mut_landed "$M4"
+stub_reset acme/demo private; seed 101 open stub-user lc:launch-check ''; calls_reset
+probe "$M4" - "X=1" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -f state=closed
+check "G1 mutation (field-key allowlist removed): a state field now reaches the stub (which refuses it), so the G1.7 row is sensitive" bash -c '[ "$1" = 64 ] && [ -s "$2" ]' _ "$PRC" "$ST/refused.log"
 hostile_facts() { # hostile_facts <out> <evidence>: the first non-count-only gap gets the evidence; prints its id
   local id; id=$(awk -F'\t' '$2 == "gap" && $1 !~ /^SEC-0[12]$/ {print $1; exit}' "$FACTS")
   awk -F'\t' -v OFS='\t' -v id="$id" -v ev="$2" '$1 == id { $3 = ev } { print }' "$FACTS" > "$1"; printf '%s' "$id"
@@ -657,4 +684,4 @@ LCS="$SB0"
 
 # ---------------------------------------------------------------- 9. the exit-code table: every fail_loud reason was exercised by a row above
 check "every fail_loud abort reason was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch confirm-public-required redaction-hit epic-closed epic-ambiguous issues-unavailable write-shape-refused issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 218
+finish 226

@@ -21,32 +21,32 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 2 — `issues.sh`: wrappers, preflight, live lookup, preview
 
-- 2.1 `lc__gh_exec` (stderr capture, `HTTP nnn` parse, rate-limit text first), `lc_gh_read` (inject `-X GET`), `lc_gh_write` (headless, dry-run, 4 shapes, field-key allowlist, `@file` realpath confinement, 1 s pause with a test seam)
-- 2.2 `lc_issues_preflight` (cd to target; gh present/auth; `gh repo view` slug + fork flag; REST repo read; report-only reasons)
-- 2.3 `lc_issues_live` (paginated REST listing; anchored `scan`; PR rows dropped; values used as set keys only)
-- 2.4 `references/issue-body.template`, `references/phrases.txt` additions; awk splice via `ENVIRON`/`index()`/`substr()`
-- 2.5 `lc_issues_preview` (report required, report/catalog hash, partition create/exists/closed/accepted/excluded/capped, cap 30 per run, excludes, plan directory mode 700, blob scan, summary lines, `SOLEUR_LAUNCH_CHECK_ISSUES_PLAN`)
+- [x] 2.1 `lc__gh_exec` (stderr capture, `HTTP nnn` parse, rate-limit text first), `lc_gh_read` (inject `-X GET`), `lc_gh_write` (headless, dry-run, 4 shapes, field-key allowlist, `@file` realpath confinement, 1 s pause with a test seam)
+- [x] 2.2 `lc_issues_preflight` (cd to target; gh present/auth; `gh repo view` slug + fork flag; REST repo read; report-only reasons)
+- [x] 2.3 `lc_issues_live` (paginated REST listing; anchored `scan`; PR rows dropped; values used as set keys only)
+- [x] 2.4 `references/issue-body.template`, `references/phrases.txt` additions; awk splice via `ENVIRON`/`index()`/`substr()`
+- [x] 2.5 `lc_issues_preview` (report required, report/catalog hash, partition create/exists/closed/accepted/excluded/capped, cap 30 per run, excludes, plan directory mode 700, blob scan, summary lines, `SOLEUR_LAUNCH_CHECK_ISSUES_PLAN`)
 
 ## Phase 3 — `--create`
 
-- 3.1 Plan trust chain: `--confirm-repo`/`--confirm-count`; lstat owner/mode/symlink checks; `cp -R` into `$WORK`; closed-vocabulary validation; regenerate every body from catalog+facts+ids and `cmp` (`--create` takes `--target --facts --judged --plan`); repo binding; `--check-plan` stop; `plan-missing`
-- 3.2 Live visibility gate (PUBLIC, UNKNOWN, internal need `--confirm-public`); resolved slug vs `origin` (`--repo`); github.com-only host (`--host`); `gh` environment scrub and neutral cwd; report-hash and "create rows still open" re-check
-- 3.3 Scan blob and each sent file before the first write
-- 3.4 Re-list live (a failed or malformed listing aborts `issues-incomplete phase=lookup`); epic handling (`epic-closed`, `epic-ambiguous`, epic author check, second re-list after epic creation); absent labels only (422 `already_exists` is success)
-- 3.5 Item loop in severity order: REST create, link with `-F sub_issue_id`, whole-run task-list latch on first failed link, stop at first failed write, orphan re-link
-- 3.6 Epic section: GET just before splice, `lc_epic_splice` (CRLF tolerant, damaged markers stop the edit), section scan in a subshell, PATCH only if changed
-- 3.7 Summary marker `SOLEUR_LAUNCH_CHECK_ISSUES` with `plan=` and `phase=`, failed ids, rate-limit hint, resume command, `created.tsv`, `issues-incomplete`, exit codes; closed `detail=` tokens, no raw `gh` stderr printed
+- [x] 3.1 Plan trust chain: `--confirm-repo`/`--confirm-count`; lstat owner/mode/symlink checks; `cp -R` into `$WORK`; closed-vocabulary validation; regenerate every body from catalog+facts+ids and `cmp` (`--create` takes `--target --facts --judged --plan`); repo binding; `--check-plan` stop; `plan-missing`
+- [x] 3.2 Live visibility gate (PUBLIC, UNKNOWN, internal need `--confirm-public`); resolved slug vs `origin` (`--repo`); github.com-only host (`--host`); `gh` environment scrub and neutral cwd; report-hash and "create rows still open" re-check
+- [x] 3.3 Scan the blob of exactly the sent bytes before the first write (the per-file rescan was dropped as redundant: a gitleaks run costs about 0.7 s)
+- [x] 3.4 Re-list live (a failed or malformed listing aborts `issues-incomplete phase=lookup`); epic handling (`epic-closed`, `epic-ambiguous`, epic author check, second re-list after epic creation); absent labels only (422 `already_exists` is success)
+- [x] 3.5 Item loop in severity order: REST create, link with `-F sub_issue_id`, whole-run task-list latch on first failed link, stop at first failed write, orphan re-link
+- [x] 3.6 Epic section: GET just before splice, `lc_epic_splice` (CRLF tolerant, damaged markers stop the edit), section scan in a subshell, PATCH only if changed
+- [x] 3.7 Summary marker `SOLEUR_LAUNCH_CHECK_ISSUES` with `plan=` and `phase=`, failed ids, rate-limit hint, resume command, `created.tsv`, `issues-incomplete`, exit codes; closed `detail=` tokens, no raw `gh` stderr printed
 
 ## Phase 4 — CLI wiring
 
-- 4.1 `cmd_issues` flags; abort-reason to exit-code table in the `launch-check.sh` header; headless/`--plan` refusals before `need_repo`; `--check-plan` before scanner preflight; no `echo "SOLEUR_..."` in `launch-check.sh`
+- [x] 4.1 `cmd_issues` flags; abort-reason to exit-code table in the `launch-check.sh` header; headless/`--plan` refusals before `need_repo`; `--check-plan` before scanner preflight; no `echo "SOLEUR_..."` in `launch-check.sh`
 
 ## Phase 5 — Docs and architecture
 
 - 5.1 `SKILL.md`: replace "Planned" and the no-`gh` rule; preview/ask/create flow, decline path, lost-session recovery, public and fork questions, abort reasons; no `description:` edit
 - 5.2 ADR-314 dated amendment (decisions 6 and 7, Art. 28(3) posture note, markers unmirrored, one alternatives row); status stays `adopting`
 - 5.3 `model.c4`: second `plugin -> github` edge (customer's own `gh` token), rewrite `launchcheck` description; `bash scripts/regenerate-c4-model.sh`
-- 5.3b Comment-only block in `apps/web-platform/server/git-lock-marker-telemetry.ts` (unmirrored `ISSUES` markers, hosted run dark); `redact-gate.sh` runs its scans from the scratch directory (+ `.gitleaksignore` test)
+- 5.3b Comment-only block in `apps/web-platform/server/git-lock-marker-telemetry.ts` (unmirrored `ISSUES` markers, hosted run dark); `redact-gate.sh` runs its scans from the scratch directory (+ `.gitleaksignore` test; DONE with Phases 2-4, only the comment-only TS block remains)
 - 5.3c `SKILL.md` Undo paragraph; decline deletes the plan directory
 - 5.4 Suite assertion: no `skills/*/scripts/*.sh` emits `SOLEUR_LAUNCH_CHECK_ISSUES*` or `_PLAN_OK`
 
