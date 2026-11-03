@@ -752,7 +752,7 @@ _SUITE_BOUNDS=(
   # on a starved -P 4 leg while green. Pin at 840 (about 1.9x the loaded figure): a bound EQUAL to the leg's 15-minute
   # ceiling (900 s, which also covers ~60 s of leg setup) would cancel the whole leg anonymously on a hang instead of failing this suite by name.
   # The weight row (suite-durations.tsv) is an ESTIMATE, never measured on CI: the first CI wall time of this suite's leg must be recorded
-  # (ADR-314, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
+  # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"

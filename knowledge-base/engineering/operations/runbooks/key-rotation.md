@@ -4,13 +4,13 @@ type: runbook
 status: active
 issue: 11294
 related: [11294, 10205, 11920, 11922, 11923, 11927, 11928, 9294]
-related_adrs: [ADR-314, ADR-307, ADR-241]
+related_adrs: [ADR-317, ADR-307, ADR-241]
 ---
 
 # Key rotation for the non-tunnel secrets
 
 One dispatch-only workflow, `.github/workflows/key-rotate.yml` (body `scripts/key-rotate.sh`, decision record
-[ADR-314](../architecture/decisions/ADR-314-key-rotation-second-dispatch-only-route-sourcing-the-inngest-route.md)), rotates ONE
+[ADR-317](../architecture/decisions/ADR-317-key-rotation-second-dispatch-only-route-sourcing-the-inngest-route.md)), rotates ONE
 secret per dispatch and then redeploys the web fleet canary-then-prod. This page is the procedure; the rationale lives in the ADR.
 Everything here runs from GitHub Actions, the Doppler CLI of the owner's own shell, and Better Stack reads. There is no host shell step
 anywhere in this procedure and none is needed.

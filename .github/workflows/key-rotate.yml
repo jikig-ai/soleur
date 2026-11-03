@@ -1,5 +1,5 @@
 # Rotate ONE non-tunnel secret per dispatch by a targeted Terraform -replace, then redeploy the web fleet canary-then-prod
-# (#11294, ADR-314; runbook knowledge-base/engineering/operations/runbooks/key-rotation.md). The body is scripts/key-rotate.sh, which
+# (#11294, ADR-317; runbook knowledge-base/engineering/operations/runbooks/key-rotation.md). The body is scripts/key-rotate.sh, which
 # sources scripts/inngest-key-rotate.sh (ADR-307, untouched) and overrides what differs.
 #
 # DISPATCH-ONLY, and a production act. The authorization is the owner's fresh in-session go naming the exact command (mode, key, typed

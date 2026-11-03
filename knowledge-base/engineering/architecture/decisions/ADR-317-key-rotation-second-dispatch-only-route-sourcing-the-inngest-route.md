@@ -10,7 +10,7 @@ brand_survival_threshold: single-user incident
 tags: [secrets, rotation, terraform, doppler, ci, authorization]
 ---
 
-# ADR-314: Key rotation for the non-tunnel secrets runs through a second dispatch-only route that sources the Inngest route and overrides it
+# ADR-317: Key rotation for the non-tunnel secrets runs through a second dispatch-only route that sources the Inngest route and overrides it
 
 ## Context
 

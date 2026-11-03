@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drift, behaviour and mutation guard for the key rotation route (#11294, ADR-314): .github/workflows/key-rotate.yml and its body
+# Drift, behaviour and mutation guard for the key rotation route (#11294, ADR-317): .github/workflows/key-rotate.yml and its body
 # scripts/key-rotate.sh (which SOURCES scripts/inngest-key-rotate.sh and overrides what differs; the sibling suite
 # inngest-key-rotate-workflow.test.sh stays green and unchanged).
 #

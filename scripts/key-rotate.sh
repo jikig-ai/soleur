@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# key-rotate.sh - the orchestration body of .github/workflows/key-rotate.yml (#11294, ADR-314; runbook key-rotation.md).
+# key-rotate.sh - the orchestration body of .github/workflows/key-rotate.yml (#11294, ADR-317; runbook key-rotation.md).
 #
 # Rotates ONE non-tunnel secret per dispatch (the six rotatable keys of the table below; a seventh, egress_audit_ingest_token, is
 # plan-only) by a targeted Terraform -replace, then redeploys
