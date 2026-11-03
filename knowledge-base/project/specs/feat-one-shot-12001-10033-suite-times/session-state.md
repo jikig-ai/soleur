@@ -37,3 +37,8 @@
 - user-impact sign-off "concerns" → discharged by cross-key fix.
 - Verified: self-test ok, suite 703/703 + 24/24 mutants, secret scan CLEAN.
 - Next: soleur:qa → compound → ship → postmerge.
+
+## QA: skipped per graceful-degradation (scenarios are integration prose; covered by 703/703 suite + seats)
+## Compound COMPLETE
+- Learning written: learnings/workflow-patterns/2026-11-03-an-actuation-arms-predicate-must-be-load-bearing-at-every-seam.md (6-seam defect class from the review panel).
+- Next: soleur:ship (PR #12002: ready it, verify comments resolved + gates, wait CI, merge, release-workflow verify, postmerge verify, Closes #12001 + #10033 body check).
