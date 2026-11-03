@@ -42,3 +42,9 @@
 ## Compound COMPLETE
 - Learning written: learnings/workflow-patterns/2026-11-03-an-actuation-arms-predicate-must-be-load-bearing-at-every-seam.md (6-seam defect class from the review panel).
 - Next: soleur:ship (PR #12002: ready it, verify comments resolved + gates, wait CI, merge, release-workflow verify, postmerge verify, Closes #12001 + #10033 body check).
+
+## Ship Phase (auto-merge queued 21:07Z)
+- PR #12002 readied; body has Closes #12001 + Closes #10033 + Ref #11556 + Changelog + Test plan.
+- Trailers: Reviewed-Coverage: full 10/10 agents (a63ef7443e); Reviewed-Fix-Round over ad239b4624..5a30903489 (cceb61690d).
+- KB artifacts archived (20261103-220633). Secret scan CLEAN at cceb61690d. 0 unpushed.
+- Watcher: polls state every 60s (bg shell ff498b). On MERGED → postmerge: detached origin/main worktree .worktrees/postmerge-12002, deploy-arm find --wait <merge-sha>, release workflow verify, audit/ratchet merged-tree verify.
