@@ -63,7 +63,15 @@ ctl_sbm() (
 check "control (sent_bodies_match): nothing sent fails, a body that is a plan file passes, one extra edited body fails it" ctl_sbm
 printf 'TOP\n<!-- launch-check:begin -->\nINNER\n<!-- launch-check:end -->\nBOTTOM\n' > "$SCRATCH/ctl.ep"
 printf 'TOP\r\n<!-- launch-check:begin -->\r\nINNER\r\n<!-- launch-check:end -->\r\nBOTTOM\r\n' > "$SCRATCH/ctl.epcr"
-check "control (outside): the text between the markers is dropped (LF and CRLF), the text outside stays" bash -c '[ "$(outside "$1")" = "$(printf "TOP\nBOTTOM")" ] && ! outside "$2" | grep -q INNER && outside "$2" | grep -q BOTTOM && outside "$2" | grep -q TOP' _ "$SCRATCH/ctl.ep" "$SCRATCH/ctl.epcr"
+ctl_outside() {
+  local o
+  [ "$(outside "$SCRATCH/ctl.ep")" = "$(printf 'TOP\nBOTTOM')" ] || return 1
+  o=$(outside "$SCRATCH/ctl.epcr")
+  case "$o" in *INNER*) return 1 ;; esac
+  case "$o" in *TOP*BOTTOM*) return 0 ;; esac
+  return 1
+}
+check "control (outside): the text between the markers is dropped (LF and CRLF), the text outside stays" ctl_outside
 stub_reset acme/demo private
 
 # ---------------------------------------------------------------- 1. the library exists; source scans
@@ -616,4 +624,4 @@ done
 
 # ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
 check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 232
+finish 280
