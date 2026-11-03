@@ -49,7 +49,7 @@ Extend `.claude/hooks/cla-signed-author-gate.sh` so the `gh pr ready`/`gh pr mer
 - **Upstream hardcode:** contributor-assistant drops `databaseId === 41898282` (`github-actions[bot]`) before the allowlist filter (`learning 2026-06-03`), so `41898282+github-actions[bot]@users.noreply.github.com` is sanctioned by mechanism regardless.
 - **`pull_request_target` reads `cla.yml` from `main`** — an in-PR allowlist edit cannot self-heal; authorship on the branch is the only lever (learning 2026-10-30).
 - **Sanctioned noreply emails observed in-tree:** `273333864+soleur-ai[bot]` (pinned in `fix-issue/SKILL.md:175`), `335404629+soleur-infra[bot]` (pinned in `.github/scripts/bump-inngest-bootstrap-pin.sh:132`), `41898282+github-actions[bot]`, `49699333+dependabot[bot]` (git history).
-- **The `-c user.*` guidance lives at `plugins/soleur/skills/git-worktree/SKILL.md:461`** (`hr-never-fake-git-author`) — currently scoped to `<fake>` emails only; the `jean@jikig.ai` incident was a *real but wrong* email, outside that text.
+- **The `-c user.*` guidance lives at `plugins/soleur/skills/git-worktree/SKILL.md:461`** (the `hr-never-fake-git-author` bullet — retired id, body migrated to git-worktree §Sharp Edges per `scripts/retired-rule-ids.txt`; still the canonical `-c user.*` authority) — currently scoped to `<fake>` emails only; the `jean@jikig.ai` incident was a *real but wrong* email, outside that text.
 - **`plugins/soleur/devin/INSTRUCTIONS.md:327`** already prescribes authoring as the CLA-allowlisted identity via `-c` overrides — accurate but silent on "do not override when config already supplies identity" (the exact #12027 failure).
 - **Worktree identity machinery exists:** `worktree-manager.sh` `ensure_worktree_identity` (~line 1294) pins worktree local config from `--global` — covers config drift at creation, NOT per-commit `-c` overrides.
 - **Hook wiring:** `emit_incident` + `hook_parse_input` + `soleur_ctx_sanitize_lines` pattern per the existing file; the suite `cla-signed-author-gate.test.sh` uses mktemp fixture repos and is auto-registered by `scripts/test-all.sh` glob `.claude/hooks/*.test.sh` — no manifest edit needed.
@@ -81,6 +81,25 @@ No uncovered stacks (bash/CI tooling). Functional-overlap check ran inline (no `
 ### Skill Description Budget (Phase 1.8)
 
 No `description:` frontmatter edit to any `plugins/soleur/skills/*/SKILL.md` is planned (edits are body prose only) — check skipped per trigger.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Observability (discoverability probe corrected off the suite-shaped reject), Research Insights (retired-rule-id citations corrected), Precedent-diff note added.
+**Research agents used:** sequential inline (`sequential-fallback` — no `run_subagent` in this session): repo research, learnings research, functional-overlap, spec-flow edge-case pass, plan-review panel lenses (DHH/Kieran/code-simplicity + standing checks), CTO domain consult.
+
+### Key Improvements
+1. Sanctioned-set derivation is offline and base-ref-pinned (`origin/main` cla.yml + `origin/cla-signatures` cla.json) — mirrors what `cla-check` accepts without a network dependency on the ready boundary.
+2. `devin-ai-integration[bot]` corrected from "sanctioned" to DENIED on measured evidence (PR #11690 `cla-check: fail`; learning 2026-10-30).
+3. Guard Contract with an 8-row design-derived mutation matrix (own-dispatch vacuity, second-member, committer-only, order-of-checks, harness mutation, two must-PASS discriminators).
+
+### New Considerations Discovered
+- `hr-never-fake-git-author` is a RETIRED rule id (`scripts/retired-rule-ids.txt:67`); its body lives in `git-worktree/SKILL.md` §Sharp Edges — the edit target is the bullet, not a corpus rule.
+- The `discoverability_test.command` must be a single allowlisted verb with no shell metachars and under 15 s — the suite itself is rejected as the probe; `grep SANCTIONED` on the hook substitutes.
+- `wg-cla-signed-author-before-merge` rule line is 538/600 bytes and `B_ALWAYS=44390/46000` — the widening is byte-constrained (recorded in Phase 3).
+
+### Precedent-diff note (Phase 4.4)
+The extension follows the hook's own precedent: the `noreply@anthropic.com` deny block (emit_incident + jq deny payload + `exit 0`), `hook_parse_input`/`soleur_ctx_sanitize_lines` libs, and the sibling-hook chain-boundary trigger grep (`ship-unpushed-commits-gate.sh`, `pre-merge-rebase.sh`). Fixture conventions copied from `cla-signed-author-gate.test.sh`/`ship-unpushed-commits-gate.test.sh` (mktemp repos + `assert_fixture_dir` copy pinned to `plugins/soleur/test/test-helpers.sh`). No novel pattern introduced.
 
 ## Problem Statement / Motivation
 
@@ -114,7 +133,7 @@ The deny message lists the offending emails with sample commits, names the sanct
 - **Merge commits on the branch** are commits too — they flow through the same check (their authors are typically the operator or `github-actions[bot]`, both sanctioned).
 - **Read sources at base refs, not PR head** — `origin/main` for cla.yml, `origin/cla-signatures` for cla.json. Both refs already gate the hook's early exits (`origin/main` is required; `cla-signatures` absence degrades only that component).
 - **No new required check, no allowlist/roster edit, no new workflow** — consistent with ADR-201 (roster untouched, no third required check, additive evidence never gates).
-- **`hr-never-fake-git-author` widening** (`git-worktree/SKILL.md:461`): the incident email was real-but-wrong, so the text widens from "`<fake>`" to "any `-c user.*` override when config already supplies identity, or any identity outside the sanctioned set".
+- **`hr-never-fake-git-author` bullet widening** (`git-worktree/SKILL.md` §Sharp Edges, line ~461 — retired id, migrated body): the incident email was real-but-wrong, so the text widens from "`<fake>`" to "any `-c user.*` override when config already supplies identity, or any identity outside the sanctioned set".
 - **Hook style:** `[[ ]]`, `local`, stderr diagnostics, deny payload via `jq -n`, `soleur_ctx_sanitize_lines` on commit-subject text, no `^`-anchored guardrail greps — per constitution and sibling hooks.
 
 ### SpecFlow edge cases (Phase 3, executed inline — sequential-fallback)
@@ -143,7 +162,7 @@ New arms per the Guard Contract mutation matrix: wrong-identity `-c` email denie
 ### Phase 3: Guidance convergence
 
 - `AGENTS.rules.md` — widen `wg-cla-signed-author-before-merge` body: name the sanctioned set and add the "never `-c user.*` when config already supplies identity" clause. **Byte-cap constraint:** the rule line is 538/600 bytes and `B_ALWAYS=44390` against the 46000 ratchet (`python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md`) — the widening must re-verify the rule line stays < 600 bytes and the corpus under cap; if the clause cannot fit, move the detail into the hook's header comment and keep the rule line pointing at the sanctioned-set semantics only.
-- `plugins/soleur/skills/git-worktree/SKILL.md` — widen the `hr-never-fake-git-author` line (line ~461).
+- `plugins/soleur/skills/git-worktree/SKILL.md` — widen the `hr-never-fake-git-author` Sharp-Edges bullet (line ~461; retired id, migrated body — edit the bullet text, not a rule id).
 - `plugins/soleur/devin/INSTRUCTIONS.md` — extend the §Devin-specific "Commit author identity" bullet: prefer configured identity; `-c` only when config is unset and only with an allowlisted email.
 - `plugins/soleur/skills/work/SKILL.md` — one line at the incremental-commit guidance (author identity comes from git config; never `-c user.*` to override a configured identity).
 - `plugins/soleur/skills/ship/SKILL.md` — one line in the `gh pr ready`-boundary gate cluster (after the recurring-vendor-expense block) naming the author-identity gate's subset semantics.
@@ -192,8 +211,8 @@ logs:
   where:           ".claude/.rule-incidents.jsonl (per-repo, emit_incident sink)"
   retention:       "repo-local until swept; aggregator reads weekly"
 discoverability_test:
-  command:         bash .claude/hooks/cla-signed-author-gate.test.sh
-  expected_output: passed
+  command:         grep SANCTIONED .claude/hooks/cla-signed-author-gate.sh
+  expected_output: SANCTIONED
 ```
 
 ## Guard Contract
@@ -255,7 +274,7 @@ discoverability_test:
 - [ ] AC3 — Commits authored/committeed by the session's `git config user.email`, by an allowlisted-bot noreply email (`<id>+<allowlisted-login>@users.noreply.github.com`), by a signed contributor's noreply email (`<id>+Elvalio@users.noreply.github.com`), or by the pinned allowlisted human email are NOT denied (carve-outs preserved, including the unset-config `-c` override path).
 - [ ] AC4 — The `noreply@anthropic.com` first-stage deny still fires with its specialized message ahead of the subset check (existing T1–T6 arms stay green).
 - [ ] AC5 — Fail-open posture preserved: invalid `.cwd`, non-worktree, `main`/`master`/detached, missing `origin/main`, or ALL sanctioned sources unreadable → `exit 0`.
-- [ ] AC6 — `AGENTS.rules.md` `wg-cla-signed-author-before-merge`, `git-worktree/SKILL.md` `hr-never-fake-git-author`, `devin/INSTRUCTIONS.md` §Devin-specific considerations, `work/SKILL.md`, and `ship/SKILL.md` all state the sanctioned-set semantics and the "never `-c user.*` when config already supplies identity" rule.
+- [ ] AC6 — `AGENTS.rules.md` `wg-cla-signed-author-before-merge`, `git-worktree/SKILL.md` `hr-never-fake-git-author` Sharp-Edges bullet, `devin/INSTRUCTIONS.md` §Devin-specific considerations, `work/SKILL.md`, and `ship/SKILL.md` all state the sanctioned-set semantics and the "never `-c user.*` when config already supplies identity" rule.
 - [ ] AC7 — `bash .claude/hooks/cla-signed-author-gate.test.sh` reports all arms passed and exits 0; the suite is picked up by `scripts/test-all.sh` unchanged (glob `.claude/hooks/*.test.sh`).
 - [ ] AC8 — PR body carries `Closes #12027` AND `Closes #7218` (the fix covers both named gaps).
 
