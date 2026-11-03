@@ -48,15 +48,16 @@ lives in
 **Why:** #10161 — the hook suite was 84/84 green at the first shard and still
 produced six separate shard-discovered surfaces, one FAIL per cycle.
 
-## A nested `test-all.sh` sandbox inherits the enclosing run's selection env
+## A nested `test-all.sh` sandbox inherits whatever selection env its parent exported
 
-Under an outer `TEST_GROUP=affected` run (a `--affected` alias since #8621), a suite's own
-`bash sandbox/test-all.sh` inherits `MODE`/`SOLEUR_TEST_FORCE_ALL` (and `TEST_GROUP` when the
-outer caller exported it: the runner itself stopped exporting it in #11939, and `SCRIPTS_SHARD` in #7902,
-so neither crosses from a runner to its suites), takes the affected path against a sandbox diff that
-selects zero suites, and exits 0 — reading as "the refusal arm never fired"
-in every arm that measures refusal. Scrub with
-`env -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL`:
+A suite's own `bash sandbox/test-all.sh` inherits the selection env its parent process exported.
+Since #11939 the runner drops the export attribute of `TEST_GROUP` (and unsets `SCRIPTS_SHARD`, #7902),
+so a suite the runner spawns inherits neither; the cases that still bite are a suite run outside the
+runner (standalone, `bun test`, a hook) from a shell that exported them, and an operator-exported
+`SOLEUR_TEST_FORCE_ALL`. With `TEST_GROUP=affected` inherited (a `--affected` alias since #8621) the
+sandbox takes the affected path against a sandbox diff that selects zero suites and exits 0 — reading
+as "the refusal arm never fired" in every arm that measures refusal. Keep the scrub as defence:
+`env -u TEST_GROUP -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL`:
 empty assignments like `TEST_GROUP=` are NOT equivalent — the runner's enum
 validation rejects an empty-but-set value with rc=2 — and the `-u` forms must
 precede the arm's own vars so an intentional `TEST_GROUP=affected` still

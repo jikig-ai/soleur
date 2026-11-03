@@ -16,3 +16,12 @@ None blocking. Planning subagent: a backgrounded test run lost its output-dir va
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: cto, learnings-researcher, repo-research-analyst, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer.
+## Review ledger (panel 3dd091d255, fix 7a8aff49f3)
+dedup: ~45 raw -> 12 unique. structural-cause roll-up: the guard (Part C) proved one sandbox path while the property spans the registration region, tee path, parallel launcher, other groups, CI=true and shards; plus stale prose saying the runner exports TEST_GROUP.
+| defect key | seats | fix |
+|---|---|---|
+| stale 'runner exports TEST_GROUP' prose | arch, history, code-quality | comments reworded (7a8aff49f3) |
+| suite header/banner omit Part C | pattern, code-quality, test-design | header+banner updated |
+| Part C reach (groups, CI, shard, region/tee/parallel, floor, failure kind) | test-design, structural | C1b, C1b-ctl, C6-C8, floor, messages |
+| P3 hardening (python -I, PROBE_DIR guard, B3 backticks, lib reuse) | security, pattern, code-quality | taken |
+| plan citation/wording | history, code-quality | corrected |

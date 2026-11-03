@@ -228,15 +228,14 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 # reached, and instead of exiting 2 the mutant RUNS THE ENTIRE SHARD. That shard contains this
 # suite, which mutates and re-invokes again: unbounded recursion.
 #
-# Measured 2026-08-13, and it is not subtle:
+# Measured 2026-08-13, before the runner dropped the export attribute (#11939), and it is not subtle:
 #   TEST_GROUP unset    -> 17 rows, 65 passed, 10 s
 #   TEST_GROUP=scripts  -> still running at 120 s, three nested copies of the suite alive at once
-#
-# Measured 2026-08-13, before the runner demoted the variable (#11939): it reproduced under a caller that
-# exported the group (and in the documented local exit gate, `TEST_GROUP=scripts bash scripts/test-all.sh`).
-# The runner now demotes it, so the scrub below is defence in depth for direct runs and for any caller
-# that exports it, and must stay. It did NOT reproduce standalone, which is
-# exactly why it survived: the suite's own green run leaves TEST_GROUP unset.
+# It reproduced under a caller that exported the group (the monitor's step env, the documented local
+# exit gate `TEST_GROUP=scripts bash scripts/test-all.sh`). The runner now drops the attribute, so the
+# scrub below is defence in depth for direct runs and for any caller that exports it, and must stay.
+# It did NOT reproduce standalone, which is exactly why it survived: the suite's own green run
+# leaves TEST_GROUP unset.
 #
 # Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
 # environment happens to hold, which is the only form of "fail closed" worth the name.
