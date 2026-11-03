@@ -18,7 +18,7 @@ requires_cpo_signoff: false
 
 ## Enhancement Summary
 
-**Deepened on:** 2026-11-03 (after the five-seat plan-review panel and 20 CTO rulings).
+**Deepened on:** 2026-11-03 (after the five-seat plan-review panel and 20 CTO rulings; superseded in part by D21 to D32, see the work-phase review corrections in decision-challenges.md).
 **Method:** the deepen halts and quality checks were run mechanically against this documentation-only plan; the broad agent fan-out was not repeated because the plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer) and the plan-time CLO and CTO consults had already covered every section, and a second fan-out would only re-read the same ADRs.
 
 **Halts and checks (all pass):** User-Brand Impact present with threshold `single-user incident` (4.6); Observability skipped, pure-docs (4.7); no PAT-shaped variable (4.8); no UI surface, no wireframe needed (4.9); no store or connection (4.10); no guard deliverable (4.11); exactly one unfenced `## Scope Check`, a `Recommendation:` line, zero `unmapped` cells, no BLOCKED marker (4.12); no new autonomous task (4.13). Every cited ADR file (14), issue and PR was re-resolved live with `gh` and `git`; the one cited rule id (`wg-ui-feature-requires-pen-wireframe`) is an active rule. AC1 was run against synthetic archived and live paths (clean copy prints 0, forbidden copy prints 5, the branch diff prints 0), and AC2's pattern and negative control print 0 and 1.
@@ -159,6 +159,7 @@ None. No existing file is edited; a query of open `code-review` issues for the l
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one user acting on a wrong "measured" row is enough to damage trust and create deceptive-implication exposure, so the tier is single-user incident, not aggregate pattern.
 - **CPO waiver (CTO ruling D9):** `requires_cpo_signoff` is `false` because no public page or UI is in the diff and the product-placement question is deferred to the publishing PR, which must flip the key to `true` and run the CPO pass.
+- **Further exposure the panel named:** Part 2 counts read as an acceptance (labels such as `accepted-by-CLO`), an unresolved state invisible to the human principal, and `advisory` or `dark` read by a lay reader as live; the ledger answers these with provisional-routing wording, an open-items section and sharper status definitions.
 - **Review path:** the CLO agent prepares the ledger; the standard panel and `soleur:engineering:review:user-impact-reviewer` run first (report-only), then a fresh CLO review (mandatory) last; CMO and CPO are not consulted.
 
 ## Domain Review
@@ -182,11 +183,14 @@ Documentation-only diff: observability, IaC, encryption posture, Guard Contract,
 2. `knowledge-base/project/plans/2026-11-03-feat-public-security-claim-ledger-plan.md` (this file).
 3. `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/tasks.md`.
 4. `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/spec.md`.
-5. `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/decision-challenges.md` (D1 to D20; at the end of work a `## CLO Review Record`).
+5. `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/decision-challenges.md` (D1 to D32; at the end of work a `## CLO Review Record`).
 
 A learnings file under `knowledge-base/project/learnings/` only if compound produces one (at most one). **Files to Edit:** none; in particular none of `docs/legal/**`, `plugins/soleur/docs/**`, `apps/**`, `.github/**`, `scripts/**`, any `.tf`, flag or Doppler configuration, `compliance-posture.md`, `article-30-register.md`. The ledger is flat in `knowledge-base/legal/`, is not in `REGISTER_FILES` of `scripts/lint-legal-registers.sh` (Art. 30, Art. 30-2, breach register, compliance posture, CCLA register) and is outside its `audits/**` walk.
 
 ## Ledger Specification (structure the work phase writes)
+
+> **Superseded in part (work phase).** Rows I3, A3, E1b, E2, A4, E1a, A6 and I4 changed status under D21 to D25 and D28, I5 moved to `advisory`, and the committed Part 2 is counts-only under D30 to D32 (the per-statement table is withheld; its ids and `Disposed by` cells in section 5 below describe the withheld copy). The host class of the measured rows is `dev-host`. See decision-challenges.md, section "Work-phase review corrections".
+
 
 One Markdown file; section order and table shape are fixed so the ACs can check them. Table cells never contain `|`; status cells are bare words (no backticks); paths in cells are backticked; the ledger uses no Markdown links (backticked paths only, so the KB link walker has nothing to resolve).
 

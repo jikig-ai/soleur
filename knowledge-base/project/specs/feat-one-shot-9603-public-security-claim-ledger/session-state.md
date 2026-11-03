@@ -16,3 +16,10 @@ None blocking. The plan-sharp-edges catalogue was read selectively; deepen-plan 
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; CTO (resumed twice), CLO, repo-research-analyst, learnings-researcher, functional-discovery, and the five-seat plan-review panel.
+
+## Work Phase
+- Status: complete through review; fixes applied from the six-seat report-only panel
+- Ledger: committed, counts-only Part 2; the per-statement table is withheld outside the repository
+- Remaining: fresh CLO attestation, QA, compound, ship
+- cto_spawns: 3 in planning, 2 in work (rulings D21 to D32 recorded)
+

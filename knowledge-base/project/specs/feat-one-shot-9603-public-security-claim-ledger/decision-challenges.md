@@ -1,6 +1,6 @@
 # Decision challenges: feat-one-shot-9603-public-security-claim-ledger
 
-Headless plan-phase record (2026-11-03). Every row is a technical ruling by the CTO agent; none is an operator question, the epic has no Standing Delegation and no act here is delegable. Items marked `unverified` inside a ruling were not verified by the ruling agent and are re-checked in the work phase.
+Headless plan-phase and work-phase record (2026-11-03). Every row is a technical ruling by the CTO agent; none is an operator question, the epic has no Standing Delegation and no act here is delegable. Items marked `unverified` inside a ruling were not verified by the ruling agent and are re-checked in the work phase.
 
 ## Decision Classes
 
@@ -42,3 +42,16 @@ Headless plan-phase record (2026-11-03). Every row is a technical ruling by the 
 ## Plan-review corrections to earlier records
 
 D2 and D16 gave the lint as a reason for keeping the CLO record out of `knowledge-base/legal/audits/`. Verified correction: `scripts/lint-legal-registers.sh` demands a register citation or waiver only for determination-shaped audit text (Art. 4(12) or Art. 33 wording), so the allowed-path list alone is the binding reason; the rulings themselves stand.
+
+## Work-phase review corrections (lead, report-only panel of six seats)
+
+These record how the committed ledger differs from the plan after the work phase. They are lead corrections, not CTO rulings, and none changes a ruling above.
+
+- Host class: I1, I2, I3, A2, A4 and A5 carry `dev-host`, the host of the preparer's reproduction run of 2026-11-03, not `CI-runner` as D21 and D24 and the plan matrix assumed. The ledger legend defines the host classes; A3 stays `CI-runner` (a scheduled run).
+- I2 is narrowed to sibling directory hiding under a hand-built bubblewrap argv, because the three real-SDK arms were skipped on the measuring host (D29 keeps the row `measured` with the scope in the descriptor).
+- I5 moves from `dark` to `advisory` (sub-case unmeasured) on the reasoning of D28: the live value is unread, and `dark` now requires a dated flag read in the evidence cell.
+- Legend and criterion amendments from the panel: `published-measured` means the statement meets C1; C1 gains the owning-section status rule, the nondeterministic-probe rule and the rows-read-at-merge-base rule; C2 diffs instruments and the decision record and requires a re-run with 0 skipped at the publishing base; C3 requires the human principal's signature after a committed CLO review; C5's guard fails on any `yes` row it relies on.
+- Part 2 in the committed ledger is counts-only (D30 to D32). The plan's Ledger Specification section 5 (a seven-column table with `P2-n` ids and `Disposed by` cells) describes the withheld copy, and AC3(b)(c) and AC4 are run over the committed ledger concatenated with the withheld table.
+- IDs `E1a` and `E1b` carry a letter suffix; the AC patterns use `[IEA][0-9]+[a-z]?`.
+- The finding-type names `register entry beyond row scope` and `disclosure differs from a later decision record` replace the plan's earlier names (D31); the sixth type, `no mapped row`, has a count of 0.
+- Open for the final report: the plan's AC2 text derives the withheld digit string by pattern and by timestamp arithmetic; it cannot be removed from already pushed history.
