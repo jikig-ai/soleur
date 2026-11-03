@@ -326,6 +326,25 @@ expect ALLOW "PARKED_RE fires, and the irreversible-prod escape is what rescues 
 expect ALLOW "a turn ending in a genuine question is not parked work" \
   "Paused: PR is awaiting your review. Which approach do you want?"
 
+# ── agent-owned pipeline acts are never the operator's to approve (2026-11-03) ──
+# A closing "Paused: waiting for your go to push through the remaining items and mark the PR ready" parked
+# FINISHED pipeline work on the operator under a label this hook itself offers as an exit. Marking a PR ready,
+# editing its body, filing a follow-up and running compound/ship are agent-owned; the object set stays narrow
+# so the rule-mandated gates (cost, agent spawn, outward-facing sends) below are untouched.
+expect BLOCK "the real 2026-11-03 turn: waiting for a go to mark the PR ready" \
+  "Pushed. Paused: waiting for your go to push through the remaining items and mark the PR ready."
+expect BLOCK "go-ahead to edit the PR body and file the follow-up issue" \
+  "Blocked: need your go-ahead to edit the PR body and file the follow-up issue."
+expect BLOCK "approval before running compound and ship" \
+  "Paused: waiting for your approval before I run compound and ship."
+# MUTATION RECORD (2026-11-03): dropping PARKED_GO_RE from the arm reds the first two rows; dropping the spawn alternative from
+# PARKED_AUTH_RE reds the next row (the existing PARKED_RE alone would block "your go ... review agents"). Adding a bare
+# `review` object to PARKED_GO_RE SURVIVES and is EQUIVALENT: PARKED_RE already blocks every (your ... review) sentence.
+expect ALLOW "rule-mandated agent-spawn gate still allowed (wg-zero-agents-until-user-confirms)" \
+  "Paused: pending your go before I spawn the review agents."
+expect ALLOW "in-flight CI that will end in marking ready is an external event, not a go" \
+  "Paused: waiting on CI run 123; once it is green I mark the PR ready."
+
 # ── each escape alternative pinned ALONE ───────────────────────────────────────
 # The single escape row tripped `irreversible`, `wipe` AND `per-command` at once,
 # so each rescued the other two: deleting any ONE of the eleven alternatives left
@@ -461,7 +480,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=75
+MIN_EXPECT_ROWS=80
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -470,7 +489,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=87
+MIN_ASSERTIONS=92
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -247,6 +247,11 @@ STOP_MARK_RE='^[*]*(paused|blocked)[*[:space:]]*:'
 STOP_NOOP_RE='^[^:]*:[*[:space:]]*((no|none|nothing|n/?a)[[:punct:][:space:]]*)?$'
 is_stop_mark() { grep -qiE "$STOP_MARK_RE" <<<"$1" && ! grep -qiE "$STOP_NOOP_RE" <<<"$1"; }
 
+# AGENT-OWNED PIPELINE ACTS (2026-11-03). Marking a PR ready, editing its body, filing a follow-up issue and
+# running compound/ship are the agent's own steps; "waiting for your go" on them parks finished work on the
+# operator under the very label this hook offers as an exit. The object set is a CLOSED list of those acts and
+# deliberately omits spawn, cost, budget and send, so the rule-mandated gates stay untouched.
+PARKED_GO_RE='(your|the[[:space:]]+operator.?s?)[[:space:]]+(go|go-?ahead|approval|ok|okay|permission|say-?so|nod)([[:space:]]|[.,;:]|$)[^.]{0,80}(mark(ing)?[^.]{0,30}ready|pr[[:space:]]+ready|ready[[:space:]]+for[[:space:]]+review|(edit|update|editing|updating)[^.]{0,20}(pr[[:space:]]+)?body|follow-?up[[:space:]]+issue|remaining[[:space:]]+(items|steps|work)|compound|ship)'
 PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0,60}(your|operator|the[[:space:]]+operator|human|a[[:space:]]+human)[^.]{0,60}(merge|review|ship)|awaiting[[:space:]]+(review|merge)([[:space:]]|[.,;:]|$)|needs?[[:space:]]+a[[:space:]]+human([[:space:]]|[.,;:]|$)|ready[[:space:]]+(for[[:space:]]+(you|your)|to[[:space:]]+merge[[:space:]]+when[[:space:]]+you)|(yours|over[[:space:]]+to[[:space:]]+you|handing[[:space:]]+(it[[:space:]]+)?off[[:space:]]+to[[:space:]]+you)[^.]{0,40}(merge|review|ship)'
 
 # The sanctioned pause survives: `hr-menu-option-ack-not-prod-write-auth` requires
@@ -259,7 +264,7 @@ PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0
 # a promise anywhere else in it"). Measured on the first revision: "I revoked the
 # old token as part of cleanup. Paused: PR #8244 is green and awaiting
 # your merge." ALLOWED, because `revoke` appeared in an unrelated sentence.
-PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
+PARKED_AUTH_RE='(spawn(ing)?[[:space:]]+[a-z -]{0,30}agents?|irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
 
 # ALL THREE TERMS ARE TESTED ON THE MARKER'S OWN SENTENCE, not on the window.
 #
@@ -280,10 +285,16 @@ PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:spa
 PARKED_SENTENCE=$(printf '%s\n' "$CLOSING" | grep -iE "$STOP_MARK_RE" | tail -n 1)
 if [ -n "$PARKED_SENTENCE" ] &&
    ! grep -q '?' < <(printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2) &&
-   grep -qiE "$PARKED_RE" <<<"$PARKED_SENTENCE" &&
+   { grep -qiE "$PARKED_RE" <<<"$PARKED_SENTENCE" || grep -qiE "$PARKED_GO_RE" <<<"$PARKED_SENTENCE"; } &&
    ! grep -qiE "$PARKED_AUTH_RE" <<<"$PARKED_SENTENCE"; then
-  PARKED_REASON="Your Paused/Blocked line hands finished work back for a merge, review or ship. That is not a
-legitimate gate -- it defers to someone who cannot clear it.
+  PARKED_REASON="Your Paused/Blocked line hands finished pipeline work back to the operator. That is not a
+legitimate gate -- it defers to someone who should not be asked.
+
+Marking a PR ready, editing its body, filing a follow-up issue, and running review, compound, ship or
+merge on a green PR are YOURS. \"Waiting for your go\" on any of them is a violation: do the act now.
+A Paused: or Blocked: line is for exactly two things: (a) an external event you cannot advance (a CI run in
+progress, a queued lock, a vendor reply), or (b) an operator-reserved act (money, scope, legal, brand,
+production-mutating authorization).
 
   rf-never-skip-qa-review-before-merging: \"Carry every PR to MERGED in-session;
   'awaiting review'/'needs a human' as an end state defers to an operator who
@@ -373,6 +384,12 @@ If the stop is legitimate, end the message with ONE plain sentence that starts w
 the label and says why (no markup, no sentence break inside it):
   Paused: the one thing you are waiting on.
   Blocked: the one thing that is blocking you.
+
+A stop is legitimate ONLY when (a) an external event you cannot advance is pending (a CI run,
+a queued lock, a vendor reply) or (b) the next step is an operator-reserved act (money, scope,
+legal, brand, production-mutating authorization). Waiting for the operator's go or approval on
+your own pipeline steps (mark a PR ready, edit its body, file a follow-up, run review, compound
+or ship, merge a green PR) is not a legitimate stop: do the step.
 
 Stopping is allowed. Stopping silently is not -- an operator who cannot see the
 pipeline has no way to tell a finished task from an abandoned one."
