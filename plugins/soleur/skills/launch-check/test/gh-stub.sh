@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gh-stub.sh: a stateful fake of the GitHub CLI for test/issues.test.sh. The suite copies this file to <bin>/gh and
+# gh-stub.sh: a stateful fake of the GitHub CLI for test/issues-common.sh (sourced by issues-guards.test.sh and issues-resume.test.sh). The suite copies this file to <bin>/gh and
 # puts <bin> first on PATH. It never touches the network and never reads a credential.
 #
 # STUB CONTRACT. Each emulated shape is marked either

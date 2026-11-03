@@ -1,99 +1,12 @@
 #!/usr/bin/env bash
-# issues: the only part of launch-check that writes to a customer's tracker. Four guards (plan "Guard Contract"):
-#   1 saved-plan-only writes · 2 authored bytes are scanned bytes · 3 idempotency and resume · 4 epic edits confined to the marked section.
-# Every case runs against test/gh-stub.sh (a stateful fake gh on PATH); no real gh, no network. The independent witnesses are the
-# stub's append-only call log and the fake tracker's contents, never the script's own counters.
-#
-# INTERFACE ASSUMED BY THIS SUITE (written before issues.sh existed; Phase 2-4 either implement it or amend the line here):
-#   launch-check.sh issues --preview      --target R --facts F --judged J [--plan-out D] [--exclude-domain X] [--exclude-class X] [--host H] [--repo S]
-#       stdout: SOLEUR_LAUNCH_CHECK_ISSUES_PLAN repo=<o/n> visibility=<V> create=<n> exists=<n> closed=<n> accepted=<n> excluded=<n> capped=<n> plan=<dir>
-#       (the plan directory is created inside D; report-only: SOLEUR_LAUNCH_CHECK_ISSUES mode=report-only reason=<cause>, exit 0, no plan)
-#   launch-check.sh issues --create       --target R --facts F --judged J --plan P --confirm-repo S --confirm-count N [--confirm-public] [--repo S] [--host H] [--dry-run]
-#       stdout: SOLEUR_LAUNCH_CHECK_ISSUES created= linked= skipped= failed=<ids> fallback= epic=#N epic-section= plan=<dir> phase=<..>
-#   launch-check.sh issues --check-plan   --plan P            stdout: SOLEUR_LAUNCH_CHECK_PLAN_OK
-#   plan.tsv: key=value header lines (repo host visibility catalog_hash report_hash created), then a header row and one row per item:
-#       id<TAB>severity<TAB>domain<TAB>class<TAB>action<TAB>title      (see test/fixtures/plan-sample)
-#   Sourced-library names: lc_gh_write, lc_gh_read, lc__gh_exec, lc_issues_live (writes $WORK/live.tsv), lc_epic_splice <old-body-file> <new-section-file>
-#   (new body on stdout), lc_emit_checked; globals ISSUES_REPO (plan-bound slug) and ISSUES_PLAN_DIR; env LC_DRY=1; seam LAUNCH_CHECK_PAUSE=0.
-# Rows tagged UNVERIFIED-STUB-ONLY depend on a stub shape nobody has checked against GitHub yet (live check: follow-up #11956).
+# issues (1 of 2): preview, --check-plan, Guard 1 (saved-plan-only gh writes) and Guard 2 (authored bytes are scanned bytes).
+# The resume and epic-section guards (3 and 4) are in issues-resume.test.sh; both source issues-common.sh, which also holds the
+# interface this pair of suites assumes. Every case runs against test/gh-stub.sh (a stateful fake gh on PATH): no real gh, no network.
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/issues-common.sh"
 check "instrument self-test" selftest
-command -v gitleaks >/dev/null 2>&1 || { echo "FAIL - gitleaks is required for this suite"; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "FAIL - jq is required for this suite (the stub runs real jq)"; exit 1; }
-REPORT_REL=$(bash "$LC" report-path)
-ISS="$SKILL/scripts/lib/issues.sh"
-TAB=$(printf '\t')
-export LAUNCH_CHECK_PAUSE=0
 check "the 1 s pause between writes is forced to 0 for the suite" test "$LAUNCH_CHECK_PAUSE" = 0
 
-# ---------------------------------------------------------------- harness: stub, tracker views, run helpers
-BIN="$SCRATCH/bin"; mkdir -p "$BIN"; cp "$SKILL/test/gh-stub.sh" "$BIN/gh"; chmod +x "$BIN/gh"
-export PATH="$BIN:$PATH"
-ST="$SCRATCH/st"
-stub_reset() { # stub_reset <slug> [visibility] [fork true|false]
-  rm -rf "${ST:?}"; mkdir -p "$ST"
-  jq -n --arg s "$1" --arg v "${2:-private}" --argjson f "${3:-false}" \
-    '{full_name:$s,name:($s|split("/")[1]),owner:{login:($s|split("/")[0])},visibility:$v,archived:false,has_issues:true,fork:$f,permissions:{push:true}}' > "$ST/repo.json"
-  printf '[]\n' > "$ST/labels.json"; printf '[]\n' > "$ST/issues.json"
-  export GH_STUB_STATE="$ST"
-}
-calls_reset() { rm -f "$ST/calls.log" "$ST/pages.log" "$ST/violations.log" "$ST/refused.log"; }
-cj() { local f=$1; if [ -s "$ST/calls.log" ]; then jq -sr "$f" "$ST/calls.log"; else printf '[]' | jq -r "$f"; fi; }
-n_calls() { cj 'length'; }
-n_writes() { cj '[.[]|select(.class=="write")]|length'; }
-n_post() { cj "[.[]|select(.method==\"$1\" and (.path|test(\"$2\")))]|length"; }
-tr_q() { jq -r "$1" "$ST/issues.json"; }
-EPICSEL='select(.labels|map(.name)|index("lc:epic"))'
-items_n() { tr_q "[.[]|select(.labels|map(.name)|index(\"lc:epic\")|not)]|length"; }
-epics_n() { tr_q "[.[]|$EPICSEL]|length"; }
-epic_body_to() { jq -j "[.[]|$EPICSEL][0].body" "$ST/issues.json" > "$1"; }
-marker_n() { tr_q "[.[]|select((.body // \"\")|contains(\"<!-- launch-check:gap=$1 -->\"))]|length"; }
-max_dup() { tr_q '[.[]|(.body // "")|scan("<!-- launch-check:gap=[A-Z]+-[A-Za-z0-9-]+ -->")]|group_by(.)|map(length)|max // 0'; }
-linked_n() { tr_q '[.[]|select(.parent != null)]|length'; }
-seed() { # seed <number> <state> <login> <labels-csv> <body-text|NULL>
-  local lj
-  lj=$(printf '%s' "$4" | jq -R 'split(",")|map(select(.!=""))|map({name:.})')
-  jq -c --argjson n "$1" --arg st "$2" --arg login "$3" --argjson l "$lj" --arg b "$5" \
-    '. + [{number:$n,id:(4000000000+$n*13),state:$st,title:"seeded",body:(if $b=="NULL" then null else $b end),labels:$l,user:{login:$login},parent:null}]' "$ST/issues.json" > "$ST/i.new" && mv "$ST/i.new" "$ST/issues.json"
-}
-seed_label() { jq -c --arg n "$1" --arg c "$2" '. + [{name:$n,color:$c,description:"seeded"}]' "$ST/labels.json" > "$ST/l.new" && mv "$ST/l.new" "$ST/labels.json"; }
-tracker_edit() { jq -c "$1" "$ST/issues.json" > "$ST/i.new" && mv "$ST/i.new" "$ST/issues.json"; }
-kv() { awk -v m="$2" -v k="$3" '$1==m { for (i = 2; i <= NF; i++) if (index($i, k "=") == 1) { print substr($i, length(k) + 2); exit } }' "$1"; }
-lcs() { # like lc(), but against the script in LCS (a sandbox copy for the mutation battery)
-  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE \
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
-    bash "${LCS:-$LC}" "$@"
-}
-# with NAME=value... -- command...: run a function in THIS shell with variables exported, then restore them (a subshell would lose RC and OUT)
-with() {
-  local -a names=() olds=() was=(); local n i
-  while [ "$1" != "--" ]; do
-    n=${1%%=*}; names+=("$n")
-    if [ -n "${!n+x}" ]; then was+=(1); olds+=("${!n}"); else was+=(0); olds+=(""); fi
-    export "$1"; shift
-  done
-  shift; "$@"
-  local rc=$?
-  for i in "${!names[@]}"; do if [ "${was[$i]}" = 1 ]; then export "${names[$i]}=${olds[$i]}"; else unset "${names[$i]}"; fi; done
-  return $rc
-}
-RC=0; OUT=""; SEEN_REASONS=""; N=0; CRN=0
-runi() { local name=$1; shift; OUT="$SCRATCH/$name.out"; lcs issues "$@" > "$OUT" 2>&1; RC=$?; }
-abort_is() { # abort_is <rc> <reason> [file]: exit code AND marker, both (the report-only exit 0 path can never pass as an abort)
-  local f=${3:-$OUT}; SEEN_REASONS="$SEEN_REASONS $2"
-  [ "$RC" = "$1" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=$2\( \|\$\)" "$f"
-}
-lacks() { ! grep -qF -- "$1" "$OUT"; }
-# autolink shapes outside code spans: a user mention, owner/repo#N, an issue URL, a bare #N, GH-N, a 7-40 hex run. (Same lint in wording.test.sh.)
-autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
-autolink_clean() { ! autolink_hits "$@" >/dev/null; }
-file_and_clean() { [ -f "$1" ] && autolink_clean "$1"; }
-gl_only_secret() { printf '%s%s' 'glpat-' 'aB3dE5gH7jK9mN1pQ3sT'; }   # matched by gitleaks (gitlab-pat) and NOT by the sentinel (checked: sentinel rc 0, gitleaks rc 1; the npm_ shape the first draft used IS a sentinel hit)
-stub_secret() { printf '%s%s' 'ghp_' 'Q3nW8tY1kD6vB2xM9cL5hZ7pR4aE0sJ2fG1u'; }      # what the stub prints on stderr for GH_STUB_FAIL_KIND=secret
-outside() { awk 'BEGIN { s = 0 } { l = $0; sub(/\r$/, "", l) } l == "<!-- launch-check:begin -->" { s = 1; next } l == "<!-- launch-check:end -->" { s = 0; next } !s { print }' "$1"; }
-export -f outside
-export ST; export -f kv cj   # used inside `bash -c` check bodies
 
 # ---------------------------------------------------------------- 0. the instrument itself (a recorder that cannot record proves nothing)
 stub_reset acme/demo private
@@ -128,7 +41,7 @@ check "stub contract: without --paginate only the first page is served" test "$c
 
 # ---------------------------------------------------------------- 1. the library exists; source scans
 check "scripts/lib/issues.sh exists" test -f "$ISS"
-verbs=$(grep -rnE 'gh[[:space:]]+(issue|label|pr)([[:space:]]|$)' "$SKILL/scripts" "$SKILL/references" "$SKILL/SKILL.md" 2>/dev/null || true)
+verbs=$(find "$SKILL/scripts" "$SKILL/references" "$SKILL/SKILL.md" -type f -exec grep -nE 'gh[[:space:]]+(issue|label|pr)([[:space:]]|$)' {} + 2>/dev/null || true)
 check "no gh issue / gh label / gh pr verb anywhere in the skill (REST via gh api only)" test -z "$verbs"
 jq_fn_violations() { grep -h -- '--jq' "$@" 2>/dev/null | sed -e 's/.*--jq//' | grep -oE '[a-z_][a-z_0-9]*\(' | sort -u | grep -vxE '(scan|select|test)\(' || true; }
 check "every shipped --jq expression stays inside the pinned function list (scan, //, @tsv, select, test)" bash -c '[ -f "$1" ] && [ -z "$2" ] && grep -q -- "--jq" "$1"' _ "$ISS" "$(jq_fn_violations "$ISS")"
@@ -152,47 +65,11 @@ hdr=$(sed -n '1,80p' "$LC")
 miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch confirm-public-required redaction-hit epic-closed epic-ambiguous issues-unavailable write-shape-refused issues-incomplete; do case "$hdr" in *"$r"*) ;; *) miss="$miss $r" ;; esac; done
 check "launch-check.sh header lists every abort reason (the exit-code table)" test -z "$miss"
 check "the issue template exists and passes the autolink lint" file_and_clean "$SKILL/references/issue-body.template"
-SAMPLE="$SKILL/test/fixtures/plan-sample"
 check "the sample plan's issue body passes the autolink lint" file_and_clean "$SAMPLE/issues/CI-01.md"
 check "the sample epic.md carries the epic, begin and end markers exactly once each" bash -c '[ "$(grep -c "launch-check:epic" "$1")" = 1 ] && [ "$(grep -c "launch-check:begin" "$1")" = 1 ] && [ "$(grep -c "launch-check:end" "$1")" = 1 ]' _ "$SAMPLE/epic.md"
 
 # ---------------------------------------------------------------- 2. fixtures: one rendered report, copied per case
-BASE=$(fx_minimal base); gitq "$BASE" remote add origin https://github.com/acme/demo.git
-FACTS="$SCRATCH/facts.tsv"; scan_to "$BASE" "$FACTS"
-JUD="$SCRATCH/judged.tsv"; printf '# judged\n' > "$JUD"
-lc render --target "$BASE" --facts "$FACTS" --judged "$JUD" > "$SCRATCH/base.render" 2>&1
 check "fixture: the base report is written and verifies" bash -c 'x=$(bash "$1" verify-report --file "$2"); grep -q REPORT_OK <<<"$x"' _ "$LC" "$BASE/$REPORT_REL"
-newcase() { N=$((N + 1)); R="$SCRATCH/case$N"; cp -R "$BASE" "$R"; stub_reset acme/demo private; PLAN=""; }
-only_first() { # only_first <repo> <K>: accept every open finding after the first K, so exactly K remain to file
-  local rep="$1/$REPORT_REL"
-  awk -v k="$2" '/^```launch-check-state$/ {f=1} /^```$/ && f {f=0} f && /^finding [A-Z]+-[A-Za-z0-9-]+ open$/ { if (++n > k) { print $1 " " $2 " accepted 2026-11-03 fixture-accept"; next } } {print}' "$rep" > "$rep.new" && mv "$rep.new" "$rep"
-}
-only_ids() { # only_ids <repo> <ID...>: accept every open finding except the named ones
-  local rep="$1/$REPORT_REL" keep; shift; keep=" $* "
-  awk -v keep="$keep" '/^```launch-check-state$/ {f=1} /^```$/ && f {f=0} f && /^finding [A-Z]+-[A-Za-z0-9-]+ open$/ { if (index(keep, " " $2 " ") == 0) { print $1 " " $2 " accepted 2026-11-03 fixture-accept"; next } } {print}' "$rep" > "$rep.new" && mv "$rep.new" "$rep"
-}
-prev() { runi "pv$N" --preview --target "$R" --facts "$FACTS" --judged "$JUD" --plan-out "$SCRATCH/po$N" "$@"; PLAN=$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN plan); }
-plan_n() { awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create"' "$PLAN/plan.tsv" 2>/dev/null | wc -l | tr -d ' '; }
-create_ids() { awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create" {print $1}' "$PLAN/plan.tsv" 2>/dev/null; }
-create() { CRN=$((CRN + 1)); runi "cr$N.$CRN" --create --target "$R" --facts "$FACTS" --judged "$JUD" --plan "$PLAN" --confirm-repo "${CREPO:-acme/demo}" --confirm-count "${CCOUNT:-$(plan_n)}" "$@"; }
-mode700() { [ "$(ls -ld "$1" 2>/dev/null | cut -c1-10)" = "drwx------" ]; }
-table_rows_present() { # every create row of the plan appears in the preview output as "ID | severity | title"
-  local out=$1 plan=$2 n=0 id sev dom cls act title
-  while IFS="$TAB" read -r id sev dom cls act title; do
-    grep -qF -- "$id | $sev | $title" "$out" || return 1; n=$((n + 1))
-  done < <(awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create"' "$plan")
-  [ "$n" -ge 1 ]
-}
-bodies_clean() { local f n=0; for f in "$1"/issues/*.md; do [ -f "$f" ] || return 1; autolink_clean "$f" || return 1; n=$((n + 1)); done; [ "$n" -ge 1 ]; }
-sent_bodies_match() { # every body the stub received on an issue create is byte-identical to a file of the plan that was scanned
-  local n=0 seq b ok f
-  while IFS= read -r seq; do
-    b="$ST/bodies/$seq-body"; ok=0
-    for f in "$PLAN"/issues/*.md "$PLAN/epic.md"; do cmp -s "$b" "$f" && { ok=1; break; }; done
-    [ "$ok" = 1 ] || return 1; n=$((n + 1))
-  done < <(cj '.[]|select(.method=="POST" and (.path|test("/issues$")))|.seq')
-  [ "$n" -ge 1 ]
-}
 
 # ---------------------------------------------------------------- 3. --check-plan (parse-only: no network, no scanner, no jq)
 calls_reset
@@ -389,29 +266,7 @@ calls_reset; create --host ghe.example
 check "G1.9: --host ghe.example makes the same plan runnable and the host reaches a call (hostname flag or GH_HOST)" bash -c '[ "$(jq -sr "[.[]|select(.hostname==\"ghe.example\" or .env.GH_HOST==\"ghe.example\")]|length>0" "$1" 2>/dev/null)" = true ]' _ "$ST/calls.log"
 
 # ---------------------------------------------------------------- 6. Guard 2: authored bytes are scanned bytes
-# Sandbox copy of the skill for the mutation battery, with seams injected before main: a gate bypass and a live-lookup bypass, both inert unless set.
-mk_sbx() { # mk_sbx <name> -> prints the sandbox launch-check.sh
-  local d="$SCRATCH/sbx-$1/plugins/soleur" s
-  mkdir -p "$d/skills/launch-check"; ln -s "$PLUGIN/.claude-plugin" "$d/.claude-plugin"
-  for s in incident verification-scaffold; do ln -s "$PLUGIN/skills/$s" "$d/skills/$s"; done
-  cp -R "$SKILL/scripts" "$SKILL/references" "$d/skills/launch-check/"
-  printf '%s' "$d/skills/launch-check/scripts/launch-check.sh"
-}
-inject() { awk -v f="$2" '/^main "\$@"$/ { while ((getline l < f) > 0) print l } { print }' "$1" > "$1.new" && mv "$1.new" "$1"; }
-cat > "$SCRATCH/seams.sh" <<'EOF'
-# test seams, inert unless their variable is set
-if declare -F lc_emit_checked >/dev/null; then
-  eval "$(declare -f lc_emit_checked | sed '1s/^lc_emit_checked/lc__real_emit_checked/')"
-  lc_emit_checked() { if [ -n "${LC_TEST_NOGATE:-}" ]; then return 0; fi; lc__real_emit_checked "$@"; }
-fi
-if declare -F lc_issues_live >/dev/null; then
-  eval "$(declare -f lc_issues_live | sed '1s/^lc_issues_live/lc__real_issues_live/')"
-  lc_issues_live() { if [ -n "${LC_TEST_NOLIVE:-}" ]; then : > "$WORK/live.tsv"; return 0; fi; lc__real_issues_live "$@"; }
-fi
-EOF
-SB0=$(mk_sbx pristine); inject "$SB0" "$SCRATCH/seams.sh"
 check "sandbox: the pristine copy parses and has the seams injected" bash -c 'bash -n "$1" && grep -q LC_TEST_NOGATE "$1"' _ "$SB0"
-LCS="$SB0"
 # Guard 1 mutation battery: each edit removes one check from the wrapper in a sandbox copy; the matching direct-call row above must
 # then see the write reach the stub (otherwise that row could not fail).
 sbx_lib() { local r; r=$(mk_sbx "$1"); dirname "$(dirname "$r")"; }   # -> the sandbox skill root
@@ -444,7 +299,7 @@ hostile_facts() { # hostile_facts <out> <evidence>: the first non-count-only gap
 OFACTS="$FACTS"
 newcase; HID=$(hostile_facts "$SCRATCH/hostile.tsv" "$(planted_secret)"); only_ids "$R" "$HID"
 FACTS="$SCRATCH/hostile.tsv"; with LC_TEST_NOGATE=1 -- prev; calls_reset
-check "G2 setup: with the gate bypassed in preview the plan really carries the planted token (a suite with no plant asserts nothing)" bash -c '[ -n "$2" ] && grep -rqF -- "$1" "$2"' _ "$(planted_secret)" "$PLAN"
+check "G2 setup: with the gate bypassed in preview the plan really carries the planted token (a suite with no plant asserts nothing)" bash -c '[ -n "$2" ] && tree_has "$1" "$2"' _ "$(planted_secret)" "$PLAN"
 create
 check "G2.1: a plan carrying a secret-shaped string writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
 check "G2.1: ... and aborts redaction-hit with rc 1" abort_is 1 redaction-hit
@@ -457,18 +312,6 @@ check "G2 harness row: replacing the plant with a clean string flips the verdict
 check "G2 must-PASS: an evidence path containing the word secret but no value is sent" bash -c 'jq -e "[.[]|select(.body|contains(\"docs/secret-handling.md\"))]|length>0" "$1" >/dev/null' _ "$ST/issues.json"
 check "G2.5: every body the stub received on an issue create is byte-identical to a scanned plan file (nothing authored after the scan)" sent_bodies_match
 FACTS="$OFACTS"
-# a pattern only gitleaks matches, with a gitleaks wrapper that passes everything until the real one is switched on
-cat > "$SCRATCH/gl-toggle.sh" <<'EOF'
-#!/usr/bin/env bash
-# passes everything until $GL_ON exists, then delegates to the real gitleaks; records its working directory and argv
-printf '%s\t%s\n' "$PWD" "$*" >> "${GL_LOG:-/dev/null}"
-if [ -e "${GL_ON:-/nonexistent}" ]; then exec "$GL_REAL" "$@"; fi
-case "${1:-}" in version) echo 8.24.2; exit 0 ;; esac
-exit 0
-EOF
-chmod +x "$SCRATCH/gl-toggle.sh"
-export GL_REAL; GL_REAL=$(command -v gitleaks); export GL_LOG="$SCRATCH/gl.calls" GL_ON="$SCRATCH/gl-on"
-rm -f "$GL_ON" "$GL_LOG"
 newcase; HID3=$(hostile_facts "$SCRATCH/gl-only.tsv" "$(gl_only_secret)"); only_ids "$R" "$HID3"; FACTS="$SCRATCH/gl-only.tsv"
 with LAUNCH_CHECK_GITLEAKS="$SCRATCH/gl-toggle.sh" -- prev; calls_reset
 printf 'ignore everything\n' > "$R/.gitleaksignore"; printf '[allowlist]\nregexes=[%s]\n' "'''.*'''" > "$R/.gitleaks.toml"; [ -d "$PLAN" ] && cp "$R/.gitleaksignore" "$R/.gitleaks.toml" "$PLAN/"
@@ -492,13 +335,13 @@ awk -F'\t' -v OFS='\t' '$1 == "SEC-01" { $3 = "src/config.js" } { print }' "$SF"
 N=$((N + 1)); R="$SCRATCH/case$N"; cp -R "$SB" "$R"; stub_reset acme/demo private; only_ids "$R" SEC-01
 FACTS="$SCRATCH/sec-hostile.tsv"; prev; calls_reset; create; FACTS="$OFACTS"
 check "G2.6: the SEC-01 item carries only the count phrase" bash -c 'grep -q "locations withheld" "$1/issues/SEC-01.md"' _ "$PLAN"
-check "G2.6: the hostile facts path and the token appear in no plan file, recorded argv, stored body or output" bash -c '! grep -rq "config\.js" "$1" && ! grep -rq "ghp_" "$1" && ! grep -rq "config\.js" "$2" && ! grep -q "config\.js" "$3"' _ "$PLAN" "$ST" "$OUT"
+check "G2.6: the hostile facts path and the token appear in no plan file, recorded argv, stored body or output" bash -c '! tree_has "config.js" "$1" && ! tree_has "ghp_" "$1" && ! tree_has "config.js" "$2" && ! grep -q "config\.js" "$3"' _ "$PLAN" "$ST" "$OUT"
 newcase; only_ids "$R" CI-01; prev
 check "G2.7: the domain label Tests & CI/CD reaches the CI-01 body intact (no substitution mangling)" bash -c 'grep -qF "Tests & CI/CD" "$1/issues/CI-01.md"' _ "$PLAN"
 check "G2: rendered bodies carry no autolink shape outside a code span (owner/repo#N, bare #N, @name, GH-N, hex run)" bodies_clean "$GOODPLAN"
 newcase; HID4=$(hostile_facts "$SCRATCH/types.tsv" "node_modules/@types/node/index.d.ts"); only_ids "$R" "$HID4"
 FACTS="$SCRATCH/types.tsv"; prev; FACTS="$OFACTS"
-check "G2.8: evidence node_modules/@types/node/index.d.ts is rendered inside a code span and mentions no one" bash -c 'grep -qF "\`node_modules/@types/node/index.d.ts\`" "$1/issues/$2.md" && ! sed -e "s/\`[^\`]*\`//g" "$1/issues/$2.md" | grep -q "@"' _ "$PLAN" "$HID4"
+check "G2.8: evidence node_modules/@types/node/index.d.ts is rendered inside a code span and mentions no one" bash -c 'grep -qF "\`node_modules/@types/node/index.d.ts\`" "$1/issues/$2.md" && ! grep -q "@" < <(sed -e "s/\`[^\`]*\`//g" "$1/issues/$2.md")' _ "$PLAN" "$HID4"
 
 # plan-invalid table on --create (zero writes each)
 GP="$GOODPLAN"
@@ -534,154 +377,6 @@ check "G2.11: a plan passed through a path alias (a symlinked parent) is accepte
 rm -f "$ALIAS"
 newcase; only_first "$R" 3; ln -sfn "$GP" "$SCRATCH/plan-link"; PLAN="$SCRATCH/plan-link"; calls_reset; CCOUNT=3 create; unset CCOUNT
 check "G2.11: a plan directory that is itself a symlink is plan-invalid with zero writes" bash -c 'grep -q "reason=plan-invalid" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"
-
-# ---------------------------------------------------------------- 7. Guard 3: idempotency and resume
-full_case() { newcase; only_first "$R" "$1"; prev; }
-full_case 7; calls_reset
-with GH_STUB_FAIL_AFTER=3 -- create; FIRST_OUT="$OUT"
-check "G3.1: the 4th item create fails -> created=3 and the failed ids are named" bash -c '[ "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES created)" = 3 ] && [ -n "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES failed)" ] && [ "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES failed)" != "-" ]' _ "$FIRST_OUT"
-check "G3.1: ... and the run aborts issues-incomplete (rc 2)" abort_is 2 issues-incomplete "$FIRST_OUT"
-check "G3.1: the fake tracker holds 3 items and one epic after the failure (state read from the tracker)" bash -c '[ "$1" = 3 ] && [ "$2" = 1 ]' _ "$(items_n)" "$(epics_n)"
-check "G3.1: the abort and the summary carry plan=<dir> and phase=, and the exact resume command" bash -c 'grep -q "plan=" "$1" && grep -q "phase=" "$1" && grep -q -- "--create" "$1" && grep -q -- "--plan" "$1"' _ "$FIRST_OUT"
-calls_reset; create
-check "G3.1: re-running the same plan completes (rc 0)" test "$RC" = 0
-check "G3.1: the tracker holds 7 items and exactly one epic, each id once, all linked" bash -c '[ "$1" = 7 ] && [ "$2" = 1 ] && [ "$3" = 1 ] && [ "$4" = 7 ]' _ "$(items_n)" "$(epics_n)" "$(max_dup)" "$(linked_n)"
-check "G3.1: the re-run created only the 4 missing issues (issue POSTs == 4)" test "$(n_post POST 'repos/acme/demo/issues$')" = 4
-check "G3.1: created.tsv in the plan directory lists what the runs created and the plan directory survives (mode 700)" bash -c '[ -s "$1/created.tsv" ] && [ "$(ls -ld "$1" | cut -c1-10)" = drwx------ ]' _ "$PLAN"
-calls_reset; create; calls_reset; create
-check "G3 must-PASS: a re-run of an already complete plan records zero writes (no PATCH for a byte-identical section)" bash -c '[ "$1" = 0 ] && [ "$2" = 7 ]' _ "$(n_writes)" "$(items_n)"
-full_case 7; calls_reset
-with GH_STUB_TRANSPORT_ERROR_AFTER_CREATE=2 -- create
-check "G3.2: a transport error right after a create (unknown outcome) ends the run non-zero with the created issues in the tracker" bash -c '[ "$1" != 0 ] && [ "$2" -ge 2 ]' _ "$RC" "$(items_n)"
-before_items=$(items_n); calls_reset; create
-check "G3.2: the re-run creates no duplicate and links the orphan: 7 items, 7 links, each marker once, at least 2 items existed before" bash -c '[ "$1" = 7 ] && [ "$2" = 7 ] && [ "$3" = 1 ] && [ "$4" -ge 2 ]' _ "$(items_n)" "$(linked_n)" "$(max_dup)" "$before_items"
-check "G3.2: no child was linked by more than one POST in the re-run" bash -c '[ "$1" -le 1 ] && [ "$2" = 7 ]' _ "$(cj '[.[]|select(.method=="POST" and (.path|test("sub_issues$")))|.fields[]|select(.k=="sub_issue_id")|.v]|group_by(.)|map(length)|max // 0')" "$(linked_n)"
-full_case 7; CLOSED_ID=$(create_ids | sed -n 1p); ORPH_ID=$(create_ids | sed -n 2p)
-stub_reset acme/demo private; seed_label lc:launch-check ededed
-seed 301 closed stub-user lc:launch-check "<!-- launch-check:gap=$CLOSED_ID -->"; seed 302 open stub-user lc:launch-check "<!-- launch-check:gap=$ORPH_ID -->"
-prev
-check "G3.3: the preview reports the closed issue by number" grep -q "#301" "$OUT"
-calls_reset; create
-orph_db=$(tr_q '[.[]|select(.number==302)|.id]|first'); orph_links=$(cj "[.[]|select(.method==\"POST\" and (.path|test(\"sub_issues\$\")))|.fields[]|select(.k==\"sub_issue_id\" and .v==\"$orph_db\")]|length")
-check "G3.3: a closed marked issue is not recreated (one carrier of its marker, still closed)" bash -c '[ "$1" = 1 ] && [ "$2" = closed ]' _ "$(marker_n "$CLOSED_ID")" "$(tr_q '[.[]|select(.number==301)|.state]|first')"
-check "G3.4: an open marked issue with no parent is not recreated and is linked exactly once" bash -c '[ "$1" = 1 ] && [ "$2" = 1 ] && [ "$3" = 302 ]' _ "$(marker_n "$ORPH_ID")" "$orph_links" "$(tr_q '[.[]|select(.parent != null and .number==302)|.number]|first')"
-full_case 7; stub_reset acme/demo private; seed_label lc:severity-high 123456; prev; calls_reset; create
-check "G3.6: a pre-existing lc:severity-high label is untouched: no label write names it and its colour is unchanged" bash -c '[ "$(cj "[.[]|select(.method==\"POST\" and (.path|test(\"/labels\$\")) and (.fields[]|select(.k==\"name\" and .v==\"lc:severity-high\")))]|length")" = 0 ] && [ "$(jq -r "[.[]|select(.name==\"lc:severity-high\")|.color]|first" "$1/labels.json")" = 123456 ]' _ "$ST"
-check "G3.6 control: absent labels were created (lc:launch-check and lc:epic exist now)" bash -c 'jq -e "map(.name)|index(\"lc:launch-check\") != null and index(\"lc:epic\") != null" "$1/labels.json" >/dev/null' _ "$ST"
-full_case 7; D_ID=$(create_ids | sed -n 1p); A_ID=$(create_ids | sed -n 2p); B_ID=$(create_ids | sed -n 3p)
-stub_reset acme/demo private; seed 401 open stub-user lc:launch-check "<!-- launch-check:gap=$D_ID -->"; seed 402 open stub-user lc:launch-check "<!-- launch-check:gap=$D_ID -->"
-seed 403 open stub-user lc:launch-check "<!-- launch-check:gap=$A_ID --> <!-- launch-check:gap=$B_ID -->"
-prev; calls_reset; create
-check "G3.7: duplicates of one id resolve to the lowest number (no create for it) and a two-marker body is ignored: 6 item creates + the epic" test "$(n_post POST 'repos/acme/demo/issues$')" = 7
-full_case 3; stub_reset acme/demo private; seed 501 closed stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
-prev
-check "G3.8: preview prints a plain warning for a closed epic" bash -c 'grep -qi "closed" "$1" && grep -qi "epic" "$1"' _ "$OUT"
-calls_reset; create
-check "G3.8: create writes nothing and says how to recover (reopen it or remove the lc:epic label)" bash -c '[ "$1" = 0 ] && grep -qi "reopen" "$2"' _ "$(n_writes)" "$OUT"
-check "G3.8: create aborts epic-closed (rc 2)" abort_is 2 epic-closed
-full_case 3; stub_reset acme/demo private; seed 511 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"; seed 512 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
-prev; calls_reset; create
-check "G3.8: two labelled epic candidates write nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
-check "G3.8: ... and abort epic-ambiguous (rc 2)" abort_is 2 epic-ambiguous
-full_case 3; stub_reset acme/demo private; seed 521 open someone-else lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
-prev; calls_reset; create
-check "G3.12: an epic authored by another login writes nothing and names epic-author" bash -c '[ "$1" = 0 ] && grep -q "epic-author" "$2"' _ "$(n_writes)" "$OUT"
-check "G3.12: ... and aborts plan-invalid (rc 2)" abort_is 2 plan-invalid
-for st in 404 422; do
-  full_case 4; calls_reset; with GH_STUB_SUBISSUE=$st -- create
-  check "G3.9 (UNVERIFIED-STUB-ONLY $st): the first failed link latches the run to the task list: one link call, rc 0, fallback=task-list" bash -c '[ "$1" = 1 ] && [ "$2" = 0 ] && [ "$(kv "$3" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = task-list ]' _ "$(n_post POST 'sub_issues$')" "$RC" "$OUT"
-  epic_body_to "$SCRATCH/epic.fb"
-  check "G3.9 ($st): the epic section lists every created item as an unchecked task line" bash -c '[ "$(grep -c "^- \[ \] #[0-9]" "$1")" = 4 ]' _ "$SCRATCH/epic.fb"
-done
-full_case 3; one=$(create_ids | sed -n 1p); sed "s/^finding $one open\$/finding $one accepted 2026-11-03 accepted after the preview/" "$R/$REPORT_REL" > "$R/r.new" && mv "$R/r.new" "$R/$REPORT_REL"
-calls_reset; create
-check "G3.10: accepting a finding after the preview makes create write nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
-check "G3.10: ... and abort report-stale (rc 2)" abort_is 2 report-stale
-full_case 3; jq '.visibility="public"' "$ST/repo.json" > "$ST/r.new" && mv "$ST/r.new" "$ST/repo.json"; calls_reset; create
-check "G3: a plan recorded PRIVATE against a LIVE PUBLIC repo writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
-check "G3: ... and aborts confirm-public-required (rc 2)" abort_is 2 confirm-public-required
-create --confirm-public
-check "G3: --confirm-public makes the same run proceed" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
-full_case 3; jq '.visibility="internal"' "$ST/repo.json" > "$ST/r.new" && mv "$ST/r.new" "$ST/repo.json"; calls_reset; create
-check "G3: an internal repository is gated like a public one (confirm-public-required)" abort_is 2 confirm-public-required
-full_case 3; calls_reset; create
-check "G1 must-PASS: a PRIVATE repository runs without --confirm-public" bash -c '[ "$1" = 0 ]' _ "$RC"
-full_case 3; calls_reset; with GH_STUB_LIST=fail -- create
-check "G3.11: a failed listing writes nothing and says phase=lookup (never read as none found)" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup" "$2"' _ "$(n_writes)" "$OUT"
-check "G3.11: ... and aborts issues-incomplete (rc 2)" abort_is 2 issues-incomplete
-calls_reset; with GH_STUB_LIST=malformed -- create
-check "G3.11 (UNVERIFIED-STUB-ONLY): malformed listing output writes nothing and says phase=lookup" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup" "$2"' _ "$(n_writes)" "$OUT"
-stub_reset acme/demo private; seed 601 open stub-user lc:launch-check NULL; seed 602 open stub-user lc:launch-check ''; seed 603 open stub-user lc:launch-check 'no marker here'
-calls_reset; create
-check "G3.11 (UNVERIFIED-STUB-ONLY, gojq null handling): null, empty and marker-less bodies are ignored cleanly and the run completes" bash -c '[ "$1" = 0 ] && [ "$2" = 3 ]' _ "$RC" "$(tr_q '[.[]|select(.number>=100 and .number<600)|select(.labels|map(.name)|index("lc:epic")|not)]|length')"
-full_case 3; ID3=$(create_ids | sed -n 3p); stub_reset acme/demo private
-for i in 1 2 3 4 5; do seed $((700 + i)) closed stub-user lc:launch-check "<!-- launch-check:gap=ZZ-0$i -->"; done; seed 706 closed stub-user lc:launch-check "<!-- launch-check:gap=$ID3 -->"
-calls_reset; with GH_STUB_PER_PAGE=2 -- create
-maxpages=$(awk -F'\t' '{ if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }' "$ST/pages.log" 2>/dev/null)
-check "G3: a listing forced onto at least 3 pages is read completely (the id on the last page is not recreated)" bash -c '[ "$1" -ge 3 ] && [ "$2" = 1 ]' _ "$maxpages" "$(marker_n "$ID3")"
-full_case 7; with GH_STUB_FAIL_AFTER=3 -- create; calls_reset; with LC_TEST_NOLIVE=1 -- create
-check "G3.5 mutation: with the live lookup removed from the re-run, duplicates appear (so the resume rows are sensitive)" bash -c '[ "$1" -ge 2 ] || [ "$2" -gt 7 ]' _ "$(max_dup)" "$(items_n)"
-full_case 7; calls_reset; with GH_STUB_FAIL_AFTER=2 GH_STUB_FAIL_KIND=ratelimit -- create
-check "G3: a rate-limit failure names the rate limit and the re-run line" bash -c 'grep -qi "rate" "$1" && grep -q -- "--create" "$1"' _ "$OUT"
-check "G3: ... and stops the run issues-incomplete (rc 2)" abort_is 2 issues-incomplete
-calls_reset; create
-check "G3: the re-run after a rate limit completes with 7 items" bash -c '[ "$1" = 0 ] && [ "$2" = 7 ]' _ "$RC" "$(items_n)"
-full_case 7; calls_reset; with GH_STUB_FAIL_AFTER=1 GH_STUB_FAIL_KIND=secret -- create
-check "G2.12: a secret-shaped string on the stub's stderr never reaches stdout or stderr of the run, nor the raw HTTP line" bash -c '! grep -qF -- "$1" "$2" && ! grep -qF "token=" "$2" && ! grep -q "HTTP 502" "$2"' _ "$(stub_secret)" "$OUT"
-check "G2.12: a failed write still yields the closed-token summary line" grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES " "$OUT"
-check "G2: every printed line of a failed create passes lc_scrub (no tab or carriage return)" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES " "$1" && ! grep -q "$(printf "\t")" "$1" && ! grep -q "$(printf "\r")" "$1"' _ "$OUT"
-full_case 3; TMPD="$SCRATCH/tmpd"; mkdir -p "$TMPD"; with TMPDIR="$TMPD" -- create
-check "no lc-work or lc-gate temp file is left behind after a create (only the plan directory survives)" bash -c '[ "$1" = 0 ] && [ -z "$(ls -A "$2")" ]' _ "$RC" "$TMPD"
-
-# ---------------------------------------------------------------- 8. Guard 4: epic edits are confined to the marked section
-custom_epic() { # customer text before and after the markers, using the words begin and end without the marker syntax
-  tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= ("CUSTOMER-TOP begin and end are just words here\n" + . + "\nCUSTOMER-BOTTOM\n")'
-}
-full_case 7; with GH_STUB_FAIL_AFTER=3 -- create; custom_epic; epic_body_to "$SCRATCH/e.before"; calls_reset; create; epic_body_to "$SCRATCH/e.after"
-check "G4.1: customer text before and after the markers is byte-identical after a re-run that rewrote the section" bash -c 'outside "$1" > "$3"; outside "$2" > "$4"; cmp -s "$3" "$4" && grep -q CUSTOMER-TOP "$4" && grep -q CUSTOMER-BOTTOM "$4"' _ "$SCRATCH/e.before" "$SCRATCH/e.after" "$SCRATCH/o1" "$SCRATCH/o2"
-check "G4.1 harness row: the re-run really rewrote the section (a PATCH was recorded and the body changed)" bash -c '[ "$1" -ge 1 ] && ! cmp -s "$2" "$3"' _ "$(n_post PATCH 'issues/[0-9]+$')" "$SCRATCH/e.before" "$SCRATCH/e.after"
-check "G4 must-PASS: customer text containing the words begin and end (without marker syntax) survives" grep -q "CUSTOMER-TOP begin and end are just words here" "$SCRATCH/e.after"
-order=$(cj '[.[]|select(.path|test("issues/[0-9]+$"))|.method]|join(",")')
-check "G4: the call order on the epic is GET then PATCH (the body is read just before the splice)" bash -c 'case "$1" in *GET*PATCH*) exit 0 ;; esac; exit 1' _ "$order"
-for mode in get write; do
-  full_case 7; with GH_STUB_FAIL_AFTER=3 -- create; custom_epic; calls_reset; with GH_STUB_EDIT_EPIC_BETWEEN=$mode -- create; epic_body_to "$SCRATCH/e.mid"
-  check "G4.2: a customer edit made mid-run ($mode) survives the splice (the epic body is re-read just before it)" bash -c 'grep -q CUSTOMER-EDIT-MIDRUN "$1" && [ -s "$2/events.log" ]' _ "$SCRATCH/e.mid" "$ST"
-done
-full_case 7; with GH_STUB_FAIL_AFTER=3 -- create
-tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= sub("<!-- launch-check:end -->"; "")'
-calls_reset; create
-check "G4.3: a deleted end marker -> no PATCH is recorded and the summary says epic-section=markers-damaged" bash -c '[ "$1" = 0 ] && [ "$(kv "$2" SOLEUR_LAUNCH_CHECK_ISSUES created)" != "" ] && [ "$(kv "$2" SOLEUR_LAUNCH_CHECK_ISSUES epic-section)" = markers-damaged ]' _ "$(n_post PATCH 'issues/[0-9]+$')" "$OUT"
-full_case 7; with GH_STUB_FAIL_AFTER=3 -- create
-tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= (. + "\n<!-- launch-check:begin -->\n")'
-calls_reset; create
-check "G4.4: a duplicated begin marker -> no PATCH is recorded (the run itself created the items)" bash -c '[ "$1" = 0 ] && [ "$2" = 7 ]' _ "$(n_post PATCH 'issues/[0-9]+$')" "$(items_n)"
-full_case 7; calls_reset; with GH_STUB_FAIL_AFTER=3 GH_STUB_CRLF=1 -- create; custom_epic
-tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= gsub("\r?\n"; "\r\n")'
-epic_body_to "$SCRATCH/c.before"; create; epic_body_to "$SCRATCH/c.after"
-check "G4.5: an epic stored with CRLF: the section is rewritten and the CRLF bytes outside it are preserved" bash -c 'outside "$1" > "$3"; outside "$2" > "$4"; cmp -s "$3" "$4" && grep -q "$(printf "\r")" "$4" && ! cmp -s "$1" "$2"' _ "$SCRATCH/c.before" "$SCRATCH/c.after" "$SCRATCH/o3" "$SCRATCH/o4"
-full_case 4; with GH_STUB_SUBISSUE=404 -- create
-tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= sub("- \\[ \\] #"; "- [x] #")'
-calls_reset; with GH_STUB_SUBISSUE=404 -- create; epic_body_to "$SCRATCH/t.after"
-check "G4.9: a task line the customer ticked stays ticked after a re-run" bash -c '[ "$(grep -c "^- \[x\] #" "$1")" -ge 1 ]' _ "$SCRATCH/t.after"
-check "G4: the marked section carries the last run's counts (the record that outlives the terminal)" bash -c 'awk "/<!-- launch-check:begin -->/{f=1;next} /<!-- launch-check:end -->/{f=0} f" "$1" | grep -qiE "created|skipped|failed"' _ "$SCRATCH/t.after"
-full_case 7; with GH_STUB_FAIL_AFTER=3 -- create; custom_epic
-tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= (. + "\ncustomer pasted '"$(gl_only_secret)"'\n")'
-calls_reset; : > "$GL_ON"; with LAUNCH_CHECK_GITLEAKS="$SCRATCH/gl-toggle.sh" -- create; rm -f "$GL_ON"
-check "G4 carve-out: customer-owned bytes outside the markers are carried unchanged and not re-judged (rc 0, the text is still in the epic)" bash -c '[ "$1" = 0 ] && jq -r "[.[]|select(.labels|map(.name)|index(\"lc:epic\"))][0].body" "$2" | grep -qF "customer pasted"' _ "$RC" "$ST/issues.json"
-cat > "$SCRATCH/splice-mut.sh" <<'EOF'
-lc_epic_splice() { cat "$2"; }
-EOF
-SB1=$(mk_sbx splice); inject "$SB1" "$SCRATCH/seams.sh"; inject "$SB1" "$SCRATCH/splice-mut.sh"
-check "G4.6 mutation landed (the sandbox differs from the pristine copy and still parses)" bash -c 'bash -n "$1" && ! cmp -s "$1" "$2"' _ "$SB1" "$SB0"
-splice_scn() { # splice_scn <lc script>: customer text outside the markers survives a rewrite (return 0 = the property holds)
-  LCS="$1"; full_case 7; with GH_STUB_FAIL_AFTER=3 -- create; custom_epic; create; epic_body_to "$SCRATCH/s.after"; grep -q CUSTOMER-BOTTOM "$SCRATCH/s.after"
-}
-splice_scn "$SB0"; rc=$?
-check "G4.6 control: the pristine copy keeps the customer text" test "$rc" = 0
-splice_scn "$SB1"; rc=$?
-check "G4.6 mutation: a splice that replaces the whole body loses the customer text (caught)" test "$rc" != 0
-LCS="$SB0"
-
-# ---------------------------------------------------------------- 9. the exit-code table: every fail_loud reason was exercised by a row above
-check "every fail_loud abort reason was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch confirm-public-required redaction-hit epic-closed epic-ambiguous issues-unavailable write-shape-refused issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 226
+# ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
+check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
+finish 162
