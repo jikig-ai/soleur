@@ -14,6 +14,18 @@ brand_survival_threshold: none
 
 # chore: follow-through probe hygiene — retire inngest-trace-retention-5150, repair inngest-cli-apply-window-7463
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03 | **Sections enhanced:** gate-verified | **Passes:** deepen-plan halt gates §4.6–4.13 all PASS or correctly skipped; agent fan-outs discharged inline (no subagent spawner on this harness — Reviewed-Coverage: sequential-fallback)
+
+### Key gate outcomes
+
+1. **§4.11 Guard Contract** — `lint-guard-contract.py` green (1 entry, 6-row matrix incl. dispatch + second-member + must-PASS).
+2. **§4.12 Scope Check** — one unfenced section, 8 mapped asks, inferred items justified.
+3. **§4.8 PAT / §4.9 .pen / §4.10 encryption / §4.13 task-design / §4.5 network / §4.55 downtime** — no trigger or pass; the §4.5 keyword hit is "unreachable" inside "newly-reachable" prose, not a connectivity symptom.
+4. **§4.4 precedent-diff** — suite shape is not novel; donor `scripts/followthroughs/git-data-boot-poll-8178.test.sh` cited.
+5. **§4.45 realism** — the plan's negative claims (no jq crash, never-FAIL on vanished history, no STALE verdict) each map to a named suite arm or CI gate.
+
 ## Overview
 
 Batch of two same-defect-class follow-through probes under `scripts/followthroughs/` — a probe that cannot reach a terminal verdict.
