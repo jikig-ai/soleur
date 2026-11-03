@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Shared setup for the two issues suites (issues-guards.test.sh, issues-resume.test.sh): sourced, not itself a suite.
 # It holds the stub harness, the tracker views, the run helpers, the rendered base report, the sandbox-copy builder and the
-# gitleaks wrapper. Every assertion lives in one of the two suites (split because one suite took 6-8 minutes; plan Phase 6).
+# gitleaks wrapper. Every assertion lives in one of the two suites (split because one suite took 6-8 minutes).
 #
-# issues: the only part of launch-check that writes to a customer's tracker. Four guards (plan "Guard Contract"):
+# issues: the only part of launch-check that writes to a customer's tracker. Four guards (ADR-314, amendment 2026-11-03):
 #   1 saved-plan-only writes · 2 authored bytes are scanned bytes · 3 idempotency and resume · 4 epic edits confined to the marked section.
 # Every case runs against test/gh-stub.sh (a stateful fake gh on PATH); no real gh, no network. The independent witnesses are the
 # stub's append-only call log and the fake tracker's contents, never the script's own counters.
 #
-# INTERFACE ASSUMED BY THIS SUITE (written before issues.sh existed; Phase 2-4 either implement it or amend the line here):
+# THE INTERFACE THIS SUITE PINS (a change to issues.sh that alters it amends the line here in the same commit):
 #   launch-check.sh issues --preview      --target R --facts F --judged J [--plan-out D] [--exclude-domain X] [--exclude-class X] [--host H] [--repo S]
 #       stdout: SOLEUR_LAUNCH_CHECK_ISSUES_PLAN repo=<o/n> visibility=<V> create=<n> exists=<n> closed=<n> accepted=<n> excluded=<n> capped=<n> plan=<dir>
 #       (the plan directory is created inside D; report-only: SOLEUR_LAUNCH_CHECK_ISSUES mode=report-only reason=<cause>, exit 0, no plan)

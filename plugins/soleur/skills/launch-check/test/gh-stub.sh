@@ -3,7 +3,7 @@
 # puts <bin> first on PATH. It never touches the network and never reads a credential.
 #
 # STUB CONTRACT. Each emulated shape is marked either
-#   [verified 2026-11-03]  checked against a real response by the plan author (gh 2.103.3), or
+#   [verified 2026-11-03]  checked against a real response when this stub was written (gh 2.103.3), or
 #   [UNVERIFIED-STUB-ONLY] invented here from documentation; a suite row that depends on it is tagged in its label.
 # The live check of the unverified shapes is the tracked follow-up (#11956); nothing here is proof of GitHub's behaviour.
 #   gh auth status [--hostname H]                      exit 0, or 1 under GH_STUB_AUTH=fail     [UNVERIFIED-STUB-ONLY]

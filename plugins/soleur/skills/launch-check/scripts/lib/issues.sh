@@ -3,7 +3,7 @@
 # Contract with launch-check.sh: TARGET, WORK, FACTS, JUDGED, LC_DRY, REPORT_REL, SKILL_DIR and the ISSUES_* option variables
 # are set by cmd_issues. Sourced; never executed. Bash 3.2 safe (no associative arrays, no mapfile).
 #
-# Four guards (see the plan's Guard Contract and test/issues-guards.test.sh and test/issues-resume.test.sh):
+# Four guards (ADR-314, amendment 2026-11-03; pinned by test/issues-guards.test.sh and test/issues-resume.test.sh):
 #   1 saved-plan-only writes   lc__gh_exec is the only place the CLI is invoked; lc_gh_read always sends -X GET; lc_gh_write
 #                              is a closed allowlist (headless, dry-run, four REST shapes, field keys, confined @file operands).
 #   2 authored bytes are scanned bytes   every title, body, label and epic section passes lc_emit_checked (scan-only) on the exact
