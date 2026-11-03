@@ -32,3 +32,9 @@
 - merge-tree vs origin/main: clean; mergeable=MERGEABLE, mergeStateStatus=BEHIND
 - Pending: 4-seat review panel -> findings -> qa -> compound -> ship -> merge -> AC9 dispatch (gh workflow run cla-evidence-timestamp.yml -f manifest_yyyy_mm=2026-11) -> close #11916
 - Arc: item1 half-1 done (bb55315e88 all green); monitor 00:00Z run not yet appeared (watcher B died GH_ERROR_STREAK, re-check); #10859 hold report-only; #10860 drain ask operator
+
+## Review Phase
+- Panel: 4-seat non-code (git-history, pattern-recognition, security-sentinel, code-quality) — all 4 returned, 0 P1
+- P2s fixed inline: (a) unguarded empty-JSONL_KEY path + .Contents[]? null-iterate + [-z LIST] transport guard + [-z JSONL_KEY] early-outs at §6 and §7.7 (§7.7 note added); (b) retrieval trust-anchor: sha256 cross-check vs git canonical on cla-signatures added to §6
+- P3s fixed: anchored regex /manifest(-\d+-\d+)?\.jsonl$, pagination-bound comment, mixed-month wording; pre-existing/unverifiable noted
+- jq re-verified: partial, complete, empty-{}, anchored no-match arms all pass
