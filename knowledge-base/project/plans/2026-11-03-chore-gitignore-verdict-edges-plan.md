@@ -294,6 +294,28 @@ None — queried `gh issue list --label code-review --state open --limit 200` bo
 - **Stale anchors are branch-relative** — re-run the audit/ratchet on the merged tree before arming if siblings landed on the accept file's host lines.
 - **The suite file itself is untouched** — `unwired_in`'s parity check greps only FILES_7376 members; adding array members needs no `PIN_7376` update.
 
+## Enhancement Summary
+
+### Deepen-plan gate results (2026-11-03, run inline — no agent spawn tool in this session)
+
+- **Phase 4.4 Precedent-diff:** pattern-bound shape exists — the #11648 `glob:<dir>/**.<ext>` whole-tree enumeration in the same array; the new block mirrors it verbatim (21-dir ordering, comment style, forward-cover role). No novel pattern.
+- **Phase 4.45 verify-the-negative:** every negative claim in the plan was re-verified against repo state, not memory — `code_pats_of` `CODE_EXT` exclusion (ci-pr-affected-replay.py:1074,1376), `_is_soleur_checkout` early return (lint-ratchet.py:1224–1281), zero `.gitignore` members in the array, zero `(grep-q|lint-ratchet, .gitignore)` baseline rows, and the 4-line total audit delta measured live.
+- **Phase 4.6 User-Brand Impact:** PASS — section present, `none` threshold with decision line; no sensitive-path files (`scripts/lib/test-affected-paths.sh`, `scripts/ci-pr-affected-audit.accept.tsv` match no `SENSITIVE_PATH_RE` arm).
+- **Phase 4.7 Observability:** SKIP — no file under `apps/*/server|src|infra` or `plugins/*/scripts`, no new infrastructure surface.
+- **Phase 4.8 PAT-shaped variable:** PASS — zero matches.
+- **Phase 4.9 UI-wireframe:** SKIP — no UI-surface files.
+- **Phase 4.10 Encryption Posture:** SKIP — no `.tf`/`.sql`/cloud-init/docker-compose file, no store class.
+- **Phase 4.11 Guard Contract:** PASS — `lint-guard-contract.py` reports 1 guard entry, zero FAILs; Assembly names the mint chokepoint (`_affected_add_declared_edge`/`_affected_glob_split`/`edge_hit`) + census + ratchet oracle, not a member snapshot; 6 mutation rows incl. own-dispatch (row 2), malformed-degrade (row 3), oracle self-detection (row 4), must-PASS (row 5), second-member (row 6).
+- **Phase 4.12 Scope Check:** PASS — exactly one `## Scope Check`; all 8 ruling asks mapped, two file items `asked`, verification battery `asked` (ruling checks + runbook suite set), one `inferred` item (array comment) with justification; split assessment single PR.
+- **Phase 4.13 Task Design:** SKIP — no new autonomous-task surface (no workflow/cron/registration/check).
+- **Phases 2/3/4/5 (skill, learnings, per-section research, review agents):** executed inline (no Task spawn tool available in this Devin session). Learnings folded in: ratchet-green-vs-merged-tree (2026-10-26), moved-echo accept-row repair (2026-11-01), hot-anchor accept rows (2026-11-01), the runbook's index-edit suite set.
+
+### Key improvements from deepening
+
+- Empirical end-state proof landed in Research Insights: baseline → edges-only → edges+deletion audit counters measured in-session (`accepted 234→233`, `stale 0`, all else byte-identical), so Phase 3.1 verifies against *measured* numbers rather than asserted ones.
+- `AFFECTED_TESTS_SCRIPTS_LINT_RATCHET_PATHS` byte-identity AC added (AC row 10) so the "do NOT edge lint-ratchet" half of the ruling is mechanically asserted, not just prose.
+- Guard Contract row 4 pins the harness's own oracle (a kept accept row → `stale`/`stale-accept` RED) — the deletion is verified by the gate it retires, not by inspection.
+
 ## References
 
 - Issue: [#11810](https://github.com/jikig-ai/soleur/issues/11810) — [CTO ruling comment](https://github.com/jikig-ai/soleur/issues/11810#issuecomment-6597435507)
