@@ -4,6 +4,7 @@ import { deleteAccount } from "./account-delete";
 import { enqueueExport } from "./dsar-export";
 import {
   ERASURE_COMPLETE_TOOL_MESSAGE,
+  ERASURE_PENDING_AGENT_INSTRUCTION,
   ERASURE_PENDING_TOOL_MESSAGE,
 } from "@/lib/legal/account-deletion-copy";
 
@@ -63,13 +64,15 @@ export function buildAccountTools(opts: BuildAccountToolsOpts) {
       tool(
         "account_delete_initiate",
         "Initiate permanent account deletion for the current user. " +
-          "DESTRUCTIVE: deletes account data, conversations, messages, " +
-          "attachments and workspace files, and cancels any active subscription. " +
-          "The repository copy of the workspace is removed through the repository " +
-          "store; if the store cannot confirm the removal immediately the result " +
-          "carries gitDataErasurePending: true and the removal is retried " +
-          "automatically until the store confirms. In that case do not tell the " +
-          "user the repository copy has been erased or removed. " +
+          "DESTRUCTIVE: deletes the account, conversations, messages and attachments " +
+          "from the application, and cancels any active subscription. " +
+          "A removal of the repository copy of the workspace is requested from the " +
+          "repository store. If the store does not confirm it, the result carries " +
+          "gitDataErasurePending: true, an `agentInstruction` field, and a qualified " +
+          "`message`; we then try to keep a record of the workspace ID so the removal " +
+          "can be retried, on a best-effort basis that is not guaranteed. In that case " +
+          "do not tell the user the repository copy has been, or will certainly be, " +
+          "erased or removed. " +
           "Requires explicit acknowledgment via the 'ack' parameter " +
           "(must be the literal string 'DELETE MY ACCOUNT') per " +
           "hr-menu-option-ack-not-prod-write-auth. " +
@@ -100,6 +103,7 @@ export function buildAccountTools(opts: BuildAccountToolsOpts) {
                 success: true,
                 gitDataErasurePending: true,
                 message: ERASURE_PENDING_TOOL_MESSAGE,
+                agentInstruction: ERASURE_PENDING_AGENT_INSTRUCTION,
               });
             }
             return textResponse({ success: true, message: ERASURE_COMPLETE_TOOL_MESSAGE });

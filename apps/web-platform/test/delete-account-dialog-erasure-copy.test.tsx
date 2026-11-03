@@ -2,13 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-// #8211 / #9066 follow-up (CLO recommendation 2026-11-02, copy PENDING CLO sign-off).
+// #8211 / #9066 follow-up (copy derived from the merged Privacy Policy, best effort).
 // Pre-delete: the dialog cannot know the erasure outcome, so it must not promise an
-// unqualified "permanently deleted" and must carry the retry-and-ledger qualifier.
+// unqualified deletion and must carry the best-effort retry qualifier.
 // Post-delete: the outcome rides the URL (hard nav stays unconditional, GAP F).
 
 import { DeleteAccountDialog } from "@/components/settings/delete-account-dialog";
-import { ERASURE_RETRY_QUALIFIER } from "@/lib/legal/account-deletion-copy";
+import {
+  ERASURE_RETRY_QUALIFIER,
+  NEW_TAB_CUE,
+  PRIVACY_POLICY_CITATION,
+  PRIVACY_POLICY_URL,
+} from "@/lib/legal/account-deletion-copy";
 
 const EMAIL = "test@example.com";
 const assignMock = vi.fn();
@@ -36,27 +41,35 @@ async function openAndConfirm() {
 }
 
 describe("DeleteAccountDialog pre-delete copy", () => {
-  it("carries the retry-and-ledger qualifier for the repository copy", async () => {
-    await openAndConfirm();
-    expect(ERASURE_RETRY_QUALIFIER).toMatch(/try again until/i);
-    expect(ERASURE_RETRY_QUALIFIER).toMatch(/workspace identifier/i);
-    expect(screen.getByText(new RegExp(ERASURE_RETRY_QUALIFIER.slice(0, 40)), { exact: false })).toBeInTheDocument();
+  it("carries the full best-effort qualifier in its own paragraph, tied to the confirm control", async () => {
+    const confirm = await openAndConfirm();
+    const paragraph = screen.getByText(ERASURE_RETRY_QUALIFIER);
+    expect(paragraph.textContent).toContain(ERASURE_RETRY_QUALIFIER);
+    expect(paragraph.id).not.toBe("");
+    expect(confirm.getAttribute("aria-describedby")).toContain(paragraph.id);
+    expect(screen.getByPlaceholderText(EMAIL).getAttribute("aria-describedby")).toContain(paragraph.id);
   });
 
-  it("no longer promises unqualified permanent deletion of workspace files", async () => {
-    await openAndConfirm();
-    expect(screen.queryByText(/permanently deleted/i)).toBeNull();
-    expect(screen.getByText(/this action cannot be undone/i)).toBeInTheDocument();
-  });
-
-  it("links the Privacy Policy and never mentions lock/cursor residue or purging", async () => {
+  it("heading and body agree: no 'Permanently'/'All your data', no guarantee, no timeline", async () => {
     const { container } = render(<DeleteAccountDialog userEmail={EMAIL} />);
     await userEvent.click(screen.getByRole("button", { name: /delete account/i }));
-    expect(screen.getByRole("link", { name: /privacy policy/i })).toHaveAttribute(
-      "href",
-      expect.stringContaining("soleur.ai/legal/privacy-policy"),
-    );
-    expect(container.textContent ?? "").not.toMatch(/\.gc-cursor|lock file|purge|erased/i);
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Delete your account");
+    const text = container.textContent ?? "";
+    expect(text).toContain("This action cannot be undone.");
+    expect(text).toContain("Your account and conversations are deleted from our application.");
+    expect(text).toContain("Payment records are kept as French tax law requires.");
+    expect(text).not.toMatch(/permanent|all your data|workspace files|straight away|will be completed|we keep your/i);
+  });
+
+  it("links the Privacy Policy by heading name with a new-tab cue and never mentions residue or purging", async () => {
+    const { container } = render(<DeleteAccountDialog userEmail={EMAIL} />);
+    await userEvent.click(screen.getByRole("button", { name: /delete account/i }));
+    const link = screen.getByRole("link", { name: PRIVACY_POLICY_CITATION + NEW_TAB_CUE });
+    expect(link.getAttribute("href")).toBe(PRIVACY_POLICY_URL);
+    expect(link.childNodes[0].textContent).toBe(PRIVACY_POLICY_CITATION);
+    expect(link.textContent).toBe(PRIVACY_POLICY_CITATION + NEW_TAB_CUE);
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(container.textContent ?? "").not.toMatch(/\.gc-cursor|lock file|purge|erased|removed/i);
   });
 });
 
