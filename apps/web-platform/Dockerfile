@@ -93,7 +93,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.293
 # same flag, so the tree and install mode the tests validate are the tree and install mode shipped.
 # Do NOT add it to the claude-code line above: its postinstall places the native binary, and without
 # it the CLI reports "claude native binary not installed".
-RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+RUN npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts
 
 # vitest for the deploy-time cross-workspace isolation canary probe (#2640).
 # ci-deploy.sh `docker exec`s `vitest run --config test/vitest.canary.config.ts`
