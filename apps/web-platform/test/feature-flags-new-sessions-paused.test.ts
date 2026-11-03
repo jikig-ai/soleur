@@ -120,16 +120,46 @@ describe("isNewAgentSessionsPaused: a failing Flagsmith never re-opens the gate 
     }
   });
 
-  it("the mirror can turn the gate ON during a failure but a held OFF never wins over a mirror of 1", async () => {
+  // #8211 mirror fix (CTO ruling 2026-11-03): a baked mirror of 1 (set while the pause was ON, re-baked by every
+  // deploy until a code fix) must not re-refuse sessions after the owner turned the pause OFF, whenever Flagsmith
+  // blips. A FRESH held value (Flagsmith answered within the 10-minute bound) is authoritative; the mirror only
+  // decides on a cold start or once the held value is stale.
+  it("a held OFF wins over a baked mirror of 1 while Flagsmith is failing (inside the 10-minute bound)", async () => {
     vi.useFakeTimers();
     try {
       process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
-      process.env.FLAG_NEW_SESSIONS_PAUSED = "0";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
       mockGetIdentityFlags.mockResolvedValueOnce(live(false));
       await expect(isNewAgentSessionsPaused()).resolves.toBe(false);
-      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
       vi.advanceTimersByTime(31_000);
       mockGetIdentityFlags.mockRejectedValueOnce(new Error("timeout"));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a cold start with Flagsmith failing and a mirror of 1 keeps the gate ON (no held value yet)", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+      mockGetIdentityFlags.mockRejectedValue(new Error("down"));
+      await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a held OFF older than 10 minutes falls back to the mirror (mirror of 1 turns the gate ON)", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+      process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+      mockGetIdentityFlags.mockResolvedValueOnce(live(false));
+      await isNewAgentSessionsPaused();
+      mockGetIdentityFlags.mockRejectedValue(new Error("down"));
+      vi.advanceTimersByTime(11 * 60_000);
       await expect(isNewAgentSessionsPaused()).resolves.toBe(true);
     } finally {
       vi.useRealTimers();
