@@ -89,7 +89,9 @@ LOCAL_SQL="$(awk '/^[[:space:]]*inngest_cutover_flip_silent_sql[[:space:]]*=[[:s
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
 ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
 EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' "$TF")"
-MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=\$\?/{exit}' "$WF")"
+# Bounded at the first `rc=` line-start — the plan step's own `rc=${PIPESTATUS[0]}` capture.
+# The old `rc=$?` terminator never matched it, so the slice silently ran to EOF (#11899).
+MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[ \t]*rc=/{exit}' "$WF")"
 
 # Whole-line assertions anchored at both ends; greps over captured variables read HERE-STRINGS,
 # never `printf … | grep -q` (pipefail + early-match SIGPIPE fails a negated check OPEN).
@@ -232,6 +234,11 @@ grep -qF 'logtail_exploration_alert.inngest_cutover_flip_silent' "$LQ" \
   && ok "betterstack-log-query.md's standing-alarms table names the alert" \
   || no "the standing-alarms row in betterstack-log-query.md is missing"
 
+# The slice must have terminated ON the capture line (count-compare over its last line):
+# a deleted or renamed rc= capture re-opens the silent run-to-EOF overshoot (#11899).
+[ "$(printf '%s\n' "$MAIN_PLAN" | tail -1 | grep -cxF '          rc=${PIPESTATUS[0]}')" -eq 1 ] \
+  && ok "MAIN_PLAN is bounded: its last line is the plan step's rc= capture" \
+  || no "MAIN_PLAN does not end on the plan step's rc= capture — the slice overshoots past the step or the capture moved"
 grep -qE '^[[:space:]]*-target=logtail_exploration\.inngest_cutover_flip_silent \\$' <<< "$MAIN_PLAN" \
   && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.inngest_cutover_flip_silent \\$' <<< "$MAIN_PLAN" \
   && ok "both resources are in the push-triggered MAIN plan's -target= allowlist (an untargeted resource is never applied)" \
@@ -239,11 +246,19 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.inngest_cutover_flip_silent 
 
 # This guard only runs in CI if infra-validation.yml runs it, and re-runs on a runbook edit.
 IV_PR="$(awk '/^  pull_request:$/{p=1;next} p&&/^  [a-z_]+:/{exit} p{print}' "$IV")"
-IV_JOB="$(awk '/^  deploy-script-tests-fixed:$/{f=1;print;next} f&&/^  [A-Za-z0-9_-]+:$/{exit} f{print}' "$IV")"
+IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
+REG_RUN='        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh'
+# The hosting-job slice is DERIVED from the pinned run line — back to the nearest
+# `^  <job-id>:` header, forward to the next or EOF — never a hardcoded job name.
+IV_JOB="$(awk -v run="$REG_RUN" '
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { if (inside) exit; n = 0 }
+  { buf[++n] = $0 }
+  index($0, run) { inside = 1 }
+  END { if (inside) for (i = 1; i <= n; i++) print buf[i] }' <<< "$IV_CODE")"
 IV_STEP="$(awk '/^      - name: Run Inngest cutover-flip silence alert drift guard \(#11820\)$/{f=1;print;next} f&&/^      - name:/{exit} f{print}' <<< "$IV_JOB")"
 IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
 if [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/inngest-server.md"' <<< "$IV_PR")" -eq 1 ] \
-   && [ "$(grep -cxF '        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh' <<< "$IV_STEP")" -eq 1 ] \
+   && [ "$(grep -cxF "$REG_RUN" <<< "$IV_STEP")" -eq 1 ] \
    && ! grep -qE '^        (if|continue-on-error):' <<< "$IV_STEP" \
    && [ "$(grep -cxF "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" <<< "$IV_HDR")" -eq 1 ] \
    && ! grep -qE '^    continue-on-error:' <<< "$IV_HDR"; then
@@ -252,12 +267,44 @@ else
   no "infra-validation.yml no longer wires this guard: runbook path missing from pull_request paths, the step missing/conditional/non-blocking, or its job conditional/non-blocking"
 fi
 
+# ── Workflow seam (#11899): no env channel may mute or redirect the battery ──────────────────
+# Literal greps cover literal text only — a runtime-composed name ("MUT_""SKIP", a GUARD-
+# fragment prefix) or a shell-injection env reaches the step with no literal present, so the
+# FRAGMENTS are asserted absent file-wide (GUARD covers FLIPSILENT_GUARD_* and every sibling's
+# *_GUARD_* axis; MUT_/_SKIP cover MUT_SKIP at either split point).
+seam_bad=""
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+done
+[ -z "$seam_bad" ] \
+  && ok "no muting/shell-injection env fragment (MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS) reaches the workflow's executable text" \
+  || no "workflow seam violated:$seam_bad — a guard env axis or shell-injection env is reachable from infra-validation.yml"
+# The only DYNAMIC channel is a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside
+# the enclosing job. The slice must carry the pinned run line, or the ban would pass vacuously.
+{ [ -n "$IV_JOB" ] && grep -qFx "$REG_RUN" <<< "$IV_JOB"; } \
+  && ok "the enclosing-job slice is non-empty and carries the pinned run line (the env-write ban cannot pass vacuously)" \
+  || no "the enclosing-job slice is empty or lost the pinned run line — a missliced job-scope ban would grade green"
+job_bad=""
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_ENV' >/dev/null && job_bad="$job_bad GITHUB_ENV"
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_PATH' >/dev/null && job_bad="$job_bad GITHUB_PATH"
+printf '%s\n' "$IV_JOB" | grep -nF 'defaults:' >/dev/null && job_bad="$job_bad defaults:"
+[ -n "$IV_JOB" ] && [ -z "$job_bad" ] \
+  && ok "no GITHUB_ENV/GITHUB_PATH write or defaults: sits inside the enclosing job (the only dynamic env channel)" \
+  || no "job-scope seam violated:${job_bad:- empty-slice} — a runtime env write inside the job can carry a composed name past the literal seam"
+
+echo ""
+echo "=== inngest-cutover-flip-silent-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
+
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
-SELF="${BASH_SOURCE[0]}"
-PRESENCE_ROWS=29
-MUT_ROWS_EXPECTED=13
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
+PRESENCE_ROWS=33
+MUT_ROWS_EXPECTED=23
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   trap 'rm -rf "$MUT_DIR"' EXIT
@@ -394,11 +441,70 @@ i = s.index("  inngest_cutover_flip_silent_sql = <<-SQL")
 j = s.index("\n  SQL\n", i)
 head, rest = s[i:j].split("\n", 1)
 s = s[:i] + head + "\n" + re.sub(r"(?m)^\s+", "                    ", rest) + s[j:]'
+  # A14–A19 — workflow seam rows (#11899): composed/injected env names and the job-scope channel.
+  mutate RED "A14 a runtime-composed MUT_SKIP name reaches the workflow (no literal present)" IV \
+    "workflow seam violated" \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")'
+  mutate RED "A15 a GUARD-fragmented env name reaches the workflow's executable text" IV \
+    "workflow seam violated" \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          FOO_GUARD_X: /dev/null\n")'
+  mutate RED "A16 a BASH_ENV shell-injection env reaches the workflow" IV \
+    "workflow seam violated" \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          BASH_ENV: /tmp/x\n")'
+  mutate RED "A17 a GITHUB_ENV write inside the suite's own job (the only dynamic env channel)" IV \
+    "job-scope seam violated" \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")'
+  mutate PASS "A18 the same GITHUB_ENV write lands in the plan: job (another job's writes are out of scope)" IV \
+    "" \
+    'old = "  plan:\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")'
+  mutate RED "A19 the suite's run line is removed (the derived job slice goes empty)" IV \
+    "the enclosing-job slice is empty" \
+    'old = "        run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "")'
+  # A20–A23 — the bounded MAIN_PLAN slice (#11899): the overshoot shapes and the terminator itself.
+  mutate RED "A20 the alert's -target= lines are moved below the plan step's rc= capture" WF \
+    "one or both -target= lines are missing" \
+    'old = "              -target=logtail_exploration.inngest_cutover_flip_silent \\\n              -target=logtail_exploration_alert.inngest_cutover_flip_silent \\\n"
+assert s.count(old) == 1
+s = s.replace(old, "")
+anchor = "          rc=${PIPESTATUS[0]}\n"
+i = s.index(anchor)
+s = s[:i] + anchor + old + s[i:]'
+  mutate RED "A21 the plan step's rc= capture is deleted (the slice re-overshoots silently)" WF \
+    "MAIN_PLAN does not end on the plan step" \
+    'i = s.index("            terraform plan -no-color")
+old = "          rc=${PIPESTATUS[0]}\n"
+j = s.index(old, i)
+s = s[:j] + s[j + len(old):]'
+  mutate PASS "A22 a second terraform plan block with decoy -target= lines sits after the real step" WF \
+    "" \
+    'anchor = "          rc=${PIPESTATUS[0]}\n"
+i = s.index(anchor)
+s = s[:i] + anchor + "            terraform plan -no-color -input=false \\\n              -target=logtail_exploration.decoy_nope \\\n          rc=${PIPESTATUS[0]}\n" + s[i:]'
+  mutate RED "A23 the rc= capture is renamed to plan_rc= (the line-start terminator misses)" WF \
+    "MAIN_PLAN does not end on the plan step" \
+    'i = s.index("            terraform plan -no-color")
+old = "          rc=${PIPESTATUS[0]}\n"
+j = s.index(old, i)
+s = s[:j] + "          plan_rc=${PIPESTATUS[0]}\n" + s[j + len(old):]'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
   printf '[FATAL] mutation rows: %s ran, %s expected — a row was added or dropped without updating MUT_ROWS_EXPECTED\n' "${MUT_ROWS_RUN:-0}" "$MUT_ROWS_EXPECTED" >&2; exit 2
 fi
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
+# row deletion stays green — PRESENCE_ROWS/MUT_ROWS_EXPECTED are two-write-site constants.
 _floor=$((PRESENCE_ROWS))
 [ -z "${MUT_SKIP:-}" ] && _floor=$((PRESENCE_ROWS + MUT_ROWS_EXPECTED))
 _ran=$((pass + fail))
