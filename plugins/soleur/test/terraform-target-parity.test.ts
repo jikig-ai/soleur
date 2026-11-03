@@ -10165,6 +10165,8 @@ describe("G2f registration pin (#9927): Guard 1 stays registered inside the requ
       ["add a decoy second line for the same label", testAll.replace(line, `${line}\n  run_suite "${G2F_LABEL}" bash -c true || true`), /starts 2 run_suite lines/],
       ["move into the infra group region", testAll.replace(line + "\n", "").replace(/^if want_infra; then$/m, `if want_infra; then\n${line}`), /not inside a column-0/],
       ["redefine run_suite", testAll.replace(/^run_suite\(\) \{$/m, "run_suite() { :; }\nrun_suite() {"), /run_suite\(\) is defined 2 times/],
+      ["redefine _shard_selects", testAll.replace(/^_shard_selects\(\) \{$/m, "_shard_selects() { return 0; }\n_shard_selects() {"), /_shard_selects\(\) is defined 2 times/],
+      ["wrapper wider than the neighbours (isolates the depth check)", testAll.replace("if want_scripts; then\n", "if want_scripts; then\n  if false; then\n").replace("  run_suite \"tests/scripts/trio-baseline-census\" bash tests/scripts/test-trio-baseline-census.sh\n", "  run_suite \"tests/scripts/trio-baseline-census\" bash tests/scripts/test-trio-baseline-census.sh\n  fi\n"), /enclosing indented conditional/],
       ["redefine want_scripts", testAll.replace(/^want_scripts\(\) .*$/m, (m) => `${m}\nwant_scripts() { false; }`), /want_scripts\(\) is defined 2 times/],
       ["label-specific early return in run_suite", testAll.replace(/^run_suite\(\) \{$/m, `run_suite() {\n  [[ "$1" == *luks-sole-copy ]] && return 0`), /mention the suite/],
       ["own dispatch: no want_scripts region at all", testAll.replace(/^if want_scripts; then$/gm, "if want_scripts_x; then"), /no column-0 `if want_scripts; then` region/],
