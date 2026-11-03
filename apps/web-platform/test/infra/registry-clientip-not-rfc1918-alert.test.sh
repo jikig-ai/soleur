@@ -116,7 +116,7 @@ harness_marker_valid() {
 }
 
 # The exact floors (assertions that must have run). A child run with a seam honoured runs only the base rows.
-FLOOR_FULL=110
+FLOOR_FULL=115
 FLOOR_CHILD=37
 
 SEAMS_SET=""
@@ -476,7 +476,27 @@ JOB_BAD="$(awk -v allow=" name needs if runs-on permissions timeout-minutes step
 IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 WF_BAD=""
 [[ $'\n'"$IV_CODE" == *$'\ndefaults:'* ]] && WF_BAD="$WF_BAD top-level-defaults"
-{ has 'REGCIP_' "$IV_CODE" || has 'MUT_SKIP' "$IV_CODE"; } && WF_BAD="$WF_BAD suite-seam-in-workflow"
+# Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP", a GUARD-fragment
+# prefix) or a shell-injection env (BASH_ENV/SHELLOPTS/BASHOPTS) reaches the step with no
+# literal present — MUT_/_SKIP cover MUT_SKIP at either split, GUARD covers every *_GUARD_*
+# axis. REGCIP_ stays literal (its prefix carries no GUARD fragment).
+_seam_frag=""
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS' 'REGCIP_'; do
+  has "$_frag" "$IV_CODE" && _seam_frag="$_seam_frag ${_frag}-fragment"
+done
+[ -n "$_seam_frag" ] && WF_BAD="$WF_BAD suite-seam-in-workflow:$_seam_frag"
+# The only DYNAMIC channel: a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside
+# the hosting job. JOB_BLOCK is already derived from the registered run line's position and
+# comment-stripped; an empty slice reds the composite below, so the ban cannot pass vacuously.
+if [ -z "$JOB_BLOCK" ]; then
+  WF_BAD="$WF_BAD job-slice-empty"
+else
+  _job_seam=""
+  has 'GITHUB_ENV' "$JOB_BLOCK" && _job_seam="$_job_seam GITHUB_ENV"
+  has 'GITHUB_PATH' "$JOB_BLOCK" && _job_seam="$_job_seam GITHUB_PATH"
+  has 'defaults:' "$JOB_BLOCK" && _job_seam="$_job_seam defaults:"
+  [ -n "$_job_seam" ] && WF_BAD="$WF_BAD job-scope-env-write:$_job_seam"
+fi
 # The aggregator: every job (other than the host) whose `needs:` names the host; one of them must carry the facts.
 AGG_CANDS="$(awk -v host="$HOST_JOB" "$AWK_HDR"'
   function emit(l,   n, t, i) { sub(/[ \t]#.*$/, "", l); gsub(/[\[\],"\047]/, " ", l); n = split(l, t, /[ \t]+/); for (i = 1; i <= n; i++) if (t[i] == host && job != host) print job }
@@ -547,6 +567,13 @@ if [ -n "$SHIP_ENTRY" ] && [ -n "$DISK_ENTRY" ] \
   ok "ENVELOPE PARITY: the shipper's ship() body and the disk heartbeat's --data-raw both start the stored row with {\"message\":\" (offset 0 of raw, the other half of both startsWith anchors)"
 else
   no "envelope parity broken: the shipper's body=\"{\\\"message\\\":\\\"\$line\\\"}\" or the disk heartbeat's --data-raw \"{\\\"message\\\":\\\"\$LINE\\\"}\" changed, so both startsWith anchors would match nothing"
+fi
+
+echo ""
+echo "=== registry-clientip-not-rfc1918-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
 fi
 
 # ── Mutation rows: each must make the rows above RED (the must-pass rows must stay GREEN) ──────
@@ -622,14 +649,21 @@ def block(kind, old, new, n=1):
       fi
     elif [ "$expect" = ambient ] || [ "$expect" = forged ]; then
       # AMBIENT SEAMS: the trio set without a valid marker must change NOTHING: [SEAM-IGNORED] is printed, no [NO_MUT] /
-      # [REPIN] honoured line, the exact pin reds on the mutated predicate, and the child ran the FULL floor.
+      # [REPIN] honoured line, the exact pin reds on the mutated predicate, and the child ran the FULL presence
+      # section. Since #11899 the pre-battery fail>0 gate exits a presence-failing child at the `guard:` summary
+      # (the floor line is unreachable by design), so reaching that summary is the full-presence proof — and the
+      # summary's own counts close it: X+Y must equal FLOOR_CHILD (the base/presence rows a seam-honoured child
+      # runs), so a presence row dropped before the gate is a red here, not a quiet pass.
       local alog; alog="$(cat "$MUT_DIR/child.log")"
+      local _gp=0 _gf=0
+      [[ "$alog" =~ guard:\ ([0-9]+)\ passed,\ ([0-9]+)\ failed ]] && { _gp="${BASH_REMATCH[1]}"; _gf="${BASH_REMATCH[2]}"; }
       if [ "$rc" -ne 0 ] && has '[SEAM-IGNORED]' "$alog" && has '[FAIL] the predicate drifted from the pinned text' "$alog" \
          && ! has '[REPIN] honoured' "$alog" && ! has '[NO_MUT]' "$alog" && ! has '[FATAL]' "$alog" \
-         && has "($FLOOR_FULL assertions, floor $FLOOR_FULL) ===" "$alog"; then
-        ok "ambient seams ignored, FULL suite ran, exact pin RED ($expect): $label"
+         && has "=== registry-clientip-not-rfc1918-alert guard: " "$alog" \
+         && [ $((_gp + _gf)) -eq "$FLOOR_CHILD" ]; then
+        ok "ambient seams ignored, FULL presence ran to the fail>0 gate ($_gp+$_gf rows), exact pin RED ($expect): $label"
       else
-        no "an ambient/forged seam was honoured, or the child did not run the full $FLOOR_FULL: $label (child rc=$rc)"
+        no "an ambient/forged seam was honoured, or the child did not run the full presence section to the gate (guard counts ${_gp}+${_gf}, want $FLOOR_CHILD): $label (child rc=$rc)"
       fi
     elif [ "$expect" = norepin ]; then
       # REGCIP_REPIN WITHOUT MUT_SKIP must be ignored: the exact-pin row still reds on the mutated predicate, and the
@@ -778,6 +812,17 @@ AFTER = "          fi\n\n  # Aggregator (#8736): the single verdict"
     'rep("\nenv:\n  TERRAFORM_VERSION", "\ndefaults:\n  run:\n    shell: /bin/true {0}\nenv:\n  TERRAFORM_VERSION")'
   mutate red "S7 the workflow-level env names a suite seam (REGCIP_TF)" iv \
     'rep("env:\n  TERRAFORM_VERSION: " + DQ + "1.10.5" + DQ + "\n", "env:\n  TERRAFORM_VERSION: " + DQ + "1.10.5" + DQ + "\n  REGCIP_TF: /dev/null\n")'
+  # S8–S12 (#11899): composed/injected env names and the job-scope $GITHUB_ENV channel.
+  mutate red "S8 a runtime-composed MUT_SKIP name reaches the workflow (no literal present)" iv \
+    "$IV_PRE"'rep(RUN, RUN + "          echo " + DQ + "MUT_" + DQ + DQ + "SKIP=1" + DQ + " >> " + DQ + "$GITHUB_ENV" + DQ + "\n")'
+  mutate red "S9 a GUARD-fragmented env name reaches the workflow's executable text" iv \
+    "$IV_PRE"'rep(RUN, RUN + "        env:\n          FOO_GUARD_X: /dev/null\n")'
+  mutate red "S10 a BASH_ENV shell-injection env reaches the workflow" iv \
+    "$IV_PRE"'rep(RUN, RUN + "        env:\n          BASH_ENV: /tmp/x\n")'
+  mutate red "S11 a GITHUB_ENV write inside the hosting job but outside the registered step" iv \
+    "$IV_PRE"'rep(HOSTH, HOSTH + "    steps:\n          echo " + DQ + "FOO=1" + DQ + " >> " + DQ + "$GITHUB_ENV" + DQ + "\n")'
+  mutate green "S12 the same GITHUB_ENV write lands in the plan: job (another job's writes are out of scope)" iv \
+    'rep("  plan:\n", "  plan:\n          echo " + DQ + "FOO=1" + DQ + " >> " + DQ + "$GITHUB_ENV" + DQ + "\n")'
   mutate green "HC1 the hosting job header carries a trailing comment (the step must still attach to THIS job)" iv \
     "$IV_PRE"'rep(HOSTH, HOSTH.replace("fixed:\n", "fixed: # hosts the infra drift guards\n", 1))'
   mutate green "HQ1 the hosting job header is a quoted id" iv \
@@ -867,6 +912,8 @@ sql("\n    FROM {{source}}", "\n\n  FROM    {{source}}")'
     'block("logtail_exploration_alert", "The registry plane shipped a clientIP outside RFC1918", "A non-private client address was shipped by the registry plane")'
 fi
 
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
+# row deletion stays green — FLOOR_FULL/FLOOR_CHILD are declared here and read only below.
 _floor=$FLOOR_FULL
 [ -n "$E_SKIP$E_NOMUT" ] && _floor=$FLOOR_CHILD
 _ran=$((pass + fail))

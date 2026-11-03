@@ -1,0 +1,21 @@
+# Decision Challenges — feat-one-shot-11899-convention-suite-cleanup
+
+Depth-1 subagent run (no spawn tool): technical rows that could not be resolved from evidence
+are `pending - assumed: <default>`; the parent's technical-ruling gate batches them for the
+CTO spawn after this run returns.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Item 8 — floor self-reference (`PRESENCE_ROWS`/`MUT_ROWS` decrement alongside row deletion stays green+FIRES): document-and-keep vs external per-suite constant table in the meta-guard | technical | Ruled by CTO agent, 2026-11-03: document-and-keep — two-line self-reference caveat at each touched suite's floor window + PROMOTED_FILES membership pin (floor deletion is mechanically red) + review covers decrement-with-deletion drift - rationale: no cheap invariant exists; the only anchor breaking self-reference is a value stored outside the suite file (a third write site per suite, ~15× ongoing edit tax on every row-touching edit). Dissent: a `floor-decrease: <issue>` marker gate would be near-free and strictly stronger if decrements prove rare — evidence would flip the ruling |
+| Items 3–4 + SELF scope — issue-named subsets (5 fail>0, 4 step-pin, 2 SELF) vs family-wide census (12 fail>0, 8 step-pin, 5 SELF) | technical | Ruled by CTO agent, 2026-11-03: family-wide convergence — pre-battery `fail>0` gate to all 12 `no()`/FAILED+MUT_SKIP suites, step-shape pins to all 8 seam-bearing suites lacking them, `SELF="$DIR/$(basename …)"` to all 5 relative sites; extensions beyond the issue's named subsets recorded as inferred-with-justification - rationale: the issue's own frame is family-wide; measured census verified the named subsets understate the defect (verbatim `if [ "$fail" -gt 0 ]` donor gate exists only in egress-gw:367-370 + inngest-step-524:355) |
+| `EXPECT_1` in ghcr/web-nic — "vestigial" in the issue, but both compares are live (`if [ "$SQL_1" = "$EXPECT_1" ]`) | taste | Ruled by CTO agent, 2026-11-03: rename `EXPECT_1` → `EXPECT_SQL` in ghcr-blocked-alert.test.sh and web-nic-guard-unpinned-url-alert.test.sh, keep whole-string compares byte-for-byte - rationale: compares are live (ghcr:223, web-nic:168); deleting is a coverage loss, not cleanup |
+| Item 7 — `PROMOTED_FILES` stale-site marker vs consolidation | technical | Ruled by CTO agent, 2026-11-03: (b) consolidation — delete the three stale `^PROMOTED_FILES='` sites (:798/:811/:819), hoist their grounds comments above the live site (:1104), add a `grep -cE "^PROMOTED_FILES='" == 1` self-pin - rationale: a marker leaves the last-wins trap in place; the pin makes a second site mechanically red. Dissent: hoist must preserve each site's grounds text verbatim or promotion history is lost |
+| Item 1 — seam-check strengthening approach | technical | Ruled by CTO agent, 2026-11-03: confirm the two-layer seam design WITH one required correction — fragment set {`MUT_`, `_SKIP`, `GUARD`, `BASH_ENV`, `SHELLOPTS`, `BASHOPTS`} absent over IV_CODE (comment-stripped whole-file) + enclosing-job slice banning `GITHUB_ENV`/`GITHUB_PATH`/`defaults:`, asserted non-empty and containing the pinned run line - rationale: fragment census verified 0 hits over IV_CODE today; `GITHUB_ENV`×3 confined to the `plan:` job (infra-validation.yml:1662/1674/1675). CORRECTION: the enclosing job is `deploy-script-tests-fixed` (:847-:1353), NOT `validate:` — the slice must be derived from the pinned run line, never a hardcoded job name |
+| Census-vocabulary drift target (`_census_missing` et al.) | taste | Ruled by CTO agent, 2026-11-03: normalize to the `CENSUS_*` accumulator naming — donor is faithful-canary-sandbox (`CENSUS_NAMES`/`CENSUS_N`/`CENSUS_MISSING` at :350-357; egress-gw carries no census block) — in files already touched only: sandbox-alerts (`_census_n`→`CENSUS_N`, `_census_missing`→`CENSUS_MISSING`), luks pair (`_census`→`CENSUS`, `_extra_*`/`_gone_*`→`CENSUS_EXTRA_*`/`CENSUS_GONE_*`); bound to the accumulator family, update `no "…"` message interpolations too - rationale: one vocabulary; sandbox-alerts already half-diverged |
+| inngest-524 tasks.md "<3" stale reference | taste | resolved — the reference lives in the archived batch-3 spec dir, a point-in-time artifact; not edited |
+
+## Not Yet Specified candidates
+
+None — every ask mapped in the plan's Scope Check.
