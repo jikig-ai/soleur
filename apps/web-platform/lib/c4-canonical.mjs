@@ -21,17 +21,19 @@
 // reads the exported artifact back. The key is kept (value "") because the
 // ViewWithHash type declares it.
 //
-// Relation IDs are additionally RE-KEYED to a content hash. Since likec4 1.60
-// the CLI derives relation ids from the absolute workspace path, so two renders
-// of identical .c4 sources at different roots differ on every relation id —
-// and nothing else: a same-source two-path diff moves only the `relations` map
-// keys, each relation's `id` field, and `views[*].edges[*].relations[]`
-// referents. Without a re-key the committed artifact can never byte-match a
-// render at CI's checkout path (#11915). The new id is a 64-bit FNV-1a hash
-// (base36) of the relation's content minus `id`; element ids, edge ids and all
-// other fields stay as rendered. A repeated content hash (duplicate relations,
-// or a freak collision) is disambiguated with a `-N` suffix in insertion order,
-// which is deterministic for a given input.
+// Relation IDs are additionally RE-KEYED to a content hash and the map is
+// emitted SORTED by the new key. Since likec4 1.60 the CLI derives relation
+// ids — and the `relations` map's emission order with them — from the absolute
+// workspace path, so two renders of identical .c4 sources at different roots
+// differ on every relation id AND on map order; the only other movers are
+// each relation's `id` field and `views[*].edges[*].relations[]` referents
+// (element ids, edge ids, and view/node/edge ordering are content-stable).
+// Without a re-key + sort the committed artifact can never byte-match a render
+// at CI's checkout path (#11915). The new id is a 64-bit FNV-1a hash (base36)
+// of the relation's content minus `id`; `edges[].relations` is sorted after
+// rewriting — it is a referent set, not an ordering. A repeated content hash
+// (duplicate relations, or a freak collision) is disambiguated with a `-N`
+// suffix in insertion order, which is deterministic for a given input.
 
 const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
@@ -68,7 +70,11 @@ function rekeyRelations(model) {
     if (Object.prototype.hasOwnProperty.call(rel, "id")) rel.id = newId;
     next[newId] = rel;
   }
-  model.relations = next;
+  // Upstream emission order follows the path-derived ids, so it drifts across
+  // render roots too; emit the re-keyed map sorted by the new id.
+  const sorted = Object.create(null);
+  for (const k of Object.keys(next).sort()) sorted[k] = next[k];
+  model.relations = sorted;
   const views = model.views;
   if (views === null || typeof views !== "object" || Array.isArray(views)) {
     return;
@@ -79,7 +85,7 @@ function rekeyRelations(model) {
     }
     for (const edge of view.edges) {
       if (edge !== null && typeof edge === "object" && Array.isArray(edge.relations)) {
-        edge.relations = edge.relations.map((r) => idMap.get(r) ?? r);
+        edge.relations = edge.relations.map((r) => idMap.get(r) ?? r).sort();
       }
     }
   }

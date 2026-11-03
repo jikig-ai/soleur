@@ -133,6 +133,21 @@ describe("canonicalizeC4Model", () => {
     expect(parsed.views.index.edges[0].id).toBe("e1");
   });
 
+  test("normalizes path-derived relations-map ORDER, not just ids (#11915)", () => {
+    // likec4 1.60 emits the relations map in id order, so the map's key order
+    // drifts with the path too — a re-key alone still produced byte drift
+    // (first CI arm, #11937-adjacent diagnosis). Reverse the input order;
+    // canonical bytes must not move.
+    const reordered = JSON.parse(RAW);
+    reordered.relations = {};
+    const entries = Object.entries<any>(JSON.parse(RAW).relations).reverse();
+    for (const [k, v] of entries) reordered.relations[k] = v;
+    expect(canonicalizeC4Model(JSON.stringify(reordered))).toBe(out);
+    // And the committed form is sorted by the re-keyed id.
+    const keys = Object.keys(parsed.relations);
+    expect([...keys].sort()).toEqual(keys);
+  });
+
   test("duplicate-content relations disambiguate deterministically (-N suffix)", () => {
     const dup = JSON.parse(RAW);
     dup.relations.r2 = { ...dup.relations.r1, id: "r2" };
@@ -142,12 +157,14 @@ describe("canonicalizeC4Model", () => {
     expect(keys.length).toBe(2);
     expect(keys[1]).toBe(`${keys[0]}-2`);
     expect(d.views.index.edges[0].relations).toEqual(keys);
-    // Referents map by OLD id, not by position — reordering edge refs tracks.
+    // Referents map by OLD id and are emitted sorted — a different referent
+    // order canonicalizes to identical bytes.
     const swapped = JSON.parse(RAW);
     swapped.relations.r2 = { ...swapped.relations.r1, id: "r2" };
     swapped.views.index.edges[0].relations = ["r2", "r1"];
-    const s = JSON.parse(canonicalizeC4Model(JSON.stringify(swapped)));
-    expect(s.views.index.edges[0].relations).toEqual([...keys].reverse());
+    expect(canonicalizeC4Model(JSON.stringify(swapped))).toBe(
+      canonicalizeC4Model(JSON.stringify(dup)),
+    );
   });
 
   test("an edge referent naming no relation passes through unchanged", () => {
