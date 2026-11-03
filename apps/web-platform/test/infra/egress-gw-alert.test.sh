@@ -355,12 +355,78 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 [ "$n_run" -eq 1 ] \
   && ok "G4: this guard's run line is registered in infra-validation.yml exactly once" \
   || no "G4: run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+# A CI-dead guard must not pass (the clientip idiom, #11899). The step's allowed keys are
+# name + run ONLY — an `env:`, `shell:`, `with:`, `if:` or `continue-on-error:` can neuter or
+# redirect the run — at EITHER step position (the `      - ` dash line or an `        ` key
+# line). The HOSTING JOB is derived from the step's position (the last `jobs:`-level header
+# above the run line — a trailing-comment or quoted-id header included), never named here,
+# and is read WHOLE: header, steps AND any keys after `steps:` (YAML key order is free, so a
+# post-steps key must grade). Its `^    if:` must occur exactly once and equal the known
+# literal, `^    continue-on-error:` zero times over the whole block, needs/runs-on the known
+# literals, and its own keys only the known set (no `env`, `defaults`, `container`,
+# `strategy`, `services` ...).
+# hdr LINE -> the job id when LINE is a `jobs:`-level key header (`  id:`, `  "id":`,
+# `  id: # note`), else "".
+AWK_HDR='function hdr(l,   n) { if (l ~ /^  [\047"]?[A-Za-z0-9_-]+[\047"]?:[ \t]*(#.*)?$/) { n = l; sub(/^  [\047"]?/, "", n); sub(/[\047"]?:.*$/, "", n); return n } return "" }'
+STEP_BLOCK="$(awk -v r="$REG_RUN" "$AWK_HDR"'
+  function flush() { if (blk != "" && index(blk, r "\n") > 0) printf "%s", blk; blk = "" }
+  /^      - / || hdr($0) != "" { flush() }
+  { if ($0 !~ /^[[:space:]]*#/) blk = blk $0 "\n" }
+  END { flush() }' "$IV")"
+HOST_JOB="$(awk -v r="$REG_RUN" "$AWK_HDR"'{ h = hdr($0); if (h != "") j = h } $0 == r { print j; exit }' "$IV")"
+JOB_BLOCK=""
+[ -n "$HOST_JOB" ] && JOB_BLOCK="$(awk -v j="$HOST_JOB" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f && !/^[[:space:]]*#/ { print }' "$IV")"
+JOB_IF="$(awk '/^    if:/ { print }' <<<"$JOB_BLOCK")"
+JOB_NEEDS="$(awk '/^    needs:/ { print }' <<<"$JOB_BLOCK")"
+JOB_RUNS_ON="$(awk '/^    runs-on:/ { print }' <<<"$JOB_BLOCK")"
+JOB_IF_N="$(awk '/^    if:/ { n++ } END { print n + 0 }' <<<"$JOB_BLOCK")"
+JOB_COE_N="$(awk '/^    continue-on-error:/ { n++ } END { print n + 0 }' <<<"$JOB_BLOCK")"
+# Key allowlists: the step is `- name:` + `run:`; the job is the known set. Any other key —
+# or an unrecognised line shape, which grades "?" — is listed.
+STEP_BAD="$(awk -v allow=" name run " 'NF == 0 { next } { k = "?" }
+  /^      - [A-Za-z_-]+:/ { k = $0; sub(/^      - /, "", k); sub(/:.*/, "", k) }
+  /^        [A-Za-z_-]+:/ { k = $0; sub(/^        /, "", k); sub(/:.*/, "", k) }
+  index(allow, " " k " ") == 0 { print k }' <<<"$STEP_BLOCK")"
+JOB_BAD="$(awk -v allow=" name needs if runs-on permissions timeout-minutes steps " '/^    [A-Za-z_-]+:/ { k = $0; sub(/^    /, "", k); sub(/:.*/, "", k); if (index(allow, " " k " ") == 0) print k }' <<<"$JOB_BLOCK")"
+{ [ -n "$STEP_BLOCK" ] && [ -n "$HOST_JOB" ] && [ -n "$JOB_BLOCK" ] && grep -qFx "$REG_RUN" <<< "$JOB_BLOCK"; } \
+  && ok "G4: the registered step and its hosting job '$HOST_JOB' were located (run-line-derived, comment-stripped, the slice carries the run line)" \
+  || no "G4: the registered step or its hosting job could not be located (step ${#STEP_BLOCK}B, host '${HOST_JOB:-none}', job ${#JOB_BLOCK}B) — every step/job pin below would grade vacuous"
+[ -n "$STEP_BLOCK" ] && [ -z "$STEP_BAD" ] \
+  && [[ "$STEP_BLOCK" != *continue-on-error* ]] \
+  && ! [[ "$STEP_BLOCK" =~ $'\n'[[:space:]]+if: ]] \
+  && ! [[ "$STEP_BLOCK" =~ ^[[:space:]]*-[[:space:]]+if: ]] \
+  && ok "G4: the registered step has only name+run keys — no env/shell/with/if:/continue-on-error: at the run-key or - dash position" \
+  || no "G4: the registered step is conditional, non-blocking or redirected (offending keys beyond name+run: '${STEP_BAD//$'\n'/ }'; an if: or continue-on-error: at the run-key or - dash position), or the step could not be located"
+[ -n "$JOB_BLOCK" ] && [ -z "$JOB_BAD" ] \
+  && [ "$JOB_IF_N" -eq 1 ] && [ "$JOB_IF" = "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" ] \
+  && [ "$JOB_COE_N" -eq 0 ] && [[ "$JOB_BLOCK" != *continue-on-error* ]] \
+  && [ "$JOB_NEEDS" = "    needs: detect-changes" ] && [ "$JOB_RUNS_ON" = "    runs-on: ubuntu-24.04" ] \
+  && ok "G4: the hosting job '$HOST_JOB' keeps the one known if:, the needs+runs-on literals, the known key set and no continue-on-error anywhere (post-steps keys grade)" \
+  || no "G4: the hosting job '$HOST_JOB' is conditional, non-blocking or carries keys beyond name/needs/if/runs-on/permissions/timeout-minutes/steps: '${JOB_BAD//$'\n'/ }' (^    if: lines seen: $JOB_IF_N, want 1 and the known literal; ^    continue-on-error: lines seen: $JOB_COE_N, want 0 over the WHOLE job — post-steps keys included; needs/runs-on differ), or the job could not be located"
+# File-wide seam (over the comment-stripped workflow view): guard env axes may not reach
+# executable text. Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP",
+# a GUARD-fragment prefix) or a shell-injection env reaches the step with no literal present
+# — MUT_/_SKIP cover MUT_SKIP at either split, GUARD covers EGW_GUARD_* and every sibling's
+# *_GUARD_* axis; EGW_ stays literal so a future EGW_* seam carrying no GUARD fragment still
+# reds. A top-level `defaults:` block would smuggle run.shell/env into every job — banned.
 seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'EGW_GUARD_' >/dev/null && seam_bad="$seam_bad EGW_GUARD_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS' 'EGW_'; do
+  [[ "$IV_CODE" == *"$_frag"* ]] && seam_bad="$seam_bad ${_frag}-fragment"
+done
+[[ $'\n'"$IV_CODE" == *$'\ndefaults:'* ]] && seam_bad="$seam_bad top-level-defaults"
 [ -z "$seam_bad" ] \
-  && ok "G4: no EGW_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
-  || no "G4: workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+  && ok "G4: no muting/shell-injection env fragment (MUT_, _SKIP, GUARD, EGW_, BASH_ENV, SHELLOPTS, BASHOPTS) or top-level defaults: reaches the workflow's executable text" \
+  || no "G4: workflow seam violated:$seam_bad — a guard env axis or a top-level defaults: is reachable from infra-validation.yml"
+# The only DYNAMIC channel is a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults:
+# inside the HOSTING job. JOB_BLOCK is derived above — an empty slice reds the located row
+# and is re-checked here, so the ban cannot pass vacuously on a misslice.
+job_bad=""
+[[ "$JOB_BLOCK" == *GITHUB_ENV* ]] && job_bad="$job_bad GITHUB_ENV"
+[[ "$JOB_BLOCK" == *GITHUB_PATH* ]] && job_bad="$job_bad GITHUB_PATH"
+[[ "$JOB_BLOCK" == *defaults:* ]] && job_bad="$job_bad defaults:"
+[ -n "$JOB_BLOCK" ] && [ -z "$job_bad" ] \
+  && ok "G4: no GITHUB_ENV/GITHUB_PATH write or defaults: sits inside the hosting job '$HOST_JOB' (the only dynamic env channel)" \
+  || no "G4: job-scope seam violated:${job_bad:- empty-slice} — a runtime env write inside the job can carry a composed name past the literal seam"
 
 echo ""
 echo "=== egress-gw-alert guard: $pass passed, $fail failed ==="
@@ -386,8 +452,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -447,9 +512,13 @@ PY
   }
 
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" src copy rc=0
+    case "$which" in
+      TF)  src="$TF";  copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -460,7 +529,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    EGW_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -588,11 +657,80 @@ s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
 assert s.count(old) == 1
 s = s.replace(old, old + "        env:\n          EGW_GUARD_TF: /dev/null\n")' \
     "workflow seam"
+  mutate_red "a runtime-composed MUT_SKIP name reaches the workflow (no literal present)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
+    "workflow seam"
+  mutate_red "a GUARD-fragmented env name reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          FOO_GUARD_X: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          BASH_ENV: /tmp/x\n")' \
+    "workflow seam"
+  mutate_red "a GITHUB_ENV write inside the suite's own job (the only dynamic env channel)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")' \
+    "job-scope seam violated"
+  mutate_green "the same GITHUB_ENV write lands in the plan: job (another job's writes are out of scope)" IV \
+    'old = "  plan:\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")'
   mutate_red "the suite's own run line is dropped from the workflow" IV \
     'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+
+  # ── Step/job shape rows (#11899): the clientip idiom — the step's keys are name+run only  #
+  # at either position, the hosting job's keys are the known set, `if:` is exactly one known  #
+  # literal, and continue-on-error: is absent over the WHOLE job (post-steps keys grade —     #
+  # YAML key order is free).                                                                  #
+  mutate_red "the registered step gets an env: key (a step-scope redirect needs no if:)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO: bar\n" + old)' \
+    "beyond name+run: 'env"
+  mutate_red "the registered step gets an if: key line (a conditional step, key form)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "beyond name+run: 'if"
+  mutate_red "the registered step gets a continue-on-error: key line (a non-blocking step)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "beyond name+run: 'continue-on-error"
+  mutate_red "the registered step is made conditional on the - dash line (- if: false)" IV \
+    'old = "      - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - if: false\n        name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)\n")' \
+    "dash position"
+  mutate_red "the hosting job gets an env: key (outside the known job key set)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    env:\n      FOO: bar\n")' \
+    "steps: 'env'"
+  mutate_red "a second, differing if: is added to the hosting job (count != 1 and not the known literal)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    if: false\n")' \
+    "if: lines seen"
+  mutate_red "a job-level continue-on-error: is placed AFTER the job's steps (key order is free in YAML)" IV \
+    'old = "          fi\n\n  # Aggregator (#8736): the single verdict"
+assert s.count(old) == 1
+s = s.replace(old, "          fi\n    continue-on-error: true\n\n  # Aggregator (#8736): the single verdict")' \
+    "continue-on-error: lines seen"
+  mutate_red "the workflow gains a top-level defaults: (a run.shell or env default would reach every job)" IV \
+    'old = "\nenv:\n  TERRAFORM_VERSION"
+assert s.count(old) == 1
+s = s.replace(old, "\ndefaults:\n  run:\n    shell: bash\nenv:\n  TERRAFORM_VERSION")' \
+    "top-level-defaults"
 
   mutate_red "the count = 0 mute knob is added inside the fail alert resource" TF \
     's = edit(s, FAILRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
@@ -607,9 +745,9 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "a comment-only edit to the tf" \
+  mutate_green "a comment-only edit to the tf" TF \
     's = s + "\n# control comment\n"'
-  mutate_green "whitespace reflow of the deny heredoc" \
+  mutate_green "whitespace reflow of the deny heredoc" TF \
     'i = s.index("  egress_gw_deny_spike_sql = <<\x2dSQL"); j = s.index(SQLEND, i)
 blk = s[i:j]
 old = "\n      AND position("
@@ -621,8 +759,10 @@ s = s[:i] + blk.replace(old, " AND\n          position(") + s[j:]'
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
-PRESENCE_ROWS=54
-MUT_ROWS=29
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
+# row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
+PRESENCE_ROWS=58
+MUT_ROWS=42
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

@@ -176,10 +176,12 @@ heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
 #   - NARROWING (a shape that used to match stops matching) is bounded by ARM 3. Its
 #     `MIN_FIRING_SUITES` is absolute and hand-ratcheted — deliberately never derived from
 #     anything this file computes — so a pattern that drops existing members drives `n_fires`
-#     under the ratchet and ARM 3 names it. That is the bound; there is no ARM 11. An earlier
-#     revision of this comment cited one, and no such arm has ever existed (the arms are
-#     1, 2, 2b, 3, 4, 5, 5b, 5c, 7, 8, 8b, 9, 10, 10d, 10e; 6 was deleted as subsumed and says
-#     so at its old position).
+#     under the ratchet and ARM 3 names it. That is the bound; ARM 11 exists but pins the
+#     PROMOTED_FILES single-site seam, not this pattern. (The arms are 1, 2, 2b, 3, 4, 5,
+#     5b, 5c, 7, 8, 8b, 9, 10, 10d, 10e, 11; 6 was deleted as subsumed and says so at its
+#     old position. An earlier revision of this comment claimed no ARM 11 had ever existed;
+#     #11899 then created one, and this corrects the record rather than leaving a claim the
+#     same file's tail falsifies.)
 #   - A NEW floor written in a shape the pattern never matched is bounded by NOTHING here, and
 #     cannot be: it is absent from both scopes and from `n_total`, so every arithmetic
 #     identity in this file still balances. Widen the pattern when you add a floor form, and
@@ -795,7 +797,6 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # #10136 test-hardening round (PROMOTED as FILES, ratchet not raised): `REAL_PASSES` is floored with a literal `MIN_PASSES` directly
 # above the `if` (and a drift check the other way) via printf + exit 1, never through assert_eq; an assert_eq self-test exits 2 first
 # unless a deliberately failing comparison moved the FAIL counter.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|apps/web-platform/scripts/real-sdk-ask-probe\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/cron-egress-ghcr-probe.test.sh` born floor-bearing in #9275 — the probe
 # verdict/sampler table suite. PROMOTED, not deferred, and not by raising MAX_DEFERRED: the floor is
 # `$((PASS + FAIL)) -lt 146` with the literal on the `if` itself, reported by `printf` + `exit 1`
@@ -808,7 +809,6 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # `printf '[FATAL] anti-vacuity floor: ...' >&2` + `exit 1` and never through the suite's
 # ok()/no() pair, and a `pass+fail != cases` conservation check sits adjacent — all three
 # covered-bar grounds hold. The ledger returns to its ratchet.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|apps/web-platform/scripts/real-sdk-ask-probe\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard.test.sh` added by #7463 PR-B —
 # the parity guard for the rule-audit.yml `Detect inngest CLI pin drift` step, under a deferred
 # directory. Promoted, not deferred, on the covered bar: (a) its floor is `(( TOTAL < MIN_FLOOR ))`
@@ -816,7 +816,6 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # carries a positive control that drives assert() through a real pass and a real (reversed) fail
 # before any row; (c) the floor exits via a direct `echo >&2` + `exit 2`, never through the
 # machinery it backstops (ADR-193). Ledger returns to its ratchet rather than growing.
-PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|apps/web-platform/scripts/real-sdk-ask-probe\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh)$'
 # `apps/web-platform/infra/workspaces-plaintext-forget-workflow.test.sh` added by #6604 step 7 — Guard 4
 # of the plaintext wipe (the single-use state-forget workflow; PR B deletes it with the workflow). A NEW
 # floor-bearing file in a deferred directory grew the ledger 47 -> 48 and reddened ARM 5c. PROMOTED as a
@@ -1103,7 +1102,15 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # ledger at all; each ported suite also gained a `<PREFIX>_GUARD_IV` seam pin over
 # infra-validation.yml's comment-stripped view.
 
+# ---------------------------------------------------------------------------------------
+# THE SINGLE CANONICAL PROMOTED_FILES ASSIGNMENT — every promotion edits THIS line; the
+# count pin below reds ANY second assignment-shaped site: an indented `  PROMOTED_FILES=…`,
+# a double-quoted `PROMOTED_FILES="…"`, or a `PROMOTED_FILES+=` append all count, so a
+# drift site cannot be smuggled past the anchor by shape. (#11899 deleted the three stale
+# snapshot assignments that sat inside the grounds log above; every grounds paragraph was
+# kept verbatim, in place — the comment log IS the promotion history.)
 PROMOTED_FILES='^(apps/web-platform/infra/key-rotate-workflow\.test\.sh|apps/web-platform/infra/inngest-gate-witness-classify\.test\.sh|apps/web-platform/infra/luks-monitor-install\.test\.sh|apps/web-platform/test/approval-guard1-mutation\.test\.sh|\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/hooks/follow-through-directive-gate\.test\.sh|\.claude/hooks/prod-write-defer-gate\.test\.sh|apps/web-platform/infra/git-data-luks-reopen\.test\.sh|apps/web-platform/infra/git-data-liveness\.test\.sh|apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/web-zot-consumer-probe\.test\.sh|apps/web-platform/infra/inngest-consumer-probe\.test\.sh|apps/web-platform/infra/cron-egress-ghcr-probe\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/pre-ask-technical-fork-gate\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|\.claude/hooks/pre-merge-rebase-parity\.test\.sh|\.claude/hooks/pre-merge-rebase\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh|apps/web-platform/infra/git-data-flag-precheck\.test\.sh|apps/web-platform/infra/git-data-root-key\.test\.sh|plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/bite-proof\.test\.sh|plugins/soleur/skills/archive-kb/test/archive-kb-partial-run\.test\.sh|plugins/soleur/skills/constraint-scaffold/test/parity\.test\.sh|apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow\.test\.sh|apps/web-platform/infra/templatefile-bare-dollar-guard\.test\.sh|apps/web-platform/infra/registry-luks-launch-gate\.test\.sh|apps/web-platform/infra/inngest-host-state-workflow-guard\.test\.sh|apps/web-platform/infra/registry-luks-escrow\.test\.sh|apps/web-platform/infra/private-nic-guard\.test\.sh|apps/web-platform/infra/inngest-boot-emitter\.test\.sh|apps/web-platform/infra/canary-bundle-claim-check\.test\.sh|apps/web-platform/infra/web-1-host-key-local\.test\.sh|apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation\.test\.sh|apps/web-platform/infra/inngest-nic-wait\.test\.sh|apps/web-platform/scripts/lint-migration-immutability\.test\.sh|apps/web-platform/scripts/dev-ledger-parity\.test\.sh|apps/web-platform/infra/git-data-store-device-census\.test\.sh|apps/web-platform/infra/git-data-bootstrap-store-verify\.test\.sh|apps/web-platform/scripts/anthropic-key-distinctness\.test\.sh|\.github/actions/infra-credentials/infra-credentials\.test\.sh|apps/web-platform/infra/cloud-init-web-zot-seed\.test\.sh|apps/web-platform/infra/workspaces-luks-host-token-refresh\.test\.sh|apps/web-platform/infra/git-data-plaintext-snapshot-loopback\.test\.sh|apps/web-platform/infra/cloud-init-ghcr-seed-login\.test\.sh|apps/web-platform/infra/web-probes-token-rotation\.test\.sh|apps/web-platform/infra/inngest-host\.test\.sh|apps/web-platform/infra/workspaces-boot-unlock\.test\.sh|apps/web-platform/infra/inngest-cli-staleness\.test\.sh|apps/web-platform/infra/web-2-host-key-local\.test\.sh|apps/web-platform/infra/rule-audit-inngest-pin-workflow-guard\.test\.sh|apps/web-platform/infra/workspaces-luks-provision\.test\.sh|apps/web-platform/infra/workspaces-luks-fresh-boot\.test\.sh|apps/web-platform/infra/scripts/gen-github-egress-cidr\.test\.sh|apps/web-platform/infra/apt-bounded\.test\.sh|plugins/soleur/skills/review/test/fix-round-seats\.test\.sh|apps/web-platform/infra/lb-weight-gate-with-marker\.test\.sh|apps/web-platform/infra/workspaces-luks-header-web\.test\.sh|apps/web-platform/infra/workspaces-luks-t2-rehearsal\.test\.sh|apps/web-platform/infra/cron-egress-self-heal\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime\.test\.sh|apps/web-platform/infra/web-private-nic-guard\.test\.sh|apps/web-platform/infra/cron-egress-enforce-probe\.test\.sh|apps/web-platform/infra/luks-monitor\.test\.sh|apps/web-platform/infra/workspaces-luks-rollback-refusal\.test\.sh|apps/web-platform/infra/workspaces-luks-freeze\.test\.sh|apps/web-platform/infra/workspaces-luks-staging\.test\.sh|apps/web-platform/infra/inngest-provision-rehearsal\.test\.sh|apps/web-platform/infra/egress-gateway\.test\.sh|apps/web-platform/infra/egress-gw-image-staleness\.test\.sh|apps/web-platform/test/destroy-ask-mutation\.test\.sh|apps/web-platform/infra/inngest-luks-sole-copy\.test\.sh|apps/cla-evidence/scripts/_r2-sigv4-curl\.test\.sh|apps/cla-evidence/scripts/bootstrap-r2-probe\.test\.sh|apps/cla-evidence/scripts/upload-evidence\.test\.sh|apps/cla-evidence/scripts/upload-bypass\.test\.sh|apps/web-platform/scripts/lint-migration-api-grants\.test\.sh|apps/web-platform/test/vitest-related\.test\.sh|apps/web-platform/infra/sandbox-masked-proc-docker\.test\.sh|plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape\.test\.sh|apps/web-platform/infra/docker-run-tuple\.test\.sh|\.claude/hooks/pre-closing-technical-fork-gate\.test\.sh|apps/web-platform/infra/htpasswd-stdin\.test\.sh|plugins/soleur/skills/skill-security-scan/test/parse-override\.test\.sh|apps/web-platform/infra/inngest-redis-luks-loopback\.test\.sh|\.claude/hooks/ship-kb-archive-gate\.test\.sh|apps/web-platform/test/infra/vector-admission\.test\.sh|apps/web-platform/infra/git-data-wipe-assert\.test\.sh|apps/web-platform/infra/git-data-wipe-access\.test\.sh|apps/web-platform/infra/web-platform-release-peer-gate\.test\.sh|apps/web-platform/infra/inngest-link-resolver\.test\.sh|apps/web-platform/infra/inngest-link-flip-workflow\.test\.sh|apps/web-platform/infra/inngest-registry-probe\.test\.sh|apps/web-platform/infra/inngest-doublefire-probe\.test\.sh|apps/web-platform/infra/sandbox-canary-soak\.test\.sh|apps/web-platform/infra/cat-deploy-state\.test\.sh|\.claude/hooks/brand-hex-commit-gate\.test\.sh|apps/web-platform/infra/cloudflared-pin-staleness\.test\.sh|apps/web-platform/infra/web-git-data-probe\.test\.sh|apps/web-platform/infra/inngest-key-rotate-workflow\.test\.sh|apps/web-platform/infra/git-data-refs-assert\.test\.sh|apps/web-platform/scripts/home-census-trigger\.test\.sh|apps/web-platform/test/home-census-mutations\.test\.sh|apps/web-platform/infra/git-data-stale-clone-push\.test\.sh|apps/web-platform/scripts/real-sdk-ask-probe\.test\.sh|apps/web-platform/test/infra/registry-store-not-luks-alert\.test\.sh|apps/web-platform/test/infra/registry-zot-credential-shape-alert\.test\.sh|apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert\.test\.sh|apps/web-platform/test/infra/egress-gw-alert\.test\.sh|apps/web-platform/test/infra/bwrap-probe-rollback-alert\.test\.sh|apps/web-platform/test/infra/faithful-canary-sandbox-alert\.test\.sh|apps/web-platform/test/infra/ghcr-blocked-alert\.test\.sh|apps/web-platform/test/infra/inngest-step-524-alert\.test\.sh|apps/web-platform/test/infra/sandbox-alerts\.test\.sh|apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert\.test\.sh)$'
+  [ "$(grep -cE "^[[:space:]]*PROMOTED_FILES[+]?=" "${BASH_SOURCE[0]}")" -eq 1 ] || { printf '[FATAL] PROMOTED_FILES single-site pin: file carries %s assignment-shaped sites (any indentation, any quote form, += appends included), expected exactly 1 — a second site is a last-wins or silent-widen drift trap\n' "$(grep -cE "^[[:space:]]*PROMOTED_FILES[+]?=" "${BASH_SOURCE[0]}")" >&2; exit 1; }
 
 
 COVERED="$SUITE_TMP/covered.txt"
@@ -1840,6 +1847,144 @@ if [[ "$ce_rc" -ne 0 ]] && grep -qaE '\[FATAL\] accounting' "$ce_err"; then
   pass "conservation EXECUTES: a neutered verdict helper is caught by the accounting identity (exit $ce_rc)"
 else
   fail "conservation did not fire when a verdict helper was neutered (exit $ce_rc) — the identity is spelled but not enforced; a gutted comparison would pass every static arm above"
+fi
+
+# --- ARM 11: the PROMOTED_FILES single-site pin discriminates (#11899) ----------------------
+# The pin beside the canonical assignment counts every ASSIGNMENT-SHAPED `PROMOTED_FILES`
+# site in this file — column-0 or indented, any quote form, `+=` appends included — and
+# exits 1 on any count but one. Each row below grades a mutation with THE PIN LINE
+# ITSELF, extracted verbatim and run inside a scratch probe — the pin reads the probe's own
+# BASH_SOURCE, so the mechanism under test is the real one, never a restated count.
+_pf_self="${BASH_SOURCE[0]}"
+_pf_name='PROMOTED_FILES'
+# The pin is the only indented `[ "$(grep -cE … PROMOTED_FILES …` line in this file: it
+# sits inside a `[` test precisely so its own text can never satisfy the
+# `^[[:space:]]*PROMOTED_FILES` anchor it counts, and this extraction finds it by that
+# shape rather than by a line number that drifts.
+_pf_pin_ln="$(grep -m1 -nE '^[[:space:]]+\[ "\$\(grep -cE .*PROMOTED_FILES' "$_pf_self" | cut -d: -f1 || true)"
+_pf_pin_line=""
+if [[ -n "$_pf_pin_ln" ]]; then
+  _pf_pin_line="$(sed -n "${_pf_pin_ln}p" "$_pf_self")"
+fi
+_pf_canonical="$(grep -m1 -E "^${_pf_name}='" "$_pf_self" || true)"
+
+cases=$((cases + 1))
+if [[ -n "$_pf_pin_line" && -n "$_pf_canonical" ]] \
+   && [ "$(grep -cE "^[[:space:]]*${_pf_name}[+]?=" "$_pf_self")" -eq 1 ]; then
+  pass "the single-site pin is present and the file carries exactly one ${_pf_name} assignment-shaped site"
+else
+  fail "the single-site pin is missing, or the file no longer carries exactly one ${_pf_name} assignment-shaped site — the probe rows below would grade a pin that does not exist"
+fi
+
+# Each probe carries ONLY the pin line plus the site-shaped lines under test; running it
+# executes the real pin against the probe's own text — the mutation is graded by the pin,
+# not by a paraphrase of it.
+mk_pf_probe() { # <out> [probe-line]...
+  local out="$1" _l
+  shift
+  { printf '%s\n' "$_pf_pin_line"; for _l in "$@"; do printf '%s\n' "$_l"; done; } > "$out"
+}
+
+# probe_built <probe> [required-substring]... — the explicit probe-construction verdict.
+# Without it, a probe that failed to build (empty, missing, or lacking its decoy line)
+# still exits non-zero under `bash` — the pin inside it fires on a count of 0 — and
+# grading that as "the pin caught the mutation" is a grading vacuity: the row certifies
+# a pin that never saw the fault it is claimed to have caught.
+probe_built() { # <probe> [required-substring]...
+  local probe="$1" _d
+  shift
+  [[ -s "$probe" ]] || return 1
+  for _d in "$@"; do grep -qF "$_d" "$probe" || return 1; done
+  return 0
+}
+
+cases=$((cases + 1))
+_pf_a="$SUITE_TMP/pf-probe-second-site.sh"
+if mk_pf_probe "$_pf_a" "$_pf_canonical" "${_pf_name}='^(second-site-decoy)\$'" \
+   && probe_built "$_pf_a" "$_pf_pin_line" "${_pf_name}='^(second-site-decoy)"; then
+  _pf_a_rc=0
+  bash "$_pf_a" >/dev/null 2>&1 || _pf_a_rc=$?
+  if [[ "$_pf_a_rc" -ne 0 ]]; then
+    pass "a second column-0 ${_pf_name} assignment site is RED — the pin fires inside the probe (rc $_pf_a_rc)"
+  else
+    fail "a second ${_pf_name} assignment site went GREEN — the single-site pin does not fire; stale-snapshot drift is silently last-wins again"
+  fi
+else
+  fail "second-site probe failed to build or lacks its decoy — the row would grade a pin that never saw the mutation"
+fi
+
+cases=$((cases + 1))
+_pf_b="$SUITE_TMP/pf-probe-deleted-site.sh"
+if mk_pf_probe "$_pf_b" && probe_built "$_pf_b" "$_pf_pin_line"; then
+  _pf_b_rc=0
+  bash "$_pf_b" >/dev/null 2>&1 || _pf_b_rc=$?
+  if [[ "$_pf_b_rc" -ne 0 ]]; then
+    pass "deleting the only ${_pf_name} assignment site is RED — the pin fires on a zero count (rc $_pf_b_rc)"
+  else
+    fail "a file with no ${_pf_name} assignment at all went GREEN — the pin accepts a zero count"
+  fi
+else
+  fail "deleted-site probe failed to build — the row would grade a pin that never ran"
+fi
+
+cases=$((cases + 1))
+_pf_c="$SUITE_TMP/pf-probe-comment-site.sh"
+if mk_pf_probe "$_pf_c" "$_pf_canonical" "# stale-site lookalike: ${_pf_name}='^(comment-decoy)\$' inside a comment never counts" \
+   && probe_built "$_pf_c" "$_pf_pin_line" "${_pf_name}='^(comment-decoy)"; then
+  _pf_c_rc=0
+  bash "$_pf_c" >/dev/null 2>&1 || _pf_c_rc=$?
+  if [[ "$_pf_c_rc" -eq 0 ]]; then
+    pass "a '#'-prefixed comment carrying a literal ${_pf_name}='…' text does NOT count as a site — comments can never self-match the pin"
+  else
+    fail "a comment line containing ${_pf_name}=' text fired the pin (rc $_pf_c_rc) — the anchor is not comment-safe"
+  fi
+else
+  fail "comment-site probe failed to build or lacks its decoy — the row would grade a pin that never saw the mutation"
+fi
+
+cases=$((cases + 1))
+_pf_d="$SUITE_TMP/pf-probe-indented-site.sh"
+if mk_pf_probe "$_pf_d" "$_pf_canonical" "  ${_pf_name}='^(indented-decoy)\$'" \
+   && probe_built "$_pf_d" "$_pf_pin_line" "${_pf_name}='^(indented-decoy)"; then
+  _pf_d_rc=0
+  bash "$_pf_d" >/dev/null 2>&1 || _pf_d_rc=$?
+  if [[ "$_pf_d_rc" -ne 0 ]]; then
+    pass "an indented second ${_pf_name} site is RED — leading whitespace no longer hides a last-wins drift site from the pin (rc $_pf_d_rc)"
+  else
+    fail "an indented ${_pf_name}='…' site went GREEN — the pin's anchor is column-0-bound and an indented assignment smuggles a second site past it"
+  fi
+else
+  fail "indented-site probe failed to build or lacks its decoy — the row would grade a pin that never saw the mutation"
+fi
+
+cases=$((cases + 1))
+_pf_e="$SUITE_TMP/pf-probe-dq-site.sh"
+if mk_pf_probe "$_pf_e" "$_pf_canonical" "${_pf_name}=\"^(dq-decoy)\$\"" \
+   && probe_built "$_pf_e" "$_pf_pin_line" "${_pf_name}=\"^(dq-decoy)"; then
+  _pf_e_rc=0
+  bash "$_pf_e" >/dev/null 2>&1 || _pf_e_rc=$?
+  if [[ "$_pf_e_rc" -ne 0 ]]; then
+    pass "a double-quoted ${_pf_name}=\"…\" site is RED — quote style cannot launder a second assignment (rc $_pf_e_rc)"
+  else
+    fail "a double-quoted ${_pf_name}=\"…\" site went GREEN — the pin counted only the single-quoted form"
+  fi
+else
+  fail "double-quoted-site probe failed to build or lacks its decoy — the row would grade a pin that never saw the mutation"
+fi
+
+cases=$((cases + 1))
+_pf_f="$SUITE_TMP/pf-probe-append-site.sh"
+if mk_pf_probe "$_pf_f" "$_pf_canonical" "${_pf_name}+='|rogue-promotion'" \
+   && probe_built "$_pf_f" "$_pf_pin_line" "${_pf_name}+='|rogue"; then
+  _pf_f_rc=0
+  bash "$_pf_f" >/dev/null 2>&1 || _pf_f_rc=$?
+  if [[ "$_pf_f_rc" -ne 0 ]]; then
+    pass "a ${_pf_name}+= append site is RED — an appended alternation silently widens the promoted set without touching the canonical line (rc $_pf_f_rc)"
+  else
+    fail "a ${_pf_name}+='…' append went GREEN — the pin counted only plain '=' sites and an append smuggles entries into the promoted set"
+  fi
+else
+  fail "append-site probe failed to build or lacks its decoy — the row would grade a pin that never saw the mutation"
 fi
 
 # ---------------------------------------------------------------------------------------

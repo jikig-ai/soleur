@@ -479,7 +479,7 @@
 1	scripts/generate-article-30-register.sh
 6	scripts/generate-kb-index.sh
 1	scripts/grok-fidelity-bootstrap.sh
-6	scripts/guard-vacuity-floor.test.sh
+7	scripts/guard-vacuity-floor.test.sh
 2	scripts/infra-config-red-alert.test.sh
 8	scripts/inngest-key-rotate.sh
 1	scripts/kb-staleness-metric.sh
