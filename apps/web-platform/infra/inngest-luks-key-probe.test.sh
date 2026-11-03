@@ -124,7 +124,7 @@ new_case() {
 # cryptsetup stub. Records argv + environment per call, and on the proof call drains stdin into
 # keyrec so the suite can assert the EXACT bytes that arrived on the pipe.
 sub="${1:-}"
-# An early exit BEFORE any logging or stdin read: the upstream tr then takes SIGPIPE (a race in the 20 natural runs; forced by a tr shim in the last run).
+# An early exit BEFORE any logging or stdin read: tr then dies by SIGPIPE (racy in the 20 natural runs; forced in the last one, #11752).
 [ -n "${STUB_EARLY_RC:-}" ] && [ "$sub" = luksOpen ] && exit "$STUB_EARLY_RC"
 printf '%s\n' "$*" >> "$STUB_DIR/arglog"
 env >> "$STUB_DIR/envlog"
@@ -1025,6 +1025,8 @@ pred_early_exit_rc() {
   # prove the 0:0:141 allowance is exercised. This run makes PIPESTATUS read "0 0 141 4" by construction:
   # a tr shim, gated on the probe's exact argv, drains its stdin (so sed and head do not take SIGPIPE
   # first) and then dies by SIGPIPE; every other tr call goes to the real tr by absolute path.
+  # Known, accepted gaps (pre-existing, outside #11752): nothing here pins the allowance against WIDENING
+  # (0:0:1, 0:141:x, *:0:141) or exercises the sed-side 141:0:0 arm (one key line, so sed never takes SIGPIPE).
   local real_tr
   real_tr="$(command -v tr)"
   [[ "$real_tr" == /* ]] || bad=$((bad + 1))
@@ -1036,18 +1038,21 @@ if [ "$*" = '-d \n' ]; then
   : > "$SHIM_TR_FIRED"
   cat >/dev/null
   kill -s PIPE $$
+  exit 99
 fi
 exec "$SHIM_REAL_TR" "$@"
 SHIM
   chmod +x "$WORK/shim/tr"
-  rm -f "$STAMP" "$WORK/tr-fired"
+  local fired="$WORK/tr-fired"
+  rm -f "$STAMP" "$fired"
   : > "$LOGTRACE"
   : > "$PHONETRACE"
   RUN_PREFIX="env --default-signal=PIPE"
-  run_tick "done" STUB_EARLY_RC=4 PATH="$WORK/shim:$PATH" SHIM_REAL_TR="$real_tr" SHIM_TR_FIRED="$WORK/tr-fired"
+  run_tick "done" STUB_EARLY_RC=4 PATH="$WORK/shim:$PATH" SHIM_REAL_TR="$real_tr" SHIM_TR_FIRED="$fired"
   RUN_PREFIX=""
-  # the shim must have fired, or the forced run proves nothing (a missing interpreter falls through to the real tr)
-  [[ -e "$WORK/tr-fired" ]] || bad=$((bad + 1))
+  # the shim must have fired, or the forced run proves nothing (a missing interpreter falls through to the real tr);
+  # exit 99 above makes a kill that did not land read as rc=99, not as a silent 0 0 0 4
+  [[ -e "$fired" ]] || bad=$((bad + 1))
   [[ "$(probe_summary)" == "$(expect_summary 'verdict=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
   end_case
   SUT="$TARGET"
