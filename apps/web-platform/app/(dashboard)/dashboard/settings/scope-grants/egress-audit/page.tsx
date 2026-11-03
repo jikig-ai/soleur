@@ -1,7 +1,7 @@
 // #9545 PR2 — egress audit destination page (wireframes 07-04..07-25). A child route of Scope Grants, so
 // the settings shell keeps the Scope Grants tab highlighted. Server-rendered: the loader calls the
-// member-gated RPC through the caller's cookie client; the filter is the `?decision=` search param
-// (chips are links), so there is no client fetch, abort guard or rate-limited route. Expected failures
+// member-gated RPC through the caller's cookie client; the filter is the `?decision=` search param and the
+// time window (24h / 7d / 30d, default 30d) is the `?window=` search param (chips are links), so there is no client fetch, abort guard or rate-limited route. Expected failures
 // render in place (the settings tabs stay); only an uncaught bug reaches the dashboard error boundary.
 // Caching: `force-dynamic` below keeps the page out of the static cache, and the middleware sends
 // `Cache-Control: no-store` on authenticated document navigations (test/middleware.no-store.test.ts), so a
@@ -11,7 +11,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { EgressAuditView } from "@/components/settings/egress-audit-view";
-import { parseDecisionFilter } from "@/lib/egress-audit/summary";
+import { parseDecisionFilter, parseTimeWindow } from "@/lib/egress-audit/summary";
 import { loadEgressAudit } from "@/server/egress-audit-read";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export default async function EgressAuditPage({
   searchParams,
 }: {
-  searchParams: Promise<{ decision?: string | string[] }>;
+  searchParams: Promise<{ decision?: string | string[]; window?: string | string[] }>;
 }) {
   const supabase = await createClient();
   const {
@@ -27,9 +27,12 @@ export default async function EgressAuditPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // Next 16: searchParams is a Promise. An unknown or repeated value falls back to "all" (never a 400).
-  const filter = parseDecisionFilter((await searchParams).decision);
-  const result = await loadEgressAudit(supabase, user.id, filter);
+  // Next 16: searchParams is a Promise. An unknown or repeated value falls back to "all" / "30d" (never a 400).
+  // Property access, no destructuring: a `window` binding would shadow the browser global.
+  const params = await searchParams;
+  const filter = parseDecisionFilter(params.decision);
+  const timeWindow = parseTimeWindow(params.window);
+  const result = await loadEgressAudit(supabase, user.id, filter, timeWindow);
 
-  return <EgressAuditView result={result} filter={filter} />;
+  return <EgressAuditView result={result} filter={filter} timeWindow={timeWindow} />;
 }

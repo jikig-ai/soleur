@@ -3,8 +3,10 @@
 // There is no HTTP route (CTO ruling 2026-10-26): the page and the card call the RPC directly through
 // the caller's cookie (tenant) client, exactly like the rest of the settings pages.
 //
-// Authorization is the RPC's alone (migration 177: `is_workspace_member(p_workspace_id, auth.uid())`,
-// SQLSTATE 42501 otherwise). This loader never decides who may read; it decides WHICH workspace to
+// Authorization is the RPC's alone (migration 177 for the card hint, migration 183 for the page:
+// `is_workspace_member(p_workspace_id, auth.uid())`, SQLSTATE 42501 otherwise). The page reads
+// `get_egress_audit_window_summary` (window 24h / 7d / 30d, #11238) with no fallback to the 177 function; the
+// card hint stays on `get_egress_audit_summary` with `p_limit = 0` and no window. This loader never decides who may read; it decides WHICH workspace to
 // ask about and how to render each outcome, under these rules:
 //
 //   1. The workspace id comes ONLY from `readWorkspaceIdFromDb`, the fail-loud reader. It is never an
@@ -15,7 +17,7 @@
 //   2. Expected outcomes are values, never throws: forbidden / unbound / unavailable / ready. An error
 //      is therefore never rendered as an empty log.
 //   3. `forbidden` is ONLY the RPC's own in-body denial: SQLSTATE 42501 AND a message starting with
-//      RPC_DENIAL_PREFIX (migration 177 raises exactly those). The database engine uses the same
+//      RPC_DENIAL_PREFIX (migrations 177 and 183 raise exactly those). The database engine uses the same
 //      SQLSTATE for a lost EXECUTE grant ("permission denied for function ..."); that is a fault, not
 //      a denial, so it is mirrored and renders `unavailable`.
 //   4. Faults are mirrored with the reason in `op`, `err = null` and a STATIC message, so each reason is
@@ -48,6 +50,7 @@ import {
   type DecisionFilter,
   type EgressAuditResult,
   type EgressCardState,
+  type TimeWindow,
 } from "@/lib/egress-audit/summary";
 
 const FEATURE = "egress-audit-read";
@@ -189,11 +192,12 @@ async function readWebAccess(supabase: SupabaseClient, wsId: string): Promise<bo
   }
 }
 
-/** Destination page: the 30-day summary for the caller's current workspace. Never throws. */
+/** Destination page: the summary for the caller's current workspace over the chosen window (24h / 7d / 30d). Never throws. */
 export async function loadEgressAudit(
   supabase: SupabaseClient,
   userId: string,
   filter: DecisionFilter,
+  timeWindow: TimeWindow,
 ): Promise<EgressAuditResult> {
   const pointer = await readPointer(supabase, userId, PAGE_POINTER_TIMEOUT_MS);
   if (pointer.kind === "timeout") {
@@ -210,7 +214,12 @@ export async function loadEgressAudit(
   let reply: Reply | "timeout";
   try {
     reply = await bounded(
-      call(supabase, "get_egress_audit_summary", { p_workspace_id: ws, p_limit: PAGE_LIMIT, p_decision: toRpcDecision(filter) }, PAGE_TIMEOUT_MS),
+      call(
+        supabase,
+        "get_egress_audit_window_summary",
+        { p_workspace_id: ws, p_limit: PAGE_LIMIT, p_decision: toRpcDecision(filter), p_window: timeWindow },
+        PAGE_TIMEOUT_MS,
+      ),
       PAGE_TIMEOUT_MS,
     );
   } catch {
