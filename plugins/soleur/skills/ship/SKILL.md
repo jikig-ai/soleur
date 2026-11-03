@@ -1728,6 +1728,8 @@ Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, 
 
 **Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (standalone ship writes no ledger otherwise), `gate ci_cycles` — `STOP` → `budget-capped` session-state write per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) and exit; `WARN`/`UNKNOWN` → continue; `incr ci_cycles` after a successful push.
 
+**`ci_wall_s` — measured CI wall-clock per driven run (#11775).** Every `incr ci_cycles` site below also posts `incr ci_wall_s <seconds>` for the head-SHA run that push produced, once that run reaches `completed` — the measured-wall recipe (run `startedAt`→`updatedAt` delta, per-job `started_at`→`completed_at` span as fallback) is in the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md). Skip the incr when the timing is unreadable — never a fabricated 0; a zero count renders `ci_wall_s=unmeasured`, so a skipped post stays visible.
+
 **Secret scan — BEFORE every `git push` (also 6.45, 6.5, 7):** `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/prepush-secret-scan.sh"; echo "SCAN_RC=$?"`, Bash `timeout: 400000` ([contract](./scripts/prepush-secret-scan.sh)); 43 is not an error. 0 continue; 43 append the printed `secret-scan:` line to the PR body (re-add after any body rewrite), continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode). Headless FINDINGS/44: abort, never rewrite history or edit the gitleaks config.
 
 Push the branch to remote. Get the branch name first:
@@ -2009,6 +2011,7 @@ If it archives anything (`Archived N artifact(s)`), commit and push the move so 
 ```bash
 # Phase 6 secret scan first
 git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+# + `incr ci_wall_s <s>` once this push's head-SHA run completes (Phase-6 tally gate recipe; skip on unreadable timing)
 ```
 
 — but check `git status` first: `git add -A knowledge-base` sweeps dirty KB files into the commit; stage deliberately when the tree carries unrelated edits.
@@ -2124,6 +2127,7 @@ retired both the driver and AC17.)
    # Phase 6 secret scan first
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push \
      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+   # + `incr ci_wall_s <s>` once this push's head-SHA run completes (Phase-6 tally gate recipe; skip on unreadable timing)
    ```
 
 2. Identify conflicted files:
@@ -2151,6 +2155,7 @@ retired both the driver and AC17.)
    ```bash
    # Phase 6 secret scan first
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+   # + `incr ci_wall_s <s>` once this push's head-SHA run completes (Phase-6 tally gate recipe; skip on unreadable timing)
    gh pr view --json mergeable | jq '.mergeable'
    ```
 
@@ -2452,6 +2457,8 @@ while true; do
       0) echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
          behind_pushes=$((behind_pushes+1))
          bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
+         # ci_wall_s (#11775): the sync push's run wall is posted at the Tally
+         # re-render step after this loop — never here; unreadable -> skip, never a fabricated 0
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
          s=$(gh pr view "$PR" --json state,mergeStateStatus \
@@ -2492,7 +2499,7 @@ done
 # <!-- phase-7-poll-block:end -->
 ```
 
-**Tally re-render (#9403):** if the poll pushed syncs or halted on a `ci_cycles` STOP, re-render `## Pipeline Tally` + `Pipeline-Tally:` via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — Phase 6's body predates Phase-7 cycles; `SOLEUR_TALLY_CAP_IGNORED` is reachable only here.
+**Tally re-render (#9403):** if the poll pushed syncs or halted on a `ci_cycles` STOP, first post `incr ci_wall_s <seconds>` for each sync-pushed run that completed — the Phase-6 `ci_wall_s` recipe, skipped when a run's timing is unreadable (never a fabricated 0) — then re-render `## Pipeline Tally` + `Pipeline-Tally:` via `gh pr edit` per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) — Phase 6's body predates Phase-7 cycles; `SOLEUR_TALLY_CAP_IGNORED` is reachable only here.
 
 **A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery run as the Monitor's command was reaped at 30 minutes; relaunched detached, it completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
 
@@ -2519,7 +2526,7 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll, so a pathological BEHIND→
 **CI-run diagnosis:** derive the run id from the failing check name, then read jobs + steps via `gh api --paginate` — [ci-run-diagnosis.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ci-run-diagnosis.md). `--paginate` is load-bearing (`gh api` does NOT auto-paginate; a >30-job run returns a truncated, false-clean set). Both commands work while the run is still in progress, but **an in-progress snapshot is not a verdict** — classify only once the run reaches `completed`. Then:
 
 - **Default: treat it as a real red.** Exit and diagnose. Everything below is a narrow exception to this, and anything you cannot confidently place is a red.
-- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first; a rerun drives a fresh CI cycle — `incr ci_cycles` on it too), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
+- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first; a rerun drives a fresh CI cycle — `incr ci_cycles` on it too, plus `incr ci_wall_s <s>` on the rerun's measured wall once it completes — Phase-6 recipe; skip on unreadable timing), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
 - **A dependency install is NOT in that exception, whatever the step is called.** Read the failing step's COMMAND: if it is `bun install`, `npm ci`, `npm install`, `yarn install`, or `pnpm install`, it is lockfile drift — a red your diff caused (`cq-before-pushing-package-json-changes`). So is a `sha256sum -c` mismatch when the PR bumps that pin. Rerunning those wastes two cycles and then reports a code failure to the operator as an infrastructure outage, steering them away from the diff that caused it.
 - If the same step fails again after one rerun, stop and diagnose — do not keep rerunning, and do not assert "infrastructure" unless the failing output actually shows a network/HTTP error.
 
@@ -2566,6 +2573,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
       ```bash
       # Phase 6 secret scan first
       git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+      # + `incr ci_wall_s <s>` once this push's head-SHA run completes (Phase-6 tally gate recipe; skip on unreadable timing)
       gh pr merge <number> --squash --auto
       ```
 

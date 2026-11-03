@@ -3506,8 +3506,10 @@ _affected_edge_token() {
   # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
   # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
   # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
-  # fallback for any spelling this pattern does not match.
-  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+  # fallback for any spelling this pattern does not match. A redirect between the target and `&& pwd`
+  # is tolerated — the probe idiom `source "$(cd "<dir>" 2>/dev/null && pwd)/x.sh"` carries `2>/dev/null`
+  # or `2>&1` there (the unwalked-SUT learning, 2026-11-02); any other spelling falls to the greedy arm.
+  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?([[:space:]]+2[>](/dev/null|&1))?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
     local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
     # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
     # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
@@ -3883,6 +3885,10 @@ _affected_derive() {
       test-*.py|test_*.py)  _stem="${_base#test?}" ;;
       *)                    _stem="" ;;
     esac
+    # Minted-edge snapshot for the stem fan below: the closure frontier reuses this
+    # slice as its seed set, so only candidates that actually minted an edge are probed —
+    # the fan offers up to 31 spellings per suite, most nonexistent.
+    local _stem_pre=${#_AC_EDGES[@]}
     if [[ -n "$_stem" ]]; then
       # The SUT's extension does not have to match the test's — a .test.sh can
       # guard an .mjs/.ts/.py helper — so fan the bare stem across every SUT
@@ -3915,9 +3921,21 @@ _affected_derive() {
       done
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
-    # Closure, bounded: follow source/import edges one level at a time.
+    # Closure, bounded: follow source/import edges one level at a time. The frontier
+    # seeds with the suite file AND every file the stem fan minted an edge for (the
+    # `_stem_pre` slice): a SUT's edge is pre-minted by the naming convention, so it
+    # never appears in a walked file's newly-minted slice — an unseeded BFS never
+    # extracts the SUT, and its source/invocation/$VAR/path tokens mint nothing
+    # (learning 2026-11-02-stem-minted-suts-are-never-walked-by-the-derive).
     local -a _queue=("$_suite_file")
     local _sset=$'\n'"$_suite_file"$'\n' _snl=$'\n'
+    local _si _sf
+    for (( _si=_stem_pre; _si<${#_AC_EDGES[@]}; _si++ )); do
+      _sf="${_AC_EDGES[$_si]#^}"
+      if _affected_probe f "$_sf"; then
+        case "$_sset" in *"$_snl$_sf$_snl"*) ;; *) _sset+="$_sf$_snl"; _queue+=("$_sf") ;; esac
+      fi
+    done
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
       # Deleted-cwd re-check inside the one multi-iteration site of a single

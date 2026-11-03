@@ -5,6 +5,11 @@
 - Status: complete
 - cto_spawns=1 (technical-ruling gate: wall-ceiling constants ruled keep 240/285, conditioned — breach routes to budget owner, never a raise)
 
+## Work Phase
+- Tier: B fan-out ×3 (workstreams A/B/C; Tier 0 declined — its no-Bash constraint cannot run the gh/audit drain work). agent_ids c1d8c10c (A), cb46cbea (B), 89087fac (C-mech)
+- Overlap preflight post-planning: exit=13 — 9 name-overlap PRs, no duplicate vehicle; continue without touching their changes.
+- **s4-drain coordination:** PR #11950 (draft, branch feat-one-shot-10861-pr5-strict-zero, active 2026-11-03) is an open sibling drain editing `ci-pr-affected-audit.{accept,baseline}.tsv`. Task 1.3 gate: NO baseline edit while it is open. Our drain defers baseline regen; accept-row/declaration edits scoped to what our widening actually reveals.
+
 ### Errors
 None. (Disclosure: no nested-subagent capability — all research, review, and ruling roles were executed sequentially inline; `Reviewed-Coverage: sequential-fallback` recorded in the plan, decision-challenges.md, and the Enhancement Summary.)
 
