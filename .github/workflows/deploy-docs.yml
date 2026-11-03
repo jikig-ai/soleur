@@ -171,7 +171,7 @@ jobs:
         # npm package drifts off the container's Chromium revision. Keep this
         # pin in sync with the container image tag above and with ci.yml's
         # critical-css-gate matching step.
-        run: npm install --no-save playwright@1.60.0 http-server@14
+        run: npm install --no-save playwright@1.60.0 http-server@14.1.1
 
       - name: Screenshot gate (FOUC) + stylesheet-swap regression gate
         run: |
@@ -266,7 +266,7 @@ jobs:
       # `conclusion` — continue-on-error rewrites `conclusion` to `success`, so
       # a verdict reading it would pass vacuously.
       # Exact version, no floating tag — same discipline as the
-      # `playwright@1.60.0` install above (its `http-server@14` companion is
+      # `playwright@1.60.0` install above (its `http-server@14.1.1` companion is
       # itself a floating major — the pin that matters here is exact), and for a
       # sharper reason: this step holds a token that can replace every byte
       # of soleur.ai. A floating major tag would re-resolve from npm on every
