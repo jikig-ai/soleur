@@ -636,7 +636,7 @@
                           "fill": "$amber",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Final once recorded. You will sign in again first.",
+                          "content": "Final once recorded. We check it is you first with an email code.",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 12,
@@ -1406,7 +1406,7 @@
                           "fill": "$amber",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Final once recorded. You will sign in again first.",
+                          "content": "Final once recorded. We check it is you first with an email code.",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 12,
@@ -2297,7 +2297,7 @@
                           "fill": "$amber",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Final once recorded. You will sign in again first.",
+                          "content": "Final once recorded. We check it is you first with an email code.",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 12,
@@ -3077,7 +3077,7 @@
                           "fill": "$amber",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Final once recorded. You will sign in again first.",
+                          "content": "Final once recorded. We check it is you first with an email code.",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 12,
@@ -3325,500 +3325,6 @@
     },
     {
       "type": "frame",
-      "id": "P1beTF",
-      "x": 2160,
-      "y": 0,
-      "name": "Desktop fresh sign-in before Yes",
-      "width": 1000,
-      "fill": "$bg",
-      "layout": "vertical",
-      "gap": 24,
-      "padding": 40,
-      "alignItems": "center",
-      "children": [
-        {
-          "type": "frame",
-          "id": "l8LFMg",
-          "name": "Page header",
-          "width": "fill_container",
-          "justifyContent": "space_between",
-          "alignItems": "center",
-          "children": [
-            {
-              "type": "text",
-              "id": "dP6s7",
-              "name": "Brand",
-              "fill": "$gold",
-              "content": "Soleur",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 20,
-              "fontWeight": "bold"
-            },
-            {
-              "type": "text",
-              "id": "wvqSE",
-              "name": "Section",
-              "fill": "$text-muted",
-              "content": "Approvals",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 14,
-              "fontWeight": "normal"
-            }
-          ]
-        },
-        {
-          "type": "frame",
-          "id": "Zfldm",
-          "name": "Sign-in step card",
-          "width": 560,
-          "fill": "$surface",
-          "cornerRadius": 12,
-          "stroke": "$border",
-          "strokeWidth": 1,
-          "layout": "vertical",
-          "gap": 20,
-          "padding": 28,
-          "children": [
-            {
-              "type": "text",
-              "id": "pnJjp",
-              "name": "Label ONE MORE STEP BEFO",
-              "fill": "$gold",
-              "content": "ONE MORE STEP BEFORE YES IS RECORDED",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 11,
-              "fontWeight": "bold",
-              "letterSpacing": 1.2
-            },
-            {
-              "type": "text",
-              "id": "XHC19",
-              "name": "Title",
-              "fill": "$text",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "Sign in again to confirm it is you",
-              "lineHeight": 1.25,
-              "fontFamily": "$font-ui",
-              "fontSize": 24,
-              "fontWeight": "bold"
-            },
-            {
-              "type": "text",
-              "id": "LMcMo",
-              "name": "Why we ask",
-              "fill": "$text-soft",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "Nothing has been recorded yet. We ask you to sign in again so that nobody can answer for you from a window you left open.",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 14,
-              "fontWeight": "normal"
-            },
-            {
-              "type": "frame",
-              "id": "gpaqB",
-              "name": "Answer recap",
-              "width": "fill_container",
-              "fill": "$amber-tint",
-              "cornerRadius": 8,
-              "stroke": "$amber",
-              "strokeWidth": 1,
-              "layout": "vertical",
-              "gap": 4,
-              "padding": 14,
-              "children": [
-                {
-                  "type": "text",
-                  "id": "l0E9d",
-                  "name": "Recap answer",
-                  "fill": "$text",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Your answer: Yes",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 15,
-                  "fontWeight": "bold"
-                },
-                {
-                  "type": "text",
-                  "id": "XLvoe",
-                  "name": "Recap detail",
-                  "fill": "$text-soft",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Accept the updated Customer Terms, version 3 (2 Nov 2026). Final once recorded.",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 13,
-                  "fontWeight": "normal"
-                }
-              ]
-            },
-            {
-              "type": "frame",
-              "id": "CrVRa",
-              "name": "Account row",
-              "width": "fill_container",
-              "gap": 10,
-              "alignItems": "center",
-              "children": [
-                {
-                  "type": "icon",
-                  "id": "mJxgK",
-                  "name": "Account icon",
-                  "width": 16,
-                  "height": 16,
-                  "icon": "user",
-                  "library": "lucide",
-                  "fill": "$text-muted"
-                },
-                {
-                  "type": "text",
-                  "id": "b8DdXd",
-                  "name": "Account line",
-                  "fill": "$text",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Signing in as dana@example.com",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 14,
-                  "fontWeight": "normal"
-                }
-              ]
-            },
-            {
-              "type": "frame",
-              "id": "psvhZ",
-              "name": "Step actions",
-              "width": "fill_container",
-              "layout": "vertical",
-              "gap": 12,
-              "children": [
-                {
-                  "type": "frame",
-                  "id": "V382wi",
-                  "name": "Sign in and record button",
-                  "width": "fill_container",
-                  "height": 48,
-                  "fill": "$gold-fill",
-                  "cornerRadius": 8,
-                  "justifyContent": "center",
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "text",
-                      "id": "fIGGl",
-                      "name": "Record label",
-                      "fill": "$on-gold",
-                      "content": "Sign in again and record Yes",
-                      "lineHeight": 1.5,
-                      "fontFamily": "$font-ui",
-                      "fontSize": 15,
-                      "fontWeight": "bold"
-                    }
-                  ]
-                },
-                {
-                  "type": "frame",
-                  "id": "H1hfuz",
-                  "name": "Go back button",
-                  "width": "fill_container",
-                  "height": 48,
-                  "fill": "$surface",
-                  "cornerRadius": 8,
-                  "stroke": "#4A4A4A",
-                  "strokeWidth": 1.5,
-                  "justifyContent": "center",
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "text",
-                      "id": "w5Wuh8",
-                      "name": "Back label",
-                      "fill": "$text",
-                      "content": "Go back. Do not record anything.",
-                      "lineHeight": 1.5,
-                      "fontFamily": "$font-ui",
-                      "fontSize": 15,
-                      "fontWeight": "bold"
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "type": "text",
-              "id": "paHRS",
-              "name": "After note",
-              "fill": "$text-muted",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "If you close this page now, nothing is recorded. After you finish, the card will say: Signed in with your account, re-checked just now.",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 12,
-              "fontWeight": "normal"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "frame",
-      "id": "fQG0T",
-      "x": 940,
-      "y": 1700,
-      "name": "Mobile fresh sign-in before Yes",
-      "width": 390,
-      "fill": "$bg",
-      "layout": "vertical",
-      "gap": 16,
-      "padding": 16,
-      "alignItems": "center",
-      "children": [
-        {
-          "type": "frame",
-          "id": "Bq6WS",
-          "name": "Page header",
-          "width": "fill_container",
-          "justifyContent": "space_between",
-          "alignItems": "center",
-          "children": [
-            {
-              "type": "text",
-              "id": "knP0r",
-              "name": "Brand",
-              "fill": "$gold",
-              "content": "Soleur",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 20,
-              "fontWeight": "bold"
-            },
-            {
-              "type": "text",
-              "id": "jvynP",
-              "name": "Section",
-              "fill": "$text-muted",
-              "content": "Approvals",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 14,
-              "fontWeight": "normal"
-            }
-          ]
-        },
-        {
-          "type": "frame",
-          "id": "p2Yj8",
-          "name": "Sign-in step card",
-          "width": "fill_container",
-          "fill": "$surface",
-          "cornerRadius": 12,
-          "stroke": "$border",
-          "strokeWidth": 1,
-          "layout": "vertical",
-          "gap": 20,
-          "padding": 16,
-          "children": [
-            {
-              "type": "text",
-              "id": "m08nbd",
-              "name": "Label ONE MORE STEP BEFO",
-              "fill": "$gold",
-              "content": "ONE MORE STEP BEFORE YES IS RECORDED",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 11,
-              "fontWeight": "bold",
-              "letterSpacing": 1.2
-            },
-            {
-              "type": "text",
-              "id": "CZnWI",
-              "name": "Title",
-              "fill": "$text",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "Sign in again to confirm it is you",
-              "lineHeight": 1.25,
-              "fontFamily": "$font-ui",
-              "fontSize": 22,
-              "fontWeight": "bold"
-            },
-            {
-              "type": "text",
-              "id": "jaXvn",
-              "name": "Why we ask",
-              "fill": "$text-soft",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "Nothing has been recorded yet. We ask you to sign in again so that nobody can answer for you from a window you left open.",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 14,
-              "fontWeight": "normal"
-            },
-            {
-              "type": "frame",
-              "id": "UGuo8",
-              "name": "Answer recap",
-              "width": "fill_container",
-              "fill": "$amber-tint",
-              "cornerRadius": 8,
-              "stroke": "$amber",
-              "strokeWidth": 1,
-              "layout": "vertical",
-              "gap": 4,
-              "padding": 14,
-              "children": [
-                {
-                  "type": "text",
-                  "id": "E9Bs6F",
-                  "name": "Recap answer",
-                  "fill": "$text",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Your answer: Yes",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 15,
-                  "fontWeight": "bold"
-                },
-                {
-                  "type": "text",
-                  "id": "dJ80h",
-                  "name": "Recap detail",
-                  "fill": "$text-soft",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Accept the updated Customer Terms, version 3 (2 Nov 2026). Final once recorded.",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 13,
-                  "fontWeight": "normal"
-                }
-              ]
-            },
-            {
-              "type": "frame",
-              "id": "EF4BG",
-              "name": "Account row",
-              "width": "fill_container",
-              "gap": 10,
-              "alignItems": "center",
-              "children": [
-                {
-                  "type": "icon",
-                  "id": "BKf1N",
-                  "name": "Account icon",
-                  "width": 16,
-                  "height": 16,
-                  "icon": "user",
-                  "library": "lucide",
-                  "fill": "$text-muted"
-                },
-                {
-                  "type": "text",
-                  "id": "yyv08",
-                  "name": "Account line",
-                  "fill": "$text",
-                  "textGrowth": "fixed-width",
-                  "width": "fill_container",
-                  "content": "Signing in as dana@example.com",
-                  "lineHeight": 1.5,
-                  "fontFamily": "$font-ui",
-                  "fontSize": 14,
-                  "fontWeight": "normal"
-                }
-              ]
-            },
-            {
-              "type": "frame",
-              "id": "nlPbC",
-              "name": "Step actions",
-              "width": "fill_container",
-              "layout": "vertical",
-              "gap": 12,
-              "children": [
-                {
-                  "type": "frame",
-                  "id": "JQpxc",
-                  "name": "Sign in and record button",
-                  "width": "fill_container",
-                  "height": 48,
-                  "fill": "$gold-fill",
-                  "cornerRadius": 8,
-                  "justifyContent": "center",
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "text",
-                      "id": "TfuJl",
-                      "name": "Record label",
-                      "fill": "$on-gold",
-                      "content": "Sign in again and record Yes",
-                      "lineHeight": 1.5,
-                      "fontFamily": "$font-ui",
-                      "fontSize": 15,
-                      "fontWeight": "bold"
-                    }
-                  ]
-                },
-                {
-                  "type": "frame",
-                  "id": "tLP8m",
-                  "name": "Go back button",
-                  "width": "fill_container",
-                  "height": 48,
-                  "fill": "$surface",
-                  "cornerRadius": 8,
-                  "stroke": "#4A4A4A",
-                  "strokeWidth": 1.5,
-                  "justifyContent": "center",
-                  "alignItems": "center",
-                  "children": [
-                    {
-                      "type": "text",
-                      "id": "QURyV",
-                      "name": "Back label",
-                      "fill": "$text",
-                      "content": "Go back. Do not record anything.",
-                      "lineHeight": 1.5,
-                      "fontFamily": "$font-ui",
-                      "fontSize": 15,
-                      "fontWeight": "bold"
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "type": "text",
-              "id": "bjKxz",
-              "name": "After note",
-              "fill": "$text-muted",
-              "textGrowth": "fixed-width",
-              "width": "fill_container",
-              "content": "If you close this page now, nothing is recorded. After you finish, the card will say: Signed in with your account, re-checked just now.",
-              "lineHeight": 1.5,
-              "fontFamily": "$font-ui",
-              "fontSize": 12,
-              "fontWeight": "normal"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "type": "frame",
       "id": "pIMif",
       "x": 0,
       "y": 3800,
@@ -4000,7 +3506,7 @@
                           "fill": "$text",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Not answered yet. If you say Yes, we will ask you to sign in again first.",
+                          "content": "Not answered yet. If you say Yes, we first check it is you with a code sent to your email.",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 14,
@@ -4182,10 +3688,23 @@
                           "fill": "$text",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Signed in with your account, re-checked just now (10:42).",
+                          "content": "Confirmed with an email code, Tue 4 Nov 2026, 10:42 UTC",
                           "lineHeight": 1.5,
                           "fontFamily": "$font-ui",
                           "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "FPvda",
+                          "name": "Other ways this line can read",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Other ways this line can read:\nConfirmed with your password, Tue 4 Nov 2026, 10:42 UTC\nConfirmed by signing in again with Google, Tue 4 Nov 2026, 10:42 UTC",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
                           "fontWeight": "normal"
                         }
                       ]
@@ -5929,6 +5448,2553 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "r1WYsC",
+      "x": 2160,
+      "y": 0,
+      "name": "Desktop in-place check before Yes",
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "M2tU8",
+          "name": "Label IN-PLACE CHECK BEF",
+          "fill": "$gold",
+          "content": "IN-PLACE CHECK BEFORE YES IS RECORDED",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-ui",
+          "fontSize": 11,
+          "fontWeight": "bold",
+          "letterSpacing": 1.2
+        },
+        {
+          "type": "text",
+          "id": "s1lW4",
+          "name": "Board intro",
+          "fill": "$text-soft",
+          "textGrowth": "fixed-width",
+          "width": 1000,
+          "content": "Opens on top of the same card and closes back to it. The founder stays signed in at every step. Nothing is recorded until the code (or password, or provider check) is accepted.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-ui",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "VH9fL",
+          "name": "Row 1",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "QlxaZ",
+              "name": "Panel A · START (THE EMAIL",
+              "width": 460,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cC6ei",
+                  "name": "Label A · START (THE EMA",
+                  "fill": "$text-muted",
+                  "content": "A · START (THE EMAIL CODE IS THE MAIN WAY)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "oY5Lt",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "nFNuX",
+                      "name": "Label ONE QUICK CHECK BE",
+                      "fill": "$gold",
+                      "content": "ONE QUICK CHECK BEFORE YES IS RECORDED",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "KBkjU",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm it is you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UfhgA",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "We will email a 6-digit code to dana@example.com. You stay signed in, and you come back to this same card.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Tg2Kn",
+                      "name": "Answer recap",
+                      "width": "fill_container",
+                      "fill": "$amber-tint",
+                      "cornerRadius": 8,
+                      "stroke": "$amber",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "BpMOf",
+                          "name": "Recap answer",
+                          "fill": "$text",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Your answer: Yes. Final once recorded.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "F3YKBk",
+                          "name": "Recap detail",
+                          "fill": "$text-soft",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Accept the updated Customer Terms, version 3 (2 Nov 2026). Nothing is recorded until your code is accepted.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "VTCcv",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "E8gITn",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "uEsJQ",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Send me a code",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "UOE1i",
+                          "name": "Link Use my password instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Use my password instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "jyi3F",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Zf8lH",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Wieug",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "The password link is only shown if your account has a password.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "VQmhR",
+              "name": "Panel B · ENTER THE CODE",
+              "width": 460,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ZqrJY",
+                  "name": "Label B · ENTER THE CODE",
+                  "fill": "$text-muted",
+                  "content": "B · ENTER THE CODE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "TxErM",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "n8UCO",
+                      "name": "Label CHECK YOUR EMAIL",
+                      "fill": "$gold",
+                      "content": "CHECK YOUR EMAIL",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "DJJOe",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Enter the 6-digit code we emailed you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "IiaRZ",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sent to dana@example.com. The code works for a few minutes. Nothing is recorded until it is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "e1d0e0",
+                      "name": "Code boxes",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "xrxeM",
+                          "name": "Digit 1",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$gold",
+                          "strokeWidth": 2,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "jd2kp",
+                          "name": "Digit 2",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "skEWC",
+                          "name": "Digit 3",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "cF8Hc",
+                          "name": "Digit 4",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "BrN2y",
+                          "name": "Digit 5",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "P2kWzt",
+                          "name": "Digit 6",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "U8kXAQ",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ufYMd",
+                          "name": "Primary button",
+                          "opacity": 0.5,
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "FDUn6",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "ZDfw0",
+                          "name": "Link Send me a new code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a new code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Bfrsd",
+                          "name": "Link I cannot get the code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "I cannot get the code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "dABjE",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "gqc9N",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "l3XeaX",
+              "name": "Panel C · WRONG OR EXPIRED",
+              "width": 460,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "GbBQy",
+                  "name": "Label C · WRONG OR EXPIR",
+                  "fill": "$text-muted",
+                  "content": "C · WRONG OR EXPIRED CODE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "E4FRl",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$red",
+                  "strokeWidth": 1.5,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "uPQS9",
+                      "name": "Label CHECK YOUR EMAIL",
+                      "fill": "$gold",
+                      "content": "CHECK YOUR EMAIL",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "Q51Z7G",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Enter the 6-digit code we emailed you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "V8Xh1e",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sent to dana@example.com. Nothing has been recorded.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "SPdPP",
+                      "name": "Code boxes",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "I9zZm",
+                          "name": "Digit 1",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "jaXXx",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "4",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "bzjwK",
+                          "name": "Digit 2",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "NVn20",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "8",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "q8x0SL",
+                          "name": "Digit 3",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "FeRWh",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "1",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "dMm37",
+                          "name": "Digit 4",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "fMLXN",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "9",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Hm2N8",
+                          "name": "Digit 5",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "u6AAB",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "0",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "pn1AL",
+                          "name": "Digit 6",
+                          "width": 48,
+                          "height": 54,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "c4um3",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "2",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "rj663",
+                      "name": "Code error",
+                      "width": "fill_container",
+                      "fill": "$red-tint",
+                      "cornerRadius": 8,
+                      "stroke": "$red",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ETRRc",
+                          "name": "Error text",
+                          "fill": "$text",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "That code is wrong or has expired. Codes only work for a few minutes. Check it, or send a new one.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "C6Icv",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f8Blr",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "ZN1KE",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "XIKX4",
+                          "name": "Link Send me a new code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a new code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "LSG5Y",
+                          "name": "Link I cannot get the code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "I cannot get the code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "V0Kn5",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "aYCfM",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "r9L4Vd",
+          "name": "Row 2",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "hmPlM",
+              "name": "Panel D · PASSWORD, SECOND",
+              "width": 460,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fRQZb",
+                  "name": "Label D · PASSWORD, SECO",
+                  "fill": "$text-muted",
+                  "content": "D · PASSWORD, SECOND CHOICE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "KQl34",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "UAU4l",
+                      "name": "Label ONE QUICK CHECK BE",
+                      "fill": "$gold",
+                      "content": "ONE QUICK CHECK BEFORE YES IS RECORDED",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "NOrJy",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm with your password",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ajv7j",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Type the password for dana@example.com. You stay signed in. Nothing is recorded until it is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "LtXIA",
+                      "name": "Password field",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "N5aRJS",
+                          "name": "Label YOUR PASSWORD",
+                          "fill": "$text-muted",
+                          "content": "YOUR PASSWORD",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "bold",
+                          "letterSpacing": 1.2
+                        },
+                        {
+                          "type": "frame",
+                          "id": "VeW0Z",
+                          "name": "Password input",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$gold",
+                          "strokeWidth": 2,
+                          "padding": [
+                            0,
+                            14
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "g1MGa",
+                              "name": "Password dots",
+                              "fill": "$text",
+                              "content": "••••••••",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 16,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "nosRT",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "itIag",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "idVOE",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "CdOgt",
+                          "name": "Link Send me a code instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a code instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "D7pXso",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Guwcx",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "VzDMO",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Only shown if your account has a password.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "aiys0",
+              "name": "Panel E · PROVIDER, LAST F",
+              "width": 460,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "a7Q5C",
+                  "name": "Label E · PROVIDER, LAST",
+                  "fill": "$text-muted",
+                  "content": "E · PROVIDER, LAST FALLBACK",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "nqilq",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "L1FO1F",
+                      "name": "Label IF YOU CANNOT GET ",
+                      "fill": "$gold",
+                      "content": "IF YOU CANNOT GET THE CODE",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "zYJ5w",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm with Google",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "rBGO5",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "You will go to Google to sign in again, then come straight back to this same card. Nothing is recorded until you are back and the check is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "j3MYmq",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "dDArw",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "i5psN5",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm with Google",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "RAqJO",
+                          "name": "Link Send me a code instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a code instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "jYBIC",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "ZUyh5",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Kxvzf",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Only shown if you signed in with Google, Apple, GitHub or Microsoft and cannot get the code. The button names your provider.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ea2JD",
+              "name": "Design notes",
+              "width": 460,
+              "fill": "$surface",
+              "cornerRadius": 12,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SkZ0r",
+                  "name": "Label DESIGN NOTES",
+                  "fill": "$gold",
+                  "content": "DESIGN NOTES",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "text",
+                  "id": "q6SQF",
+                  "name": "Note 1",
+                  "fill": "$text-soft",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "1. The code is the main view. Most founders have no password.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "krQtz",
+                  "name": "Note 2",
+                  "fill": "$text-soft",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "2. The password option is secondary and appears only when the account has one.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "zeaD6",
+                  "name": "Note 3",
+                  "fill": "$text-soft",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "3. The provider button is the last fallback and the only step that leaves the page. It returns to this same card.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "rIHTt",
+                  "name": "Note 4",
+                  "fill": "$text-soft",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "4. Go back is always there and records nothing.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "R1fNm",
+      "x": 940,
+      "y": 1700,
+      "name": "Mobile in-place check before Yes",
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "Zd4WJ",
+          "name": "Label IN-PLACE CHECK BEF",
+          "fill": "$gold",
+          "content": "IN-PLACE CHECK BEFORE YES IS RECORDED",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-ui",
+          "fontSize": 11,
+          "fontWeight": "bold",
+          "letterSpacing": 1.2
+        },
+        {
+          "type": "text",
+          "id": "KFRh7",
+          "name": "Board intro",
+          "fill": "$text-soft",
+          "textGrowth": "fixed-width",
+          "width": 1000,
+          "content": "Opens on top of the same card and closes back to it. The founder stays signed in at every step. Nothing is recorded until the code (or password, or provider check) is accepted.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-ui",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "jz7Vw",
+          "name": "Row 1",
+          "gap": 30,
+          "children": [
+            {
+              "type": "frame",
+              "id": "QxKu7",
+              "name": "Panel A · START (THE EMAIL",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cNsTs",
+                  "name": "Label A · START (THE EMA",
+                  "fill": "$text-muted",
+                  "content": "A · START (THE EMAIL CODE IS THE MAIN WAY)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "VfXIH",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MPTit",
+                      "name": "Label ONE QUICK CHECK BE",
+                      "fill": "$gold",
+                      "content": "ONE QUICK CHECK BEFORE YES IS RECORDED",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "wvwRo",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm it is you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KEAOA",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "We will email a 6-digit code to dana@example.com. You stay signed in, and you come back to this same card.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fpB3Y",
+                      "name": "Answer recap",
+                      "width": "fill_container",
+                      "fill": "$amber-tint",
+                      "cornerRadius": 8,
+                      "stroke": "$amber",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "xDmDH",
+                          "name": "Recap answer",
+                          "fill": "$text",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Your answer: Yes. Final once recorded.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "m5xiiP",
+                          "name": "Recap detail",
+                          "fill": "$text-soft",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Accept the updated Customer Terms, version 3 (2 Nov 2026). Nothing is recorded until your code is accepted.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "z76NiT",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "KEWpM",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "lyuIb",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Send me a code",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "KDIFt",
+                          "name": "Link Use my password instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Use my password instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ZOJHM",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "gpOed",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "O7LZR",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "The password link is only shown if your account has a password.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "A6IO3",
+              "name": "Panel B · ENTER THE CODE",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "H3IHs",
+                  "name": "Label B · ENTER THE CODE",
+                  "fill": "$text-muted",
+                  "content": "B · ENTER THE CODE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "DIy9d",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CaIQi",
+                      "name": "Label CHECK YOUR EMAIL",
+                      "fill": "$gold",
+                      "content": "CHECK YOUR EMAIL",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "QXDFl",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Enter the 6-digit code we emailed you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "BFYsp",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sent to dana@example.com. The code works for a few minutes. Nothing is recorded until it is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "xxLdb",
+                      "name": "Code boxes",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "o4bLbl",
+                          "name": "Digit 1",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$gold",
+                          "strokeWidth": 2,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "pnnYY",
+                          "name": "Digit 2",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Nouyj",
+                          "name": "Digit 3",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Vlxkq",
+                          "name": "Digit 4",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "rcLrM",
+                          "name": "Digit 5",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "UAjly",
+                          "name": "Digit 6",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "YxtkT",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "R5pS6",
+                          "name": "Primary button",
+                          "opacity": 0.5,
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "dmGZI",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "yetsj",
+                          "name": "Link Send me a new code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a new code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "SPjPd",
+                          "name": "Link I cannot get the code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "I cannot get the code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "TN6FL",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Om8X3",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ooxRY",
+              "name": "Panel C · WRONG OR EXPIRED",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "EmA1e",
+                  "name": "Label C · WRONG OR EXPIR",
+                  "fill": "$text-muted",
+                  "content": "C · WRONG OR EXPIRED CODE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "M1yqn",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$red",
+                  "strokeWidth": 1.5,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BdSID",
+                      "name": "Label CHECK YOUR EMAIL",
+                      "fill": "$gold",
+                      "content": "CHECK YOUR EMAIL",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "wQwxl",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Enter the 6-digit code we emailed you",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "GFWiI",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sent to dana@example.com. Nothing has been recorded.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "L3Qfe",
+                      "name": "Code boxes",
+                      "width": "fill_container",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "gMC7U",
+                          "name": "Digit 1",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "h69Eg",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "4",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ar5Zz",
+                          "name": "Digit 2",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "jUfsA",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "8",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "XgzBy",
+                          "name": "Digit 3",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "ftPnj",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "1",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "eNWXL",
+                          "name": "Digit 4",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "dxLz3",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "9",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "wjeW1",
+                          "name": "Digit 5",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "k3asK",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "0",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "UMXc4",
+                          "name": "Digit 6",
+                          "width": 40,
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$red",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "XRUQK",
+                              "name": "Digit value",
+                              "fill": "$text",
+                              "content": "2",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-mono",
+                              "fontSize": 22,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "p1iqtI",
+                      "name": "Code error",
+                      "width": "fill_container",
+                      "fill": "$red-tint",
+                      "cornerRadius": 8,
+                      "stroke": "$red",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "lgWZu",
+                          "name": "Error text",
+                          "fill": "$text",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "That code is wrong or has expired. Codes only work for a few minutes. Check it, or send a new one.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Pcjne",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "iZ6yS",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "igcD1",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "O87mlh",
+                          "name": "Link Send me a new code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a new code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "v2urr4",
+                          "name": "Link I cannot get the code",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "I cannot get the code",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "J4PRb",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "RL3ny",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pzgLo",
+              "name": "Panel D · PASSWORD, SECOND",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PKB3F",
+                  "name": "Label D · PASSWORD, SECO",
+                  "fill": "$text-muted",
+                  "content": "D · PASSWORD, SECOND CHOICE",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "h2OQB",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "o6l5l",
+                      "name": "Label ONE QUICK CHECK BE",
+                      "fill": "$gold",
+                      "content": "ONE QUICK CHECK BEFORE YES IS RECORDED",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "zUAFA",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm with your password",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "vJi0V",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Type the password for dana@example.com. You stay signed in. Nothing is recorded until it is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "EFYoY",
+                      "name": "Password field",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nEn4e",
+                          "name": "Label YOUR PASSWORD",
+                          "fill": "$text-muted",
+                          "content": "YOUR PASSWORD",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "bold",
+                          "letterSpacing": 1.2
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Y02YgE",
+                          "name": "Password input",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$bg",
+                          "cornerRadius": 8,
+                          "stroke": "$gold",
+                          "strokeWidth": 2,
+                          "padding": [
+                            0,
+                            14
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "W8kLOb",
+                              "name": "Password dots",
+                              "fill": "$text",
+                              "content": "••••••••",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 16,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Igby9",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Vq9Wi",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "f4o2Oh",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm and record Yes",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "XtBN9",
+                          "name": "Link Send me a code instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a code instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "pc9cX",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "eFMuf",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "rNd9D",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Only shown if your account has a password.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "tBPtG",
+              "name": "Panel E · PROVIDER, LAST F",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TVVI4",
+                  "name": "Label E · PROVIDER, LAST",
+                  "fill": "$text-muted",
+                  "content": "E · PROVIDER, LAST FALLBACK",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "bold",
+                  "letterSpacing": 1.2
+                },
+                {
+                  "type": "frame",
+                  "id": "V9sr8P",
+                  "name": "Dialog",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 12,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "DLMwz",
+                      "name": "Label IF YOU CANNOT GET ",
+                      "fill": "$gold",
+                      "content": "IF YOU CANNOT GET THE CODE",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "bold",
+                      "letterSpacing": 1.2
+                    },
+                    {
+                      "type": "text",
+                      "id": "Un9rD",
+                      "name": "Dialog title",
+                      "fill": "$text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Confirm with Google",
+                      "lineHeight": 1.25,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 20,
+                      "fontWeight": "bold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "WTar3",
+                      "name": "Dialog text",
+                      "fill": "$text-soft",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "You will go to Google to sign in again, then come straight back to this same card. Nothing is recorded until you are back and the check is accepted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "l7qgiT",
+                      "name": "Actions",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "WtIIl",
+                          "name": "Primary button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$gold-fill",
+                          "cornerRadius": 8,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "vdzNI",
+                              "name": "Primary label",
+                              "fill": "$on-gold",
+                              "content": "Confirm with Google",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "LvV6X",
+                          "name": "Link Send me a code instead",
+                          "fill": "$gold",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Send me a code instead",
+                          "lineHeight": 1.5,
+                          "textAlign": "center",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "bold"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Nkhg3",
+                          "name": "Go back button",
+                          "width": "fill_container",
+                          "height": 48,
+                          "fill": "$surface",
+                          "cornerRadius": 8,
+                          "stroke": "#4A4A4A",
+                          "strokeWidth": 1.5,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "JVCO4",
+                              "name": "Back label",
+                              "fill": "$text",
+                              "content": "Go back. Do not record anything.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 15,
+                              "fontWeight": "bold"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Fv9r5",
+                      "name": "Dialog note",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Only shown if you signed in with Google, Apple, GitHub or Microsoft and cannot get the code. The button names your provider.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {
@@ -5999,6 +8065,14 @@
     "font-mono": {
       "type": "string",
       "value": "JetBrains Mono"
+    },
+    "red": {
+      "type": "color",
+      "value": "#E5645A"
+    },
+    "red-tint": {
+      "type": "color",
+      "value": "#2A1210"
     }
   }
 }
