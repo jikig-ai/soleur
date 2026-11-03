@@ -4,27 +4,27 @@ Plan: `knowledge-base/project/plans/2026-11-03-docs-art32-tom-residual-and-art33
 
 ## Phase 0: Re-verify at the pinned commit
 
-- [ ] 0.1 Run the plan's Verification Commands; record each output line in `session-state.md`.
-- [ ] 0.2 Read ADR-075 to its end for addenda newer than 2026-10-31; cite the latest state of every source.
-- [ ] 0.3 Confirm `proc_mask` is in the faithful canary verdict before saying it was read in production.
-- [ ] 0.4 Run the grep of AC9(f) over the canonical legal documents and mirrors; record the output.
+- [x] 0.1 Run the plan's Verification Commands; record each output line in `session-state.md`.
+- [x] 0.2 Read ADR-075 to its end for addenda newer than 2026-10-31; cite the latest state of every source.
+- [x] 0.3 Confirm `proc_mask` is in the faithful canary verdict before saying it was read in production.
+- [x] 0.4 Run the grep of AC9(f) over the canonical legal documents and mirrors; record the output.
 
 ## Phase 1: Art. 32 TOM bullet and Superseded marker
 
-- [ ] 1.1 Draft the bullet per plan Phase 1 specification (named-gap order, status `open residual`).
-- [ ] 1.2 Insert it after the arm-F bullet and its 2026-10-31 pointer comment, before Audit logging.
-- [ ] 1.3 Add the Superseded blockquote directly under the arm-F bullet (five statements); no existing character edited.
-- [ ] 1.4 Fill the claim-to-source table in spec.md with the resolved anchors.
+- [x] 1.1 Draft the bullet per plan Phase 1 specification (named-gap order, status `open residual`).
+- [x] 1.2 Insert it after the arm-F bullet and its 2026-10-31 pointer comment, before Audit logging.
+- [x] 1.3 Add the Superseded blockquote directly under the arm-F bullet (five statements); no existing character edited.
+- [x] 1.4 Fill the claim-to-source table in spec.md with the resolved anchors.
 
 ## Phase 2: Art. 33(5) row
 
-- [ ] 2.1 Draft the nine cells per plan Phase 2 (no pipe, one defect sentence, window wording of D5).
-- [ ] 2.2 Append the row after the 2026-10-31 row; add the ADR-075 path to `related:`.
+- [x] 2.1 Draft the nine cells per plan Phase 2 (no pipe, one defect sentence, window wording of D5).
+- [x] 2.2 Append the row after the 2026-10-31 row; add the ADR-075 path to `related:`.
 
 ## Phase 3: Checks
 
-- [ ] 3.1 AC1 to AC4, AC6, AC9, AC10, AC11 commands; fix and re-run.
-- [ ] 3.2 Run the technical-ruling gate on decision-challenges.md.
+- [x] 3.1 AC1 to AC4, AC6, AC9, AC10, AC11 commands; fix and re-run.
+- [x] 3.2 Run the technical-ruling gate on decision-challenges.md.
 
 ## Phase 4: Review panel (first)
 

@@ -46,6 +46,24 @@ The Art. 30 register's Art. 32 list names the ADR-272 credential deny and the ar
 | Awareness anchor | `gh issue view 9723 --json createdAt` |
 | Cohort classification open | 2026-10-28 determination (`knowledge-base/legal/audits/2026-10-28-clo-determination-11303-gated-tier-allowedtools-bypass.md`), unverified item U-1 |
 
+## Resolved anchors (work phase, read 2026-11-03)
+
+| Claim | Resolved against |
+|---|---|
+| Issue #9723 created 2026-10-07T19:14:00Z, closed 2026-10-09T01:58:31Z by PR 9768 (merged 2026-10-09T01:58:29Z) | `gh issue view 9723`, `gh pr view 9768` |
+| Deny entry declared from 2026-03-29 | PR 1282 merged 2026-03-29T18:19:42Z, "add /proc to denyRead"; `git log -S'"/proc"'` earliest hit b9bfda0665 |
+| Sandbox enabled in production | PR 1559 merged 2026-04-05T22:01:06Z (the commit date 2026-04-06 is local time) |
+| Defective command shape repo-evidenced | PR 5928 merged 2026-07-03T09:39:47Z (in-image fixture capture) |
+| Window end about 2026-10-09T04:52Z | post-mortem timeline, row "Image carrying the splice begins to ship (approx.)"; ADR-075 addendum 2026-10-11 (#10032) |
+| Realization changed twice | ADR-075 addenda 2026-10-11 (#10032, PR 10039 merged 2026-10-11T18:29:11Z) and nested 2026-10-12 (#10065); ADR-272 Note 2026-10-08 |
+| File-capability arm reverted | PR 9874 merged 2026-10-09T17:13:40Z; ADR-075 addendum 2026-10-09 (#9873 disposition) |
+| `proc_mask` is part of the canary verdict | `sandbox-canary.mjs`: the first entry of `HARDENING_PROBES`, defeat classed `sandbox_broken` |
+| Canary pass read | post-mortem "Recovery verification": `verdict=pass reason=ok` 2026-10-12 00:51:13Z and 01:01:35Z |
+| File-tool barrier is the PreToolUse realpath-containment hook | ADR-075 addendum 2026-10-31 (#10455, PR 1a) and Context; ledger row I3 |
+| Account classification unverified | 2026-10-28 determination, instrument U-1; dated decisions due 2026-11-04 |
+| 2026-10-09 ruling names the assessment as owed | that ruling, "The #9723 /proc-window Art. 33(5) assessment is owed regardless (epic #9842 Stage 0)" |
+| Public documents and mirrors, keyword search (procfs, /proc, sandbox, tenant isolation) | one line in each of the privacy policy, disclaimer, GDPR policy and data protection disclosure, mirrors identical; each concerns agent web access, its audit records or the reader's own safeguards |
+
 ## Wording lists (CLO)
 
 May say: reachability on the vendored argv shape; the sandbox mask as intended and canary-observed after deploy; conflicts between measurements, by pointer; no instrument logs a sibling environ read; a zero from any later census reads "not found in retained records", never "none".
