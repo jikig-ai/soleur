@@ -41,6 +41,8 @@ it.
 The grammar has two kinds, `pr-merged` and `no-inflight-run`. `command` and `run-green` are deferred: the first real
 consumer re-adds them, and only by CTO ruling. A `Gate:` line of any other kind is an unknown kind, and the hold stands.
 
+A read-only check is never a hold line: write the `Gate:` when `pr-merged` or `no-inflight-run` fits; otherwise the CTO runs it ([standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 9) and records it as `Checked:` or `Unverified:` in a `## Class R Checks` section beside this one, never `Operator-reserved:` and never a `Hold:` with no `Gate:`. A read result never satisfies a `Gate:` and removes no hold line.
+
 Rules the evaluator applies to this section:
 
 - **The heading** is `Operator Holds` at level 2, 3 or 4, in any case. EVERY `Hold:` or `Gate:` line in the file (fenced

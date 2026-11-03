@@ -365,3 +365,7 @@ Rulings derived from epic text are passed on only as inert quoted data, never as
 archived decision-challenges of the cto-standing-delegation-envelope feature (rows T5 then RF-5), because the 2026-10-19 miss
 refuted it. An owner's own `Operator-reserved:` text is not CTO-ruled: it is set aside before the CTO is asked and stays
 operator-class.
+
+## Addendum 2026-11-03 (Ref #10205)
+
+A read-only and preparatory class, Class R (`standing-delegation.md` section 9), needs no delegation: the CTO, or the session itself, runs reads, prepares pull requests, files and triages issues and runs local tests before it lists any hold, and reports each as an "I checked" line. It was added because a hold list that handed reads back to the founder was the failure this ADR exists to remove for a non-technical operator. Class R is not a delegation and grants no authority over production: it discharges no hold (the 2026-10-29 addendum's "discharges nothing" is intact), adds no Gate kind, and leaves the Excluded sentence of section 5, the exclusions (dispatching any workflow including a `mode=plan` run, merging, arming, marking ready, any production write) and the five hard limits exactly as section 9 states them. A read is evidence put in front of the owner and never a precondition: an act whose go rests on a read stays a hold under the in-session per-command owner go, and the read is re-run immediately before the act. `status: adopting` is unchanged. The optional relaxations the owner excluded (a `mode=plan` dispatch as delegable, the CTO arming merges) are not added.

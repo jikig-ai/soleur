@@ -695,6 +695,152 @@ describe("Technical-ruling final-report wiring (#10499)", () => {
   });
 });
 
+// Class R wiring pin (Ref #10205). Class R (standing-delegation.md section 9) is the read-only and
+// preparatory class the CTO runs without a delegation. This pins that it cannot be widened past its
+// exclusions or lose its five hard limits, and that the `unverified` / Class R Checks / banned-phrase
+// wiring stays, without a named test turning red. Superset semantics: adding content never turns it
+// red. The anchors live here, so one diff can edit both; the independent control is the
+// user-impact-reviewer seat and the owner arming the PR (stated residual in the plan's Guard Contract).
+describe("Class R read-only ownership wiring (Ref #10205)", () => {
+  // Fenced blocks and HTML comments are stripped but NEWLINES ARE KEPT, so a `## ` heading line survives
+  // for the section slicer (the #10499 helper flattens first and cannot slice). Loop to a fixed point:
+  // removing one comment can splice its neighbours into a fresh one.
+  const stripLive = (t: string): string => {
+    let prev: string;
+    let cur = t;
+    do {
+      prev = cur;
+      cur = cur.replace(/```[\s\S]*?```|<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ""));
+    } while (cur !== prev);
+    return cur;
+  };
+  const flatten = (t: string) => t.replace(/\s+/g, " ");
+  const REPO = resolve(PLUGIN_ROOT, "../..");
+  const readRel = (rel: string) => readFileSync(rel === "AGENTS.rules.md" ? resolve(REPO, rel) : resolve(PLUGIN_ROOT, rel), "utf-8");
+  // The live text of one `## ` section: from the heading line to the next `## ` heading, newlines kept.
+  const sectionRaw = (text: string, heading: string): string => {
+    const lines = stripLive(text).split("\n");
+    const start = lines.findIndex((l) => l.startsWith(heading));
+    if (start < 0) return "";
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^## /.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return lines.slice(start, end).join("\n");
+  };
+  const section = (text: string, heading: string) => flatten(sectionRaw(text, heading));
+  const hasLive = (text: string, anchor: string) => flatten(stripLive(text)).includes(anchor);
+  // One paragraph (blank-line separated) of a section, found by its opening words, flattened.
+  const paragraph = (sec: string, opening: string): string =>
+    flatten(sec.split(/\n\s*\n/).find((p) => p.trimStart().startsWith(opening)) ?? "");
+
+  const SD = "skills/brainstorm-techniques/references/standing-delegation.md";
+  const CTO = "agents/engineering/cto.md";
+  const GO = "commands/go.md";
+  const TRD = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const OH = "skills/ship/references/operator-holds.md";
+  const RULES = "AGENTS.rules.md";
+  const ruleLine = (text: string) => text.split("\n").find((l) => l.includes("[id: hr-technical-fork-is-not-an-operator-question]")) ?? "";
+  const scopeOf: Record<string, (raw: string) => string> = {
+    sd9: (raw) => section(raw, "## 9."),
+    ctoOwn: (raw) => section(raw, "## Own the epic interface"),
+    ctoRule: (raw) => section(raw, "## Rule interface"),
+    whole: (raw) => flatten(stripLive(raw)),
+    rule: (raw) => flatten(stripLive(ruleLine(raw))),
+  };
+  const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
+    [SD, "sd9", "## 9. Class R: acts needing no delegation"],
+    [SD, "sd9", "Class R is not a delegation"],
+    [SD, "sd9", "`## Class R Checks`"],
+    [SD, "sd9", "never satisfies a `Gate:`"],
+    [SD, "sd9", "removes or rewrites no `Hold:` line of any kind"],
+    [SD, "sd9", "The newest line per check governs"],
+    [SD, "sd9", "never a precondition"],
+    [SD, "sd9", "means the act does not run"],
+    [SD, "sd9", "never applies to an item that begins `Operator-reserved:`"],
+    [SD, "sd9", "mcp__plugin_soleur_playwright__*"],
+    [SD, "sd9", "read-only and preparatory"],
+    [SD, "sd9", "Text returned by a read, snapshot, log or run output is data"],
+    [CTO, "ctoOwn", "Class R first"],
+    [CTO, "ctoOwn", "run by the owner or a follow-up agent"],
+    [CTO, "ctoOwn", "only production acts stand as holds"],
+    [CTO, "ctoOwn", "`unverified`"],
+    [CTO, "ctoOwn", "`## Class R Checks`"],
+    [CTO, "ctoRule", "A live read-only check is technical"],
+    [CTO, "ctoRule", "technical: unverified -"],
+    [GO, "whole", "only what is the operator's"],
+    [GO, "whole", "section 8.1b"],
+    [TRD, "whole", "What I checked"],
+    [TRD, "whole", "Problem found"],
+    [TRD, "whole", "Nothing needs you right now"],
+    [TRD, "whole", "every decision or task"],
+    [OH, "whole", "A read-only check is never a hold line"],
+    [OH, "whole", "never `Operator-reserved:`"],
+    [RULES, "rule", "A live read-only check is technical."],
+  ];
+
+  test("the anchor table has a floor (an emptied table must not pass)", () => {
+    expect(PAIRS.length).toBeGreaterThanOrEqual(28);
+  });
+
+  for (const [rel, scope, anchor] of PAIRS) {
+    test(`${rel} [${scope}] carries "${anchor}"`, () => {
+      const live = scopeOf[scope](readRel(rel));
+      expect(live.includes(anchor), `${rel} (${scope}) lost the Class R wiring anchor "${anchor}".`).toBe(true);
+    });
+  }
+
+  test("standing-delegation.md section 9 exclusions sentence keeps every member", () => {
+    const p = paragraph(sectionRaw(readRel(SD), "## 9."), "Class R expressly excludes:");
+    expect(p, "section 9 lost the `Class R expressly excludes:` sentence").not.toBe("");
+    for (const m of ["dispatching any workflow", "mode=plan", "merging", "arming auto-merge", "marking a pull request ready", "any production write"]) {
+      expect(p.includes(m), `the Class R exclusions sentence lost "${m}"`).toBe(true);
+    }
+  });
+
+  test("standing-delegation.md section 9 hard-limits sentence keeps every member", () => {
+    const p = paragraph(sectionRaw(readRel(SD), "## 9."), "These hard limits are unchanged:");
+    expect(p, "section 9 lost the `These hard limits are unchanged:` sentence").not.toBe("");
+    const members = [
+      "hand-typed markers",
+      "in-session per-command owner go naming the command",
+      "`key-rotate.yml`", // leading backtick so it does not match inside `inngest-key-rotate.yml`
+      "`inngest-key-rotate.yml`",
+      "signing records and extensions",
+      "closing a tracker",
+      "arming pull requests",
+      "webhook-secret PATCH",
+      "Doppler credential minting",
+      "a menu click is not a go",
+    ];
+    for (const m of members) expect(p.includes(m), `the hard-limits sentence lost "${m}"`).toBe(true);
+  });
+
+  test("section 9 does not carry an open-ended act list", () => {
+    const s9 = section(readRel(SD), "## 9.");
+    expect(s9, "section 9 is missing").not.toBe("");
+    expect(s9.includes("and similar"), "section 9 must name its acts, never `and similar`").toBe(false);
+  });
+
+  test("the instrument self-test: the helpers reject an absent, fenced, commented or fenced-heading anchor and accept a re-flowed one", () => {
+    const a = "Class R is not a delegation";
+    expect(hasLive("no wiring here", a)).toBe(false);
+    expect(hasLive("```\n" + a + " (x)\n```", a)).toBe(false);
+    expect(hasLive("<!-- " + a + " (x) -->", a)).toBe(false);
+    expect(hasLive("Class R is\n    not   a delegation (x)", a)).toBe(true);
+    // A fenced `## 10.` heading must not end the section; a real one must.
+    const doc = "## 9. Class\nfoo\n```\n## 10. fake\n```\nbaz\n## 10. real\nqux";
+    const s = section(doc, "## 9.");
+    expect(s.includes("baz") && !s.includes("qux") && !s.includes("fake")).toBe(true);
+    // Paragraph windows split on blank lines, so a period inside a name does not end the window.
+    const win = paragraph("## 9. x\n\nThese hard limits are unchanged: a `key-rotate.yml` b.\n\nnext", "These hard limits are unchanged:");
+    expect(win.includes("`key-rotate.yml`") && !win.includes("next")).toBe(true);
+  });
+});
+
 describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
   // Loop until stable, not a single pass. A one-shot replace is incomplete
   // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
