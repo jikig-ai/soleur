@@ -46,3 +46,8 @@ Watcher/poll state: Phase-7 poll armed in bg shell; watcher agent loop killed by
 - model.likec4.json regenerated with content-keyed ids; c4-model-freshness PASSes locally for the first time under 1.60.
 - Determinism defect filed as #11915.
 - Verified: 123 C4 vitest tests, c4-count-parity/render-c4-model/c4-from-components shell suites, assert-dependabot-drain (44 rows OK), npm audit 0 vulns.
+
+## Resume-3b additions (2026-11-03 ~00:30Z, head be9c8ee7fe)
+
+- The auto-sync's [regen-on-conflict] arm=plugin root_src=sibling resolved the DIRTY merge by regenerating model.likec4.json with the INSTALLED plugin's canonicalizer (no re-key) — committed nanoid ids, freshness gate red again on da0ed73916. Regenerated with the branch's own script, pushed be9c8ee7fe. Resolver defect filed: #11937. Determinism defect: #11915.
+- affected-index-ratchet still advisory-red (3 new-pairs incl. 2 inherited from main's machinery commits); NOT a required check.
