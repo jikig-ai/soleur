@@ -194,12 +194,12 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] AC1: Deterministic speed claim: the benchmark suite shows the pool beats serial on non-conflicting stub suites. The live host pair (serial vs default, same diff, equal `AFFECTED_SUMMARY`, `[parallel] mode engaged — width=4` present, lock-queue wait separated from run time, `uptime` noted) is recorded in the PR body with the Phase 0.2 floor and the P1 projection, with no live pass/fail threshold.
-- [ ] AC2: The soak (at most 2 parallel runs) yields the same `[ok]/[FAIL]` label set as serial, including `git-data-replication`, with the mode-engaged line asserted, not just an announced fallback; any divergence is root-caused (a token added or documented).
-- [ ] AC3: Every non-zero live `done` line carries wall time and the provisional/signal-shaped marker, `^\[FAIL\]` output and the three existing consumers are unchanged (tests pinned with mutation rows), and the ship SKILL sentence states the exit code is authoritative.
-- [ ] AC4: `--full`, `CI` set, explicit `SOLEUR_TEST_JOBS=1`, and nested runner suites behave exactly as before; the rc map (3→1, 2/4→4, 124→deferral) is unchanged under the pool (tests pinned).
-- [ ] AC5: Both weight rows exist via the generator; the weight-budget ratchet, `fullsuite-merge-gate.test.ts`, `lint-orphan-test-suites` and `grep -c 'run_suite "scripts/check-pa-22' scripts/test-all.sh` (2) are green; `bash scripts/test-all.sh --affected` passes on this branch through the real dispatch.
-- [ ] AC6: ADR-242 addendum, runbook update and ship SKILL sentence committed; the follow-up issue is filed and linked from #12013.
+- [x] AC1 (deterministic half): `scripts/test-all-parallel-benchmark.test.sh` 4/4 and A5 overlap in the scheduler suite show the pool beats serial on non-conflicting stubs. **Live host pair NOT recorded pre-merge**: this diff edits the runner, so the affected gate degrades to the full battery (`AFFECTED_FALLBACK reason=runner-changed`) and a sibling worktree held a full run for the whole session (`refusing a full-gate run`, waited 1800 s via battery-refusal-wait). The measurement moves to AC7 on the next feature PR whose diff does not touch the runner.
+- [ ] AC2: Soak NOT run pre-merge (same cause as AC1). The pool's own suites (scheduler 32/32, contention 5/5, benchmark 4/4) are green; the live soak incl. `git-data-replication` rides AC7. CI's required `test` context runs the full battery on the PR head.
+- [x] AC3: live `done` line carries wall time + provisional/unresolved marker through `_pj_fmt_done` at all three sites; `[FAIL]` text unchanged and printed once, after the live line; static pins (1 def, 3 call sites, 0 raw prints) and three mutants killed (scheduler suite A8). Ship SKILL sentence states the exit code is authoritative.
+- [x] AC4: `--full`, `CI`, `SOLEUR_TEST_JOBS=1` and the rc map pinned in `plugins/soleur/test/affected-tests-pool-default.test.sh` (16/16, five mutants killed); the width is demoted from the runner env (A8 probe).
+- [ ] AC5: Partly. Weight rows moved to #12025 (decision-challenges.md UC-1). Green locally: scheduler, benchmark, contention, group-affected (44), corpus-weight-budget, fixture-relative-assert, fixture-dir-operand-assert, guard-vacuity-floor, lint-orphan-test-suites, fullsuite-merge-gate (17). The full `affected-tests.sh` dispatch was REFUSED (sibling full run); CI is the gate for the remainder.
+- [x] AC6: ADR-242 addendum, runbook update, ship SKILL paragraph committed; follow-up filed as #12025; #12013 comment posted (more after merge).
 
 ### Post-merge (operator)
 
