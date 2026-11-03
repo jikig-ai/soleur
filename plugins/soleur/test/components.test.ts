@@ -1398,6 +1398,15 @@ const DOCUMENTED_ENUMERATION_EXEMPTIONS: {
       "the bound is the loop the runbook is documenting; --paginate would " +
       "rewrite the procedure it exists to teach.",
   },
+  {
+    file: "scripts/watch-wallclock-p90-11774.sh",
+    cmdIncludes: "per_page=$page_size",
+    reason:
+      "the bound is a variable (page_size=SAMPLE capped at 100) — the static " +
+      "scan cannot read it; without --paginate the call returns ONE page of " +
+      "at most page_size rows and `head -n $SAMPLE` bounds consumption, so " +
+      "the sampled window is always fully fetched.",
+  },
 ];
 
 /**

@@ -390,4 +390,7 @@ tests/scripts/lint-rule-bodies	.claude/rule-weakening-acks.txt	260888cc7de7	1	fa
 tests/scripts/lint-rule-bodies	AGENTS.md	9d9f104d281c	1	false-positive: JSDoc/comment: scripts/_agents_md_sections.py:9: prose inside a docstring or comment; not a read
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	8c59fe5445e7	1	false-positive: message: scripts/lint-rule-bodies.py:349: an error message string; the suite never reads the named script through it
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	d96ff524fb10	1	false-positive: JSDoc/comment: scripts/lint-rule-bodies.py:127: prose inside a docstring or comment; not a read
+plugins/soleur	scripts/watch-wallclock-p90-11774.sh	540b82ab8c72	1	false-positive: the suite names the path in a DOCUMENTED_ENUMERATION_EXEMPTIONS file: key (a string the detector matches); it never reads or executes the script
+plugins/soleur/test/ci-head-verdict.test.sh	scripts/watch-wallclock-p90-11774.sh	cfca34ff2184	1	false-positive: the suite names the path in its LINT_EXEMPT registry (a string match); it never reads or executes the script
+tests/hooks/emissions	scripts/watch-wallclock-p90-11774.sh	540b82ab8c72	1	false-positive: same components.test.ts:1402 exemption-table string; the suite names the file via that registry, never reads it
 plugins/soleur	tests/scripts/lib/cf-lb-overlay-gate.sh	a058c48e6cc2	1	false-positive: terraform-target-parity.test.ts names the gate lib inside a comment describing where the allow-sets live; it readFileSyncs only the workflow yml

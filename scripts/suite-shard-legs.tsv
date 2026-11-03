@@ -602,6 +602,7 @@ scripts/watch-lint-ratchet-reeval-10515	1
 scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	4
 scripts/watch-shard-balance-11564	3
+scripts/watch-wallclock-p90-11774	5
 scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
 scripts/web-first-deploy-10585	4
