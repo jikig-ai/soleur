@@ -453,3 +453,4 @@ tests/scripts/lint-rule-bodies	.claude/rule-body-hashes.txt	e6ca16a2cb3f	1	false
 tests/scripts/lint-rule-bodies	.claude/rule-weakening-acks.txt	260888cc7de7	1	false-positive: JSDoc/comment: scripts/lint-rule-bodies.py:7: prose inside a docstring or comment; not a read
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	8c59fe5445e7	1	false-positive: message: scripts/lint-rule-bodies.py:349: an error message string; the suite never reads the named script through it
 tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	d96ff524fb10	1	false-positive: JSDoc/comment: scripts/lint-rule-bodies.py:127: prose inside a docstring or comment; not a read
+plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	.nvmrc	6637585f70e2	1	false-positive: the suffix of the apps/web-platform/.nvmrc literal in the X3 comparison; the suite never reads the repository root .nvmrc
