@@ -751,7 +751,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     whole: (raw) => flatten(stripLive(raw)),
     rule: (raw) => flatten(stripLive(ruleLine(raw))),
   };
-  const PAIRS_FLOOR = 42; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS_FLOOR = 48; // the table's length at write time; raise it in the same edit as any added row
   const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
     [SD, "sd9", "## 9. Class R: acts needing no delegation"],
     [SD, "sd9", "Class R is not a delegation"],
@@ -771,8 +771,14 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [SD, "sd9", "The epic stays open while an `Unverified:` line stands"],
     [SD, "sd9", "or contains `ask me before`, `explicit go-ahead` or `operator approval`"],
     [SD, "sd9", "or that in any other wording reserves a look, an approval or a decision to the founder"],
-    [SD, "sd9", "A key-rotation workflow is never a Scope item of a delegation."],
+    [SD, "sd9", "A key-rotation workflow is never a Scope item of a delegation"],
     [SD, "sd9", "nothing from it is used"],
+    [SD, "sd9", "A read of a customer (tenant) workspace"],
+    [SD, "sd9", "When unsure whether an act is Class R, it is not"],
+    [SD, "sd9", "Sentry reads use the read-only issue token only"],
+    [SD, "sd9", "<ok|bad>"],
+    [SD, "sd9", "forces a `Problem found` line"],
+    [SD, "sd9", "is never reused as evidence for a go or a tick"],
     [SD, "sd9", "the exact parsed hostnames of items 2 and 3"],
     [CTO, "ctoOwn", "Class R first"],
     [CTO, "ctoOwn", 'Never hand a Class R act back with the phrase "run by the owner or a follow-up agent"'],
@@ -835,6 +841,10 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
       "without a typed go naming the exact command",
     ];
     for (const m of members) expect(p.includes(m), `the hard-limits sentence lost "${m}"`).toBe(true);
+    expect(/\b(except|unless|but)\b/.test(p), "the hard-limits sentence carries a negating word").toBe(false);
+    // The Operator-reserved carve-out must be unconditional: its own paragraph, opening with the rule itself.
+    const carve = paragraph(sectionRaw(readRel(SD), "## 9."), "Class R never applies to an item that begins");
+    expect(carve, "the Operator-reserved carve-out no longer opens its own paragraph").not.toBe("");
   });
 
   test("section 9 names exactly six Class R acts and the Playwright act list is split from its exclusions", () => {
@@ -852,6 +862,27 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     for (const t of ["gh api graphql", "gh secret", "gh variable", "gh auth", "`--header`"]) {
       expect(gh.includes(t), `item 1 lost the exclusion "${t}"`).toBe(true);
     }
+  });
+
+  test("each Class R act keeps its own limits (pinned inside its numbered item, not anywhere in the section)", () => {
+    const items = sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
+    const flat = (n: number) => flatten(items.find((l) => l.startsWith(`${n}. `)) ?? "");
+    const REQUIRED: Record<number, string[]> = {
+      2: ["never `--latest-event`", "the `--table` and `--grep` flag forms"],
+      3: ["so there is no screenshot", "including the `playwright` entry", "aggregate pages only"],
+      4: ["is never pushed under Class R", "Never push main.", "again before opening the pull request"],
+      5: ["never the CLA signing sentence", "never closing or editing an issue or its body", "`priority/*`, `domain/*` and `type/*`"],
+      6: ["no `prd` configuration", "one suite at a time"],
+    };
+    for (const [n, strs] of Object.entries(REQUIRED)) {
+      for (const str of strs) expect(flat(Number(n)).includes(str), `Class R act ${n} lost "${str}"`).toBe(true);
+    }
+  });
+
+  test("the Playwright host list is a closed set (an added host must change this test)", () => {
+    const pw = sectionRaw(readRel(SD), "## 9.").split("\n").find((l) => l.startsWith("3. Playwright")) ?? "";
+    const hosts = [...pw.matchAll(/`([a-z0-9.-]+\.(?:io|com))`/g)].map((m) => m[1]).sort();
+    expect(hosts).toEqual(["dash.cloudflare.com", "jikigai-eu.sentry.io", "telemetry.betterstack.com", "uptime.betterstack.com"]);
   });
 
   test("section 9 does not carry an open-ended act list", () => {
