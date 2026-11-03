@@ -86,11 +86,38 @@ full_case 3; stub_reset acme/demo private; seed 521 open someone-else lc:launch-
 prev; calls_reset; create
 check "G3.12: an epic authored by another login writes nothing and names epic-author" bash -c '[ "$1" = 0 ] && grep -q "epic-author" "$2"' _ "$(n_writes)" "$OUT"
 check "G3.12: ... and aborts plan-invalid (rc 2)" abort_is 2 plan-invalid
-for st in 404 422; do
+for st in 403 404 410 422; do
   full_case 4; calls_reset; with GH_STUB_SUBISSUE=$st -- create
   check "G3.9 (UNVERIFIED-STUB-ONLY $st): the first failed link latches the run to the task list: one link call, rc 0, fallback=task-list" bash -c '[ "$1" = 1 ] && [ "$2" = 0 ] && [ "$(kv "$3" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = task-list ]' _ "$(n_post POST 'sub_issues$')" "$RC" "$OUT"
   epic_body_to "$SCRATCH/epic.fb"
   check "G3.9 ($st): the epic section lists every created item as an unchecked task line" bash -c '[ "$(grep -c "^- \[ \] #[0-9]" "$1")" = 4 ]' _ "$SCRATCH/epic.fb"
+done
+# L1: a rate limit, a 5xx or a transport failure on a link says nothing about the feature, so it stops the run resumably (phase=link)
+for st in ratelimit 502; do
+  full_case 4; calls_reset; with GH_STUB_SUBISSUE=$st -- create; LNK_OUT="$OUT"
+  check "L1 ($st): a failed link is not latched to the task list: the run stops issues-incomplete phase=link (rc 2) with fallback=none" bash -c '[ "$1" = 2 ] && grep -q "phase=link" "$2" && [ "$(kv "$2" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = none ]' _ "$RC" "$LNK_OUT"
+  check "L1 ($st): ... and the resume command is printed" bash -c 'grep -q -- "--create" "$1" && grep -q -- "--plan" "$1"' _ "$LNK_OUT"
+  check "L1 ($st): ... after exactly one link attempt (the first failure stops the run)" test "$(n_post POST 'sub_issues$')" = 1
+  [ "$st" != ratelimit ] || check "L1 (ratelimit): the rate-limit hint is printed with the stopped run" bash -c 'grep -qi "rate" "$1"' _ "$LNK_OUT"
+  calls_reset; create
+  check "L1 ($st): the re-run completes (rc 0) with real links for all 4 items and each marker once" bash -c '[ "$1" = 0 ] && [ "$2" = 4 ] && [ "$3" = 1 ] && [ "$4" = none ]' _ "$RC" "$(linked_n)" "$(max_dup)" "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES fallback)"
+done
+# one progress line per item as it happens (an agent shell with a 120 s default timeout must see progress before the end)
+check "progress: a stopped run printed one created line and one linked line per item already made, before the summary" bash -c '[ "$(grep -c "^created: #" "$1")" = 3 ] && [ "$(grep -c "^linked: #" "$1")" = 3 ] && [ "$(grep -n "^created: #" "$1" | tail -n 1 | cut -d: -f1)" -lt "$(grep -n "^SOLEUR_LAUNCH_CHECK_ISSUES " "$1" | head -n 1 | cut -d: -f1)" ]' _ "$FIRST_OUT"
+# a signal ends the run: the summary and the resume command come first when a write was attempted (the exit code is 128 plus the signal)
+sigrun() { # sigrun <TERM|HUP>: start create against a stub whose item create sleeps, signal it in that window
+  ( exec env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+      GH_STUB_SLEEP=2 bash "${LCS:-$LC}" issues --create --target "$R" --facts "$FACTS" --judged "$JUD" --plan "$PLAN" --confirm-repo acme/demo --confirm-count "$(plan_n)" ) > "$SCRATCH/sig.$1.out" 2>&1 &
+  local pid=$! i
+  for i in $(seq 1 150); do [ "$(n_post POST 'repos/acme/demo/issues$')" -ge 2 ] && break; sleep 0.1; done
+  kill -s "$1" "$pid"; wait "$pid"; RC=$?; OUT="$SCRATCH/sig.$1.out"
+}
+for sg in TERM HUP; do
+  full_case 4; calls_reset; sigrun $sg; want=143; [ "$sg" = HUP ] && want=129
+  check "signal ($sg): exit code $want, the summary says phase=interrupted and the exact resume command is printed" bash -c '[ "$1" = "$2" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES .*phase=interrupted" "$3" && grep -q -- "--create" "$3" && grep -q -- "--plan" "$3" && grep -q "reason=issues-incomplete phase=interrupted" "$3"' _ "$RC" "$want" "$OUT"
+  check "signal ($sg): the interrupted run had written (anti-vacuous: at least the epic and one item exist)" test "$(n_writes)" -ge 2
+  calls_reset; create
+  check "signal ($sg): the resume completes (rc 0) with 4 items, one epic, each marker once, all linked" bash -c '[ "$1" = 0 ] && [ "$2" = 4 ] && [ "$3" = 1 ] && [ "$4" = 1 ] && [ "$5" = 4 ]' _ "$RC" "$(items_n)" "$(epics_n)" "$(max_dup)" "$(linked_n)"
 done
 full_case 3; one=$(create_ids | sed -n 1p); sed "s/^finding $one open\$/finding $one accepted 2026-11-03 accepted after the preview/" "$R/$REPORT_REL" > "$R/r.new" && mv "$R/r.new" "$R/$REPORT_REL"
 calls_reset; create

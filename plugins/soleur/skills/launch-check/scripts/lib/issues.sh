@@ -162,8 +162,9 @@ lc_gh_write() {
   [ "${LC_DRY:-0}" = 1 ] && return 0
   lc__pause
   local rc=0
-  lc__gh_exec "$@" || rc=$?
+  # counted before the call: a write that was in flight when a signal arrived may have reached the tracker
   LC_WRITES_DONE=$((LC_WRITES_DONE + 1))
+  lc__gh_exec "$@" || rc=$?
   return "$rc"
 }
 
@@ -609,7 +610,7 @@ lc__summary() { # <phase>
 }
 # lc__incomplete <phase> <detail>: the run stopped with something unfinished. Print the summary, the rate-limit hint and the exact
 # resume command, then abort. Nothing the CLI printed is echoed; detail is one of the closed tokens.
-lc__incomplete() {
+lc__resume_block() { # <phase> <detail>: the summary, the rate-limit hint and the exact resume command
   lc__summary "$1"
   [ "$2" != rate-limit ] || lc__fmt rate_limit_hint
   if [ -n "${ISSUES_ORIG_PLAN_DIR:-}" ]; then
@@ -617,7 +618,20 @@ lc__incomplete() {
     lc__create_cmd "$ISSUES_ORIG_PLAN_DIR" "${PLAN_CREATE_N:-0}"
     lc__public_note
   fi
+}
+lc__incomplete() {
+  lc__resume_block "$1" "$2"
   lc_abort issues-incomplete 2 "phase=$1 detail=$2 plan=${ISSUES_ORIG_PLAN_DIR:--}"
+}
+# A signal ends the run (the exit code is 128 plus the signal). When a write was already attempted, the summary and the exact
+# resume command are printed first: a created issue is found again by its marker, so the resume is safe even when the counts lag.
+lc__on_signal() { # <exit code>
+  trap '' INT TERM HUP
+  if [ "${LC_WRITES_DONE:-0}" -gt 0 ]; then
+    lc__resume_block interrupted signal
+    printf 'SOLEUR_LAUNCH_CHECK_ABORT reason=issues-incomplete phase=interrupted detail=signal plan=%s\n' "${ISSUES_ORIG_PLAN_DIR:--}"
+  fi
+  exit "$1"
 }
 
 # lc__parse_pair: the "number<TAB>database id" line a create printed, into NEW_NUM and NEW_ID.
@@ -628,12 +642,18 @@ lc__parse_pair() {
   NEW_NUM=$(cut -f1 <<<"$line"); NEW_ID=$(cut -f2 <<<"$line")
 }
 
-# lc__link <issue database id>: link a child under the epic. The first failure of any kind latches the run to the task list.
+# lc__link <issue database id> <number> <gap id>: link a child under the epic. Only a refusal of the feature itself (403, 404, 410 or
+# 422) latches the run to the task list. A rate limit, a transport failure, a timeout or a 5xx says nothing about the feature, so it
+# stops the run resumably (phase=link): the re-run links what is still unlinked, and a later run can still use the real links.
 lc__link() {
   if lc_gh_write api -X POST "repos/$ISSUES_REPO/issues/$EPIC_NUM/sub_issues" -F "sub_issue_id=$1"; then
     CNT_LINKED=$((CNT_LINKED + 1))
+    lc__say "linked: #$2 $3"
   else
-    ISSUES_FALLBACK=task-list
+    case "$LC_GH_KIND" in
+      http-403|http-404|http-410|http-422) ISSUES_FALLBACK=task-list ;;
+      *) lc__incomplete link "$LC_GH_KIND" ;;
+    esac
   fi
 }
 
@@ -682,6 +702,7 @@ lc_issues_create() {
   CNT_CREATED=0; CNT_LINKED=0; CNT_SKIPPED=0; FAILED_IDS="-"; FAILED_N=0; ISSUES_FALLBACK=none; EPIC_REF="-"; EPIC_NUM=""; EPIC_STATE=skipped
   mkdir -p "$WORK/out"; : > "$WORK/made.tsv"
   lc_plan_load "$ISSUES_PLAN_ARG" 1
+  trap 'lc__on_signal 130' INT; trap 'lc__on_signal 143' TERM; trap 'lc__on_signal 129' HUP
   if [ "$ISSUES_CONFIRM_REPO" != "$PLAN_REPO" ] || [ "$ISSUES_CONFIRM_COUNT" != "$PLAN_CREATE_N" ]; then
     lc__fmt confirm_flags_fix; lc_abort usage 2 "detail=confirm-mismatch"
   fi
@@ -777,18 +798,23 @@ lc_issues_create() {
     : > "$WORK/children"
     if [ "$made_epic" = 0 ]; then
       if lc_gh_read api "repos/$ISSUES_REPO/issues/$EPIC_NUM/sub_issues" --paginate --jq '.[].number'; then cp "$WORK/gh.out" "$WORK/children"
-      else ISSUES_FALLBACK=task-list; fi
+      else
+        case "$LC_GH_KIND" in
+          http-403|http-404|http-410|http-422) ISSUES_FALLBACK=task-list ;;
+          *) lc__incomplete link "$LC_GH_KIND" ;;
+        esac
+      fi
     fi
   fi
   if [ -n "$EPIC_NUM" ] && [ "$ISSUES_FALLBACK" = none ]; then
     F_ROWS="$WORK/plan.rows.tsv" F_LIVE="$WORK/live.items" F_KIDS="$WORK/children" awk -F'\t' -v OFS='\t' '
       FILENAME == ENVIRON["F_ROWS"] { if ($5 == "create" || $5 == "exists") want[$1] = 1; next }
       FILENAME == ENVIRON["F_KIDS"] { kid[$1] = 1; next }
-      $4 == "open" && ($1 in want) && !($2 in kid) { print $3 }' "$WORK/plan.rows.tsv" "$WORK/children" "$WORK/live.items" > "$WORK/orphans.ids"
-    while IFS= read -r k; do
+      $4 == "open" && ($1 in want) && !($2 in kid) { print $3, $2, $1 }' "$WORK/plan.rows.tsv" "$WORK/children" "$WORK/live.items" > "$WORK/orphans.ids"
+    while IFS=$'\t' read -r k num id; do
       [ -n "$k" ] || continue
       [ "$ISSUES_FALLBACK" = none ] || break
-      lc__link "$k"
+      lc__link "$k" "$num" "$id"
     done < "$WORK/orphans.ids"
   fi
 
@@ -804,12 +830,12 @@ lc_issues_create() {
     printf '%s\t%s\thttps://%s/%s/issues/%s\n' "$id" "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv"
     printf '%s\t%s\n' "$id" "$NEW_NUM" >> "$WORK/made.tsv"
     CNT_CREATED=$((CNT_CREATED + 1))
-    if [ -n "$EPIC_NUM" ] && [ "$ISSUES_FALLBACK" = none ]; then lc__link "$NEW_ID"; fi
+    lc__say "created: #$NEW_NUM $id"
+    if [ -n "$EPIC_NUM" ] && [ "$ISSUES_FALLBACK" = none ]; then lc__link "$NEW_ID" "$NEW_NUM" "$id"; fi
   done < "$WORK/plan.rows.tsv"
 
   lc__epic_update
   lc__summary complete
-  while IFS=$'\t' read -r id num; do lc__say "created: #$num $id"; done < "$WORK/made.tsv"
   [ "$EPIC_STATE" != markers-damaged ] || lc__fmt markers_damaged_hint
   return 0
 }

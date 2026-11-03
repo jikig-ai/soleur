@@ -82,7 +82,9 @@ Offer this after the report is written (step 3) and only when the report has ope
    bash "$LC" issues --create --target . --facts "$W/facts.tsv" --judged "$W/judged.tsv" --plan <dir> --confirm-repo <owner/name> --confirm-count <N>
    ```
 
-   Relay the `SOLEUR_LAUNCH_CHECK_ISSUES created=...` line. `fallback=task-list` means GitHub refused the sub-issue links, so the epic lists the issues as a task list instead; that is complete, not a failure. `epic-section=markers-damaged` means the customer edited the epic's marker lines, so the epic was left alone; tell them to restore the begin and end marker lines. The plan directory also holds `created.tsv` (number and URL of everything the run created).
+   A create of the full 30 takes minutes (one write per second plus the network): run it with the Bash tool timeout set to 600000 ms (or in the background with a Monitor on its output), and never repeat a create that timed out or was interrupted without first running the resume command the run printed (a signal prints it with `phase=interrupted`; the issues already made are found again by their marker). The run prints one `created: #N ID` line and one `linked: #N ID` line as it goes.
+
+   Relay the `SOLEUR_LAUNCH_CHECK_ISSUES created=...` line. `fallback=task-list` means GitHub refused the sub-issue links (403, 404, 410 or 422), so the epic lists the issues as a task list instead; that is complete, not a failure, and a later run upgrades it to real links when GitHub accepts them. A rate limit, server error or timeout while linking is different: the run stops with `issues-incomplete` and `phase=link` (could not link; a re-run upgrades it), and the printed command links what is still unlinked. `epic-section=markers-damaged` means the customer edited the epic's marker lines, so the epic was left alone; tell them to restore the begin and end marker lines. The plan directory also holds `created.tsv` (number and URL of everything the run created).
 
 **Decline.** If the customer says no, say plainly that nothing was filed, delete the plan directory the preview created (and only that directory), and offer a new preview with `--exclude-domain` or `--exclude-class`.
 
@@ -114,7 +116,8 @@ Offer this after the report is written (step 3) and only when the report has ope
 | `confirm-public-required` | The repository is public, internal or of unknown visibility | Ask the second question; pass `--confirm-public` only after an explicit yes |
 | `issues-unavailable` | No `gh`, not signed in, issues off, archived, or no write permission | Relay the printed cause; the report is still complete |
 | `epic-closed` | The earlier epic issue is closed | The customer reopens it, or removes its `lc:epic` label for a fresh epic, then re-run |
-| `epic-ambiguous` | More than one issue carries `lc:epic` | The customer leaves one, then re-run |
+| `epic-ambiguous` | More than one issue carries `lc:epic`, or an issue with several launch-check marker lines is an epic candidate | The customer leaves one epic, then re-run |
+| `issue-ambiguous` | An issue carries more than one launch-check marker line and names a finding of this plan | The customer edits that issue so it holds one marker line, then re-run |
 | `write-shape-refused` | An internal guard refused a write that was not an allowed form | Nothing was written; report the detail and stop |
 | `issues-incomplete` | The run stopped part-way | Run the printed command again |
 | `baseline-source-empty`, `baseline-source-malformed`, `catalog-malformed`, `plugin-root-unresolved` | The plugin install is incomplete or damaged | Reinstall the plugin |

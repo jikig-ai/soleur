@@ -40,7 +40,7 @@
 # github.com); GH_STUB_LOGIN (default stub-user); GH_STUB_FAIL_AFTER=<n> (every item create after the n-th fails, the
 # epic is not counted); GH_STUB_FAIL_KIND=server|ratelimit|secret; GH_STUB_TRANSPORT_ERROR_AFTER_CREATE=<n> (alias
 # GH_STUB_KILL_AFTER_CREATE: right after storing the n-th item create exit 1 with no output, once; the harness is never
-# killed); GH_STUB_SUBISSUE; GH_STUB_PER_PAGE=<n> (forces pagination); GH_STUB_EDIT_EPIC_BETWEEN=get|write (a customer
+# killed); GH_STUB_SUBISSUE=ok|403|404|410|422|ratelimit|502 (the link POST only); GH_STUB_SLEEP=<seconds> (an item create sleeps that long after storing the issue, before it answers: a window for a signal); GH_STUB_PER_PAGE=<n> (forces pagination); GH_STUB_EDIT_EPIC_BETWEEN=get|write (a customer
 # edit of the epic body: before serving the first epic GET that follows a listing, or after the first item create);
 # GH_STUB_CRLF=1 (the epic body is stored with CRLF line endings); GH_STUB_LIST=ok|fail|malformed (the issue listing).
 set -u
@@ -302,6 +302,7 @@ if [[ "$ENDPOINT" =~ $PATTERN_LIST ]]; then
         jq -c '(.[] | select(.labels | map(.name) | index("lc:epic"))) |= (.body += "\nCUSTOMER-EDIT-MIDRUN\n")' "$S/issues.json" > "$S/issues.json.new" && mv "$S/issues.json.new" "$S/issues.json"
         printf 'epic edited after item create %s\n' "$made" >> "$S/events.log"
       fi
+      [ -z "${GH_STUB_SLEEP:-}" ] || sleep "$GH_STUB_SLEEP"
       tx=${GH_STUB_TRANSPORT_ERROR_AFTER_CREATE:-${GH_STUB_KILL_AFTER_CREATE:-}}
       if [ -n "$tx" ] && [ "$made" = "$tx" ] && [ ! -e "$S/transport_fired" ]; then : > "$S/transport_fired"; exit 1; fi
     fi
@@ -321,6 +322,8 @@ if [[ "$ENDPOINT" =~ $PATTERN_SUB ]]; then
     404) http_fail 404 "Not Found" ;;
     410) http_fail 410 "Gone" ;;
     422) http_fail 422 "Validation Failed" ;;
+    ratelimit) http_fail 403 "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." ;;
+    502) http_fail 502 "Server Error" ;;
   esac
   jq -e --argjson n "$n" 'map(select(.number == $n)) | length > 0' "$S/issues.json" >/dev/null || http_fail 404 "Not Found"
   if [ "$METHOD" = GET ]; then
