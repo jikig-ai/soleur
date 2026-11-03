@@ -48,6 +48,11 @@
 .claude/hooks/skill-context-queries.test.sh	knowledge-base
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/git-data-birth.md
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/project/specs
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/project/specs/archive
 apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 apps/web-platform/scripts/home-census-trigger.test.sh	knowledge-base/legal/audits
 apps/web-platform/scripts/real-sdk-ask-probe.test.sh	knowledge-base/engineering/architecture/decisions/ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md
@@ -215,6 +220,7 @@ scripts/lint-encryption-posture	knowledge-base/project/plans
 scripts/lint-orphan-test-suites	knowledge-base
 scripts/lint-orphan-test-suites	knowledge-base/engineering/architecture/diagrams
 scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
+scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-2-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits
