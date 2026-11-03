@@ -650,8 +650,8 @@ do_render() {
   render_body "$EPIC" "$today" "$QF" "$AF" "$SF" "$EXPIRY" "$METHOD" > "$WORK/rendered.md"
   parse_body "$WORK/rendered.md"
   [ "$P_MARKER_OK" = 1 ] && [ "${#P_QUOTE}" -ge 40 ] && [ "$P_ONE_CONF" = 1 ] && [ -s "$WORK/scope.nums" ] && [ "$P_EXCL_OK" = 1 ] && valid_date "$P_EXPDATE" \
-    && [ "$P_METHOD_N" = "$([ -n "$METHOD" ] && echo 1 || echo 0)" ] \
     || die_render "the record would not verify (the quoted question and answer must total at least 40 characters)"
+  [ "$P_METHOD_N" = "$([ -n "$METHOD" ] && echo 1 || echo 0)" ] || die_render "the question, answer or scope holds a line that claims a Method; the label is added only by --method"
   cat "$WORK/rendered.md"
   exit 0
 }
