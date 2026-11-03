@@ -21,6 +21,7 @@
 #   (new body on stdout), lc_emit_checked; globals ISSUES_REPO (plan-bound slug) and ISSUES_PLAN_DIR; env LC_DRY=1; seam LAUNCH_CHECK_PAUSE=0.
 # Rows tagged UNVERIFIED-STUB-ONLY depend on a stub shape nobody has checked against GitHub yet (live check: follow-up #11956).
 
+# shellcheck disable=SC2034  # ISS, SAMPLE and the other names below are read by the two suites that source this file
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 command -v gitleaks >/dev/null 2>&1 || { echo "FAIL - gitleaks is required for this suite"; exit 1; }
@@ -73,6 +74,7 @@ with() {
   while [ "$1" != "--" ]; do
     n=${1%%=*}; names+=("$n")
     if [ -n "${!n+x}" ]; then was+=(1); olds+=("${!n}"); else was+=(0); olds+=(""); fi
+    # shellcheck disable=SC2163  # $1 is a NAME=value word on purpose
     export "$1"; shift
   done
   shift; "$@"
@@ -83,13 +85,14 @@ with() {
 RC=0; OUT=""; SEEN_REASONS=""; N=0; CRN=0
 runi() { local name=$1; shift; OUT="$SCRATCH/$name.out"; lcs issues "$@" > "$OUT" 2>&1; RC=$?; }
 abort_is() { # abort_is <rc> <reason> [file]: exit code AND marker, both (the report-only exit 0 path can never pass as an abort)
-  local f=${3:-$OUT}; SEEN_REASONS="$SEEN_REASONS $2"
-  [ "$RC" = "$1" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=$2\( \|\$\)" "$f"
+  # The reason is recorded for the exit-code table only after the assertion held: a row that failed proves nothing about its reason.
+  local f=${3:-$OUT}
+  [ "$RC" = "$1" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=$2\( \|\$\)" "$f" || return 1
+  SEEN_REASONS="$SEEN_REASONS $2"
 }
+seen() { SEEN_REASONS="$SEEN_REASONS $1"; }   # call only after the assertion that exercised the reason passed (check returns its verdict)
 lacks() { ! grep -qF -- "$1" "$OUT"; }
-# autolink shapes outside code spans: a user mention, owner/repo#N, an issue URL, a bare #N, GH-N, a 7-40 hex run. (Same lint in wording.test.sh.)
-autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
-autolink_clean() { ! autolink_hits "$@" >/dev/null; }
+# autolink_hits / autolink_clean live in lib.sh (one copy, shared with wording.test.sh)
 file_and_clean() { [ -f "$1" ] && autolink_clean "$1"; }
 gl_only_secret() { printf '%s%s' 'glpat-' 'aB3dE5gH7jK9mN1pQ3sT'; }   # matched by gitleaks (gitlab-pat) and NOT by the sentinel (checked: sentinel rc 0, gitleaks rc 1; the npm_ shape the first draft used IS a sentinel hit)
 stub_secret() { printf '%s%s' 'ghp_' 'Q3nW8tY1kD6vB2xM9cL5hZ7pR4aE0sJ2fG1u'; }      # what the stub prints on stderr for GH_STUB_FAIL_KIND=secret
@@ -124,8 +127,8 @@ export -f cmd_line
 banner_line() { cat "$SKILL/references/banner.txt"; }
 mode700() { [ "$(ls -ld "$1" 2>/dev/null | cut -c1-10)" = "drwx------" ]; }
 table_rows_present() { # every create row of the plan appears in the preview output as "ID | severity | title"
-  local out=$1 plan=$2 n=0 id sev dom cls act title
-  while IFS="$TAB" read -r id sev dom cls act title; do
+  local out=$1 plan=$2 n=0 id sev title
+  while IFS="$TAB" read -r id sev _ _ _ title; do
     grep -qF -- "$id | $sev | $title" "$out" || return 1; n=$((n + 1))
   done < <(awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create"' "$plan")
   [ "$n" -ge 1 ]

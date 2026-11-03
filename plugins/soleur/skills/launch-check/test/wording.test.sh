@@ -47,8 +47,7 @@ check "the plan-sample fixture (issue body and epic) is clean" bash -c 'for f in
 check "issues.sh has no echo/printf of sentence-length prose (all prose lives in references/)" bash -c '[ -f "$1" ] && ! grep -nE "(echo|printf) .*[A-Za-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+" "$1" | grep -vE "^[0-9]+:[[:space:]]*#"' _ "$ISSUES_SH"
 check "issues.sh has no \${var//pat/repl} substitution (render.sh and checks.sh already carry some; the ban is scoped to issues.sh)" bash -c '[ -f "$1" ] && ! grep -nE "\$\{[^}]*//" "$1" | grep -vE "^[0-9]+:[[:space:]]*#"' _ "$ISSUES_SH"
 # Autolink shapes outside code spans: a user mention, owner/repo#N, an issue URL, a bare #N, GH-N, a 7-40 hex run.
-autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
-autolink_clean() { ! autolink_hits "$@" >/dev/null; }
+# autolink_hits and autolink_clean come from lib.sh (one copy)
 awk -F'\t' '!/^#/ && $1!="id" {print $5; print $11; print $12}' "$SKILL/references/checks.tsv" > "$SCRATCH/prose3.txt"
 check "autolink lint: checks.tsv titles, commands and remedies carry no autolink shape" autolink_clean "$SCRATCH/prose3.txt"
 check "autolink lint: phrases.txt, banner.txt and footer.txt carry no autolink shape" autolink_clean "$SKILL/references/phrases.txt" "$SKILL/references/banner.txt" "$SKILL/references/footer.txt"

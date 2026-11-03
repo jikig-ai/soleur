@@ -39,6 +39,33 @@ calls_reset
 cnt=$(gh api -X GET repos/acme/demo/issues -f labels=lc:launch-check -f state=all --jq '.[]|.number' 2>/dev/null | wc -l | tr -d ' ')
 check "stub contract: without --paginate only the first page is served" test "$cnt" = 7
 
+# known-bad controls for the helpers every later row leans on: a helper that cannot fail would let every row that uses it pass
+ctl_out="$SCRATCH/ctl.out"; printf 'SOLEUR_LAUNCH_CHECK_ABORT reason=alpha detail=x\nSOLEUR_LAUNCH_CHECK_ISSUES_PLAN create=3 plan=/p\n' > "$ctl_out"
+ctl_abort_is() ( SEEN_REASONS=""; RC=2; OUT="$ctl_out"
+  ! abort_is 3 alpha && ! abort_is 2 alph && ! abort_is 2 beta && [ -z "$SEEN_REASONS" ] && abort_is 2 alpha && [ "$SEEN_REASONS" = " alpha" ] )
+check "control (abort_is): a wrong exit code, a wrong reason or a prefix of the real one fails, and only a held assertion records its reason" ctl_abort_is
+ctl_lacks() ( OUT="$ctl_out"; ! lacks alpha && lacks zzz-not-there )
+check "control (lacks): a string that is in the output fails it, one that is not passes it" ctl_lacks
+ctl_kv() { [ "$(kv "$ctl_out" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN create)" = 3 ] && [ -z "$(kv "$ctl_out" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN nokey)" ] && [ -z "$(kv "$ctl_out" SOLEUR_LAUNCH_CHECK_ISSUES create)" ] && [ -z "$(kv "$ctl_out" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN crea)" ]; }
+check "control (kv): the value of an exact key on an exact marker; a missing key, a different marker and a key prefix read as empty" ctl_kv
+stub_reset acme/demo private; calls_reset
+gh api -X GET repos/acme/demo >/dev/null 2>&1
+check "control (n_writes): a read is a call and not a write" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$(n_writes)" "$(n_calls)"
+ctl_sbm() (
+  PLAN="$SCRATCH/ctlplan"; mkdir -p "$PLAN/issues"; printf 'planned body\n' > "$PLAN/issues/a.md"; printf 'planned body\n' > "$PLAN/epic.md"
+  stub_reset acme/demo private; calls_reset
+  ! sent_bodies_match || return 1
+  printf 'planned body\n' > "$SCRATCH/ctl.b1"; gh api -X POST repos/acme/demo/issues -f title=t -F body=@"$SCRATCH/ctl.b1" >/dev/null 2>&1
+  sent_bodies_match || return 1
+  printf 'planned body, edited\n' > "$SCRATCH/ctl.b2"; gh api -X POST repos/acme/demo/issues -f title=t2 -F body=@"$SCRATCH/ctl.b2" >/dev/null 2>&1
+  ! sent_bodies_match
+)
+check "control (sent_bodies_match): nothing sent fails, a body that is a plan file passes, one extra edited body fails it" ctl_sbm
+printf 'TOP\n<!-- launch-check:begin -->\nINNER\n<!-- launch-check:end -->\nBOTTOM\n' > "$SCRATCH/ctl.ep"
+printf 'TOP\r\n<!-- launch-check:begin -->\r\nINNER\r\n<!-- launch-check:end -->\r\nBOTTOM\r\n' > "$SCRATCH/ctl.epcr"
+check "control (outside): the text between the markers is dropped (LF and CRLF), the text outside stays" bash -c '[ "$(outside "$1")" = "$(printf "TOP\nBOTTOM")" ] && ! outside "$2" | grep -q INNER && outside "$2" | grep -q BOTTOM && outside "$2" | grep -q TOP' _ "$SCRATCH/ctl.ep" "$SCRATCH/ctl.epcr"
+stub_reset acme/demo private
+
 # ---------------------------------------------------------------- 1. the library exists; source scans
 check "scripts/lib/issues.sh exists" test -f "$ISS"
 verbs=$(find "$SKILL/scripts" "$SKILL/references" "$SKILL/SKILL.md" -type f -exec grep -nE 'gh[[:space:]]+(issue|label|pr)([[:space:]]|$)' {} + 2>/dev/null || true)
@@ -47,14 +74,21 @@ jq_fn_violations() { grep -h -- '--jq' "$@" 2>/dev/null | sed -e 's/.*--jq//' | 
 check "every shipped --jq expression stays inside the pinned function list (scan, //, @tsv, select, test)" bash -c '[ -f "$1" ] && [ -z "$2" ] && grep -q -- "--jq" "$1"' _ "$ISS" "$(jq_fn_violations "$ISS")"
 mkdir -p "$SCRATCH/scan1"; printf "x --jq 'ltrimstr(\"a\")'\n" > "$SCRATCH/scan1/jqbad.sh"
 check "pinned-list canary: a function outside the list is flagged" test -n "$(jq_fn_violations "$SCRATCH/scan1/jqbad.sh")"
-gh_cmd_lines() { # command-position gh invocations (not 'command -v gh'), each with the function that holds it
+gh_cmd_lines() { # every `gh` token in code (not a comment line, not `command -v gh`, not a path such as gh.out), each with the function that holds it
   awk 'FNR == 1 { fn = "" } /^[a-zA-Z_][a-zA-Z_0-9]*\(\) *\{/ { fn = $1 } /^[[:space:]]*#/ { next }
-       /(^|[[:space:]|;&(])gh[[:space:]]+("|\$|-|api|auth|repo)/ && !/command -v gh/ { print FILENAME ":" fn }' "$@"
+       /(^|[^A-Za-z0-9_.\/-])gh([^A-Za-z0-9_.\/-]|$)/ && !/command -v gh/ { print FILENAME ":" fn }' "$@"
 }
 others=$(gh_cmd_lines "$SKILL"/scripts/*.sh "$SKILL"/scripts/lib/*.sh | grep -v 'lc__gh_exec' || true)
 check "gh is invoked only inside lc__gh_exec, and it is invoked there (anti-vacuous)" bash -c '[ -f "$1" ] && [ -z "$2" ] && [ -n "$3" ]' _ "$ISS" "$others" "$(gh_cmd_lines "$ISS")"
 { cat "$ISS" 2>/dev/null; printf '\nlc_extra() {\n  gh api -X POST repos/o/r/issues -f title=x\n}\n'; } > "$SCRATCH/scan1/issues.sh"
 check "mutation (Guard 1 row 5): a second gh call site outside lc__gh_exec is caught by the scan" bash -c '[ -f "$1" ] && [ -n "$2" ]' _ "$ISS" "$(gh_cmd_lines "$SCRATCH/scan1/issues.sh" | grep -v lc__gh_exec || true)"
+# any gh token counts, not a list of spellings: a verb the first draft's list did not name, a tab separator and an exec form are all caught
+for spell in 'gh extension install x' 'exec gh version' 'x=$(gh	browse)' 'gh -R o/r issue list'; do
+  printf 'lc_extra() {\n  %s\n}\n' "$spell" > "$SCRATCH/scan1/spell.sh"
+  check "mutation (Guard 1 scan, any gh token): '$spell' outside lc__gh_exec is caught" test -n "$(gh_cmd_lines "$SCRATCH/scan1/spell.sh")"
+done
+printf 'lc_ok() {\n  command -v gh >/dev/null\n  x=$WORK/gh.out; ISSUES_REASON=gh-missing\n  # gh api is only a comment\n}\n' > "$SCRATCH/scan1/ok.sh"
+check "scan control: command -v gh, a gh.out path, gh-missing and a comment line are not call sites" test -z "$(gh_cmd_lines "$SCRATCH/scan1/ok.sh")"
 subst_hits() { grep -nE '\$\{[^}]*//' "$@" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true; }
 check "issues.sh contains no \${var//pat/repl} substitution (& is special in a replacement)" bash -c '[ -f "$1" ] && [ -z "$2" ]' _ "$ISS" "$(subst_hits "$ISS")"
 printf 'x=${y//a/b}\n' > "$SCRATCH/scan1/sub.sh"
@@ -91,9 +125,12 @@ m_twomark() { printf '<!-- launch-check:gap=CI-02 -->\n' >> "$1/issues/CI-01.md"
 m_nomark() { sed '1d' "$1/issues/CI-01.md" > "$1/n.new" && mv "$1/n.new" "$1/issues/CI-01.md"; }
 m_badrepo() { sed 's#^repo=.*#repo=acme/../evil#' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
 m_extra() { printf 'x\n' > "$1/issues/EXTRA-01.md"; }
-for m in badid symlink big twomark nomark badrepo extra; do
+m_dirlink() { mv "$1/issues" "$1/issues.real"; ln -s issues.real "$1/issues"; }
+# (a symlinked issues/ directory is reached here: --create's strict mode refuses it earlier, for its mode)
+for md in badid:id symlink:symlink big:size twomark:marker nomark:marker badrepo:repo extra:body-files dirlink:issues-dir; do
+  m=${md%%:*}; det=${md#*:}
   calls_reset; chkmut "$m" "m_$m"
-  check "check-plan rejects a hand-edited plan ($m): plan-invalid on stdout, rc 2, zero gh calls" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_calls)"
+  check "check-plan rejects a hand-edited plan ($m): plan-invalid detail=$det on stdout, rc 2, zero gh calls" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid detail=$4\( \|\$\)" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_calls)" "$det"
 done
 runi plm --create --target "$BASE" --facts "$FACTS" --judged "$JUD" --plan "$SCRATCH/no-such-plan" --confirm-repo acme/demo --confirm-count 1
 check "plan-missing: a vanished plan directory aborts with the recovery sentence (scan, render, preview)" grep -qi "preview" "$OUT"
@@ -242,27 +279,36 @@ for hv in 0 false no off ""; do
 done
 probe "$SKILL" - "CI=false" lc_is_headless
 check "lc_is_headless: any non-empty CI (even false) is unattended" test "$PRC" = 0
-shape_with() { # shape_with <env-assignment> <desc> <args...>: a call outside the four allowlisted shapes (EPIC_NUM=101 unless the row says otherwise)
-  local e=$1 d=$2; shift 2; calls_reset; probe "$SKILL" - "$e" lc_gh_write "$@"
-  check "G1.7: $d -> write-shape-refused, rc 2, nothing recorded and nothing refused by the stub" bash -c 'grep -q "reason=write-shape-refused" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ] && [ ! -s "$4" ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)" "$ST/refused.log"
-  SEEN_REASONS="$SEEN_REASONS write-shape-refused"
+shape_with() { # shape_with <env-assignment> <detail> <desc> <args...>: a call outside the allowlisted shapes -> write-shape-refused with exactly this detail token
+  local e=$1 det=$2 d=$3; shift 3; calls_reset; probe "$SKILL" - "$e" lc_gh_write "$@"
+  check "G1.7: $d -> write-shape-refused detail=$det, rc 2, nothing recorded and nothing refused by the stub" bash -c 'grep -q "reason=write-shape-refused detail=$4\( \|\$\)" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ] && [ ! -s "$5" ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)" "$det" "$ST/refused.log" && seen write-shape-refused
 }
-shape() { local d=$1; shift; shape_with EPIC_NUM=101 "$d" "$@"; }
-shape "-X DELETE" api -X DELETE repos/acme/demo/issues/101
-shape "a labels PATCH" api -X PATCH repos/acme/demo/labels -f name=x
-shape "a different slug" api -X POST repos/evil/other/issues -f title=x
-shape "state on the PATCH shape" api -X PATCH repos/acme/demo/issues/101 -f state=closed
-shape "an @file operand outside the plan directory" api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
-shape "a non-digit issue number" api -X PATCH repos/acme/demo/issues/10x -f title=x
-shape "an issue verb form" issue create --title x
+shape() { local det=$1 d=$2; shift 2; shape_with EPIC_NUM=101 "$det" "$d" "$@"; }
 PLAN=""; printf 'body\n' > "$SCRATCH/body.txt"
-shape "a PATCH to an issue other than the epic (102, epic is 101)" api -X PATCH repos/acme/demo/issues/102 -F "body=@$SCRATCH/body.txt"
-shape_with X=1 "a PATCH when no epic is known (EPIC_NUM unset)" api -X PATCH repos/acme/demo/issues/101 -F "body=@$SCRATCH/body.txt"
-shape "a sub_issues link under another parent (102, epic is 101)" api -X POST repos/acme/demo/issues/102/sub_issues -F sub_issue_id=5
-shape_with X=1 "a sub_issues link when no epic is known" api -X POST repos/acme/demo/issues/101/sub_issues -F sub_issue_id=5
-shape "a label create named bug (not lc:)" api -X POST repos/acme/demo/labels -f name=bug -f color=ededed
-shape "an issue create carrying the label bug" api -X POST repos/acme/demo/issues -f title=x -f 'labels[]=bug'
-shape "an issue create whose field key holds a space (title body)" api -X POST repos/acme/demo/issues -f 'title body=x'
+shape shape "-X DELETE" api -X DELETE repos/acme/demo/issues/101
+shape shape "a labels PATCH" api -X PATCH repos/acme/demo/labels -f name=x
+shape shape "a different slug" api -X POST repos/evil/other/issues -f title=x
+shape field-key "state on the PATCH shape" api -X PATCH repos/acme/demo/issues/101 -f state=closed
+shape file-operand "an @file operand outside the plan directory" api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
+shape issue-number "a non-digit issue number on a PATCH that carries a valid body file (nothing else about it is wrong)" api -X PATCH repos/acme/demo/issues/10x -F "body=@$SCRATCH/body.txt"
+shape issue-number "a non-digit parent on a link that carries a valid integer id" api -X POST repos/acme/demo/issues/10x/sub_issues -F sub_issue_id=5
+shape not-api "an issue verb form" issue create --title x
+shape not-api "api with --method instead of -X" api --method POST repos/acme/demo/issues -f title=x
+shape epic-bind "a PATCH to an issue other than the epic (102, epic is 101)" api -X PATCH repos/acme/demo/issues/102 -F "body=@$SCRATCH/body.txt"
+shape_with X=1 epic-bind "a PATCH when no epic is known (EPIC_NUM unset)" api -X PATCH repos/acme/demo/issues/101 -F "body=@$SCRATCH/body.txt"
+shape epic-bind "a sub_issues link under another parent (102, epic is 101)" api -X POST repos/acme/demo/issues/102/sub_issues -F sub_issue_id=5
+shape_with X=1 epic-bind "a sub_issues link when no epic is known" api -X POST repos/acme/demo/issues/101/sub_issues -F sub_issue_id=5
+shape label-name "a label create named bug (not lc:)" api -X POST repos/acme/demo/labels -f name=bug -f color=ededed
+shape label-name "an issue create carrying the label bug" api -X POST repos/acme/demo/issues -f title=x -f 'labels[]=bug'
+shape field-key "an issue create whose field key holds a space (title body)" api -X POST repos/acme/demo/issues -f 'title body=x'
+shape raw-field "a raw -f body= on the epic PATCH (the body must be a file operand)" api -X PATCH repos/acme/demo/issues/101 -f body=text
+shape raw-field "a raw -f sub_issue_id= on the link (it must be a typed integer)" api -X POST repos/acme/demo/issues/101/sub_issues -f sub_issue_id=5
+shape typed-field "a typed -F body= that is not an @file" api -X PATCH repos/acme/demo/issues/101 -F body=text
+shape typed-field "a typed -F title=" api -X POST repos/acme/demo/issues -F title=x
+shape sub-issue-id "a typed sub_issue_id that is not an integer" api -X POST repos/acme/demo/issues/101/sub_issues -F sub_issue_id=abc
+shape field-form "a field word with no =" api -X POST repos/acme/demo/issues -f title
+shape flag-value "a field flag with nothing after it" api -X POST repos/acme/demo/issues -f
+shape flag "a flag outside the allowlist (--input)" api -X POST repos/acme/demo/issues --input x
 stub_reset acme/demo private; seed 101 open stub-user lc:launch-check,lc:epic ''; calls_reset
 probe "$SKILL" - "EPIC_NUM=101" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -F "body=@$SCRATCH/body.txt"
 check "G1.7 twin: the same PATCH to the epic itself reaches the stub exactly once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
@@ -270,12 +316,26 @@ calls_reset; probe "$SKILL" - "EPIC_NUM=101" lc_gh_write api -X POST repos/acme/
 check "G1.7 twin: a link under the epic itself reaches the stub exactly once (the stub may refuse the unknown id)" test "$(n_writes)" = 1
 calls_reset; probe "$SKILL" - "X=1" lc_gh_write api -X POST repos/acme/demo/issues -f title=x -f 'labels[]=lc:launch-check'
 check "G1.7 twin: an lc: label on an issue create reaches the stub exactly once" test "$(n_writes)" = 1
-# reads: auth takes only status and repo only view (a second word like delete, edit or token is not a read)
-for rd in "repo delete acme/demo" "repo edit acme/demo --visibility public" "repo" "auth token" "auth login" "auth"; do
-  # shellcheck disable=SC2086  # the row is deliberately split into words
-  stub_reset acme/demo private; calls_reset; probe "$SKILL" - "X=1" lc_gh_read $rd
-  check "G1.8: lc_gh_read $rd is refused (write-shape-refused, rc 2, zero gh calls)" bash -c 'grep -q "reason=write-shape-refused" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)"
-done
+# reads: auth takes only status and repo only view (a second word like delete, edit or token is not a read); api is GET only and never graphql
+read_refused() { # read_refused <detail> <desc> <args...>
+  local det=$1 d=$2; shift 2; stub_reset acme/demo private; calls_reset; probe "$SKILL" - "X=1" lc_gh_read "$@"
+  check "G1.8: lc_gh_read $d is refused (write-shape-refused detail=$det, rc 2, zero gh calls)" bash -c 'grep -q "reason=write-shape-refused detail=$4\( \|\$\)" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)" "$det" && seen write-shape-refused
+}
+read_refused read-verb "repo delete" repo delete acme/demo
+read_refused read-verb "repo edit" repo edit acme/demo --visibility public
+read_refused read-verb "repo with no verb" repo
+read_refused read-verb "auth token" auth token
+read_refused read-verb "auth login" auth login
+read_refused read-verb "auth with no verb" auth
+read_refused read-verb "a verb that is not a read (issue)" issue list
+read_refused read-not-get "api -X POST" api -X POST repos/acme/demo/labels -f name=x
+read_refused read-not-get "api -XPOST (attached)" api -XPOST repos/acme/demo/labels -f name=x
+read_refused read-not-get "api --method=POST" api --method=POST repos/acme/demo/labels -f name=x
+read_refused read-not-get "api --method PATCH" api --method PATCH repos/acme/demo/issues/101
+read_refused read-not-get "api -X with nothing after it" api repos/acme/demo -X
+read_refused read-graphql "api graphql" api graphql -f query=x
+read_refused read-graphql "api /graphql" api /graphql -f query=x
+read_refused read-graphql "api <host path>/graphql" api repos/acme/demo/graphql
 calls_reset; probe "$SKILL" - "X=1" lc_gh_read auth status
 check "G1.8 twin: lc_gh_read auth status reaches the stub once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_calls)"
 calls_reset; probe "$SKILL" - "X=1" lc_gh_read repo view --json nameWithOwner
@@ -342,6 +402,12 @@ prev --host gitlab.example
 check "origin host: naming that host makes the same preview proceed" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
 newcase; only_first "$R" 3; gitq "$R" remote set-url origin git@github.com:acme/demo.git; prev
 check "origin host: an scp-style remote on the target host is accepted" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+# --repo is an acknowledgement, not a target, and the plan does not record it: a create that omits it meets the same origin check
+newcase; stub_reset other/thing private; only_first "$R" 3; prev --repo other/thing; calls_reset
+CREPO=other/thing create
+check "origin differs (create): a create WITHOUT --repo after a preview that needed it aborts repo-unresolved detail=origin-differs with zero writes" bash -c 'grep -q "detail=origin-differs" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"; check "origin differs (create): ... marker and rc" abort_is 2 repo-unresolved
+CREPO=other/thing create --repo other/thing
+check "origin differs (create): the same create WITH --repo other/thing (the resolved slug) proceeds (rc 0, writes recorded)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
 
 # ---------------------------------------------------------------- 6. Guard 2: authored bytes are scanned bytes
 check "sandbox: the pristine copy parses and has the seams injected" bash -c 'bash -n "$1" && grep -q LC_TEST_NOGATE "$1"' _ "$SB0"
@@ -399,6 +465,35 @@ banner_bodies() { # every issue body the stub received (the sub-issues and the e
 check "banner: every created body and the epic body carry the banner line (the report says it is not an attestation; the issues must too)" banner_bodies
 check "banner: the banner is the first block after the marker line in every plan body and in the epic" bash -c 'for f in "$1"/issues/*.md "$1"/epic.md; do [ "$(sed -n 1p "$f" | cut -c1-4)" = "<!--" ] && [ -z "$(sed -n 2p "$f")" ] && [ "$(sed -n 3p "$f")" = "$2" ] || exit 1; done' _ "$PLAN" "$(banner_line)"
 FACTS="$OFACTS"
+# a secret in an item that is NOT the last one in send order is caught: the scanned blob must hold every item, not only the last
+hostile_at() { awk -F'\t' -v OFS='\t' -v id="$2" -v ev="$3" '$1 == id { $3 = ev } { print }' "$FACTS" > "$1"; }
+newcase; only_first "$R" 3; prev
+MI_HID=""; for mi in $(create_ids); do case "$mi" in SEC-0[12]) ;; *) MI_HID=$mi; break ;; esac; done
+newcase; only_first "$R" 3; hostile_at "$SCRATCH/multi.tsv" "$MI_HID" "$(planted_secret)"; FACTS="$SCRATCH/multi.tsv"
+with LC_TEST_NOGATE=1 -- prev; calls_reset   # FACTS stays hostile: create regenerates the bodies from the facts it is given and compares them with the plan
+multi_setup_ok() { # the plan has 3 create rows; the token is in item $MI_HID, which is not the last one
+  local pos; [ -n "$MI_HID" ] && [ "$(plan_n)" = 3 ] && grep -qF -- "$(planted_secret)" "$PLAN/issues/$MI_HID.md" || return 1
+  pos=$(create_ids | grep -nx "$MI_HID" | cut -d: -f1); [ -n "$pos" ] && [ "$pos" -lt 3 ]
+}
+check "G2.1 multi-item setup: the plan has 3 create rows and the planted token sits in $MI_HID, which is not the last of them (send order = plan order)" multi_setup_ok
+create
+check "G2.1 multi-item: a secret in a non-last item writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
+check "G2.1 multi-item: ... and aborts redaction-hit with rc 1" abort_is 1 redaction-hit
+check "G2.1 multi-item: ... and the token is nowhere in the run's output" lacks "$(planted_secret)"
+M5=$(sbx_edit blobtrunc 's#cat "\$ISSUES_PLAN_DIR/issues/\$id.md"; } >> "\$WORK/blob"#cat "$ISSUES_PLAN_DIR/issues/$id.md"; } > "$WORK/blob"#')
+check "G2.1 mutation landed (the item loop truncates the blob instead of appending, in the sandbox copy)" mut_landed "$M5"
+calls_reset; with LCS="$M5/scripts/launch-check.sh" -- create
+check "G2.1 mutation (> instead of >>): only the last item is scanned, so the same plan now reaches the tracker (the multi-item row above is sensitive to the append)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
+FACTS="$OFACTS"
+# the preview scans what it is about to put in front of the customer, with the real gate (no bypass seam)
+newcase; HIDP=$(hostile_facts "$SCRATCH/hostile-pv.tsv" "$(planted_secret)"); only_ids "$R" "$HIDP"; FACTS="$SCRATCH/hostile-pv.tsv"; calls_reset; prev; FACTS="$OFACTS"
+check "G2.1 preview: a hostile fact through the real gate aborts redaction-hit with rc 1 in the preview itself" abort_is 1 redaction-hit
+check "G2.1 preview: ... writes no plan (the plan-out directory stays empty), no gh write, and the token is nowhere in the output" bash -c '[ -z "$(ls -A "$1" 2>/dev/null)" ] && [ "$2" = 0 ]' _ "$SCRATCH/po$N" "$(n_writes)"
+check "G2.1 preview: ... the token is not echoed" lacks "$(planted_secret)"
+M6=$(sbx_edit pvgate '/for id in lc:launch-check lc:epic; do/{n;s/lc_emit_checked "\$WORK\/blob" "" 1/:/;}')
+check "G2.1 preview mutation landed (the preview's scan call removed in the sandbox copy)" mut_landed "$M6"
+newcase; FACTS="$SCRATCH/hostile-pv.tsv"; only_ids "$R" "$HIDP"; with LCS="$M6/scripts/launch-check.sh" -- prev; FACTS="$OFACTS"
+check "G2.1 preview mutation: without the preview's scan the same facts yield a plan that carries the token (so the preview row is sensitive)" bash -c '[ "$1" = 0 ] && [ -n "$2" ] && [ -d "$2" ] && [ -n "$(find "$2" -type f -exec grep -lF -- "$3" {} + 2>/dev/null)" ]' _ "$RC" "$PLAN" "$(planted_secret)"
 newcase; HID3=$(hostile_facts "$SCRATCH/gl-only.tsv" "$(gl_only_secret)"); only_ids "$R" "$HID3"; FACTS="$SCRATCH/gl-only.tsv"
 with LAUNCH_CHECK_GITLEAKS="$SCRATCH/gl-toggle.sh" -- prev; calls_reset
 printf 'ignore everything\n' > "$R/.gitleaksignore"; printf '[allowlist]\nregexes=[%s]\n' "'''.*'''" > "$R/.gitleaks.toml"; [ -d "$PLAN" ] && cp "$R/.gitleaksignore" "$R/.gitleaks.toml" "$PLAN/"
@@ -437,7 +532,7 @@ planmut() { # planmut <name> <fn>: mutate a copy of the good plan, run create ag
   newcase; only_first "$R" 3; PLAN="$d"; CCOUNT=3 create; unset CCOUNT
 }
 retitle() { T="$2" awk -F'\t' -v OFS='\t' 'NF == 6 && $1 != "id" && !d { $6 = ENVIRON["T"]; d = 1 } { print }' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
-firstid() { awk -F'\t' 'NF == 6 && $1 != "id" {print $1; exit}' "$GP/plan.tsv"; }
+firstid() { awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create" {print $1; exit}' "$GP/plan.tsv"; }   # a CREATE row: only it has a body file for the byte/note/size/link mutators to reach
 p_sev() { awk -F'\t' -v OFS='\t' 'NF == 6 && $1 != "id" && !d { $2 = "urgent"; d = 1 } { print }' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
 p_nl() { retitle "$1" "$(printf 'two\nlines')"; }
 p_dots() { T="../$(firstid)" awk -F'\t' -v OFS='\t' 'NF == 6 && $1 != "id" && !d { $1 = ENVIRON["T"]; d = 1 } { print }' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
@@ -452,11 +547,16 @@ p_byte() { printf 'x' >> "$1/issues/$(firstid).md"; }
 p_note() { printf '\nNote from the customer: please fix soon.\n' >> "$1/issues/$(firstid).md"; }
 p_mode() { chmod 777 "$1"; }
 p_noepic() { rm -f "$1/epic.md"; }
+# a plan that is valid in every vocabulary but no longer what the catalog and facts regenerate
+p_rowtitle() { awk -F'\t' -v OFS='\t' 'NF == 6 && $1 != "id" && $5 == "create" && !d { $6 = "A different but valid title"; d = 1 } { print }' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
+p_rowsev() { awk -F'\t' -v OFS='\t' 'NF == 6 && $1 != "id" && $5 == "create" && !d { $2 = ($2 == "low") ? "critical" : "low"; d = 1 } { print }' "$1/plan.tsv" > "$1/p.new" && mv "$1/p.new" "$1/plan.tsv"; }
+p_epictxt() { printf 'Text added to the epic after the preview.\n' >> "$1/epic.md"; }
 p_big() { head -c 70000 /dev/zero | tr '\0' a >> "$1/issues/$(firstid).md"; }
-for m in sev nl dots at hash ghn utf long link dirlink byte note mode noepic big; do
+# each mutation of a saved plan is refused for ITS reason: the detail token is part of the assertion
+for md in sev:severity nl:row dots:id at:title hash:title ghn:title utf:title long:title link:symlink dirlink:mode byte:body-mismatch note:body-mismatch mode:mode noepic:epic-file big:size rowtitle:row-mismatch rowsev:row-mismatch epictxt:epic-mismatch; do
+  m=${md%%:*}; det=${md#*:}
   calls_reset; planmut "$m" "p_$m"
-  check "G2.9 plan-invalid ($m): rc 2, plan-invalid marker, zero writes" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_writes)"
-  SEEN_REASONS="$SEEN_REASONS plan-invalid"
+  check "G2.9 plan-invalid ($m): detail=$det, rc 2, plan-invalid marker, zero writes" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid detail=$4\( \|\$\)" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_writes)" "$det" && seen plan-invalid
 done
 ALIAS="$SCRATCH-alias"; ln -sfn "$SCRATCH" "$ALIAS"
 newcase; only_first "$R" 3; PLAN="$ALIAS${GP#"$SCRATCH"}"; CCOUNT=3 create; unset CCOUNT

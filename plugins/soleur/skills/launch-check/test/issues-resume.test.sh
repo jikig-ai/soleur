@@ -3,6 +3,8 @@
 # Preview, --check-plan, Guard 1 and Guard 2 are in issues-guards.test.sh; both source issues-common.sh.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/issues-common.sh"
+check "instrument self-test" selftest
+check "the 1 s pause between writes is forced to 0 for the suite" test "$LAUNCH_CHECK_PAUSE" = 0
 
 # ---------------------------------------------------------------- 7. Guard 3: idempotency and resume
 full_case() { newcase; only_first "$R" "$1"; prev; }
@@ -152,6 +154,16 @@ full_case 7; calls_reset; with GH_STUB_FAIL_AFTER=3 -- create
 check "resume hint (private): the resume command is printed and no --confirm-public line appears" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" "$1"' _ "$OUT"
 full_case 3; jq '.visibility="internal"' "$ST/repo.json" > "$ST/r.new" && mv "$ST/r.new" "$ST/repo.json"; calls_reset; create
 check "G3: an internal repository is gated like a public one (confirm-public-required)" abort_is 2 confirm-public-required
+# a repository whose visibility the API did not give (the field missing, or a value this tool does not know) is UNKNOWN, and UNKNOWN is gated
+for vz in missing weird; do
+  full_case 3
+  if [ "$vz" = missing ]; then jq 'del(.visibility)' "$ST/repo.json" > "$ST/r.new"; else jq '.visibility="weird"' "$ST/repo.json" > "$ST/r.new"; fi
+  mv "$ST/r.new" "$ST/repo.json"; calls_reset; create
+  check "G3: a $vz visibility is read as UNKNOWN and gated like a public repository: zero writes" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
+  check "G3: ... aborts confirm-public-required naming visibility=UNKNOWN (rc 2)" bash -c 'grep -q "visibility=UNKNOWN" "$1"' _ "$OUT"; check "G3: ... marker and rc ($vz visibility)" abort_is 2 confirm-public-required
+  create --confirm-public
+  check "G3: --confirm-public makes the same $vz-visibility run proceed" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
+done
 full_case 3; calls_reset; create
 check "G1 must-PASS: a PRIVATE repository runs without --confirm-public" bash -c '[ "$1" = 0 ]' _ "$RC"
 full_case 3; calls_reset; with GH_STUB_LIST=fail -- create
@@ -159,6 +171,9 @@ check "G3.11: a failed listing writes nothing and says phase=lookup (never read 
 check "G3.11: ... and aborts issues-incomplete (rc 2)" abort_is 2 issues-incomplete
 calls_reset; with GH_STUB_LIST=malformed -- create
 check "G3.11 (UNVERIFIED-STUB-ONLY): malformed listing output writes nothing and says phase=lookup" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup" "$2"' _ "$(n_writes)" "$OUT"
+calls_reset; with GH_STUB_LIST=emptyfail -- create
+check "G3.11: a listing call that fails with NOTHING on stdout and stderr is not 'none found': zero writes and phase=lookup" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup" "$2"' _ "$(n_writes)" "$OUT"
+check "G3.11: ... and aborts issues-incomplete (rc 2)" abort_is 2 issues-incomplete
 stub_reset acme/demo private; seed 601 open stub-user lc:launch-check NULL; seed 602 open stub-user lc:launch-check ''; seed 603 open stub-user lc:launch-check 'no marker here'
 calls_reset; create
 check "G3.11 (UNVERIFIED-STUB-ONLY, gojq null handling): null, empty and marker-less bodies are ignored cleanly and the run completes" bash -c '[ "$1" = 0 ] && [ "$2" = 3 ]' _ "$RC" "$(tr_q '[.[]|select(.number>=100 and .number<600)|select(.labels|map(.name)|index("lc:epic")|not)]|length')"
@@ -181,10 +196,55 @@ check "G2: every printed line of a failed create passes lc_scrub (no tab or carr
 full_case 3; TMPD="$SCRATCH/tmpd"; mkdir -p "$TMPD"; with TMPDIR="$TMPD" -- create
 check "no lc-work or lc-gate temp file is left behind after a create (only the plan directory survives)" bash -c '[ "$1" = 0 ] && [ -z "$(ls -A "$2")" ]' _ "$RC" "$TMPD"
 
+# every remaining call that can fail ends the run in a closed abort that names its phase, with no raw tracker text; the re-run completes
+for rp in labels-get:lookup labels-post:create epic-post:epic epic-patch:epic; do
+  route=${rp%%:*}; ph=${rp#*:}
+  full_case 3; calls_reset; with GH_STUB_FAIL_ROUTE=$route -- create; RT_OUT="$OUT"; RT_ITEMS=$(items_n); RT_EPICS=$(epics_n)
+  check "failed call ($route): the run stops issues-incomplete phase=$ph detail=http-500 (rc 2)" bash -c 'grep -q "reason=issues-incomplete phase=$2 detail=http-500" "$1"' _ "$RT_OUT" "$ph"; check "failed call ($route): ... marker and rc" abort_is 2 issues-incomplete "$RT_OUT"
+  check "failed call ($route): ... no raw tracker text reaches the output (no HTTP line, no server message)" bash -c '! grep -qE "HTTP [0-9]{3}|Server Error" "$1"' _ "$RT_OUT"
+  case "$route" in
+    labels-get) check "failed call ($route): ... before the first write" test "$(n_writes)" = 0 ;;
+    labels-post) check "failed call ($route): ... before any issue exists" bash -c '[ "$1" = 0 ] && [ "$2" = 0 ]' _ "$RT_ITEMS" "$RT_EPICS" ;;
+    epic-post) check "failed call ($route): ... no item and no epic exists" bash -c '[ "$1" = 0 ] && [ "$2" = 0 ]' _ "$RT_ITEMS" "$RT_EPICS" ;;
+    epic-patch) check "failed call ($route): ... the items and the epic exist, only the epic section is unwritten" bash -c '[ "$1" = 3 ] && [ "$2" = 1 ]' _ "$RT_ITEMS" "$RT_EPICS" ;;
+  esac
+  calls_reset; create
+  check "failed call ($route): the re-run completes (rc 0) with 3 items, one epic, each marker once" bash -c '[ "$1" = 0 ] && [ "$2" = 3 ] && [ "$3" = 1 ] && [ "$4" = 1 ]' _ "$RC" "$(items_n)" "$(epics_n)" "$(max_dup)"
+done
+# the signed-in login is read before anything is written when an epic already exists
+full_case 3; stub_reset acme/demo private; seed 531 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"; prev; calls_reset; with GH_STUB_FAIL_ROUTE=user-get -- create
+check "failed call (user-get): the author check cannot read the login: phase=lookup, zero writes, no raw text" bash -c 'grep -q "reason=issues-incomplete phase=lookup detail=http-500" "$1" && [ "$2" = 0 ] && ! grep -qE "HTTP [0-9]{3}|Server Error" "$1"' _ "$OUT" "$(n_writes)"; check "failed call (user-get): ... marker and rc" abort_is 2 issues-incomplete
+# a paginated listing that dies after its first page is not a complete listing
+full_case 3; stub_reset acme/demo private; for i in 1 2 3 4 5; do seed $((800 + i)) closed stub-user lc:launch-check "<!-- launch-check:gap=ZZ-0$i -->"; done
+prev; calls_reset; with GH_STUB_PER_PAGE=2 GH_STUB_PAGE_FAIL_AFTER=1 -- create
+check "interrupted pagination: a listing that fails after page 1 stops the run phase=lookup with zero writes (a partial listing is never 'the issues that exist')" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup" "$2"' _ "$(n_writes)" "$OUT"; check "interrupted pagination: ... marker and rc" abort_is 2 issues-incomplete
+# a label someone else created after the listing (already_exists on the label POST, its detail on stdout where the CLI puts it) is not a failure
+full_case 7; PVOUT_L="$OUT"; for lbl in $(sed -n 's/^Labels ensured if absent (.*): \(.*\)\.$/\1/p' "$PVOUT_L"); do seed_label "$lbl" ededed; done
+calls_reset; with GH_STUB_LABELS_STALE=1 -- create
+check "label race: the labels listing misses labels that exist, the POST answers 422 already_exists, and the run goes on (rc 0, all 7 items filed)" bash -c '[ "$1" = 0 ] && [ "$2" = 7 ] && [ "$(jq -r "length" "$3/labels.json")" -ge 4 ]' _ "$RC" "$(items_n)" "$ST"
+check "label race (anti-vacuous): the stale listing really led to label POSTs that the stub answered with 422" bash -c '[ "$(cj "[.[]|select(.method==\"POST\" and (.path|test(\"/labels\$\")))]|length")" -ge 4 ]' _
+
 # the preview names the labels the create will ensure, and the set it prints is the set the create then holds
 full_case 7; PVOUT="$OUT"; calls_reset; create
 check "labels: the preview prints 'Labels ensured if absent' and the create consent text mentions the absent labels" bash -c 'grep -q "^Labels ensured if absent" "$1" && grep -q "create the absent labels" "$1"' _ "$PVOUT"
 check "labels: the create succeeded (rc 0, all 7 items, so every label an issue carries existed) and the set the preview printed equals the set the stub holds after it (all were absent)" bash -c 'printed=$(sed -n "s/^Labels ensured if absent (.*): \(.*\)\.\$/\1/p" "$1" | tr " " "\n" | sort | tr "\n" " "); have=$(jq -r ".[].name" "$2/labels.json" | sort | tr "\n" " "); [ -n "$printed" ] && [ "$printed" = "$have" ] && [ "$(wc -w <<<"$printed")" -ge 4 ] && [ "$3" = 0 ] && [ "$4" = 7 ] && [ "$(jq -r "[.[].labels[].name]|unique|length" "$2/issues.json")" -le "$(wc -w <<<"$printed")" ]' _ "$PVOUT" "$ST" "$RC" "$(items_n)"
+
+# the pause between writes is real when no test seam is set: N writes -> N-1 sleeps of 1 s, none before the first write
+PSHIM="$SCRATCH/sleepshim"; mkdir -p "$PSHIM"
+cat > "$PSHIM/sleep" <<'EOS'
+#!/usr/bin/env bash
+# records how many tracker writes had been made when it was called, and its argument; returns at once
+printf '%s\t%s\n' "$(jq -s '[.[]|select(.class=="write")]|length' "$ST/calls.log" 2>/dev/null || echo '?')" "$*" >> "$SLEEP_LOG"
+exit 0
+EOS
+chmod +x "$PSHIM/sleep"
+full_case 4; calls_reset; : > "$SCRATCH/sleep.log"
+env -u LAUNCH_CHECK_TEST -u LAUNCH_CHECK_PAUSE -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE \
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null PATH="$PSHIM:$PATH" SLEEP_LOG="$SCRATCH/sleep.log" ST="$ST" \
+  bash "${LCS:-$LC}" issues --create --target "$R" --facts "$FACTS" --judged "$JUD" --plan "$PLAN" --confirm-repo acme/demo --confirm-count "$(plan_n)" > "$SCRATCH/pause.out" 2>&1; RC=$?
+PW=$(n_writes)
+check "pause: the run with no test seam completed (rc 0) and made at least 5 writes (anti-vacuous)" bash -c '[ "$1" = 0 ] && [ "$2" -ge 5 ]' _ "$RC" "$PW"
+check "pause: N writes -> exactly N-1 sleeps, each of 1 second, the k-th taken after k writes (so none before the first)" bash -c 'n=$1; [ "$(wc -l < "$2" | tr -d " ")" = $((n - 1)) ] && [ "$(cut -f2 "$2" | sort -u)" = 1 ] && [ "$(cut -f1 "$2" | paste -s -d, -)" = "$(seq 1 $((n - 1)) | paste -s -d, -)" ]' _ "$PW" "$SCRATCH/sleep.log"
 
 # ---------------------------------------------------------------- 8. Guard 4: epic edits are confined to the marked section
 custom_epic() { # customer text before and after the markers, using the words begin and end without the marker syntax

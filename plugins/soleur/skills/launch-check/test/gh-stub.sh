@@ -42,7 +42,10 @@
 # GH_STUB_KILL_AFTER_CREATE: right after storing the n-th item create exit 1 with no output, once; the harness is never
 # killed); GH_STUB_SUBISSUE=ok|403|404|410|422|ratelimit|502 (the link POST only); GH_STUB_SLEEP=<seconds> (an item create sleeps that long after storing the issue, before it answers: a window for a signal); GH_STUB_PER_PAGE=<n> (forces pagination); GH_STUB_EDIT_EPIC_BETWEEN=get|write (a customer
 # edit of the epic body: before serving the first epic GET that follows a listing, or after the first item create);
-# GH_STUB_CRLF=1 (the epic body is stored with CRLF line endings); GH_STUB_LIST=ok|fail|malformed (the issue listing).
+# GH_STUB_CRLF=1 (the epic body is stored with CRLF line endings); GH_STUB_LIST=ok|fail|emptyfail|malformed (the issue listing; emptyfail is exit 1
+# with nothing on stdout or stderr); GH_STUB_FAIL_ROUTE=<names, comma separated> (labels-get, labels-post, epic-post, epic-patch, user-get: that call
+# answers HTTP 500); GH_STUB_PAGE_FAIL_AFTER=<n> (a paginated read serves n pages, then fails with HTTP 502); GH_STUB_LABELS_STALE=1 (the labels
+# listing answers an empty list while the labels POST still sees the real set: a label created by someone else after the listing).
 set -u
 S=${GH_STUB_STATE:-}
 if [ -z "$S" ] || [ ! -d "$S" ]; then printf 'gh-stub: REFUSE GH_STUB_STATE unset or missing\n' >&2; exit 64; fi
@@ -85,6 +88,10 @@ jq_out() { # jq_out <json> : apply --jq (real jq -r) or print compact JSON
   if [ -n "${JQEXPR:-}" ]; then printf '%s' "$1" | jq -r "$JQEXPR" || exit 1; else printf '%s' "$1" | jq -c .; fi
 }
 repo_field() { jq -r "$1" "$S/repo.json"; }
+route_fails() { # route_fails <name>: GH_STUB_FAIL_ROUTE names this call
+  case ",${GH_STUB_FAIL_ROUTE:-}," in *",$1,"*) return 0 ;; esac
+  return 1
+}
 need_auth() { if [ "${GH_STUB_AUTH:-ok}" = fail ]; then printf 'gh: To use GitHub CLI, run: gh auth login\n' >&2; exit 4; fi; }
 
 sub=${1:-}; [ $# -gt 0 ] && shift
@@ -204,7 +211,7 @@ PATTERN_ONE='^repos/([^/]+)/([^/]+)/issues/([0-9]+)$'
 PATTERN_LIST='^repos/([^/]+)/([^/]+)/(issues|labels)$'
 
 paginate_emit() { # paginate_emit <json array>: pages of per_page (default 30), jq per page, pages.log
-  local arr=$1 per page=1 total n s pages=0 slice
+  local arr=$1 per total n s pages=0 slice
   per=$(fld per_page); per=${per:-30}; [ -n "${GH_STUB_PER_PAGE:-}" ] && per=$GH_STUB_PER_PAGE
   total=$(jq 'length' <<<"$arr")
   if [ "$PAGINATE" = 0 ]; then
@@ -215,6 +222,9 @@ paginate_emit() { # paginate_emit <json array>: pages of per_page (default 30), 
       n=$(jq -r --argjson s "$s" --argjson n "$per" '.[$s:$s+$n] | length' <<<"$arr")
       slice=$(jq -c --argjson s "$s" --argjson n "$per" '.[$s:$s+$n]' <<<"$arr")
       pages=$((pages + 1)); jq_out "$slice" || exit 1
+      if [ -n "${GH_STUB_PAGE_FAIL_AFTER:-}" ] && [ "$pages" -ge "$GH_STUB_PAGE_FAIL_AFTER" ] && [ "$((s + per))" -lt "$total" ]; then
+        printf '%s\t%s\n' "$CUR_SEQ" "$pages" >> "$S/pages.log"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1
+      fi
       s=$((s + per)); [ "$n" -ge "$per" ] && [ "$s" -lt "$total" ] || break
     done
   fi
@@ -225,6 +235,7 @@ route="$METHOD $ENDPOINT"
 case "$route" in
   "GET user")
     record read GET "$ENDPOINT" "$EXPLICIT"; need_auth
+    ! route_fails user-get || http_fail 500 "Server Error"
     jq_out "$(jq -nc --arg l "$LOGIN" '{login:$l}')"; exit 0 ;;
 esac
 
@@ -241,15 +252,21 @@ if [[ "$ENDPOINT" =~ $PATTERN_LIST ]]; then
   if [ "$METHOD" = GET ] && [ "$kind" = labels ]; then
     record read GET "$ENDPOINT" "$EXPLICIT"; need_auth
     repo_ok "$o" "$r" || http_fail 404 "Not Found"
+    ! route_fails labels-get || http_fail 500 "Server Error"
+    if [ "${GH_STUB_LABELS_STALE:-0}" = 1 ]; then paginate_emit '[]'; exit 0; fi
     paginate_emit "$(cat "$S/labels.json")"; exit 0
   fi
   if [ "$METHOD" = POST ] && [ "$kind" = labels ]; then
     record write POST "$ENDPOINT" "$EXPLICIT"; need_auth
     repo_ok "$o" "$r" || http_fail 404 "Not Found"
+    ! route_fails labels-post || http_fail 500 "Server Error"
     name=$(fld name); color=$(fld color); desc=$(fld description)
     [ -n "$name" ] || http_fail 422 "Validation Failed"
     if jq -e --arg n "$name" 'map(.name | ascii_downcase) | index($n | ascii_downcase)' "$S/labels.json" >/dev/null; then
-      http_fail 422 "Validation Failed" '{"resource":"Label","code":"already_exists","field":"name"}'
+      # the error body (with its errors array) is on STDOUT, as the CLI prints it; stderr carries only the one-line message
+      printf '{"message":"Validation Failed","errors":[{"resource":"Label","code":"already_exists","field":"name"}],"status":"422"}\n'
+      printf 'gh: Validation Failed (HTTP 422)\n' >&2
+      exit 1
     fi
     new=$(jq -nc --arg n "$name" --arg c "${color:-ededed}" --arg d "$desc" '{name:$n,color:$c,description:$d}')
     jq -c --argjson l "$new" '. + [$l]' "$S/labels.json" > "$S/labels.json.new" && mv "$S/labels.json.new" "$S/labels.json"
@@ -260,6 +277,7 @@ if [[ "$ENDPOINT" =~ $PATTERN_LIST ]]; then
     repo_ok "$o" "$r" || http_fail 404 "Not Found"
     case "${GH_STUB_LIST:-ok}" in
       fail) http_fail 500 "Server Error" ;;
+      emptyfail) exit 1 ;;
       malformed) printf '<<not a listing>>\n\037\n'; exit 0 ;;
     esac
     st=$(fld state); st=${st:-open}; lab=$(fld labels)
@@ -276,6 +294,7 @@ if [[ "$ENDPOINT" =~ $PATTERN_LIST ]]; then
     title=$(fld title); [ -n "$title" ] || http_fail 422 "Validation Failed"
     labs=$(fld_all 'labels[]' | jq -R . | jq -sc .)
     epic=false; jq -e 'index("lc:epic")' <<<"$labs" >/dev/null && epic=true
+    if [ "$epic" = true ] && route_fails epic-post; then http_fail 500 "Server Error"; fi
     missing=$(jq -nr --argjson l "$labs" --slurpfile all "$S/labels.json" '[$l[] | select(. as $w | ($all[0] | map(.name) | index($w)) == null)] | join(",")')
     [ -z "$missing" ] || http_fail 422 "Validation Failed"
     if [ "$epic" = false ]; then
@@ -312,7 +331,7 @@ fi
 
 if [[ "$ENDPOINT" =~ $PATTERN_SUB ]]; then
   o=${BASH_REMATCH[1]}; r=${BASH_REMATCH[2]}; n=${BASH_REMATCH[3]}
-  cls=read; [ "$METHOD" = POST ] && cls=write
+  cls="read"; if [ "$METHOD" = POST ]; then cls="write"; fi
   [ "$METHOD" = GET ] || [ "$METHOD" = POST ] || refuse "sub_issues method $METHOD"
   record "$cls" "$METHOD" "$ENDPOINT" "$EXPLICIT"; need_auth
   repo_ok "$o" "$r" || http_fail 404 "Not Found"
@@ -357,6 +376,7 @@ if [[ "$ENDPOINT" =~ $PATTERN_ONE ]]; then
   if [ "$METHOD" = PATCH ]; then
     record write PATCH "$ENDPOINT" "$EXPLICIT"; need_auth
     repo_ok "$o" "$r" || http_fail 404 "Not Found"
+    ! route_fails epic-patch || http_fail 500 "Server Error"
     bad=$(jq -rn --argjson f "$FIELDS" '[$f[] | select(.k != "body" and .k != "title") | .k] | join(",")')
     [ -z "$bad" ] || refuse "PATCH field $bad"
     jq -e --argjson n "$n" 'map(select(.number == $n)) | length > 0' "$S/issues.json" >/dev/null || http_fail 404 "Not Found"
