@@ -252,6 +252,16 @@ async function githubFetch(
   // pino + Sentry so this arm shares the url-refused liveness signal).
   url = githubEgressUrl(url, "github-app");
   const { timeoutMs, ...rest } = options;
+  // False positive on a pinned sink (CodeQL alert #268): the line above
+  // rebinds `url` through githubEgressUrl, which throws unless the URL parses
+  // to https://api.github.com with no userinfo and no dot-segments, so this
+  // credential can only egress to the GitHub API origin. js/request-forgery
+  // has no sanitizer for a throwing hostname pin (its only sanitizers are
+  // URI-encoding and data-extension models, which default setup does not
+  // consume), so the result is suppressed in source rather than refactored
+  // away. The annotation must stay line-adjacent to the fetch below — it
+  // covers exactly the next line (github-url.test.ts › suppression sentinel).
+  // codeql[js/request-forgery]
   const response = await fetch(url, {
     ...rest,
     signal: AbortSignal.timeout(timeoutMs ?? GITHUB_FETCH_TIMEOUT_MS),

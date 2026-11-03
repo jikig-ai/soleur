@@ -340,3 +340,32 @@ describe("GitHub API egress census", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("CodeQL in-source suppression sentinel", () => {
+  // A `// codeql[<query-id>]` annotation suppresses ONLY the alert on the
+  // immediately following line (AlertSuppression.qll `covers` semantics: the
+  // suppressed range is commentEndLine + 1). A formatter reflow or an
+  // interposed statement therefore silently un-suppresses the githubFetch
+  // `fetch(url,` sink and re-opens CodeQL alert #268 — pin the adjacency.
+  test("codeql[js/request-forgery] stays line-adjacent to the githubFetch sink", () => {
+    const rel = "server/github-app.ts";
+    const src = readFileSync(join(APP_ROOT, rel), "utf8");
+    const lines = src.split("\n");
+    const sinkIdx = lines.findIndex((l) => /\bawait fetch\(url\b/.test(l));
+    expect(
+      sinkIdx,
+      "no `await fetch(url,` sink found in github-app.ts githubFetch",
+    ).toBeGreaterThan(0);
+    const annotations = lines.filter((l) =>
+      l.includes("codeql[js/request-forgery]"),
+    );
+    expect(
+      annotations,
+      "exactly one js/request-forgery suppression annotation in github-app.ts",
+    ).toHaveLength(1);
+    expect(
+      lines[sinkIdx - 1],
+      "line above the githubFetch sink must carry codeql[js/request-forgery]",
+    ).toContain("codeql[js/request-forgery]");
+  });
+});
