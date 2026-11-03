@@ -461,31 +461,38 @@ END {
     printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
   }
 }'
-_census="$(awk -v MARK="$WRONGVOLUME_STEM" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
+CENSUS="$(awk -v MARK="$WRONGVOLUME_STEM" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$WRONGVOLUME_STEM"* ]]; then printf '%s\n' "$_n"; fi
-done <<<"$_census" | sort -u | tr '\n' ' ')"
+done <<<"$CENSUS" | sort -u | tr '\n' ' ')"
 _dal="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = A ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$WRONGVOLUME_STEM"* ]] || [[ "$_b" == "$WRONGVOLUME_STEM"* ]]; then printf '%s\n' "$_n"; fi
-done <<<"$_census" | sort -u | tr '\n' ' ')"
+done <<<"$CENSUS" | sort -u | tr '\n' ' ')"
 _want="$(printf '%s\n' $WRONGVOLUME_EXPLORATIONS | sort -u | tr '\n' ' ')"
-_extra_e="$(comm -23 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_extra_a="$(comm -23 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_gone_e="$(comm -13 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_gone_a="$(comm -13 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-if [ -z "$_extra_e$_extra_a$_gone_e$_gone_a" ] && [ -n "$_want" ]; then
+CENSUS_EXTRA_E="$(comm -23 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_EXTRA_A="$(comm -23 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_GONE_E="$(comm -13 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_GONE_A="$(comm -13 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+if [ -z "$CENSUS_EXTRA_E$CENSUS_EXTRA_A$CENSUS_GONE_E$CENSUS_GONE_A" ] && [ -n "$_want" ]; then
   ok "the .tf declares exactly the WRONGVOLUME_EXPLORATIONS pair set (${_want% }), each once as an exploration and once as an alert, by marker and by stem"
 else
-  no "wrong-volume census differs from WRONGVOLUME_EXPLORATIONS (${_want% }): undeclared exploration(s) [${_extra_e% }], undeclared alert(s) [${_extra_a% }], missing exploration(s) [${_gone_e% }], missing alert(s) [${_gone_a% }]: add it to WRONGVOLUME_EXPLORATIONS in this PR"
+  no "wrong-volume census differs from WRONGVOLUME_EXPLORATIONS (${_want% }): undeclared exploration(s) [${CENSUS_EXTRA_E% }], undeclared alert(s) [${CENSUS_EXTRA_A% }], missing exploration(s) [${CENSUS_GONE_E% }], missing alert(s) [${CENSUS_GONE_A% }]: add it to WRONGVOLUME_EXPLORATIONS in this PR"
+fi
+
+echo ""
+echo "=== inngest-luks-wrong-volume-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
 fi
 
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs
 # this guard with MUT_SKIP=1 and the matching LUKS_GUARD_* override pointing at the copy. The
 # inner run reads; it never writes. Nothing here touches a tracked file.
-SELF="${BASH_SOURCE[0]}"
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t luksalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -852,6 +859,8 @@ fi
 # outer run adds one row per mutation. The instrument control above is what catches a floor
 # that drifts past the presence rows (that control, not this comment, is the guard against a
 # dead battery).
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
+# row deletion stays green — PRESENCE_ROWS is two-write-site (here + the floor row's sed anchor).
 PRESENCE_ROWS=43
 MUT_ROWS=54
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
