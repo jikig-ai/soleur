@@ -307,29 +307,29 @@ the post-fix tree rather than the one we found.
 
 ## Acceptance Criteria
 
-- [ ] **Failing test first (`cq-write-failing-tests-before`):** Part C rows are committed and observed RED
+- [x] **Failing test first (`cq-write-failing-tests-before`):** Part C rows are committed and observed RED
   against the unfixed runner before `export -n TEST_GROUP` is added.
-- [ ] `scripts/test-all.sh` contains `export -n TEST_GROUP` after the `unset SCRIPTS_SHARD` line and before
+- [x] `scripts/test-all.sh` contains `export -n TEST_GROUP` after the `unset SCRIPTS_SHARD` line and before
   `tc_acquire "test-all"`; the runner still reads `$TEST_GROUP` (no rename).
-- [ ] With `TEST_GROUP=scripts` exported, `bash scripts/lint-orphan-test-suites.test.sh --rows 1-18` and
+- [x] With `TEST_GROUP=scripts` exported, `bash scripts/lint-orphan-test-suites.test.sh --rows 1-18` and
   `--rows 19-35` exit 0 (C0 and M16 PASS), and `bash scripts/test-all-group-affected.test.sh` reports
   `0 failed` (B1/B2/B3 PASS), **both run as children of the runner**, i.e. via
   `TEST_GROUP=scripts SCRIPTS_SHARD=<k>/8 bash scripts/test-all.sh` on the shard that owns them
   (find it with `SCRIPTS_SHARD=k/8 bash scripts/test-all.sh --enumerate scripts`).
-- [ ] Part C: committed rows are the probe(s) incl. grandchild reading, the row-1 positive control and the
+- [x] Part C: committed rows are the probe(s) incl. grandchild reading, the row-1 positive control and the
   positional-channel / `scripts-heavy` must-PASS; mutation rows 2, 3, 4 are each demonstrated RED once by
   hand (RED output recorded in the PR body, not committed); no existing assertion in
   `test-all-group-affected.test.sh` is edited, removed or loosened (`git diff` shows additions only to that
   file).
-- [ ] The inventory's scripts-group suites (`lib/test-suite-lanes`, `lib/repo-write-boundary`,
+- [x] The inventory's scripts-group suites (`lib/test-suite-lanes`, `lib/repo-write-boundary`,
   `tests/scripts/test-scratch-residue`) are checked in the dry run's leg captures (no separate spot-run);
   any newly red one is root-caused, not skipped.
-- [ ] `plugins/soleur/test/main-health-monitor-workflow.test.sh` and
+- [x] `plugins/soleur/test/main-health-monitor-workflow.test.sh` and
   `scripts/followthroughs/jobs1-stopgap-7432.test.sh` pass unchanged (they pin the step-env channel).
-- [ ] `lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh` exits 0.
+- [x] `lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh` exits 0.
 - [ ] Measured gate before ship: `bash scripts/test-all.sh --affected` (the runner is the changed file, so
   expect the degraded-full fallback; allow the long run).
-- [ ] **Dry run on the branch (`gh workflow run main-health-monitor.yml --ref
+- [x] **Dry run on the branch (`gh workflow run main-health-monitor.yml --ref
   feat-one-shot-11939-main-health-scripts-shards -f dry_run=true`):** every leg including scripts 1-8 and
   scripts-heavy 1-3 reaches `success` and the three originally failing suites show `[ok]` in the leg
   captures. The dry run skips tracker/heartbeat by construction (`inputs.dry_run` guards), so it proves
@@ -337,7 +337,7 @@ the post-fix tree rather than the one we found.
 - [ ] **PR keyword:** `Closes #11939` only if the dry run above is fully green; otherwise `Ref #11939`
   (the monitor auto-closes its own tracker on the next green scheduled run). Post-merge: confirm the next
   scheduled run is green; if red the monitor re-files, which is the correct behaviour.
-- [ ] Unmodified: alert predicates, `.github/workflows/main-health-monitor.yml`, anything under
+- [x] Unmodified: alert predicates, `.github/workflows/main-health-monitor.yml`, anything under
   Hetzner/Doppler.
 
 ## Test Scenarios
