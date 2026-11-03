@@ -877,7 +877,7 @@ lc_issues_create() {
     F_ROWS="$WORK/plan.rows.tsv" F_LIVE="$WORK/live.items" F_KIDS="$WORK/children" awk -F'\t' -v OFS='\t' '
       FILENAME == ENVIRON["F_ROWS"] { if ($5 == "create" || $5 == "exists") want[$1] = 1; next }
       FILENAME == ENVIRON["F_KIDS"] { kid[$1] = 1; next }
-      $4 == "open" && ($1 in want) && !($2 in kid) { print $3, $2, $1 }' "$WORK/plan.rows.tsv" "$WORK/children" "$WORK/live.items" > "$WORK/orphans.ids"
+      $4 == "open" && ($1 in want) && !($2 in kid) { print $3, $2, $1 }' "$WORK/plan.rows.tsv" "$WORK/children" "$WORK/live.items" > "$WORK/orphans.ids" || lc__incomplete link malformed
     while IFS=$'\t' read -r k num id; do
       [ -n "$k" ] || continue
       [ "$ISSUES_FALLBACK" = none ] || break
