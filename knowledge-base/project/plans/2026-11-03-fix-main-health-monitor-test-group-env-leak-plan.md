@@ -321,6 +321,9 @@ the post-fix tree rather than the one we found.
   hand (RED output recorded in the PR body, not committed); no existing assertion in
   `test-all-group-affected.test.sh` is edited, removed or loosened (`git diff` shows additions only to that
   file).
+  **Measured at QA (2026-11-03):** the literal claim is false: four lines changed in place (two header
+  comment lines, the banner, and the message text of the B3 positional label, where backticks inside
+  double quotes ran `affected` as a command). No assertion condition was edited, removed or loosened.
 - [x] The inventory's scripts-group suites (`lib/test-suite-lanes`, `lib/repo-write-boundary`,
   `tests/scripts/test-scratch-residue`) are checked in the dry run's leg captures (no separate spot-run);
   any newly red one is root-caused, not skipped.
