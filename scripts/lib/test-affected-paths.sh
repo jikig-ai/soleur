@@ -956,6 +956,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/cf-lb-overlay.yml"
   # #10540: terraform-target-parity.test.ts reads the dispatch-only key-rotation workflow at runtime (existsSync-guarded, then parses its jobs).
   ".github/workflows/inngest-key-rotate.yml"
+  # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
+  ".github/workflows/key-rotate.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -998,6 +1000,9 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "packages/opencode-plugin/"
   "scripts/check-adr-ordinals.sh"
+  # #11294: terraform-target-parity.test.ts SOURCES scripts/key-rotate.sh and the sibling it sources to read their gate tables (Guard 5).
+  "scripts/inngest-key-rotate.sh"
+  "scripts/key-rotate.sh"
   "scripts/lib/git-data-boot-signal-poll.sh"
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/git-data-store-dirty-scan.sh"
@@ -3919,6 +3924,10 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
 # TEST_GROUP=affected mutation suite: copies the runner and its affected-selection libs
 # into a sandbox and splices fixture registrations between the lock and the epilogue.
 # Real reads: the runner (TARGET + sandbox copy), the five libs below, and self.
+# Part C's static census (#11939) also reads every non-test lib under scripts/lib/ and
+# plugins/soleur/scripts/lib/session-state.sh to prove none re-exports TEST_GROUP, so a
+# new export in any of them must select this suite: the glob row and the named
+# session-state.sh row below declare that read.
 # (knowledge-base/support/community/2026-10-26-digest.md is a synthetic --paths member,
 # never read — argv-code citation recorded in the kb-consumers baseline if flagged.)
 AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS=(
@@ -3928,6 +3937,8 @@ AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS=(
   "scripts/lib/affected-glob.sh"
   "scripts/lib/test-affected-derive-cache.sh"
   "scripts/lib/repo-write-boundary.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "glob:scripts/lib/*.sh"
   "scripts/test-all-group-affected.test.sh"
 )
 
