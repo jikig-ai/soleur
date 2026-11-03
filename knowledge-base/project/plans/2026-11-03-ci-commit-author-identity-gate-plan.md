@@ -124,6 +124,8 @@ Invert the gate from a denylist-of-one to a **sanctioned-set subset check** (the
 
 This covers `soleur-ai[bot]`/`soleur-infra[bot]`/`github-actions[bot]`/`dependabot[bot]`/`renovate[bot]`/`claude[bot]` noreply emails (allowlisted logins) and signed contributors using GitHub noreply emails (`Elvalio`) — **and it correctly DENIES `158243242+devin-ai-integration[bot]@users.noreply.github.com`**, which is in neither roster (measured fail, PR #11690 / learning 2026-10-30).
 
+**Explicit exclusion precedes admission (CTO ruling, decision-challenges.md Item 1).** A small `DENIED_EMAILS` constant carries the two devin-bot forms — `devin-ai-integration[bot]@users.noreply.github.com` and `158243242+devin-ai-integration[bot]@users.noreply.github.com` — and is evaluated **before** any sanctioned-set source: an email on that list denies even when the session's `git config user.email` equals it (a Devin session could in principle be configured with the bot noreply; the roster clauses alone would not catch that case). Deny-overrides-admit is the only ordering consistent with `pull_request_target` reading `cla.yml` from main — authorship is the only lever, so no admission clause may resurrect an identity cla-check can never accept.
+
 The deny message lists the offending emails with sample commits, names the sanctioned sources, and generalizes the existing `filter-branch --env-filter` + `--force-with-lease` remedy to the offender emails.
 
 ## Technical Considerations
@@ -151,13 +153,14 @@ Every branch of the sanctioned-set evaluation must terminate in `exit 0` — the
 
 ### Phase 1: Hook extension (`.claude/hooks/cla-signed-author-gate.sh`)
 
+- Add a `DENIED_EMAILS` constant (both devin-bot forms) checked **first** — before session config and before roster membership — so an explicitly-denied identity denies even when it is the session's configured `user.email`.
 - Add a sanctioned-set builder (config email + `SANCTIONED_EMAILS` constant + noreply-login resolvers against `git show origin/main:.github/workflows/cla.yml` allowlist and `git show origin/cla-signatures:signatures/cla.json`).
 - Add the subset-check stage after the existing noreply deny: enumerate unique `%ae`/`%ce` on `origin/main..HEAD`, partition into sanctioned/offenders, deny with offender list + generalized filter-branch fix on any offender.
 - All-sources-empty → `exit 0` (fail-open). Individual source failures degrade that component only.
 
 ### Phase 2: Fixture-suite arms (`.claude/hooks/cla-signed-author-gate.test.sh`)
 
-New arms per the Guard Contract mutation matrix: wrong-identity `-c` email denies; allowlisted-bot noreply passes; signed-login noreply passes; devin-bot noreply denies; committer-only offender denies; mixed authors denies; unset-config + pinned human email passes; all-sources-absent fail-opens; and the harness self-test (assert_deny instrument actually parses the deny payload).
+New arms per the Guard Contract mutation matrix: wrong-identity `-c` email denies; allowlisted-bot noreply passes; signed-login noreply passes; devin-bot noreply denies; **devin-bot noreply as `git config user.email` still denies** (explicit-exclusion precedence arm); committer-only offender denies; mixed authors denies; unset-config + pinned human email passes; all-sources-absent fail-opens; and the harness self-test (assert_deny instrument actually parses the deny payload).
 
 ### Phase 3: Guidance convergence
 
