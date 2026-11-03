@@ -70,4 +70,21 @@ check "destination resolving outside LC_DEST_ROOT: rc 2 write-failed, nothing cr
 # Source scan: every use of the report path is a read or the single chokepoint call.
 stray=$(grep -n 'TARGET/\$REPORT_REL' "$SKILL/scripts/lib/render.sh" "$SKILL/scripts/launch-check.sh" | grep -vE 'lc_emit_checked|lc_prev_state|\[ -f|2>/dev/null' || true)
 check "no use of the report path other than a read or lc_emit_checked" test -z "$stray"
-finish 23
+# --- PR-B: the scans run from the gate's own scratch directory, so a .gitleaksignore in the caller's directory is never read ---
+# gitleaks reads .gitleaksignore from its working directory; a customer's repository or a plan directory must not be that place.
+mkdir -p "$SCRATCH/gi/cwd" "$SCRATCH/gi/src"; GIF="$SCRATCH/gi/src/x.md"
+printf 'value: %s%s\n' 'npm_' 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bD1fH3jK5' > "$GIF"
+gitleaks detect --source "$GIF" --no-git --report-format json --report-path "$SCRATCH/gi/r.json" --redact --exit-code 1 >/dev/null 2>&1
+sed -n 's/^ *"Fingerprint": *"\(.*\)",\{0,1\}$/\1/p' "$SCRATCH/gi/r.json" | head -n 1 > "$SCRATCH/gi/cwd/.gitleaksignore"
+check "gitleaksignore setup: the planted ignore entry names the secret (anti-vacuous)" test -s "$SCRATCH/gi/cwd/.gitleaksignore"
+( cd "$SCRATCH/gi/cwd" && gitleaks detect --source "$GIF" --no-git --report-format json --report-path "$SCRATCH/gi/r2.json" --redact --exit-code 1 >/dev/null 2>&1 ); rc=$?
+check "gitleaksignore control: run from the directory holding the ignore file, gitleaks stays silent (the ignore bites)" test "$rc" = 0
+( cd "$SCRATCH/gi/cwd" && export LAUNCH_CHECK_REDACT_SENTINEL="$SCRATCH/s0.sh" && run_gate "$GATE" "$GIF" "$SCRATCH/out13/x.md" ); rc=$?
+check "a .gitleaksignore in the caller's directory does not suppress the gate: rc 1 layer=gitleaks, nothing written" bash -c '[ "$1" = 1 ] && grep -q "layer=gitleaks" "$2" && [ ! -e "$3" ]' _ "$rc" "$SCRATCH/g.out" "$SCRATCH/out13/x.md"
+sed '/^  cd "\$scratch" ||/d' "$GATE" > "$SCRATCH/mut/gate-nocd.sh"
+check "mutation landed (the cd into the scratch directory is gone from the sandbox copy)" bash -c '! cmp -s "$1" "$2"' _ "$GATE" "$SCRATCH/mut/gate-nocd.sh"
+( cd "$SCRATCH/gi/cwd" && export LAUNCH_CHECK_REDACT_SENTINEL="$SCRATCH/s0.sh" && run_gate "$SCRATCH/mut/gate-nocd.sh" "$GIF" "$SCRATCH/out14/x.md" ); rc=$?
+check "mutation (scans not run from the scratch directory): the planted ignore entry now hides the secret, so the row is sensitive" test "$rc" = 0 -a -f "$SCRATCH/out14/x.md"
+( cd "$SCRATCH/gi" && export LAUNCH_CHECK_REDACT_SENTINEL="$SCRATCH/s0.sh" && run_gate "$GATE" "src/x.md" "$SCRATCH/out15/rel.md" ); rc=$?
+check "a relative source path still resolves (made absolute before the scans move)" bash -c '[ "$1" = 1 ] && grep -q "layer=gitleaks" "$2"' _ "$rc" "$SCRATCH/g.out"
+finish 29
