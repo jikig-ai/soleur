@@ -1453,9 +1453,10 @@ unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 # on the same SHA. The decision is made (`$TEST_GROUP` is now read as a SHELL variable throughout,
 # and the affected-walk child receives the group as an explicit positional), so demote the
 # export attribute and let descendants see the same environment whichever channel selected the group.
-# Only the attribute goes; the value stays, so no reader below changes. Placement is load-bearing:
-# AFTER the resolution, the `affected` alias normalisation and the `--print-selection`/`--affected`
-# parse above. Pinned by scripts/test-all-group-affected.test.sh Part C.
+# Only the attribute goes; the value stays, so no reader below changes (every read is a shell-variable
+# read, and the affected-walk child gets the group as a positional). The line sits beside the
+# SCRIPTS_SHARD unset by convention; what is load-bearing is that it precedes the first suite spawn.
+# Pinned by scripts/test-all-group-affected.test.sh Part C.
 export -n TEST_GROUP
 
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent

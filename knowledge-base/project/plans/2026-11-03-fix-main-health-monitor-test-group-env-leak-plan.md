@@ -58,12 +58,12 @@ edited, nothing touches Hetzner or Doppler.
 | Evidence | Finding |
 |---|---|
 | Same SHA `f05eaab78f` | `ci.yml` merge_group run 41576202102: all 8 `test-scripts` legs and 3 `test-scripts-heavy` legs **success**. Monitor run 41587171627 on the same SHA: legs 5/6/7 red. A source or checkout defect cannot split one SHA. |
-| Channel difference | `main-health-monitor.yml` lines ~399/486 (`TEST_GROUP: scripts` / `scripts-heavy` as step env, `bash scripts/test-all.sh` with no positional). `ci.yml` test-scripts (`bash scripts/test-all.sh scripts`, positional; the comment above it says the two channels are deliberate). |
+| Channel difference | `main-health-monitor.yml` lines ~399/486 (`TEST_GROUP: scripts` / `scripts-heavy` as step env, `bash scripts/test-all.sh` with no positional). `ci.yml` test-scripts (`bash scripts/test-all.sh scripts`, positional; the comment above that job explains why the SHARD (not the group) is the env channel there). |
 | Resolver | `scripts/test-all.sh` ~1177 `TEST_GROUP="${TEST_GROUP:-${1:-all}}"`; no `export -n`/unset of it anywhere; `unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST …` at ~1446 already exists with a "consume at the point of coupling, not `env -u` at N call sites" comment. |
-| C0 / M16 (`lint-orphan-test-suites-mutations-a/b`) | `scripts/lint-orphan-test-suites.test.sh` step (4b) builds its sandbox from a child `bash scripts/test-all.sh --enumerate-commands`. Inheriting `TEST_GROUP=scripts` returns only scripts-group registrations, so the bun-group registration `blog-link-validation` (`scripts/test-all.sh` ~7114, `want_bun`) has its target `scripts/validate-blog-links.sh` left out of the sandbox, and surface 7 (dead-registration census, #11662 G4 / #11665) reds C0 and M16. The file exists on main; the sandbox simply never received it. Local repro: `--rows 1-1` with `TEST_GROUP` unset → C0 PASS, rc 0; with `TEST_GROUP=scripts` → C0 FAIL "dead registration", rc 1. |
+| C0 / M16 (`lint-orphan-test-suites-mutations-a/b`) | `scripts/lint-orphan-test-suites.test.sh` step (4b) builds its sandbox from a child `bash scripts/test-all.sh --enumerate-commands`. Inheriting `TEST_GROUP=scripts` returns only scripts-group registrations, so the bun-group registration `blog-link-validation` (the `blog-link-validation` `run_suite` line in `scripts/test-all.sh`, `want_bun`) has its target `scripts/validate-blog-links.sh` left out of the sandbox, and surface 7 (dead-registration census, #11662 G4 / #11665) reds C0 and M16. The file exists on main; the sandbox simply never received it. Local repro: `--rows 1-1` with `TEST_GROUP` unset → C0 PASS, rc 0; with `TEST_GROUP=scripts` → C0 FAIL "dead registration", rc 1. |
 | B1/B2/B3 (`test-all-group-affected`) | The suite calls `bash scripts/test-all.sh --print-selection` under `env -u CI` only. `--print-selection` requires `TEST_GROUP=all` (runner ~1215) and env beats the positional `affected`, so rc=2 → empty selection → "edge suite not selected", "always-on suite fell off the floor", "positional alias diverged rc=2". |
-| Why only now | The monitor was sharded with `TEST_GROUP` as env by #11119 (2026-10-26). Until #11844 (2026-11-02) the monitor ended `cancelled`/timeout (#9457, closed 2026-11-02 21:54Z), which masked the leak. The surface-7 census (#11665, 2026-10-31) added the C0/M16 failure mode. |
-| `Broken pipe` noise | Present in the **green** `ci.yml` legs too (25 and 34 occurrences in merge_group run 41576202102 shards 5/6). Not causal; left alone (tracked repo-wide by #9217). |
+| Why only now | The monitor has delivered the group as a step `env:` since #7371 (infra leg, 2026-08-10) and on every leg since #11119 (2026-10-26). Until #11844 (2026-11-02) its scripts legs ended at the 15-minute step ceiling (#9457, closed 2026-11-02 21:54Z), before the suites that leak reached their failing assertions. The surface-7 census (#11665, 2026-10-31) added the C0/M16 failure mode. |
+| `Broken pipe` noise | Present in the **green** `ci.yml` legs too (25 and 34 occurrences in merge_group run 41576202102 shards 5/6). Not causal; left alone (the same SIGPIPE class as #9217). |
 | 0/50 red rate | `ci.yml` **push** runs elide the test legs (`push-dedupe`; push run 41580111851 on the monitor's SHA shows `test-scripts` skipped), so the `0/50` figure cannot see this class. Recorded as a non-goal; alert predicates are not edited (see Deferrals). |
 
 ### Exposed-spawn inventory (repo-wide audit, read-only)
@@ -380,8 +380,9 @@ unchanged); no new autonomous-task surface is created.
 - **Do not** "fix" this by adding `env -u TEST_GROUP` to the two failing suites: it greens the monitor and
   leaves every other child spawn (and every developer who exports the variable) exposed; the corpus shows
   the class recurring after exactly that patch.
-- **Do not** move the demotion above the `affected→all` alias or the `--print-selection`/`--affected`
-  parse: they read `$TEST_GROUP` as a shell variable; `export -n` preserves that, a rename would not.
+- Keep the demotion where it is, beside the `unset SCRIPTS_SHARD` line, before the first suite spawn.
+  It would also work earlier (the alias and the parse read `$TEST_GROUP` as a shell variable, which `export -n`
+  preserves), but the convention keeps the two carrier-consuming lines together; a rename would break the readers.
 - The branch dry run is ~40-50 min wall; dispatch it once the runner edit is pushed. It needs the branch
   on origin (the workflow file is read from the dispatched ref).
 - After the fix, previously **silently narrowed** suites in the monitor's webplat/bun/infra legs now run
@@ -401,4 +402,4 @@ unchanged); no new autonomous-task surface is created.
 - `scripts/test-all.sh` (~1177, ~1446, ~4263), `scripts/lint-orphan-test-suites.test.sh` (build_pristine 4b),
   `scripts/lint-orphan-test-suites.sh` (surface 7), `scripts/test-all-group-affected.test.sh`
 - Runs: monitor 41549682691, 41587171627; ci.yml merge_group 41576202102 (same SHA as the latter)
-- Issues/PRs: #11939 (this), #11952 (draft PR), #9323, #10233, #11119, #11844, #11665, #7902, #9217
+- Issues/PRs: #11939 (this), #11952 (draft PR), #9323 (cost of the mutation batteries), #10233 (fixture-dir ratchet failing when `$HOME` is a git repo; same suite family, not this defect), #11119, #11844, #11665, #7902, #9217

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Regression suite for `TEST_GROUP=affected` — since #8621 a COMPAT ALIAS of the
-# declared-edge `--affected` axis, not a selector of its own.
+# Regression suite for the runner's `TEST_GROUP` handling. Parts A and B pin
+# `TEST_GROUP=affected` — since #8621 a COMPAT ALIAS of the declared-edge `--affected`
+# axis, not a selector of its own. Part C pins that the group never leaks into the
+# suites the runner spawns (#11939), which has nothing to do with the alias.
 #
 # WHY THIS EXISTS. #8591 shipped a second, heuristic affected selector (argv-path
 # containment, content references, stem equality, grep-based census backstop at the
@@ -29,6 +31,10 @@
 #           subject diff, the always-on floor selects on both, the combo
 #           refusals fire rc=2, and a sandbox run proves the refusal exemptions
 #           dispatch (subagent + sibling).
+#   Part C  environment hygiene (#11939) — whichever channel selected the group (the
+#           monitor's step env, ci.yml's positional), no suite or grandchild the runner
+#           spawns finds TEST_GROUP in its environment. It must survive removal of the
+#           alias: it guards `export -n TEST_GROUP` in the runner, not the alias.
 #
 # WHAT IT DOES NOT CLAIM. Selection semantics themselves are
 # scripts/test-all-affected.test.sh's subject — this suite pins the ALIAS
@@ -47,7 +53,7 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 dump() { sed 's/^/    /' <<<"$1"; }
 
-echo "=== test-all.sh TEST_GROUP=affected (alias) suite ==="
+echo "=== test-all.sh TEST_GROUP handling suite (alias contract + environment hygiene) ==="
 echo ""
 echo "--- Part A: the structural contract ---"
 
@@ -200,7 +206,7 @@ fi
 # --print-selection both work under the alias.
 env -u CI bash "$TARGET" --print-selection --paths="$P1" affected > "$TMP/pos-p1.out" 2>/dev/null; RC=$?
 if [[ "$RC" == "0" ]] && cmp -s "$TMP/pos-p1.out" "$TMP/tg-p1.out"; then
-  pass "B3 — positional `affected` + --print-selection selects identically"
+  pass "B3 — positional 'affected' + --print-selection selects identically"
 else
   fail "B3 — positional alias diverged (rc=$RC)"
 fi
@@ -324,15 +330,17 @@ echo "--- Part C: environment hygiene — a runner-spawned suite never observes 
 # TEST_GROUP is in its own environment and in a grandchild's. C3 is the positive
 # control: the same sandbox with the demotion line removed MUST read `set`, which is what
 # proves the probes can see a leak (C1 pins that the line exists exactly once, so a
-# control that removed nothing cannot pass).
-SBC="$TMP/sbc"; mkdir -p "$SBC/lib"
-for lib in repo-write-boundary.sh test-relevance-paths.sh test-affected-paths.sh affected-glob.sh; do
-  cp "$REPO_ROOT/scripts/lib/$lib" "$SBC/lib/" || { echo "FATAL: part C lib copy $lib failed"; exit 2; }
-done
+# control that removed nothing cannot pass). The sandbox keeps only the shared `run_suite`
+# chokepoint, so C1b is the static half: no re-export route exists anywhere else in the
+# runner (the registration region, the tee path, the parallel launcher), and its own
+# controls prove the detector fires. C6-C8 vary the environment the monitor really has:
+# the other groups, CI=true, and a shard binding.
+SB_REAL="$SB/real.sh"; SB_CTL="$SB/ctl.sh"   # beside runner.sh so they resolve $SB/lib
 for probe in probe-a probe-b; do
   cat > "$FX/scripts/$probe.test.sh" <<'PROBE'
 #!/usr/bin/env bash
 # Records whether TEST_GROUP is exported into this process and into a grandchild.
+: "${PROBE_DIR:?PROBE_DIR is not set}"
 name="$(basename "$0" .test.sh)"
 if [ -n "${TEST_GROUP+x}" ]; then own=set; else own=absent; fi
 gc="$(bash -c 'if [ -n "${TEST_GROUP+x}" ]; then echo set; else echo absent; fi')"
@@ -340,7 +348,7 @@ printf 'child=%s\ngrandchild=%s\n' "$own" "$gc" > "$PROBE_DIR/$name.reading"
 exit 0
 PROBE
 done
-python3 - "$TARGET" "$SBC/real.sh" "$SBC/ctl.sh" <<'PY' || { echo "FATAL: part C sandbox splice failed"; exit 2; }
+python3 -I - "$TARGET" "$SB_REAL" "$SB_CTL" <<'PY' || { echo "FATAL: part C sandbox splice failed"; exit 2; }
 import re, sys
 src, real_out, ctl_out = sys.argv[1:4]
 s = open(src).read()
@@ -352,7 +360,6 @@ j = s.index(end_anchor)
 calls = ('\nrun_suite "probe-a" bash scripts/probe-a.test.sh\n'
          'run_suite "probe-b" bash scripts/probe-b.test.sh\n')
 s = s[:i] + calls + s[j:]
-assert s.count('tc_acquire "test-all"') == 1
 s = s.replace('tc_acquire "test-all"', 'true "test-all"  # sandbox: lock neutered')
 s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=1, flags=re.M)
 open(real_out, 'w').write(s)
@@ -385,19 +392,33 @@ run_sbx() { # <runner> <probe-dir> <env pairs...> -- <runner argv...> — serial
 }
 c_clean=$'child=absent\ngrandchild=absent'
 c_leak=$'child=set\ngrandchild=set'
-# Both probes dispatched (floor: a run that executed zero probes cannot pass), both read
-# `want`, and the run itself succeeded.
+C_ROWS=0
+# Both probes dispatched (a run that executed zero probes cannot pass), both read `want`,
+# and the run itself succeeded. A failure names which of the two it is: a sandbox run that
+# did not complete is a harness problem, a wrong reading is the leak.
 c_check() { # <label> <runner> <want> <env pairs...> -- <runner argv...>
   local label="$1" runner="$2" want="$3"; shift 3
-  local pd="$TMP/probe-out" out rc ra rb dispatched
+  local pd="$TMP/probe-out" out rc ra rb dispatched kind
+  C_ROWS=$((C_ROWS + 1))
   out=$(run_sbx "$runner" "$pd" "$@"); rc=$?
   ra=$(cat "$pd/probe-a.reading" 2>/dev/null); rb=$(cat "$pd/probe-b.reading" 2>/dev/null)
   dispatched=$(grep -cE '^\[ok\] probe-(a|b) ' <<<"$out")
   if [[ "$rc" == "0" && "$dispatched" == "2" && "$ra" == "$want" && "$rb" == "$want" ]]; then
     pass "$label"
   else
-    fail "$label (rc=$rc dispatched=$dispatched probe-a=[${ra//$'\n'/ }] probe-b=[${rb//$'\n'/ }])"; dump "$out"
+    if [[ "$rc" != "0" || "$dispatched" != "2" ]]; then
+      kind="HARNESS failure (the sandbox run did not complete both probes), not a leak"
+    else
+      kind="TEST_GROUP readings differ from the contract: scripts/test-all.sh lost its export-attribute demotion (#11939)"
+    fi
+    fail "$label — $kind (rc=$rc dispatched=$dispatched probe-a=[${ra//$'\n'/ }] probe-b=[${rb//$'\n'/ }])"; dump "$out"
   fi
+}
+# Lines of a runner, comments stripped, that re-export or env-prefix the group. Empty = clean.
+c_static() { # <runner file>
+  grep -vE '^[[:space:]]*#' "$1" \
+    | grep -E '(^|[^A-Za-z0-9_-])(export|declare[[:space:]]+-[a-z]*x|typeset[[:space:]]+-[a-z]*x|local[[:space:]]+-[a-z]*x)[[:space:]]+(-[a-z]+[[:space:]]+)?TEST_GROUP|^[[:space:]]*set[[:space:]]+(-a|-o[[:space:]]+allexport)|TEST_GROUP="\$TEST_GROUP"|^[[:space:]]*env[[:space:]].*TEST_GROUP=' \
+    | grep -v 'export -n TEST_GROUP' || true
 }
 
 # C1 — the demotion exists exactly once: the line the control removes is the line that
@@ -407,19 +428,63 @@ if [[ "$(grep -c '^export -n TEST_GROUP$' "$TARGET")" == "1" ]]; then
 else
   fail "C1 — expected exactly one export-attribute demotion of TEST_GROUP in the runner"
 fi
+# C1b — static: nothing else in the runner re-exports it (registration region, tee path,
+# parallel launcher, libs-as-text are all outside the sandbox the probes run in).
+c_bad=$(c_static "$TARGET")
+if [[ -z "$c_bad" ]]; then
+  pass "C1b — no re-export route for TEST_GROUP anywhere in the runner"
+else
+  fail "C1b — the runner re-exports TEST_GROUP:"; dump "$c_bad"
+fi
+# C1b-ctl — the detector fires on each re-export spelling and stays quiet on the legitimate
+# lines (a comment, the demotion itself), so an empty C1b result means something.
+c1b_fired=0; c1b_quiet=0
+for shape in 'export TEST_GROUP' 'declare -x TEST_GROUP' 'typeset -x TEST_GROUP' 'set -a' \
+             'env TEST_GROUP=scripts bash x' '  TEST_GROUP="$TEST_GROUP" "$@"'; do
+  printf '%s\n' "$shape" > "$TMP/c1b-sample.txt"
+  [[ -n "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_fired=$((c1b_fired + 1))
+done
+for shape in '# export TEST_GROUP' 'export -n TEST_GROUP'; do
+  printf '%s\n' "$shape" > "$TMP/c1b-sample.txt"
+  [[ -z "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_quiet=$((c1b_quiet + 1))
+done
+if [[ "$c1b_fired" == "6" && "$c1b_quiet" == "2" ]]; then
+  pass "C1b-ctl — the static detector fires on 6 re-export spellings and ignores a comment and the demotion"
+else
+  fail "C1b-ctl — detector self-check wrong (fired=$c1b_fired of 6, quiet=$c1b_quiet of 2)"
+fi
 # C2 — the monitor's channel (step env): no spawned suite or grandchild observes it.
 c_check "C2 — TEST_GROUP=scripts (the monitor's channel) is invisible to runner-spawned suites" \
-  "$SBC/real.sh" "$c_clean" TEST_GROUP=scripts
+  "$SB_REAL" "$c_clean" TEST_GROUP=scripts
 # C3 — positive control: without the demotion the same probes DO see it.
 c_check "C3 — control: with the demotion removed both probes read set" \
-  "$SBC/ctl.sh" "$c_leak" TEST_GROUP=scripts
+  "$SB_CTL" "$c_leak" TEST_GROUP=scripts
 # C4/C5 — must-PASS non-canonical inputs: the positional channel (ci.yml's) and another
 # permitted env value stay clean. These guard over-rejection only; they cannot see a
 # missing demotion in the positional case, by construction.
 c_check "C4 — the positional channel (ci.yml's) reads absent" \
-  "$SBC/real.sh" "$c_clean" -- scripts
+  "$SB_REAL" "$c_clean" -- scripts
 c_check "C5 — TEST_GROUP=scripts-heavy is invisible to runner-spawned suites" \
-  "$SBC/real.sh" "$c_clean" TEST_GROUP=scripts-heavy
+  "$SB_REAL" "$c_clean" TEST_GROUP=scripts-heavy
+# C6 — the monitor sets the group on every leg, not only the scripts ones.
+for c_group in webplat bun infra all; do
+  c_check "C6 — TEST_GROUP=$c_group (a monitor leg) is invisible to runner-spawned suites" \
+    "$SB_REAL" "$c_clean" TEST_GROUP=$c_group
+done
+# C7 — the monitor runs under CI=true; the sandbox otherwise blanks it.
+c_check "C7 — TEST_GROUP=scripts under CI=true is invisible to runner-spawned suites" \
+  "$SB_REAL" "$c_clean" CI=true TEST_GROUP=scripts
+# C8 — shards 5/6/7 were the incident; every other row runs unsharded.
+c_check "C8 — TEST_GROUP=scripts with a shard bound (SCRIPTS_SHARD=1/1) is invisible to runner-spawned suites" \
+  "$SB_REAL" "$c_clean" SCRIPTS_SHARD=1/1 TEST_GROUP=scripts
+
+# Floor: rows that actually ran. Deleting the c_check calls above must not leave a green suite;
+# the floor reports through printf+exit, never through the helpers it backstops.
+C_ROWS_MIN=10
+if [[ "$C_ROWS" -lt "$C_ROWS_MIN" ]]; then
+  printf 'FATAL: Part C anti-vacuity floor: only %s of %s probe rows ran\n' "$C_ROWS" "$C_ROWS_MIN"
+  exit 1
+fi
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

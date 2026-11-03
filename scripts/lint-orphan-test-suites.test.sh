@@ -1183,7 +1183,9 @@ done
 # That holds ONLY when TEST_GROUP is unset. This suite runs as a registered suite inside
 # `test-all.sh`, which exports `TEST_GROUP=<shard>` — so the child inherits a VALID group, never
 # reaches the unknown-group branch, and runs the whole shard instead. The shard contains this
-# suite. It mutates and re-invokes. Unbounded recursion.
+# suite. It mutates and re-invokes. Unbounded recursion. (Since #11939 the runner no longer keeps
+# TEST_GROUP exported, so a runner-spawned copy no longer inherits it; the scrub stays as defence for
+# direct runs and for callers that export it, which is what this row pins.)
 #
 # Measured 2026-08-13: TEST_GROUP unset -> 65 passed in 10 s; TEST_GROUP=scripts -> still running
 # at 120 s with three nested copies alive. It reproduces in CI (which sets TEST_GROUP per shard)

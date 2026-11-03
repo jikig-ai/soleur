@@ -51,8 +51,9 @@ produced six separate shard-discovered surfaces, one FAIL per cycle.
 ## A nested `test-all.sh` sandbox inherits the enclosing run's selection env
 
 Under an outer `TEST_GROUP=affected` run (a `--affected` alias since #8621), a suite's own
-`bash sandbox/test-all.sh` inherits `TEST_GROUP`/`MODE`/`SCRIPTS_SHARD`/
-`SOLEUR_TEST_FORCE_ALL`, takes the affected path against a sandbox diff that
+`bash sandbox/test-all.sh` inherits `MODE`/`SOLEUR_TEST_FORCE_ALL` (and `TEST_GROUP` when the
+outer caller exported it: the runner itself stopped exporting it in #11939, and `SCRIPTS_SHARD` in #7902,
+so neither crosses from a runner to its suites), takes the affected path against a sandbox diff that
 selects zero suites, and exits 0 — reading as "the refusal arm never fired"
 in every arm that measures refusal. Scrub with
 `env -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL`:
