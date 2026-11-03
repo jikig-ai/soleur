@@ -4,7 +4,7 @@
 - Plan file: knowledge-base/project/plans/2026-11-03-feat-launch-check-severity-ranked-epic-sub-issues-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
-- cto_spawns=1 (post-plan batch for P1-P5; planner's own CTO rounds were inside the plan subagent)
+- cto_spawns=2 (post-plan batch P1-P5; implementation deviations S1-S2). Cap of two reached.
 
 ### Errors
 - Plan-file write blocked once by the IaC-routing hook (reworded); issue-filing blocked once (body written as a separate file). Follow-up #11956 filed.
