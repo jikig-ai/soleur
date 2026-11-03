@@ -333,6 +333,8 @@ Live standing alarms over this source:
   never read as green, and one host's beats cannot mask the other's silence. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
+  Resolve only if every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of `var.web_hosts`) shows an `egress-gw-probe` row in the last 15 minutes; if any host has none, the silence is real, so leave the incident open.
 - **`logtail_exploration_alert.egress_gw_probe_fail`** (#9534 review, `higher_than 0` over 900 s,
   missing data counts as zero): `soleur-egress-gw-probe-fail-prd`. Pages on any `egress-gw-probe`
   row carrying `result=fail` (allow leg refused, or deny leg BYPASSED — Squid accepted a denied
@@ -359,6 +361,10 @@ Live standing alarms over this source:
 
 - **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
+  **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
+  `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
+  stuck-at-0 shows on `egress_gw_probe_silent` (no `JSONType`), so the cause is not yet isolated and no
+  replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
   row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
@@ -366,6 +372,8 @@ Live standing alarms over this source:
   `message` and do not count. So it sees a unit that fails BEFORE the script's first emit (a revoked or
   invalid flip token) and does not see a failure that reaches the script's `emit_state` (those still write JSON rows). It also
   emails during an owner-authorized host replace (expected; it clears at the first row after boot).
+  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
+  Resolve only if an object-typed `inngest-cutover-flip` row from `soleur-inngest-prd` arrived in the last 15 minutes. None means the silence is real, so leave the incident open and follow the "Flip-token split" runbook, unless an owner-authorized host replace is under way (expected; it clears at the first row after boot).
   To read the rows yourself use `scripts/betterstack-query.sh --since 1h --grep inngest-cutover-flip`
   with `--limit 500` (about 160 string rows per hour share the tag, so the default 100 can crowd the object rows out), as in the "Flip-token split" step 3 recipe, and count the rows whose `message` is a JSON object
   (those carry a `reason` key). Runbook: [`inngest-server.md`](./inngest-server.md) section

@@ -117,7 +117,9 @@ usage: sync-pr-behind.sh <pr-number> [--max-attempts N]
                     because the fence has already made that decision, expiry included
   --queue-state     print `<queued|not_queued|dequeued> <OPEN|CLOSED|MERGED> <armed|disarmed> removal=<reason|none>`
                     (the merge queue state; `dequeued` = out of the queue, OPEN, and seen queued or a current removal
-                    event; no push, no worktree needed) and exit 0, or `kind=gh` exit 4 after one retry. Writes
+                    event; no push, no worktree needed). armed is queue-gated (#11789): a queued verdict always
+                    reports armed (a queued PR's autoMergeRequest reads null — the queue owns the merge); disarmed
+                    only ever means not queued and autoMergeRequest null. Exit 0, or `kind=gh` exit 4 after one retry. Writes
                     nothing except to CONSUME the seen-queued marker when it prints `dequeued`: that verdict is
                     reported once, so a re-armed PR is not reported again (a current removal event needs no marker)
                     Env: PR_QUEUE_TIMEOUT (s, default 10), PR_QUEUE_ATTEMPTS (default 2 = one retry),
@@ -240,7 +242,11 @@ qw_base_path() (
 # removal = the newest RemovedFromMergeQueueEvent, only while it is CURRENT: newer than the auto-merge re-arm
 # and than the head commit, so a fixed-and-pushed or re-armed PR reads none) and returns 0, or
 # sets QS_CAUSE (timeout | gh_error | unparseable) and QS_DETAIL and returns 1: a failed read is
-# NEVER a verdict. `{owner}` / `{repo}` are filled by gh from the cwd repository (PR_QUEUE_REPO=o/r
+# NEVER a verdict. The armed field is GATED ON THE QUEUE VERDICT (#11789): a queued PR's autoMergeRequest
+# reads null on both views — the queue owns the merge — so classifying armed off autoMergeRequest alone
+# false-reported "disarmed" on the one PR whose merge is most certainly armed. Queued (isInMergeQueue true,
+# or an entry read by mergeQueueEntry alone) is `armed`; disarmed only ever means "not queued AND
+# autoMergeRequest null". `{owner}` / `{repo}` are filled by gh from the cwd repository (PR_QUEUE_REPO=o/r
 # overrides). Both queue fields are read (an entry exists iff isInMergeQueue); the call runs under
 # `bash -c` so a gh that is a shell function (an exported test mock) is still reached, and under
 # timeout/gtimeout when present so a hung call cannot hang a poll tick or a hook.
@@ -269,7 +275,9 @@ query($owner: String!, $name: String!, $number: Int!) {
           elif .isInMergeQueue == false then "not_queued"
           else "unreadable" end)
          + " " + (.state // "-")
-         + " " + (if has("autoMergeRequest") then (if .autoMergeRequest == null then "disarmed" else "armed" end) else "-" end)
+         + " " + (if .isInMergeQueue == true or .mergeQueueEntry != null then "armed"
+                  elif has("autoMergeRequest") then (if .autoMergeRequest == null then "disarmed" else "armed" end)
+                  else "-" end)
          + " removal=" + (if has("timelineItems") then
              (.timelineItems.nodes // [])[0] as $r
              | (.autoMergeRequest.enabledAt // "") as $en
@@ -422,7 +430,11 @@ qw_unknown() { printf '%s' "NOT A TRANSIENT ERROR - unknown queue_wait verdict '
 
 # qw_snapshot — ONE bounded `gh pr view <PR> --json state,mergeStateStatus,autoMergeRequest,baseRefName` for the flagless --step and --queue-wait
 # (no GraphQL queue read: --queue-wait's caller already classified queued / not_queued, and a second read would race a
-# just-dequeued PR that still reads armed). Sets QW_STATE (`<STATE> <MERGESTATE>`), QW_ARMED (armed | disarmed) and QW_BASEREF (the PR's base branch, possibly empty: it is
+# just-dequeued PR that still reads armed). QW_ARMED is autoMergeRequest != null off THIS REST snapshot — which for a queued PR reads
+# null (#11789: the queue owns the merge), so REST alone cannot classify armed for it. That is safe by call order, not by
+# this read: both callers only reach the snapshot after a queue answer said NOT queued (the pre-merge hook gates on
+# `_q_state == not_queued`; step_guard runs only after queue_gate returned), so a `disarmed` here is genuine. Any other
+# caller must read --queue-state first — autoMergeRequest alone never classifies armed. Sets QW_STATE (`<STATE> <MERGESTATE>`), QW_ARMED (armed | disarmed) and QW_BASEREF (the PR's base branch, possibly empty: it is
 # validated only inside queue_wait_eval, after the armed check, so an odd base never fails a path that does not reach the rules read; the
 # answer is split with `read -r` only, never a suffix expansion, which would read a base named `disarmed` as the armed bit). It runs under
 # the same timeout wrapper and PR_QUEUE_REPO handling as the other reads, with gh's stderr kept OUT of the string the match
@@ -457,8 +469,10 @@ qw_snapshot() {
 qw_probe() { qw_snapshot; queue_wait_eval "$QW_STATE" "$QW_ARMED" "$QW_BASEREF"; }
 
 # --queue-wait: the read-only verdict for the pre-merge hook (#9869), handled beside --queue-state before the worktree check.
-# Armed means autoMergeRequest != null in THIS snapshot, so an armed PR that is already in the queue also reads queue_wait (the
-# stricter, safe direction for a caller that decides whether to push). Writes nothing — no marker. A foreign or unusable base answers
+# Armed means autoMergeRequest != null in THIS snapshot — but a queued PR reads null there (#11789: the queue owns the
+# merge), so this mode answers `proceed` for a queued armed PR. It is only valid after --queue-state said `not_queued`:
+# the pre-merge hook calls it only then, so a caller deciding whether to push sees the stricter answer for the queued
+# case through --queue-state, not here. Writes nothing — no marker. A foreign or unusable base answers
 # `queue_wait` too (not `kind=gh`: the hook treats any non-zero exit as "sync anyway", which would merge origin/main into that PR).
 if [[ "$MODE" == queue_wait ]]; then
   QW_STATE=""; QW_ARMED=""

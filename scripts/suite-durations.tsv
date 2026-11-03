@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1223
-# generated-at=2026-11-01T23:04:46Z
+# generated-at=2026-11-02T13:37:36Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -138,6 +138,13 @@ plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	390	m
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	5676	measured
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	407	measured
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	6665	measured
+plugins/soleur/skills/launch-check/test/baseline.test.sh	6400	measured
+plugins/soleur/skills/launch-check/test/identity.test.sh	10200	measured
+plugins/soleur/skills/launch-check/test/redact-gate.test.sh	3200	measured
+plugins/soleur/skills/launch-check/test/render.test.sh	31700	measured
+plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	200	measured
+plugins/soleur/skills/launch-check/test/scan.test.sh	38900	measured
+plugins/soleur/skills/launch-check/test/wording.test.sh	7100	measured
 plugins/soleur/skills/linear-fetch/test/assert-no-linear-telemetry.test.sh	93	measured
 plugins/soleur/skills/linear-fetch/test/parity.test.sh	16	measured
 plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	50	measured
@@ -424,8 +431,13 @@ scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
+scripts/image-cve-db-pin	1223	floor
+scripts/image-cve-public-claim-guard	1223	floor
 scripts/image-cve-scan	3823	measured
 scripts/image-cve-scan-window-9826	3457	measured
+scripts/image-cve-triage	1223	floor
+scripts/image-cve-verdict	1223	floor
+scripts/image-cve-verdict-consumers	1223	floor
 scripts/infra-config-red-alert	768	measured
 scripts/infra-credentials-loader	1742	measured
 scripts/infra-drift-autoclose	10115	measured
@@ -595,6 +607,7 @@ scripts/watch-lint-ratchet-reeval-10515	1222	floor
 scripts/watch-live-verify-pass	172	measured
 scripts/watch-registration-narrowing-9564	10976	measured
 scripts/watch-shard-balance-11564	1222	floor
+scripts/watch-wallclock-p90-11774	1223	floor
 scripts/watchdog-arm-soak-9237	2199	measured
 scripts/watchdog-debounce-soak-9686	563	measured
 scripts/web-first-deploy-10585	1222	floor

@@ -57,8 +57,12 @@ if [[ "${SOLEUR_SKIP_CMO_CONTENT_GATE:-}" == "1" ]]; then
   exit 0
 fi
 
-# Resolve the PR number
-PR_NUM=$(echo "$CMD" | grep -oE 'gh\s+pr\s+(ready|merge[^|;&]*)\s+([0-9]+)' | grep -oE '[0-9]+$' | head -1 || true)
+# Resolve the PR number from the SCRUBBED command ($SCAN) — a `gh pr merge <M>`
+# mention inside a quoted --body/-m body must not hijack the extraction
+# (#11795). The boundary alternation restricts matches to command position
+# (same anchor as the gate-detect grep above); when several real invocations
+# exist, the LAST one wins.
+PR_NUM=$(echo "$SCAN" | grep -oE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge[^|;&]*)\s+([0-9]+)' | grep -oE '[0-9]+$' | tail -1 || true)
 if [[ -z "$PR_NUM" ]]; then
   PR_NUM=$(gh pr view --json number --jq .number 2>/dev/null || true)
 fi

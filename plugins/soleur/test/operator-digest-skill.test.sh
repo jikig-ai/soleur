@@ -149,8 +149,10 @@ assert "run-rate allowlist also admits accruing-with-actual" 'accruing'
 # (a) is anchored to the real `--json` command line(s) and strips comment lines. It is worded so
 # the guard-note prose ("never add an `author` field to the §1 `gh pr list --json` list", where
 # `author` precedes `--json`) cannot false-trip it — only `--json <fields>,author` (author AFTER
-# the field list) matches.
-if grep -E -- '--json' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -ciE >/dev/null -- '--json[[:space:]]*[a-zA-Z,]*author'; then
+# the field list) matches. `gh issue list` lines are scoped OUT: §6's tracker read needs
+# author.login for the bot-authorship filter (the inverse of per-contributor noise — it excludes
+# human-filed issues), while §1's `gh pr list` prohibition stands.
+if grep -E -- '--json' "$SKILL" | grep -vE '^[[:space:]]*#' | grep -vE 'gh issue list' | grep -ciE >/dev/null -- '--json[[:space:]]*[a-zA-Z,]*author'; then
   fail=$((fail+1)); echo "FAIL: a --json field list includes 'author' — re-introduces per-contributor noise (#5986 AC)" >&2
 else
   pass=$((pass+1))
