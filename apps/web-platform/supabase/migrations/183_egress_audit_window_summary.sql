@@ -209,5 +209,5 @@ COMMENT ON FUNCTION public.get_egress_audit_window_summary(uuid, integer, text, 
   'bad decision filter or window. Best-effort minimum counts clamped to 9007199254740991; '
   'a bucket straddling the window start is counted whole; no per-member or session data. '
   'p_limit = 0 returns only the last-request probe. No function-level timeout: the bound '
-  'is the role timeout (not set by any migration in this repo, so unverified) + p_limit <= 500 clamp + PK-led scan + custom plan '
+  'is the role timeout (8 s) + p_limit <= 500 clamp + PK-led scan + custom plan '
   '(plan_cache_mode = force_custom_plan avoids the generic-plan flip after 5 calls).';
