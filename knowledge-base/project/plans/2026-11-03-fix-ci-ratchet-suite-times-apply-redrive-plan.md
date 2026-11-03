@@ -13,6 +13,24 @@ requires_cpo_signoff: true
 
 # fix: repair affected-index-ratchet red, top-15 suite-time report, apply-delivery re-queue
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** 4 (Encryption Posture added; Observability, Guard Contract, Scope Check, Task-Design verified against deepen halt gates)
+**Research agents used:** none — no Task/Agent tool on this harness; all gate checks executed inline and mechanically (`lint-guard-contract.py`, scope-check awk count, ratchet reproduction)
+
+### Key Improvements
+
+1. Verified the red state locally — `python3 -I scripts/ci-pr-affected-replay.py ratchet` reproduced `exit=1 reason=new-pair live=1518 baseline=1510` with the complete 8-line boundary set, so every accept-row anchor/ordinal in the disposition table is real, not transcribed from the issue.
+2. Found the detection half of #10033 already shipped (#10879 `apply-delivery-gap-follower`), shrinking item 3 to the actuation arm; found GitHub's native `queue: max` (2026-05-07) and rejected it with mechanism-level reasoning (arriving-run-governs + storm backlog).
+3. Added the `## Encryption Posture` declaration for the new `gh workflow run` write connection the redrive introduces.
+
+### New Considerations Discovered
+
+- `infra-privileged` environment verified live: `branch_policy` only, no reviewer gate — an automated `--ref main` dispatch runs unattended.
+- PR #10928 touches `apply-deploy-pipeline-fix.yml` at `jobs:` ~651 and `track.sh` itself — the plan's zero-touch stance on that workflow also dodges a `track.sh` content collision beyond the accept-row question.
+- `ci-pr-affected-replay-a` still measures 1348 s post-#11562-split on run 41693754894 — the top-15 report's leading outlier is pre-identified.
+
 ## Overview
 
 One PR carrying three CI-time fixes from epic #11556's lever set. First, the advisory `affected-index-ratchet` job is red on every `merge_group` run since ~2026-11-02 (`exit=1 reason=new-pair`, live=1518 vs baseline=1510): eight undeclared suite-to-path pairs introduced by the key-rotate series (#11918, #11890, #11853, #11287) each need the ratchet's own remedy — a declared edge in `AFFECTED_<LABEL>_PATHS` where the suite really reads or executes the path (or the file's state feeds its verdict), or an anchor-keyed row in `scripts/ci-pr-affected-audit.accept.tsv` where it merely names it — followed by the shrink-only baseline regeneration. This un-pauses the #10865 soak that gates the #10448 go/no-go. Second, Lever A item 2 gets its measurement deliverable: a committed top-15 suite-time report derived from the `suite-timings-*` CI artifacts, naming the outliers by cause class (sleep-waits, lock contention, repeated tool installs) so the next Lever-A slice is pre-staged ahead of the first `wallclock-p90-watch` report (#11954). Third, `apply-deploy-pipeline-fix.yml` push runs are silently cancelled by pending-slot eviction in the shared `terraform-apply-web-platform-host` concurrency group during merge-queue drains (#10033): the detection half already ships in `apply-delivery-gap-follower.yml`/`scripts/apply-delivery-gap.sh` (#10879), so the fix closes the loop — a bounded, class-gated re-dispatch job makes evicted deliveries re-queue while apply serialization is preserved exactly.
@@ -191,6 +209,20 @@ discoverability_test:
   command: "bash scripts/apply-delivery-gap.sh --self-test"
   expected_output: "apply_delivery_gap_self_test=ok"
 ```
+
+## Encryption Posture
+
+```yaml
+in_transit:
+  - connection: "apply-delivery-gap-follower `redrive` job (github-hosted runner) -> api.github.com `gh workflow run` dispatch"
+    enforced_at: "scripts/apply-delivery-gap.sh redrive output + the redrive job's `run:` step (new)"
+    tls: "https, TLS 1.2+ (gh CLI default transport)"
+    cert_verification: on
+    does_not_defend: "token-scope misuse — mitigated by scoping `actions: write` to the redrive job only and gating the dispatch on the class predicate; a forged eligible state requires write access to the repo's own workflow state"
+    disclosed_as: not-publicly-claimed
+```
+
+No `at_rest` rows: the plan introduces no persistent store — the concurrency "queue" tokens are GitHub Actions run-queue semantics, not a data store. `exception` omitted: `cert_verification` is `on` and no mechanism is `plaintext-exception`.
 
 ## Guard Contract
 
