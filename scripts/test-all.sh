@@ -6915,6 +6915,7 @@ if want_scripts; then
   run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
   run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
+  run_suite "scripts/watch-wallclock-p90-11774" bash scripts/watch-wallclock-p90-11774.test.sh
 fi
 
 # Named bun-test entries — bun shard.
