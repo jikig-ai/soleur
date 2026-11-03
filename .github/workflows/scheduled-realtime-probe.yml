@@ -40,12 +40,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Supported 22 line (the former EOL 21.7.3 pin was vulnerable to
-          # CVE-2026-111497). The probe needs Node WITHOUT a global WebSocket;
-          # Node 22 ships one, so the probe step sets
-          # NODE_OPTIONS=--no-experimental-websocket to reproduce that
-          # condition and fails closed if it ever stops holding.
-          node-version: '22'
+          # Exact patch version, not the floating '22': this job holds Doppler dev
+          # credentials, and a runner-cached 22.x can predate the CVE-2026-111497
+          # fix (22.23.4); the former EOL 21.7.3 pin was vulnerable too. Move this
+          # together with the apps/web-platform/Dockerfile base-image digest.
+          # The probe needs Node WITHOUT a global WebSocket; Node 22 ships one, so
+          # the probe step sets NODE_OPTIONS=--no-experimental-websocket to
+          # reproduce that condition and fails closed if it ever stops holding.
+          node-version: '22.23.4'
 
       # Pinned package-lock.json install is deliberate: when @supabase/supabase-js
       # is bumped via Dependabot/Renovate, the next nightly run is the canary
@@ -132,13 +134,15 @@ jobs:
           # by a future Node, or the env block edited away), fail loudly rather
           # than silently probing the native path. `|| ws_type=""` keeps a node
           # that rejects the option from killing the step before the output
-          # write (see the set -e note above).
+          # write (see the set -e note above). The compared value takes stdout
+          # only (a Node warning on stderr must not read as drift) and the
+          # command runs without the Doppler token: it needs no credential.
           if [[ -z "$fail_mode" ]]; then
-            ws_type=$(node -p 'typeof WebSocket' 2>&1) || ws_type=""
+            ws_type=$(env -u DOPPLER_TOKEN node -p 'typeof WebSocket' 2>/dev/null) || ws_type=""
             if [[ "$ws_type" != "undefined" ]]; then
               ws_type_safe=$(strip_log_injection "$(printf '%s' "$ws_type" | tr '\n' ' ' | head -c 200)")
               record_failure "probe_contract_drift" \
-                "NODE_OPTIONS no longer removes the global WebSocket (typeof WebSocket=${ws_type_safe:-unavailable}); the probe would exercise the native path, not the polyfill path."
+                "NODE_OPTIONS no longer removes the global WebSocket (typeof WebSocket=${ws_type_safe:-unavailable}); check NODE_OPTIONS and the Node version. The probe would exercise the native path, not the polyfill path."
             fi
           fi
 
@@ -161,18 +165,18 @@ jobs:
               has_polyfill="no"
               grep -q "polyfill: applied" <<<"$output" && has_polyfill="yes"
 
-              # Every iteration must have run the polyfill path; a healthy
-              # SUBSCRIBED on the native path proves nothing about it.
-              if [[ "$has_polyfill" == "no" ]]; then
-                detail_trim=$(printf '%s' "$output" | tr '\n' ' ' | head -c 500)
-                detail_safe=$(strip_log_injection "$detail_trim")
-                record_failure "probe_contract_drift" \
-                  "Run ${i}/5: no 'polyfill: applied' line, so the polyfill path was not exercised. Output: ${detail_safe}"
-                break
-              fi
-
               if [[ "$probe_exit" -eq 0 && "$has_subscribed" == "yes" ]]; then
-                # healthy
+                # Healthy only if this iteration ran the polyfill path: a clean
+                # SUBSCRIBED on the native path proves nothing about it. Checked
+                # here, not before the classification, so a Doppler/infra failure
+                # that never reached the script stays realtime_join_timeout.
+                if [[ "$has_polyfill" == "no" ]]; then
+                  detail_trim=$(printf '%s' "$output" | tr '\n' ' ' | head -c 500)
+                  detail_safe=$(strip_log_injection "$detail_trim")
+                  record_failure "probe_contract_drift" \
+                    "Run ${i}/5: SUBSCRIBED but no 'polyfill: applied' line, so the polyfill path was not exercised. Output: ${detail_safe}"
+                  break
+                fi
                 continue
               fi
 
@@ -241,7 +245,7 @@ jobs:
             printf '### What to do\n\nSee the [Phoenix JOIN handshake learning](%s).\n\n' "$LEARNING_URL"
             printf 'Common triage paths:\n\n'
             printf -- '- `realtime_join_timeout` — most likely a `@supabase/realtime-js` or `@supabase/supabase-js` bump re-triggered the Node-without-native-WebSocket race (or upstream removed the polyfill workaround). Re-run `apps/web-platform/scripts/realtime-probe.mjs` locally with and without `--no-polyfill` to confirm which side changed.\n'
-            printf -- '- `probe_contract_drift` — `realtime-probe.mjs` exit code disagrees with its SUBSCRIBED stdout token. Script bug, not a race.\n'
+            printf -- '- `probe_contract_drift` — `realtime-probe.mjs` exit code disagrees with its SUBSCRIBED stdout token (script bug, not a race), OR the probe no longer runs the polyfill path (global `WebSocket` not removed, or SUBSCRIBED without a `polyfill: applied` line): check `NODE_OPTIONS` and the Node version in this workflow.\n'
             printf -- '- `doppler_config_drift` / `doppler_config_missing` — investigate Doppler workspace `dev_scheduled` config: it should resolve to environment `dev` and the dev-scoped service token must have read access.\n'
             printf -- '- `secret_unset` — provision `DOPPLER_TOKEN_DEV_SCHEDULED` via `gh secret set` from a separate terminal; the token must be scoped to the `dev_scheduled` Doppler config.\n\n'
             printf '**Tracks:** #3060\n'
