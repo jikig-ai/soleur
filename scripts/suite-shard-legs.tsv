@@ -140,6 +140,13 @@ plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	2
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
+plugins/soleur/skills/launch-check/test/baseline.test.sh	1
+plugins/soleur/skills/launch-check/test/identity.test.sh	1
+plugins/soleur/skills/launch-check/test/redact-gate.test.sh	1
+plugins/soleur/skills/launch-check/test/render.test.sh	1
+plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	1
+plugins/soleur/skills/launch-check/test/scan.test.sh	1
+plugins/soleur/skills/launch-check/test/wording.test.sh	1
 plugins/soleur/skills/linear-fetch/test/assert-no-linear-telemetry.test.sh	5
 plugins/soleur/skills/linear-fetch/test/parity.test.sh	3
 plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	4
