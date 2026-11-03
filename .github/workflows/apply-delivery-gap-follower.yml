@@ -15,7 +15,7 @@
 # shared group exists to prevent. The dispatch cannot widen: deploy-fix only
 # (the `infra` key stays reserved), no `apply_target` and no
 # `allow_missing_status_endpoint`, at most once per reconcile, and the
-# dispatched run lands in the same `terraform-apply-web-platform-host` group so
+# dispatched run lands in the same apply group so
 # apply serialization is untouched - a re-eviction just re-fires this follower
 # on the next completion, with the aged-issue escalation as the floor. The
 # `follow` job itself still holds no credential beyond the run token and
@@ -81,7 +81,7 @@ jobs:
   # Bounded actuation (ADR-318): the only `actions: write` grant in this
   # workflow. Fires once per reconcile, deploy-fix rows only, every row
   # evicted-before-start, nothing in flight. The dispatched run lands in the
-  # shared apply group, so serialization is untouched and a re-eviction just
+  # same apply group, so serialization is untouched and a re-eviction just
   # re-fires the follower on the next completion.
   redrive:
     needs: follow
