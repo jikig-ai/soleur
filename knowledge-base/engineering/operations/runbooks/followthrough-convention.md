@@ -431,3 +431,5 @@ even on a healthy run).
 **And when the probe cannot resolve the ambiguity, exit TRANSIENT.** `PASS` is an auto-close;
 spending it on "I could not tell" converts an unverified channel into a closed issue. Ask of every
 PASS branch: *what would this report if the change were never deployed?*
+
+- **Fixture keys must be the API's wire fields, not the convenient CLI's.** `gh api repos/…/actions/runs` returns `id`; `databaseId` only exists in `gh run list --json` (GraphQL). A fixture keyed on the wrong field makes suite and probe agree with each other and disagree with the wire — a null projection collapses the TSV into permanent CANNOT-ESTABLISH or false NOT-YET. Verify once against the real endpoint (`gh api <path> --jq '.[0] | keys'`) before keying fixtures. And `jq`'s `//` swallows `false` — when absent/null/false carry different verdicts, write `== null`, never `// []`. **Why:** #11994 fix-round — see `knowledge-base/project/learnings/2026-11-03-fixture-fields-must-match-the-wire-shape-and-jq-coalesce-swallows-false.md`.
