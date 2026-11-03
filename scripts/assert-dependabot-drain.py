@@ -56,6 +56,7 @@ WATCHED_PACKAGES = {
     "@vitest/mocker",
     "body-parser",
     "brace-expansion",
+    "browserslist",
     "fast-uri",
     "glob",
     "hono",
@@ -65,6 +66,8 @@ WATCHED_PACKAGES = {
     "minimatch",
     "nanoid",
     "next",
+    "postcss",
+    "postcss-selector-parser",
     "undici",
     "zod",
 }
@@ -176,6 +179,19 @@ REQUIRED = [
     # @likec4/core@1.50.0 itself imports no zod). Drop it only when the likec4
     # 1.60 pin-train (#11696) lands native zod-4.
     ("web-platform", "zod", 4, "4.6.6"),
+    # likec4@1.60.0 vendors the @pandacss/* tree, which declares EXACT pins on
+    # vulnerable versions (browserslist 4.28.1, postcss 8.5.14,
+    # postcss-selector-parser 7.1.1). Scoped overrides in
+    # apps/web-platform/package.json lift each edge to the patched floor;
+    # these rows ratchet them so a lockfile regen cannot silently re-admit.
+    # browserslist: GHSA-c83g-rgw3-j3cx + GHSA-73wf-gq98-2v4g (HIGH x2, <=4.28.6).
+    ("web-platform", "browserslist", 4, "4.28.7"),
+    # postcss: GHSA-fxqj-rqcc-2cmp (HIGH, <=8.5.22) is stricter than
+    # GHSA-r28c-9q8g-f849 (<8.5.18) -- floor is the union's max.
+    ("web-platform", "postcss", 8, "8.5.23"),
+    # postcss-selector-parser: GHSA-rj75-hqrm-r3gf (moderate, >=7.0.0 <7.1.6)
+    # is stricter than GHSA-w9m9-85wc-3x92's 7.x arm (<7.1.3).
+    ("web-platform", "postcss-selector-parser", 7, "7.1.6"),
     ("pencil-setup", "zod", 4, "4.6.6"),
     ("pen-cli", "zod", 4, "4.6.6"),
     ("spike", "zod", 4, "4.6.6"),
@@ -236,6 +252,9 @@ FLOOR_ANCHORS = {
     ("@sentry/nextjs", 10): "10.75.2",  # GHSA-mchm-gjx6-7h55 (CRITICAL)
     ("body-parser", 2): "2.4.0",      # GHSA-27r3-jxmh-p828 (HIGH)
     ("zod", 4): "4.6.6",              # GHSA-mrhx-c7xc-m3w5 (HIGH; CVE-2023-54404)
+    ("browserslist", 4): "4.28.7",    # GHSA-c83g-rgw3-j3cx + GHSA-73wf-gq98-2v4g (HIGH x2; likec4-1.60 @pandacss tree)
+    ("postcss", 8): "8.5.23",         # GHSA-fxqj-rqcc-2cmp (HIGH) + GHSA-r28c-9q8g-f849 (HIGH; likec4-1.60 @pandacss tree)
+    ("postcss-selector-parser", 7): "7.1.6",  # GHSA-rj75-hqrm-r3gf + GHSA-w9m9-85wc-3x92 (moderate; likec4-1.60 @pandacss tree)
 }
 
 # DISCHARGED 2026-09-02 (#7591) -- the next 15.x -> 16.x major this list was waiting for.
@@ -377,7 +396,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 41  # prior 36 + the five rows of the 2026-11-01 medium/low batch (minimatch x3, glob, @vitest/mocker)
+    MIN_ROWS = 44  # prior 41 + the three likec4-1.60 @pandacss-transitive rows (browserslist, postcss, postcss-selector-parser)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -385,7 +404,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 38  # prior 36 + the five rows of the 2026-11-01 batch, minus three net:
+    MIN_RESOLVED = 41  # prior 38 + the three likec4-1.60 @pandacss-transitive rows, all resolved:
                        # brace-expansion 1.x/2.x went legitimately '(absent)' in BOTH
                        # web-platform and root-1.x when minimatch consolidated on 11.x
                        # (no consumer left); root's major-5 row re-resolved under
