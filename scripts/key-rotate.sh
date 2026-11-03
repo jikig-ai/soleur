@@ -128,23 +128,38 @@ KK_ISSUE_LIMIT=1000
 # plain literals (guard 15/25, apply 40/50, redeploy 85/105, notify 5/15). The G3 window constants derive from these.
 KK_APPLY_STEP_S=$((KR_TF_INIT_S + KR_TF_PLAN_S + KR_TF_APPLY_S + KR_STEP_SLACK_S))
 KK_APPLY_JOB_S=$((KK_APPLY_STEP_S + KR_JOB_SLACK_S))
+KK_RECHECK_STEP_S=600
 # The redeploy JOB holds four steps (checkout 2 + Re-checks 10 + track 85 + Verdict 5 = 102 min), so its bound is the track step plus
 # the sourced slack plus the 10 minutes the Re-checks step adds: 105 min.
-KK_REDEPLOY_JOB_S=$((KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S + 600))
+KK_REDEPLOY_JOB_S=$((KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S + KK_RECHECK_STEP_S))
 # kb_drift window (CTO G3): refuse when [now, now + the remaining budget] intersects [03:00, 03:30] UTC.
 KK_KB_WIN_START_S=10800
 KK_KB_WIN_LEN_S=1800
-KK_KB_BUDGET_APPLY_S=$((KK_APPLY_STEP_S + KR_REDEPLOY_STEP_S))
-KK_KB_BUDGET_PREAPPLY_S=$((KR_TF_APPLY_S + KR_STEP_SLACK_S + KR_REDEPLOY_STEP_S))
+# The Re-checks step (up to 10 minutes, 480 s of it the R1 wait) sits between the apply and the track step, so it is part of the
+# budget: 40 min apply + 10 min re-checks + 85 min track = 8100 s, and the first unsafe start is about 00:45 UTC.
+KK_KB_BUDGET_APPLY_S=$((KK_APPLY_STEP_S + KK_RECHECK_STEP_S + KR_REDEPLOY_STEP_S))
+KK_KB_BUDGET_PREAPPLY_S=$((KR_TF_APPLY_S + KR_STEP_SLACK_S + KK_RECHECK_STEP_S + KR_REDEPLOY_STEP_S))
 # R3: `terraform show` is capped (the sourced kr_tf default is the plan bound); the write is refused when the time left in the apply
 # step is below the apply bound plus this margin. Doppler reads are capped too.
 KK_TF_SHOW_S=120
-KK_APPLY_MARGIN_S=240
 KK_DOPPLER_READ_S=60
+# The margin is a literal: the apply kill-after (30 s) plus one post-state round. It does NOT cover the full post-state worst case
+# (KK_RETRIES x copies x 2 x KK_DOPPLER_READ_S + (KK_RETRIES - 1) x KK_RETRY_SLEEP_S = 400 s for one copy, 760 s for the two
+# kb_drift copies), because the apply step has only KR_STEP_SLACK_S of slack in total. A step kill after the write lands as the notify
+# job_cancelled with write_started=true (safe, but the per-copy states are lost). The suite pins the derivation and the literal.
+KK_APPLY_MARGIN_S=240
 # R1: after a landed write the redeploy leg never refuses on staleness, the kb window or quiet_window; it waits read-only for a
 # transient rung (in-flight run, earlier run, walker) to clear, inside the Re-checks step's 10-minute timeout.
 KK_REDEPLOY_WAIT_S=480
 KK_REDEPLOY_POLL_S=30
+# N6: every `gh run list` of the poll is capped; a rung re-poll is at most five statuses, so one poll iteration is bounded by
+# KK_REDEPLOY_ITER_S and WAIT + ITER fits the 10-minute Re-checks step (the suite pins it).
+KK_GH_POLL_S=20
+KK_REDEPLOY_ITER_S=$((5 * KK_GH_POLL_S))
+# N3: workflows whose deploy job is a member of the `web-1-swap` concurrency group (web-1-swap-concurrency-parity.test.sh). While the
+# redeploy job holds the group their deploy jobs are queued behind OUR hold and cannot finish, so in redeploy mode their runs are not
+# blockers (the group serializes the swap anyway). apply-web-platform-infra.yml is NOT listed: its routine apply job is not a member.
+KK_SWAP_MEMBER_WORKFLOWS=(web-platform-release.yml apply-deploy-pipeline-fix.yml)
 
 # The plan projection (CTO H1): ONLY these five fields survive the full `terraform show -json`.
 KK_PROJECT_JQ='[.resource_changes[]? | select((.change.actions == ["no-op"] or .change.actions == ["read"]) | not)
@@ -161,6 +176,9 @@ KK_GATE_JQ='length as $n | ($want | length) as $w
             and (if $r.recovery then $x.after_unknown_value == true else true end)))))'
 
 KK_GUARD_MODE=""
+KK_LAST_DETAIL=""
+KK_GH_BIN=gh
+KK_RECHECK_RUNG=""
 KK_STEP_START=0
 declare -A KK_BOOL=()
 KK_BOOL_ORDER=()
@@ -197,6 +215,7 @@ kr_refuse() {
   kr_token_known "$t" || t="internal_error"
   d="$(printf '%s' "${2:-}" | kr_scrub)"
   KR_VERDICT="$t"
+  KK_LAST_DETAIL="$d"
   printf '::error::key-rotate verdict=%s %s\n' "$t" "$d" >&2
   kr_summary "- key-rotate verdict=${t}: ${d}"
   kr_out verdict "$t"
@@ -238,7 +257,9 @@ kr_verdict_recipe() {
 
 # kr_converge_cmd: the exact re-dispatch command the stop sentence and the issue carry (the owner types a fresh confirm; no agent runs it).
 kr_converge_cmd() {
-  local k="${EFF_KEY:-${INPUT_KEY:-<key>}}" extra=""
+  local k="${EFF_KEY:-}" v ok=1 extra=""
+  for v in "${KK_KEYS[@]}"; do [[ "$k" == "$v" ]] && ok=0; done
+  [[ "$ok" == 0 ]] || k="<key>"
   [[ "$k" == github_webhook_secret ]] && extra=" -f webhook_patch_ready=true"
   printf 'gh workflow run %s -f mode=rotate -f key=%s -f confirm=ROTATE-%s-YYYY-MM-DD -f quiet_window=true%s' \
     "$KK_OWN_WORKFLOW" "$k" "$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$extra"
@@ -300,7 +321,7 @@ kr_stop_sentence() {
 # kk_stop_tail: fixed words, the validated key and the numeric run id only. owner_step_pending carries no re-dispatch command (the
 # single owner action is above); a kb_drift partial_absent_state gets it only after the missing copy is recreated.
 kk_stop_tail() {
-  local k="${EFF_KEY:-${INPUT_KEY:-}}"
+  local k="${EFF_KEY:-}"
   case "${KR_VERDICT:-}:$k" in
     owner_step_pending:*) printf ' Read the verdict: %s' "$(kr_verdict_recipe)" ;;
     partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh typed confirm (no agent dispatches a rotate): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
@@ -433,10 +454,19 @@ kk_runs_count() {
   printf '%s' "$n"
 }
 
-kk_chk_inflight() { # the sourced three statuses, then the two the sourced helper does not poll
+kk_swap_member() { local m; for m in "${KK_SWAP_MEMBER_WORKFLOWS[@]}"; do [[ "$1" == "$m" ]] && return 0; done; return 1; }
+
+kk_chk_inflight() { # [redeploy]: the sourced three statuses, then the two the sourced helper does not poll
   local wf st n
-  kr_inflight_check || return 1
+  local -a wfs=()
   for wf in "${KR_INFLIGHT_WORKFLOWS[@]}"; do
+    # N3: in redeploy mode a web-1-swap member's run is not a blocker (its deploy job is queued behind this job's own hold)
+    if [[ "${1:-}" == redeploy ]] && kk_swap_member "$wf"; then continue; fi
+    wfs+=("$wf")
+  done
+  local -a KR_INFLIGHT_WORKFLOWS=("${wfs[@]}")
+  kr_inflight_check || return 1
+  for wf in "${wfs[@]}"; do
     for st in pending requested; do
       n="$(kk_runs_count "$wf" "$st")" || { KR_CHECK_TOKEN=run_list_unreadable; KR_CHECK_DETAIL="cannot list ${wf} runs"; return 1; }
       [[ "$n" == 0 ]] || { KR_CHECK_TOKEN=run_in_flight; KR_CHECK_DETAIL="${wf} has ${n} ${st} run(s)"; return 1; }
@@ -448,7 +478,7 @@ kk_chk_lower_run() { # refuse-only: an earlier key-rotate.yml run still queued o
   local st n
   for st in queued waiting pending requested in_progress; do
     n="$(kk_runs_count "$KK_OWN_WORKFLOW" "$st" "${GITHUB_RUN_ID:-0}")" || { KR_CHECK_TOKEN=run_list_unreadable; KR_CHECK_DETAIL="cannot list ${KK_OWN_WORKFLOW} runs"; return 1; }
-    [[ "$n" == 0 ]] || { KR_CHECK_TOKEN=run_in_flight; KR_CHECK_DETAIL="an earlier ${KK_OWN_WORKFLOW} run is still ${st}"; return 1; }
+    [[ "$n" == 0 ]] || { KR_CHECK_TOKEN=run_in_flight; KR_CHECK_DETAIL="an earlier ${KK_OWN_WORKFLOW} run (a plan or a rotate dispatch) is still ${st}"; return 1; }
   done
 }
 
@@ -479,14 +509,26 @@ kk_chk_walker() {
 # windows). The "redeploy" mode (R1) skips the kb window: after a landed write the leg must finish, so only the transient rungs
 # (in-flight, earlier run, walker) are read, and the caller polls them.
 kk_recheck() {
-  KR_CHECK_TOKEN=internal_error; KR_CHECK_DETAIL=""
-  kk_chk_inflight || return 1
-  kk_chk_lower_run || return 1
+  KR_CHECK_TOKEN=internal_error; KR_CHECK_DETAIL=""; KK_RECHECK_RUNG=""
+  KK_RECHECK_RUNG=inflight; kk_chk_inflight "${3:-}" || return 1
+  KK_RECHECK_RUNG=lower; kk_chk_lower_run || return 1
   if [[ "$1" == kb_drift_ingest_signing_key ]]; then
-    [[ "${3:-}" == redeploy ]] || { kk_chk_kb_window "$2" || return 1; }
-    kk_chk_walker || return 1
+    [[ "${3:-}" == redeploy ]] || { KK_RECHECK_RUNG=kb; kk_chk_kb_window "$2" || return 1; }
+    KK_RECHECK_RUNG=walker; kk_chk_walker || return 1
   fi
+  KK_RECHECK_RUNG=""
   return 0
+}
+
+# kk_recheck_rung <rung>: re-read ONE rung of the redeploy poll (N6: after the first blocked pass only the rung that blocked).
+kk_recheck_rung() {
+  KR_CHECK_TOKEN=internal_error; KR_CHECK_DETAIL=""
+  case "$1" in
+    inflight) kk_chk_inflight redeploy ;;
+    lower) kk_chk_lower_run ;;
+    walker) kk_chk_walker ;;
+    *) return 1 ;;
+  esac
 }
 
 # kk_check <name> <function>: records a boolean. plan reports and never refuses; rotate refuses on the first false.
@@ -669,27 +711,43 @@ kk_tf_class() {
   printf 'other'
 }
 
+# kk_tf_clean [keep-plan]: delete every Terraform stream file (and the saved plan unless told to keep it) the moment its exit code is
+# read. A stream carries key bytes and nothing may linger on the runner until the EXIT trap. The only code that names a `tf-` stream
+# file outside the sourced kr_tf is kk_tf_class (reads a count), kk_gate_plan (the projection) and this function (the suite pins it).
+kk_tf_clean() {
+  rm -f -- "$KR_TMP"/tf-*
+  [[ "${1:-}" == keep-plan ]] || rm -f -- "$KR_TMP"/tfplan-*
+  return 0
+}
+
 # kk_gate_plan <key> <name>: plan, show, PROJECT, delete the full JSON, gate. On success $KR_TMP/tfplan-<name> is the saved plan.
 kk_gate_plan() {
-  local key="$1" name="$2" rc=0 want proj
+  local key="$1" name="$2" rc=0 want proj cls
   local -a targets repls
   mapfile -t targets < <(kr_gate_targets A "$key"; kr_gate_targets B "$key")
   mapfile -t repls < <(kr_gate_replaces A "$key"; kr_gate_replaces B "$key")
   kr_tf "plan-${name}" plan -no-color -input=false -out="$KR_TMP/tfplan-${name}" -var="ssh_key_path=${KR_TMP}/ci_ssh_key.pub" \
     "${targets[@]}" "${repls[@]}" || rc=$?
-  if [[ "$rc" != 0 ]]; then kr_refuse terraform_failed "the plan step exited ${rc} (cause class: $(kk_tf_class "plan-${name}" "$rc")); its output stays on the runner (it carries key bytes)"; return 1; fi
+  if [[ "$rc" != 0 ]]; then
+    cls="$(kk_tf_class "plan-${name}" "$rc")"; kk_tf_clean
+    kr_refuse terraform_failed "the plan step exited ${rc} (cause class: ${cls}); its output was deleted from the runner (it carried key bytes)"; return 1
+  fi
   rc=0
   KR_TF_T="$KK_TF_SHOW_S" kr_tf "show-${name}" show -json "$KR_TMP/tfplan-${name}" || rc=$?
-  if [[ "$rc" != 0 ]]; then kr_refuse terraform_failed "the plan-to-JSON step exited ${rc} (cause class: $(kk_tf_class "show-${name}" "$rc")); its output stays on the runner (it carries key bytes)"; return 1; fi
+  if [[ "$rc" != 0 ]]; then
+    cls="$(kk_tf_class "show-${name}" "$rc")"; kk_tf_clean
+    kr_refuse terraform_failed "the plan-to-JSON step exited ${rc} (cause class: ${cls}); its output was deleted from the runner (it carried key bytes)"; return 1
+  fi
   proj="$KR_TMP/proj-${name}.json"
   ( umask 077; jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-${name}.out" > "$proj" 2>/dev/null ) || rc=$?
-  rm -f -- "$KR_TMP/tf-show-${name}.out" "$KR_TMP/tf-show-${name}.err" "$KR_TMP/tf-plan-${name}.out" "$KR_TMP/tf-plan-${name}.err"
+  kk_tf_clean keep-plan
   if [[ "$rc" != 0 || ! -s "$proj" ]] || ! jq -e 'type == "array"' "$proj" >/dev/null 2>&1; then
+    kk_tf_clean
     kr_refuse terraform_failed "the plan projection failed or was empty; the full plan JSON was deleted"
     return 1
   fi
-  want="$(kk_want "$key")" || { kr_refuse internal_error "the gate table could not be built for this key"; return 1; }
-  kk_gate "$key" "$proj" "$want"
+  want="$(kk_want "$key")" || { kk_tf_clean; kr_refuse internal_error "the gate table could not be built for this key"; return 1; }
+  kk_gate "$key" "$proj" "$want" || { kk_tf_clean; return 1; }
 }
 
 kk_stale_test() { # authorization_stale as a report-only test (sets KR_CHECK_*, prints nothing): the confirm date still today, the gap bounded
@@ -763,13 +821,13 @@ kk_print_post() {
 kk_has_post() { local s; for s in "${KK_POST_ST[@]}"; do [[ "$s" == "$1" ]] && return 0; done; return 1; }
 
 # kk_rotate_would_refuse <key>: report-only (plan mode): the first rotate-only rung this key would meet, as a token already in the
-# fixed set, or none. The guard-time rungs that need dispatch inputs or the issues API (confirm, quiet_window, attempt,
-# webhook_patch_ready, owner_step_open) are not readable by the apply job and are not evaluated here.
+# fixed set, or none. Not evaluated here: the guard-time rungs that need dispatch inputs or the issues API (confirm, quiet_window,
+# attempt, webhook_patch_ready, owner_step_open) and authorization_stale (in plan mode it would measure the plan run's own guard age,
+# not the age a later rotate dispatch would have).
 kk_rotate_would_refuse() {
   local tok=none
   if ! kk_chk_egress "$1"; then tok="$KR_CHECK_TOKEN"
   elif ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"
-  elif ! kk_stale_test; then tok="$KR_CHECK_TOKEN"
   elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"
   fi
   [[ "$tok" == none ]] || kr_token_known "$tok" || tok=internal_error
@@ -777,7 +835,7 @@ kk_rotate_would_refuse() {
 }
 
 kk_cmd_apply() {
-  local mode="${EFF_MODE:-}" key="${EFF_KEY:-}" rc=0 would
+  local mode="${EFF_MODE:-}" key="${EFF_KEY:-}" rc=0 would irc
   KK_STEP_START="$(kr_now)"
   kk_valid_inputs "$mode" "$key" || return 1
   kr_init || return 1
@@ -788,26 +846,37 @@ kk_cmd_apply() {
     kk_chk_stale || return 1
     kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
   fi
-  kr_tf_prepare || { [[ "${KR_VERDICT:-}" == terraform_failed ]] && kk_say "key-rotate: terraform_failed cause class: $(kk_tf_class init 1)"; return 1; }
+  if ! kr_tf_prepare; then
+    if [[ "${KR_VERDICT:-}" == terraform_failed ]]; then
+      # kr_tf_prepare hides the init exit code; the refusal detail it just wrote carries "exited <rc>" (kr_refuse keeps it)
+      irc="${KK_LAST_DETAIL#*exited }"; irc="${irc%%[!0-9]*}"; [[ "$irc" =~ ^[0-9]+$ ]] || irc=1
+      kk_say "key-rotate: terraform_failed cause class: $(kk_tf_class init "$irc")"
+    fi
+    kk_tf_clean
+    return 1
+  fi
+  kk_tf_clean
   kk_load_copies "$key"
   kk_pre_state || return 1
   kk_gate_plan "$key" p || return 1
   if [[ "$mode" == plan ]]; then
     kr_summary "gate rows: $(kr_gate_rows A "$key" | cut -d'|' -f3,5 | tr '\n' ' ')$(kr_gate_rows B "$key" | cut -d'|' -f3,5 | tr '\n' ' ')"
+    kk_tf_clean
     would="$(kk_rotate_would_refuse "$key")"
     kr_ok plan_ok "the plan gate passed for key=${key} (${#KK_CP[@]} copies readable, absent_all=${KK_ABSENT_ALL}); nothing was applied" "rotate_would_refuse=${would}"
     return 0
   fi
   # the last read before the write: the facts above have aged by up to the init and plan time
-  kk_chk_stale || return 1
-  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
-  kk_chk_apply_budget || return 1
+  kk_chk_stale || { kk_tf_clean; return 1; }
+  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
+  kk_chk_apply_budget || { kk_tf_clean; return 1; }
   kr_out write_started true
   KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?
+  kk_tf_clean
   kk_post_state
   kk_print_post
   if [[ "$rc" != 0 ]]; then
-    kr_post_write_failure apply_failed "the apply exited ${rc}; see the per-copy states above; its output stays on the runner" "The apply failed part-way."
+    kr_post_write_failure apply_failed "the apply exited ${rc}; see the per-copy states above; its output was deleted from the runner" "The apply failed part-way."
     return 1
   fi
   if kk_has_post unknown; then kr_post_write_failure post_hash_unreadable "a copy could not be read back after the apply" "The apply finished but a copy cannot be read."; return 1; fi
@@ -831,12 +900,20 @@ kk_redeploy_refuse() { # <reason-token> <detail>
 # staleness, the kb window or quiet_window; it re-reads every KK_REDEPLOY_POLL_S seconds for at most KK_REDEPLOY_WAIT_S seconds and
 # leaves the last blocking rung in KR_CHECK_TOKEN / KR_CHECK_DETAIL when the wait is spent.
 kk_redeploy_wait() {
-  local start now
+  local start now rung=""
+  # N6: every gh call of the poll (the sourced kr_inflight_check included) is capped; the shadow is removed on return
+  KK_GH_BIN="$(type -P gh)" || KK_GH_BIN=gh
+  gh() { timeout "$KK_GH_POLL_S" "$KK_GH_BIN" "$@"; }
   start="$(kr_now)"
   while :; do
-    kk_recheck "$1" 0 redeploy && return 0
+    # after the first blocked pass only the rung that blocked is re-read; once it clears, the full ladder runs once more
+    if [[ -z "$rung" ]] || kk_recheck_rung "$rung"; then
+      rung=""
+      if kk_recheck "$1" 0 redeploy; then unset -f gh; return 0; fi
+      rung="$KK_RECHECK_RUNG"
+    fi
     now="$(kr_now)"
-    (( now - start + KK_REDEPLOY_POLL_S > KK_REDEPLOY_WAIT_S )) && return 1
+    if (( now - start + KK_REDEPLOY_POLL_S > KK_REDEPLOY_WAIT_S )); then unset -f gh; return 1; fi
     kr_sleep "$KK_REDEPLOY_POLL_S"
   done
 }
@@ -898,15 +975,17 @@ kk_prewrite_token() {
   return 1
 }
 
-kk_close_earlier() { # <key>
-  local repo="${GITHUB_REPOSITORY:-}" list num
+kk_close_earlier() { # <key>: closes only issues whose title run number is LESS than this run's (never a later run's issue)
+  local repo="${GITHUB_REPOSITORY:-}" list num me="${GITHUB_RUN_ID:-}"
+  [[ "$me" =~ ^[0-9]+$ ]] || { printf '::warning::key-rotate: the run id is unknown; no earlier issue closed\n' >&2; return 0; }
   list="$(gh issue list --repo "$repo" --label action-required --state open --limit "$KK_ISSUE_LIMIT" --json number,title 2>/dev/null)" \
     || { printf '::warning::key-rotate: could not list earlier key-rotate issues; none closed\n' >&2; return 0; }
   while IFS= read -r num; do
     [[ "$num" =~ ^[0-9]+$ ]] || continue
-    gh issue close "$num" --repo "$repo" --comment "Superseded by a confirmed rotation of ${1} (run ${GITHUB_RUN_ID:-unknown})." >/dev/null 2>&1 \
+    gh issue close "$num" --repo "$repo" --comment "Superseded by a confirmed rotation of ${1} (run ${me})." >/dev/null 2>&1 \
       || printf '::warning::key-rotate: could not close earlier issue #%s; close it by hand\n' "$num" >&2
-  done < <(jq -r --arg k "$1" '.[] | select((.title | test("^key-rotate " + $k + " [a-z_]+ \\(run [0-9]+\\)$")) and ((.title | startswith("key-rotate " + $k + " owner_step_pending ")) | not)) | .number' <<<"$list" 2>/dev/null)
+  done < <(jq -r --arg k "$1" --argjson me "$me" '.[] | select((.title | test("^key-rotate " + $k + " [a-z_]+ \\(run [0-9]+\\)$")) and ((.title | startswith("key-rotate " + $k + " owner_step_pending ")) | not)
+      and ((.title | capture("\\(run (?<n>[0-9]+)\\)$").n | tonumber) < $me)) | .number' <<<"$list" 2>/dev/null)
   return 0
 }
 

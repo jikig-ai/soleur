@@ -56,7 +56,7 @@ anywhere in this procedure and none is needed.
    `ignore_changes=[value]` recreates it with the new value (the `value_unchanged` verdict is the detector), and that `-replace` of an
    address absent from state plans a plain create. Exercise the second one with a deliberately interrupted **dev** rehearsal before any
    `_prd` rotate.
-3. `kb_drift_ingest_signing_key`, started outside the window the guard computes (roughly 00:55 to 03:30 UTC; the guard prints the
+3. `kb_drift_ingest_signing_key`, started outside the window the guard computes (roughly 00:45 to 03:30 UTC; the guard prints the
    refusal if you are inside it).
 4. `inngest_manual_trigger_secret_prd`, after #11923.
 5. `github_webhook_secret` last, in a quiet window, after #11923 and with the App private key at hand.
@@ -92,10 +92,19 @@ every verdict line and every guard boolean (`key-rotate check <name>=<bool>`); t
 
 `mode=plan` ends `plan_ok` when the gate passes, with exit 0, and its line ends with `rotate_would_refuse=<token|none>`. The field is
 report-only: it names the first rotate-only rung this key would meet right now (the egress refusal, `approval_environment_missing`,
-`authorization_stale`, or a re-check: `run_in_flight`, `run_list_unreadable`, `kb_drift_cron_window`,
-`kb_drift_walker_in_flight`). It is **advisory**: `plan_ok` with `rotate_would_refuse` other than `none` means a rotate dispatched now
+or a re-check: `run_in_flight`, `run_list_unreadable`, `kb_drift_cron_window`, `kb_drift_walker_in_flight`; an earlier `plan` run
+that is still running counts as `run_in_flight` too, because a rotate would refuse on it). It is **advisory**: `plan_ok` with `rotate_would_refuse` other than `none` means a rotate dispatched now
 would refuse, not that the plan failed. Not evaluated by `plan` (they need the dispatch inputs or the issues API, which the apply job
-does not hold): `confirm_mismatch`, `quiet_window_missing`, `rerun_refused`, `webhook_patch_not_ready`, `owner_step_open`.
+does not hold, or that would measure the plan run itself): `authorization_stale` (a plan run would report its own age, not the age a later
+rotate dispatch would have), `confirm_mismatch`, `quiet_window_missing`, `rerun_refused`, `webhook_patch_not_ready`, `owner_step_open`.
+
+### The redeploy wait (after a landed write)
+
+The redeploy job's re-check step never refuses on staleness, the kb window or `quiet_window`: the new value is already landed. It polls
+read-only (a related workflow in flight, an earlier `key-rotate.yml` run, the kb-drift walker) every 30 s for at most 480 s, then
+refuses `rotated_redeploy_failed` naming the blocking workflow. Runs of `web-platform-release.yml` and `apply-deploy-pipeline-fix.yml`
+(members of the `web-1-swap` group) are not counted as blockers there, because their deploy jobs are queued behind this job's own hold
+and the group serializes the swap anyway (UNVERIFIED live: the first dev rehearsal settles it). Every other related workflow still blocks.
 
 ## Before a `prd` manual-trigger rotation
 
@@ -121,7 +130,7 @@ The passing verdicts are `guard_ok` (the ladder passed), `plan_ok` and `rotate_o
 | `approval_environment_missing` | the key needs the reviewer-gated environment (#11923) | wait for #11923; the dev keys are not subject to it |
 | `webhook_patch_not_ready` | `github_webhook_secret` without `webhook_patch_ready=true` | have the App private key at hand, then set it |
 | `owner_step_open` | an `owner_step_pending` issue for the webhook secret is open, or its label or listing is unreadable (fails closed) | finish the owner step and close that issue |
-| `kb_drift_cron_window` | the remaining apply-and-redeploy budget would overlap 03:00-03:30 UTC | dispatch outside roughly 00:55 to 03:30 UTC |
+| `kb_drift_cron_window` | the remaining apply-and-redeploy budget would overlap 03:00-03:30 UTC | dispatch outside roughly 00:45 to 03:30 UTC |
 | `kb_drift_walker_in_flight` | a `kb-drift-walker.yml` run is queued, running or waiting | wait for it to finish |
 | `run_in_flight` | a related workflow, or an EARLIER `key-rotate.yml` run, is running or queued | wait for it, then re-dispatch |
 | `run_list_unreadable` | the run listing failed (fails closed, never read as none-in-flight) | re-dispatch; check GitHub API status if it repeats |

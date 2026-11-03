@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the EIGHT GitHub Actions jobs that mutate web-1 — or that invalidate the
+# Drift guard: the NINE GitHub Actions jobs that mutate web-1 — or that invalidate the
 # credential the jobs mutating web-1 authenticate with — MUST share ONE job-level
 # `web-1-swap` concurrency group so GitHub's scheduler serializes them across
 # pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
@@ -17,9 +17,9 @@
 #
 # reason: 5 job-level members -> 3 (the `warm_standby` and `web_2_recreate` members were
 # DELETED with the web-2 dispatch sweep, #6575, 2026-07-20) -> 4 (#6854) -> 5 (#6730)
-# -> 6 (#6969) -> 7 (#7095) -> 8 (#7542).
+# -> 6 (#6969) -> 7 (#7095) -> 8 (#7542) -> 9 (#11294: key-rotate.yml job `redeploy`, in its own workflow file).
 #
-# The eight job-level members (allow-list — an explicit named list so a DELIBERATE
+# The nine job-level members (eight in the three shared workflows, a ninth in key-rotate.yml; allow-list — an explicit named list so a DELIBERATE
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                  (tagged-release deploy)
@@ -30,6 +30,7 @@
 #   6. apply-web-platform-infra.yml    job `web_host_replace`        (#6969 replaces a web host; same singleton, same reason)
 #   7. apply-web-platform-infra.yml    job `ci_ssh_token_replace`    (#7095 destroys the credential the other members' SSH bridges use)
 #   8. apply-web-platform-infra.yml    job `vector_redeliver`        (#7542 root remote-exec on web-1; restarts vector + systemd-journald)
+#   9. key-rotate.yml                  job `redeploy`                (#11294: the same track.sh canary-then-prod fleet redeploy as member 1, in its own workflow file)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
@@ -40,6 +41,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
+#   - key-rotate.yml carries exactly ONE `group: web-1-swap` (its redeploy job), counted separately from the eight below;
 #   - the TOTAL count of `group: web-1-swap` across the three workflows == 8
 #     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is

@@ -110,6 +110,12 @@ on staleness, the kb window or `quiet_window` (it polls the transient rungs for 
 step refuses `authorization_stale` before the write when its remaining time cannot cover the apply bound plus a margin; a notify
 re-run adds no comment to an identical open issue.
 
+Review round 2 (2026-11-03): in redeploy mode the poll does not treat runs of `web-1-swap` member workflows (`web-platform-release.yml`,
+`apply-deploy-pipeline-fix.yml`) as blockers, because their deploy jobs are queued behind the redeploy job's own hold (UNVERIFIED live:
+the first dev rehearsal settles it); every other related workflow still blocks. The kb_drift window budget includes the Re-checks step,
+so the budget is 8100 s and the first unsafe start is about 00:45 UTC. Terraform stream files are deleted as soon as their exit code is
+read, and `rotate_would_refuse` no longer reports `authorization_stale` (in plan mode it would measure the plan run's own age).
+
 ## Consequences
 
 - Seven more secrets rotate without a Terraform stream in a log, with an exact gate, a recovery arm for an interrupted replace, and one
