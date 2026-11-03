@@ -368,4 +368,26 @@ operator-class.
 
 ## Addendum 2026-11-03 (Ref #10205)
 
-A read-only and preparatory class, Class R (`standing-delegation.md` section 9), needs no delegation: the CTO, or the session itself, runs reads, prepares pull requests, files and triages issues and runs local tests before it lists any hold, and reports each as an "I checked" line. It was added because a hold list that handed reads back to the founder was the failure this ADR exists to remove for a non-technical operator. Class R is not a delegation and grants no authority over production: it discharges no hold (the 2026-10-29 addendum's "discharges nothing" is intact), adds no Gate kind, and leaves the Excluded sentence of section 5, the exclusions (dispatching any workflow including a `mode=plan` run, merging, arming, marking ready, any production write) and the five hard limits exactly as section 9 states them. A read is evidence put in front of the owner and never a precondition: an act whose go rests on a read stays a hold under the in-session per-command owner go, and the read is re-run immediately before the act. `status: adopting` is unchanged. The optional relaxations the owner excluded (a `mode=plan` dispatch as delegable, the CTO arming merges) are not added.
+A read-only and preparatory class, Class R (`standing-delegation.md` section 9), needs no delegation. The CTO, or the
+session itself, runs reads, prepares pull requests, files and triages issues and runs local tests before it lists any
+hold, and reports each as an "I checked" line. It was added because a hold list that handed reads back to the founder
+was the failure this ADR exists to remove for a non-technical operator.
+
+What it changes, stated plainly:
+
+- The Context line that a session with no recorded delegation "behaves exactly as before" is qualified for these acts:
+  they need no confirmation question.
+- The fixed Excluded sentence of section 5 ("anything on third-party or tenant systems") is byte-identical, but section 9
+  reads a read-only look at the operator's own Sentry, Better Stack, Cloudflare and GitHub accounts as not an act on a
+  third-party system for that list. The carve-out is read-only, limited to those named vendors, bars tenant data, and
+  grants no authority over production.
+
+What it does not change: it is not a delegation, adds no Gate kind and discharges no hold (the 2026-10-29 addendum's
+"discharges nothing" is intact). Dispatching any workflow (including a `mode=plan` run), merging, arming, marking ready,
+any production write and the owner's other hard limits stay exactly as section 9 states them. A read is evidence put in
+front of the owner and never a precondition: an act whose go rests on a read stays a hold under the in-session
+per-command owner go, and the read is re-run immediately before the act. The two relaxations the owner excluded (a
+`mode=plan` dispatch as delegable, the CTO arming merges) are not added. `status: adopting` is unchanged.
+
+No C4 change: the model draws no agent-read relationships to Sentry, Better Stack or Cloudflare today, and Class R adds
+none. That omission is deliberate, not an oversight.
