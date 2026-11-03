@@ -17,7 +17,9 @@
 # knowledge-base/project/learnings/workflow-patterns/2026-06-04-subagent-commits-fail-cla-check.md
 # (PR #4948 cla-check failure).
 #
-# Stage-2 SANCTIONED SET (evaluated per unique %ae ∪ %ce on origin/main..HEAD):
+# Stage-2 SANCTIONED SET (author and committer slots evaluated separately on
+# origin/main..HEAD — the committer-only WEB_COMMITTER_EMAIL carve-out does not
+# cover the author slot):
 #   1. the session's `git config user.email` (merged scopes, trimmed);
 #   2. SANCTIONED_EMAILS — pinned CLA-allowlisted human emails (a non-noreply
 #      signed email cannot be resolved to a login offline, so the sanctioned
@@ -285,7 +287,12 @@ while IFS= read -r _e; do
   [[ "$_e" == "$WEB_COMMITTER_EMAIL" ]] && continue
   is_sanctioned_email "$_e" || _offender_emails+="${_e}"$'\n'
 done <<<"$_committer_emails"
-_offender_emails=$(printf '%s' "$_offender_emails" | sort -u)
+# sort is `|| true`-guarded like every other dynamic read (a sort failure must
+# not abort the hook before the stage-1 deny can emit). UNSIGNED_EMAIL is
+# dropped from the stage-2 set — stage-1's own clause and message already own
+# it, so re-listing it would print a redundant offender and a duplicate `for e
+# in` arg on every stage-1 deny.
+_offender_emails=$(printf '%s' "$_offender_emails" | sort -u | grep -vxF "$UNSIGNED_EMAIL" || true)
 
 # Remedy-arg validation: %ae/%ce bytes are attacker-influenceable — `$(…)`,
 # backticks, quotes and `;` survive git's ident sanitization into %ae
