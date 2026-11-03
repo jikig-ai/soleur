@@ -131,10 +131,15 @@ SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | sed 's/[[:space:]][[:space:]]*/ /g; s/( 
 # The alert and exploration blocks, from their exact header to the first column-0 "}".
 ALERT="$(res_block logtail_exploration_alert ghcr_hostsfile_deny_lost)"
 EXPL="$(res_block logtail_exploration ghcr_hostsfile_deny_lost)"
-# The push-triggered MAIN plan: from the first `terraform plan -no-color` to its `rc=$?`. The workflow
-# has other plan commands whose -target lists never run on a push to main, so the allowlist rows below
-# read THIS region, not the whole file.
-MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=\$\?/{exit}' "$WF")"
+# The push-triggered MAIN plan: from the first `terraform plan -no-color` to the first `rc=` line-start
+# (the step's rc=${PIPESTATUS[0]} capture — the only rc= line-start inside the step). The workflow has
+# other plan commands whose -target lists never run on a push to main, so the allowlist rows below read
+# THIS region, not the whole file — and the terminator itself is asserted, so a deleted or moved rc
+# line fails loud instead of silently re-opening a run-past-the-step slice.
+MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=/{exit}' "$WF")"
+[ "$(printf '%s\n' "$MAIN_PLAN" | tail -1 | grep -cE '^[[:space:]]*rc=\$\{PIPESTATUS\[0\]\}$')" -eq 1 ] \
+  && ok "the MAIN plan slice ends on the rc=\${PIPESTATUS[0]} capture line (the -target= rows grade exactly the plan step's span)" \
+  || no "the MAIN plan slice does not end on the rc=\${PIPESTATUS[0]} capture line — the -target= pins below would grade a run-past span"
 
 # Opener/header counts — unanchored, file-wide, exactly once each. A /* */- or #-wrapped
 # decoy opener still counts and goes red; dead text can never satisfy the live local.
@@ -215,12 +220,12 @@ HB_SCRIPT="$(awk '/^  - path: \/usr\/local\/bin\/zot-disk-heartbeat\.sh$/{f=1} f
 
 # ── the predicate, compared whole ───────────────────────────────────────────────────────────────
 _msg="JSONExtractString(raw, 'message')"
-EXPECT_1="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND ("
-EXPECT_1+="(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy' AND ${_msg} = '${W_NEEDLE}0')"
-EXPECT_1+=" OR (startsWith(raw, '{\"message\":\"${R_MARK}') AND position(${_msg}, '${R_MARK}') = 1"
-EXPECT_1+=" AND position(${_msg}, '${R_FIELD}0 ') > 0 AND position(${_msg}, '${R_FIELD}0 ') < position(${_msg}, ' zot_last_err='))"
-EXPECT_1+=") GROUP BY time"
-if [ -n "$W_NEEDLE" ] && [ -n "$R_MARK" ] && [ -n "$R_FIELD" ] && [ "$SQL_1" = "$EXPECT_1" ]; then
+EXPECT_SQL="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}} AND ("
+EXPECT_SQL+="(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy' AND ${_msg} = '${W_NEEDLE}0')"
+EXPECT_SQL+=" OR (startsWith(raw, '{\"message\":\"${R_MARK}') AND position(${_msg}, '${R_MARK}') = 1"
+EXPECT_SQL+=" AND position(${_msg}, '${R_FIELD}0 ') > 0 AND position(${_msg}, '${R_FIELD}0 ') < position(${_msg}, ' zot_last_err='))"
+EXPECT_SQL+=") GROUP BY time"
+if [ -n "$W_NEEDLE" ] && [ -n "$R_MARK" ] && [ -n "$R_FIELD" ] && [ "$SQL_1" = "$EXPECT_SQL" ]; then
   ok "the predicate equals the string built from the emitters' own needles (two arms, value 0, nothing else)"
 else
   no "the predicate is not the two-arm string built from the emitters' needles"
@@ -364,16 +369,47 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 [ "$n_run" -eq 1 ] \
   && ok "this suite's run line is registered in infra-validation.yml exactly once" \
   || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+# Fragments, not literals (#11899): a runtime-composed name — "MUT_""SKIP" or a *_GUARD_* built
+# from quoted pieces — reaches the battery with no full literal ever present. MUT_/_SKIP catch
+# MUT_SKIP split at either boundary; bare GUARD catches any *_GUARD_* prefix; BASH_ENV/SHELLOPTS/
+# BASHOPTS bar the shell-injection envs a composer could smuggle the name through.
 seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'GHCR_GUARD_' >/dev/null && seam_bad="$seam_bad GHCR_GUARD_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+done
+# The only remaining channel is dynamic: a $GITHUB_ENV/$GITHUB_PATH write or a defaults: shell
+# inside THIS suite's enclosing job (env: keys are static — the fragments above already cover them).
+# The job slice is derived from the pinned run line — walk back to its `^  name:` header, forward
+# to the next — never a hardcoded job name. An empty or missliced slice would pass the ban
+# vacuously, so it must be non-empty AND contain the run line before the ban applies.
+IV_JOB_SEAM="$(printf '%s\n' "$IV_CODE" | awk -v run="$REG_RUN" '
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { hdr = NR }
+  $0 == run { rl = NR; encl = hdr }
+  { L[NR] = $0 }
+  END {
+    if (!rl) exit 1
+    for (i = encl; i <= NR; i++) {
+      if (i > rl && L[i] ~ /^  [a-zA-Z_][a-zA-Z0-9_-]*:/) break
+      print L[i]
+    }
+  }')"
+if [ -n "$IV_JOB_SEAM" ] && [ "$(printf '%s\n' "$IV_JOB_SEAM" | grep -cFx "$REG_RUN")" -eq 1 ]; then
+  for _jb in 'GITHUB_ENV' 'GITHUB_PATH' 'defaults:'; do
+    printf '%s\n' "$IV_JOB_SEAM" | grep -nF "$_jb" >/dev/null && seam_bad="$seam_bad in-job-${_jb}"
+  done
+else
+  seam_bad="$seam_bad job-slice-miss"
+fi
 [ -z "$seam_bad" ] \
-  && ok "no GHCR_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  && ok "no guard/battery env fragment reaches the workflow's executable text, and this suite's job writes no \$GITHUB_ENV/\$GITHUB_PATH and sets no defaults: (env muting is barred)" \
   || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
 
 # The runbook's decode is the only no-SSH reader of this alert: run its own function body against synthetic rows
 # (a non-JSON row, an object-message row, a forged ` zot_last_err` tail, healthy rows) with the two network tools stubbed.
 JQ_DIR="$(mktemp -d -t ghcrjq.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
+# One EXIT trap covers every scratch dir this suite makes — JQ_DIR now, MUT_DIR once the battery
+# block creates it (${MUT_DIR:+…} expands only when set, so the inner MUT_SKIP run cleans JQ_DIR alone).
+trap 'rm -rf "$JQ_DIR" ${MUT_DIR:+"$MUT_DIR"}' EXIT
 assert_fixture_dir "$JQ_DIR"
 awk '/^ghcr_deny_rows\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$RB" | sed "s#scripts/betterstack-query.sh#$JQ_DIR/bq.sh#" > "$JQ_DIR/fn.sh"
 printf '#!/bin/bash\ncat "%s/rows.jsonl"\n' "$JQ_DIR" > "$JQ_DIR/bq.sh"
@@ -391,7 +427,6 @@ JQ_GOT="$(PATH="$JQ_DIR:$PATH" bash -c ". '$JQ_DIR/fn.sh'; ghcr_deny_rows x 0" 2
 JQ_WANT=$'2026-10-04 10:00:00\tsoleur-web-2\tghcr_blocked=0\n2026-10-04 10:03:00\tsoleur-registry\tghcr_blocked=0'
 JQ_ONE="$(PATH="$JQ_DIR:$PATH" bash -c ". '$JQ_DIR/fn.sh'; ghcr_deny_rows x 1" 2>&1)"
 JQ_ONE_WANT=$'2026-10-04 10:04:00\tsoleur-registry\tghcr_blocked=1\n2026-10-04 10:05:00\tsoleur-web-platform\tghcr_blocked=1'
-rm -rf "$JQ_DIR"
 if [ "$JQ_GOT" = "$JQ_WANT" ] && [ "$JQ_ONE" = "$JQ_ONE_WANT" ]; then
   ok "the runbook's ghcr_deny_rows decode selects the web and registry value-0 rows (host from host_name or host=), skips non-JSON and object-message rows, ignores a forged tail past zot_last_err, and its =1 control selects the healthy rows"
 else
@@ -424,13 +459,18 @@ PY
   && ok "the runbook anchor '#${RB_SLUG}' resolves to a heading in cron-egress-blocked.md" \
   || no "the runbook anchor '#${RB_SLUG:-?}' matches no heading in cron-egress-blocked.md — the alert's link would dangle"
 
+echo "=== ghcr-blocked-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
+
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching GHCR_GUARD_* override pointing at the copy.
-SELF="${BASH_SOURCE[0]}"
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t ghcralert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
-  trap 'rm -rf "$MUT_DIR"' EXIT
   assert_fixture_dir "$MUT_DIR"
 
   # INSTRUMENT CONTROL — the inner run against the PRISTINE tree must exit 0, or every row below
@@ -441,8 +481,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -501,11 +540,19 @@ PY
     esac
   }
 
+  # mutate_green <label> <python-program-on-s> [TF|WF|IV] — a legitimate edit on one fixture that
+  # must stay green on the inner run (the over-breadth controls). Default target is TF, matching
+  # the predicate-layout rows.
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
+    local label="$1" prog="$2" which="${3:-TF}" src copy rc=0
     MUT_ROWS_RUN=$((MUT_ROWS_RUN + 1))
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    case "$which" in
+      TF) src="$TF"; copy="$MUT_DIR/green-betterstack-logs-alerts.tf" ;;
+      WF) src="$WF"; copy="$MUT_DIR/green-apply-web-platform-infra.yml" ;;
+      IV) src="$IV"; copy="$MUT_DIR/green-infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp %s failed\n' "$src" >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -516,7 +563,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    GHCR_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "GHCR_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS edit stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -589,6 +636,29 @@ b = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\
 assert s.count(a) == 1 and s.count(b) == 1
 s = s.replace(a, "").replace(b, "") + "\n" + a + b' \
     "one or both -target= lines are missing"
+  # The MAIN_PLAN slice ends at the plan step's rc= capture: -target lines moved just below it, a
+  # deleted capture, or a renamed capture each re-open the run-past-the-step overshoot (#11899).
+  mutate_red "M4d the -target= lines move just below the plan step's rc= capture (the overshoot shape)" WF \
+    'a = "              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n"
+b = "              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n"
+assert s.count(a) == 1 and s.count(b) == 1
+s = s.replace(a, "").replace(b, "")
+i = s.index("          rc=\x24{PIPESTATUS[0]}\n") + len("          rc=\x24{PIPESTATUS[0]}\n")
+s = s[:i] + a + b + s[i:]' \
+    "one or both -target= lines are missing"
+  mutate_red "M4e the plan step's rc= capture line is deleted (the slice terminator must not go silent)" WF \
+    'old = "          rc=\x24{PIPESTATUS[0]}\n"
+i = s.index(old)
+s = s[:i] + s[i + len(old):]' \
+    "does not end on the rc="
+  mutate_red "M4f the plan step's rc= capture is renamed to plan_rc= (line-start no longer rc=)" WF \
+    'old = "          rc=\x24{PIPESTATUS[0]}\n"
+i = s.index(old)
+s = s[:i] + "          plan_rc=\x24{PIPESTATUS[0]}\n" + s[i + len(old):]' \
+    "does not end on the rc="
+  mutate_green "M4g a second terraform plan block with decoy -target= lines after the real step (the slice grades the first span only)" \
+    's = s + "\n            terraform plan -no-color -input=false \\\n              -target=logtail_exploration.ghcr_hostsfile_deny_lost \\\n              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \\\n              -target=betteruptime_policy.decoy\n"' \
+    WF
   # M5 — a THIRD arm is appended after a compliant pair: a check that stops at the first member passes it.
   mutate_red "M5 a third OR arm matching ghcr_blocked=1 is appended after the compliant pair" TF \
     's = sql_replace(s, "\n      )\n    GROUP BY time", "\n    OR (JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27ci-deploy\x27 AND JSONExtractString(raw, \x27message\x27) = \x27GHCR_DENY ghcr_blocked=1\x27)\n  )\n    GROUP BY time")' \
@@ -811,6 +881,32 @@ s = s.replace(old, old + "        env:\n          GHCR_GUARD_TF: /dev/null\n")' 
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+  # Composed/injected env names — no literal ever reaches the file (#11899 fragment coverage).
+  mutate_red "a MUT_/SKIP-split composed env write inside this suite's job (no literal ever present)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - run: echo \x22MUT_\x22\x22SKIP=1\x22 >> \x22\x24GITHUB_ENV\x22\n" + old)' \
+    "workflow seam"
+  mutate_red "a *_GUARD_* env under a different prefix reaches the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          FOO_GUARD_X: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          BASH_ENV: /tmp/x\n")' \
+    "workflow seam"
+  mutate_red "a \$GITHUB_ENV write inside this suite's own job (the dynamic channel)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - run: echo \x22SENT=1\x22 >> \x22\x24GITHUB_ENV\x22\n" + old)' \
+    "workflow seam"
+  mutate_green "a \$GITHUB_ENV write in a different job (plan:) — the ban is job-scoped" \
+    'i = s.index("          printf \x27AWS_SECRET_ACCESS_KEY=")
+e = s.index("\n", i)
+s = s[:e + 1] + "          printf \x27SENTINEL=1\x27 >> \x22\x24GITHUB_ENV\x22\n" + s[e + 1:]' \
+    IV
 
   # ── Scorer negative control ────────────────────────────────────────────────────────────────────
   mutate_red "scorer control: paused-flip reds a different row than the named fragment" TF \
@@ -845,8 +941,10 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────────
 # Instrument failures exit 2 (the MUT_ROWS_RUN conservation ledger); floor/ledger trips exit 1 —
 # the battery grades an inner rc 1 as a CAUGHT mutation.
-PRESENCE_ROWS=44
-MUT_ROWS=51
+# Floor self-reference (accepted residual, #11899 — CTO ruling: document-and-keep): these constants
+# are written by this same file — decrementing one alongside a row deletion stays green+FIRES; review covers it.
+PRESENCE_ROWS=45
+MUT_ROWS=60
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
