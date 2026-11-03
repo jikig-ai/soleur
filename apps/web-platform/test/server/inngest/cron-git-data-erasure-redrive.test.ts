@@ -557,7 +557,8 @@ describe("age gauge and escalation (owner-gone rows only)", () => {
     expect(e).toHaveLength(1);
     expect(e[0][1]).toMatchObject({ feature: "cron-git-data-erasure-redrive", op: REDRIVE_OP, tags: { escalation: tier } });
     const msg = (e[0][1] as { message: string }).message;
-    expect(msg).toMatch(/no paging rule yet/);
+    expect(msg).toMatch(/git-data-erasure-redrive-escalation/);
+    expect(msg).not.toMatch(/no paging rule yet/);
     expect(msg).toMatch(/confirm git_data_erasure_owner_gone first/);
     expect(msg).not.toMatch(/hard-stop page|\bpage\b(?! rule| ing)/i);
   });
@@ -930,13 +931,16 @@ describe("registration", () => {
     expect(src).not.toMatch(/scope: "account", key: '"cron-platform"'/);
   });
 
-  it("never claims a hard-stop PAGE it does not have", () => {
+  it("names the Sentry alert that routes the escalation, and never claims a hard-stop page of its own", () => {
     const src = readFileSync(
       path.join(__dirname, "../../../server/inngest/functions/cron-git-data-erasure-redrive.ts"),
       "utf8",
     );
     expect(src).not.toMatch(/hard-stop page/i);
-    expect(src).toMatch(/NO PAGING RULE/);
-    expect(src).toContain("#10914");
+    expect(src).not.toMatch(/NO PAGING RULE/);
+    // Positive anchors are asserted on the code with comments removed, so a header comment cannot satisfy them
+    // (the static tier message is what actually reaches Sentry).
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+    expect(code).toContain("routed by the git-data-erasure-redrive-escalation Sentry alert once applied, #10914");
   });
 });

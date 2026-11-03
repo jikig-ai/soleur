@@ -3109,3 +3109,106 @@ resource "sentry_alert" "art17_approval_anonymise_failed" {
     ignore_changes = [environment]
   }
 }
+
+# (#10914, Ref #8211) The git-data erasure re-drive's paging rules. server/inngest/functions/
+# cron-git-data-erasure-redrive.ts (feature=cron-git-data-erasure-redrive, op=git-data-erasure-redrive)
+# raises a Sentry ERROR event when the oldest pending erasure whose owner is GONE reaches 20 days
+# (tag escalation=20d) and another at 28 days (escalation=28d). Without a rule those are issues in the
+# un-routed stream that email nobody, and the privacy policy promises the erasure "will be completed":
+# the Art. 12(3) one-month limit (as short as 28 days) could pass with nobody told. This is that rule.
+# The 28-day event is the LAST warning, not a margin.
+#
+# Filter = feature AND the `escalation` tag, with `in` over the two tiers (the `in` match is comma
+# separated, as in egress_audit_read_failure). It deliberately does NOT match the feature alone: the
+# same feature also emits an info event on each run that claimed a row or found one pending (idle runs
+# emit none), the owner_still_exists / live_owner_aged warns and the heartbeat/claim/resolve error ops, none of which is a deadline. Nothing here reads
+# GIT_DATA_STORE_ENABLED or any environment: if the ledger write is later gated on that flag, rows (and so
+# escalations) simply stop appearing while it is off, and this rule is unchanged. The tags are low-cardinality
+# and carry no workspace id (the handler never tags one).
+#
+# Triggers copy art17_erasure_incomplete (an open issue must not swallow the next escalation): the
+# handler re-emits each tier at most hourly per process, and `frequency_minutes = 360` is the per-issue
+# action interval, so a persisting escalation re-pages at most every 6 h per tier (about 4 emails a day
+# per live issue). Resolve the Sentry issue after the erasure is confirmed, never archive it: an
+# archived issue fires no trigger. 360 is used only by this rule in the root (Sentry dedups identical
+# rules on action shape + frequency; the other values in use are 5,10-44,60-63,120,240,1440-1442, plus 720 for the
+# no-progress rule below).
+#
+# DEAD-OR-FAILING-CRON GAP, stated so nobody reads this rule as covering it: if the cron stops, no escalation
+# event is ever emitted and this rule stays silent; a cron that runs but fails (heartbeat ?status=error, or the
+# stage-failure ERROR events) matches neither new rule either, and only the unrouted monitor issue sees it. The liveness cover is the cron's own Sentry monitor
+# (sentry_cron_monitor.scheduled_git_data_erasure_redrive), which is declared but still in
+# cron_monitor_alert_unrouted: routing it into cron_monitor_failure is PR 2 of the README's two-PR rule
+# (after #10905's apply and the monitor's first measured check-in), tracked on #10914.
+# The tag literals are pinned against the handler by
+# apps/web-platform/test/sentry-git-data-erasure-redrive-alert-op-contract.test.ts.
+resource "sentry_alert" "git_data_erasure_redrive_escalation" {
+  organization      = var.sentry_org
+  name              = "git-data-erasure-redrive-escalation"
+  enabled           = true
+  frequency_minutes = 360
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "cron-git-data-erasure-redrive" } },
+        { tagged_event = { key = "escalation", match = "in", value = "20d,28d" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#10914) Fleet-wide refusal, the early warning ahead of the 20-day escalation above: a run drove rows at
+# the host and the host confirmed none (reason=no_erasure_progress, a WARNING-level event with the status
+# counts in `extra.byStatus`). It is a separate rule so it can be disabled on its own: it also fires during
+# a deliberate freeze / rotate window (the runbook says a refusal inside the window simply waits), where the
+# right move is to leave it open and resolve it after the unfreeze. Same trigger set and email as the rule
+# above; a quieter `frequency_minutes = 720` (at most 2 emails a day per issue) because it is a lead
+# indicator, not the deadline. 720 is used only by this rule in the root.
+resource "sentry_alert" "git_data_erasure_redrive_no_progress" {
+  organization      = var.sentry_org
+  name              = "git-data-erasure-redrive-no-progress"
+  enabled           = true
+  frequency_minutes = 720
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "cron-git-data-erasure-redrive" } },
+        { tagged_event = { key = "reason", match = "eq", value = "no_erasure_progress" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
