@@ -684,4 +684,4 @@ check "ordering: an exists row whose gap was re-scanned aborts report-stale (not
 
 # ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
 check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 280
+finish 315

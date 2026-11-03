@@ -363,8 +363,8 @@
 10	plugins/soleur/skills/launch-check/test/baseline.test.sh
 27	plugins/soleur/skills/launch-check/test/gh-stub.sh
 2	plugins/soleur/skills/launch-check/test/identity.test.sh
-18	plugins/soleur/skills/launch-check/test/issues-common.sh
-49	plugins/soleur/skills/launch-check/test/issues-guards.test.sh
+19	plugins/soleur/skills/launch-check/test/issues-common.sh
+50	plugins/soleur/skills/launch-check/test/issues-guards.test.sh
 16	plugins/soleur/skills/launch-check/test/issues-resume.test.sh
 3	plugins/soleur/skills/launch-check/test/lib.sh
 12	plugins/soleur/skills/launch-check/test/redact-gate.test.sh

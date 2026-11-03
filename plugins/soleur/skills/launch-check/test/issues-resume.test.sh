@@ -345,4 +345,4 @@ LCS="$SB0"
 
 # ---------------------------------------------------------------- 9. the exit-code table: every fail_loud reason this half owns was exercised by a row above
 check "every fail_loud abort reason owned by this half (resume and epic) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in confirm-public-required epic-closed epic-ambiguous issue-ambiguous issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 143
+finish 184
