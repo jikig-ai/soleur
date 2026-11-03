@@ -249,18 +249,24 @@ amendment holds for both functions: membership check first, jti denylist second,
   Bounded above by `now()`; the `last_seen` predicate decides inclusion. The 15-minute `bucket_start` slack stays a scan aid, so a
   bucket that began before the window start but whose `last_seen` falls inside it is counted whole: the view says "about the last N".
 - **Retention is unchanged.** A shorter window is a narrower read of the same stored rows; the purge still keys on `last_seen` at 30 days.
-- **Why a distinct name and not a 4-argument overload.** The RLS fuzz coverage gates (AC7 and AC8) and the ADR-112 static allowlist
-  key on the bare function name and assert that no authenticated-executable definer function is overloaded; a distinct name avoids
-  rewriting a security-gate harness and any named-argument ambiguity in PostgREST.
+- **Why a distinct name and not a 4-argument overload.** The runtime RLS fuzz coverage gates assert that no authenticated-executable
+  definer function is overloaded (AC7 over the classified function names; AC8 classifies by the `proname(args)` composite); ADR-112's
+  static allowlist tier accepts an overload name collision as a residual and does not assert it. A distinct name avoids rewriting a
+  security-gate harness and any named-argument ambiguity in PostgREST.
 - **Why the body is duplicated and the 177 function is not turned into a wrapper.** Migration 177 is immutable and the previous image
   calls it. Drift between the two bodies is capped by a text-parity guard in the default suite
   (`test/supabase-migrations/183-egress-audit-window-summary.test.ts`, which names the only permitted differences) and a live parity
   check in the gated RLS fuzz suite.
 - **Retirement path.** The card's "requests in the last 24 hours" count is a later PR on #11238. That PR must either move the card to the
-  183 function and retire the 177 function in the same change (deleting the parity guard, the 177 verify rows' successor and the
-  loader's three-argument pin), or add a separate count-only function. It must NOT add a third copy of the body: if a third reader is
-  ever needed, extract the shared aggregation into a non-granted `STABLE` helper first. That PR also flips AC8's expectations and the
-  loader test that pins the card probe's argument object. This paragraph is the record; no separate issue.
+  183 function or add a separate count-only function. Retiring the 177 function is TWO steps, never one change: migrations run before
+  the app image, so a migration that drops it while the previous image's card still calls it would fault the card hint for the whole
+  rollout. First ship an image whose card no longer calls 177; only a later migration (a new `DROP FUNCTION`, never an edit of 177)
+  drops it, together with `supabase/verify/177_egress_audit_summary_rpc.sql`, the runbook's 177 lost-grant query, the 183 text-parity test
+  and the loader test that pins the card probe's argument object (and AC8's expectations). It must NOT add a third copy of the body: if
+  a third reader is ever needed, extract the shared aggregation into a non-granted `STABLE` helper first. A default-suite test in
+  `test/supabase-migrations/183-egress-audit-window-summary.test.ts` pins the set of member-readable readers of the rollup table to
+  exactly migrations 177 and 183, so a third reader fails there until this paragraph is revisited. This paragraph is the record; no
+  separate issue.
 - **Skew.** Migration 183 is applied before the app image that calls it. Until PostgREST reloads its schema cache a page load can fault
   with `PGRST202` (a paged `rpc_error`); the card keeps working because it uses the 177 function.
 

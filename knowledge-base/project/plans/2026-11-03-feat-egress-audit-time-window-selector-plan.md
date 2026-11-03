@@ -261,7 +261,7 @@ then `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role;`, `GRANT EX
 
 `183_egress_audit_window_summary.down.sql`: `DROP FUNCTION IF EXISTS public.get_egress_audit_window_summary(uuid, integer, text, text);` only.
 
-`verify/183_egress_audit_window_summary.sql`: the ten function rows of `verify/177` for the new signature, with check names distinct from 177's (`egress_window_summary_*`) (definer, stable, search_path pinned incl. pg_temp, `plan_cache_mode=force_custom_plan`, body contains `is_jti_denied_from_jwt()`, anon / service_role / PUBLIC revoked, `authenticated` granted, grantee set is only `authenticated` plus owner). Existence of the new function is asserted with `to_regprocedure(...)` (a `::regprocedure` cast would raise instead of returning `bad = 1`). The 177 function's continued existence is already asserted by `verify/177`; the two table-level `egress_rollup_*` rows stay there too. Each row is a `pg_proc` / `has_function_privilege` predicate on the exact `regprocedure`, not just a check name (the 177 test already enforces predicate content; extend the same test pattern).
+`verify/183_egress_audit_window_summary.sql`: the ten function rows of `verify/177` for the new signature plus a window row (`egress_window_summary_validates_window`: the live body carries the window check), eleven in all, with check names distinct from 177's (`egress_window_summary_*`) (definer, stable, search_path pinned incl. pg_temp, `plan_cache_mode=force_custom_plan`, body contains `is_jti_denied_from_jwt()`, anon / service_role / PUBLIC revoked, `authenticated` granted, grantee set is only `authenticated` plus owner). Existence of the new function is asserted with `to_regprocedure(...)` (a `::regprocedure` cast would raise instead of returning `bad = 1`). The 177 function's continued existence is already asserted by `verify/177`; the two table-level `egress_rollup_*` rows stay there too. Each row is a `pg_proc` / `has_function_privilege` predicate on the exact `regprocedure`, not just a check name (the 177 test already enforces predicate content; extend the same test pattern).
 
 The header repeats the 177 `-- LAWFUL_BASIS: legitimate interests (Art. 6(1)(f))` line verbatim and adds that a shorter window is a narrower read of the same stored aggregates (gdpr-gate plan-time pass: one Suggestion, `GDPR-Art-6`, folded in here; no Critical or Important finding; no column, table, foreign key, vendor or retention change).
 
@@ -436,16 +436,16 @@ error_reporting:
 failure_modes:
   - mode: new function missing or not in PostgREST's schema cache (migration not applied yet, or cache reload lagging)
     detection: rpc_error event with pg_code=PGRST202 on the page path while the card (177 function) keeps working
-    alert_route: existing paged rpc_error rule
+    alert_route: existing paged rpc_error rule (observability layer 2, the pino-to-Sentry mirror via reportSilentFallback; Sentry issue-alert egress-audit-read-failure)
   - mode: window rejected by the function (22023) - only reachable if the allowlist in TypeScript and SQL drift
     detection: rpc_error with pg_code=22023; the loader test pins the three values, the 183 test pins the CASE map
-    alert_route: existing paged rpc_error rule
+    alert_route: existing paged rpc_error rule (observability layer 2, the pino-to-Sentry mirror via reportSilentFallback; Sentry issue-alert egress-audit-read-failure)
   - mode: lost EXECUTE grant on the new function
     detection: rpc_error with pg_code=42501 and a message without the egress audit prefix (not treated as forbidden); verify/183 fails the deploy first
-    alert_route: existing paged rpc_error rule; runbook query for the new signature
+    alert_route: existing paged rpc_error rule (observability layer 2, the pino-to-Sentry mirror via reportSilentFallback; Sentry issue-alert egress-audit-read-failure); runbook query for the new signature
   - mode: slow or timing-out aggregate on a large workspace
     detection: rpc_timeout (8 s page bound); shorter windows read fewer rows than 30 days
-    alert_route: existing paged rpc_timeout rule
+    alert_route: existing paged rpc_timeout rule (observability layer 2, the pino-to-Sentry mirror via reportSilentFallback; Sentry issue-alert egress-audit-read-failure)
 logs:
   where: Sentry (events above); Postgres function has no logging
   retention: Sentry project retention
@@ -532,3 +532,11 @@ in_transit:
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6.** It is filled here (threshold `single-user incident`).
 - **Never run migrations, `psql` or the live fuzz suites against production.** Local database only; the release `migrate` job applies 183 on merge.
 - **Re-verify the migration ordinal at ship**, after every sync with `origin/main`; if 183 is taken, renumber the three SQL files, the test file name, the references in the ADR amendment and this plan's artifacts (`grep -rn '183' knowledge-base/project/{plans,specs}/feat-one-shot-11238-egress-audit-time-window/`).
+
+## Review residuals accepted (2026-11-03, review pass on #11238)
+
+- **Router Cache.** `next.config.ts` sets `staleTimes.dynamic: 30`, so each of the three `?window=` URLs is its own client Router Cache entry and a revisit inside 30 s can show a list up to 30 s old, including for a member removed in that interval. This is the existing ADR-067 invariant for every dynamic settings page, the view is dark, and `force-dynamic` plus `no-store` cover document navigations only. Accepted; not a new exposure class.
+- **Future-dated buckets are excluded.** `last_seen <= now()` (copied from 177) drops rows whose `last_seen` is ahead of the database clock, so an ingest clock running ahead undercounts the freshest rows. This falls under the existing "counts are minimums" copy.
+- **Schema-cache reload.** Migration 183 contains no `NOTIFY pgrst`; `run-migrations.sh` requests a PostgREST schema-cache reload after each run (best-effort). Until it lands, the page shows the paged `rpc_error` with `pg_code=PGRST202` and the card keeps working (runbook step 5).
+- **"Blocked" is a recorded outcome, not a protection claim.** The label is the stored `denied` value renamed. Before flag-on, confirm with the operator's legal sign-off that `denied` means the proxy refused the request; this PR makes no protection claim and the plan's copy bans stay in force.
+- **Not adopted.** The screen-reader summary line stays window-free: it is a CLO-reviewed string and the selected chip and subtitle name the window. A live-state parity check (a later migration redefining either function) is outside the default suite; migration immutability and the reader-set test cover the file-level cases.
