@@ -409,8 +409,10 @@ export async function provisionGitDataRepo(
  * with its own key — a THIRD authority distinct from provision/transport, so a
  * transport-key compromise cannot delete repos. The wrapper reads `workspaceId`
  * from `SSH_ORIGINAL_COMMAND` (one opaque argv element) and canonicalizes it
- * host-side (CWE-22). NO-OP when the store is disabled — at flag-off there is no
- * git-data repo to erase (the working tree is purged by `deleteWorkspace`).
+ * host-side (CWE-22). Gated on arming, NOT on the live store flag: a bare repo provisioned
+ * during a flag-on window persists after a rollback, so an armed env attempts the erase even
+ * at flag-off. With no REMOVE key and nothing armed the result is `skipped` (no ssh); the
+ * working tree is purged separately by `deleteWorkspace`.
  *
  * Called from the account/workspace deletion path (best-effort, mirroring the
  * chat-attachments purge) so the shared-store copy is erased alongside the

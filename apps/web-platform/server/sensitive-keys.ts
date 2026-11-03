@@ -95,6 +95,10 @@ export const SENSITIVE_KEY_NAMES = [
   "email",
   "inviteeEmail",
   "recipient",
+  // Bulk user/workspace id list (#8211 PR-B2): the manual git-data erasure seed carries up to 500 raw
+  // account UUIDs in `data.ids`, and the Inngest sentry-correlation middleware ships the whole
+  // event_data to every Sentry event of the run. Redact the list (and any pino `ids` / `*.ids` field).
+  "ids",
   // HTTP transport
   "cookie",
   "x-nonce",
