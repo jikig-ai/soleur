@@ -28,6 +28,13 @@ absent() { ! grep -qF -- "$2" <<<"$1"; }
 clean() { ! leaks "$1"; }
 nlines() { printf '%s\n' "$1" | wc -l; }
 
+# Controls for the helpers that OWN a verdict (a positive control on pass()/fail() cannot see these): each must be able to say
+# NO. They report with printf+exit directly, never through the helpers under test, and are not counted as assertions.
+_c_ok="$(check "ctl-ok" 0)"; _c_bad="$(check "ctl-bad" 1)"
+if [ "$_c_ok" != "[ok] ctl-ok" ] || [ "$_c_bad" != "[FAIL] ctl-bad" ]; then printf 'FATAL: check() cannot tell pass from fail\n' >&2; exit 1; fi
+if absent "xAy" "A" || ! absent "xBy" "A" || clean "[id=$K22]" || ! clean "plain text"; then printf 'FATAL: absent()/clean() control failed\n' >&2; exit 1; fi
+
+
 # --- Refreshing / Creation / Modification / Destruction / Read lines -------------------------------------
 LINES="random_id.inngest_signing_key_dedicated: Refreshing state... [id=$K22]
 random_id.inngest_event_key_dedicated: Refreshing state... [id=$K43]
@@ -188,8 +195,9 @@ shape_row() {
   contains "$out" '        id        = "12345"'; check "$label: the next resource's id line is NOT redacted (block ends at its closer)" "$?"
   contains "$out" 'Plan: 1 to add, 1 to change, 1 to destroy.'; check "$label: Plan summary kept" "$?"
   [ "$(nlines "$out")" = "$(nlines "$raw")" ]; check "$label: line count preserved" "$?"
-  # ONE anchored verdict per shape: a consumer that greps `^[ok] .*<label>` can no longer be satisfied by a shape whose
-  # redaction rows failed (the old lib still prints six [ok] lines for every new label).
+  # ONE verdict per shape. A consumer must grep `^\[ok\] <label>: verdict` (anchored at the line start AND on the verdict
+  # text): a bare `^\[ok\] .*<label>` is satisfied by any [ok] row of the shape (the old lib still prints six per label), and
+  # `destroyed` is a suffix of `deposed-will-be-destroyed`.
   [ "$FAILS" = "$fails_before" ]; check "$label: verdict - every row of this shape passed" "$?"
 }
 
@@ -267,7 +275,7 @@ for t in id password string uuid bytes; do
     vo="SynthOld_${a}_$(printf '0%.0s' {1..50})"; vn="SynthNew_${a}_$(printf '1%.0s' {1..50})"
     raw="$(printf '  # random_%s.m will be updated in-place\n  ~ resource "random_%s" "m" {\n      ~ %-10s = "%s" -> "%s"\n        byte_length = 16\n    }\n\n  # hcloud_volume.v will be updated in-place\n  ~ resource "hcloud_volume" "v" {\n        id        = "12345"\n    }\n' "$t" "$t" "$a" "$vo" "$vn")"
     out="$(tf_redact_random_ids <<<"$raw")"
-    contains "$raw" "$vo"; check "member-$t-$a: raw block carries the value (live positive control)" "$?"
+    contains "$raw" "$vo" && contains "$raw" "$vn"; check "member-$t-$a: raw block carries both values (live positive control)" "$?"
     absent "$out" "$vo" && absent "$out" "$vn"; check "member-$t-$a: old and new value redacted" "$?"
     contains "$out" '        id        = "12345"' && contains "$out" 'byte_length = 16'; check "member-$t-$a: block ends at its closer, non-secret attribute kept" "$?"
   done
@@ -308,6 +316,22 @@ SHOWOUT="$(tf_redact_random_ids <<<"$SHOWIN")"
 leaks "$SHOWIN"; check "show-shape: detector flags the raw block (live positive control)" "$?"
 clean "$SHOWOUT" && absent "$SHOWOUT" "$OLD_HEX"; check "show-shape: bare '# random_id.k:' block is redacted" "$?"
 contains "$SHOWOUT" '    id          = "12345"'; check "show-shape: the next resource's id line is NOT redacted" "$?"
+SHOWNEST="# random_string.s:
+resource \"random_string\" \"s\" {
+    id          = \"$K22\"
+    keepers     = {
+        \"rot\" = \"a\"
+    }
+    result      = \"SynthShowResult_$(printf '2%.0s' {1..40})\"
+}
+# hcloud_volume.v:
+resource \"hcloud_volume\" \"v\" {
+    id          = \"12345\"
+}"
+SNOUT="$(tf_redact_random_ids <<<"$SHOWNEST")"
+contains "$SHOWNEST" 'SynthShowResult_' && contains "$SHOWNEST" "$K22"; check "show-shape nested map: raw block carries the values (live positive control)" "$?"
+absent "$SNOUT" 'SynthShowResult_' && absent "$SNOUT" "$K22"; check "show-shape nested map: id AND result AFTER a 4-space keepers closer are redacted (column-0 closer only)" "$?"
+contains "$SNOUT" '"rot" = "a"' && contains "$SNOUT" '    id          = "12345"'; check "show-shape nested map: keepers entry and the next resource's id are kept" "$?"
 BARE="$(printf '  # random_id.k\n  ~ resource "random_id" "k" {\n      ~ hex = "%s" -> "%s"\n    }\n' "$OLD_HEX" "$NEW_HEX" | tf_redact_random_ids)"
 absent "$BARE" "$OLD_HEX" && absent "$BARE" "$NEW_HEX"; check "bare-address header (nothing after the address) is redacted" "$?"
 
@@ -318,15 +342,23 @@ LB="  # hcloud_server.my_random_id.x will be replaced
     }"
 [ "$(tf_redact_random_ids <<<"$LB")" = "$LB" ]; check "left boundary: '# ..my_random_id.x ...' does not open a block (byte-identical)" "$?"
 
-# A Refreshing/Creating LINE naming the address (no leading `# `) opens no plan block: the per-line rule redacts its [id=] and the
-# next resource's id attribute stays readable.
-RF="random_id.k: Refreshing state... [id=$K22]
+# A Destroying/Refreshing LINE naming the address (no leading `# `) opens no plan block: the per-line rule redacts its [id=] and the
+# next resource's id attribute stays readable. The deposed-object line has a SPACE after the address, i.e. the one non-comment
+# shape the address part of the start regex alone would accept.
+RF="random_id.k (deposed object abc12345): Destroying... [id=$K22]
   # hcloud_server.web will be updated in-place
   ~ resource \"hcloud_server\" \"web\" {
       ~ id          = \"12345\" -> \"67890\"
     }"
 RFOUT="$(tf_redact_random_ids <<<"$RF")"
 absent "$RFOUT" "$K22" && contains "$RFOUT" '~ id          = "12345" -> "67890"'; check "comment anchor: a non-comment line naming the address opens no block (next id readable)" "$?"
+
+# The show-shape start is anchored `:$`: a comment that merely has text after `addr:` is no show header (byte-identical).
+NS="# random_id.k: this is prose, not a show header
+resource \"hcloud_volume\" \"v\" {
+    id          = \"12345\"
+}"
+[ "$(tf_redact_random_ids <<<"$NS")" = "$NS" ]; check "show start is anchored: '# addr: prose' opens no block (byte-identical)" "$?"
 
 # Real replace shape: the new side is `(known after apply)`, unquoted.
 KA="$(printf '  # random_id.k is tainted, so must be replaced\n-/+ resource "random_id" "k" {\n      ~ b64_std     = "%s" -> (known after apply)\n    }\n' "$K22" | tf_redact_random_ids)"
@@ -348,7 +380,7 @@ contains "$UT2OUT" '~ id          = "<redacted>" -> "<redacted>"'; check "stuck-
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
 # Gate. Conservation first, WITHOUT routing through pass()/fail() (neutering either must not disarm it): every check()
 # lands in exactly one bucket. MIN_ASSERTIONS is a FLOOR (never -eq), raised deliberately with the suite.
-MIN_ASSERTIONS=313
+MIN_ASSERTIONS=317
 if [ "$((PASSES + FAILS))" -ne "$CHECKS" ]; then printf 'FATAL: assertion conservation broken: passes+fails=%s checks=%s\n' "$((PASSES + FAILS))" "$CHECKS" >&2; exit 1; fi
 if [ "$CHECKS" -lt "$MIN_ASSERTIONS" ]; then printf 'FATAL: only %s assertions ran, floor is %s\n' "$CHECKS" "$MIN_ASSERTIONS" >&2; exit 1; fi
 [ "$FAILS" -eq 0 ] || exit 1
