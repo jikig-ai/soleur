@@ -1208,8 +1208,11 @@ printf 'source lib/chain-leaf.sh\n' > "$FXS/lib/chain-mid.sh"
 printf 'echo guarded\n' > "$FXS/cases/chain.test.sh"
 # (e) absent SUT — no candidate mints an edge, so nothing seeds: a no-op, never an error
 printf 'echo plain\n' > "$FXS/cases/ghost.test.sh"
-# the learning's exact composition: a walked SUT whose source line carries the redirect idiom
-printf 'libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)"\nsource "$libdir/x-lib.sh"\n' > "$FXS/cases/endtoend.sh"
+# the learning's exact composition: a walked SUT whose source line carries the redirect idiom —
+# the assignment carries the real file's `|| libdir=""` fallback tail verbatim (the greedy var-map
+# capture holds it, so the resolved operand arrives as `$(cd …)" || libdir="/x`), and the SUT
+# sources through it twice like the probe does
+printf 'libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)" || libdir=""\nsource "$libdir/x-lib.sh"\nsource "$libdir/p1.sh"\n' > "$FXS/cases/endtoend.sh"
 printf 'echo guarded\n' > "$FXS/cases/endtoend.test.sh"
 # (b) the `$(cd "<dir>" <redirect> && pwd[ -P])` spelling matrix — every tolerated spelling resolves
 # to the cd target (here the fixture root, two levels up), so $REPO_ROOT/lib/x-lib.sh is an edge.
@@ -1319,14 +1322,16 @@ else
   fail "SUT-cd unresolvable: edges '${_cdx:0:160}' (want ^app/deep/helper.sh and no ^app/helper.sh)"
 fi
 
-# the learning's exact composition — a walked SUT whose source line carries the redirect idiom
-# mints the lib edge only with BOTH fixes (walk AND redirect tolerance)
+# the learning's exact composition — a walked SUT whose `X="$(cd …)" || X=""` fallback assignment
+# sources through the redirect idiom mints BOTH file edges only with all three fixes (walk,
+# redirect tolerance, and the `" || X="` residue strip). Pre-strip the resolved operand
+# `$(cd …)" || libdir="/x` collapsed to the dir and the row read `^lib/` alone.
 cases=$((cases + 1))
 _sut7="$(sut_edges 'bash cases/endtoend.test.sh')"
-if [[ " $_sut7 " == *" ^lib/x-lib.sh "* && " $_sut7 " == *" ^cases/endtoend.sh "* ]]; then
-  pass "SUT7: the learning's case — SUT walked AND its source \"\$(cd … 2>/dev/null && pwd)\" line resolved (^lib/x-lib.sh)"
+if [[ " $_sut7 " == *" ^lib/x-lib.sh "* && " $_sut7 " == *" ^lib/p1.sh "* && " $_sut7 " == *" ^cases/endtoend.sh "* ]]; then
+  pass "SUT7: the learning's case — SUT walked AND its \"\$(cd … 2>/dev/null && pwd)\" ||-fallback sources resolved (^lib/x-lib.sh + ^lib/p1.sh)"
 else
-  fail "SUT7: edges '${_sut7:0:200}' (want ^cases/endtoend.sh + ^lib/x-lib.sh)"
+  fail "SUT7: edges '${_sut7:0:200}' (want ^cases/endtoend.sh + ^lib/x-lib.sh + ^lib/p1.sh)"
 fi
 
 # ---- Guard-1 mutation battery — one rewritten site per arm, driven through DERIVE_BLOCK --------

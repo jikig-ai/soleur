@@ -38,7 +38,9 @@ Do not spend time hunting for a derivation fix per-suite; declare
 `AFFECTED_<LABEL>_PATHS` with the real dep set and record *why* the derive
 missed in the array comment. The extractor-level fixes (walk stem-minted SUTs,
 tolerate `$(cd … 2>/dev/null && pwd)` prefixes or a `$libdir` map) would retire
-this declaration class — tracked as out-of-scope follow-up, not a per-pair fix.
+this declaration class — implemented 2026-11-03 in the feat-one-shot-11775-10865-extractor-batch
+PR (BFS frontier seeds stem-minted SUTs; the D1 `$(cd)` arm tolerates redirects
+before `&& pwd`).
 
 ## Evidence
 

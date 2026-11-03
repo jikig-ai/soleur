@@ -12,8 +12,6 @@
 .claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/test/fixtures/operator-ack-arms.tsv
 .claude/hooks/rule-incident-marker-capture.test.sh	scripts/migrated-rule-ids.txt
 .claude/hooks/rule-incident-marker-capture.test.sh	scripts/rule-metrics-aggregate.sh
-.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/devin-dispositions.tsv
-.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/pre-merge-rebase.sh
 .claude/hooks/ship-kb-archive-gate.test.sh	.claude/settings.json
 .claude/hooks/ship-kb-archive-gate.test.sh	.devin/config.json
 .claude/hooks/ship-unpushed-commits-gate.test.sh	.claude/settings.json
@@ -128,7 +126,6 @@ plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scr
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/references/check-13-founder-check.md
-plugins/soleur/test/regenerate-shard-manifest.test.sh	scripts/suite-durations.tsv
 plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh
 plugins/soleur/test/required-checks-canonical-parity.test.sh	.github/workflows/ci.yml
 plugins/soleur/test/required-checks-canonical-parity.test.sh	.github/workflows/main-health-monitor.yml
@@ -187,7 +184,6 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	.github/workflows/ci.yml
 scripts/followthroughs/ci-push-dedupe-soak-9512	.github/workflows/web-platform-release.yml
 scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
 scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh
-scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/uptime-alerts.tf

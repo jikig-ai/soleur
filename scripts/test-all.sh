@@ -3501,6 +3501,13 @@ _affected_edge_token() {
   # would cut it to `$(dirname` — which is how these tokens arrive.
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `X="$(cmd)" || X=""` fallback assignments: the var map's greedy quoted capture carries the
+  # ` || X="` tail into the value, so a resolved operand arrives as `<val>" || <name>="<rest>`
+  # (the probe idiom `libdir="$(cd …)" || libdir=""` in the stem-minted SUT learning). Remove the
+  # residue before any arm runs — the quote-strip below would otherwise cut the token at that `"`
+  # and drop `<rest>` (widen-only: `" || <name>="` is never a path byte, and a token whose residue
+  # was already absent is untouched).
+  _p="${_p//\" || [A-Za-z_]*=\"/}"
   # `$(cd "<dir>[/..]" && pwd[ -P])` resolves to its cd TARGET, normalised (D1, #9307): the dirname
   # substitutions above have already turned `<dir>` into the file's own directory, so
   # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
