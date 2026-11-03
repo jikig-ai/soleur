@@ -1,0 +1,12 @@
+{"manifest_yyyy_mm":"2026-11","schema_version":"1.0"}
+{"key":"allowlist/claude-bot/2026-q2.json","etag":"\"ab39ae7c19b494a6f131348b720572f0\"","size":221,"last_modified":"2026-05-18T09:37:23.574000+00:00"}
+{"key":"allowlist/dependabot-bot/2026-q2.json","etag":"\"ef7983b12e638221d872e28ed26a8691\"","size":228,"last_modified":"2026-05-19T08:09:14.712000+00:00"}
+{"key":"allowlist/dependabot-bot/2026-q3.json","etag":"\"4bf76711e1f3c8046709521785c2e067\"","size":228,"last_modified":"2026-07-21T10:54:58.591000+00:00"}
+{"key":"allowlist/dependabot-bot/2026-q4.json","etag":"\"818acda403e606061c609bdc64724373\"","size":228,"last_modified":"2026-10-01T05:26:36.574000+00:00"}
+{"key":"allowlist/deruelle/2026-q2.json","etag":"\"7bdcc094ec8fffa46716ced83ba3f37b\"","size":212,"last_modified":"2026-05-18T09:25:54.433000+00:00"}
+{"key":"allowlist/deruelle/2026-q3.json","etag":"\"287c892d791427e6a7c8d1988603641a\"","size":212,"last_modified":"2026-07-01T00:04:05.526000+00:00"}
+{"key":"allowlist/deruelle/2026-q4.json","etag":"\"aaa02a0a4d2a21d65fee2dc0179b9c48\"","size":212,"last_modified":"2026-10-01T00:10:10.709000+00:00"}
+{"key":"allowlist/soleur-ai-bot/2026-q2.json","etag":"\"f7b83a9bc3663f712c5fb910aad40c91\"","size":227,"last_modified":"2026-06-21T06:08:01.412000+00:00"}
+{"key":"allowlist/soleur-ai-bot/2026-q3.json","etag":"\"1042ca262994ce1b30a63c8a0ff2385c\"","size":227,"last_modified":"2026-07-06T09:09:50.234000+00:00"}
+{"key":"allowlist/soleur-ai-bot/2026-q4.json","etag":"\"25f53d63e07bcaa0cee859252996dd7e\"","size":227,"last_modified":"2026-10-01T06:19:17.664000+00:00"}
+{"key":"allowlist/soleur-infra-bot/2026-q4.json","etag":"\"0f89535cf397bdf3e7dea571aaa70178\"","size":233,"last_modified":"2026-10-07T13:26:43.563000+00:00"}
