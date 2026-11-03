@@ -195,7 +195,7 @@ model {
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
-        description "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+        description "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
@@ -282,6 +282,10 @@ model {
       verificationscaffold = component "verification-scaffold skill" {
         technology "Guardrail Corpus Generator"
         description "Generates the generic guardrail set (secret-scan, commit-on-main, block-stash, orphan-test) into a user repo's .claude/hooks + settings.json and repo-root .github/workflows/verification-gates.yml, advisory-first (ADR-295)"
+      }
+      launchcheck = component "launch-check skill" {
+        technology "Readiness Gap Analyzer"
+        description "Read-only analysis of a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. Writes only that report, through one redaction-checked chokepoint; no network, no telemetry (ADR-314)"
       }
       // #7980 / ADR-213 — the browser-snapshot credential guard, modelled as ONE component
       // because its code artifacts share ONE predicate (redact-a11y-snapshot.py's

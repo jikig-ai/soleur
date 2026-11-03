@@ -777,7 +777,7 @@
 },
 "technology": "Markdown SKILL.md",
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "title": "Skills",
 "kind": "container",
@@ -1042,6 +1042,19 @@
 "title": "verification-scaffold skill",
 "kind": "component",
 "id": "platform.plugin.verificationscaffold"
+},
+"platform.plugin.launchcheck": {
+"notation": "Component",
+"style": {
+"shape": "component"
+},
+"technology": "Readiness Gap Analyzer",
+"description": {
+"txt": "Read-only analysis of a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. Writes only that report, through one redaction-checked chokepoint; no network, no telemetry (ADR-314)"
+},
+"title": "launch-check skill",
+"kind": "component",
+"id": "platform.plugin.launchcheck"
 },
 "platform.plugin.snapshotGuard": {
 "notation": "Component",
@@ -18007,7 +18020,7 @@
 "size": "md"
 },
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "tags": [],
 "notation": "Container",
