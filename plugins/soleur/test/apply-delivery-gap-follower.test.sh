@@ -1233,7 +1233,11 @@ for nm, doc_ in (("deploy-fix", d), ("infra", i)):
     chk("watched %s is triggered only by push/workflow_dispatch (no fork-controlled trigger can fire the follower)" % nm, set(onk) <= {"push", "workflow_dispatch"})
 chk("permissions exactly {contents: read, actions: read, issues: write}", doc.get("permissions") == {"contents": "read", "actions": "read", "issues": "write"})
 jobs = doc.get("jobs", {})
-chk("no job-level permissions block", all("permissions" not in j for j in jobs.values()) and len(jobs) >= 1)
+follow = jobs.get("follow", {})
+redrive = jobs.get("redrive", {})
+chk("follow holds no job-level permissions (detection stays read-only)", "permissions" not in follow)
+chk("redrive permissions are exactly {actions: write} (the only write grant, scoped to actuation)", redrive.get("permissions") == {"actions": "write"})
+chk("no other job carries a permissions block", all("permissions" not in j for k, j in jobs.items() if k != "redrive"))
 def group(x): return (x.get("concurrency") or {}).get("group")
 conc = doc.get("concurrency") or {}
 chk("concurrency group differs from the apply group", conc.get("group") not in (None, group(d), group(i)))
@@ -1241,7 +1245,7 @@ chk("cancel-in-progress is false", conc.get("cancel-in-progress") is False)
 chk("every watched file exists and shares one group", group(d) == group(i) and group(d))
 for lit, who, t in (("(^|$'\\n')\\[skip-deploy-fix-apply\\]($|$'\\n')", "deploy-fix", dtext), ("(^|$'\\n')\\[skip-web-platform-apply\\]($|$'\\n')", "infra", itext)):
     chk("kill-switch literal for %s appears in the script and in the apply workflow's preflight" % who, lit in stext and lit in t)
-for word in ("secrets.", "environment:", "terraform", "workflow_dispatch", "gh workflow run", "/dispatches"):
+for word in ("secrets.", "environment:", "terraform", "workflow_dispatch", "/dispatches"):
     chk("raw text lacks '%s' (the follower is detection only; write it as 'the apply group', never by its literal)" % word, word not in text)
 ev = re.findall(r"github\.event\.[A-Za-z_.]+", text)
 chk("the only github.event.* text is the TRIGGER_RUN_ID env value", ev == ["github.event.workflow_run.id"])
@@ -1252,19 +1256,27 @@ chk("anti-vacuity: at least 2 parsed steps", len(steps) >= 2)
 chk("checkout has no ref:", all("ref" not in (s.get("with") or {}) for s in steps if "checkout" in str(s.get("uses", ""))))
 chk("checkout is sparse and credential-free", any((s.get("with") or {}).get("persist-credentials") is False and "apply-delivery-gap.sh" in str((s.get("with") or {}).get("sparse-checkout", "")) for s in steps))
 runs = [s.get("run") for s in steps if s.get("run")]
-chk("the run: line is exactly bash scripts/apply-delivery-gap.sh", runs == ["bash scripts/apply-delivery-gap.sh"])
+chk("run: lines are exactly the reconcile plus one redrive dispatch", runs == ["bash scripts/apply-delivery-gap.sh", 'gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason="apply-delivery-gap redrive follower-run ${{ github.run_id }}"'])
 chk("job timeout-minutes is set", all("timeout-minutes" in j for j in jobs.values()))
 chk("no step env reads a secret", "secrets" not in str([s.get("env") for s in steps]))
 # ---- exact shape of the parsed workflow (a new key anywhere is a new capability and must be a conscious edit) ----
 top = {("on" if k is True else k) for k in doc}
 chk("top-level keys are exactly name, on, concurrency, permissions, jobs (no workflow-level env, defaults or run-name)", top == {"name", "on", "concurrency", "permissions", "jobs"})
-chk("exactly one job", len(jobs) == 1)
-job = next(iter(jobs.values())) if jobs else {}
-chk("job keys are exactly runs-on, timeout-minutes, steps (no if, needs, environment, container, services, strategy, outputs, defaults, continue-on-error)", set(job) == {"runs-on", "timeout-minutes", "steps"})
-chk("runs-on is exactly ubuntu-24.04", job.get("runs-on") == "ubuntu-24.04")
-chk("timeout-minutes is exactly 10", job.get("timeout-minutes") == 10 and not isinstance(job.get("timeout-minutes"), bool))
-chk("exactly two steps (checkout, reconcile)", len(steps) == 2)
-chk("step key sets are exactly {name, uses, with} and {name, env, run}", [set(x) for x in steps] == [{"name", "uses", "with"}, {"name", "env", "run"}])
+chk("exactly two jobs (follow + redrive)", len(jobs) == 2 and set(jobs) == {"follow", "redrive"})
+chk("follow job keys are exactly runs-on, timeout-minutes, outputs, steps", set(follow) == {"runs-on", "timeout-minutes", "outputs", "steps"})
+chk("redrive job keys are exactly needs, if, runs-on, timeout-minutes, permissions, steps", set(redrive) == {"needs", "if", "runs-on", "timeout-minutes", "permissions", "steps"})
+chk("follow runs-on is exactly ubuntu-24.04", follow.get("runs-on") == "ubuntu-24.04")
+chk("follow timeout-minutes is exactly 10", follow.get("timeout-minutes") == 10 and not isinstance(follow.get("timeout-minutes"), bool))
+chk("follow outputs is exactly the redrive_deploy_fix step output", follow.get("outputs") == {"redrive_deploy_fix": "${{ steps.reconcile.outputs.redrive_deploy_fix }}"})
+chk("redrive needs is exactly follow", redrive.get("needs") == "follow")
+chk("redrive if: is exactly the redrive_deploy_fix == 'true' gate (the single dispatch chokepoint)", redrive.get("if") == "needs.follow.outputs.redrive_deploy_fix == 'true'")
+chk("redrive runs-on is exactly ubuntu-24.04", redrive.get("runs-on") == "ubuntu-24.04")
+chk("redrive timeout-minutes is exactly 5", redrive.get("timeout-minutes") == 5 and not isinstance(redrive.get("timeout-minutes"), bool))
+fsteps = follow.get("steps", [])
+rsteps = redrive.get("steps", [])
+chk("exactly three steps (checkout, reconcile, dispatch)", len(steps) == 3)
+chk("step key sets are exactly {name, uses, with}, {name, id, env, run} and {name, env, run}", [set(x) for x in steps] == [{"name", "uses", "with"}, {"name", "id", "env", "run"}, {"name", "env", "run"}])
+chk("the reconcile step carries id: reconcile (the single output source)", fsteps[1].get("id") == "reconcile" if len(fsteps) > 1 else False)
 def keys_anywhere(o):
     if isinstance(o, dict):
         for k, v in o.items():
@@ -1273,8 +1285,8 @@ def keys_anywhere(o):
     elif isinstance(o, list):
         for v in o:
             yield from keys_anywhere(v)
-banned = {"if", "continue-on-error", "defaults", "environment", "container", "services", "strategy", "needs", "outputs", "secrets"}
-chk("no if:, continue-on-error, defaults, environment, container, services, strategy, needs, outputs or secrets key anywhere", not (banned & set(keys_anywhere(doc))))
+banned = {"continue-on-error", "defaults", "environment", "container", "services", "strategy", "secrets"}
+chk("no continue-on-error, defaults, environment, container, services, strategy or secrets key anywhere (if/needs/outputs are contract-pinned on the two jobs above)", not (banned & set(keys_anywhere(doc))))
 chk("checkout with: keys are exactly persist-credentials, sparse-checkout, sparse-checkout-cone-mode", [set(x.get("with") or {}) for x in steps[:1]] == [{"persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"}])
 run_env = steps[1].get("env") if len(steps) > 1 else None
 chk("the run step env is exactly the four expected names and values", run_env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}", "GITHUB_RUN_ID": "${{ github.run_id }}", "TRIGGER_RUN_ID": "${{ github.event.workflow_run.id }}"})

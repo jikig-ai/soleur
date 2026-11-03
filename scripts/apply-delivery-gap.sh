@@ -96,6 +96,29 @@ ks_deploy_fix() { [[ "${1-}" =~ (^|$'\n')\[skip-deploy-fix-apply\]($|$'\n') ]]; 
 ks_infra() { [[ "${1-}" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; }
 descendant_status() { case "${1-}" in identical|ahead) return 0 ;; *) return 1 ;; esac; }
 class_for_total() { if [[ "${1-}" == "0" ]]; then printf 'evicted-before-start'; else printf 'cancelled-mid-run'; fi; }
+
+# Redrive eligibility (Ref #10033; ADR-318 provisional). Exactly one output the
+# workflow's redrive job consumes: redrive_deploy_fix=true only when deploy-fix
+# gap rows exist, EVERY deploy-fix row is evicted-before-start (zero jobs ran -
+# nothing partial on the lockless backend), and no non-stale deploy-fix run is
+# in flight (its completion re-fires this follower anyway). cancelled-mid-run
+# rows keep the dispatch human-only; the infra key is reserved (always false
+# this slice - deploy-fix only until the arm is observed). Defined before
+# self_test: the --self-test dispatch precedes the count_inflight site.
+emit_redrive_output() {
+  local nb
+  REDRIVE_DEPLOY_FIX=false
+  if [[ -f "$ROWS" ]]; then
+    nb="$(awk -F'\t' '$1=="deploy-fix"{n++} $1=="deploy-fix"&&$4!="evicted-before-start"{b++} END{printf "%d\t%d", n+0, b+0}' "$ROWS")"
+    if [[ "${nb%%$'\t'*}" -gt 0 && "${nb##*$'\t'}" -eq 0 && "${N_INFLIGHT_deploy_fix:-0}" -eq 0 ]]; then
+      REDRIVE_DEPLOY_FIX=true
+    fi
+  fi
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'redrive_deploy_fix=%s\n' "$REDRIVE_DEPLOY_FIX" >>"$GITHUB_OUTPUT"
+    printf 'redrive_infra=false\n' >>"$GITHUB_OUTPUT"
+  fi
+}
 # jobs_have_apply_success [required step name]: stdin is a jobs response. Fail closed: a required step that is absent
 # from steps[] (or whose conclusion is not `success`) means not delivered.
 jobs_have_apply_success() {
@@ -130,6 +153,20 @@ self_test() {
   printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
   j='{"jobs":[{"name":"apply","conclusion":"success"}]}'
   printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
+  # redrive predicate (Ref #10033): deploy-fix rows all evicted-before-start
+  # with zero in-flight -> true; a mid-run row, zero deploy-fix rows, or an
+  # in-flight deploy-fix run -> false.
+  local _rrows; _rrows="$(mktemp)"; ROWS="$_rrows"; GITHUB_OUTPUT=""
+  printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
+  N_INFLIGHT_deploy_fix=0; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == true ]] || bad=1
+  printf 'deploy-fix\t1\tabc1234\tcancelled-mid-run\t5\t-\t-\t100\n' >"$_rrows"
+  emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
+  N_INFLIGHT_deploy_fix=1; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  N_INFLIGHT_deploy_fix=0
+  printf 'infra\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
+  emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  rm -f "$_rrows"
   if [[ "$bad" -ne 0 ]]; then
     printf '::error::apply_delivery_gap_self_test_failed\n'
     exit 1
@@ -534,6 +571,8 @@ reconcile_workflow() { # key file ks-function cap
 }
 
 # non-stale in-flight runs of EITHER workflow (any branch): a completion of one of them re-fires the follower.
+# Per-key counts (N_INFLIGHT_<key with - -> _>) feed the redrive predicate; the
+# total stays the reconcile's deferral signal.
 count_inflight() {
   local row key cap f total=0 n
   for row in "${WATCHED[@]}"; do
@@ -542,6 +581,7 @@ count_inflight() {
     n="$(jq --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" --argjson cutoff "$CUTOFF" "$JQ_LIVE"'
       [ .[] | select(live and .ce >= $cutoff) ] | length' "$f")" || fail_loud malformed_response
     total=$((total + n))
+    declare "N_INFLIGHT_${key//-/_}=$n"
   done
   N_INFLIGHT="$total"
 }
@@ -701,6 +741,7 @@ main() {
   done
   count_inflight
   reconcile_issue
+  emit_redrive_output
   printf '::notice::apply_delivery_gap_summary mode=%s workflows_read=%s candidates=%s rows=%s deferred=%s delivered=%s dropped=%s mid_run=%s inflight=%s issue=%s\n' \
     "$MODE" "$WORKFLOWS_READ" "$N_CAND" "$N_ROWS" "$N_DEFERRED" "$N_DELIVERED" "$N_DROPPED" "$N_MID" "$N_INFLIGHT" "$ISSUE_ACTION"
 }
