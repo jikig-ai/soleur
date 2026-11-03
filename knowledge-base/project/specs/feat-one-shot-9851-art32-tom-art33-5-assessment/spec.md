@@ -68,7 +68,7 @@ The Art. 30 register's Art. 32 list names the ADR-272 credential deny and the ar
 
 May say: reachability on the vendored argv shape; the sandbox mask as intended and canary-observed after deploy; conflicts between measurements, by pointer; no instrument logs a sibling environ read; a zero from any later census reads "not found in retained records", never "none".
 
-Must not say: no exposure; no personal data; not a breach; tenant isolation (outside the existing quoted ceiling); secure; fixed; resolved; closed; anything past-tense about this pull request; any kernel ptrace control for the file-tool tier.
+Must not say: no exposure; no personal data; not a breach; tenant isolation (outside the existing quoted ceiling); secure; fixed; resolved; closed; anything past-tense about this pull request; any kernel-level control for the file-tool tier.
 
 ## Out of scope
 
