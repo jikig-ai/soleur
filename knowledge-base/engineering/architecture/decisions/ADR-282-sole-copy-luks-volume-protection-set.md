@@ -73,6 +73,8 @@ parents, and a pin of the dependency edge by which the volume update reaches the
 `logtail_exploration.inngest_luks_wrong_volume` and the alias local in `betterstack-logs-alerts.tf`). Guard 1 is advisory
 until it is promoted to a required check (#9927).
 
+> **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** Guard 1 is registered in `scripts/test-all.sh` and runs in the required `test` check through `test-scripts`; see the addendum of 2026-11-03.
+
 ### Why the attachment stays unpinned (contrast ADR-263 and ADR-119)
 
 Web-1's attachment carries `prevent_destroy` (ADR-119 D1; `hcloud_volume_attachment.workspaces_luks` in
@@ -238,6 +240,8 @@ nothing was changed.
   `infra-validation.yml`, whose context is not in the required list, and `scripts/test-all.sh` runs infra suites only for
   `TEST_GROUP` of `all`, `infra` or `affected`, which no CI shard sets. A red Guard 1 therefore does not by itself block a
   merge. This gap goes to #9927 (promote the suite into a required context, or add a thin required aggregator).
+  > **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** Guard 1 is registered in the `want_scripts` region of
+  > `scripts/test-all.sh` and runs in the required `test` context through `test-scripts`; see the addendum of 2026-11-03 at the end of this file.
 - **CODEOWNERS.** `/apps/web-platform/infra/` is owned (`@deruelle`), so `inngest-redis-luks.tf`, `inngest-host.tf` and
   Guard 1 are covered. The other guard files (`plugins/soleur/test/terraform-target-parity.test.ts`,
   `tests/scripts/test-infra-privileged-tier-census.sh`, `tests/scripts/lib/hcl-effective-text.sh`, the host-replace gate
@@ -251,6 +255,7 @@ nothing was changed.
   the parity test, which runs in the required `test` check, plus the live read (the post-apply read-back and the drift
   plan), which a weakening of text alone cannot change. Guard 1 remains non-required. The anchors are as strong as those
   being required checks, which is the measurement above.
+  > **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** "Guard 1 remains non-required" no longer holds; see the addendum of 2026-11-03.
 
 ### Fresh-host provisioning tension (`hr-fresh-host-provisioning-reachable-from-terraform-apply`)
 
@@ -303,6 +308,8 @@ Appended; nothing above is changed except the frontmatter `status` and the leadi
 **The run history, as measured.** Merge-SHA apply run 38139392390 applied the in-place update `hcloud_volume.inngest_redis_luks delete_protection false -> true` ("Apply complete! Resources: 0 added, 1 changed, 0 destroyed", 2026-10-11T12:32:53Z); the failing step (`terraform_data.egress_gateway_web2` remote-exec, dial tcp i/o timeout) ended at 12:48:18Z and the job concluded `failure` at 12:48:26Z, after that apply had completed and on an unrelated step. Later runs are mixed: dispatch run 38580429629 (2026-10-14) concluded `failure`, and the latest apply on main, run 38653889114 on 944372f0d5, succeeded. Neither proves the flag; only the read-back does.
 
 **What the read-back is and is not.** It is a point-in-time read of the delete-protection flag only. `prevent_destroy` is a plan-time control, enforced by the guards named in this ADR, and is not read back from any live system. Guard 1 stays advisory until #9927. The residuals, the loss-mode table, the absent Art. 32(1)(c) restore capability and the "no sanctioned erase path" statement are unchanged. Protection defends against mistaken deletes; it does not defend against a holder of the read/write Hetzner token, which can lift it, or against the three writers of the Doppler copy of the key.
+
+> **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** the sentence "Guard 1 stays advisory until #9927" no longer holds; see the addendum of 2026-11-03.
 
 **Who flips it** is discharged by this follow-up PR. `soleur:postmerge` Phase 5.7 step 6 files no tracking issue once the status is `accepted`.
 
@@ -529,3 +536,17 @@ Appended; nothing above is edited and the status stays `accepted`. No new ordina
 ## Addendum - 2026-11-02 (#11831, #11820)
 
 Appended; nothing above is edited and the status stays `accepted`. Two items the 2026-11-01 build record deferred now exist. (1) The replace gate pins the token `access` level: on any plan entry that creates `doppler_service_token.inngest_flip` or `doppler_service_token.inngest` (create, delete+create, create+delete) `.change.after.access` must be `read/write` and `read` respectively, a missing value fails closed, and a violation aborts before any apply with `reason=doppler_token_access` (counter `doppler_token_access_wrong`); a no-op token is not judged (the pin judges what the plan mints, not state; the `apply_target=inngest-host` shape gate for an already-absent host does not carry it). This replaces the "neither gate reads `.after`" limit and makes the owner's pre-go read of the two `access` lines a cross-check rather than the only cover. (2) `logtail_exploration_alert.inngest_cutover_flip_silent` emails when no JSON `inngest-cutover-flip` row arrives from the production Inngest host for 15 minutes, which narrows the "A revoked or stalled flip token is unalarmed (CTO N8)" limit to a failure that reaches the script's `emit_state` (those still write JSON rows, so the alert does not see them). It has no replace-window suppression and will email during an owner-authorized host replace (expected); suppression stays open on #11820. Ruled by CTO agent, 2026-11-02: ship the query alert now, discriminated by `JSONType(raw,'message')='Object'` (measured: flip rows are object-typed, the doppler error lines under the same tag are strings).
+
+## Addendum - 2026-11-03 (#9927 item 10)
+
+Appended; the only edits above are dated `Superseded` markers under the sentences that called Guard 1 advisory or non-required, and the status stays `accepted`. Every statement here is conditional on the PR that carries it merging.
+
+**What changed.** Guard 1 (`apps/web-platform/infra/inngest-luks-sole-copy.test.sh`) is registered as `run_suite "apps/web-platform/infra/inngest-luks-sole-copy"` in the `want_scripts` region of `scripts/test-all.sh`. That region runs in the `test-scripts` leg, which is in the `needs` list of the required `test` context, so a red Guard 1 now blocks merge. The ruleset (`infra/github/ruleset-ci-required.tf`) is unchanged and no new required context exists. The suite stays covered by the infra runner glob as well (`deploy-script-tests`), so `scripts/lint-orphan-test-suites.sh` sees two registration surfaces and carries a `DOUBLE_COVERED_ACK` entry for it.
+
+**Before and after.** Before: a diff that weakened the Terraform pins and Guard 1 together merged green because nothing required Guard 1 to run. After: Guard 1 runs on every pull request that reaches `test-scripts`. Local run: 89 of 89 cases in about 40 s (the infra runner's own manifest records 72 s). The wall time on the CI runner is recorded in a follow-up append once the first run on the branch has finished.
+
+**What keeps the registration in place.** The G2f pin in `plugins/soleur/test/terraform-target-parity.test.ts` (leg `test-bun`, a different required leg) fails if the `run_suite` line is deleted, stubbed, given a control suffix such as `|| true`, duplicated, moved out of its `want_scripts` region, or wrapped. Wrapping is closed by neighbourhood rather than by listing spellings: the previous and next code lines must themselves be plain `run_suite` registrations, so no line-continuation prefix, heredoc, `if`/`while`/`case`, function body, `exit` or `return` can sit directly around it. It also requires `run_suite()`, `want_scripts()` and `_shard_selects()` to be defined once each, the suite name to appear on no non-comment line other than the registration, and, from the parsed `ci.yml`, that the `test-scripts` job runs `bash scripts/test-all.sh scripts` in exactly one step with no `continue-on-error` and no step `if:`, and that the `test` aggregator lists `test-scripts` in `needs:` and in its entries array. Seven reviewers converged on one structural gap in the first version of this pin (it recognised only an indented one-line `if`); this is the fix. What it still cannot see: edits inside the body of `run_suite()` that do not name the suite, and edits to `scripts/suite-shard-legs.tsv` or the shard matrix (both fail closed in the runner: an out-of-range leg exits 2 and an unlisted label hashes onto a leg). `test-bun` can be skipped by the PR-affected selector, but a diff to `scripts/test-all.sh` is a full-battery trigger in `scripts/ci-pr-selection.sh`, so the pin runs for exactly the edits that matter. This is a consistency check, not an integrity proof: one diff can still edit the registration and this pin together. The G2e attribute pin is kept as the independent, different-language anchor; its sunset comment now says it may stay, and executing the sunset is a tracked follow-up that waits until the new leg has run green on `main` and in the merge queue.
+
+**CODEOWNERS.** Explicit rows now name the guard files outside `/apps/web-platform/infra/`. They are routing text only: `*` already names the same owner and the ruleset has no `require_code_owner_review`, so they are not a second reviewer and not enforcement.
+
+**What this does not do (owner-facing, plain words).** Guard 1 is a regression check on Terraform text. It does not stop an Admin or Member on the Hetzner project from switching delete protection off, it does not stop a compromise of the account, and it does not help if the account is suspended or terminated: Hetzner states that deletion protection does not guarantee data retention after account termination (support reply of 2026-11-02, recorded on #9927). The volume is the only copy, and there is no recovery path for it until the owner decides on an off-project copy of the ciphertext (header plus data). That decision is item 1b of #9927, deferred and not declined, with re-evaluation at the earliest of 2027-01-08, the next planned `apply_target=inngest-host-replace`, or a written Hetzner answer (the answer has now arrived). It is the owner's call and is not taken here.
