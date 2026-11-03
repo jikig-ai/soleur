@@ -37,4 +37,25 @@ check "a render with a judged gap is clean" lint "$SCRATCH/repj.out"
 check "a rendered report is clean" lint "$SCRATCH/rep.out"
 check "a rendered report carries the banner" grep -q "How to read this report" "$SCRATCH/rep.out"
 check "render.sh has no echo/printf of sentence-length prose (all prose lives in references/)" bash -c '! grep -nE "(echo|printf) .*[A-Za-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+" "$1" | grep -vE "^[0-9]+:[[:space:]]*#"' _ "$SKILL/scripts/lib/render.sh"
-finish 25
+# --- PR-B: the issue writer (scripts/lib/issues.sh, references/issue-body.template) and the autolink shapes ---
+# A missing file must FAIL (a grep over a missing file reads as clean), so every row below requires the file first.
+lint_file() { [ -f "$1" ] && lint "$1"; }
+ISSUES_SH="$SKILL/scripts/lib/issues.sh"; TPL="$SKILL/references/issue-body.template"
+check "issues.sh exists and carries no banned word of its own" lint_file "$ISSUES_SH"
+check "issue-body.template exists and is clean" lint_file "$TPL"
+check "the plan-sample fixture (issue body and epic) is clean" bash -c 'for f in "$1"/issues/*.md "$1"/epic.md; do [ -f "$f" ] || exit 1; ! grep -iwFf "$2" "$f" >/dev/null 2>&1 || exit 1; done' _ "$SKILL/test/fixtures/plan-sample" "$BW"
+check "issues.sh has no echo/printf of sentence-length prose (all prose lives in references/)" bash -c '[ -f "$1" ] && ! grep -nE "(echo|printf) .*[A-Za-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+ [a-z]+" "$1" | grep -vE "^[0-9]+:[[:space:]]*#"' _ "$ISSUES_SH"
+check "issues.sh has no \${var//pat/repl} substitution (render.sh and checks.sh already carry some; the ban is scoped to issues.sh)" bash -c '[ -f "$1" ] && ! grep -nE "\$\{[^}]*//" "$1" | grep -vE "^[0-9]+:[[:space:]]*#"' _ "$ISSUES_SH"
+# Autolink shapes outside code spans: a user mention, owner/repo#N, an issue URL, a bare #N, GH-N, a 7-40 hex run.
+autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
+autolink_clean() { ! autolink_hits "$@" >/dev/null; }
+awk -F'\t' '!/^#/ && $1!="id" {print $5; print $11; print $12}' "$SKILL/references/checks.tsv" > "$SCRATCH/prose3.txt"
+check "autolink lint: checks.tsv titles, commands and remedies carry no autolink shape" autolink_clean "$SCRATCH/prose3.txt"
+check "autolink lint: phrases.txt, banner.txt and footer.txt carry no autolink shape" autolink_clean "$SKILL/references/phrases.txt" "$SKILL/references/banner.txt" "$SKILL/references/footer.txt"
+tpl_clean() { [ -f "$TPL" ] && autolink_clean "$TPL"; }
+check "autolink lint: issue-body.template exists and carries no autolink shape" tpl_clean
+printf '%s\n' 'see owner/repo#12' 'ping @someone' 'item #7' 'related GH-9' 'commit deadbeef1' 'https://example.invalid/o/r/issues/3' > "$SCRATCH/al-bad.txt"
+check "autolink lint canary: each of the six shapes is caught by the lint helper itself" test "$(autolink_hits "$SCRATCH/al-bad.txt" | wc -l | tr -d ' ')" = 6
+printf 'path `node_modules/@types/node/index.d.ts` only\n' > "$SCRATCH/al-ok.txt"
+check "autolink lint canary: a code span is exempt (an @scope/pkg path inside backticks is not a mention)" autolink_clean "$SCRATCH/al-ok.txt"
+finish 35

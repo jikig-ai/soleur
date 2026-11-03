@@ -6,11 +6,11 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 0 — Failing tests and fixtures first (RED)
 
-- 0.1 Write `plugins/soleur/skills/launch-check/test/gh-stub.sh`: stateful fake `gh` with a stub-contract header (verified vs `UNVERIFIED-STUB-ONLY` shapes), a transport-error interruption mode, no basename of any real `gh` pipe producer named; real-flag whitelist, unknown flag exits 64; real `gh: ... (HTTP nnn)` stderr lines; records inside the matched dispatch branch only; read-without-`-X GET` logged as a violation; failure injection env (`GH_STUB_AUTH`, `FAIL_AFTER`, `KILL_AFTER_CREATE`, `SUBISSUE`, `PER_PAGE`, `EDIT_EPIC_BETWEEN`, `CRLF`)
-- 0.2 Write `test/issues.test.sh` (sources `lib.sh` unchanged): Test Scenarios, recorder canary, instrument self-test, exact assertion floor, small sandbox-copy mutation battery
-- 0.3 Commit `test/fixtures/plan-sample/` (`plan.tsv`, `epic.md`, `issues/CI-01.md`), synthesized
-- 0.4 Extend `test/wording.test.sh` (lint `issues.sh` and the template; no sentence-length prose literal; no `${...//...}` in `issues.sh` only) and add the autolink-shape lint over `checks.tsv`, `phrases.txt`, `issue-body.template` and rendered bodies
-- 0.5 Capture `render --dry-run` output for `fx_minimal`, `fx_healthy`, `fx_python` as the before-image for Phase 1
+- [x] 0.1 Write `plugins/soleur/skills/launch-check/test/gh-stub.sh`: stateful fake `gh` with a stub-contract header (verified vs `UNVERIFIED-STUB-ONLY` shapes), a transport-error interruption mode, no basename of any real `gh` pipe producer named; real-flag whitelist, unknown flag exits 64; real `gh: ... (HTTP nnn)` stderr lines; records inside the matched dispatch branch only; read-without-`-X GET` logged as a violation; failure injection env (`GH_STUB_AUTH`, `FAIL_AFTER`, `KILL_AFTER_CREATE`, `SUBISSUE`, `PER_PAGE`, `EDIT_EPIC_BETWEEN`, `CRLF`)
+- [x] 0.2 Write `test/issues.test.sh` (sources `lib.sh` unchanged): Test Scenarios, recorder canary, instrument self-test, exact assertion floor, small sandbox-copy mutation battery
+- [x] 0.3 Commit `test/fixtures/plan-sample/` (`plan.tsv`, `epic.md`, `issues/CI-01.md`), synthesized
+- [x] 0.4 Extend `test/wording.test.sh` (lint `issues.sh` and the template; no sentence-length prose literal; no `${...//...}` in `issues.sh` only) and add the autolink-shape lint over `checks.tsv`, `phrases.txt`, `issue-body.template` and rendered bodies
+- [x] 0.5 Capture `render --dry-run` output for `fx_minimal`, `fx_healthy`, `fx_python` as the before-image for Phase 1
 
 ## Phase 1 — Refactors
 
