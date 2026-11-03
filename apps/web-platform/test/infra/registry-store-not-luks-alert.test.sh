@@ -278,12 +278,14 @@ grep -qxF '              -target=logtail_exploration.registry_store_not_luks \' 
   && ok "both resources are in the push-triggered apply job's -target allowlist (#5566)" \
   || no "one or both -target= lines are missing from the apply job — the alert would never exist"
 
-# ── Workflow seam — the suite is registered, and no env axis may reach the workflow ──────────
+# ── Workflow seam — registered, unconditionally blocking, and no env axis may reach it ───────
 # The run line pins byte-exact (exactly once) so a rename/moved step cannot silently unregister
-# the suite; and no REGSTORE_ or MUT_SKIP literal may appear in the workflow's executable text —
-# the shipped convention's seam check, strictly stronger than an `env -u` prefix (which the
-# sibling registry-clientip pin forbids by construction anyway). Whole-line comments are
-# stripped; an inline ` # MUT_SKIP` still reds — deliberate over-caution.
+# the suite; and no env-composition FRAGMENT may appear in the workflow's executable text — the
+# literal `MUT_SKIP`/`REGSTORE_` greps are subsumed by the fragment set
+# {MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS} (kept alongside, since REGSTORE_ carries
+# no GUARD infix), which also bars runtime-composed names ("MUT_""SKIP", any *_GUARD_* prefix)
+# and the shell-injection env names a smuggler would use. Whole-line comments are stripped;
+# an inline ` # MUT_SKIP` still reds — deliberate over-caution.
 REG_RUN='        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh'
 IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
@@ -293,10 +295,73 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 
 seam_bad=""
 printf '%s\n' "$IV_CODE" | grep -nE 'REGSTORE_' >/dev/null && seam_bad="$seam_bad REGSTORE_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF -- "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+done
 [ -z "$seam_bad" ] \
-  && ok "no REGSTORE_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  && ok "no REGSTORE_ literal or env-composition fragment reaches the workflow's executable text (literal, composed or injected env muting is barred)" \
   || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+
+# Enclosing-job slice: the job block containing the pinned run line — walk back to the nearest
+# `^  <job-id>:` header, forward to the next or EOF. Derived from the run line (never a hardcoded
+# job name) and asserted non-empty AND containing the run line, so the env-write ban below can
+# never pass vacuously on an empty or missliced region.
+IV_JOB="$(awk -v run="$REG_RUN" '
+  { L[NR] = $0 }
+  $0 == run { here = NR }
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { hdr[++nh] = NR }
+  END {
+    if (!here) exit 0
+    lo = 0; hi = NR + 1
+    for (i = 1; i <= nh; i++) {
+      if (hdr[i] < here) { lo = hdr[i] } else { hi = hdr[i]; break }
+    }
+    if (lo) for (i = lo; i < hi; i++) print L[i]
+  }
+' <<< "$IV_CODE")"
+if [ -n "$IV_JOB" ] && [ "$(grep -cxF "$REG_RUN" <<< "$IV_JOB")" -eq 1 ]; then
+  ok "the enclosing job block holds this suite's run line (the env-write ban below is never vacuous)"
+else
+  no "the enclosing job slice is empty or misses the run line — the env-write ban below would pass vacuously"
+fi
+job_bad=""
+printf '%s\n' "$IV_JOB" | grep -nE 'GITHUB_(ENV|PATH)' >/dev/null && job_bad="$job_bad GITHUB_ENV/GITHUB_PATH"
+printf '%s\n' "$IV_JOB" | grep -nE '^[[:space:]]*defaults:' >/dev/null && job_bad="$job_bad defaults:"
+[ -z "$job_bad" ] \
+  && ok "no \$GITHUB_ENV/\$GITHUB_PATH write or defaults: inside the enclosing job (the only runtime env-composition channel is barred)" \
+  || no "enclosing-job seam violated:$job_bad — a composed env name could reach this suite's step"
+
+# Step-shape pins — the step block and job header enclosing the run line: no `if:` or
+# `continue-on-error:` at step indent inside IV_STEP; the job's `if:` is the one known literal
+# exactly once; no `continue-on-error:` in IV_HDR (the job header before `steps:`).
+IV_STEP="$(awk -v run="$REG_RUN" '
+  { L[NR] = $0 }
+  $0 == run { here = NR }
+  END {
+    if (!here) exit 0
+    lo = 0; hi = NR + 1
+    for (i = here; i >= 1; i--) { if (L[i] ~ /^      - /) { lo = i; break } }
+    for (i = here + 1; i <= NR; i++) { if (L[i] ~ /^      - / || L[i] ~ /^    [^ ]/) { hi = i; break } }
+    if (lo) for (i = lo; i < hi; i++) print L[i]
+  }
+' <<< "$IV_JOB")"
+IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
+if [ -n "$IV_STEP" ] \
+   && [ "$(grep -cxF "$REG_RUN" <<< "$IV_STEP")" -eq 1 ] \
+   && ! grep -qE '^        (if|continue-on-error):' <<< "$IV_STEP" \
+   && [ "$(grep -cxF "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" <<< "$IV_HDR")" -eq 1 ] \
+   && ! grep -qE '^    continue-on-error:' <<< "$IV_HDR"; then
+  ok "the suite's step is unconditional and blocking (no step if:/continue-on-error:, the job's dedup if: is the one literal, no job continue-on-error:)"
+else
+  no "the suite's step or job is conditional or non-blocking — an if: or continue-on-error: would mute or weaken this suite in CI"
+fi
+
+echo ""
+echo "=== registry-store-not-luks-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
 
 # ── Mutation rows: each must make the rows above RED (must-PASS rows stay GREEN) ─────────────
 if [ -z "${MUT_SKIP:-}" ]; then
@@ -371,11 +436,19 @@ PY
     esac
   }
 
-  # mutate_green <label> <python-program-on-tf-copy>: a legitimate edit must NOT red the guard.
+  # mutate_green <label> <TF|WF|CI|IV> <python-program-on-s>: a legitimate edit must NOT red
+  # the guard. Axis-widened past the donor's TF-only shape so the workflow/wiring must-PASS
+  # controls ride the same helper.
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" src copy rc=0
+    case "$which" in
+      TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
+      CI) src="$CI"; copy="$MUT_DIR/cloud-init-registry.yml" ;;
+      IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -386,7 +459,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    REGSTORE_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "REGSTORE_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -508,6 +581,43 @@ s = s.replace(old, old + "        env:\n          REGSTORE_TF: /dev/null\n")' \
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+  mutate_red "a runtime-composed MUT_/SKIP name is written to \$GITHUB_ENV inside the job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
+    "workflow seam"
+  mutate_red "a foreign-prefix *_GUARD_* env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO_GUARD_X: /dev/null\n" + old)' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          BASH_ENV: /tmp/x\n" + old)' \
+    "workflow seam"
+  mutate_red "a \$GITHUB_ENV write lands inside the suite's own job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"POISON=1\" >> \"$GITHUB_ENV\"\n")' \
+    "enclosing-job seam"
+
+  # ── Step-shape rows: an if:/continue-on-error: on the step or job would mute this suite ──────
+  mutate_red "the suite's step becomes conditional (if: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "conditional or non-blocking"
+  mutate_red "the suite's step becomes non-blocking (continue-on-error: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "conditional or non-blocking"
+  mutate_red "the suite's job becomes non-blocking (continue-on-error: on the job)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    continue-on-error: true\n")' \
+    "conditional or non-blocking"
 
   # ── Scorer negative control — a mutant that reds a row other than the named one must grade
   # WRONG (never RED), or the fragment check is decoration.
@@ -519,7 +629,13 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "whitespace reflow of the heredoc" \
+  # Over-breadth control: a $GITHUB_ENV write inside a DIFFERENT job (plan:) is legitimate —
+  # the enclosing-job slice must not reach past this suite's own job block.
+  mutate_green "a \$GITHUB_ENV write inside a different job (the plan: job) stays green" IV \
+    'old = "          printf \x27AWS_SECRET_ACCESS_KEY=%s\\n\x27 \"$SECRET\" >> \"$GITHUB_ENV\"\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"CROSS_JOB=1\" >> \"$GITHUB_ENV\"\n")'
+  mutate_green "whitespace reflow of the heredoc" TF \
     'i = s.index(SQLLOC); j = s.index(SQLEND, i)
 blk = s[i:j]
 old = "\n          AND position('"$Q"', \x27'"${MUT_ESC_F}"'ok \x27)"
@@ -533,8 +649,10 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 # PRESENCE_ROWS is exactly the count of rows an inner (MUT_SKIP) run asserts; the outer run adds
 # one row per mutation. The instrument control is what catches a floor drifting past the rows.
-PRESENCE_ROWS=32
-MUT_ROWS=23
+# SELF-REFERENCE CAVEAT (#11899 item 8, document-and-keep): a decrement WITH a row deletion stays
+# green+FIRES; PROMOTED_FILES pins floor deletion, review covers decrement-with-deletion drift.
+PRESENCE_ROWS=35
+MUT_ROWS=31
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
