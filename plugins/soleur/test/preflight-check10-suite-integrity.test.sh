@@ -324,8 +324,9 @@ assert_parse "S1 plain summary parses all six fields" "122 3 1 2 514 128" \
   <(printf ' 122 pass\n 3 fail\n 1 skip\n 2 todo\n 514 expect() calls\nRan 128 tests across 1 file.\n')
 
 # S2a/S2b — REAL bytes captured from bun 1.3.11 with FORCE_COLOR=1, pasted from
-# `cat -v`. VERIFIED ALSO ON 1.3.14 and on 1.4.2, which is what CI installs
-# (`.bun-version`, consumed by setup-bun in ci.yml) — measured 2026-09-19 by
+# `cat -v`. VERIFIED ALSO ON 1.3.14, 1.4.2 and 1.4.4 (CI installs 1.4.4 from
+# `.bun-version`, consumed by setup-bun in ci.yml; 1.4.4 re-checked 2026-11-03 for the
+# same ESC placement, `0 fail` dim line and `Ran N tests across M file.` terminator) — 1.4.2 measured 2026-09-19 by
 # running the same pass/fail/skip/todo suite on both binaries under FORCE_COLOR=1
 # and diffing `cat -v`: byte-identical apart from the elapsed-time suffix. Same
 # counter shapes, same value-dependent colour placement, same

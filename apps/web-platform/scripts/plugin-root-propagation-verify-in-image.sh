@@ -38,7 +38,7 @@ esac
 
 APP_DIR="${PLUGIN_ROOT_PROBE_APP_DIR:-apps/web-platform}"
 # Pin to the same base as apps/web-platform/Dockerfile (keep in sync on a base bump).
-IMG="${PLUGIN_ROOT_PROBE_BASE_IMAGE:-node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d}"
+IMG="${PLUGIN_ROOT_PROBE_BASE_IMAGE:-node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da}"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   printf '{"verdict":"infra_error","reason":"creds_absent"}\n'

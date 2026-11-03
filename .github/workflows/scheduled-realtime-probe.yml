@@ -40,7 +40,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '21.7.3'
+          # Supported 22 line (the former EOL 21.7.3 pin was vulnerable to
+          # CVE-2026-111497). The probe needs Node WITHOUT a global WebSocket;
+          # Node 22 ships one, so the probe step sets
+          # NODE_OPTIONS=--no-experimental-websocket to reproduce that
+          # condition and fails closed if it ever stops holding.
+          node-version: '22'
 
       # Pinned package-lock.json install is deliberate: when @supabase/supabase-js
       # is bumped via Dependabot/Renovate, the next nightly run is the canary
@@ -62,6 +67,9 @@ jobs:
           # `.environment == "dev"` assertion below before any prod credentials
           # are touched. See `hr-dev-prd-distinct-supabase-projects`.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_DEV_SCHEDULED }}
+          # Removes the native global WebSocket on Node 22 so the probe's
+          # `ws` polyfill branch runs, the path this canary exists to cover.
+          NODE_OPTIONS: --no-experimental-websocket
         # set -e is forced by GitHub Actions' default `bash -e {0}` shell, so
         # every potentially-failing command in this block needs `|| ...` to
         # avoid silent step-exit before $GITHUB_OUTPUT is written.
@@ -119,6 +127,21 @@ jobs:
             fi
           fi
 
+          # Precondition: the polyfill path is only exercised when Node has no
+          # global WebSocket. If NODE_OPTIONS stops removing it (flag dropped
+          # by a future Node, or the env block edited away), fail loudly rather
+          # than silently probing the native path. `|| ws_type=""` keeps a node
+          # that rejects the option from killing the step before the output
+          # write (see the set -e note above).
+          if [[ -z "$fail_mode" ]]; then
+            ws_type=$(node -p 'typeof WebSocket' 2>&1) || ws_type=""
+            if [[ "$ws_type" != "undefined" ]]; then
+              ws_type_safe=$(strip_log_injection "$(printf '%s' "$ws_type" | tr '\n' ' ' | head -c 200)")
+              record_failure "probe_contract_drift" \
+                "NODE_OPTIONS no longer removes the global WebSocket (typeof WebSocket=${ws_type_safe:-unavailable}); the probe would exercise the native path, not the polyfill path."
+            fi
+          fi
+
           # Run probe 5x consecutively. Any single non-SUBSCRIBED breaks early.
           # The probe script's own joinTimeout is 10s; its hard timeout is 30s.
           # Workflow's timeout-minutes ceiling is 10.
@@ -135,6 +158,18 @@ jobs:
               set -e
               has_subscribed="no"
               grep -q "SUBSCRIBED" <<<"$output" && has_subscribed="yes"
+              has_polyfill="no"
+              grep -q "polyfill: applied" <<<"$output" && has_polyfill="yes"
+
+              # Every iteration must have run the polyfill path; a healthy
+              # SUBSCRIBED on the native path proves nothing about it.
+              if [[ "$has_polyfill" == "no" ]]; then
+                detail_trim=$(printf '%s' "$output" | tr '\n' ' ' | head -c 500)
+                detail_safe=$(strip_log_injection "$detail_trim")
+                record_failure "probe_contract_drift" \
+                  "Run ${i}/5: no 'polyfill: applied' line, so the polyfill path was not exercised. Output: ${detail_safe}"
+                break
+              fi
 
               if [[ "$probe_exit" -eq 0 && "$has_subscribed" == "yes" ]]; then
                 # healthy

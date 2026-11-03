@@ -12,7 +12,9 @@
 // Node 21.x as a side-effect of the 20.16+ clause. The runtime floor enforced
 // here is narrower (rejects 21.x) because Node 21 reached EOL before
 // `process.getBuiltinModule` was back-ported. `apps/web-platform/.nvmrc`
-// pins `22.3.0` to keep contributor workstations on the upper line.
+// pins the deployed Node line (`22.23.4`), which keeps contributor
+// workstations on the upper line; the floor above is a pdfjs compatibility
+// floor, not a security floor.
 //
 // Use a regex match over `process.versions.node` (NOT `split(".").map(Number)`
 // which returns NaN on prerelease tags like `22.3.0-nightly...`).

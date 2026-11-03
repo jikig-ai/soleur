@@ -155,3 +155,7 @@ The polyfill helper lives under `test/helpers/`. It MUST NOT be imported from `l
 - **Context7 MCP quota exhausted mid-deepen** — `Monthly quota exceeded` mid-research. **Recovery:** fell back through `gh api` → `npm view` → WebFetch and reached the same evidence. **Prevention:** plan/deepen-plan should treat MCP doc-tools as best-effort (already do), but the fallback chain (gh api / npm view for version state, WebFetch for changelogs) deserves to be the documented first-line approach for library-version evidence — Context7 is a nice-to-have, not a load-bearing tool.
 
 - **WebFetch 404 on realtime-js CHANGELOG** — `github.com/supabase/realtime-js/blob/master/CHANGELOG.md` returned 404; the path moved when the repo restructured. **Recovery:** supabase-js CHANGELOG had sufficient realtime-tagged entries. **Prevention:** when an upstream package's CHANGELOG WebFetch 404s, fall back to the parent-package CHANGELOG (monorepo-pinned releases often surface upstream entries) or the GitHub release notes endpoint.
+
+## Addendum — 2026-11-03
+
+The nightly probe no longer runs on Node 21.7.3 (EOL, vulnerable to CVE-2026-111497). It runs on Node 22 with `NODE_OPTIONS=--no-experimental-websocket`, which removes the global `WebSocket` Node 22 ships, so the "Node without native WebSocket" condition this learning describes is still reproduced and the polyfill branch still runs. The step fails closed if `typeof WebSocket` is not `undefined` or an iteration lacks the `polyfill: applied` line. The 21.7.3 measurements above are unchanged point-in-time records.
