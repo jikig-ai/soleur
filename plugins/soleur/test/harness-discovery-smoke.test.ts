@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -432,6 +432,30 @@ describe("resolveBin — the shim is followed to a HOME-independent launcher", (
     // `driveOpenCode` falls back to the bare name, which under a hermetic HOME would be
     // a shim that tries to reinstall — so the undefined case must be a clean signal.
     expect(resolveBin("soleur-no-such-binary-9f3a1c")).toBeUndefined();
+  });
+
+  test("a PATH shim is followed to the real launcher (command -v + readlink -f parity)", () => {
+    // Fixture: <tmp>/shims/probe-bin -> <tmp>/real-bin (executable regular file). The
+    // pre-fix implementation returned `readlink -f $(command -v probe-bin)`; the
+    // pure-Node walk must return the same canonical path, not the shim's.
+    const d = realpathSync(mkdtempSync(join(tmpdir(), "resolvebin-")));
+    const savedPath = process.env.PATH;
+    try {
+      const real = join(d, "real-bin");
+      writeFileSync(real, "#!/bin/sh\nexit 0\n");
+      chmodSync(real, 0o755);
+      const shimDir = join(d, "shims");
+      mkdirSync(shimDir);
+      symlinkSync(real, join(shimDir, "probe-bin-9f3a1c"));
+      process.env.PATH = shimDir;
+      expect(resolveBin("probe-bin-9f3a1c")).toBe(real);
+      // A non-executable regular file is not a `command -v` hit either.
+      writeFileSync(join(shimDir, "not-exec-9f3a1c"), "#!/bin/sh\n");
+      expect(resolveBin("not-exec-9f3a1c")).toBeUndefined();
+    } finally {
+      process.env.PATH = savedPath;
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });
 
