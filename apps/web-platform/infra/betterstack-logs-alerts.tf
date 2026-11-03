@@ -2074,9 +2074,21 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # that logs a JSON object under this tag holds it green.
 # `JSONExtractString(raw,'message')` returns '' for the object rows, which is why the sibling
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
-# Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file; it
-# was verified through the query API only, so if the alert evaluator rejects it the per-merge
-# apply fails and the fix is a revert.
+# Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file.
+#
+# PAUSED PENDING #11869 (false positive, measured 2026-11-02). The alert opened an incident at its
+# first evaluation (started 14:00:00Z, alert created 14:05:54Z) and has read `Current value: 0` ever
+# since, while the query API returns 3 rows for a 900 s window (269 object rows in 24 h;
+# `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
+# and an empty window returns 0 under both). The API accepted the resource (no 422), so the evaluator
+# does not REJECT it; it returns 0 for a window that holds rows. The predicate cannot be blamed alone:
+# the sibling silence alert `egress_gw_probe_silent` (`lower_than`, the same `toDateTime({{end_time}})`
+# + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
+# returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
+# (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
+# cycle plus another false page. The resource is kept, predicate unchanged, and paused; re-arming is
+# one line (`paused = false`) once an evaluator-side fix is MEASURED on a live alert, and the guard
+# pins `paused = true` with this issue number so the pause cannot be lost silently.
 #
 # THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
 # `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
@@ -2151,7 +2163,10 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   recovery_period     = 900
   on_missing_data     = "treat_as_zero"
 
-  paused = false
+  # Paused pending #11869 (see "PAUSED PENDING #11869" above). A literal true keeps the
+  # reconciler's `logs-alert-paused` arm quiet: it reports only a live pause under a declaration
+  # that resolves to `paused = false`.
+  paused = true
 
   email          = true
   push           = false

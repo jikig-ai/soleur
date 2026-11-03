@@ -3120,7 +3120,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // completed non-push release-workflow run; a row does not imply a deploy). NO SUBSTITUTE:
   // the row is private BY DESIGN (public repository, so the job log carries counts only) and lands only in the Logs warehouse, which has
   // no unauthenticated read path; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
-  const BASELINE_DECLARED_PROBES = 93;
+  // #6027 AC4 (2026-11-02): +1 (93 -> 94, rebased over #9826 slice 2a at merge) for `2026-11-02-fix-lb-health-alert-new-health-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the Cloudflare `alerting/v3/policies` list via
+  // CF_API_TOKEN/CF_ACCOUNT_ID (Doppler soleur/prd_terraform) to verify the web_lb_health policy
+  // exists enabled. NO SUBSTITUTE: the CF alerting API has no unauthenticated read surface. Genuine.
+  const BASELINE_DECLARED_PROBES = 94;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
