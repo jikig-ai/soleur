@@ -71,6 +71,11 @@ check "G3: a plan recorded PRIVATE against a LIVE PUBLIC repo writes nothing" ba
 check "G3: ... and aborts confirm-public-required (rc 2)" abort_is 2 confirm-public-required
 create --confirm-public
 check "G3: --confirm-public makes the same run proceed" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
+full_case 7; jq '.visibility="public"' "$ST/repo.json" > "$ST/r.new" && mv "$ST/r.new" "$ST/repo.json"; calls_reset; with GH_STUB_FAIL_AFTER=3 -- create --confirm-public
+check "resume hint (public): the stopped run prints the resume command WITHOUT --confirm-public, and the separate line that names it" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" <<<"$c" && grep -q "append --confirm-public" "$1"' _ "$OUT"
+check "resume hint (public): the stopped run is issues-incomplete (anti-vacuous: the hint was printed by a real failure)" abort_is 2 issues-incomplete
+full_case 7; calls_reset; with GH_STUB_FAIL_AFTER=3 -- create
+check "resume hint (private): the resume command is printed and no --confirm-public line appears" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" "$1"' _ "$OUT"
 full_case 3; jq '.visibility="internal"' "$ST/repo.json" > "$ST/r.new" && mv "$ST/r.new" "$ST/repo.json"; calls_reset; create
 check "G3: an internal repository is gated like a public one (confirm-public-required)" abort_is 2 confirm-public-required
 full_case 3; calls_reset; create

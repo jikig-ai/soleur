@@ -1,5 +1,7 @@
 <!-- launch-check:gap={{ID}} -->
 
+{{BANNER}}
+
 **Severity:** {{SEVERITY}}. **Domain:** {{DOMAIN}}. **Check:** {{ID}}.
 
 **Finding:** {{TITLE}}

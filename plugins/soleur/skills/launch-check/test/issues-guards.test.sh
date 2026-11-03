@@ -123,7 +123,13 @@ stub_reset acme/demo private
 runi pvst --preview --target "$HB" --facts "$HF" --judged "$JUD" --plan-out "$SCRATCH/pohb"
 check "preview: facts rescanned after the report was rendered (a new gap the report lacks) aborts report-stale" abort_is 2 report-stale
 newcase; stub_reset acme/demo public; only_first "$R" 3; prev
-check "preview: a PUBLIC repo prints a warning and the --confirm-public command line" bash -c 'grep -qi "public" "$1" && grep -q -- "--confirm-public" "$1" && [ "$2" = PUBLIC ]' _ "$OUT" "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN visibility)"
+check "preview: a PUBLIC repo prints the warning and the create command WITHOUT --confirm-public, and a separate line that names the flag" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" <<<"$c" && grep -qi "public" "$1" && grep -q "append --confirm-public" "$1" && [ "$2" = PUBLIC ]' _ "$OUT" "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES_PLAN visibility)"
+for vis in internal weird; do
+  newcase; stub_reset acme/demo "$vis"; only_first "$R" 3; prev
+  check "preview ($vis visibility): the create command has no --confirm-public and the separate line is printed" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" <<<"$c" && grep -q "append --confirm-public" "$1"' _ "$OUT"
+done
+newcase; only_first "$R" 3; prev
+check "preview: a PRIVATE repo prints the create command and no --confirm-public line" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && ! grep -q -- "--confirm-public" "$1"' _ "$OUT"
 newcase; stub_reset acme/demo private true; only_first "$R" 3; prev
 check "preview: a fork names the resolved owner/name and the fork flag" bash -c 'grep -q "acme/demo" "$1" && grep -qi "fork" "$1"' _ "$OUT"
 newcase; stub_reset other/thing private; only_first "$R" 3; prev
@@ -212,17 +218,18 @@ probe() { # probe <skill-root> <inject-file|-> <env-assignments> <command...>: c
   PRC=$?
 }
 stub_reset acme/demo private
-probe "$SKILL" - "CI=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+probe "$SKILL" - "CI=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1.4: lc_gh_write called directly under CI=1 aborts headless-write-refused (rc 2) and reaches nothing" bash -c '[ "$1" = 2 ] && grep -q "reason=headless-write-refused" "$2" && [ "$3" = 0 ]' _ "$PRC" "$SCRATCH/probe.out" "$(n_calls)"
-probe "$SKILL" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+probe "$SKILL" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1.4: lc_gh_write called directly under LC_DRY=1 returns 0 and reaches nothing (the function exists)" bash -c '[ "$1" = 0 ] && [ "$2" = 0 ]' _ "$PRC" "$(n_calls)"
-probe "$SKILL" - "X=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+probe "$SKILL" - "X=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1.4 twin: the same compliant call with neither switch reaches the stub exactly once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
-shape() { # shape <desc> <args...>: a call outside the four allowlisted shapes
-  local d=$1; shift; calls_reset; probe "$SKILL" - "X=1" lc_gh_write "$@"
+shape_with() { # shape_with <env-assignment> <desc> <args...>: a call outside the four allowlisted shapes (EPIC_NUM=101 unless the row says otherwise)
+  local e=$1 d=$2; shift 2; calls_reset; probe "$SKILL" - "$e" lc_gh_write "$@"
   check "G1.7: $d -> write-shape-refused, rc 2, nothing recorded and nothing refused by the stub" bash -c 'grep -q "reason=write-shape-refused" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ] && [ ! -s "$4" ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)" "$ST/refused.log"
   SEEN_REASONS="$SEEN_REASONS write-shape-refused"
 }
+shape() { local d=$1; shift; shape_with EPIC_NUM=101 "$d" "$@"; }
 shape "-X DELETE" api -X DELETE repos/acme/demo/issues/101
 shape "a labels PATCH" api -X PATCH repos/acme/demo/labels -f name=x
 shape "a different slug" api -X POST repos/evil/other/issues -f title=x
@@ -230,6 +237,47 @@ shape "state on the PATCH shape" api -X PATCH repos/acme/demo/issues/101 -f stat
 shape "an @file operand outside the plan directory" api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
 shape "a non-digit issue number" api -X PATCH repos/acme/demo/issues/10x -f title=x
 shape "an issue verb form" issue create --title x
+PLAN=""; printf 'body\n' > "$SCRATCH/body.txt"
+shape "a PATCH to an issue other than the epic (102, epic is 101)" api -X PATCH repos/acme/demo/issues/102 -F "body=@$SCRATCH/body.txt"
+shape_with X=1 "a PATCH when no epic is known (EPIC_NUM unset)" api -X PATCH repos/acme/demo/issues/101 -F "body=@$SCRATCH/body.txt"
+shape "a sub_issues link under another parent (102, epic is 101)" api -X POST repos/acme/demo/issues/102/sub_issues -F sub_issue_id=5
+shape_with X=1 "a sub_issues link when no epic is known" api -X POST repos/acme/demo/issues/101/sub_issues -F sub_issue_id=5
+shape "a label create named bug (not lc:)" api -X POST repos/acme/demo/labels -f name=bug -f color=ededed
+shape "an issue create carrying the label bug" api -X POST repos/acme/demo/issues -f title=x -f 'labels[]=bug'
+shape "an issue create whose field key holds a space (title body)" api -X POST repos/acme/demo/issues -f 'title body=x'
+stub_reset acme/demo private; seed 101 open stub-user lc:launch-check,lc:epic ''; calls_reset
+probe "$SKILL" - "EPIC_NUM=101" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -F "body=@$SCRATCH/body.txt"
+check "G1.7 twin: the same PATCH to the epic itself reaches the stub exactly once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
+calls_reset; probe "$SKILL" - "EPIC_NUM=101" lc_gh_write api -X POST repos/acme/demo/issues/101/sub_issues -F sub_issue_id=5
+check "G1.7 twin: a link under the epic itself reaches the stub exactly once (the stub may refuse the unknown id)" test "$(n_writes)" = 1
+calls_reset; probe "$SKILL" - "X=1" lc_gh_write api -X POST repos/acme/demo/issues -f title=x -f 'labels[]=lc:launch-check'
+check "G1.7 twin: an lc: label on an issue create reaches the stub exactly once" test "$(n_writes)" = 1
+# reads: auth takes only status and repo only view (a second word like delete, edit or token is not a read)
+for rd in "repo delete acme/demo" "repo edit acme/demo --visibility public" "repo" "auth token" "auth login" "auth"; do
+  # shellcheck disable=SC2086  # the row is deliberately split into words
+  stub_reset acme/demo private; calls_reset; probe "$SKILL" - "X=1" lc_gh_read $rd
+  check "G1.8: lc_gh_read $rd is refused (write-shape-refused, rc 2, zero gh calls)" bash -c 'grep -q "reason=write-shape-refused" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)"
+done
+calls_reset; probe "$SKILL" - "X=1" lc_gh_read auth status
+check "G1.8 twin: lc_gh_read auth status reaches the stub once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_calls)"
+calls_reset; probe "$SKILL" - "X=1" lc_gh_read repo view --json nameWithOwner
+check "G1.8 twin: lc_gh_read repo view reaches the stub once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_calls)"
+# every shipped phrase renders through lc__fmt: no stderr (a phrase that starts with -- was read as an option) and not empty
+cat > "$SCRATCH/allphr.sh" <<'EOS'
+lc_test_all_phrases() {
+  local k f n args i out
+  for k in $(awk -F= '/^[a-z_0-9-]+=/ {print $1}' "$SKILL_DIR/references/phrases.txt"); do
+    f=$(lc_phrase "$k"); n=$(grep -o '%s' <<<"$f" | wc -l | tr -d ' '); args=(); i=0
+    while [ "$i" -lt "$n" ]; do args+=("v$i"); i=$((i + 1)); done
+    out=$(lc__fmt "$k" ${args[@]+"${args[@]}"} 2>"$WORK/phr.err")
+    if [ -s "$WORK/phr.err" ] || [ -z "$out" ]; then echo "BAD-PHRASE $k"; return 1; fi
+  done
+  echo PHRASES-OK
+}
+EOS
+probe "$SKILL" "$SCRATCH/allphr.sh" "X=1" lc_test_all_phrases
+check "every phrases.txt key renders through lc__fmt with no stderr and a non-empty result (a phrase starting with -- is not an option)" bash -c '[ "$1" = 0 ] && grep -q PHRASES-OK "$2" && ! grep -q BAD-PHRASE "$2"' _ "$PRC" "$SCRATCH/probe.out"
+check "phrase-render canary: a bare printf of a -- phrase prints to stderr (the helper would see it)" bash -c 'f="--starts-with-dashes %s"; [ -n "$(printf "$f" v 2>&1 >/dev/null)" ]'
 calls_reset; probe "$SKILL" - "X=1" lc_gh_read api repos/acme/demo/issues -f labels=lc:launch-check -f state=all
 check "G1.8: a read-helper call with -f and no -X GET never reaches the stub as an implicit method (injected or refused)" bash -c '[ ! -s "$1" ] && [ "$(jq -sr "[.[]|select(.explicit_method|not)]|length" "$2" 2>/dev/null || echo 0)" = 0 ]' _ "$ST/violations.log" "$ST/calls.log"
 check "G1.8: and any call that did get through is a GET" bash -c '[ "$(jq -sr "[.[]|select(.method!=\"GET\")]|length" "$1" 2>/dev/null || echo 0)" = 0 ]' _ "$ST/calls.log"
@@ -276,21 +324,21 @@ sbx_edit() { # sbx_edit <name> <sed expression>: prints the sandbox skill root, 
 mut_landed() { bash -n "$1/scripts/lib/issues.sh" && ! cmp -s "$1/scripts/lib/issues.sh" "$ISS"; }
 M1=$(sbx_edit nohead '/if lc_is_headless; then lc_abort headless-write-refused/d')
 check "G1 mutation landed (headless check removed from lc_gh_write in the sandbox copy)" mut_landed "$M1"
-stub_reset acme/demo private; probe "$M1" - "CI=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+stub_reset acme/demo private; probe "$M1" - "CI=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1 mutation (headless check removed): the CI=1 call now reaches the stub, so the G1.4 row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
 M2=$(sbx_edit nodry '/\[ "\${LC_DRY:-0}" = 1 \] && return 0/d')
 check "G1 mutation landed (dry-run check removed from lc_gh_write in the sandbox copy)" mut_landed "$M2"
-stub_reset acme/demo private; probe "$M2" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=probe -f color=ededed
+stub_reset acme/demo private; probe "$M2" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1 mutation (dry-run check removed): the LC_DRY=1 call now reaches the stub, so the G1.4 dry-run row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
 M3=$(sbx_edit nofile 's/lc__file_ok "${val#@}" || lc__refuse file-operand/:/')
 check "G1 mutation landed (@file confinement removed from the sandbox copy)" mut_landed "$M3"
 stub_reset acme/demo private; seed 101 open stub-user lc:launch-check ''; calls_reset
-probe "$M3" - "X=1" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
+probe "$M3" - "EPIC_NUM=101" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -F body=@/etc/hostname
 check "G1 mutation (@file confinement removed): an operand outside the plan directory now reaches the stub, so the G1.7 row is sensitive" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
 M4=$(sbx_edit nokeys 's/case "$allowed" in \*" $key "\*) ;; \*) lc__refuse field-key ;; esac/:/')
 check "G1 mutation landed (field-key allowlist removed from the sandbox copy)" mut_landed "$M4"
 stub_reset acme/demo private; seed 101 open stub-user lc:launch-check ''; calls_reset
-probe "$M4" - "X=1" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -f state=closed
+probe "$M4" - "EPIC_NUM=101" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -f state=closed
 check "G1 mutation (field-key allowlist removed): a state field now reaches the stub (which refuses it), so the G1.7 row is sensitive" bash -c '[ "$1" = 64 ] && [ -s "$2" ]' _ "$PRC" "$ST/refused.log"
 hostile_facts() { # hostile_facts <out> <evidence>: the first non-count-only gap gets the evidence; prints its id
   local id; id=$(awk -F'\t' '$2 == "gap" && $1 !~ /^SEC-0[12]$/ {print $1; exit}' "$FACTS")
@@ -311,6 +359,15 @@ FACTS="$SCRATCH/clean.tsv"; prev; calls_reset; create
 check "G2 harness row: replacing the plant with a clean string flips the verdict to success (rc 0, writes recorded)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
 check "G2 must-PASS: an evidence path containing the word secret but no value is sent" bash -c 'jq -e "[.[]|select(.body|contains(\"docs/secret-handling.md\"))]|length>0" "$1" >/dev/null' _ "$ST/issues.json"
 check "G2.5: every body the stub received on an issue create is byte-identical to a scanned plan file (nothing authored after the scan)" sent_bodies_match
+banner_bodies() { # every issue body the stub received (the sub-issues and the epic) carries the banner line; at least 2 bodies were sent
+  local n=0 seq
+  while IFS= read -r seq; do
+    grep -qxF -- "$(banner_line)" "$ST/bodies/$seq-body" || return 1; n=$((n + 1))
+  done < <(cj '.[]|select(.method=="POST" and (.path|test("/issues$")))|.seq')
+  [ "$n" -ge 2 ]
+}
+check "banner: every created body and the epic body carry the banner line (the report says it is not an attestation; the issues must too)" banner_bodies
+check "banner: the banner is the first block after the marker line in every plan body and in the epic" bash -c 'for f in "$1"/issues/*.md "$1"/epic.md; do [ "$(sed -n 1p "$f" | cut -c1-4)" = "<!--" ] && [ -z "$(sed -n 2p "$f")" ] && [ "$(sed -n 3p "$f")" = "$2" ] || exit 1; done' _ "$PLAN" "$(banner_line)"
 FACTS="$OFACTS"
 newcase; HID3=$(hostile_facts "$SCRATCH/gl-only.tsv" "$(gl_only_secret)"); only_ids "$R" "$HID3"; FACTS="$SCRATCH/gl-only.tsv"
 with LAUNCH_CHECK_GITLEAKS="$SCRATCH/gl-toggle.sh" -- prev; calls_reset

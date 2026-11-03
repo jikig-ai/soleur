@@ -27,7 +27,7 @@ lc__say() { printf '%s\n' "$(lc_scrub "$*")"; }
 lc__fmt() {
   local f; f=$(lc_phrase "$1"); shift
   # shellcheck disable=SC2059  # the format is our own shipped phrase, never repository content
-  lc__say "$(printf "$f" "$@")"
+  lc__say "$(printf -- "$f" "$@")"
 }
 # lc__re <ERE> <value>: the whole one-line value matches (awk, so the same grammar on every platform).
 lc__re() { RE_X=$1 awk '{ if (NR == 1 && $0 ~ ENVIRON["RE_X"]) ok = 1; n = NR } END { exit !(ok && n == 1) }' <<<"$2"; }
@@ -64,11 +64,12 @@ lc__gh_exec() {
   return "$rc"
 }
 
-# lc_gh_read <auth|repo|api> ...: a read. For `api` the method is always sent as -X GET (a field flag would otherwise flip the call
+# lc_gh_read <auth status|repo view|api> ...: a read (`auth` takes only `status`, `repo` only `view`). For `api` the method is always sent as -X GET (a field flag would otherwise flip the call
 # to POST); any other method is refused.
 lc_gh_read() {
   case "${1:-}" in
-    auth|repo) lc__gh_exec "$@"; return $? ;;
+    auth) [ "${2:-}" = status ] || lc_abort write-shape-refused 2 "detail=read-verb"; lc__gh_exec "$@"; return $? ;;
+    repo) [ "${2:-}" = view ] || lc_abort write-shape-refused 2 "detail=read-verb"; lc__gh_exec "$@"; return $? ;;
     api) shift ;;
     *) lc_abort write-shape-refused 2 "detail=read-verb" ;;
   esac
@@ -115,6 +116,8 @@ lc__write_shape() {
   esac
   if [ "$shape" = sub ] || [ "$shape" = patch ]; then
     case "$n" in ''|*[!0-9]*) lc__refuse issue-number ;; esac
+    # The target is bound to the epic this run found or created: a PATCH or a link under any other issue is not a form we send.
+    [ -n "${EPIC_NUM:-}" ] && [ "$n" = "$EPIC_NUM" ] || lc__refuse epic-bind
   fi
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -123,7 +126,11 @@ lc__write_shape() {
         flag=$1; kv=$2
         case "$kv" in *=*) ;; *) lc__refuse field-form ;; esac
         key=${kv%%=*}; val=${kv#*=}
+        # Whole-word match: a key holding a space ("title body") would otherwise be a substring of the allowed list.
+        case "$key" in ''|*[[:space:]]*) lc__refuse field-key ;; esac
         case "$allowed" in *" $key "*) ;; *) lc__refuse field-key ;; esac
+        # Every label this tool names, on a label create or on an issue, is one of its own lc: labels.
+        case "$key" in name|'labels[]') case "$val" in lc:?*) ;; *) lc__refuse label-name ;; esac ;; esac
         if [ "$flag" = -F ]; then
           case "$key" in
             body) case "$val" in @*) lc__file_ok "${val#@}" || lc__refuse file-operand ;; *) lc__refuse typed-field ;; esac ;;
@@ -253,7 +260,7 @@ lc_issue_body() {
   esac
   case "$ev" in *'`'*) ev="(evidence withheld)" ;; esac
   [ "$7" = "-" ] || cmd=" Command: \`$7\`"
-  V_ID=$1 V_SEVERITY=$2 V_DOMAIN=$(lc_domain_label "$3") V_TITLE=$5 V_EVIDENCE=$ev V_REMEDY=$8 V_COMMAND=$cmd awk '
+  V_BANNER=$(cat "$SKILL_DIR/references/banner.txt") V_ID=$1 V_SEVERITY=$2 V_DOMAIN=$(lc_domain_label "$3") V_TITLE=$5 V_EVIDENCE=$ev V_REMEDY=$8 V_COMMAND=$cmd awk '
     { out = ""; s = $0
       while ((i = index(s, "{{")) > 0) {
         rest = substr(s, i + 2); j = index(rest, "}}")
@@ -266,8 +273,8 @@ lc_issue_body() {
 
 lc_epic_title() { lc_phrase epic_heading; }
 lc_epic_initial() {
-  printf '<!-- launch-check:epic -->\n\n# %s\n\n%s\n\n<!-- launch-check:begin -->\n<!-- launch-check:end -->\n\n%s\n' \
-    "$(lc_phrase epic_heading)" "$(lc_phrase epic_intro)" "$(lc_phrase epic_outro)"
+  printf '<!-- launch-check:epic -->\n\n%s\n\n# %s\n\n%s\n\n<!-- launch-check:begin -->\n<!-- launch-check:end -->\n\n%s\n' \
+    "$(cat "$SKILL_DIR/references/banner.txt")" "$(lc_phrase epic_heading)" "$(lc_phrase epic_intro)" "$(lc_phrase epic_outro)"
 }
 
 lc__label_color() {
@@ -398,11 +405,13 @@ lc__create_cmd() { # <plan-dir> <create-count>
   c=$(printf 'bash %q issues --create --target %q --facts %q' "$SKILL_DIR/scripts/launch-check.sh" "$TARGET" "$ISSUES_FACTS_ARG")
   [ -z "$ISSUES_JUDGED_ARG" ] || c="$c $(printf -- '--judged %q' "$ISSUES_JUDGED_ARG")"
   c="$c $(printf -- '--plan %q --confirm-repo %q --confirm-count %q' "$1" "$ISSUES_REPO" "$2")"
-  [ "${ISSUES_VIS:-PRIVATE}" = PRIVATE ] || c="$c --confirm-public"
   [ -z "${ISSUES_REPO_ARG:-}" ] || c="$c $(printf -- '--repo %q' "$ISSUES_REPO_ARG")"
   [ "${ISSUES_HOST:-github.com}" = github.com ] || c="$c $(printf -- '--host %q' "$ISSUES_HOST")"
   lc__say "$c"
 }
+# lc__public_note: the printed command never carries --confirm-public (a command copied and run whole must not publish a list of
+# unfixed gaps on its own); a separate line says when the owner's own yes may append it.
+lc__public_note() { [ "${ISSUES_VIS:-PRIVATE}" = PRIVATE ] || lc__fmt confirm_public_append; }
 
 # ---------------------------------------------------------------- preview
 lc_issues_partition() {
@@ -509,6 +518,7 @@ lc_issues_preview() {
     else
       lc__fmt issues_create_hdr
       lc__create_cmd "$plandir" "$n_create"
+      lc__public_note
       lc__fmt issues_guard_note
     fi
   else
@@ -573,6 +583,7 @@ lc__incomplete() {
   if [ -n "${ISSUES_ORIG_PLAN_DIR:-}" ]; then
     lc__fmt resume_hint
     lc__create_cmd "$ISSUES_ORIG_PLAN_DIR" "${PLAN_CREATE_N:-0}"
+    lc__public_note
   fi
   lc_abort issues-incomplete 2 "phase=$1 detail=$2 plan=${ISSUES_ORIG_PLAN_DIR:--}"
 }

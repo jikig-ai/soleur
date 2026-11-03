@@ -119,6 +119,9 @@ prev() { runi "pv$N" --preview --target "$R" --facts "$FACTS" --judged "$JUD" --
 plan_n() { awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create"' "$PLAN/plan.tsv" 2>/dev/null | wc -l | tr -d ' '; }
 create_ids() { awk -F'\t' 'NF == 6 && $1 != "id" && $5 == "create" {print $1}' "$PLAN/plan.tsv" 2>/dev/null; }
 create() { CRN=$((CRN + 1)); runi "cr$N.$CRN" --create --target "$R" --facts "$FACTS" --judged "$JUD" --plan "$PLAN" --confirm-repo "${CREPO:-acme/demo}" --confirm-count "${CCOUNT:-$(plan_n)}" "$@"; }
+cmd_line() { grep -E '^bash .* issues --create ' "$1"; }   # the printed --create command, as one line
+export -f cmd_line
+banner_line() { cat "$SKILL/references/banner.txt"; }
 mode700() { [ "$(ls -ld "$1" 2>/dev/null | cut -c1-10)" = "drwx------" ]; }
 table_rows_present() { # every create row of the plan appears in the preview output as "ID | severity | title"
   local out=$1 plan=$2 n=0 id sev dom cls act title

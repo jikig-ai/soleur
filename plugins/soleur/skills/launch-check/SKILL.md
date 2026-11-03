@@ -128,7 +128,7 @@ Offer this after the report is written (step 3) and only when the report has ope
 - SEC-01 scans every file of the last commit, including the never-read classes, and ignores the repository's own gitleaks configuration. It cannot see files that are not committed.
 - If Claude Code is the customer's tool, anything printed to its tool result is model context: keep it free of secrets by following the rules above.
 - Detectors are heuristics. A gap means "not identified in the files read"; a missing gap is not assurance.
-- Filed issues carry catalog titles, remedies, check ids, severities and sanitized evidence only; secret-class findings appear as a count, never a location. Every byte sent passes the same redaction gate as the report. On a public repository the issues still publish the list of unfixed gaps, which is why it needs its own yes.
+- Filed issues carry the report's banner, catalog titles, remedies, check ids, severities and sanitized evidence only; secret-class findings appear as a count, never a location. Every byte sent passes the same redaction gate as the report. On a public repository the issues still publish the list of unfixed gaps, which is why it needs its own yes.
 - Libraries and CLIs are not deployed services: checks such as the health endpoint or backups will read as gaps and can be accepted.
 
 ## References
