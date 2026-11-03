@@ -213,8 +213,24 @@ expect_out "runsjunk" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
 # real jobs read would then confirm — the same counted-fault class as `.jobs`.
 fx="$WORK/fx-runsobject"; new_fx runsobject
 printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":91,"created_at":"2026-10-05T09:00:00Z","conclusion":"success"}}}' > "$fx/runs.json"
+# The planted phantom's jobs + health make the UNGUARDED path a demonstrable
+# false-PASS (rc 0), not merely rc != 3 — the pin survives a weakened message.
+add_job "$fx" 91 inngest_host_replace success
+add_health "$fx" 304 "$T3" success
 expect "non-array .workflow_runs is a counted fault, not phantom runs -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "runsobject" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
+
+# `.workflow_runs` ABSENT or NULL — the `// []` coalesce parses it as a
+# measured-empty list (NOT-YET), never a counted fault: a drifted envelope
+# missing the key is a valid empty read, not an unreadable one.
+fx="$WORK/fx-runsabsent"; new_fx runsabsent
+printf '%s' '{"total_count":0,"message":"drifted"}' > "$fx/runs.json"
+expect "absent .workflow_runs -> measured-empty NOT-YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "runsabsent" "$fx" "NOT-YET: no post-merge apply dispatches on main"
+
+fx="$WORK/fx-runsnull"; new_fx runsnull
+printf '%s' '{"total_count":0,"workflow_runs":null}' > "$fx/runs.json"
+expect "null .workflow_runs -> measured-empty NOT-YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 # A run carrying a successful replace job but created AT or BEFORE the merge second —
 # the probe's own jq applies the strict `>` filter on the fixture's raw list; either
@@ -331,6 +347,33 @@ add_job "$fx" 248 inngest_host_replace success
 add_health "$fx" 300 "$T3" success
 expect "success among replace jobs beats coexisting in-flight -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
+# Same pin, reversed list order — the grep-any semantic must not depend on the
+# success line arriving last (a last-conclusion-wins read would miss it).
+fx="$WORK/fx-jobprecedencerev"; new_fx jobprecedencerev
+add_run "$fx" 252 "$T1"
+add_job "$fx" 252 inngest_host_replace success
+add_job "$fx" 252 inngest_host_replace in_progress
+add_health "$fx" 303 "$T3" success
+expect "success listed before in-flight still wins -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+# A `queued` replace job is in-flight too — a queued member landing in the else
+# branch would read as a false FAIL ("the apply window needs a human").
+fx="$WORK/fx-queuedreplace"; new_fx queuedreplace
+add_run "$fx" 249 "$T1"
+add_job "$fx" 249 inngest_host_replace queued
+expect "replace job queued -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "queuedreplace" "$fx" "still in flight"
+
+# Within ONE run's jobs list: a failed attempt with a retry in flight reads
+# NOT-YET — the in-flight member supersedes the concluded failure (nothing
+# has concluded yet).
+fx="$WORK/fx-retryinflight"; new_fx retryinflight
+add_run "$fx" 250 "$T1"
+add_job "$fx" 250 inngest_host_replace failure
+add_job "$fx" 250 inngest_host_replace in_progress
+expect "in-flight retry beats coexisting failure -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "retryinflight" "$fx" "still in flight"
+
 fx="$WORK/fx-pass"; new_fx pass
 add_run "$fx" 260 "$T1"
 add_job "$fx" 260 inngest_host_replace success
@@ -373,6 +416,23 @@ add_health "$fx" 288 "$T3" null
 expect "post-dating health still in flight -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "inflight" "$fx" "still in flight"
 
+# `in_progress` and `queued` conclusions pin the remaining in-flight members of
+# the health verdict set — a conclusion `null` arrives via @tsv as the empty
+# field (the `inflight` arm above), so these cover the other two branches.
+fx="$WORK/fx-healthinprog"; new_fx healthinprog
+add_run "$fx" 253 "$T1"
+add_job "$fx" 253 inngest_host_replace success
+add_health "$fx" 305 "$T3" in_progress
+expect "post-dating health in_progress -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthinprog" "$fx" "still in flight"
+
+fx="$WORK/fx-healthqueued"; new_fx healthqueued
+add_run "$fx" 251 "$T1"
+add_job "$fx" 251 inngest_host_replace success
+add_health "$fx" 302 "$T3" queued
+expect "post-dating health queued -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthqueued" "$fx" "still in flight"
+
 fx="$WORK/fx-healthfail"; new_fx healthfail
 add_run "$fx" 289 "$T1"
 add_job "$fx" 289 inngest_host_replace success
@@ -414,6 +474,15 @@ add_job "$fx" 298 inngest_host_replace success
 printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":301,"created_at":"2026-10-07T09:00:00Z","conclusion":"success"}}}' > "$fx/health.json"
 expect "non-array .workflow_runs on health list -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "healthobject" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
+
+# `.workflow_runs` ABSENT on the health list — the `// []` coalesce must read it
+# as measured-empty (NOT-YET), never a counted fault (same pin as runsabsent).
+fx="$WORK/fx-healthabsent"; new_fx healthabsent
+add_run "$fx" 299 "$T1"
+add_job "$fx" 299 inngest_host_replace success
+printf '%s' '{"total_count":0,"incomplete_results":false}' > "$fx/health.json"
+expect "absent .workflow_runs on health list -> measured-empty NOT-YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthabsent" "$fx" "NOT-YET: replace ran (299) but no health run post-dates it yet"
 
 printf 'inngest-cli-apply-window-7463.test.sh: %s passed, %s failed\n' "$((total - fails))" "$fails"
 [[ "$fails" -eq 0 ]]
