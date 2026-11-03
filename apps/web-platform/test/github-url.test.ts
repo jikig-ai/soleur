@@ -1,5 +1,6 @@
 /**
- * GitHub API egress URL guard tests (CodeQL js/request-forgery, alert #234)
+ * GitHub API egress URL guard tests (CodeQL js/request-forgery, alert #234;
+ * suppression-adjacency sentinel for alert #268's codeql[...] annotation)
  *
  * Pins the contract of server/github-url.ts — every credential-bearing GitHub
  * API request must resolve to https://api.github.com and only there — plus the
@@ -341,6 +342,12 @@ describe("GitHub API egress census", () => {
   });
 });
 
+// A standalone-line `// codeql[<query-id>]` is the only form CodeQL honors
+// (AlertSuppression.qll `covers`: commentEndLine + 1, and the comment must be
+// the first node on its line — a trailing comment on a code line or a string
+// literal carrying the token suppresses nothing).
+const CODEQL_RF_ANNOTATION = /^\s*\/\/\s*codeql\[js\/request-forgery\]\s*$/;
+
 describe("CodeQL in-source suppression sentinel", () => {
   // A `// codeql[<query-id>]` annotation suppresses ONLY the alert on the
   // immediately following line (AlertSuppression.qll `covers` semantics: the
@@ -351,21 +358,21 @@ describe("CodeQL in-source suppression sentinel", () => {
     const rel = "server/github-app.ts";
     const src = readFileSync(join(APP_ROOT, rel), "utf8");
     const lines = src.split("\n");
-    const sinkIdx = lines.findIndex((l) => /\bawait fetch\(url\b/.test(l));
+    const sinkIdxs = lines
+      .map((l, i) => (/\bawait fetch\(url\b/.test(l) ? i : -1))
+      .filter((i) => i >= 0);
     expect(
-      sinkIdx,
-      "no `await fetch(url,` sink found in github-app.ts githubFetch",
-    ).toBeGreaterThan(0);
-    const annotations = lines.filter((l) =>
-      l.includes("codeql[js/request-forgery]"),
-    );
+      sinkIdxs,
+      "exactly one `await fetch(url,` sink expected in github-app.ts",
+    ).toHaveLength(1);
+    const annotations = lines.filter((l) => CODEQL_RF_ANNOTATION.test(l));
     expect(
       annotations,
-      "exactly one js/request-forgery suppression annotation in github-app.ts",
+      "exactly one standalone codeql[js/request-forgery] annotation line in github-app.ts",
     ).toHaveLength(1);
     expect(
-      lines[sinkIdx - 1],
-      "line above the githubFetch sink must carry codeql[js/request-forgery]",
-    ).toContain("codeql[js/request-forgery]");
+      lines[sinkIdxs[0] - 1],
+      "line above the githubFetch sink must be a standalone codeql[js/request-forgery] comment",
+    ).toMatch(CODEQL_RF_ANNOTATION);
   });
 });
