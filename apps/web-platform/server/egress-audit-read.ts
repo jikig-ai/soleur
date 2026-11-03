@@ -6,8 +6,8 @@
 // Authorization is the RPC's alone (migration 177 for the card hint, migration 183 for the page:
 // `is_workspace_member(p_workspace_id, auth.uid())`, SQLSTATE 42501 otherwise). The page reads
 // `get_egress_audit_window_summary` (window 24h / 7d / 30d, #11238) with no fallback to the 177 function; the
-// card hint stays on `get_egress_audit_summary` with `p_limit = 0` and no window. This loader never decides who may read; it decides WHICH workspace to
-// ask about and how to render each outcome, under these rules:
+// card hint stays on `get_egress_audit_summary` with `p_limit = 0` and no window. This loader never decides
+// who may read; it decides WHICH workspace to ask about and how to render each outcome, under these rules:
 //
 //   1. The workspace id comes ONLY from `readWorkspaceIdFromDb`, the fail-loud reader. It is never an
 //      argument and never read from a request. The shared `resolveCurrentWorkspaceId` falls back to
@@ -96,7 +96,7 @@ function pgTag(code: unknown): PgTags {
 const isAbort = (e: NonNullable<RpcError>): boolean =>
   e.name === "AbortError" || e.name === "TimeoutError" || /abort|timed? ?out/i.test(e.message ?? "");
 
-// The RPC's own denial (migration 177): SQLSTATE 42501 with a message from the function body. The engine's
+// The RPC's own denial (migrations 177 and 183): SQLSTATE 42501 with a message from the function body. The engine's
 // "permission denied for function ..." carries the same SQLSTATE and is NOT a denial.
 const isRpcDenial = (e: NonNullable<RpcError>): boolean =>
   e.code === "42501" && typeof e.message === "string" && e.message.startsWith(RPC_DENIAL_PREFIX);

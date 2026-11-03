@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { PAGE_LIMIT, RPC_DENIAL_PREFIX } from "@/lib/egress-audit/summary";
 import { ATTACK_SQL, CLASSIFIED_DEFINER_FN_NAMES } from "../rls-fuzz/rpc-cases";
@@ -23,7 +23,7 @@ const VERIFY = path.join(__dirname, "../../supabase/verify/183_egress_audit_wind
 const UP_177 = path.join(MIG, "177_egress_audit_summary_rpc.sql");
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
-const stripComments = (s: string): string => s.replace(/--[^\n]*/g, "");
+const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
 const up = read(UP);
 const down = read(DOWN);
 const verify = read(VERIFY);
@@ -48,11 +48,14 @@ const DENIAL_PREFIX_VALUE = "egress audit: ";
 const extractStatement = (sql: string, name: string): string =>
   stripComments(sql).match(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${name}\\s*\\([\\s\\S]*?\\$\\$;`, "i"))?.[0] ?? "";
 
-/** Whitespace collapsed AND spacing around ( ) , ; removed, so a reflowed `(\n x` equals `(x`. */
+/** Whitespace collapsed AND spacing around ( ) , ; removed OUTSIDE string literals, so a reflowed `(\n x` equals `(x`. */
 const collapse = (s: string): string =>
   s
-    .replace(/\s+/g, " ")
-    .replace(/\s*([(),;])\s*/g, "$1")
+    // SQL string literals are kept byte-for-byte: spacing inside '( other)' is data, not layout
+    .split(/('(?:[^']|'')*')/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/\s+/g, " ").replace(/\s*([(),;])\s*/g, "$1")))
+    .join("")
+    .replace(/ {2,}/g, " ")
     .trim();
 
 type Norm = { from: string; to: string; side: "177" | "183" };
@@ -124,11 +127,20 @@ const orderViolations = (execSql: string): string[] => {
   if (!(probeAt > windowAt)) out.push("probe after window");
   if (!(firstWindowRef > jtiEnd)) out.push("p_window not referenced before the jti statement ends");
   if (!(firstWindowRef > decisionAt)) out.push("p_window not referenced before the decision check");
+  // v_lo is derived from v_span and must be assigned after the window check, before the probe reads it, and
+  // never used earlier: the normalization in Guard 1 deletes this line wherever it sits, so position is pinned here
+  const spanAt = body.search(/\bv_span\s*:=\s*CASE\s+p_window/);
+  const loAt = body.search(/\bv_lo\s*:=\s*v_now\s*-\s*v_span\s*;/);
+  if (!(spanAt > decisionAt)) out.push("window CASE after the decision check");
+  if (!(loAt > windowAt)) out.push("v_lo assigned after the window check");
+  if (!(loAt > -1 && loAt < probeAt)) out.push("v_lo assigned before the probe");
+  if (body.search(/\bv_lo\b/) !== loAt) out.push("v_lo used before it is assigned");
   return out;
 };
 
 const tenantPredicates = (execSql: string): number => (execSql.match(/\bworkspace_id\s*=\s*p_workspace_id\b/g) ?? []).length;
-const tableReads = (execSql: string): number => (execSql.match(/FROM\s+public\.workspace_egress_audit_rollup\b/gi) ?? []).length;
+// any mention of the table (JOIN, comma join, unqualified or quoted FROM all count), not only `FROM public.<table>`
+const tableReads = (execSql: string): number => (execSql.match(/\bworkspace_egress_audit_rollup\b/g) ?? []).length;
 
 describe("183_egress_audit_window_summary.sql (shape)", () => {
   it("all three files exist and 177 (the oracle) is present", () => {
@@ -297,6 +309,51 @@ describe("183_egress_audit_window_summary.sql (shape)", () => {
   });
 });
 
+describe("nothing else in the migration file", () => {
+  // Guard 1 pins the function body; this pins everything AROUND it. A statement outside the function (a view, a DO
+  // block, a table grant, a TRUNCATE) is not read by any parity or order check, so the file is a closed list of heads.
+  const functionStmt = extractStatement(up, NAME);
+  const topLevelStatements = upExec
+    .replace(functionStmt, "")
+    .split(/;[ \t]*(?:\r?\n|$)/)
+    .map((x) => x.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  it("is the one function plus REVOKE, GRANT and COMMENT for the exact signature, and nothing else", () => {
+    expect(functionStmt).not.toBe("");
+    expect(topLevelStatements).toHaveLength(3);
+    expect(topLevelStatements[0]).toMatch(/^REVOKE ALL ON FUNCTION /i);
+    expect(topLevelStatements[1]).toMatch(/^GRANT EXECUTE ON FUNCTION /i);
+    expect(topLevelStatements[2]).toMatch(/^COMMENT ON FUNCTION /i);
+    for (const x of topLevelStatements) expect(x).toContain(SIG);
+  });
+
+  it("an appended statement of another kind is detected", () => {
+    const appended = `${upExec}\nTRUNCATE public.workspace_egress_audit_rollup;\nDO $x$ BEGIN UPDATE public.workspace_egress_audit_rollup SET request_count = 0; END $x$;\n`;
+    const rest = appended
+      .replace(functionStmt, "")
+      .split(/;[ \t]*(?:\r?\n|$)/)
+      .map((x) => x.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    expect(rest.length).toBeGreaterThan(3);
+  });
+});
+
+describe("a third copy of the read body cannot arrive unnoticed (ADR-288 retirement path)", () => {
+  // The two member-readable definer functions over the rollup table are 177 and 183, and Guard 1 compares exactly two
+  // bodies. A third authenticated-granted reader would pass every default-suite check, so the set is pinned: adding
+  // one is a conscious edit of this list (and of the ADR's retirement path), not a silent copy.
+  it("exactly migrations 177 and 183 grant EXECUTE to authenticated on a function that reads the rollup table", () => {
+    const readers = readdirSync(MIG)
+      .filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql"))
+      .filter((f) => {
+        const exec = stripComments(readFileSync(path.join(MIG, f), "utf8"));
+        return /\bworkspace_egress_audit_rollup\b/.test(exec) && /GRANT\s+EXECUTE\s+ON\s+FUNCTION[^;]*\bTO\s+authenticated\b/i.test(exec);
+      });
+    expect(readers).toEqual(["177_egress_audit_summary_rpc.sql", "183_egress_audit_window_summary.sql"]);
+  });
+});
+
 describe("harness registration (default-suite assertions, AC7/AC8 without a database)", () => {
   it("ATTACK_SQL classifies both read functions and CLASSIFIED_DEFINER_FN_NAMES carries both names", () => {
     expect(Object.keys(ATTACK_SQL)).toEqual(expect.arrayContaining([NAME_177, NAME]));
@@ -389,11 +446,42 @@ describe("Guard 1 - body parity between the 177 function and the 183 function", 
     expect(parityHolds(up177, up, [])).toBe(false);
   });
 
+  it("mutation 6: moving `v_lo := v_now - v_span;` after the probe, or above the CASE, reds the order check (Guard 1 deletes that line wherever it sits)", () => {
+    const line = "v_lo := v_now - v_span;";
+    expect(upExec).toContain(line);
+    const without = upExec.replace(line, "");
+    const afterProbe = without.replace(/WITH\s+w\s+AS/i, `${line}\n  WITH w AS`);
+    const aboveCase = without.replace(/v_span\s*:=\s*CASE\s+p_window/i, `${line}\n  v_span := CASE p_window`);
+    expect(afterProbe).not.toBe(without);
+    expect(aboveCase).not.toBe(without);
+    expect(orderViolations(upExec)).toEqual([]);
+    expect(orderViolations(afterProbe)).toContain("v_lo assigned before the probe");
+    expect(orderViolations(aboveCase).length).toBeGreaterThan(0);
+  });
+
+  it("mutation 7: spacing inside a string literal is data - '(other)' vs '( other)' reds parity; layout outside literals does not", () => {
+    expect(up).toContain("'(other)'");
+    const mutated = up.replace("'(other)'", "'( other)'");
+    expect(mutated).not.toBe(up);
+    expect(parityHolds(up177, mutated)).toBe(false);
+  });
+
+  it("mutation 8: a tenant predicate that survives only inside a block comment is not a predicate", () => {
+    const m = up.match(/(?:t|b)\.workspace_id\s*=\s*p_workspace_id/);
+    expect(m).not.toBeNull();
+    const idx = m?.index as number;
+    const mutated = up.slice(0, idx) + "TRUE /* " + m?.[0] + " */" + up.slice(idx + (m?.[0].length ?? 0));
+    expect(tenantPredicates(stripComments(mutated))).not.toBe(tableReads(stripComments(mutated)));
+    expect(parityHolds(up177, mutated)).toBe(false);
+  });
+
   it("must-pass: extra comments and reflowed whitespace in the 183 body still hold parity (the guard is not a byte equality)", () => {
     // reflow the code only (a comma inside a `--` comment must not spill onto an uncommented line)
+    // string literals are data (see mutation 7), so the reflow touches only the text between them
     const reflowed = stripComments(up)
-      .replace(/,/g, ",\n      ")
-      .replace(/\(/g, "(\n   ")
+      .split(/('(?:[^']|'')*')/)
+      .map((part, i) => (i % 2 === 1 ? part : part.replace(/,/g, ",\n      ").replace(/\(/g, "(\n   ")))
+      .join("")
       .replace(/^BEGIN$/m, "BEGIN -- extra comment\n  -- another comment");
     expect(reflowed).toContain("-- extra comment");
     expect(reflowed).not.toBe(up);
@@ -405,7 +493,7 @@ describe("the verify sentinel asserts the live catalog PREDICATES for the exact 
   const rows = new Map<string, string>();
   for (const seg of verifyExec.split(/\bUNION\s+ALL\b/i)) {
     const name = seg.match(/SELECT\s+'([a-z_]+)'/i)?.[1];
-    if (name) rows.set(name, seg.replace(/\s+/g, " "));
+    if (name) rows.set(name, seg.replace(/\s+/g, " ").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")"));
   }
   const FN = "'public\\.get_egress_audit_window_summary\\(uuid, integer, text, text\\)'";
   const RP = `to_regprocedure\\(${FN}\\)`;
@@ -415,14 +503,15 @@ describe("the verify sentinel asserts the live catalog PREDICATES for the exact 
     egress_window_summary_search_path_pinned: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p, unnest\\(p\\.proconfig\\) c WHERE p\\.oid = ${RP} AND c LIKE 'search_path=%pg_temp%'\\) THEN 0 ELSE 1 END`),
     egress_window_summary_plan_cache_mode_custom: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p, unnest\\(p\\.proconfig\\) c WHERE p\\.oid = ${RP} AND c = 'plan_cache_mode=force_custom_plan'\\) THEN 0 ELSE 1 END`),
     egress_window_summary_checks_jti_denylist: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p WHERE p\\.oid = ${RP} AND p\\.prosrc LIKE '%is_jti_denied_from_jwt\\(\\)%'\\) THEN 0 ELSE 1 END`),
+    egress_window_summary_validates_window: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p WHERE p\\.oid = ${RP} AND p\\.prosrc LIKE '%egress audit: invalid window%' AND p\\.prosrc LIKE '%CASE p_window%'\\) THEN 0 ELSE 1 END`),
     egress_window_summary_anon_revoked: new RegExp(`CASE WHEN has_function_privilege\\('anon', ${FN}, 'EXECUTE'\\) THEN 1 ELSE 0 END`),
     egress_window_summary_service_role_revoked: new RegExp(`CASE WHEN has_function_privilege\\('service_role', ${FN}, 'EXECUTE'\\) THEN 1 ELSE 0 END`),
-    egress_window_summary_public_revoked: new RegExp(`p\\.oid = ${RP} AND a\\.grantee = 0 AND a\\.privilege_type = 'EXECUTE'\\) THEN 1 ELSE 0 END`),
+    egress_window_summary_public_revoked: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p, aclexplode\\(p\\.proacl\\) a WHERE p\\.oid = ${RP} AND a\\.grantee = 0 AND a\\.privilege_type = 'EXECUTE'\\) OR EXISTS \\(SELECT 1 FROM pg_proc p WHERE p\\.oid = ${RP} AND p\\.proacl IS NULL\\) THEN 1 ELSE 0 END`),
     egress_window_summary_authenticated_granted: new RegExp(`CASE WHEN has_function_privilege\\('authenticated', ${FN}, 'EXECUTE'\\) THEN 0 ELSE 1 END`),
-    egress_window_summary_grantee_set_is_only_authenticated: new RegExp(`p\\.oid = ${RP} AND a\\.privilege_type = 'EXECUTE' AND a\\.grantee NOT IN \\(.*rolname = 'authenticated'\\).*proowner.*${RP}\\)\\) \\) = 0 THEN 0 ELSE 1 END`),
+    egress_window_summary_grantee_set_is_only_authenticated: new RegExp(`FROM pg_proc p, aclexplode\\(p\\.proacl\\) a WHERE p\\.oid = ${RP} AND a\\.privilege_type = 'EXECUTE' AND a\\.grantee IS DISTINCT FROM \\(SELECT oid FROM pg_roles WHERE rolname = 'authenticated'\\) AND a\\.grantee IS DISTINCT FROM \\(SELECT proowner FROM pg_proc WHERE oid = ${RP}\\)\\) = 0 THEN 0 ELSE 1 END`),
   };
 
-  it("has exactly the ten expected rows, with check names distinct from 177's", () => {
+  it("has exactly the eleven expected rows, with check names distinct from 177's", () => {
     expect([...rows.keys()].sort()).toEqual(Object.keys(predicates).sort());
     const names177 = new Set(
       stripComments(read(path.join(__dirname, "../../supabase/verify/177_egress_audit_summary_rpc.sql")))
@@ -435,6 +524,12 @@ describe("the verify sentinel asserts the live catalog PREDICATES for the exact 
 
   it.each(Object.entries(predicates))("%s has its predicate and polarity", (name, re) => {
     expect([name, re.test(rows.get(name) ?? "")]).toEqual([name, true]);
+  });
+
+  it("every row ends at its CASE ... END::int (nothing is appended after the predicate to neuter it)", () => {
+    for (const [name, seg] of rows) {
+      expect([name, /THEN [01] ELSE [01] END::int( AS bad)? ?;? ?$/.test(seg.trim())]).toEqual([name, true]);
+    }
   });
 
   it("existence goes through to_regprocedure (a ::regprocedure cast would raise instead of reporting bad = 1) and never a bare cast", () => {

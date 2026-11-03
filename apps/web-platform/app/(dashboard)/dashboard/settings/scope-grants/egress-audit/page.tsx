@@ -1,7 +1,8 @@
 // #9545 PR2 — egress audit destination page (wireframes 07-04..07-25). A child route of Scope Grants, so
 // the settings shell keeps the Scope Grants tab highlighted. Server-rendered: the loader calls the
 // member-gated RPC through the caller's cookie client; the filter is the `?decision=` search param and the
-// time window (24h / 7d / 30d, default 30d) is the `?window=` search param (chips are links), so there is no client fetch, abort guard or rate-limited route. Expected failures
+// time window (24h / 7d / 30d, default 30d) is the `?window=` search param (chips are links), so there is no
+// client fetch, abort guard or rate-limited route. Expected failures
 // render in place (the settings tabs stay); only an uncaught bug reaches the dashboard error boundary.
 // Caching: `force-dynamic` below keeps the page out of the static cache, and the middleware sends
 // `Cache-Control: no-store` on authenticated document navigations (test/middleware.no-store.test.ts), so a

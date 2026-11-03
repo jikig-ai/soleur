@@ -39,7 +39,8 @@ const FILTERS: { key: DecisionFilter; label: string }[] = [
   { key: "blocked", label: "Blocked" },
   { key: "other", label: "Other" },
 ];
-// Canonical URLs: a default (`all`, `30d`) is omitted, `decision` comes before `window`.
+// Canonical URLs: a default (`all`, `30d`) is omitted, `decision` comes before `window`. Every link keeps the
+// other control: "Show all" drops only the decision, "Show 30 days" drops only the window.
 const hrefFor = (f: DecisionFilter, w: TimeWindow) => {
   const q = [f === "all" ? null : `decision=${f}`, w === DEFAULT_TIME_WINDOW ? null : `window=${w}`].filter(Boolean).join("&");
   return q ? `${BASE}?${q}` : BASE;
@@ -339,12 +340,12 @@ function UnavailableCard() {
 export function EgressAuditView({
   result,
   filter,
-  timeWindow = DEFAULT_TIME_WINDOW,
+  timeWindow,
   now = Date.now(),
 }: {
   result: EgressAuditResult;
   filter: DecisionFilter;
-  timeWindow?: TimeWindow;
+  timeWindow: TimeWindow;
   now?: number;
 }) {
   // The settings shell already caps the content width, so no max-width here.
@@ -414,7 +415,6 @@ function ReadyView({
   const total = data.summary.request_count_min ?? 0;
   const blocked = data.summary.blocked_request_count_min ?? 0;
   const phrase = windowPhrase(timeWindow);
-  // Window and decision links: "Show all" drops only the decision, "Show 30 days" drops only the window.
   const windowChips = <WindowChips filter={filter} timeWindow={timeWindow} />;
 
   if (hasData) {
@@ -507,6 +507,9 @@ function ReadyView({
       <>
         <Banner />
         {windowChips}
+        {/* a filter on a window with no rows must stay clearable: without the outcome chips the only way back to
+            "All" would be the browser's Back button */}
+        {filter !== "all" && <Chips filter={filter} timeWindow={timeWindow} />}
         <StateCard
           icon={<Info className="h-6 w-6" />}
           title={`No requests recorded in ${phrase}`}

@@ -18,8 +18,10 @@ type Raise = { message: string; errcode: string };
 const load = (ordinal: number): { file: string | undefined; code: string; raises: Raise[] } => {
   const file = readdirSync(migrations).find((f) => new RegExp(`^${ordinal}_.*\\.sql$`).test(f) && !f.endsWith(".down.sql"));
   const sql = file ? readFileSync(join(migrations, file), "utf8") : "";
-  // A `-- ...` line comment never raises anything; strip them so a comment cannot satisfy or break the anchor.
-  const code = sql.replace(/^\s*--.*$/gm, "");
+  // Neither a `-- ...` comment (whole-line OR trailing) nor a block comment raises anything; strip them all so a
+  // comment cannot satisfy or break the anchor (a trailing `-- RAISE EXCEPTION '...' USING ERRCODE = '22023'`
+  // would otherwise satisfy the floor after the real raise was deleted).
+  const code = sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
   const raises = [...code.matchAll(/RAISE\s+EXCEPTION\s+'((?:[^']|'')*)'\s+USING\s+ERRCODE\s*=\s*'([0-9A-Z]{5})'/g)].map((m) => ({
     message: m[1].replace(/''/g, "'"),
     errcode: m[2],
@@ -65,5 +67,9 @@ describe.each(MIGRATIONS)("migration $ordinal denial messages vs RPC_DENIAL_PREF
   it("no statement in the file raises 42501 by a spelling the scan above does not see", () => {
     // Every mention of the SQLSTATE in executable code must be one of the parsed RAISE statements.
     expect((code.match(/'42501'/g) ?? []).length).toBe(raises.filter((r) => r.errcode === "42501").length);
+    // ... and the same for the 22023 argument errors: a `RAISE SQLSTATE '22023' USING MESSAGE = ...` form is not parsed
+    expect((code.match(/'22023'/g) ?? []).length).toBe(raises.filter((r) => r.errcode === "22023").length);
+    // every RAISE in the file is a parsed `RAISE EXCEPTION '<literal>' USING ERRCODE = '<code>'`
+    expect((code.match(/\bRAISE\b/gi) ?? []).length).toBe(raises.length);
   });
 });

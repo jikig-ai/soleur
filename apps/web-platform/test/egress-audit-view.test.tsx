@@ -76,7 +76,9 @@ const ready = (data: EgressAuditPayload, over: Partial<Extract<EgressAuditResult
 });
 
 type Filter = "all" | "allowed" | "blocked" | "other";
-const show = (result: EgressAuditResult, filter: Filter = "all", timeWindow?: TimeWindow) =>
+// window-assembly: timeWindow — not a regex-extracted source region: it is the selected time window (24h / 7d / 30d)
+// the view is rendered with. The closure assertions below are complete against TIME_WINDOWS and the LADDER states.
+const show = (result: EgressAuditResult, filter: Filter = "all", timeWindow: TimeWindow = "30d") =>
   render(<EgressAuditView result={result} filter={filter} timeWindow={timeWindow} now={NOW} />);
 
 afterEach(cleanup);
@@ -442,7 +444,11 @@ function renderSweep(workspaceName: string | null = "Acme"): { name: string; tim
 function strayScanText(root: HTMLElement, workspaceName: string | null, allowlist: readonly string[] = [RETENTION]): string {
   for (const el of Array.from(root.querySelectorAll('nav[aria-label="Time window"]'))) el.remove();
   for (const a of Array.from(root.querySelectorAll("a"))) if (a.textContent === "Show 30 days") a.remove();
-  let text = root.textContent ?? "";
+  // attribute text is user-visible too (screen readers, tooltips): aria-label, title and alt are scanned with the text
+  const attrs = Array.from(root.querySelectorAll("[aria-label],[title],[alt]")).flatMap((el) =>
+    ["aria-label", "title", "alt"].map((a) => el.getAttribute(a) ?? ""),
+  );
+  let text = [root.textContent ?? "", ...attrs].join(" ");
   for (const sentence of allowlist) text = text.split(sentence).join("");
   if (workspaceName) text = text.split(workspaceName).join("");
   return text;
@@ -461,10 +467,17 @@ describe("EgressAuditView — window selector", () => {
     expect(nav.compareDocumentPosition(outcomeNav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("the default (prop omitted) is the 30-day view", () => {
+  it("the 30-day view marks the 30 days chip current (the prop is required: the page always passes the parsed window)", () => {
     show(ready(payload()));
     const chips = within(screen.getByRole("navigation", WINDOW_NAV)).getAllByRole("link");
     expect(chips.filter((c) => c.getAttribute("aria-current") === "page").map((c) => c.textContent)).toEqual(["30 days"]);
+  });
+
+  it.each(SHORTER)("%s: a decision filter on a window with no rows stays clearable (outcome chips render, 'All' links back)", (w) => {
+    show(ready(empty()), "blocked", w);
+    const outcome = screen.getByRole("navigation", { name: "Filter by outcome" });
+    const all = within(outcome).getByRole("link", { name: "All" });
+    expect(all.getAttribute("href")).toBe(`${BASE}?window=${w}`);
   });
 
   it("window chips carry the current decision; canonical URLs omit the defaults and order decision before window", () => {
@@ -647,7 +660,8 @@ describe("EgressAuditView — sentences that must not move with the window", () 
 describe("Guard 2 — no stale 30-day copy; wording bans (state ladder x windows)", () => {
   it("the sweep covers the whole cross product (a dropped window or state fails here, not silently)", () => {
     const cells = renderSweep();
-    expect(LADDER.length).toBeGreaterThanOrEqual(12);
+    // exact, not a floor: dropping a state must be a deliberate edit of this number (a floor tolerates silent drops)
+    expect(LADDER.length).toBe(15);
     expect(cells).toHaveLength(TIME_WINDOWS.length * LADDER.length);
     expect(new Set(cells.map((c) => c.timeWindow))).toEqual(new Set(["24h", "7d", "30d"]));
   });
@@ -683,6 +697,8 @@ describe("Guard 2 — no stale 30-day copy; wording bans (state ladder x windows
     for (const c of renderSweep()) {
       const where = `${c.timeWindow} / ${c.name}`;
       expect([where, BANNED.test(c.text)]).toEqual([where, false]);
+      // a wrong-window sentence need not contain the digits 30
+      expect([where, /\b(last|past) month\b|\b4 weeks\b/i.test(c.text)]).toEqual([where, false]);
       expect([where, COMPLETENESS_CLAIM.test(c.text)]).toEqual([where, false]);
       expect([where, FORBIDDEN.test(c.text)]).toEqual([where, false]);
       expect([where, c.root.querySelector("time")]).toEqual([where, null]);

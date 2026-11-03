@@ -8,6 +8,9 @@
 -- reports bad = 1 instead of the cast raising. The 177 function and the two rollup table
 -- rows are asserted in verify/177 and are not repeated here. Supabase default privileges
 -- re-grant EXECUTE to anon and service_role, so every non-authenticated role is checked by name.
+-- A NULL proacl means the default ACL, i.e. PUBLIC holds EXECUTE; aclexplode(NULL) yields no rows, so the
+-- PUBLIC row also tests proacl IS NULL, and the grantee-set row uses IS DISTINCT FROM (a NOT IN list with a
+-- NULL member would pass vacuously). The window row proves the live body carries the window check.
 
 SELECT 'egress_window_summary_is_definer' AS check_name,
        CASE WHEN COALESCE((SELECT p.prosecdef FROM pg_proc p
@@ -37,6 +40,13 @@ SELECT 'egress_window_summary_checks_jti_denylist',
                             AND p.prosrc LIKE '%is_jti_denied_from_jwt()%')
             THEN 0 ELSE 1 END::int
 UNION ALL
+SELECT 'egress_window_summary_validates_window',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)')
+                            AND p.prosrc LIKE '%egress audit: invalid window%'
+                            AND p.prosrc LIKE '%CASE p_window%')
+            THEN 0 ELSE 1 END::int
+UNION ALL
 SELECT 'egress_window_summary_anon_revoked',
        CASE WHEN has_function_privilege('anon',
               'public.get_egress_audit_window_summary(uuid, integer, text, text)', 'EXECUTE')
@@ -52,6 +62,8 @@ SELECT 'egress_window_summary_public_revoked',
               SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
                WHERE p.oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)')
                  AND a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+              OR EXISTS (SELECT 1 FROM pg_proc p
+                          WHERE p.oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)') AND p.proacl IS NULL)
             THEN 1 ELSE 0 END::int
 UNION ALL
 SELECT 'egress_window_summary_authenticated_granted',
@@ -63,8 +75,6 @@ SELECT 'egress_window_summary_grantee_set_is_only_authenticated',
        CASE WHEN (SELECT count(*) FROM pg_proc p, aclexplode(p.proacl) a
                    WHERE p.oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)')
                      AND a.privilege_type = 'EXECUTE'
-                     AND a.grantee NOT IN (
-                           (SELECT oid FROM pg_roles WHERE rolname = 'authenticated'),
-                           (SELECT proowner FROM pg_proc
-                             WHERE oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)')))
+                     AND a.grantee IS DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = 'authenticated')
+                     AND a.grantee IS DISTINCT FROM (SELECT proowner FROM pg_proc WHERE oid = to_regprocedure('public.get_egress_audit_window_summary(uuid, integer, text, text)'))
                 ) = 0 THEN 0 ELSE 1 END::int;

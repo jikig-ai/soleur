@@ -178,7 +178,7 @@ describe("loadEgressAudit: 42501 discrimination", () => {
   });
 
   it("the engine's own 42501 (a lost grant) is `unavailable` with exactly one paged rpc_error tagged pg_code=42501", async () => {
-    const c = client({ summary: { data: null, error: { code: "42501", message: "permission denied for function get_egress_audit_summary" } } });
+    const c = client({ summary: { data: null, error: { code: "42501", message: "permission denied for function get_egress_audit_window_summary" } } });
     await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults()).toHaveLength(1);
     expect(faults()[0]).toMatchObject({
