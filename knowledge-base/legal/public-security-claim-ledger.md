@@ -8,7 +8,7 @@ Scope: three claim topics, namely isolation (prefix `I`), egress (prefix `E`) an
 
 These items are unresolved at the pinned commit. None is a decision.
 
-- The end-of-work CLO review is recorded in `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/decision-challenges.md` (section CLO Review Record); statements provisionally assessed by the CLO agent as needing no change to their wording remain unattested unless that record names them.
+- The end-of-work CLO review is recorded in `knowledge-base/project/specs/archive/20261103-082957-feat-one-shot-9603-public-security-claim-ledger/decision-challenges.md` (section CLO Review Record); statements provisionally assessed by the CLO agent as needing no change to their wording remain unattested unless that record names them.
 - Statements counted as `escalate` in Part 2 await a wording decision by the human principal; no wording is agreed.
 - The per-statement table behind Part 2 is held outside this repository for the human principal.
 - ADR-272 status text and issue 9614 are not reconciled (row I1).
