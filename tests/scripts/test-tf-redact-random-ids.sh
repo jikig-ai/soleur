@@ -32,7 +32,10 @@ nlines() { printf '%s\n' "$1" | wc -l; }
 # NO. They report with printf+exit directly, never through the helpers under test, and are not counted as assertions.
 _c_ok="$(check "ctl-ok" 0)"; _c_bad="$(check "ctl-bad" 1)"
 if [ "$_c_ok" != "[ok] ctl-ok" ] || [ "$_c_bad" != "[FAIL] ctl-bad" ]; then printf 'FATAL: check() cannot tell pass from fail\n' >&2; exit 1; fi
-if absent "xAy" "A" || ! absent "xBy" "A" || clean "[id=$K22]" || ! clean "plain text"; then printf 'FATAL: absent()/clean() control failed\n' >&2; exit 1; fi
+if absent "xAy" "A" || ! absent "xBy" "A" || clean "[id=$K22]" || clean "[id=$K43]" || ! clean "plain text"; then printf 'FATAL: absent()/clean() control failed\n' >&2; exit 1; fi
+if ! contains "abc" "b" || contains "abc" "z"; then printf 'FATAL: contains() control failed\n' >&2; exit 1; fi
+_c_two="$(check "ctl-two" 2)"; _c_pb="$(pass x >/dev/null; printf %s "$PASSES")"; _c_fb="$(fail x >/dev/null; printf %s "$FAILS")"
+if [ "$_c_two" != "[FAIL] ctl-two" ] || [ "$_c_pb" != "$((PASSES + 1))" ] || [ "$_c_fb" != "$((FAILS + 1))" ]; then printf 'FATAL: pass()/fail()/check(2) control failed\n' >&2; exit 1; fi
 
 
 # --- Refreshing / Creation / Modification / Destruction / Read lines -------------------------------------
@@ -332,6 +335,24 @@ SNOUT="$(tf_redact_random_ids <<<"$SHOWNEST")"
 contains "$SHOWNEST" 'SynthShowResult_' && contains "$SHOWNEST" "$K22"; check "show-shape nested map: raw block carries the values (live positive control)" "$?"
 absent "$SNOUT" 'SynthShowResult_' && absent "$SNOUT" "$K22"; check "show-shape nested map: id AND result AFTER a 4-space keepers closer are redacted (column-0 closer only)" "$?"
 contains "$SNOUT" '"rot" = "a"' && contains "$SNOUT" '    id          = "12345"'; check "show-shape nested map: keepers entry and the next resource's id are kept" "$?"
+# Real `terraform show` suffixes: `(tainted)`, `(deposed object ..)`, trailing whitespace and a CR (CRLF log).
+n=0
+for hdr in "# random_id.k: (tainted)" "# random_id.k: (deposed object abc12345)" "# random_id.k: " "# random_id.k:$(printf '\r')" "# random_id.k: (tainted) $(printf '\r')"; do
+  n=$((n + 1))
+  SH2="$hdr
+resource \"random_id\" \"k\" {
+    hex         = \"$OLD_HEX\"
+    id          = \"$K22\"
+}
+# hcloud_volume.v:
+resource \"hcloud_volume\" \"v\" {
+    id          = \"12345\"
+}"
+  SH2OUT="$(tf_redact_random_ids <<<"$SH2")"
+  contains "$SH2" "$OLD_HEX" && contains "$SH2" "$K22"; check "show-suffix-$n: raw block carries the values (live positive control)" "$?"
+  absent "$SH2OUT" "$OLD_HEX" && absent "$SH2OUT" "$K22" && contains "$SH2OUT" '    id          = "12345"'; check "show-suffix-$n: block redacted, the next resource's id kept" "$?"
+done
+
 BARE="$(printf '  # random_id.k\n  ~ resource "random_id" "k" {\n      ~ hex = "%s" -> "%s"\n    }\n' "$OLD_HEX" "$NEW_HEX" | tf_redact_random_ids)"
 absent "$BARE" "$OLD_HEX" && absent "$BARE" "$NEW_HEX"; check "bare-address header (nothing after the address) is redacted" "$?"
 
@@ -380,7 +401,7 @@ contains "$UT2OUT" '~ id          = "<redacted>" -> "<redacted>"'; check "stuck-
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
 # Gate. Conservation first, WITHOUT routing through pass()/fail() (neutering either must not disarm it): every check()
 # lands in exactly one bucket. MIN_ASSERTIONS is a FLOOR (never -eq), raised deliberately with the suite.
-MIN_ASSERTIONS=317
+MIN_ASSERTIONS=327
 if [ "$((PASSES + FAILS))" -ne "$CHECKS" ]; then printf 'FATAL: assertion conservation broken: passes+fails=%s checks=%s\n' "$((PASSES + FAILS))" "$CHECKS" >&2; exit 1; fi
 if [ "$CHECKS" -lt "$MIN_ASSERTIONS" ]; then printf 'FATAL: only %s assertions ran, floor is %s\n' "$CHECKS" "$MIN_ASSERTIONS" >&2; exit 1; fi
 [ "$FAILS" -eq 0 ] || exit 1

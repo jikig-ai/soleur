@@ -19,7 +19,8 @@
 # random_id's id/b64_*/hex/dec are NOT sensitive to Terraform (hex and b64_* ARE the key bytes: inngest.tf derives
 # the live keys from random_id.*.hex), so the plan prints them in clear; where the provider marks an attribute
 # sensitive Terraform prints `(sensitive value)` and there is nothing to lose. SECOND RANGE, the `terraform show` /
-# `state show` shape (header `# random_id.k:`, column-0 body): it closes ONLY at a column-0 `}`, because a nested map
+# `state show` shape (header `# random_id.k:`, `# random_id.k: (tainted)` or `# random_id.k: (deposed object abc)`, column-0
+# body; prose after the colon opens nothing): it closes ONLY at a column-0 `}`, because a nested map
 # (`keepers = { ... }`) closes at 4 spaces there and must not end the range early (CTO ruling 2026-11-03, option A:
 # two disjoint ranges; the plan range excludes an address ending in `:`). The address, the surrounding text and the
 # line count are kept; other resources' ids
@@ -50,7 +51,7 @@ tf_redact_random_ids() {
     -e '/^[[:space:]]*# ((.*[^[:alnum:]_])?)random_(id|password|string|uuid|bytes)\.[^[:space:]]*[^[:space:]:]([[:space:]]|$)/,/^    \}/{
       /^[^"]*[[:space:]](id|b64_std|b64_url|hex|dec|result|base64|b64)[[:space:]]+=/s/"[^"]*"/"<redacted>"/g
     }' \
-    -e '/^[[:space:]]*# ((.*[^[:alnum:]_])?)random_(id|password|string|uuid|bytes)\.[^[:space:]]+:$/,/^\}/{
+    -e '/^[[:space:]]*# ((.*[^[:alnum:]_])?)random_(id|password|string|uuid|bytes)\.[^[:space:]]+:[[:space:]]*(\([^)]*\))?[[:space:]]*$/,/^\}/{
       /^[^"]*[[:space:]](id|b64_std|b64_url|hex|dec|result|base64|b64)[[:space:]]+=/s/"[^"]*"/"<redacted>"/g
     }'
 }
