@@ -11,6 +11,32 @@ lane: cross-domain
 
 # fix: resolve three regex-family CodeQL alerts (222, 245, 300) in one batch
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** 4 (Observability, Guard Contract, Open Code-Review
+Overlap, Context)
+**Research agents used:** none — `Reviewed-Coverage: sequential-fallback`
+(depth-1 subagent, no Task tool); halt gates 4.6/4.7/4.8/4.9/4.10/4.11/
+4.12/4.13/4.55 run inline, all pass.
+
+### Key Improvements
+
+1. Alert #222 root-caused to a `re.VERBOSE` comment parsed as a char
+   class (`h-1` empty range) — fix is comment reword, not dismissal.
+2. `QUOTE_CTL` equivalence is a byte-set identity (C0 minus TAB + DEL),
+   verified by a `python3` probe, not by eyeball.
+3. `weakened` keeps its fixture role after anchoring — the RED harness
+   row still proves the canonical `FORBIDDEN` catches the planted
+   violation.
+
+### New Considerations Discovered
+
+- Sibling `test-all.sh` runs hold the local gate — targeted suites
+  substitute for the full battery (rc=4 refusal expected).
+- `no-network-fonts.test.ts` is a vitest `repo-wide` project member;
+  `bun test` is discovery-blocked (`bunfig.toml`).
+
 ## Overview
 
 Three open code-scanning alerts share one defect family — regexes whose
@@ -159,6 +185,93 @@ fail-closed per plan convention).
 **Domains relevant:** none
 
 No cross-domain implications detected — internal CI/test tooling fix.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: the three dedicated suites are the guard's heartbeat — lint-anthropic-content-position.test.sh, no-network-fonts vitest, ci-pr-affected-replay shards
+  cadence: per-PR via the affected-selector edges; the lint suite is always-on
+  alert_target: red required check blocks the PR
+  configured_in: scripts/lib/test-affected-paths.sh (ALWAYS_ON list) + apps/web-platform/vitest.config.ts
+error_reporting:
+  destination: suite stderr lines in the GitHub Actions run log
+  fail_loud: each suite exits non-zero with FAIL:<row>; the replay ratchet emits ::error annotations
+failure_modes:
+  - mode: regex over/under-matches after the edit (weakened guard)
+    detection: the three dedicated suites re-run over this diff
+    alert_route: required check red on the PR
+logs:
+  where: GitHub Actions run logs for this PR
+  retention: GitHub default retention
+discoverability_test:
+  command: grep -c QUOTE_CTL scripts/ci-pr-affected-replay.py
+  expected_output: "2"
+```
+
+## Guard Contract
+
+The deliverable is a bugfix INSIDE two existing guards plus one test
+fixture — not a new guard — but the fixes alter the guards' match
+semantics, so the contract pins the preserved properties.
+
+### Guard 1 — lint-anthropic-content-position POSITIONAL
+
+**Property.** Any Anthropic-response file selecting a content block by
+position (literal index, `.at(N)`, or `x.length - 1`) is rejected; type
+selection passes.
+
+**Assembly.** `tracked_files()` enumerates tracked files under
+`EXTENSIONS`; every scanned line flows through `POSITIONAL` /
+`POSITIONAL_JQ` — the only match chokepoints. The reworded comment is
+inside the VERBOSE literal but contributes zero pattern bytes.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | delete the `at\(\s*-?\d+\s*\)` alternative | RED (`.at(0)` row) |
+| 2 | drop `tracked_files` enumeration → 0 scanned, exit 0 | RED (dispatch/vacuity row) |
+| 3 | a second positional select after a compliant first line in one file | RED (both flagged, not first-only) |
+
+### Guard 2 — ci-pr-affected-replay QUOTE_CTL
+
+**Property.** Any emitted field containing a C0 byte other than TAB, or
+DEL (0x7f), is quoted; printable ASCII, TAB and bytes >= 0x80 pass raw.
+
+**Assembly.** `quote_field`/`QUOTE_CTL.search` at line 1922 is the sole
+quoting chokepoint for emitted rows (gap, ref, stale, unaudited lines).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | enumerate 0x09 into the class → tab fields get quoted | RED (tab fixture expects raw) |
+| 2 | drop 0x7f → DEL passes raw through a printed field | RED |
+| 3 | `QUOTE_CTL.search` → `False` in `quote_field` (dispatch neutered) | RED (ctl-byte rows) |
+
+### Guard 3 — no-network-fonts sweep + weakened fixture
+
+**Property.** `sweep` flags any swept file referencing `next/font/google`
+or the two font CDN hosts; the `weakened` fixture must still miss the
+planted `next/font/google` import while canonical `FORBIDDEN` catches it.
+
+**Assembly.** `sweep()` iterates `enumerateWalk` → `isSwept` →
+`pattern.test(text)`; `pattern` is `FORBIDDEN` unless the test injects
+`weakened`. Anchored `weakened` (this diff) must not match the fixture.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | delete `next\/font\/google` alternative from FORBIDDEN | RED (row-1 violations pass) |
+| 2 | neuter `sweep`'s test call (`pattern.test` → `false`) | RED (dispatch/vacuity row) |
+| 3 | anchored `weakened` matches the fixture (e.g. anchors dropped) | RED (RED row's `.not.toThrow()` inverts) |
+
+## Open Code-Review Overlap
+
+None — the 200-issue `code-review` query matched zero bodies containing
+any of the three planned paths.
 
 ## Acceptance Criteria
 
