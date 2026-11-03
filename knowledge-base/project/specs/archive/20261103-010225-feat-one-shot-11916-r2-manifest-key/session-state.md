@@ -38,3 +38,4 @@
 - P2s fixed inline: (a) unguarded empty-JSONL_KEY path + .Contents[]? null-iterate + [-z LIST] transport guard + [-z JSONL_KEY] early-outs at §6 and §7.7 (§7.7 note added); (b) retrieval trust-anchor: sha256 cross-check vs git canonical on cla-signatures added to §6
 - P3s fixed: anchored regex /manifest(-\d+-\d+)?\.jsonl$, pagination-bound comment, mixed-month wording; pre-existing/unverifiable noted
 - jq re-verified: partial, complete, empty-{}, anchored no-match arms all pass
+- Fix-round attestation: verification pass ran INLINE (jq re-verified on partial/complete/empty-{}/anchored arms + AC greps) rather than a seat respawn — fix surface is runbook-docs only; disclosed per harness note.
