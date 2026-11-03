@@ -61,16 +61,6 @@ locals {
     # heartbeats (soleur-luks-monitor-host-timer-prd, soleur-claude-cost-capture-prd) are the paging surface and
     # time out when the feeder goes dark; route this after three measured check-ins (tracked on #11672).
     scheduled_deadman_heartbeat_feeder = "the Better Stack heartbeats are the paging surface; route after three measured check-ins (tracked on #11672)"
-    # #8211 PR-B2 — the git-data erasure re-drive's liveness monitor, added under the two-PR rule: a
-    # monitor id that does not exist yet must not appear in monitor_ids (the plan projection errors).
-    # There is NO independent cover for a DEAD OR FAILING cron: the oldest-pending-age gauge and the 20/28-day Sentry error
-    # issues are emitted BY the cron (the escalations are routed by sentry_alert.git_data_erasure_redrive_escalation once applied,
-    # #10914), so a cron that never fires emits none of them, and a cron that fails (heartbeat ?status=error, or
-    # the stage-failure ERROR events) matches neither new rule. The only dead-or-failing-cron signal is this monitor's
-    # missed/failed check-in issue, which emails nobody until it is routed. Routing THIS monitor is PR 2 of the two-PR rule
-    # (README): move the label into monitor_ids and regenerate alert-reference.json after #10905's apply and the
-    # first measured check-in. Route before the real git-data flip.
-    scheduled_git_data_erasure_redrive = "the escalation events are routed by git-data-erasure-redrive-escalation once applied (#10914); no independent cover exists for a dead or failing cron (the age gauge and the escalations are emitted by the cron itself); routing this monitor follows after the first measured check-in (#10914)"
   }
 }
 
@@ -88,6 +78,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.image_cve_scan.id,
     sentry_cron_monitor.main_health_monitor.id,
     sentry_cron_monitor.scheduled_anthropic_credit_probe.id,
+    sentry_cron_monitor.scheduled_git_data_erasure_redrive.id,
     sentry_cron_monitor.scheduled_github_app_drift_guard.id,
     sentry_cron_monitor.scheduled_heartbeat_reconcile.id,
     sentry_cron_monitor.scheduled_inngest_cron_watchdog.id,
