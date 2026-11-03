@@ -124,7 +124,7 @@ new_case() {
 # cryptsetup stub. Records argv + environment per call, and on the proof call drains stdin into
 # keyrec so the suite can assert the EXACT bytes that arrived on the pipe.
 sub="${1:-}"
-# An early exit BEFORE any logging or stdin read: the upstream tr then takes SIGPIPE (race, ~4 in 10).
+# An early exit BEFORE any logging or stdin read: the upstream tr then takes SIGPIPE (a race in the 20 natural runs; forced by a tr shim in the last run).
 [ -n "${STUB_EARLY_RC:-}" ] && [ "$sub" = luksOpen ] && exit "$STUB_EARLY_RC"
 printf '%s\n' "$*" >> "$STUB_DIR/arglog"
 env >> "$STUB_DIR/envlog"
@@ -1020,6 +1020,35 @@ pred_early_exit_rc() {
     RUN_PREFIX=""
     [[ "$(probe_summary)" == "$(expect_summary 'verdict=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
   done
+  # Forced run (#11752). The 20 runs above only see tr take SIGPIPE when it writes after the reader has
+  # exited (a race: about 4 in 10 on CI, about 1 in 200 on a fast local host), so on their own they cannot
+  # prove the 0:0:141 allowance is exercised. This run makes PIPESTATUS read "0 0 141 4" by construction:
+  # a tr shim, gated on the probe's exact argv, drains its stdin (so sed and head do not take SIGPIPE
+  # first) and then dies by SIGPIPE; every other tr call goes to the real tr by absolute path.
+  local real_tr
+  real_tr="$(command -v tr)"
+  [[ "$real_tr" == /* ]] || bad=$((bad + 1))
+  assert_fixture_dir "$WORK"
+  mkdir -p "$WORK/shim"
+  cat > "$WORK/shim/tr" <<'SHIM'
+#!/bin/sh
+if [ "$*" = '-d \n' ]; then
+  : > "$SHIM_TR_FIRED"
+  cat >/dev/null
+  kill -s PIPE $$
+fi
+exec "$SHIM_REAL_TR" "$@"
+SHIM
+  chmod +x "$WORK/shim/tr"
+  rm -f "$STAMP" "$WORK/tr-fired"
+  : > "$LOGTRACE"
+  : > "$PHONETRACE"
+  RUN_PREFIX="env --default-signal=PIPE"
+  run_tick "done" STUB_EARLY_RC=4 PATH="$WORK/shim:$PATH" SHIM_REAL_TR="$real_tr" SHIM_TR_FIRED="$WORK/tr-fired"
+  RUN_PREFIX=""
+  # the shim must have fired, or the forced run proves nothing (a missing interpreter falls through to the real tr)
+  [[ -e "$WORK/tr-fired" ]] || bad=$((bad + 1))
+  [[ "$(probe_summary)" == "$(expect_summary 'verdict=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
   end_case
   SUT="$TARGET"
   [[ "$bad" -eq 0 ]]
@@ -1060,7 +1089,7 @@ pred_upstream_fail() {
   [[ "$sum" == "$(expect_summary 'verdict=indeterminate rc=1 at=key' indeterminate)" ]]
 }
 assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
-assert_true "pristine: a cryptsetup that exits before reading (tr takes SIGPIPE in about 4 of 10 runs) keeps its own rc: 20 runs, all indeterminate rc=4 at=kdf" pred_early_exit_rc "$TARGET"
+assert_true "pristine: a cryptsetup that exits before reading (tr takes SIGPIPE) keeps its own rc: 20 natural-race runs plus one forced tr SIGPIPE run, all indeterminate rc=4 at=kdf" pred_early_exit_rc "$TARGET"
 assert_true "pristine: with SIGPIPE ignored (the runner and systemd default) an early cryptsetup exit is still indeterminate, never a key verdict: 20 runs" pred_early_exit_sigpipe_ignored "$TARGET"
 mutate g4_m2 <<'PY'
 s = s.replace('    0:0:0|141:0:0|0:0:141) ;;', '    0:0:0|141:0:0) ;;', 1)
