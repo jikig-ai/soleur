@@ -281,6 +281,10 @@ the budget owner watches).
 **Brand-survival threshold:** none — machinery-only change on
 verification/observability surfaces; no user data, no product surface.
 
+- threshold: none, reason: diff is confined to CI/test selection machinery,
+  a counters ledger, an observability probe and knowledge-base docs — no
+  user-data, auth, migration, secret or vendor surface is touched.
+
 ## Observability
 
 ```yaml
@@ -631,3 +635,54 @@ if the work-time ruling keeps the current constants the amendment records
   NOT YET — paused on red merge_group), `gh pr list --label s4-drain` (empty).
 - External research: skipped — all three items are internal machinery with
   deep local context (Phase 1.6 decision).
+
+## Enhancement Summary
+
+deepen-plan ran 2026-11-03 in sequential-fallback (no nested subagents — the
+per-section research/review roles were executed inline by the planning
+process; `Reviewed-Coverage: sequential-fallback`).
+
+### Gate verification
+
+- 4.4 precedent-diff: N/A — no scheduled-work/cron surface introduced.
+- 4.5 network-outage: N/A — no trigger tokens in scope.
+- 4.55 downtime/cutover: N/A — no resource provisioning or state move.
+- 4.6 User-Brand Impact: PASS — three required lines + none-threshold
+  scope-out bullet present.
+- 4.7 Observability: PASS — 5-field schema populated; discoverability
+  command `bash plugins/soleur/scripts/pipeline-tally.sh selfcheck` →
+  literal `SOLEUR_TALLY_OK`, allowlisted first token, <15 s, no ssh.
+- 4.8 PAT-shaped variable: PASS — no PAT/GH_PAT/ghp_/github_pat tokens.
+- 4.9 UI wireframe: N/A — no UI-surface file in either Files list.
+- 4.10 Encryption posture: N/A — no new store or cross-component connection.
+- 4.11 Guard Contract: PASS — `lint-guard-contract.py` clean; 2 guards,
+  each Property/Assembly/mutation-matrix (≥3 rows incl. own-dispatch and
+  must-pass rows).
+- 4.12 Scope Check: PASS — one unfenced `## Scope Check`; every ask mapped
+  to an item; the only `inferred` items carry justifications.
+- 4.13 Task Design: N/A — no new autonomous-task surface.
+
+### Key deepening applied during the pass
+
+- The series-pull for the re-rule (task 3.1) uses the 2026-11-02 precedent:
+  list non-cancelled `ci.yml` runs by event since the `s4-drain` floor, read
+  each run's jobs via `actions/runs/<id>/jobs`, filter
+  `name == "affected-index-ratchet"`, wall = `completed_at − started_at`;
+  p95 is nearest-rank, matching the probe's own arithmetic
+  (`rank = ceil(0.95 × n)` — see probe :467-469).
+- The BFS seeding (task 4.1) must reuse the existing minted-edge snapshot
+  mechanism (`_pre_n` index over `_AC_EDGES`) rather than re-deriving the
+  stem list, so only candidates that actually minted an edge are probed —
+  the stem fan emits up to 31 candidates per suite, most nonexistent.
+- `pipeline-tally.sh`'s `show`/`incr`/`gate` are fail-open by contract; the
+  absent-marker rule lives ONLY in render text, never in exit codes or
+  verdict tokens (UNKNOWN/STOP/OK vocabulary is untouched).
+
+### New considerations discovered
+
+- The audit's `pats` include the full execution-mode closure, so the fix
+  widens the audit's reach transitively — drain-reveal is in scope
+  (ADR-276 item 8) and is budgeted into Phase 3 via the rubric's round caps.
+- Main's advisory ratchet is red on an unrelated-second pair at plan time —
+  absorbed only if still unrepaired at work time (decision-challenges.md).
+
