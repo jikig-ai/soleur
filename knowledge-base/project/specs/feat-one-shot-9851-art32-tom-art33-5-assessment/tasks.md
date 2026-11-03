@@ -28,13 +28,13 @@ Plan: `knowledge-base/project/plans/2026-11-03-docs-art32-tom-residual-and-art33
 
 ## Phase 4: Review panel (first)
 
-- [ ] 4.1 `soleur:review` with `soleur:engineering:review:user-impact-reviewer` and the standard panel; apply findings.
+- [x] 4.1 `soleur:review` with `soleur:engineering:review:user-impact-reviewer` and the standard panel; apply findings.
 
 ## Phase 5: CLO review (last)
 
-- [ ] 5.1 Spawn a fresh `soleur:legal:clo` on the final diff with the wording lists; it writes nothing under `knowledge-base/legal/audits/`.
-- [ ] 5.2 Append `## CLO Review Record` (reviewer, patch id and blob hashes, verdict, conditions, stale pointer, routed finding).
-- [ ] 5.3 Any later register edit: repeat 5.1 and 5.2.
+- [x] 5.1 Spawn a fresh `soleur:legal:clo` on the final diff with the wording lists; it writes nothing under `knowledge-base/legal/audits/`.
+- [x] 5.2 Append `## CLO Review Record` (reviewer, patch id and blob hashes, verdict, conditions, stale pointer, routed finding).
+- [x] 5.3 Any later register edit: repeat 5.1 and 5.2.
 
 ## Phase 6: QA, compound, ship
 
