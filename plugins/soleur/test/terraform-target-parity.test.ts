@@ -106,7 +106,10 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 320 -> 321 (#11294 follow-up, +1): the ANSI-colour pin (steps without -no-color print coloured lines; the filter strips colour first).
 // 321 -> 324 (#11766 fix round 2, +3): cf-lb-overlay ga_pool_update pins — the Plan gate step carries no `if:`, the
 // arm's -target set ⊇ {pool, LB, policy}, and the web-2 health precondition step exists/serve-gated/pre-plan.
-const TEST_FLOOR = 324;
+// 324 -> 349 (#11294 key-rotate route, +9): the "key-rotate route: the gate table versus the HCL (Guard 5)" describe (real conformance, the literal -target pin on key-rotate.yml,
+// the parser floor, the must-PASS prose fixture and five mutation rows). main stood at 340 declared against a floor of 324; the 16 rows of slack are absorbed here, so it is exact again:
+// grep -cE '^\s*test\(' = 349.
+const TEST_FLOOR = 349;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -9861,6 +9864,157 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
     expect(run("1", [[F, ["create"]], ["doppler_secret.inngest_tls_ca", ["update"]]])).not.toBe(0);
     expect(run("1", [["doppler_secret.inngest_link_tls_other[0]", ["create"]]])).not.toBe(0);
     expect(run("1", [[F, ["create", "delete"]]])).not.toBe(0); // a replace is not a create
+  });
+});
+
+// ─── #11294 Guard 5: the key-rotate route's table versus the HCL ───────────────────────────────────────────────────────────
+// scripts/key-rotate.sh holds ONE gate table (KR_GATE_TABLE) and a copies table (KK_COPIES). The HCL is the independent side: for
+// every key the table's rows must equal the set of resources in the Terraform root that carry that key's value (the random_id and
+// every resource / output / locals / module block that REFERENCES it), every random_id in the root must have a disposition, the
+// flag of every secret row must follow its lifecycle.ignore_changes, and a `_dev` key can name only dev addresses. Pure functions over
+// (rows, copies, hcl texts) so the mutation rows can feed synthetic inputs through the same code the real rows use.
+const KEY_ROTATE_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/key-rotate.yml");
+const KEY_ROTATE_SCRIPT = resolve(REPO_ROOT, "scripts/key-rotate.sh");
+const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
+
+interface KrRow { phase: string; key: string; address: string; flag: string; actions: string }
+interface KrCopy { key: string; project: string; config: string; name: string; address: string }
+interface HclBlock { kind: string; labels: string[]; body: string }
+
+function krTables(scriptPath: string): { rows: KrRow[]; copies: KrCopy[]; sibling: KrRow[] } {
+  const run = (script: string, expr: string): string[] =>
+    (spawnSync("env", ["-i", `PATH=${process.env.PATH}`, "bash", "-c", `source "$1"; ${expr}`, "_", script], { encoding: "utf8" }).stdout ?? "").split("\n").filter(Boolean);
+  const toRow = (l: string): KrRow => { const [phase, key, address, flag, actions] = l.split("|"); return { phase, key, address, flag, actions }; };
+  const rows = run(scriptPath, 'printf "%s\\n" "${KR_GATE_TABLE[@]}"').map(toRow);
+  const copies = run(scriptPath, 'printf "%s\\n" "${KK_COPIES[@]}"').map((l) => { const [key, project, config, name, address] = l.split("|"); return { key, project, config, name, address }; });
+  const sibling = run(resolve(REPO_ROOT, "scripts/inngest-key-rotate.sh"), 'printf "%s\\n" "${KR_GATE_TABLE[@]}"').map(toRow);
+  return { rows, copies, sibling };
+}
+
+/** Every top-level block (resource / data / output / locals / module / variable) of comment-stripped HCL, brace-matched. */
+function hclBlocks(stripped: string): HclBlock[] {
+  const out: HclBlock[] = [];
+  const re = /(?:^|\n)(resource|data|output|locals|module|variable)((?:\s+"[^"]+")*)\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stripped)) !== null) {
+    let depth = 0;
+    let end = -1;
+    for (let i = m.index + m[0].length - 1; i < stripped.length; i++) {
+      if (stripped[i] === "{") depth++;
+      else if (stripped[i] === "}" && --depth === 0) { end = i; break; }
+    }
+    if (end < 0) continue;
+    out.push({ kind: m[1], labels: [...m[2].matchAll(/"([^"]+)"/g)].map((x) => x[1]), body: stripped.slice(m.index + m[0].length, end) });
+  }
+  return out;
+}
+const blockAddr = (b: HclBlock): string => (b.kind === "resource" ? b.labels.join(".") : `${b.kind}.${b.labels.join(".")}`);
+
+/** The violations of the table against the HCL texts; each is a short tag. An empty array is conformant. */
+function keyRotateViolations(rows: KrRow[], copies: KrCopy[], sibling: KrRow[], hcl: string[]): string[] {
+  const v: string[] = [];
+  const blocks = hcl.flatMap((t) => hclBlocks(t));
+  if (blocks.filter((b) => b.kind === "resource").length < 10) return ["parser-floor: fewer than 10 resources found"];
+  const byAddr = new Map(blocks.filter((b) => b.kind === "resource").map((b) => [blockAddr(b), b]));
+  const rids = [...byAddr.keys()].filter((a) => a.startsWith("random_id.")).map((a) => a.slice("random_id.".length));
+  const inTable = new Set(rows.map((r) => r.address));
+  const siblingIds = new Set(sibling.map((r) => r.address));
+  const keys = [...new Set(rows.map((r) => r.key))];
+  for (const r of rows) {
+    if (!byAddr.has(r.address)) v.push(`address-missing:${r.address}`);
+    if (/^(hcloud_|terraform_data\.)/.test(r.address)) v.push(`forbidden-type:${r.address}`);
+    if (r.flag !== "replace" && r.flag !== "target") v.push(`bad-flag:${r.address}`);
+    if (r.phase === "A" && (r.flag !== "replace" || !r.address.startsWith("random_id."))) v.push(`phase-A-not-random_id-replace:${r.address}`);
+    if (r.phase === "B" && r.address.startsWith("doppler_secret.")) {
+      const body = byAddr.get(r.address)?.body ?? "";
+      const ignores = /ignore_changes\s*=\s*\[[^\]]*\bvalue\b/.test(body);
+      if (ignores && !(r.flag === "replace" && r.actions === "delete,create")) v.push(`ignore_changes-secret-not-replace:${r.address}`);
+      if (!ignores && !(r.flag === "target" && r.actions === "update")) v.push(`plain-secret-not-update:${r.address}`);
+    }
+  }
+  for (const key of keys) {
+    const rid = `random_id.${key}`;
+    const refs = new RegExp(`\\brandom_id\\.${key}\\.(?:hex|id|b64_url|b64_std|dec)\\b`);
+    const referrers = blocks.filter((b) => refs.test(b.body)).map(blockAddr);
+    const want = rows.filter((r) => r.key === key && r.phase === "B").map((r) => r.address).sort();
+    if (JSON.stringify([...referrers].sort()) !== JSON.stringify(want)) v.push(`closure:${key}: HCL referrers ${JSON.stringify([...referrers].sort())} != table ${JSON.stringify(want)}`);
+    if (!rows.some((r) => r.key === key && r.address === rid && r.phase === "A")) v.push(`no-A-row:${key}`);
+    const cp = copies.filter((c) => c.key === key);
+    if (cp.length !== want.length) v.push(`copies-count:${key}`);
+    for (const c of cp) {
+      const body = byAddr.get(c.address)?.body ?? "";
+      for (const f of ["project", "config", "name"] as const) {
+        const m = new RegExp(`(?:^|\\n)\\s*${f}\\s*=\\s*"([^"]+)"`).exec(body);
+        if (!m || m[1] !== c[f]) v.push(`copy-attr:${c.address}.${f}`);
+      }
+      if (key.endsWith("_dev") && (c.config !== "dev" || !c.address.includes("_dev") || /_prd/.test(c.address))) v.push(`dev-key-touches-non-dev:${key}`);
+    }
+    if (key.endsWith("_dev") && rows.filter((r) => r.key === key).some((r) => /_prd\b|_prd_/.test(r.address))) v.push(`dev-key-prd-address:${key}`);
+  }
+  for (const id of rids) {
+    const a = `random_id.${id}`;
+    if (!inTable.has(a) && !siblingIds.has(a) && !KR_OUT_OF_SCOPE_RANDOM_IDS.includes(id)) v.push(`undisposed-random_id:${id}`);
+  }
+  return v;
+}
+
+describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", () => {
+  const hclTexts = (): string[] => listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8")));
+  const real = krTables(KEY_ROTATE_SCRIPT);
+
+  test("the real table, copies and HCL are conformant (closure over every referencing block, flags follow ignore_changes, every random_id has a disposition)", () => {
+    expect(real.rows.length).toBe(15);
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, hclTexts())).toEqual([]);
+  });
+
+  test("when key-rotate.yml exists, every literal -target it spells is in the table and never hcloud_* / terraform_data (the script builds the list)", () => {
+    if (!existsSync(KEY_ROTATE_WORKFLOW)) return; // guarded like the sibling's pin
+    const allowed = new Set(real.rows.map((r) => r.address));
+    const targets = [...extractAllTargets(readFileSync(KEY_ROTATE_WORKFLOW, "utf8"))];
+    expect(targets.filter((t) => !allowed.has(t))).toEqual([]);
+    expect(targets.filter((t) => /^(hcloud_|terraform_data\.)/.test(t))).toEqual([]);
+  });
+
+  test("the parser fails on an empty directory (a floor on resources found: an empty HCL set must not read as conformant)", () => {
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, [])[0]).toContain("parser-floor");
+  });
+
+  test("a must-PASS fixture with extra unrelated resources and a prose mention of a table address (comment-stripped) is not a reference", () => {
+    const extra = stripComments(`# rotate with random_id.kb_drift_ingest_signing_key.hex in the runbook\nresource "null_resource" "unrelated" {\n  triggers = { a = "terraform apply -replace=random_id.kb_drift_ingest_signing_key" }\n}\n`);
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, [...hclTexts(), extra])).toEqual([]);
+  });
+
+  test("mutation 1: a third doppler_secret referencing random_id.kb_drift_ingest_signing_key turns the closure red", () => {
+    const third = stripComments(`resource "doppler_secret" "kb_drift_third" {\n  project = "soleur"\n  config = "prd"\n  name = "X"\n  value = random_id.kb_drift_ingest_signing_key.hex\n}\n`);
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, [...hclTexts(), third]).some((x) => x.startsWith("closure:kb_drift_ingest_signing_key"))).toBe(true);
+    const out = stripComments(`output "leak" {\n  value = random_id.github_webhook_secret.b64_url\n}\n`);
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, [...hclTexts(), out]).some((x) => x.startsWith("closure:github_webhook_secret"))).toBe(true);
+  });
+
+  test("mutation 2: a new random_id that is in neither tables nor the out-of-scope list has no disposition", () => {
+    const fresh = stripComments(`resource "random_id" "brand_new_secret" {\n  byte_length = 16\n}\n`);
+    expect(keyRotateViolations(real.rows, real.copies, real.sibling, [...hclTexts(), fresh])).toContain("undisposed-random_id:brand_new_secret");
+  });
+
+  test("mutation 3: pointing a _dev key row at soleur/prd (copy config or address) is red", () => {
+    const copies = real.copies.map((c) => (c.key === "inngest_signing_key_dev" ? { ...c, config: "prd" } : c));
+    expect(keyRotateViolations(real.rows, copies, real.sibling, hclTexts()).some((x) => x.startsWith("dev-key-touches-non-dev") || x.startsWith("copy-attr"))).toBe(true);
+    const rows = real.rows.map((r) => (r.address === "doppler_secret.inngest_event_key_dev" ? { ...r, address: "doppler_secret.inngest_manual_trigger_secret_prd" } : r));
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts()).length).toBeGreaterThan(0);
+  });
+
+  test("mutation 4: a table-only rename of an address (not in the HCL) is red", () => {
+    const rows = real.rows.map((r) => (r.address === "doppler_secret.github_app_webhook_secret" ? { ...r, address: "doppler_secret.github_app_webhook_secret_v2" } : r));
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts())).toContain("address-missing:doppler_secret.github_app_webhook_secret_v2");
+  });
+
+  test("mutation 5: flipping a row's flag (replace -> target on an ignore_changes secret; target -> replace on a plain one) is red", () => {
+    const a = real.rows.map((r) => (r.address === "doppler_secret.inngest_signing_key_dev" ? { ...r, flag: "target", actions: "update" } : r));
+    expect(keyRotateViolations(a, real.copies, real.sibling, hclTexts())).toContain("ignore_changes-secret-not-replace:doppler_secret.inngest_signing_key_dev");
+    const b = real.rows.map((r) => (r.address === "doppler_secret.kb_drift_ingest_signing_key" ? { ...r, flag: "replace", actions: "delete,create" } : r));
+    expect(keyRotateViolations(b, real.copies, real.sibling, hclTexts())).toContain("plain-secret-not-update:doppler_secret.kb_drift_ingest_signing_key");
+    const c = real.rows.map((r) => (r.address === "random_id.kb_drift_ingest_signing_key" ? { ...r, flag: "target" } : r));
+    expect(keyRotateViolations(c, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("phase-A"))).toBe(true);
   });
 });
 

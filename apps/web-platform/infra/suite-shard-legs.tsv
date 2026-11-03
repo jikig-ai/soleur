@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=4000
-# generated-at=2026-11-02T01:03:44Z
+# generated-at=2026-11-02T23:31:52Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -120,6 +120,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	2
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	2
 apps/web-platform/infra/inngest.test.sh	1
 apps/web-platform/infra/journald-config.test.sh	3
+apps/web-platform/infra/key-rotate-workflow.test.sh	4
 apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	2
 apps/web-platform/infra/lb-weight-gate.test.sh	4
 apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh	1

@@ -14,6 +14,8 @@
 # Operand 7 (#10540) adds inngest-key-rotate.yml (×1, the redeploy job's env): the post-rotation redeploy goes
 # through track.sh with this roster, and a stale one would restart the new keys on one host and leave the fleet
 # MIXED between old and new Inngest keys.
+# Operand 8 (#11294) adds key-rotate.yml (×1, the redeploy job's env): the redeploy after any of the seven single-key rotations goes
+# through track.sh with this roster, and a stale one would restart the new value on one host and leave the fleet MIXED.
 #
 # Operand 5 (#8211) is the SET of host KEYS the cutover workflow's per-host readback
 # loop names, compared with the keys of var.web_hosts. The per-host Better Stack
@@ -53,6 +55,7 @@ APPLY_WORKFLOW="${DIR}/../../../.github/workflows/apply-web-platform-infra.yml"
 CUTOVER_WORKFLOW="${WHP_CUTOVER_WORKFLOW:-${DIR}/../../../.github/workflows/git-data-cutover.yml}"
 FLIP_WORKFLOW="${WHP_FLIP_WORKFLOW:-${DIR}/../../../.github/workflows/inngest-link-flip.yml}"
 ROTATE_WORKFLOW="${WHP_ROTATE_WORKFLOW:-${DIR}/../../../.github/workflows/inngest-key-rotate.yml}"
+KEYROT_WORKFLOW="${WHP_KEYROT_WORKFLOW:-${DIR}/../../../.github/workflows/key-rotate.yml}"
 
 passes=0
 fails=0
@@ -136,6 +139,8 @@ check_all_copies "$CUTOVER_WORKFLOW" "cutover-workflow" 1
 check_all_copies "$FLIP_WORKFLOW" "flip-workflow" 1
 # Operand 7 (#10540): inngest-key-rotate.yml — 1 copy (the redeploy job's env feeding the track.sh redeploy after a rotation).
 check_all_copies "$ROTATE_WORKFLOW" "rotate-workflow" 1
+# Operand 8 (#11294): key-rotate.yml — 1 copy (the redeploy job's env feeding the track.sh redeploy after a single-key rotation).
+check_all_copies "$KEYROT_WORKFLOW" "key-rotate-workflow" 1
 
 # Operand 5 (#8211): the per-host git_data_store= READBACK in git-data-cutover.yml names each host
 # by its var.web_hosts KEY (`for h in "web-1|<host_name spellings>" "web-2|..."`). The readback needs
@@ -201,12 +206,12 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
     local name="$1" expect="$2" which="$3" script="$4" want="${5:-}" src rc
     rows_run=$((rows_run + 1))
     assert_fixture_dir "$MUT"
-    cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" && cp "$FLIP_WORKFLOW" "$MUT/inngest-link-flip.yml" && cp "$ROTATE_WORKFLOW" "$MUT/inngest-key-rotate.yml" || { fail "self-test $name: could not copy the sources"; return; }
-    case "$which" in var) src="$MUT/variables.tf" ;; flip) src="$MUT/inngest-link-flip.yml" ;; rot) src="$MUT/inngest-key-rotate.yml" ;; *) src="$MUT/git-data-cutover.yml" ;; esac
+    cp "$VARS_TF" "$MUT/variables.tf" && cp "$CUTOVER_WORKFLOW" "$MUT/git-data-cutover.yml" && cp "$FLIP_WORKFLOW" "$MUT/inngest-link-flip.yml" && cp "$ROTATE_WORKFLOW" "$MUT/inngest-key-rotate.yml" && cp "$KEYROT_WORKFLOW" "$MUT/key-rotate.yml" || { fail "self-test $name: could not copy the sources"; return; }
+    case "$which" in var) src="$MUT/variables.tf" ;; flip) src="$MUT/inngest-link-flip.yml" ;; rot) src="$MUT/inngest-key-rotate.yml" ;; krot) src="$MUT/key-rotate.yml" ;; *) src="$MUT/git-data-cutover.yml" ;; esac
     cp "$src" "$MUT/pristine"
     sed -E -i "$script" "$src"
     if cmp -s "$src" "$MUT/pristine"; then fail "self-test $name: the mutation did not land"; return; fi
-    WHP_SELFTEST=1 WHP_VARS_TF="$MUT/variables.tf" WHP_CUTOVER_WORKFLOW="$MUT/git-data-cutover.yml" WHP_FLIP_WORKFLOW="$MUT/inngest-link-flip.yml" WHP_ROTATE_WORKFLOW="$MUT/inngest-key-rotate.yml" \
+    WHP_SELFTEST=1 WHP_VARS_TF="$MUT/variables.tf" WHP_CUTOVER_WORKFLOW="$MUT/git-data-cutover.yml" WHP_FLIP_WORKFLOW="$MUT/inngest-link-flip.yml" WHP_ROTATE_WORKFLOW="$MUT/inngest-key-rotate.yml" WHP_KEYROT_WORKFLOW="$MUT/key-rotate.yml" \
       bash "${BASH_SOURCE[0]}" > "$MUT/out" 2>&1
     rc=$?
     # A RED row must be red for the reason it names: a harness fault also exits non-zero.
@@ -239,8 +244,11 @@ if [ -z "${WHP_SELFTEST:-}" ]; then
   # 7 (#10540): the key-rotate workflow's roster drifts from var.web_hosts, and its copy is removed.
   whp_row "rotate-roster-drift" red rot 's#(WEB_HOST_PRIVATE_IPS: ")10\.0\.1\.10,10\.0\.1\.11"#\110.0.1.10"#' 'rotate-workflow copy #1 fan-out peer list drift'
   whp_row "rotate-roster-removed" red rot '/^ *WEB_HOST_PRIVATE_IPS: /d' 'rotate-workflow: expected >=1 WEB_HOST_PRIVATE_IPS copies'
+  # 8 (#11294): the single-key key-rotate workflow's roster drifts from var.web_hosts, and its copy is removed.
+  whp_row "keyrot-roster-drift" red krot 's#(WEB_HOST_PRIVATE_IPS: ")10\.0\.1\.10,10\.0\.1\.11"#\110.0.1.10"#' 'key-rotate-workflow copy #1 fan-out peer list drift'
+  whp_row "keyrot-roster-removed" red krot '/^ *WEB_HOST_PRIVATE_IPS: /d' 'key-rotate-workflow: expected >=1 WEB_HOST_PRIVATE_IPS copies'
   # The self-test's own floor: deleting rows must not read as a pass.
-  [ "$rows_run" -eq 13 ] || fail "self-test: $rows_run rows ran, expected exactly 13 — a row was deleted or added without restating the floor"
+  [ "$rows_run" -eq 15 ] || fail "self-test: $rows_run rows ran, expected exactly 15 — a row was deleted or added without restating the floor"
 fi
 
 total=$((passes + fails))
