@@ -298,7 +298,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"
 # --no-use-dot keeps the drift check on the same wasm layout the artifact was
 # rendered with — a dot-layout verdict would disagree with committed bytes.
 cd knowledge-base/engineering/architecture/diagrams
-npx -y likec4@1.50.0 validate --no-use-dot .
+npx -y likec4@1.60.0 validate --no-use-dot .
 ```
 
 The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile`

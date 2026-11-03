@@ -1363,7 +1363,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+          npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
@@ -1583,7 +1583,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+          npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts
           likec4 --version
 
       # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer

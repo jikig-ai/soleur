@@ -32,7 +32,7 @@ import {
   type FakeTree,
 } from "./helpers/fake-github-trees";
 
-const INSTALL_HINT = "npm install -g likec4@1.50.0";
+const INSTALL_HINT = "npm install -g likec4@1.60.0";
 
 function resolveLikec4(): string | null {
   const fromEnv = process.env.LIKEC4_BIN;
@@ -271,10 +271,17 @@ describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never execute
 
 describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", () => {
   it("the config-name list matches the installed likec4 dist (a bump that adds a name reds here)", () => {
-    // Walk up from the resolved binary to the likec4 package root.
+    // Walk up from the resolved binary to the likec4 package root. The chunk
+    // layout changed at 1.60.0: `dist/_chunks/src.mjs` → `dist/chunks/filenames.mjs`.
+    const distFile = (dir: string): string | null =>
+      [join(dir, "dist", "_chunks", "src.mjs"), join(dir, "dist", "chunks", "filenames.mjs")].find((p) =>
+        existsSync(p),
+      ) ?? null;
     let dir = dirname(realpathSync(BIN!));
-    for (let i = 0; i < 6 && !existsSync(join(dir, "dist", "_chunks", "src.mjs")); i++) dir = dirname(dir);
-    const src = readFileSync(join(dir, "dist", "_chunks", "src.mjs"), "utf8");
+    let chunk: string | null = null;
+    for (let i = 0; i < 6 && !(chunk = distFile(dir)); i++) dir = dirname(dir);
+    if (!chunk) throw new Error(`likec4 dist chunk not found within 6 parents of ${BIN} (checked dist/_chunks/src.mjs and dist/chunks/filenames.mjs)`);
+    const src = readFileSync(chunk, "utf8");
     const declared = new Set(
       // The dist quotes these as template literals (backticks); accept either.
       [...src.matchAll(/[`"]((?:\.likec4rc)|(?:\.?likec4\.config\.(?:json|js|cjs|mjs|ts|cts|mts)))[`"]/g)].map((m) => m[1]),
