@@ -507,8 +507,10 @@ function ReadyView({
       <>
         <Banner />
         {windowChips}
-        {/* a filter on a window with no rows must stay clearable: without the outcome chips the only way back to
-            "All" would be the browser's Back button */}
+        {/* A filter reaches this state through the chips (24h/7d with a filter chosen, then no rows): without the
+            outcome chips here the only way back to "All" would be the browser's Back button. The other empty states
+            (web access off, recording off or unknown, the unfiltered 30-day empty) are not reachable through a chip
+            click, only by hand-editing ?decision=, and the window chips keep the filter, so they do not repeat this. */}
         {filter !== "all" && <Chips filter={filter} timeWindow={timeWindow} />}
         <StateCard
           icon={<Info className="h-6 w-6" />}

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { RPC_DENIAL_PREFIX } from "@/lib/egress-audit/summary";
+import { stripSqlComments } from "./helpers/sql-lex";
 
 // Cross-artifact contract (#9545 PR2, extended by #11238): the loader tells the RPC's own denial from the database
 // engine's ("permission denied for function ...", same SQLSTATE 42501) by the message prefix. If a migration ever
@@ -20,8 +21,9 @@ const load = (ordinal: number): { file: string | undefined; code: string; raises
   const sql = file ? readFileSync(join(migrations, file), "utf8") : "";
   // Neither a `-- ...` comment (whole-line OR trailing) nor a block comment raises anything; strip them all so a
   // comment cannot satisfy or break the anchor (a trailing `-- RAISE EXCEPTION '...' USING ERRCODE = '22023'`
-  // would otherwise satisfy the floor after the real raise was deleted).
-  const code = sql.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
+  // would otherwise satisfy the floor after the real raise was deleted). One literal-aware pass (test/helpers/sql-lex.ts):
+  // a `/*` inside a string literal or after `-- ` must not hide live SQL from the scan.
+  const code = stripSqlComments(sql);
   const raises = [...code.matchAll(/RAISE\s+EXCEPTION\s+'((?:[^']|'')*)'\s+USING\s+ERRCODE\s*=\s*'([0-9A-Z]{5})'/g)].map((m) => ({
     message: m[1].replace(/''/g, "'"),
     errcode: m[2],

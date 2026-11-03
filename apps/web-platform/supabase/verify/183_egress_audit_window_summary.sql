@@ -3,9 +3,9 @@
 -- test asserts the SQL TEXT; this asserts the LIVE catalog after apply. Each row returns
 -- bad=1 on a drift; run-verify.sh fails the deploy if any bad=1 (precedent: verify/177).
 --
--- Scoped to the exact four-argument signature. Existence is asserted through
--- to_regprocedure(...), which returns NULL for a missing function, so a missing function
--- reports bad = 1 instead of the cast raising. The 177 function and the two rollup table
+-- Scoped to the exact four-argument signature. The to_regprocedure(...) rows report bad = 1 for a
+-- missing function (NULL, not a raised cast). The has_function_privilege rows with a literal signature
+-- raise instead of reporting if the function is missing; either way run-verify.sh fails the deploy. The 177 function and the two rollup table
 -- rows are asserted in verify/177 and are not repeated here. Supabase default privileges
 -- re-grant EXECUTE to anon and service_role, so every non-authenticated role is checked by name.
 -- A NULL proacl means the default ACL, i.e. PUBLIC holds EXECUTE; aclexplode(NULL) yields no rows, so the

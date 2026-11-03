@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { PAGE_LIMIT, RPC_DENIAL_PREFIX } from "@/lib/egress-audit/summary";
 import { ATTACK_SQL, CLASSIFIED_DEFINER_FN_NAMES } from "../rls-fuzz/rpc-cases";
+import { collapseSql, lexSql, splitSqlStatements, stripSqlComments } from "../helpers/sql-lex";
 
 // Migration-shape and body-parity test for 183_egress_audit_window_summary.sql (#11238).
 // Offline text lint. Behaviour that needs an auth boundary or real rows (per-window inclusion, cross-tenant,
@@ -23,7 +24,8 @@ const VERIFY = path.join(__dirname, "../../supabase/verify/183_egress_audit_wind
 const UP_177 = path.join(MIG, "177_egress_audit_summary_rpc.sql");
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
-const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
+// One left-to-right lexer pass (test/helpers/sql-lex.ts): a `/*` inside a literal or a `-- /*` comment cannot hide live SQL.
+const stripComments = stripSqlComments;
 const up = read(UP);
 const down = read(DOWN);
 const verify = read(VERIFY);
@@ -48,15 +50,8 @@ const DENIAL_PREFIX_VALUE = "egress audit: ";
 const extractStatement = (sql: string, name: string): string =>
   stripComments(sql).match(new RegExp(`CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${name}\\s*\\([\\s\\S]*?\\$\\$;`, "i"))?.[0] ?? "";
 
-/** Whitespace collapsed AND spacing around ( ) , ; removed OUTSIDE string literals, so a reflowed `(\n x` equals `(x`. */
-const collapse = (s: string): string =>
-  s
-    // SQL string literals are kept byte-for-byte: spacing inside '( other)' is data, not layout
-    .split(/('(?:[^']|'')*')/)
-    .map((part, i) => (i % 2 === 1 ? part : part.replace(/\s+/g, " ").replace(/\s*([(),;])\s*/g, "$1")))
-    .join("")
-    .replace(/ {2,}/g, " ")
-    .trim();
+/** Whitespace collapsed AND spacing around ( ) , ; removed OUTSIDE string literals; literals are kept byte-for-byte. */
+const collapse = collapseSql;
 
 type Norm = { from: string; to: string; side: "177" | "183" };
 const TOKEN_DECL = "@@LO_DECL@@";
@@ -313,11 +308,9 @@ describe("nothing else in the migration file", () => {
   // Guard 1 pins the function body; this pins everything AROUND it. A statement outside the function (a view, a DO
   // block, a table grant, a TRUNCATE) is not read by any parity or order check, so the file is a closed list of heads.
   const functionStmt = extractStatement(up, NAME);
-  const topLevelStatements = upExec
-    .replace(functionStmt, "")
-    .split(/;[ \t]*(?:\r?\n|$)/)
-    .map((x) => x.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+  // split on a bare `;` that is code (not inside a literal), so a same-line `...; DELETE ...` is a statement of its own
+  const restOf = (sql: string): string[] => splitSqlStatements(sql.replace(functionStmt, ""));
+  const topLevelStatements = restOf(upExec);
 
   it("is the one function plus REVOKE, GRANT and COMMENT for the exact signature, and nothing else", () => {
     expect(functionStmt).not.toBe("");
@@ -328,29 +321,81 @@ describe("nothing else in the migration file", () => {
     for (const x of topLevelStatements) expect(x).toContain(SIG);
   });
 
-  it("an appended statement of another kind is detected", () => {
-    const appended = `${upExec}\nTRUNCATE public.workspace_egress_audit_rollup;\nDO $x$ BEGIN UPDATE public.workspace_egress_audit_rollup SET request_count = 0; END $x$;\n`;
-    const rest = appended
-      .replace(functionStmt, "")
-      .split(/;[ \t]*(?:\r?\n|$)/)
-      .map((x) => x.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-    expect(rest.length).toBeGreaterThan(3);
+  it("an appended statement of another kind is detected, on its own line or on the same line", () => {
+    const tail = `TRUNCATE public.workspace_egress_audit_rollup;\nDO $x$ BEGIN UPDATE public.workspace_egress_audit_rollup SET request_count = 0; END $x$;\n`;
+    expect(restOf(`${upExec}\n${tail}`).length).toBeGreaterThan(3);
+    // same line as the GRANT, and glued onto the COMMENT's last line (after the literal's closing quote)
+    expect(restOf(upExec.replace(/(GRANT EXECUTE ON FUNCTION[^;]*TO authenticated);/i, "$1; DELETE FROM public.users;")).length).toBeGreaterThan(3);
+    expect(restOf(upExec.replace(/(COMMENT ON FUNCTION[\s\S]*?');/i, "$1; UPDATE public.users SET email = NULL;")).length).toBeGreaterThan(3);
+    expect(restOf(upExec.replace(/(GRANT EXECUTE ON FUNCTION[^;]*TO authenticated);/i, "$1; DO $x$ BEGIN PERFORM 1; END $x$;")).length).toBeGreaterThan(3);
+  });
+
+  it("a `;` inside the COMMENT's string literal does not split it (the statement count is still exactly three)", () => {
+    const withSemicolon = upExec.replace(/(COMMENT ON FUNCTION[\s\S]*?IS\s*')/i, "$1a; b ");
+    expect(withSemicolon).not.toBe(upExec);
+    expect(restOf(withSemicolon)).toHaveLength(3);
   });
 });
 
-describe("a third copy of the read body cannot arrive unnoticed (ADR-288 retirement path)", () => {
-  // The two member-readable definer functions over the rollup table are 177 and 183, and Guard 1 compares exactly two
-  // bodies. A third authenticated-granted reader would pass every default-suite check, so the set is pinned: adding
-  // one is a conscious edit of this list (and of the ADR's retirement path), not a silent copy.
-  it("exactly migrations 177 and 183 grant EXECUTE to authenticated on a function that reads the rollup table", () => {
-    const readers = readdirSync(MIG)
-      .filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql"))
-      .filter((f) => {
-        const exec = stripComments(readFileSync(path.join(MIG, f), "utf8"));
-        return /\bworkspace_egress_audit_rollup\b/.test(exec) && /GRANT\s+EXECUTE\s+ON\s+FUNCTION[^;]*\bTO\s+authenticated\b/i.test(exec);
-      });
-    expect(readers).toEqual(["177_egress_audit_summary_rpc.sql", "183_egress_audit_window_summary.sql"]);
+describe("the lexer (a comment marker hidden in a literal, or a comment hiding a marker, cannot blind the checks)", () => {
+  const live = "SELECT 1; GRANT EXECUTE ON FUNCTION public.x() TO authenticated;";
+  it("`/*` in two string literals does not swallow the code between them", () => {
+    const sql = `SELECT '/*'; ${live} SELECT '*/';`;
+    expect(stripComments(sql)).toContain("GRANT EXECUTE");
+    expect(stripComments(sql)).toContain("'/*'");
+  });
+  it("a `-- /*` line comment does not open a block comment", () => {
+    const sql = `-- /*\n${live}\n-- */\n`;
+    expect(stripComments(sql)).toContain("GRANT EXECUTE");
+  });
+  it("`--` inside a literal is data; a nested block comment is one comment", () => {
+    expect(stripComments("SELECT 'a--b';")).toBe("SELECT 'a--b';");
+    expect(stripComments("a /* x /* y */ z */ b")).toBe("a   b");
+  });
+  it("double spaces inside a literal are data: 'a  b' differs from 'a b' after collapse, layout outside does not", () => {
+    expect(collapse("x  =  'a  b'")).not.toBe(collapse("x = 'a b'"));
+    expect(collapse("x  =  'a b'")).toBe(collapse("x = 'a b'"));
+    expect(lexSql("'it''s'  'x'").filter((t) => t.kind === "lit").map((t) => t.text)).toEqual(["'it''s'", "'x'"]);
+  });
+});
+
+describe("a third copy of the read body cannot arrive unnoticed (ADR-288 retirement path) - a heuristic, not a proof", () => {
+  // The member-readable definer functions over the rollup table are 177 and 183, and Guard 1 compares exactly two
+  // bodies. A third reader would pass every default-suite check, so the set is pinned: adding one is a conscious
+  // edit of these lists (and of the ADR's retirement path), not a silent copy. This is a text heuristic over the
+  // migration files: it cannot see a grant made outside migrations or a function built by dynamic SQL.
+  const migrationFiles = readdirSync(MIG)
+    .filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql"))
+    .sort();
+  const statementsOf = (f: string): string[] => splitSqlStatements(readFileSync(path.join(MIG, f), "utf8"));
+  const TABLE = /\bworkspace_egress_audit_rollup\b/;
+  // a grantee list that includes a member-facing role, quoted or not, or PUBLIC
+  const GRANTS_TO_MEMBERS = /\bGRANT\s+EXECUTE\b[^;]*\bTO\b[^;]*(?:\bauthenticated\b|\banon\b|\bPUBLIC\b)/i;
+
+  it("exactly migrations 177 and 183 grant to authenticated/anon/PUBLIC in a file that reads the rollup table (any grantee list, ON ALL FUNCTIONS included)", () => {
+    const granting = migrationFiles.filter((f) => {
+      const stmts = statementsOf(f);
+      return stmts.some((x) => TABLE.test(x)) && stmts.some((x) => GRANTS_TO_MEMBERS.test(x));
+    });
+    expect(granting).toEqual(["177_egress_audit_summary_rpc.sql", "183_egress_audit_window_summary.sql"]);
+  });
+
+  it("exactly migrations 162, 177 and 183 define a function whose statement reads the rollup table (a reader defined in one file and granted in another is still seen)", () => {
+    const definingFiles = migrationFiles.filter((f) => {
+      const text = stripComments(readFileSync(path.join(MIG, f), "utf8"));
+      return [...text.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w.]+\s*\([\s\S]*?\$\$;/gi)].some((m) => TABLE.test(m[0]));
+    });
+    expect(definingFiles).toEqual(["162_workspace_egress_audit_rollup.sql", "177_egress_audit_summary_rpc.sql", "183_egress_audit_window_summary.sql"]);
+  });
+
+  it("the grantee pattern sees each spelling a third reader could use", () => {
+    for (const g of [
+      "GRANT EXECUTE ON FUNCTION public.f(uuid) TO anon, authenticated",
+      'GRANT EXECUTE ON FUNCTION public.f(uuid) TO "authenticated"',
+      "GRANT EXECUTE ON FUNCTION public.f(uuid) TO PUBLIC",
+      "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated",
+    ]) expect([g, GRANTS_TO_MEMBERS.test(g)]).toEqual([g, true]);
+    expect(GRANTS_TO_MEMBERS.test("GRANT EXECUTE ON FUNCTION public.f(uuid) TO service_role")).toBe(false);
   });
 });
 
@@ -508,7 +553,7 @@ describe("the verify sentinel asserts the live catalog PREDICATES for the exact 
     egress_window_summary_service_role_revoked: new RegExp(`CASE WHEN has_function_privilege\\('service_role', ${FN}, 'EXECUTE'\\) THEN 1 ELSE 0 END`),
     egress_window_summary_public_revoked: new RegExp(`CASE WHEN EXISTS \\(SELECT 1 FROM pg_proc p, aclexplode\\(p\\.proacl\\) a WHERE p\\.oid = ${RP} AND a\\.grantee = 0 AND a\\.privilege_type = 'EXECUTE'\\) OR EXISTS \\(SELECT 1 FROM pg_proc p WHERE p\\.oid = ${RP} AND p\\.proacl IS NULL\\) THEN 1 ELSE 0 END`),
     egress_window_summary_authenticated_granted: new RegExp(`CASE WHEN has_function_privilege\\('authenticated', ${FN}, 'EXECUTE'\\) THEN 0 ELSE 1 END`),
-    egress_window_summary_grantee_set_is_only_authenticated: new RegExp(`FROM pg_proc p, aclexplode\\(p\\.proacl\\) a WHERE p\\.oid = ${RP} AND a\\.privilege_type = 'EXECUTE' AND a\\.grantee IS DISTINCT FROM \\(SELECT oid FROM pg_roles WHERE rolname = 'authenticated'\\) AND a\\.grantee IS DISTINCT FROM \\(SELECT proowner FROM pg_proc WHERE oid = ${RP}\\)\\) = 0 THEN 0 ELSE 1 END`),
+    egress_window_summary_grantee_set_is_only_authenticated: new RegExp(`CASE WHEN \\(SELECT count\\(\\*\\) FROM pg_proc p, aclexplode\\(p\\.proacl\\) a WHERE p\\.oid = ${RP} AND a\\.privilege_type = 'EXECUTE' AND a\\.grantee IS DISTINCT FROM \\(SELECT oid FROM pg_roles WHERE rolname = 'authenticated'\\) AND a\\.grantee IS DISTINCT FROM \\(SELECT proowner FROM pg_proc WHERE oid = ${RP}\\)\\) = 0 THEN 0 ELSE 1 END`),
   };
 
   it("has exactly the eleven expected rows, with check names distinct from 177's", () => {
@@ -522,8 +567,11 @@ describe("the verify sentinel asserts the live catalog PREDICATES for the exact 
     for (const n of rows.keys()) expect(names177.has(n)).toBe(false);
   });
 
-  it.each(Object.entries(predicates))("%s has its predicate and polarity", (name, re) => {
-    expect([name, re.test(rows.get(name) ?? "")]).toEqual([name, true]);
+  // The whole row is matched, head to tail: `SELECT '<name>'[ AS check_name], <predicate>::int[ AS bad][;]`. Anything
+  // wrapped around, nested into or appended to the predicate (`CASE WHEN false AND (...)`, `* 0`) breaks the anchor.
+  it.each(Object.entries(predicates))("%s is exactly its predicate with its polarity (head-anchored, tail-anchored)", (name, re) => {
+    const whole = new RegExp(`^SELECT '${name}'(?: AS check_name)?, ${re.source}::int(?: AS bad)?;?$`);
+    expect([name, whole.test((rows.get(name) ?? "").trim())]).toEqual([name, true]);
   });
 
   it("every row ends at its CASE ... END::int (nothing is appended after the predicate to neuter it)", () => {

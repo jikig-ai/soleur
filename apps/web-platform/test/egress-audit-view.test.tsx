@@ -425,6 +425,17 @@ const LADDER: Cell[] = [
   { name: "ready recording-on empty, filtered", result: ready(empty()), filter: "blocked" },
 ];
 
+// User-visible text with element boundaries kept as spaces (textContent glues neighbouring elements together, so a
+// `\b` after the last word of one element never matches) plus every attribute a screen reader or tooltip exposes.
+const VISIBLE_ATTRS = ["aria-label", "aria-description", "aria-roledescription", "title", "alt", "placeholder"] as const;
+function spacedText(root: HTMLElement): string {
+  const parts: string[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.textContent ?? "");
+  for (const el of Array.from(root.querySelectorAll("*"))) for (const a of VISIBLE_ATTRS) parts.push(el.getAttribute(a) ?? "");
+  return parts.join(" ");
+}
+
 // The single chokepoint of the sweep: renders every cell of ladder x windows and hands back the rendered text.
 function renderSweep(workspaceName: string | null = "Acme"): { name: string; timeWindow: TimeWindow; text: string; root: HTMLElement }[] {
   const out: { name: string; timeWindow: TimeWindow; text: string; root: HTMLElement }[] = [];
@@ -445,8 +456,8 @@ function strayScanText(root: HTMLElement, workspaceName: string | null, allowlis
   for (const el of Array.from(root.querySelectorAll('nav[aria-label="Time window"]'))) el.remove();
   for (const a of Array.from(root.querySelectorAll("a"))) if (a.textContent === "Show 30 days") a.remove();
   // attribute text is user-visible too (screen readers, tooltips): aria-label, title and alt are scanned with the text
-  const attrs = Array.from(root.querySelectorAll("[aria-label],[title],[alt]")).flatMap((el) =>
-    ["aria-label", "title", "alt"].map((a) => el.getAttribute(a) ?? ""),
+  const attrs = Array.from(root.querySelectorAll(VISIBLE_ATTRS.map((a) => `[${a}]`).join(","))).flatMap((el) =>
+    VISIBLE_ATTRS.map((a) => el.getAttribute(a) ?? ""),
   );
   let text = [root.textContent ?? "", ...attrs].join(" ");
   for (const sentence of allowlist) text = text.split(sentence).join("");
@@ -681,6 +692,14 @@ describe("Guard 2 — no stale 30-day copy; wording bans (state ladder x windows
     for (const c of withRetention) expect(strayScanText(c.root, "Acme", []).includes("30")).toBe(true);
   });
 
+  it("the spaced-text scan is load-bearing: a `past month` in an adjacent element, or in an aria-description, is seen", () => {
+    const host = document.createElement("div");
+    host.innerHTML = '<span>Showing the past month</span><p>Nothing</p><i aria-description="in the last month"></i>';
+    const seen = spacedText(host);
+    expect(seen).toMatch(/\b(?:last|past|previous) month/i);
+    expect(host.textContent).toContain("monthNothing");
+  });
+
   it("a workspace name containing the digits 30 does not trip the scan", () => {
     const cells = renderSweep("Acme30").filter((c) => c.timeWindow !== "30d");
     for (const c of cells) expect([c.timeWindow, c.name, strayScanText(c.root, "Acme30").includes("30")]).toEqual([c.timeWindow, c.name, false]);
@@ -698,7 +717,10 @@ describe("Guard 2 — no stale 30-day copy; wording bans (state ladder x windows
       const where = `${c.timeWindow} / ${c.name}`;
       expect([where, BANNED.test(c.text)]).toEqual([where, false]);
       // a wrong-window sentence need not contain the digits 30
-      expect([where, /\b(last|past) month\b|\b4 weeks\b/i.test(c.text)]).toEqual([where, false]);
+      // scanned on spaced text + attributes, with no trailing boundary: `past month` followed by another element's text
+      const spaced = spacedText(c.root);
+      expect([where, /\b(?:last|past|previous) month|\b(?:4|four) weeks|\bthirty days?\b/i.test(spaced)]).toEqual([where, false]);
+      expect([where, BANNED.test(spaced)]).toEqual([where, false]);
       expect([where, COMPLETENESS_CLAIM.test(c.text)]).toEqual([where, false]);
       expect([where, FORBIDDEN.test(c.text)]).toEqual([where, false]);
       expect([where, c.root.querySelector("time")]).toEqual([where, null]);
