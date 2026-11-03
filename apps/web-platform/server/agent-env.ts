@@ -78,6 +78,10 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
   // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash. Hosted `canUseTool` asks, through a must-ask lane, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (ADR-284, #9776); the hook itself stays off here and enabling it is a later consolidation.
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
+  // launch-check files issues in a customer's tracker, so the skill refuses `issues --create` and the report write when the run is unattended (CI set,
+  // or this variable). A hosted session has no human at a terminal and its agent Bash has no TTY, so the refusal is switched on here and an ambient value cannot
+  // clear it: a hosted session may scan, render --dry-run and preview, never file.
+  LAUNCH_CHECK_HEADLESS: "1",
 } as const);
 
 // Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
