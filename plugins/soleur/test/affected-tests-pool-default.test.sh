@@ -31,7 +31,18 @@ pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
 fail() { FAILS=$((FAILS + 1)); printf '[FAIL] %s\n' "$1"; }
 dump() { sed 's/^/    /' <<<"${1:-}"; }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 TMP="$(mktemp -d "${TMPDIR:-/var/tmp}/t12013.XXXXXX")" || exit 2
+assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 # Instrument self-test: both verdict helpers must move their counters, or nothing below means anything.
@@ -47,7 +58,7 @@ fi
 # environment and argv. Everything is written inside this function, under the directory it binds.
 mk_repo() {  # <dir>
   local d="$1"
-  case "$d" in /*) ;; *) echo "mk_repo: need an absolute path" >&2; return 1 ;; esac
+  assert_fixture_dir "$d"
   mkdir -p "$d/scripts" || return 1
   cat > "$d/scripts/test-all.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -141,6 +152,7 @@ if [[ -z "${AFFECTED_GATE_OVERRIDE:-}" ]]; then
   src_dir="$(dirname "$GATE")"
   mutate() {  # <name> <python expression transforming s>
     local name="$1" expr="$2" dir="$MUT/$1"
+    assert_fixture_dir "$dir"
     mkdir -p "$dir/lib" || return 1
     cp "$GATE" "$dir/affected-tests.sh" || return 1
     cp -R "$src_dir/lib/affected-tests" "$dir/lib/" || return 1
@@ -176,8 +188,10 @@ PY
 fi
 
 # Anti-vacuity floor, reported without the helpers it backstops.
+# 11 contract assertions + 5 mutation rows; a mutant run executes only the 11 and so ends at this floor by design.
+# TOTAL and FLOOR sit directly above the test so the vacuity meta-guard's mutant carries both bindings.
 TOTAL=$((PASSES + FAILS))
-if [[ -z "${AFFECTED_GATE_OVERRIDE:-}" ]]; then FLOOR=16; else FLOOR=11; fi
+FLOOR=16
 if (( TOTAL < FLOOR )); then
   printf '[FATAL] only %d assertions ran (floor %d) — the suite is not exercising what it claims\n' "$TOTAL" "$FLOOR"
   exit 1
