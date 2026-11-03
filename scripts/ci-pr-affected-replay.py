@@ -96,9 +96,9 @@ the walk files of the level by sorted path followed by their closures; the rows 
 accept row's ordinal never depends on the order the selector printed the rows. An edge is credited exactly when the selector would select
 the suite for a diff naming the path (edge_hit mirrors `_diff_touches`).
 DRAIN-REVEAL: reach is frozen as a definition but its result moves through declared edges and through the text of files it reads: declaring
-a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row when the suite does not read or
-execute the file, declare an edge when it does — or when the file's state feeds the suite's verdict (an ignore-rules file a suite-side
-`git --exclude-standard` call consults, though the suite's own bytes never open it) — and re-run the audit to a fixpoint.
+a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row only when the suite merely names
+the file; declare an edge when the suite reads or executes it — or when the file's state feeds the suite's verdict (an ignore-rules file a
+suite-side `git --exclude-standard` call consults, though the suite's own bytes never open it) — and re-run the audit to a fixpoint.
 DECLARED LIMITS (what no run of this audit proves):
   - literal names only: no computed path, glob expansion or variable-indirect operand;
   - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
