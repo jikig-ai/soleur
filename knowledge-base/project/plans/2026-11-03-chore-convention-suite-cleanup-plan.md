@@ -13,6 +13,21 @@ brand_survival_threshold: none
 
 # chore: family-wide cleanup — convention-suite asymmetries + seam coverage gaps (post-#11720)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Observability (added — donor-mirrored), Guard Contract (lint-verified, 6 entries), Technical Considerations, Plan Review record
+**Agents used:** none — `Reviewed-Coverage: sequential-fallback` (depth-1 subagent, no spawn tool); every prescribed fan-out (learnings filter, per-section research, review panel, verify-the-negative, post-edit self-audit) ran inline sequentially.
+
+### Key Improvements
+1. `## Observability` block added (deepen-plan 4.7 requires it for non-docs plans — the donor batch-3 plan carries the same shape; the suites ARE the observability).
+2. `IV_JOB` non-empty/run-line-inside assertion and job-boundary regex widened to `[a-zA-Z0-9_-]` (correctness catches from the inline panel pass).
+3. Halt-gate sweep run mechanically: 4.6 pass, 4.7 pass (after Observability add), 4.8 zero PAT hits, 4.9/4.10/4.13 skip, 4.11 `lint-guard-contract.py` green (6 entries), 4.12 exactly-one Scope Check all rows mapped or justified-inferred.
+
+### New Considerations Discovered
+- All `$GITHUB_ENV` writes in infra-validation.yml live in the `plan:` job (:1662/:1674) — confirms the job-scoped ban is the correct scoping and `validate:` is clean today.
+- The issue's "vestigial EXPECT_1" describes live whole-string compares — reconciled as rename-not-delete (Research Reconciliation; taste row in decision-challenges.md).
+
 ## Overview
 
 #11899 is the deferred family-wide remainder from the #11720 batch-3 review (PR #11885): eight findings shared with already-merged batch-1/batch-2 convention files or pre-existing on main, deferred so batch-3 did not diverge the port set. This plan sweeps them across the whole alert-guard convention family — the fourteen `apps/web-platform/test/infra/*alert*.test.sh` suites plus `apps/web-platform/infra/betterstack-alert-structure.test.sh` that carry the `PRESENCE_ROWS`/`MUT_ROWS` floor-window + `MUT_SKIP`-battery idiom — plus the `PROMOTED_FILES` meta-guard at `scripts/guard-vacuity-floor.test.sh`, plus one finding the resume brief carries that the issue body does not number (the `MAIN_PLAN` awk slice overshoot, with its verified `rc=` terminator remedy).
@@ -207,7 +222,7 @@ Ordering rationale: structural guards (items 1/4/7) land before cosmetics so eve
 - **Serial CI runtime:** batch-3 measured ~64s for the six; the fourteen-plus-meta-guard sweep adds seam/step/gate rows — estimate +60-90s total; `deploy-script-tests-fixed` runs under `timeout-minutes: 15` — measure the leg on-branch, bump only if approaching ~12 min.
 - **`assert_fixture_dir` parity:** the P1b blocks stay byte-identical across siblings (the P1a suite pins that) — do not touch them.
 - **Shellcheck:** `shellcheck -S warning` clean on every touched file pre-panel (SC2183 format-arg, SC2034 dead vars — deleting dead `Q`/EXPECT_1-adjacent vars must not leave dangling refs).
-- **Observability (Phase 2.9):** skipped — Files-to-Edit are `apps/web-platform/test/infra/` suites + `scripts/` meta-guard; none match the code-class path set (`apps/*/server|src|infra`, `plugins/*/scripts`) and no new infra surface is created.
+- **Observability (Phase 2.9 / deepen 4.7):** the suites ARE the observability — the donor batch-3 plan carries the block (`apps/*/test/` is non-docs under the 4.7 trigger); mirrored below.
 - **Encryption posture / Task design / ADR gate / GDPR gate / IaC gate / network-outage checklist:** all skip — no persistent store or connection, no new autonomous-task surface, no architectural decision (mechanism consistent with ADR-252), no regulated-data surface, no infrastructure provisioning, no SSH/network keywords.
 
 ## User-Brand Impact
@@ -218,6 +233,18 @@ Ordering rationale: structural guards (items 1/4/7) land before cosmetics so eve
 - **Threshold decision (challengeable):** the blast radius is a false-green CI signal on internal ops alerting — indirect, operator-facing, and self-announcing at the next alert drift; it cannot reach a user record, payment, or page.
 
 *Scope-out override:* `threshold: none, reason: the diff touches test-suite and meta-guard files under apps/web-platform/test/infra/ and scripts/ only — CI-machinery, no user-facing or data path is modified`
+
+## Observability
+
+```yaml
+liveness_signal:    # the fourteen convention suites + meta-guard run as named serial steps in deploy-script-tests-fixed on every infra-touching PR; cadence per-push; alert_target = the required "test" aggregator leg; configured_in .github/workflows/infra-validation.yml
+error_reporting:    # suite [FAIL] lines + non-zero exit → red named step → fail-closed deploy-script-tests-done aggregator (infra-validation.yml:~1345-1414); fail_loud = yes
+failure_modes:      # [{mode: vacuous edit (assertion count below floor), detection: per-suite _floor + ledger conservation + mutate_floor_red, alert_route: red step}, {mode: floor invisible to meta-guard (phantom heredoc span), detection: PROMOTED_FILES membership pin reports not-floor-bearing, alert_route: red meta-guard suite}, {mode: PROMOTED_FILES stale-site edit, detection: single-site count pin (new), alert_route: red meta-guard suite}, {mode: CI-level muting via literal/composed/injected env name, detection: per-suite fragment + job-slice seam rows (new), alert_route: red suite step}, {mode: non-blocking step drift, detection: per-suite if:/continue-on-error: step-shape pins (new), alert_route: red suite step}, {mode: MAIN_PLAN run-to-EOF overshoot, detection: terminator-match assertion (new), alert_route: red suite step}, {mode: serial-leg timeout, detection: aggregator cancelled-classifier names the timeout shape, alert_route: red leg}]
+logs:               # stdout in the infra-validation job log on GitHub Actions; GH retention default
+discoverability_test:
+  command:          bash -c 'grep -cE "^PRESENCE_ROWS=[0-9]+" apps/web-platform/test/infra/egress-gw-alert.test.sh'
+  expected_output:  "1"
+```
 
 ## Domain Review
 
