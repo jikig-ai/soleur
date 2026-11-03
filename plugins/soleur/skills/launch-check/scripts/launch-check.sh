@@ -24,6 +24,8 @@
 #   usage 2 · headless-write-refused 2 · report-missing 2 · report-stale 2 · plan-missing 2 · plan-invalid 2 · plan-repo-mismatch 2 ·
 #   repo-unresolved 2 · confirm-public-required 2 · epic-closed 2 · epic-ambiguous 2 · issue-ambiguous 2 · issues-unavailable 2 · write-shape-refused 2 ·
 #   issues-incomplete 2 (the run stopped part-way: re-run the printed command) · redaction-hit 1 · write-failed 2 · scanner-* 2.
+#   An interrupted --create (a signal, after at least one write was attempted) prints the summary, the resume command and an
+#   issues-incomplete phase=interrupted detail=signal marker, then exits 129 (HUP), 130 (INT) or 143 (TERM): 128 plus the signal.
 set -uo pipefail
 
 # Deterministic ordering and matching on every machine, and a repository that cannot run code through git config

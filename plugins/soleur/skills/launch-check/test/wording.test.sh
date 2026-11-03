@@ -57,4 +57,6 @@ printf '%s\n' 'see owner/repo#12' 'ping @someone' 'item #7' 'related GH-9' 'comm
 check "autolink lint canary: each of the six shapes is caught by the lint helper itself" test "$(autolink_hits "$SCRATCH/al-bad.txt" | wc -l | tr -d ' ')" = 6
 printf 'path `node_modules/@types/node/index.d.ts` only\n' > "$SCRATCH/al-ok.txt"
 check "autolink lint canary: a code span is exempt (an @scope/pkg path inside backticks is not a mention)" autolink_clean "$SCRATCH/al-ok.txt"
-finish 35
+ctl_alc() { autolink_clean "$SCRATCH/al-ok.txt" && ! autolink_clean "$SCRATCH/al-ok.txt" "$SCRATCH/no-such-file" && ! autolink_clean "$SCRATCH/no-such-file" && ! autolink_clean "$SCRATCH" && ! autolink_clean && ! autolink_clean "$SCRATCH/al-ok.txt" "$SCRATCH/al-bad.txt"; }
+check "control (autolink_clean): a missing file, a directory, no argument or one bad file among good ones fails it; a clean file passes" ctl_alc
+finish 36

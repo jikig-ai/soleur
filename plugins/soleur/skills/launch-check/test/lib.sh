@@ -71,7 +71,7 @@ scan_to() { # scan_to <repo> <facts-out> [extra args]
 }
 # autolink shapes outside code spans: a user mention, owner/repo#N, an issue URL, a bare #N, GH-N, a 7-40 hex run.
 autolink_hits() { sed -e 's/`[^`]*`//g' "$@" | grep -nE '(^|[^A-Za-z0-9_./-])@[A-Za-z0-9_-]|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+|https?://[^ ]*/(issues|pull)/[0-9]+|(^|[^A-Za-z0-9&])#[0-9]+|GH-[0-9]+|(^|[^A-Za-z0-9_-])[0-9a-f]{7,40}($|[^A-Za-z0-9_-])'; }
-autolink_clean() { ! autolink_hits "$@" >/dev/null; }
+autolink_clean() { local f; [ $# -gt 0 ] || return 1; for f in "$@"; do [ -f "$f" ] || return 1; done; ! autolink_hits "$@" >/dev/null; }   # any argument that is not a regular file fails (grep over a missing file reads as clean)
 finish() { # finish <minimum assertion count>
   if [ $((passes + fails)) -lt "$1" ]; then printf 'FAIL - assertion floor: %d ran, %d required\n' $((passes + fails)) "$1"; exit 1; fi
   printf '%d passed, %d failed\n' "$passes" "$fails"

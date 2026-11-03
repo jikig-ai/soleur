@@ -165,6 +165,9 @@ fi
 EOF
 SB0=$(mk_sbx pristine); inject "$SB0" "$SCRATCH/seams.sh"
 LCS="$SB0"
+# A PATH-shimmed awk that exits 2 for any program whose text contains $AWK_DIE (a dead awk must stop a run, never read as an empty result)
+SHIM="$SCRATCH/awkshim"; mkdir -p "$SHIM"
+printf '#!/usr/bin/env bash\nif [ -n "${AWK_DIE:-}" ]; then case "$*" in *"$AWK_DIE"*) exit 2 ;; esac; fi\nexec "%s" "$@"\n' "$(command -v awk)" > "$SHIM/awk"; chmod +x "$SHIM/awk"
 # a pattern only gitleaks matches, with a gitleaks wrapper that passes everything until the real one is switched on
 cat > "$SCRATCH/gl-toggle.sh" <<'EOF'
 #!/usr/bin/env bash

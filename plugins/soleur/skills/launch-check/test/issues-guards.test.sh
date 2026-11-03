@@ -83,18 +83,34 @@ check "every shipped --jq expression stays inside the pinned function list (scan
 mkdir -p "$SCRATCH/scan1"; printf "x --jq 'ltrimstr(\"a\")'\n" > "$SCRATCH/scan1/jqbad.sh"
 check "pinned-list canary: a function outside the list is flagged" test -n "$(jq_fn_violations "$SCRATCH/scan1/jqbad.sh")"
 gh_cmd_lines() { # every `gh` token in code (not a comment line, not `command -v gh`, not a path such as gh.out), each with the function that holds it
-  awk 'FNR == 1 { fn = "" } /^[a-zA-Z_][a-zA-Z_0-9]*\(\) *\{/ { fn = $1 } /^[[:space:]]*#/ { next }
-       /(^|[^A-Za-z0-9_.\/-])gh([^A-Za-z0-9_.\/-]|$)/ && !/command -v gh/ { print FILENAME ":" fn }' "$@"
+  # A declaration is `name() {`, `name () {` or `function name {`; a column-0 `}` (or a one-line function) ends it, so a call after the
+  # function is attributed to NO function (the name field is empty).
+  awk 'function nm(l,   t) { t = l; sub(/^function[ \t]+/, "", t); sub(/[ \t]*(\(\))?[ \t]*\{.*$/, "", t); return t }
+       FNR == 1 { fn = ""; one = 0 }
+       /^[[:space:]]*#/ { next }
+       /^(function[ \t]+)?[A-Za-z_][A-Za-z_0-9]*[ \t]*(\([ \t]*\))?[ \t]*\{/ { fn = nm($0); one = ($0 ~ /\}[ \t]*(#.*)?$/) }
+       /(^|[^A-Za-z0-9_.\/-])gh([^A-Za-z0-9_.\/-]|$)/ && !/command -v gh/ { print FILENAME ":" fn }
+       /^\}/ || one { fn = ""; one = 0 }' "$@"
 }
-others=$(gh_cmd_lines "$SKILL"/scripts/*.sh "$SKILL"/scripts/lib/*.sh | grep -v 'lc__gh_exec' || true)
+gh_outside() { gh_cmd_lines "$@" | grep -v ':lc__gh_exec$' || true; }   # call sites not inside exactly lc__gh_exec (a whole name, never a substring)
+others=$(gh_outside "$SKILL"/scripts/*.sh "$SKILL"/scripts/lib/*.sh)
 check "gh is invoked only inside lc__gh_exec, and it is invoked there (anti-vacuous)" bash -c '[ -f "$1" ] && [ -z "$2" ] && [ -n "$3" ]' _ "$ISS" "$others" "$(gh_cmd_lines "$ISS")"
 { cat "$ISS" 2>/dev/null; printf '\nlc_extra() {\n  gh api -X POST repos/o/r/issues -f title=x\n}\n'; } > "$SCRATCH/scan1/issues.sh"
-check "mutation (Guard 1 row 5): a second gh call site outside lc__gh_exec is caught by the scan" bash -c '[ -f "$1" ] && [ -n "$2" ]' _ "$ISS" "$(gh_cmd_lines "$SCRATCH/scan1/issues.sh" | grep -v lc__gh_exec || true)"
+check "mutation (Guard 1 row 5): a second gh call site outside lc__gh_exec is caught by the scan" bash -c '[ -f "$1" ] && [ -n "$2" ]' _ "$ISS" "$(gh_outside "$SCRATCH/scan1/issues.sh")"
 # any gh token counts, not a list of spellings: a verb the first draft's list did not name, a tab separator and an exec form are all caught
 for spell in 'gh extension install x' 'exec gh version' 'x=$(gh	browse)' 'gh -R o/r issue list'; do
   printf 'lc_extra() {\n  %s\n}\n' "$spell" > "$SCRATCH/scan1/spell.sh"
   check "mutation (Guard 1 scan, any gh token): '$spell' outside lc__gh_exec is caught" test -n "$(gh_cmd_lines "$SCRATCH/scan1/spell.sh")"
 done
+# the function attribution is exact: each of these shapes puts a gh call outside lc__gh_exec, after a real lc__gh_exec, and must be flagged
+gh_shape() { # gh_shape <name> <text after a clean lc__gh_exec>: writes the file and prints its path
+  { printf 'lc__gh_exec() {\n  gh "$@"\n}\n'; printf '%s\n' "$2"; } > "$SCRATCH/scan1/$1.sh"; printf '%s' "$SCRATCH/scan1/$1.sh"
+}
+check "control (Guard 1 scan): a clean lc__gh_exec alone is not flagged and is seen holding its call" bash -c '[ -z "$1" ] && [ -n "$2" ]' _ "$(gh_outside "$(gh_shape clean '')")" "$(gh_cmd_lines "$SCRATCH/scan1/clean.sh")"
+check "known-bad (Guard 1 scan): a second function whose name merely contains lc__gh_exec (lc__gh_exec_raw) is flagged" test -n "$(gh_outside "$(gh_shape raw $'lc__gh_exec_raw() {\n  gh api x\n}')")"
+check "known-bad (Guard 1 scan): a function declared as 'name () {' (with a space) is flagged" test -n "$(gh_outside "$(gh_shape spaced $'lc_other () {\n  gh api x\n}')")"
+check "known-bad (Guard 1 scan): a function declared as 'function name {' is flagged" test -n "$(gh_outside "$(gh_shape kw $'function lc_other {\n  gh api x\n}')")"
+check "known-bad (Guard 1 scan): a top-level gh call after lc__gh_exec has ended is flagged" test -n "$(gh_outside "$(gh_shape top 'gh api -X POST repos/o/r/issues -f title=x')")"
 printf 'lc_ok() {\n  command -v gh >/dev/null\n  x=$WORK/gh.out; ISSUES_REASON=gh-missing\n  # gh api is only a comment\n}\n' > "$SCRATCH/scan1/ok.sh"
 check "scan control: command -v gh, a gh.out path, gh-missing and a comment line are not call sites" test -z "$(gh_cmd_lines "$SCRATCH/scan1/ok.sh")"
 subst_hits() { grep -nE '\$\{[^}]*//' "$@" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true; }
@@ -104,7 +120,7 @@ check "mutation (Guard 2 row 7): introducing a substitution is caught by the sca
 leak=$(grep -nE 'SOLEUR_LAUNCH_CHECK_(ISSUES|PLAN_OK)' "$PLUGIN"/skills/*/scripts/*.sh 2>/dev/null || true)
 check "no skills/*/scripts/*.sh emits an ISSUES or PLAN_OK marker (they live in scripts/lib/issues.sh, outside the drift guard's walk)" bash -c '[ -f "$1" ] && [ -z "$2" ] && grep -q "SOLEUR_LAUNCH_CHECK_ISSUES" "$1"' _ "$ISS" "$leak"
 hdr=$(sed -n '1,80p' "$LC")
-miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch confirm-public-required redaction-hit epic-closed epic-ambiguous issues-unavailable write-shape-refused issues-incomplete; do case "$hdr" in *"$r"*) ;; *) miss="$miss $r" ;; esac; done
+miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch confirm-public-required redaction-hit epic-closed epic-ambiguous issue-ambiguous issues-unavailable write-shape-refused issues-incomplete; do case "$hdr" in *"$r"*) ;; *) miss="$miss $r" ;; esac; done
 check "launch-check.sh header lists every abort reason (the exit-code table)" test -z "$miss"
 check "the issue template exists and passes the autolink lint" file_and_clean "$SKILL/references/issue-body.template"
 check "the sample plan's issue body passes the autolink lint" file_and_clean "$SAMPLE/issues/CI-01.md"
@@ -152,7 +168,7 @@ check "preview: the plan directory mode is 700" mode700 "$PLAN"
 check "preview: zero write records (it never writes to the tracker)" test "$(n_writes)" = 0
 check "preview: names the repo and its visibility" bash -c 'grep -q "acme/demo" "$1" && grep -qi "private" "$1"' _ "$OUT"
 check "preview: prints the full ID | severity | title table for every item to file" table_rows_present "$OUT" "$PLAN/plan.tsv"
-check "preview: prints the cap rule and the exact create command with both confirm flags" bash -c 'grep -q "at most 30" "$1" && grep -q -- "--create" "$1" && grep -q -- "--confirm-repo acme/demo" "$1" && grep -q -- "--confirm-count 3" "$1"' _ "$OUT"
+check "preview: prints the cap rule and the exact create command with both confirm flags" bash -c 'c=$(cmd_line "$1"); grep -q "at most 30" "$1" && [ -n "$c" ] && grep -q -- "--confirm-repo acme/demo" <<<"$c" && grep -q -- "--confirm-count 3" <<<"$c"' _ "$OUT"
 check "preview: every printed line is one scrubbed line (no tab or carriage return)" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$1" && ! grep -q "$(printf "\t")" "$1" && ! grep -q "$(printf "\r")" "$1"' _ "$OUT"
 check "preview: plan.tsv records repo, host, visibility, catalog_hash, report_hash and created" bash -c 'for k in repo host visibility catalog_hash report_hash created; do grep -q "^$k=" "$1" || exit 1; done' _ "$PLAN/plan.tsv"
 GOODPLAN="$PLAN"
@@ -344,6 +360,16 @@ read_refused read-not-get "api -X with nothing after it" api repos/acme/demo -X
 read_refused read-graphql "api graphql" api graphql -f query=x
 read_refused read-graphql "api /graphql" api /graphql -f query=x
 read_refused read-graphql "api <host path>/graphql" api repos/acme/demo/graphql
+read_refused read-flag "auth status --show-token" auth status --show-token
+read_refused read-flag "auth status --hostname" auth status --hostname evil.example
+read_refused read-flag "repo view --web" repo view --json nameWithOwner --web
+read_refused read-flag "repo view of another repository (a positional)" repo view evil/other --json nameWithOwner
+read_refused read-flag "api --input" api repos/acme/demo --input /etc/hostname
+read_refused read-flag "api -H" api repos/acme/demo -H "Authorization: x"
+read_refused read-flag "api --header" api repos/acme/demo --header "Accept: x"
+read_refused read-flag "api --hostname" api repos/acme/demo --hostname evil.example
+read_refused read-flag "api -F (a typed field can read a file)" api repos/acme/demo -F a=@/etc/hostname
+read_refused read-flag "api --jq with no expression" api repos/acme/demo --jq
 calls_reset; probe "$SKILL" - "X=1" lc_gh_read auth status
 check "G1.8 twin: lc_gh_read auth status reaches the stub once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_calls)"
 calls_reset; probe "$SKILL" - "X=1" lc_gh_read repo view --json nameWithOwner
@@ -398,18 +424,37 @@ check "G1.9: after the slug is resolved no call runs with the customer repositor
 newcase; only_first "$R" 3; prev; [ -d "$PLAN" ] && sed 's/^host=.*/host=ghe.example/' "$PLAN/plan.tsv" > "$PLAN/p.new" && mv "$PLAN/p.new" "$PLAN/plan.tsv"; calls_reset; create
 check "G1.9: a plan for a non-github.com host is refused without --host (rc 2, an ABORT marker naming the host, zero writes)" bash -c '[ "$1" = 2 ] && [ "$2" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ABORT" "$3" && grep -qi "host" "$3"' _ "$RC" "$(n_writes)" "$OUT"
 gitq "$R" remote set-url origin https://ghe.example/acme/demo.git
-calls_reset; with GITHUB_ENTERPRISE_TOKEN=tok -- create --host ghe.example
+calls_reset; with GITHUB_ENTERPRISE_TOKEN=tok GH_ENTERPRISE_TOKEN=tok -- create --host ghe.example
 check "G1.9: --host ghe.example makes the same plan runnable (rc 0, writes recorded)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
-check "G1.9: on a non-github default host EVERY recorded call carries GH_HOST=ghe.example, and the enterprise token that host needs is passed through" bash -c '[ "$(jq -sr "[.[]|select(.env.GH_HOST!=\"ghe.example\")]|length" "$1")" = 0 ] && [ "$(jq -sr "[.[]|select(.env.GITHUB_ENTERPRISE_TOKEN==\"(set)\")]|length>0" "$1")" = true ]' _ "$ST/calls.log"
+check "G1.9: on a non-github default host EVERY recorded call carries GH_HOST=ghe.example, and BOTH enterprise tokens are scrubbed from every call (fail closed: gh's stored login is used)" bash -c '[ "$(jq -sr "[.[]|select(.env.GH_HOST!=\"ghe.example\")]|length" "$1")" = 0 ] && [ "$(jq -sr "[.[]|select(.env|has(\"GITHUB_ENTERPRISE_TOKEN\") or has(\"GH_ENTERPRISE_TOKEN\"))]|length" "$1")" = 0 ] && [ "$(jq -sr "length" "$1")" -gt 0 ]' _ "$ST/calls.log"
 # the origin remote must be on the target host
 newcase; only_first "$R" 3; gitq "$R" remote set-url origin https://gitlab.example/acme/demo.git; prev
-check "origin host: a remote on another host than the target aborts repo-unresolved detail=host-differs (the recovery names --host)" bash -c 'grep -q "detail=host-differs" "$1" && grep -q -- "--host" "$1"' _ "$OUT"; check "origin host: ... with the marker and rc 2" abort_is 2 repo-unresolved
+check "origin host: a remote on another host than the target aborts repo-unresolved detail=host-differs, and the recovery says --repo and never --host" bash -c 'grep -q "detail=host-differs" "$1" && grep -q -- "--repo OWNER/NAME" "$1" && ! grep -q -- "--host" "$1"' _ "$OUT"; check "origin host: ... with the marker and rc 2" abort_is 2 repo-unresolved
 prev --repo acme/demo
-check "origin host: --repo does not waive the host check" bash -c 'grep -q "detail=host-differs" "$1"' _ "$OUT"
+check "origin host: an explicit --repo OWNER/NAME (the repository gh resolved) bypasses the host-differs abort and the preview proceeds" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2" && ! grep -q "host-differs" "$2"' _ "$RC" "$OUT"
+prev --repo other/thing
+check "origin host: --repo that is not the resolved repository still aborts repo-unresolved detail=repo-flag-differs (the bypass is not a retarget)" bash -c 'grep -q "detail=repo-flag-differs" "$1"' _ "$OUT"; check "origin host: ... marker and rc" abort_is 2 repo-unresolved
 prev --host gitlab.example
 check "origin host: naming that host makes the same preview proceed" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
 newcase; only_first "$R" 3; gitq "$R" remote set-url origin git@github.com:acme/demo.git; prev
 check "origin host: an scp-style remote on the target host is accepted" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+for oh in ssh://git@ssh.github.com:443/acme/demo.git https://www.github.com/acme/demo git@ssh.github.com:acme/demo.git https://GitHub.com/acme/demo; do
+  newcase; only_first "$R" 3; gitq "$R" remote set-url origin "$oh"; prev
+  check "origin host: $oh is github.com (normalised) and is accepted without --repo" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+done
+for oh in ssh://git@ssh.github.com.evil.example/acme/demo.git https://notgithub.com/acme/demo; do
+  newcase; only_first "$R" 3; gitq "$R" remote set-url origin "$oh"; prev
+  check "origin host (known-bad control): $oh is NOT github.com and still aborts host-differs" bash -c 'grep -q "detail=host-differs" "$1"' _ "$OUT"
+done
+newcase; only_first "$R" 3; gitq "$R" remote set-url origin git@work-gh:acme/demo.git; prev
+check "origin host: an ssh alias (git@work-gh:...) aborts repo-unresolved detail=host-differs without --repo, with a remedy that has no --host" bash -c 'grep -q "detail=host-differs" "$1" && ! grep -q -- "--host" "$1"' _ "$OUT"; check "origin host: ... marker and rc (alias)" abort_is 2 repo-unresolved
+prev --repo acme/demo
+check "origin host: the same alias with --repo acme/demo proceeds (rc 0, plan marker)" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+check "origin host: ... and the printed create command carries --repo acme/demo (the create meets the same check)" bash -c 'grep -q -- "--repo acme/demo" <<<"$(cmd_line "$1")"' _ "$OUT"
+calls_reset; create --repo acme/demo
+check "origin host: the create from that alias origin WITH --repo proceeds (rc 0, writes recorded)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
+calls_reset; create
+check "origin host: the create from that alias origin WITHOUT --repo aborts repo-unresolved detail=host-differs with zero writes" bash -c 'grep -q "detail=host-differs" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"
 # --repo is an acknowledgement, not a target, and the plan does not record it: a create that omits it meets the same origin check
 newcase; stub_reset other/thing private; only_first "$R" 3; prev --repo other/thing; calls_reset
 CREPO=other/thing create
@@ -444,6 +489,13 @@ check "G1 mutation landed (field-key allowlist removed from the sandbox copy)" m
 stub_reset acme/demo private; seed 101 open stub-user lc:launch-check ''; calls_reset
 probe "$M4" - "EPIC_NUM=101" lc_gh_write api -X PATCH repos/acme/demo/issues/101 -f state=closed
 check "G1 mutation (field-key allowlist removed): a state field now reaches the stub (which refuses it), so the G1.7 row is sensitive" bash -c '[ "$1" = 64 ] && [ -s "$2" ]' _ "$PRC" "$ST/refused.log"
+M7=$(sbx_edit entok 's/ -u GITHUB_ENTERPRISE_TOKEN//')
+check "G1.9 mutation landed (the GITHUB_ENTERPRISE_TOKEN scrub removed from lc__gh_exec in the sandbox copy)" mut_landed "$M7"
+stub_reset acme/demo private; calls_reset
+probe "$M7" - "GITHUB_ENTERPRISE_TOKEN=tok" lc_gh_read api user
+check "G1.9 mutation: without the scrub the token reaches the stub (so the env row is sensitive to it)" bash -c '[ "$1" = 0 ] && [ "$(jq -sr "[.[]|select(.env.GITHUB_ENTERPRISE_TOKEN==\"(set)\")]|length" "$2")" = 1 ]' _ "$PRC" "$ST/calls.log"
+calls_reset; probe "$SKILL" - "GITHUB_ENTERPRISE_TOKEN=tok" lc_gh_read api user
+check "G1.9 control: the pristine copy scrubs it on the same call" bash -c '[ "$1" = 0 ] && [ "$(jq -sr "[.[]|select(.env|has(\"GITHUB_ENTERPRISE_TOKEN\"))]|length" "$2")" = 0 ] && [ "$(jq -sr "length" "$2")" = 1 ]' _ "$PRC" "$ST/calls.log"
 hostile_facts() { # hostile_facts <out> <evidence>: the first non-count-only gap gets the evidence; prints its id
   local id; id=$(awk -F'\t' '$2 == "gap" && $1 !~ /^SEC-0[12]$/ {print $1; exit}' "$FACTS")
   awk -F'\t' -v OFS='\t' -v id="$id" -v ev="$2" '$1 == id { $3 = ev } { print }' "$FACTS" > "$1"; printf '%s' "$id"
@@ -573,8 +625,6 @@ rm -f "$ALIAS"
 newcase; only_first "$R" 3; ln -sfn "$GP" "$SCRATCH/plan-link"; PLAN="$SCRATCH/plan-link"; calls_reset; CCOUNT=3 create; unset CCOUNT
 check "G2.11: a plan directory that is itself a symlink is plan-invalid with zero writes" bash -c 'grep -q "reason=plan-invalid" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"
 # ---------------------------------------------------------------- validators that die are not "valid"
-SHIM="$SCRATCH/awkshim"; mkdir -p "$SHIM"
-printf '#!/usr/bin/env bash\nif [ -n "${AWK_DIE:-}" ]; then case "$*" in *"$AWK_DIE"*) exit 2 ;; esac; fi\nexec "%s" "$@"\n' "$(command -v awk)" > "$SHIM/awk"; chmod +x "$SHIM/awk"
 calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='function fail' -- runi chkdie --check-plan --plan "$SAMPLE"
 check "validator death: --check-plan with a plan validator that dies is plan-invalid detail=validator (rc 2), never PLAN_OK" bash -c '! grep -q "PLAN_OK" "$1" && grep -q "reason=plan-invalid detail=validator" "$1" && [ "$2" = 2 ]' _ "$OUT" "$RC"
 newcase; only_first "$R" 3; with PATH="$SHIM:$PATH" AWK_DIE='ENVIRON["RE_ID"]' -- prev
@@ -587,7 +637,7 @@ calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='first[n]' -- create
 check "validator death: create whose live-table derivation dies stops issues-incomplete phase=lookup with zero writes (not 'nothing is filed yet')" bash -c 'grep -q "phase=lookup" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"; check "validator death: ... marker and rc" abort_is 2 issues-incomplete
 # the record of what a run created must be writable
 newcase; only_first "$R" 3; prev; mkdir "$PLAN/created.tsv"; calls_reset; create
-check "created.tsv: a record that cannot be appended aborts write-failed (rc 2) with the resume command at once (only the epic was filed), never a silent success" bash -c 'grep -q "detail=created-tsv" "$1" && grep -q -- "--create" "$1" && [ "$2" = 1 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "created.tsv: ... marker and rc" abort_is 2 write-failed
+check "created.tsv: a record that cannot be appended aborts write-failed (rc 2) with the resume command at once (only the epic was filed), never a silent success" bash -c 'grep -q "detail=created-tsv" "$1" && [ -n "$(cmd_line "$1")" ] && [ "$2" = 1 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "created.tsv: ... marker and rc" abort_is 2 write-failed
 # with the epic already filed, the first record is an item's: that append is checked too
 newcase; only_first "$R" 3; seed 531 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"; prev; mkdir "$PLAN/created.tsv"; calls_reset; create
 check "created.tsv: with the epic already filed, an item's record that cannot be appended aborts write-failed after the first create (rc 2)" bash -c 'grep -q "detail=created-tsv" "$1" && [ "$2" = 1 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "created.tsv: ... item record marker and rc" abort_is 2 write-failed
@@ -621,6 +671,16 @@ for m in capunk exunk exnotgap; do
   check "plan rows ($m): a capped or exists row naming an id that is not a catalog gap is plan-invalid with zero writes (rc 2)" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_writes)"
   SEEN_REASONS="$SEEN_REASONS plan-invalid"
 done
+
+# ordering: the exists/capped row check runs AFTER the staleness check, so a plan whose gap was re-scanned reads as report-stale
+# (preview again), not as a hand-edited plan (plan-invalid detail=row-id, which a re-preview would not be told to cure)
+newcase; only_first "$R" 3; prev; EX_ID=$(create_ids | sed -n 1p)
+stub_reset acme/demo private; seed 701 open stub-user lc:launch-check "<!-- launch-check:gap=$EX_ID -->"; prev
+OKID=$(awk -F'\t' '$2 == "ok" && $1 !~ /^JDG-/ { print $1; exit }' "$FACTS")
+awk -F'\t' -v OFS='\t' -v a="$EX_ID" -v b="$OKID" '$1 == a { $2 = "ok" } $1 == b { $2 = "gap"; $3 = "rescanned" } { print }' "$FACTS" > "$SCRATCH/restale.tsv"
+check "ordering setup: the plan carries an exists row for $EX_ID and the re-scanned facts drop that gap and add another (anti-vacuous)" bash -c '[ -n "$2" ] && awk -F"\t" -v i="$2" "\$1 == i && \$5 == \"exists\" { f = 1 } END { exit !f }" "$1/plan.tsv" && ! awk -F"\t" -v i="$2" "\$1 == i && \$2 == \"gap\" { f = 1 } END { exit !f }" "$3" && awk -F"\t" -v i="$4" "\$1 == i && \$2 == \"gap\" { f = 1 } END { exit !f }" "$3"' _ "$PLAN" "$EX_ID" "$SCRATCH/restale.tsv" "$OKID"
+calls_reset; FACTS="$SCRATCH/restale.tsv" create; FACTS="$SCRATCH/facts.tsv"
+check "ordering: an exists row whose gap was re-scanned aborts report-stale (not plan-invalid row-id), rc 2, zero writes" bash -c 'grep -q "detail=not-open-in-report" "$1" && ! grep -q "detail=row-id" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"; check "ordering: ... marker and rc" abort_is 2 report-stale
 
 # ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
 check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"

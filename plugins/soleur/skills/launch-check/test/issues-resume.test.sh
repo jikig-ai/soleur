@@ -13,7 +13,7 @@ with GH_STUB_FAIL_AFTER=3 -- create; FIRST_OUT="$OUT"
 check "G3.1: the 4th item create fails -> created=3 and the failed ids are named" bash -c '[ "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES created)" = 3 ] && [ -n "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES failed)" ] && [ "$(kv "$1" SOLEUR_LAUNCH_CHECK_ISSUES failed)" != "-" ]' _ "$FIRST_OUT"
 check "G3.1: ... and the run aborts issues-incomplete (rc 2)" abort_is 2 issues-incomplete "$FIRST_OUT"
 check "G3.1: the fake tracker holds 3 items and one epic after the failure (state read from the tracker)" bash -c '[ "$1" = 3 ] && [ "$2" = 1 ]' _ "$(items_n)" "$(epics_n)"
-check "G3.1: the abort and the summary carry plan=<dir> and phase=, and the exact resume command" bash -c 'grep -q "plan=" "$1" && grep -q "phase=" "$1" && grep -q -- "--create" "$1" && grep -q -- "--plan" "$1"' _ "$FIRST_OUT"
+check "G3.1: the abort and the summary carry plan=<dir> and phase=, and the exact resume command" bash -c 'c=$(cmd_line "$1"); grep -q "plan=" "$1" && grep -q "phase=" "$1" && [ -n "$c" ] && grep -q -- "--plan " <<<"$c"' _ "$FIRST_OUT"
 calls_reset; create
 check "G3.1: re-running the same plan completes (rc 0)" test "$RC" = 0
 check "G3.1: the tracker holds 7 items and exactly one epic, each id once, all linked" bash -c '[ "$1" = 7 ] && [ "$2" = 1 ] && [ "$3" = 1 ] && [ "$4" = 7 ]' _ "$(items_n)" "$(epics_n)" "$(max_dup)" "$(linked_n)"
@@ -74,6 +74,54 @@ full_case 3; stub_reset acme/demo private
 seed 611 open stub-user lc:launch-check NULL; seed 612 open stub-user lc:launch-check 'no marker here'; seed 613 open stub-user lc:launch-check 'inline <!-- launch-check:gap=ZZ-05 --> only'
 prev
 check "G3.15: the preview counts the three marker-less issues as ignored and names them" bash -c 'grep -q "^Ignored 3 issues" "$1" && grep -q "#611" "$1" && grep -q "#613" "$1"' _ "$OUT"
+# P2 marker tolerance: a marker line followed by spaces or tabs (and an optional CR) is still a whole-line marker
+for tail in ' ' $'\t' $' \t ' ; do
+  full_case 3; stub_reset acme/demo private; seed_label lc:launch-check ededed; seed_label lc:epic ededed
+  seed 501 open stub-user lc:launch-check,lc:epic "$(sed "1s/\$/$tail/" "$SAMPLE/epic.md")"
+  prev; calls_reset; create
+  check "marker tolerance: an epic whose marker line ends in trailing blanks ($(printf '%s' "$tail" | od -An -c | tr -s ' ' | tr -d '\n')) is THE epic: rc 0, no second epic is filed" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$RC" "$(epics_n)"
+  check "marker tolerance: ... and the preview did not call it an epic candidate" bash -c '! grep -q "epic candidate" "$1"' _ "$SCRATCH/pv$N.out"
+done
+full_case 7; stub_reset acme/demo private; GA=$(create_ids | sed -n 1p); GB=$(create_ids | sed -n 2p)
+seed 541 open stub-user lc:launch-check "<!-- launch-check:gap=$GA --> "; seed 542 open stub-user lc:launch-check "<!-- launch-check:gap=$GB -->"$'\t'
+prev; calls_reset; create
+check "marker tolerance: a gap marker with a trailing space or tab is read as filed: each of the two ids still carries exactly one marker (no duplicate)" bash -c '[ "$1" = 1 ] && [ "$2" = 1 ] && [ "$3" = 1 ]' _ "$(marker_n "$GA")" "$(marker_n "$GB")" "$(max_dup)"
+check "marker tolerance: ... the preview planned only the other 5 and the create filed exactly those 5 (rc 0)" bash -c '[ "$1" = 0 ] && [ "$2" = 5 ] && [ "$3" = 7 ]' _ "$RC" "$(kv "$OUT" SOLEUR_LAUNCH_CHECK_ISSUES created)" "$(items_n)"
+# the whole-line rule still holds: quoted, indented, blockquoted and trailing-text markers read as no marker
+full_case 3; stub_reset acme/demo private
+seed 561 open stub-user lc:launch-check '  <!-- launch-check:gap=ZZ-06 -->'; seed 562 open stub-user lc:launch-check '> <!-- launch-check:gap=ZZ-07 -->'
+seed 563 open stub-user lc:launch-check '<!-- launch-check:gap=ZZ-08 --> and more text'; seed 564 open stub-user lc:launch-check $'\t<!-- launch-check:gap=ZZ-09 -->'
+prev
+check "marker tolerance (known-bad): indented, blockquoted, tab-indented and trailing-text markers are still NOT markers: all four are ignored" bash -c 'grep -q "^Ignored 4 issues" "$1"' _ "$OUT"
+# P2 epic candidates: an lc:epic issue with no usable marker is an epic candidate, never silently skipped
+for eb in NULL 'no marker at all' '> <!-- launch-check:epic -->' '  <!-- launch-check:epic -->' '<!-- launch-check:epic --> trailing words'; do
+  full_case 3; stub_reset acme/demo private; seed 551 open stub-user lc:launch-check,lc:epic "$eb"
+  prev
+  check "epic candidate ($eb): the preview warns that an epic candidate lost its marker, in its own words" bash -c 'grep -q "^An epic candidate carries several marker lines or lost its marker" "$1" && ! grep -q "More than one open or closed epic" "$1"' _ "$OUT"
+  calls_reset; create
+  check "epic candidate ($eb): create writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
+  check "epic candidate ($eb): ... and aborts epic-ambiguous detail=ignored-epic (rc 2)" bash -c 'grep -q "reason=epic-ambiguous detail=ignored-epic" "$1"' _ "$OUT"; check "epic candidate ($eb): ... marker and rc" abort_is 2 epic-ambiguous
+done
+# a dead awk stops the run; it is never read as "nothing found"
+full_case 7; stub_reset acme/demo private; AA=$(create_ids | sed -n 2p); AB=$(create_ids | sed -n 3p)
+seed 403 open stub-user lc:launch-check $'<!-- launch-check:gap='"$AA"$' -->\n\n<!-- launch-check:gap='"$AB"$' -->'
+calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='($2 in id)' -- prev --plan-out "$SCRATCH/podie$N"
+check "awk dies (preview, ignored-issue scan): the preview stops issues-incomplete phase=lookup (rc 2), prints no plan marker and writes no plan" bash -c 'grep -q "reason=issues-incomplete phase=lookup detail=malformed" "$1" && ! grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$1" && [ -z "$(ls -A "$2" 2>/dev/null)" ]' _ "$OUT" "$SCRATCH/podie$N"; check "awk dies (preview): ... marker and rc" abort_is 2 issues-incomplete
+prev
+calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='($2 in id)' -- create
+check "awk dies (create, live gate): a several-marker issue naming a plan gap with a dead scan writes nothing and stops issues-incomplete phase=lookup (rc 2), never proceeds as 'no hit'" bash -c '[ "$1" = 0 ] && grep -q "phase=lookup detail=malformed" "$2"' _ "$(n_writes)" "$OUT"; check "awk dies (create, live gate): ... marker and rc" abort_is 2 issues-incomplete
+calls_reset; create
+check "awk dies (control): the same plan without the shim hits the real gate (issue-ambiguous, rc 2)" abort_is 2 issue-ambiguous
+full_case 3; calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='[xX]' -- create
+check "awk dies (epic section, ticked boxes): the run stops issues-incomplete phase=epic detail=malformed (rc 2) and the epic is not rewritten" bash -c 'grep -q "phase=epic detail=malformed" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_post PATCH 'issues/[0-9]+$')"; check "awk dies (epic section, ticked boxes): ... marker and rc" abort_is 2 issues-incomplete
+full_case 4; calls_reset; with GH_STUB_SUBISSUE=403 PATH="$SHIM:$PATH" AWK_DIE='print $2, $1 }' -- create
+check "awk dies (task list, item numbers): the run stops issues-incomplete phase=epic detail=malformed (rc 2) and the epic is not rewritten with an empty task list" bash -c 'grep -q "phase=epic detail=malformed" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_post PATCH 'issues/[0-9]+$')"; check "awk dies (task list): ... marker and rc" abort_is 2 issues-incomplete
+# the link-failure policy is one rule at both sites: the children listing of an existing epic follows it too
+full_case 3; stub_reset acme/demo private; seed_label lc:launch-check ededed; seed_label lc:epic ededed; seed 531 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
+prev; calls_reset; with GH_STUB_SUBISSUE=ratelimit -- create
+check "link policy (children listing): a rate limit on the listing of an existing epic's children stops the run issues-incomplete phase=link before any item is filed" bash -c 'grep -q "phase=link" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "link policy (children listing): ... marker and rc" abort_is 2 issues-incomplete
+calls_reset; with GH_STUB_SUBISSUE=403 -- create
+check "link policy (children listing): a 403 on that listing latches the run to the task list (rc 0, fallback=task-list)" bash -c '[ "$1" = 0 ] && [ "$(kv "$2" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = task-list ]' _ "$RC" "$OUT"
 full_case 3; stub_reset acme/demo private; seed 501 closed stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
 prev
 check "G3.8: preview prints a plain warning for a closed epic" bash -c 'grep -qi "closed" "$1" && grep -qi "epic" "$1"' _ "$OUT"
@@ -109,7 +157,7 @@ done
 for st in ratelimit 502; do
   full_case 4; calls_reset; with GH_STUB_SUBISSUE=$st -- create; LNK_OUT="$OUT"
   check "L1 ($st): a failed link is not latched to the task list: the run stops issues-incomplete phase=link (rc 2) with fallback=none" bash -c '[ "$1" = 2 ] && grep -q "phase=link" "$2" && [ "$(kv "$2" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = none ]' _ "$RC" "$LNK_OUT"
-  check "L1 ($st): ... and the resume command is printed" bash -c 'grep -q -- "--create" "$1" && grep -q -- "--plan" "$1"' _ "$LNK_OUT"
+  check "L1 ($st): ... and the resume command is printed" bash -c 'c=$(cmd_line "$1"); [ -n "$c" ] && grep -q -- "--plan " <<<"$c"' _ "$LNK_OUT"
   check "L1 ($st): ... after exactly one link attempt (the first failure stops the run)" test "$(n_post POST 'sub_issues$')" = 1
   [ "$st" != ratelimit ] || check "L1 (ratelimit): the rate-limit hint is printed with the stopped run" bash -c 'grep -qi "rate" "$1"' _ "$LNK_OUT"
   calls_reset; create
@@ -133,7 +181,7 @@ for sg in TERM HUP; do
     continue
   fi
   full_case 4; calls_reset; sigrun $sg; want=143; [ "$sg" = HUP ] && want=129
-  check "signal ($sg): exit code $want, the summary says phase=interrupted and the exact resume command is printed" bash -c '[ "$1" = "$2" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES .*phase=interrupted" "$3" && grep -q -- "--create" "$3" && grep -q -- "--plan" "$3" && grep -q "reason=issues-incomplete phase=interrupted" "$3"' _ "$RC" "$want" "$OUT"
+  check "signal ($sg): exit code $want, the summary says phase=interrupted and the exact resume command is printed" bash -c '[ "$1" = "$2" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES .*phase=interrupted" "$3" && [ -n "$(cmd_line "$3")" ] && grep -q -- "--plan " <<<"$(cmd_line "$3")" && grep -q "reason=issues-incomplete phase=interrupted" "$3"' _ "$RC" "$want" "$OUT"
   check "signal ($sg): the interrupted run had written (anti-vacuous: at least the epic and one item exist)" test "$(n_writes)" -ge 2
   calls_reset; create
   check "signal ($sg): the resume completes (rc 0) with 4 items, one epic, each marker once, all linked" bash -c '[ "$1" = 0 ] && [ "$2" = 4 ] && [ "$3" = 1 ] && [ "$4" = 1 ] && [ "$5" = 4 ]' _ "$RC" "$(items_n)" "$(epics_n)" "$(max_dup)" "$(linked_n)"

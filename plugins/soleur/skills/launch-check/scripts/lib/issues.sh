@@ -44,11 +44,11 @@ lc__same_slug() { [ "$(lc__lower "$1")" = "$(lc__lower "$2")" ]; }
 # stdout lands in $WORK/gh.out.
 lc__gh_exec() {
   local cwd=$WORK rc=0 bound="" err="$WORK/gh.err"
-  local -a scrub=(-u GH_REPO -u GH_ENTERPRISE_TOKEN -u GH_DEBUG -u DEBUG -u GH_CONFIG_DIR -u GH_PATH -u GH_FORCE_TTY -u SSL_CERT_FILE -u SSL_CERT_DIR
+  local -a scrub=(-u GH_REPO -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_DEBUG -u DEBUG -u GH_CONFIG_DIR -u GH_PATH -u GH_FORCE_TTY -u SSL_CERT_FILE -u SSL_CERT_DIR
     -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY -u http_proxy -u https_proxy -u all_proxy -u no_proxy)
   case "${1:-}" in auth|repo) cwd=$TARGET ;; esac
-  # An enterprise token is the credential of the host that --host named; for github.com it must not steer the call.
-  [ "${ISSUES_HOST:-github.com}" != github.com ] || scrub+=(-u GITHUB_ENTERPRISE_TOKEN)
+  # Both enterprise tokens are scrubbed on every host (fail closed): a token from the environment must not steer the call, and a
+  # GitHub Enterprise Server user relies on the login gh stores for the host --host names.
   if command -v timeout >/dev/null 2>&1; then bound="timeout 120"; elif command -v gtimeout >/dev/null 2>&1; then bound="gtimeout 120"; fi
   : > "$WORK/gh.out"; : > "$err"
   # GH_HOST is always the target host (github.com included), so an inherited value or a remote on another host cannot redirect the call.
@@ -66,12 +66,19 @@ lc__gh_exec() {
   return "$rc"
 }
 
-# lc_gh_read <auth status|repo view|api> ...: a read (`auth` takes only `status`, `repo` only `view`). For `api` the method is always sent as -X GET (a field flag would otherwise flip the call
-# to POST); any other method is refused.
+# lc_gh_read <auth status|repo view|api> ...: a read. `auth` takes only `status` and `repo` only `view`, each with nothing but the flags
+# callers use (a flag outside the shape, such as --show-token, --web, --input, -H or --hostname, is refused). For `api` the method is
+# always sent as -X GET (a field flag would otherwise flip the call to POST); any other method is refused.
+lc__rflag() { lc_abort write-shape-refused 2 "detail=read-flag"; }
 lc_gh_read() {
   case "${1:-}" in
-    auth) [ "${2:-}" = status ] || lc_abort write-shape-refused 2 "detail=read-verb"; lc__gh_exec "$@"; return $? ;;
-    repo) [ "${2:-}" = view ] || lc_abort write-shape-refused 2 "detail=read-verb"; lc__gh_exec "$@"; return $? ;;
+    auth) [ "${2:-}" = status ] || lc_abort write-shape-refused 2 "detail=read-verb"; [ $# -eq 2 ] || lc__rflag; lc__gh_exec "$@"; return $? ;;
+    repo) [ "${2:-}" = view ] || lc_abort write-shape-refused 2 "detail=read-verb"
+      local -a all=("$@"); shift 2
+      while [ $# -gt 0 ]; do
+        case "$1" in --json|--jq) [ $# -ge 2 ] || lc__rflag; shift 2 ;; *) lc__rflag ;; esac
+      done
+      lc__gh_exec "${all[@]}"; return $? ;;
     api) shift ;;
     *) lc_abort write-shape-refused 2 "detail=read-verb" ;;
   esac
@@ -81,6 +88,9 @@ lc_gh_read() {
       -X|--method) [ "${2:-}" = GET ] || lc_abort write-shape-refused 2 "detail=read-not-get"; shift 2 ;;
       -X*|--method=*) lc_abort write-shape-refused 2 "detail=read-not-get" ;;
       graphql|*/graphql) lc_abort write-shape-refused 2 "detail=read-graphql" ;;
+      -f|--jq) [ $# -ge 2 ] || lc__rflag; rest+=("$1" "$2"); shift 2 ;;
+      --paginate) rest+=("$1"); shift ;;
+      -*) lc__rflag ;;
       *) rest+=("$1"); shift ;;
     esac
   done
@@ -197,7 +207,9 @@ lc_issues_preflight() {
 
 # The resolved repository must be the one `origin` names, and origin must be on the target host. `--repo <slug>` does not choose the
 # target: it acknowledges the repository gh resolved (it must equal that slug) when that differs from origin, e.g. a fork that
-# resolves to its upstream. The only ways to change the target are `gh repo set-default` and the origin remote.
+# resolves to its upstream, or an origin written through an ssh alias (the owner names the repository, --confirm-repo still transcribes
+# it). The hosts ssh.github.com and www.github.com are github.com. The only ways to change the target are `gh repo set-default` and the
+# origin remote.
 lc_issues_origin_check() {
   local url slug ohost
   url=$(git -C "$TARGET" remote get-url origin 2>/dev/null) || url=""
@@ -206,7 +218,9 @@ lc_issues_origin_check() {
     *@*:*) ohost=$(printf '%s\n' "$url" | sed -e 's#^.*@##' -e 's#:.*$##') ;;
     *) ohost="" ;;
   esac
-  if [ -n "$ohost" ] && [ "$(lc__lower "$ohost")" != "$(lc__lower "${ISSUES_HOST:-github.com}")" ]; then
+  ohost=$(lc__lower "$ohost")
+  case "$ohost" in ssh.github.com|www.github.com) ohost=github.com ;; esac
+  if [ -n "$ohost" ] && [ "$ohost" != "$(lc__lower "${ISSUES_HOST:-github.com}")" ] && [ -z "${ISSUES_REPO_ARG:-}" ]; then
     lc__fmt origin_host_fix; lc_abort repo-unresolved 2 "detail=host-differs resolved=$ISSUES_RESOLVED"
   fi
   if [ -n "${ISSUES_REPO_ARG:-}" ]; then
@@ -220,12 +234,12 @@ lc_issues_origin_check() {
 # ---------------------------------------------------------------- Guard 3: the live identity
 # lc_issues_live: one paginated listing of every issue that carries the scope label, kept as validated rows in $WORK/live.tsv:
 # number, database id, state, epic-label flag, author, key (a gap id, @epic, or - for no usable marker). A marker counts only as a
-# whole line (a customer note that quotes one mid-text is not a marker; a trailing CR is tolerated). A failed or malformed listing
+# whole line (a customer note that quotes one mid-text is not a marker; trailing spaces, tabs and a CR are tolerated). A failed or malformed listing
 # is never read as "none found".
 lc_issues_live() {
   : > "$WORK/live.tsv"
   if ! lc_gh_read api "repos/$ISSUES_REPO/issues" -f labels=lc:launch-check -f state=all -f per_page=100 --paginate \
-    --jq '.[] | select(.pull_request == null) | . as $i | ((.body // "") | ((scan("(?m)^<!-- launch-check:(gap=[A-Z]+-[A-Za-z0-9-]+|epic) -->\r?$") | .[0]) // "-")) as $m | [$i.number, $i.id, $i.state, (("\t" + ([$i.labels[].name] | @tsv) + "\t") | test("\tlc:epic\t")), ($i.user.login // "-"), $m] | @tsv'; then
+    --jq '.[] | select(.pull_request == null) | . as $i | ((.body // "") | ((scan("(?m)^<!-- launch-check:(gap=[A-Z]+-[A-Za-z0-9-]+|epic) -->[ \t]*\r?$") | .[0]) // "-")) as $m | [$i.number, $i.id, $i.state, (("\t" + ([$i.labels[].name] | @tsv) + "\t") | test("\tlc:epic\t")), ($i.user.login // "-"), $m] | @tsv'; then
     lc__incomplete lookup "$LC_GH_KIND"
   fi
   RE_MARK='^(gap=[A-Z]+-[A-Za-z0-9-]+|epic|-)$' RE_LOGIN='^[A-Za-z0-9][A-Za-z0-9_-]*(\[bot\])?$' \
@@ -240,8 +254,8 @@ lc_issues_live() {
 
 # lc_live_tables: derive live.items (id, number, database id, state; lowest number wins), live.epics (number, database id, state,
 # author) and the ignored issues from live.tsv. An issue is ignored when it carries several distinct markers or none: live.ignored
-# holds the count, live.ign.nums their numbers, live.ign.epic the numbers of the several-marker ones that are epic candidates (the
-# epic label or an epic marker) and live.ign.keys "number<TAB>gap id" for every gap marker of a several-marker issue.
+# holds the count, live.ign.nums their numbers, live.ign.epic the numbers of the ignored ones that are epic candidates (the epic label,
+# with several markers or none, or an epic marker among several) and live.ign.keys "number<TAB>gap id" for every gap marker of a several-marker issue.
 lc_live_tables() {
   : > "$WORK/live.items"; : > "$WORK/live.epics"; : > "$WORK/live.ignored"; : > "$WORK/live.ign.nums"; : > "$WORK/live.ign.epic"; : > "$WORK/live.ign.keys"
   F_ITEMS="$WORK/live.items" F_EPICS="$WORK/live.epics" F_IGN="$WORK/live.ignored" F_NUMS="$WORK/live.ign.nums" F_IGNE="$WORK/live.ign.epic" F_IGNK="$WORK/live.ign.keys" \
@@ -260,7 +274,7 @@ lc_live_tables() {
           continue
         }
         split(row[n], f, "\t")
-        if (f[6] == "-") { ign++; print n > (ENVIRON["F_NUMS"]); continue }
+        if (f[6] == "-") { ign++; print n > (ENVIRON["F_NUMS"]); if (f[4] == "true") print n > (ENVIRON["F_IGNE"]); continue }
         if (f[6] == "@epic") { if (f[4] == "true") print f[1], f[2], f[3], f[5] > (ENVIRON["F_EPICS"]); continue }
         k = f[6]
         if (!(k in bn) || n + 0 < bn[k] + 0) { bn[k] = n; bd[k] = f[2]; bs[k] = f[3] }
@@ -273,16 +287,30 @@ lc_live_tables() {
   EPIC_CANDIDATES=$(grep -c . "$WORK/live.epics")
 }
 
-# lc__live_gate: stop before any write when the listing holds something the run cannot read safely. A several-marker issue that is
-# an epic candidate is an ambiguous epic; one that carries a marker of a gap in this plan could hide that gap, so the run stops
-# with one closed reason instead of filing it a second time.
+# lc__ign_hits <rows file>: rc 0 when an ignored several-marker issue carries the marker of a gap that file names (column 1), 1 when none
+# does, 2 when the scan itself failed (a dead awk is never read as "no hit").
+lc__ign_hits() {
+  local rc=0
+  F_ROWS="$1" awk -F'\t' '
+    FILENAME == ENVIRON["F_ROWS"] { id[$1] = 1; next }
+    ($2 in id) { hit = 1 }
+    END { exit !hit }' "$1" "$WORK/live.ign.keys" || rc=$?
+  return "$rc"
+}
+
+# lc__live_gate: stop before any write when the listing holds something the run cannot read safely. An ignored issue that is an epic
+# candidate (the lc:epic label with several marker lines or none) is an ambiguous epic; one that carries a marker of a gap in this plan
+# could hide that gap, so the run stops with one closed reason instead of filing it a second time.
 lc__live_gate() {
+  local rc=0
   [ ! -s "$WORK/live.ign.epic" ] || lc_abort epic-ambiguous 2 "detail=ignored-epic"
   if [ -s "$WORK/live.ign.keys" ]; then
-    F_ROWS="$WORK/plan.rows.tsv" awk -F'\t' '
-      FILENAME == ENVIRON["F_ROWS"] { id[$1] = 1; next }
-      ($2 in id) { hit = 1 }
-      END { exit !hit }' "$WORK/plan.rows.tsv" "$WORK/live.ign.keys" && lc_abort issue-ambiguous 2 "detail=several-markers"
+    lc__ign_hits "$WORK/plan.rows.tsv" || rc=$?
+    case "$rc" in
+      0) lc_abort issue-ambiguous 2 "detail=several-markers" ;;
+      1) ;;
+      *) lc__incomplete lookup malformed ;;
+    esac
   fi
   if [ "$EPIC_CANDIDATES" -gt 1 ]; then lc_abort epic-ambiguous 2 "detail=several-epics"; fi
   return 0
@@ -319,7 +347,7 @@ lc_epic_initial() {
 # lc__labels_for <rows file>: the lc: labels a create of these rows ensures (id, severity, domain, class, action, ...), one line, in the
 # order the create ensures them. The preview prints it and the create uses it, so the two cannot differ.
 lc__labels_for() {
-  awk -F'\t' 'BEGIN { s = "lc:launch-check lc:epic"; seen[s] = 1; seen["lc:launch-check"] = 1; seen["lc:epic"] = 1 }
+  awk -F'\t' 'BEGIN { s = "lc:launch-check lc:epic"; seen["lc:launch-check"] = 1; seen["lc:epic"] = 1 }
     $5 == "create" { for (i = 1; i <= 2; i++) { l = (i == 1) ? "lc:severity-" $2 : "lc:domain-" $3; if (!(l in seen)) { seen[l] = 1; s = s " " l } } }
     END { print s }' "$1"
 }
@@ -480,7 +508,7 @@ lc_issues_partition() {
 
 lc_issues_preview() {
   local pb="$WORK/pb" plandir="" parent n_create n_exists n_closed n_accepted n_excluded n_capped
-  local id sev dom cls act title ev clos rem num c_crit c_high c_med c_low created
+  local id sev dom cls act title ev clos rem num c_crit c_high c_med c_low created rc ign_conflict=0
   [ -f "$TARGET/$REPORT_REL" ] || { lc__fmt report_missing_fix; lc_abort report-missing 2 "detail=no-report"; }
   if ! lc_issues_preflight; then
     printf 'SOLEUR_LAUNCH_CHECK_ISSUES mode=report-only reason=%s\n' "$ISSUES_REASON"
@@ -494,6 +522,11 @@ lc_issues_preview() {
   lc_issues_live
   lc_live_tables
   lc_issues_partition
+  # Before anything is written for the customer: a dead scan is a stop, never "no conflict".
+  if [ -s "$WORK/live.ign.keys" ]; then
+    rc=0; lc__ign_hits "$WORK/part.tsv" || rc=$?
+    case "$rc" in 0) ign_conflict=1 ;; 1) ;; *) lc__incomplete lookup malformed ;; esac
+  fi
   bad=$(RE_ID="$ISSUES_RE_ID" RE_TITLE="$ISSUES_RE_TITLE" awk -F'\t' '$1 !~ ENVIRON["RE_ID"] || $6 !~ ENVIRON["RE_TITLE"] || length($6) > 120 || $6 ~ /GH-[0-9]/ { print $1; exit }' "$WORK/part.tsv") \
     || lc_abort plan-invalid 2 "detail=validator"
   [ -z "$bad" ] || lc_abort plan-invalid 2 "detail=catalog-title"
@@ -543,10 +576,8 @@ lc_issues_preview() {
     && [ "$(cut -f4 "$WORK/live.epics")" != "$(awk 'NR == 1 { print; exit }' "$WORK/gh.out")" ]; then lc__fmt issues_epic_author_warn; fi
   n=$(cat "$WORK/live.ignored")
   [ "$n" = 0 ] || lc__fmt issues_ignored "$n" "$(head -n 10 "$WORK/live.ign.nums" | sed 's/^/#/' | paste -s -d, -)"
-  [ ! -s "$WORK/live.ign.epic" ] || lc__fmt issues_epic_ambiguous_warn
-  if [ -s "$WORK/live.ign.keys" ] && F_PART="$WORK/part.tsv" awk -F'\t' 'FILENAME == ENVIRON["F_PART"] { id[$1] = 1; next } ($2 in id) { hit = 1 } END { exit !hit }' "$WORK/part.tsv" "$WORK/live.ign.keys"; then
-    lc__fmt issues_ignored_conflict_warn
-  fi
+  [ ! -s "$WORK/live.ign.epic" ] || lc__fmt issues_epic_candidate_warn
+  [ "$ign_conflict" = 0 ] || lc__fmt issues_ignored_conflict_warn
   lc__fmt issues_counts "$n_create" "$n_exists" "$n_closed" "$n_accepted" "$n_excluded" "$n_capped"
   c_crit=$(awk -F'\t' '$5 == "create" && $2 == "critical"' "$WORK/part.tsv" | grep -c .)
   c_high=$(awk -F'\t' '$5 == "create" && $2 == "high"' "$WORK/part.tsv" | grep -c .)
@@ -672,18 +703,23 @@ lc__parse_pair() {
   NEW_NUM=$(cut -f1 <<<"$line"); NEW_ID=$(cut -f2 <<<"$line")
 }
 
-# lc__link <issue database id> <number> <gap id>: link a child under the epic. Only a refusal of the feature itself (403, 404, 410 or
-# 422) latches the run to the task list. A rate limit, a transport failure, a timeout or a 5xx says nothing about the feature, so it
-# stops the run resumably (phase=link): the re-run links what is still unlinked, and a later run can still use the real links.
+# lc__link_failed: the policy for a failed sub-issue call (the link POST, the children listing). Only a refusal of the feature itself
+# (403, 404, 410 or 422) latches the run to the task list. A rate limit, a transport failure, a timeout or a 5xx says nothing about the
+# feature, so it stops the run resumably (phase=link): the re-run links what is still unlinked, and a later run can still use the real links.
+lc__link_failed() {
+  case "$LC_GH_KIND" in
+    http-403|http-404|http-410|http-422) ISSUES_FALLBACK=task-list ;;
+    *) lc__incomplete link "$LC_GH_KIND" ;;
+  esac
+}
+
+# lc__link <issue database id> <number> <gap id>: link a child under the epic (policy: lc__link_failed).
 lc__link() {
   if lc_gh_write api -X POST "repos/$ISSUES_REPO/issues/$EPIC_NUM/sub_issues" -F "sub_issue_id=$1"; then
     CNT_LINKED=$((CNT_LINKED + 1))
     lc__say "linked: #$2 $3"
   else
-    case "$LC_GH_KIND" in
-      http-403|http-404|http-410|http-422) ISSUES_FALLBACK=task-list ;;
-      *) lc__incomplete link "$LC_GH_KIND" ;;
-    esac
+    lc__link_failed
   fi
 }
 
@@ -694,14 +730,16 @@ lc__epic_section() {
     { l = $0; sub(/\r$/, "", l) }
     l == "<!-- launch-check:begin -->" { s = 1; next }
     l == "<!-- launch-check:end -->" { s = 0; next }
-    s && l ~ /^- \[[xX]\] #[0-9]+/ { t = l; sub(/^- \[[xX]\] #/, "", t); sub(/[^0-9].*$/, "", t); print t }' "$old" > "$WORK/ticked.nums"
-  lc__fmt epic_counts "$CNT_CREATED" "$CNT_SKIPPED" "$([ "${FAILED_IDS:--}" = - ] && echo 0 || echo 1)" "$ISSUES_FALLBACK" > "$out"
+    s && l ~ /^- \[[xX]\] #[0-9]+/ { t = l; sub(/^- \[[xX]\] #/, "", t); sub(/[^0-9].*$/, "", t); print t }' "$old" > "$WORK/ticked.nums" \
+    || lc__incomplete epic malformed
+  lc__fmt epic_counts "$CNT_CREATED" "$CNT_SKIPPED" "$ISSUES_FALLBACK" > "$out"
   if [ "$ISSUES_FALLBACK" = task-list ]; then
     # Items that exist now: the live open ones named by the plan, plus what this run made.
     F_ROWS="$WORK/plan.rows.tsv" F_LIVE="$WORK/live.items" F_MADE="$WORK/made.tsv" awk -F'\t' -v OFS='\t' '
       FILENAME == ENVIRON["F_ROWS"] { if ($5 == "create" || $5 == "exists") want[$1] = 1; next }
       FILENAME == ENVIRON["F_LIVE"] { if ($4 == "open" && ($1 in want)) print $2, $1; next }
-      { if ($1 in want) print $2, $1 }' "$WORK/plan.rows.tsv" "$WORK/live.items" "$WORK/made.tsv" | sort -t "$LC_TAB" -u -k1,1n > "$WORK/items.nums"
+      { if ($1 in want) print $2, $1 }' "$WORK/plan.rows.tsv" "$WORK/live.items" "$WORK/made.tsv" | sort -t "$LC_TAB" -u -k1,1n > "$WORK/items.nums" \
+      || lc__incomplete epic malformed
     while IFS=$'\t' read -r num id; do
       [ -n "$num" ] || continue
       tick=" "; grep -qxF "$num" "$WORK/ticked.nums" && tick="x"
@@ -742,16 +780,16 @@ lc_issues_create() {
   lc_issues_preflight || lc_abort issues-unavailable 2 "detail=$ISSUES_REASON"
   lc__same_slug "$ISSUES_RESOLVED" "$PLAN_REPO" || lc_abort plan-repo-mismatch 2 "detail=resolved-repo-differs resolved=$ISSUES_RESOLVED"
   lc_issues_origin_check
+  if [ "$ISSUES_VIS" != PRIVATE ] && [ "$ISSUES_CONFIRM_PUBLIC" != 1 ]; then
+    lc__fmt confirm_public_fix; lc_abort confirm-public-required 2 "visibility=$ISSUES_VIS"
+  fi
+  lc_issues_stale_check "$PLAN_REPHASH" "$PLAN_CATHASH"
   # An exists or capped row carries no body file, so nothing else ties it to this catalog: it must name a catalog check that is a gap now.
   F_CAT="$WORK/cat.ids" F_GAPS="$WORK/gaps.tsv" awk -F'\t' '
     FILENAME == ENVIRON["F_CAT"] { c[$1] = 1; next }
     FILENAME == ENVIRON["F_GAPS"] { g[$2] = 1; next }
     ($5 == "capped" || $5 == "exists") && (!($1 in c) || !($1 in g)) { bad = 1 }
     END { exit bad }' "$WORK/cat.ids" "$WORK/gaps.tsv" "$WORK/plan.rows.tsv" || lc__pbad row-id
-  if [ "$ISSUES_VIS" != PRIVATE ] && [ "$ISSUES_CONFIRM_PUBLIC" != 1 ]; then
-    lc__fmt confirm_public_fix; lc_abort confirm-public-required 2 "visibility=$ISSUES_VIS"
-  fi
-  lc_issues_stale_check "$PLAN_REPHASH" "$PLAN_CATHASH"
   sort "$WORK/plan.create.ids" > "$WORK/plan.create.sorted"
   [ -z "$(comm -23 "$WORK/plan.create.sorted" "$WORK/open.ids")" ] || { lc__fmt report_stale_fix; lc_abort report-stale 2 "detail=row-not-open"; }
 
@@ -832,12 +870,7 @@ lc_issues_create() {
     : > "$WORK/children"
     if [ "$made_epic" = 0 ]; then
       if lc_gh_read api "repos/$ISSUES_REPO/issues/$EPIC_NUM/sub_issues" --paginate --jq '.[].number'; then cp "$WORK/gh.out" "$WORK/children"
-      else
-        case "$LC_GH_KIND" in
-          http-403|http-404|http-410|http-422) ISSUES_FALLBACK=task-list ;;
-          *) lc__incomplete link "$LC_GH_KIND" ;;
-        esac
-      fi
+      else lc__link_failed; fi
     fi
   fi
   if [ "$ISSUES_FALLBACK" = none ] && [ -n "$EPIC_NUM" ]; then
