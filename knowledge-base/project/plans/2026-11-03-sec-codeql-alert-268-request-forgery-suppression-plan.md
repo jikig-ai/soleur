@@ -14,6 +14,24 @@ requires_cpo_signoff: true
 
 # sec: CodeQL alert #268 — js/request-forgery at `server/github-app.ts:255`
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Technical Considerations (call-site inventory corrected), Dependencies & Risks (precedent note), Guard Contract (CTO caveats folded into tasks.md 2.2)
+**Research agents used:** none — no Task/Agent tool in this harness; deepen ran in-process (mirroring the #8857 session-state constraint). The CTO ruling for the three technical forks was obtained via a `claude -p` spawn of the `soleur:engineering:cto` definition (one batched spawn).
+
+### Key Improvements
+
+1. **Verify-the-negative correction:** the call-site census is 14 `githubFetch(` sites, not 15 — and not all literals: 12 inline `${GITHUB_API}/…` literals + `probeOrgMembership`'s composed `url` (built from `${GITHUB_API}` + `encodeURIComponent` segments) + `postRepoCreate`'s plumbed `url` (pre-asserted at `github-app.ts:1116`; both of its own callers pass literals). The claim in Technical Considerations was corrected accordingly.
+2. **Precedent-diff (Phase 4.4):** no in-repo precedent for `codeql[…]` annotations — `git grep 'codeql\[' -- apps/ plugins/ scripts/` is empty. The mechanism is novel in-repo; it was verified against upstream `github/codeql` sources (`AlertSuppression.qll` `CodeQlSuppressionComment` + `covers` semantics; PR github/codeql#11723 merged — the mechanism exists; #11772 closed unmerged — same-line form rejected).
+3. **Live citation sweep (Quality Checks):** `#9953` OPEN (tracker); alert #268 `state: open` via code-scanning API; `#8857` CLOSED; PR `#9218` MERGED; labels `type/security` + `domain/engineering` exist via `gh label list`; rule ids cited (`cq-cite-content-anchor-not-line-number`, `cq-assert-anchor-not-bare-token`) verified in `AGENTS.md` index.
+4. **Gate results:** 4.6 UBI PASS (`single-user incident`), 4.7 Observability PASS (5/5 fields), 4.8 PAT PASS (no hits), 4.9 UI skip (no UI-surface files), 4.10 encryption skip (no store/connection), 4.11 Guard Contract PASS (`lint-guard-contract.py` green; assembly is structural — chokepoint + exactly-once property), 4.12 Scope Check PASS (1 unfenced section, all rows mapped/asked/justified-inferred), 4.13 task-design skip (no new autonomous surface), 4.5/4.55 skip (no triggers).
+
+### New Considerations Discovered
+
+- `probeOrgMembership` (line ~461) passes a `url` **variable**, not a literal — one of the two non-literal call-site shapes; both stay inside the chokepoint pin.
+- A `codeql[…]` annotation is line-adjacent ONLY: any formatter reflow or statement insertion silently un-covers the sink — the sentinel test is therefore load-bearing, not ornamental (CTO caveat).
+
 ## Overview
 
 CodeQL alert [#268](https://github.com/jikig-ai/soleur/security/code-scanning/268)
@@ -79,12 +97,16 @@ top of the existing fetch-site census that already reads this file.
   `url.origin === "https://api.github.com"`; no userinfo; no `\`, `#`, or
   control bytes; no dot-segments in the raw path; length ≤ 4096. Refusals are
   mirrored to pino + Sentry (`reportEgressRefusal`, `op=url-refused`).
-- Every `githubFetch(` call site passes a `${GITHUB_API}/…` template literal
-  (verified by grep over all 15 call sites); the only caller-shaped input is
-  `postRepoCreate`'s `url` param, which is itself pre-asserted at
-  `postRepoCreate` (`github-app.ts:1116`). User-controlled path segments
-  (`owner`, `repo`, `installationId`, `githubLogin`) are `encodeURIComponent`'d
-  or regex-validated (`GITHUB_LOGIN_RE`, `APP_SLUG_RE`) at the call sites.
+- All 14 `githubFetch(` call sites derive URLs from the `${GITHUB_API}`
+  origin literal (verified by grep): 12 inline `${GITHUB_API}/…` template
+  literals; `probeOrgMembership`'s `url` variable composed as
+  `${GITHUB_API}/orgs/${encodeURIComponent(owner)}/members/${encodeURIComponent(githubLogin)}`;
+  and `postRepoCreate`'s plumbed `url` param — itself pre-asserted at
+  `github-app.ts:1116`, with both of `postRepoCreate`'s own callers passing
+  literals (`/orgs/${encodeURIComponent(orgLogin)}/repos` and the
+  `KB_TEMPLATE_*` constants). User-controlled path segments are
+  `encodeURIComponent`'d or regex-validated (`GITHUB_LOGIN_RE`, `APP_SLUG_RE`)
+  at the call sites.
 - CodeQL's taint is real — the request-URL string contains
   remote-flow-controlled segments — but the *reported property* (URL depends
   on a user-provided value → credential can egress to an attacker host) is
@@ -393,6 +415,9 @@ UI-surface path (mechanical override does not fire on
   probes returned no open PR touching this file; the overlap preflight
   re-runs at ship time.
 - **Dependency:** none external — no infra, no secrets, no new dependencies.
+- **Precedent note (Phase 4.4):** no in-repo precedent for `codeql[…]`
+  annotations — the mechanism is novel here; its semantics were verified
+  against upstream `github/codeql` sources, not sibling files.
 
 ## Sharp Edges
 
