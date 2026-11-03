@@ -13,6 +13,42 @@ lane: cross-domain
 
 # fix: Repair codeql-to-issues dedupe (invalid gh search query empties EXISTING)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03 (plan-review standing checks + self-review applied inline — the
+DHH/Kieran/code-simplicity panel could not be spawned in this subagent; deepen-plan gates
+4.4–4.13 run below).
+
+### Gate results (deepen-plan)
+
+- **4.4 Precedent-diff:** sibling precedent `scripts/codeql-main-alert-gate.sh` cited and
+  diffed in `## Alternative Approaches Considered` (author scope, jq form, failure semantics).
+- **4.5 / 4.55:** no SSH/network or downtime/cutover trigger — skipped.
+- **4.6 User-Brand Impact:** PASS — section present, `none` threshold, sensitive-path regex
+  does not match `.github/workflows/codeql-to-issues.yml`.
+- **4.7 Observability:** REQUIRED by this gate's pure-docs test (`.yml` Files-to-Edit) even
+  though plan Phase 2.9's narrower trigger set skipped it — `## Observability` added with the
+  5-field schema; `discoverability_test.command` is allowlist-verb `bash`, <15 s, literal
+  `expected_output`.
+- **4.8 PAT-shaped variable:** PASS — grep clean (no `var.*_token`/`TF_VAR_*_TOKEN`/literal
+  token shapes).
+- **4.9 / 4.10 / 4.13:** no UI surface, no persistent store/connection, no new autonomous
+  task — skipped.
+- **4.11 Guard Contract:** PASS — `lint-guard-contract.py` scanned clean (1 entry, 6-row
+  matrix incl. own-dispatch, second-member, anchoring, suite-mutation and must-PASS rows).
+- **4.12 Scope Check:** PASS — exactly one `## Scope Check`; all asks mapped, `inferred`
+  items carry justifications.
+- **Review agents (Phases 4, 5):** not spawned — no agent-spawn capability in this planning
+  subagent. Deferred hardening A-vs-B items filed as issue #12004 for a CTO ruling.
+
+### Key improvements from the deepen pass
+
+- `## Observability` section added (4.7).
+- Post-merge AC reworded to the invariant form (no ambient-count dependence).
+- `--limit 200` cap residual documented (the open `type/security` list currently sits at the
+  cap, mostly the duplicates this bug produced).
+- MD038-lint-safe rendering of the trailing-space anchor literals.
+
 ## Overview
 
 <!-- MD038 disabled on the anchor literals below: the trailing space inside the code span IS the dedupe anchor being specified, not stray whitespace. -->
@@ -186,6 +222,39 @@ EXISTING=$(jq -r --arg p "sec: CodeQL alert #${ALERT_NUMBER} " \
 - **Threshold decision (challengeable):** internal triage tooling on this repo's own tracker;
   worst case is tracker noise or a suppressed internal tracker — no end-user artifact is
   produced or altered.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "the daily `check-alerts` run completes and prints `Done. Created: <N>, Skipped (existing): <N>`"
+  cadence: "daily at 06:00 UTC (schedule cron) + on-demand workflow_dispatch"
+  alert_target: "Actions run state + `::warning`/`::error` annotations; the repo's scheduled-run conventions surface failures via the Actions UI and run-notify mail"
+  configured_in: ".github/workflows/codeql-to-issues.yml `on.schedule` and `check-alerts` run block"
+
+error_reporting:
+  destination: "GitHub Actions run log (annotations render in the run summary); a failed run reds the Actions check surface"
+  fail_loud: "`::warning title=check-alerts::` lines on dedupe-fetch/parse failure; a non-zero step exit fails the job"
+
+failure_modes:
+  - mode: "dedupe read fails or returns non-JSON (transient API/CLI fault)"
+    detection: "`::warning` annotation in the run log; step exits 0 with zero filings"
+    alert_route: "Actions run annotations (visible on the run page; daily cadence self-recovers next run)"
+  - mode: "`gh issue create` fails mid-loop"
+    detection: "non-zero step exit fails the job; run state red"
+    alert_route: "failed Actions run notification"
+  - mode: "dedupe silently over-matches and suppresses a real tracker"
+    detection: "anchored-prefix fixture verification at PR time (ACs); `Skipped` count in run log vs open-alert count"
+    alert_route: "PR-time assertion; post-merge run-log read"
+
+logs:
+  where: "Actions run logs for `CodeQL Alert to Issue` (per-step output incl. per-alert skip/create lines)"
+  retention: "GitHub Actions default (~90 days)"
+
+discoverability_test:
+  command: "bash scripts/lint-workflow-run-body-syntax.py .github/workflows/codeql-to-issues.yml"
+  expected_output: "clean"
+```
 
 ## Guard Contract
 
