@@ -67,3 +67,14 @@ Wireframes approved by the operator 2026-11-03: `knowledge-base/product/design/a
 - FR4 result states: frame 16. Waiting-for-you list (FR2): frame 17. CLI plain-words prompts (FR1, FR2, FR6): frame 18.
 - Approved scope of the code check: Yes only; No and Request changes record straight away with "Signed in with your account".
 - Open wording items for planning: replace the made-up CLI delegation example with the real Standing Delegation wording; confirm the CLI honesty line ("Typed in this terminal on your computer. It was not re-checked against your account."); code lifetime is "a few minutes" until a number is chosen.
+
+## Amendments from plan review (2026-11-03)
+
+The plan at `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.md` supersedes these spec lines (rulings recorded there under `## Plan Review Rulings`):
+
+- TR1: per-row database-computed `row_hash` from length-prefixed columns; no `prev_hash` hash chain and no `chain_break` alert (deferred with the external anchor, #12021); founder id is a plain uuid with no foreign key; one write-once decision table, unique on `(founder_id, key, text_hash)`; texts come from a committed registry, so there is no request table and no `request_legal_acceptance` RPC.
+- TR2: the verify endpoint returns only `{status, text_hash, decided_at, row_ok}` and compares against a server-configured founder id.
+- TR4: the `web-session` author arm is deferred; `Method:` is a label only and `tty-ack` is its only valid value in this increment.
+- TR9: the in-place check ships email code only; password and provider confirmation are deferred to #12031. The reauth challenge binds user, key, text hash and session, with an attempt cap of 5.
+- FR2: no pending-cards script; the CLI reuses the existing `go.md` standing-delegation issue, and the web page lists web acceptances.
+- Retention and erasure: the row survives founder erasure with a plain uuid (CLO draft: instrument life plus 5 years, cap 10 years, counsel to confirm).
