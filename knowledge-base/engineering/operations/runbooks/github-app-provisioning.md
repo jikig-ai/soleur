@@ -204,7 +204,7 @@ Until a `bin/mint-app-jwt.sh` helper lands (deferred), the simplest path is
 inline JWT mint:
 
 ```bash
-# 1. Fetch the PEM and App ID. Since #8609 / ADR-241 D10 the runtime App key lives in the
+# 1. Fetch the PEM and App ID. Since #9263 (the App-key move; #8609 stays the open tracker) / ADR-241 D10 the runtime App key lives in the
 #    isolated project soleur-github-app (config prd), NOT in soleur/prd (which holds an
 #    EVICTED marker after R-step 6); the App ID is not a secret and stays in soleur/prd.
 #    (Re-verified against github-app.tf `removed {}` blocks and ci-deploy.sh on 2026-11-02, #11294.)

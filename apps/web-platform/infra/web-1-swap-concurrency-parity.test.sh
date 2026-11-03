@@ -60,13 +60,14 @@ RELEASE_WF="${WF_DIR}/web-platform-release.yml"
 APPLY_INFRA_WF="${WF_DIR}/apply-web-platform-infra.yml"
 PIPELINE_FIX_WF="${WF_DIR}/apply-deploy-pipeline-fix.yml"
 FREEZE_WF="${WF_DIR}/workspaces-luks-cutover.yml"
+KEY_ROTATE_WF="${WF_DIR}/key-rotate.yml"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF"; do
+for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF" "$KEY_ROTATE_WF"; do
   [ -f "$f" ] || { echo "FAIL: workflow not found at $f" >&2; exit 1; }
 done
 
@@ -148,6 +149,19 @@ assert_member "$APPLY_INFRA_WF"  "ci_ssh_token_replace"    "ci-ssh-token-replace
 # remote-exec window is exactly what this group exists to serialize. It also holds an SSH bridge
 # authenticated with the credential member 7 destroys, so it needs the mutex in both directions.
 assert_member "$APPLY_INFRA_WF"  "vector_redeliver"        "vector-redeliver"
+
+# #11294: the key-rotate workflow's `redeploy` job runs the same track.sh canary-then-prod fleet redeploy as member 1 (it swaps the
+# web-1 container so the new secret value is picked up), so it holds the same job-level group. It lives in its OWN workflow file
+# (key-rotate.yml), so it is a ninth member that is asserted here and counted separately below: the eight-count over the three shared
+# workflows is unchanged. (The sibling inngest-key-rotate.yml redeploy job also holds the group and predates this guard; it is not
+# enrolled here, which is a pre-existing gap, not something this PR widens.)
+assert_member "$KEY_ROTATE_WF"   "redeploy"                "key-rotate-redeploy"
+key_rotate_count=$(grep -cE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' "$KEY_ROTATE_WF")
+if [ "$key_rotate_count" -eq 1 ]; then
+  pass
+else
+  fail "key-rotate.yml: expected exactly 1 'group: web-1-swap' (the redeploy job), found $key_rotate_count"
+fi
 
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it

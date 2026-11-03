@@ -747,6 +747,10 @@ _SUITE_BOUNDS=(
   # beside ci-deploy and betterstack-alert-structure. Pin at 720 (~2x the kill point); a real hang still renders
   # as this suite's own RED before the leg's 15-minute ceiling.
   "apps/web-platform/infra/cron-egress-nftables.test.sh=720"
+  # #11294 (key-rotate-workflow.test.sh): ~240 s serial on the dev host (~480 behavioural scenarios plus ~130 mutation rows, each a
+  # run of the script under env -i), so the 360 s default would bound-kill it on a starved -P 4 leg while green. Pin at 720 (3x
+  # serial, ~1.5x the contended figure the siblings above use); a hang renders as this suite's own RED.
+  "apps/web-platform/infra/key-rotate-workflow.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

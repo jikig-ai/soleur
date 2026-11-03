@@ -41,7 +41,7 @@ Facts established while planning, each verified against the repository:
 ## Considered Options
 
 - **Option A: source `scripts/inngest-key-rotate.sh` from a new `scripts/key-rotate.sh` and override what differs (chosen).** Pros: zero
-  edits to a production route or its pinned 1806-line suite; one copy of the security-critical chokepoint. Cons: coupling to the
+  edits to a production route or its pinned suite; one copy of the security-critical chokepoint. Cons: coupling to the
   sourced file, bounded by guards (below).
 - **Option B: extract a shared library and edit the production route.** Rejected: it edits a production route and its pinned suite for
   a route that is not the production one, and the extraction would have to carry every Inngest assumption out.
@@ -59,7 +59,7 @@ Build ONE dispatch-only workflow, `.github/workflows/key-rotate.yml`, with body 
 - **F1, source and override.** The script sources the sibling at top level, type-checks every symbol it relies on (`declare -F` for
   functions, `declare -p` for the three override arrays and the two jq scalars) and refuses with exit 78 before any Terraform call
   when one is missing or changed shape. It assigns `KR_GATE_TABLE`, `KR_INFLIGHT_WORKFLOWS` and `KR_VERDICT_TOKENS` wholesale and
-  redefines eleven functions by the same name (`kr_refuse`, `kr_ok`, `kr_print_contract`, `main`, `kr_chk_confirm`,
+  redefines the sourced functions of the same name (`kr_refuse`, `kr_ok`, `kr_print_contract`, `main`, `kr_chk_confirm`,
   `kr_stop_sentence`, `kr_post_write_stop`, `kr_file_issue`, `kr_verdict_recipe`, `kr_converge_cmd`, `kr_cmd_notify`) plus a `kr_out`
   allowlist. It has no `set -e` and no `trap` (the sourced `kr_init` owns the EXIT trap that removes the key-bearing temp files). The
   suite pins a sha256 over the sourced bodies the script calls and their callees, so a semantic change to the sibling forces a
@@ -84,7 +84,8 @@ Build ONE dispatch-only workflow, `.github/workflows/key-rotate.yml`, with body 
   and "an agent never dispatches rotate" is a policy, not a mechanism. The bounds that are mechanisms: a `main`-only ref rung, a
   bot-actor refusal, a committed exact-match owner-login allowlist checked against both `github.actor` and
   `github.triggering_actor`, an `authorization_stale` bound (the UTC date and at most 60 minutes since the guard), and
-  `approval_environment_missing` for the `_prd` keys and the webhook secret until the reviewer-gated environment of #11923 exists
+  `approval_environment_missing` for `inngest_manual_trigger_secret_prd`, `kb_drift_ingest_signing_key` and `github_webhook_secret`
+  until the reviewer-gated environment of #11923 exists
   (lifted by a one-line change in the PR that binds the apply job to it). The dev keys follow parity with ADR-307.
 - **F3, the `_dev` keys redeploy too.** A dev rotation is the shakedown of the whole route and does not count unless `track.sh`
   reports success; a dev rotation that skips the redeploy would not exercise the route's last leg. The production redeploy gives a
@@ -101,7 +102,13 @@ Build ONE dispatch-only workflow, `.github/workflows/key-rotate.yml`, with body 
   call that fails loudly (`issue_unfiled`); a `github_webhook_secret` rotation ends `owner_step_pending`, a deliberate non-success,
   until the owner updates the GitHub App webhook secret.
 
-ADR-307 gets one pointer line and one `related:` entry; its body is unchanged.
+ADR-307 gets one pointer line and one `related_adrs` entry; its body is unchanged.
+
+Review round 1 (2026-11-03, rulings R1-R4 in the decision-challenges record): after a landed write the redeploy re-check never refuses
+on staleness, the kb window or `quiet_window` (it polls the transient rungs for at most 480 s, then refuses
+`rotated_redeploy_failed`); `plan_ok` carries a report-only `rotate_would_refuse=<token|none>` field with no new token; the apply
+step refuses `authorization_stale` before the write when its remaining time cannot cover the apply bound plus a margin; a notify
+re-run adds no comment to an identical open issue.
 
 ## Consequences
 
