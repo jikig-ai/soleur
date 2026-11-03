@@ -20,7 +20,7 @@
 ## Serial fallback — every way to get it
 
 1. `SOLEUR_TEST_JOBS=1` / `--jobs=1` — explicit serial.
-2. Unset the knob when calling the runner directly — the runner's own default stays serial (the #7376 interference diagnosis closed 2026-10-20 and its soak follow-up #7432 is still open, so the default is not flipped). The affected gate in `affected-tests.sh` supplies width 4 itself; to opt that out, set `SOLEUR_TEST_JOBS=1` (an operator `--jobs` flag cannot reach the runner through that script).
+2. Unset the knob when calling the runner directly — the runner's own default stays serial (the #7376 interference diagnosis closed 2026-10-20; flipping the runner default is a separate decision with no tracker yet, so it stays serial). The affected gate in `affected-tests.sh` supplies width 4 itself; to opt that out, set `SOLEUR_TEST_JOBS=1` (an operator `--jobs` flag cannot reach the runner through that script).
 3. Requested-but-denied conditions degrade automatically with a named banner (`[parallel] serial fallback — reason=...`): `CI` set, bash < 5.1, lane table missing, advisory lock not held, resolved width 1, or an unwritable capture dir.
 
 ## Tuning

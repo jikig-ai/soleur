@@ -1034,6 +1034,8 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    [skill-enforced: work Phase 2 exit]
 
+   Since #12013 the gate engages the runner's parallel pool itself (width 4, local `--affected` only): the log shows `[parallel] mode engaged`, live `[run] <label> done (rc=N, Nms) — provisional` lines are NOT the verdict (only the exit code and the final `affected-tests:` line are), and `SOLEUR_TEST_JOBS=1` forces serial — see ship Phase 4 for the wait loop.
+
    Before entering Phase 3, run the affected gate — **once, and not the whole battery**:
 
    ```bash

@@ -2154,8 +2154,9 @@ _pj_resolve_run_mode() {
   _pj_mode=0
   local want="${_JOBS_REQ:-${SOLEUR_TEST_JOBS:-}}"
   # THE DEFAULT. Unset resolves to serial — the explicit, measured choice:
-  # parallel ships opt-in while the #7376 interference diagnosis is open, and
-  # flipping the default is gated on it (see the plan + runbook). No banner:
+  # parallel ships opt-in (the #7376 interference diagnosis closed 2026-10-20; the
+  # default stays serial until flipping it is decided separately — see the runbook
+  # and the ADR-242 #12013 amendment). No banner:
   # a default must not read as a degraded arm.
   [[ -z "$want" ]] && return 0
   # Validation binds everywhere the knob is read — even enumerate/print paths —
@@ -2238,7 +2239,7 @@ _pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writ
   elif [[ "$rc" != 0 ]]; then
     note=" — provisional, verdict at drain"
   fi
-  printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
+  printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]//[[:cntrl:]]/?}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
 }
 
 _pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.

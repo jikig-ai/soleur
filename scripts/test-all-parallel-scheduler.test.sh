@@ -20,13 +20,13 @@
 #   A6  the serial fallback arms: lock-not-held falls back to serial with a
 #       named banner; --jobs=1 and jobs=0-class requests resolve serial; a
 #       malformed value exits 2.
+#   A7  the in-flight liveness pair `[run] <label> started/done` and the
+#       tmp_delta=unattributed honesty field are emitted in parallel mode.
 #   A8  (#12013) a red is visible at reap: the live `done` line carries the suite's
 #       wall time, a non-zero rc is marked provisional (a signal-shaped one
 #       unresolved), the authoritative [FAIL] verdict is unchanged and still
 #       printed once, after the live line; and the pool width is a runner-only
 #       carrier that no suite the runner spawns inherits.
-#   A7  the in-flight liveness pair `[run] <label> started/done` and the
-#       tmp_delta=unattributed honesty field are emitted in parallel mode.
 #
 # The sandbox follows the killed-classification convention: copy the runner,
 # assert each splice anchor occurs exactly once, neuter the advisory lock and
@@ -79,6 +79,7 @@ mk_timeline_fixture indC 0.4
 mk_timeline_fixture tokA 0.4
 mk_timeline_fixture tokB 0.4
 mk_timeline_fixture starS 0.4
+mk_timeline_fixture slowL 1.2
 
 cat > "$FIXTURES/fail.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -166,6 +167,7 @@ calls = {
     "order":     [("first","indC.sh"),("second","indB.sh"),("third","indA.sh")],
     "one":       [("okfixture","ok.sh")],
     "envprobe":  [("envprobe","envprobe.sh")],
+    "livered":   [("slowL","slowL.sh"),("bad","fail.sh")],
 }[arm]
 body = prelude + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -181,6 +183,10 @@ print("sandbox built")
 PY
 }
 
+# Stamp each output line with the wall clock (ns) it ARRIVED at, tab-separated, so a test can tell a line
+# printed while a suite was still running from one replayed after it finished.
+ts_filter() { local l; while IFS= read -r l; do printf '%s\t%s\n' "$(date +%s%N)" "$l"; done; }
+
 run_arm() {  # <arm> [jobs-env] — an EMPTY second arg leaves the knob unset (serial arm)
   local arm="$1" jobs="${2-4}"
   local sb="$TMP/runner-${arm}-${jobs}.sh"
@@ -189,7 +195,7 @@ run_arm() {  # <arm> [jobs-env] — an EMPTY second arg leaves the knob unset (s
   build_sandbox "$sb" "$arm" >/dev/null || { fail "sandbox build failed: $arm"; return 1; }
   if ARM_OUT=$(cd "$REPO_ROOT" && env -u CI SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="${TIMING_FILE:-/dev/null}" TEST_GROUP=all \
-            ${jobs:+SOLEUR_TEST_JOBS="$jobs"} timeout 120 bash "$sb" 2>&1); then
+            ${jobs:+SOLEUR_TEST_JOBS="$jobs"} timeout 120 bash "$sb" 2>&1 | { if [[ "${ARM_TS:-}" == 1 ]]; then ts_filter; else cat; fi; }); then
     ARM_RC=0
   else
     ARM_RC=$?
@@ -368,12 +374,22 @@ if [[ "$n_fail" == "1" ]]; then
 else
   fail "A8 — expected exactly one ^[FAIL] line, got $n_fail"; dump "$ARM_OUT"
 fi
-live_ln="$(grep -nE '^\[run\] bad done ' <<<"$ARM_OUT" | head -1 | cut -d: -f1)"
-verd_ln="$(grep -nE '^\[FAIL\] bad ' <<<"$ARM_OUT" | head -1 | cut -d: -f1)"
+live_ln="$(grep -nE '^\[run\] bad done ' <<<"$ARM_OUT" | head -1 | cut -d: -f1 || true)"
+verd_ln="$(grep -nE '^\[FAIL\] bad ' <<<"$ARM_OUT" | head -1 | cut -d: -f1 || true)"
 if [[ -n "$live_ln" && -n "$verd_ln" ]] && (( live_ln < verd_ln )); then
   pass "A8 — the live line precedes the drain verdict"
 else
   fail "A8 — live line ($live_ln) does not precede the verdict ($verd_ln)"; dump "$ARM_OUT"
+fi
+# A line merely PRINTED before another proves nothing against a replay in reap order, so compare the clock:
+# the red's live line must arrive before the slow suite (registered first) has finished running.
+ARM_TS=1 run_arm livered 4 || true
+bad_ts="$(grep -E $'\t\\[run\\] bad done ' <<<"$ARM_OUT" | head -1 | cut -f1 || true)"
+slow_end="$(awk '$1=="E" && $2=="slowL" {print $3; exit}' "$FIXTURES/timeline.log" 2>/dev/null)"
+if [[ "$bad_ts" =~ ^[0-9]+$ && "$slow_end" =~ ^[0-9]+$ ]] && (( bad_ts < slow_end )); then
+  pass "A8 — the red's live line arrived while a slower suite was still running (not replayed after it)"
+else
+  fail "A8 — live line stamp '$bad_ts' is not before the slow suite's end '$slow_end'"; dump "$ARM_OUT"
 fi
 run_arm killed 4 || true
 if grep -qE '^\[run\] selfterm done \(rc=143, [0-9]+ms\) — signal-shaped, unresolved' <<<"$ARM_OUT"; then
