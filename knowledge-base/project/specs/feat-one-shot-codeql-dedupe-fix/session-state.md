@@ -16,3 +16,14 @@ None blocking. Planning subagent could not spawn nested agents (plan research fa
 ### Components Invoked
 - `soleur:plan` (full run, MINIMAL template)
 - `soleur:deepen-plan` (gate phases 4.4–4.13 evaluated inline)
+
+## Dedup-before-fixing ledger (review PR #12000)
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| missing `--author app/github-actions` (P1 sentinel / P2 git-history) | unscoped-dedupe-list + auto-labeler poisoning | security-sentinel, git-history-analyzer | fix commit |
+| `jq -e .` accepts non-array (P3 ×3) | weaker-shape-guard-vs-sibling | architecture-strategist, code-quality-analyst, pattern-recognition-specialist | fix commit |
+| no `--limit 200` saturation warning (P3 ×4) | missing-bound-tripwire | git-history, architecture, code-quality, pattern-recognition | fix commit |
+| list/api failure-message lacks absence path (P3) | incomplete guidance | test-design-reviewer | fix commit |
+| plan misdates defect introduction (P3) | false history claim | git-history-analyzer | fix commit (docs) |
+| anchor asymmetry / green-exit semantics / `ALERTS … || true` (P3 informational, pre-existing) | deferred-hardening | multiple | deferred — #12004 |

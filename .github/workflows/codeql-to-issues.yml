@@ -38,17 +38,23 @@ jobs:
           # Dedupe reads the open type/security issue titles ONCE; the per-alert match is
           # anchored on "sec: CodeQL alert #<N> " (trailing space) so #5 cannot match a
           # tracker for #50. codeql-main-alert-gate.sh files the same title shape, so one
-          # list dedupes both filers. A fetch/parse failure skips the filing pass — a
-          # dedupe that silently reads empty is the duplicate-filing bug being replaced
-          # (fail-closed; mirrors the close-orphans job below).
-          if ! gh issue list --label type/security --state open --limit 200 --json title \
+          # list dedupes both filers. The list is bot-scoped (--author) because
+          # auto-label-security.yml hands type/security to any ^sec: title — a public
+          # stranger could otherwise suppress a real tracker (PR #12000 review P1;
+          # sibling gate: scripts/codeql-main-alert-gate.sh). A fetch/parse failure
+          # skips the filing pass — a dedupe that silently reads empty is the
+          # duplicate-filing bug being replaced (fail-closed; mirrors close-orphans).
+          if ! gh issue list --label type/security --author app/github-actions --state open --limit 200 --json title \
             > "${RUNNER_TEMP}/sec-issues.json" 2>"${RUNNER_TEMP}/sec-issues.err"; then
             echo "::warning title=check-alerts::gh issue list failed: $(cat "${RUNNER_TEMP}/sec-issues.err")"
             exit 0
           fi
-          if ! jq -e . "${RUNNER_TEMP}/sec-issues.json" >/dev/null 2>&1; then
+          if ! jq -e 'type == "array"' "${RUNNER_TEMP}/sec-issues.json" >/dev/null 2>&1; then
             echo "::warning title=check-alerts::Issue list returned non-JSON body — skipping filing pass."
             exit 0
+          fi
+          if [ "$(jq 'length' "${RUNNER_TEMP}/sec-issues.json")" -ge 200 ]; then
+            echo "::warning title=check-alerts::the open type/security issue list reached its 200-row bound; a tracker evicted past the cap reads absent and a duplicate is possible"
           fi
 
           CREATED=0

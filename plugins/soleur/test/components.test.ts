@@ -2143,9 +2143,10 @@ describe("unbounded gh enumerations carry an explicit sufficient bound (#8593)",
       families,
       `extraction saw ${JSON.stringify(families)} across ${corpus.length} files — ` +
         "a list/api false means a live command family is regex-invisible, so the " +
-        "offender check is vacuous for it; a search TRUE means a " +
-        "`gh search issues|prs` re-entered a scanned surface — restore `search: true` " +
-        "in the expectation below so the pin guards that family again",
+        "offender check is vacuous for it — OR the family left the corpus entirely, " +
+        "in which case pin it false with the restore pattern `search` uses below; " +
+        "a search TRUE means a `gh search issues|prs` re-entered a scanned surface — " +
+        "restore `search: true` in the expectation below so the pin guards that family again",
       // `search` is pinned FALSE, not dropped: the codeql-to-issues.yml dedupe fix
       // removed the last live `gh search issues|prs` enumeration from the scanned
       // corpus, and an absent family can produce no offenders (the fixture tests

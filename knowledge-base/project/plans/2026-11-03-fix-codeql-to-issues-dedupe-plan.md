@@ -89,10 +89,11 @@ this branch.
   shape the workflow files (`sec: CodeQL alert #N — <desc>`), so the prescribed anchored match
   covers both filers.
 - Label `type/security` exists (`gh label list`); repo is **public** (`isPrivate: false`).
-- The broken form was introduced by the #8593 "existence-drill" rewrite (archived spec
-  `20261101-135922-feat-one-shot-8593-8080-witness`, task 2.6 "codeql-to-issues.yml
-  (existence-drill rewrite)") — the `--limit 1 --jq '.[0].number // empty'` shape it installed is
-  exactly what the invalid query silently defeats.
+- The silent-empty mask dates to `1212deb242` (#2042, 2026-04-13 — the schedule rewrite):
+  blame shows `SEARCH_QUERY` unchanged since then and the mask (`2>/dev/null || echo "0"`)
+  introduced by the same commit; `64184a02d7` (#11782, the #8593 "existence-drill" rewrite,
+  2026-11-01) only reshaped the mask to `|| true` and replaced the jq drill. Corrected at
+  review — the plan originally misdated the defect's introduction to #8593.
 - No external premises left to validate; no cited issue numbers.
 
 ### Property List (Phase 0.6b)
@@ -202,7 +203,7 @@ EXISTING=$(jq -r --arg p "sec: CodeQL alert #${ALERT_NUMBER} " \
 | Approach | Verdict | Why |
 |---|---|---|
 | Fix the `gh search` query instead (e.g. `"sec: CodeQL alert #N" in:title`) | rejected | Still free-text search: index lag can miss a just-filed tracker; the `label:`-style qualifier trap generalizes; the prescribed fix is a bounded list read |
-| `--author app/github-actions` on the list (sibling's anti-poison scope) | not adopted | Prescribed fix is verbatim `--label type/security`; the label already bounds the population — strangers on a public repo cannot self-apply labels. Recorded as a pending technical row in `decision-challenges.md` |
+| `--author app/github-actions` on the list (sibling's anti-poison scope) | **adopted at review** | Plan-time rejection premise was factually wrong: `auto-label-security.yml` applies `type/security` to ANY `^sec:` title on this public repo, so strangers CAN get the label without applying it — the exact poisoning vector the sibling hardened against (PR #12000 review P1, security-sentinel + git-history). Both filers author as `app/github-actions`, so the scope keeps cross-filer dedupe |
 | Sibling's exact jq (`startswith` + next-char-not-digit) | not adopted | Catches bare `sec: CodeQL alert #N` titles with no suffix; prescribed form uses the trailing-space anchor — equivalent for the ` — <desc>` shape both filers always emit. Accepted residual: a human-filed bare-prefix title does not dedupe |
 | Keep `|| true` around the new list read | rejected | Re-introduces the root cause: any transient API/jq failure silently empties the dedupe set and the run files duplicates. `::warning` + `exit 0` is fail-closed and mirrors `close-orphans` in the same file |
 | Mass-close the ~185 existing duplicates in this PR | descoped | Bulk issue mutation is outside this fix's blast radius; the repaired dedupe prevents recurrence. Flagged to the operator via `decision-challenges.md` |
