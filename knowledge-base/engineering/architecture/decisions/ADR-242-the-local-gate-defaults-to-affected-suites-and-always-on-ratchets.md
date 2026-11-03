@@ -802,3 +802,38 @@ extension on the terms the deferral set.
     member clears; an uncovered one REDs per suite. Decision 27's detect-first posture is
     retained: the extension landed because the representable class exists, and the census keeps
     a root-level file from ever being unedgeable silently again.
+
+## Amendment — 2026-11-03 (#12013)
+
+Context: the ship-time affected gate took more than 30 minutes for 166 suites on 2026-11-03. The
+runner's parallel pool (`--jobs` / `SOLEUR_TEST_JOBS`, #11282) has existed since 2026-10-27 and
+defaults to serial; nothing in the ship path turned it on, so the measured run was serial by
+configuration, not for want of a mechanism.
+
+Decision:
+
+1. **The delegated affected gate hands the runner a pool width of 4.** `plugins/soleur/scripts/affected-tests.sh`
+   sets `SOLEUR_TEST_JOBS="${SOLEUR_TEST_JOBS:-4}"` on the runner call only, for `--affected` only,
+   and only when `CI` is unset. `--full` is untouched, an operator-chosen width (including `1`, the
+   serial override) wins, and the assignment prefixes the call rather than exporting, so the gate's
+   later steps never see it. The runner's own default stays serial; flipping it is a separate decision
+   (the #7376 soak follow-up #7432 is still open).
+2. **Why in the gate script and not at the ship dispatch.** The ship Phase 4 dispatch command is
+   pinned by `plugins/soleur/test/fullsuite-merge-gate.test.ts` (ADR-183), so an env prefix there
+   would break the pin. The consequence is that every caller of `affected-tests.sh` now gets the pool:
+   ship Phase 4, work section 9, review's lead gate, `grok-pre-push-gate.sh` and one-shot. Each runs
+   the same affected selection under the same advisory lock (ADR-133), which the pool preserves —
+   it goes wide only while holding the lock and otherwise announces a serial fallback.
+3. **The live `[run] <label> done` line is provisional.** It now carries the suite's wall time and,
+   for a non-zero rc, a marker saying the drain's `[ok]`/`[FAIL]`/`[KILLED]` text and the exit code
+   are authoritative (ADR-177: a signal-shaped rc is unresolved, not failed). The `[FAIL]` text
+   that monitors and `battery-refusal-wait.sh` parse is unchanged.
+4. **The pool width is demoted from the runner's environment** next to `export -n TEST_GROUP`
+   (#11939), so a suite that runs a nested `test-all.sh` does not inherit a pool request.
+
+Not taken: pushing before the local battery (ADR-276 chose local-first as its cheaper policy, and a
+draft `test` is red by design so `battery-owed.sh` returns OWED regardless); an unconditional
+CI-only skip (ADR-196, ADR-183); a suite-result cache (rejected twice, see
+`scripts/lib/test-affected-derive-cache.sh`). Re-evaluation trigger for the first: after the pool
+lands, a typical single-feature gate is still over 10 minutes, or ADR-276 S3's post-policy push mean
+falls below 2.75. Edge re-pricing and measured weights for the slowest suites are tracked in #12025.

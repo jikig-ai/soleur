@@ -4,7 +4,7 @@
 
 | Situation | Use |
 |---|---|
-| Everyday pre-commit / local affected run | Nothing — the default serial path runs `--affected` scoped to your diff. |
+| `soleur:ship` / `soleur:work` affected gate (`plugins/soleur/scripts/affected-tests.sh`, local) | Nothing — since #12013 the gate hands the runner `SOLEUR_TEST_JOBS=4` itself (not for `--full`, not under `CI`, never over a width you set). A bare `bash scripts/test-all.sh` is still serial. |
 | A long local `--full` or big affected run on a developer workstation with headroom | `SOLEUR_TEST_JOBS=auto bash scripts/test-all.sh --full` (or `--jobs=N`). |
 | CI | Never — CI already parallelizes by shard (`SCRIPTS_SHARD`, `test-scripts N/8`). The `CI` env var forces the serial fallback; a local-style pool inside a shard would oversubscribe the runner. |
 | Sharing the host with heavy work, or an unexplained flake you suspect is scheduling | `SOLEUR_TEST_JOBS=1` (or just unset it) — the serial fallback is always one knob away. |
@@ -20,7 +20,7 @@
 ## Serial fallback — every way to get it
 
 1. `SOLEUR_TEST_JOBS=1` / `--jobs=1` — explicit serial.
-2. Unset the knob — serial is the default while the #7376 interference diagnosis is open.
+2. Unset the knob when calling the runner directly — the runner's own default stays serial (the #7376 interference diagnosis closed 2026-10-20 and its soak follow-up #7432 is still open, so the default is not flipped). The affected gate in `affected-tests.sh` supplies width 4 itself; to opt that out, set `SOLEUR_TEST_JOBS=1` (an operator `--jobs` flag cannot reach the runner through that script).
 3. Requested-but-denied conditions degrade automatically with a named banner (`[parallel] serial fallback — reason=...`): `CI` set, bash < 5.1, lane table missing, advisory lock not held, resolved width 1, or an unwritable capture dir.
 
 ## Tuning
@@ -31,7 +31,7 @@
 ## Reading the output
 
 - `[parallel] mode engaged — width=N (...)` — one banner at resolution.
-- `[run] <label> started/done (rc=N)` on stderr — in-flight liveness.
+- `[run] <label> started/done (rc=N, <ms>ms)` on stderr — in-flight liveness (#12013). A non-zero rc carries a `provisional, verdict at drain` marker (a 128+n rc: `signal-shaped, unresolved until drain`). It is not the verdict: the `[FAIL]`/`[KILLED]` lines and the exit code after the drain are. A poller should grep the log for `^\[run\] .* done \(rc=[1-9]` to see a red the moment it happens.
 - `--- <label> ---` + verdict lines print in **registration order** after the pool drains — the report looks like a serial run's tail.
 - `[UNACCOUNTED] <label>` — a dispatched suite that was never measured (e.g. an interrupted pool); the run exits 1 and the suite is never silently counted.
 - `tmp_delta=unattributed` in the timing log — the suite shared its window with a sibling; a suite that ran alone keeps its numeric delta.
