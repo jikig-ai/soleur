@@ -161,6 +161,8 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
 
 ## Amendment 2026-10-26 (#9545 PR2): the member read path is an RPC, not a policy
 
+*Its "ONE function" and "Fixed 30-day window" statements are superseded in part by the 2026-11-03 amendment below.*
+
 **Decision.** Members read the rollup through ONE `SECURITY DEFINER` function, `get_egress_audit_summary(p_workspace_id, p_limit,
 p_decision)` (migration 177). There is **no member `SELECT` policy and no table grant**: a direct `.from(table).select()` stays a
 permission error, so the table is still an excluded, zero-policy target in the RLS fuzz harness. This corrects the PR1 text above
@@ -227,3 +229,39 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
 
 The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
 enablement step; the flag flip is tracked in #11237, not part of PR2).
+
+## Amendment 2026-11-03 (#11238): the member read gains a window, in a second function
+
+**Decision.** Members read the rollup through TWO `SECURITY DEFINER` functions with one contract:
+
+- `get_egress_audit_summary(p_workspace_id, p_limit, p_decision)` (migration 177): fixed 30-day window, unchanged. It stays for the
+  Scope Grants card hint (`p_limit = 0`) and for the previous app image while a deploy is in flight.
+- `get_egress_audit_window_summary(p_workspace_id, p_limit, p_decision, p_window)` (migration 183): `p_window` is one of `24h`, `7d`,
+  `30d`, with no argument defaults. The destination page always calls this one, including for the default 30 days, with no fallback
+  to the 177 function on error.
+
+This supersedes the 2026-10-26 amendment's "ONE `SECURITY DEFINER` function" and "Fixed 30-day window" wording. Everything else in that
+amendment holds for both functions: membership check first, jti denylist second, then argument validation; the
+`workspace_id = p_workspace_id` predicate on every read; `EXECUTE` for `authenticated` only; no member `SELECT` policy and no table grant.
+
+- **Window.** Derived after the two authz checks and the `p_decision` check, through a `CASE` map to a literal interval (never cast from
+  caller text, no `ELSE`), so `NULL` and any unknown value raise SQLSTATE `22023` with a message that starts with `egress audit: `.
+  Bounded above by `now()`; the `last_seen` predicate decides inclusion. The 15-minute `bucket_start` slack stays a scan aid, so a
+  bucket that began before the window start but whose `last_seen` falls inside it is counted whole: the view says "about the last N".
+- **Retention is unchanged.** A shorter window is a narrower read of the same stored rows; the purge still keys on `last_seen` at 30 days.
+- **Why a distinct name and not a 4-argument overload.** The RLS fuzz coverage gates (AC7 and AC8) and the ADR-112 static allowlist
+  key on the bare function name and assert that no authenticated-executable definer function is overloaded; a distinct name avoids
+  rewriting a security-gate harness and any named-argument ambiguity in PostgREST.
+- **Why the body is duplicated and the 177 function is not turned into a wrapper.** Migration 177 is immutable and the previous image
+  calls it. Drift between the two bodies is capped by a text-parity guard in the default suite
+  (`test/supabase-migrations/183-egress-audit-window-summary.test.ts`, which names the only permitted differences) and a live parity
+  check in the gated RLS fuzz suite.
+- **Retirement path.** The card's "requests in the last 24 hours" count is a later PR on #11238. That PR must either move the card to the
+  183 function and retire the 177 function in the same change (deleting the parity guard, the 177 verify rows' successor and the
+  loader's three-argument pin), or add a separate count-only function. It must NOT add a third copy of the body: if a third reader is
+  ever needed, extract the shared aggregation into a non-granted `STABLE` helper first. That PR also flips AC8's expectations and the
+  loader test that pins the card probe's argument object. This paragraph is the record; no separate issue.
+- **Skew.** Migration 183 is applied before the app image that calls it. Until PostgREST reloads its schema cache a page load can fault
+  with `PGRST202` (a paged `rpc_error`); the card keeps working because it uses the 177 function.
+
+The status stays **Adopting**.

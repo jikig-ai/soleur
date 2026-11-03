@@ -55,6 +55,9 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
   // Member-only egress audit summary (mig 177, #9545 PR2): the in-body membership check raises 42501 for tenant B.
   get_egress_audit_summary: (c) => `select get_egress_audit_summary('${c.wsA}', 200, null)`,
+  // Windowed member read (mig 183, #11238): a distinct function name, not an overload, so AC7/AC8 stay overload-free.
+  // Same in-body membership check (42501 for tenant B); '30d' is a valid window so the denial is the membership one.
+  get_egress_audit_window_summary: (c) => `select get_egress_audit_window_summary('${c.wsA}', 200, null, '30d')`,
   resolve_workspace_installation_id: (c) => `select resolve_workspace_installation_id('${c.wsA}')`,
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
