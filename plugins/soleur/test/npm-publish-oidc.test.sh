@@ -209,8 +209,10 @@ if want("npm11-step"):
     install_idx = publish_idx = None
     for i, st in enumerate(steps):
         body = run_body(st)
-        if install_idx is None and re.search(r"npm\s+install\s+-g\s+npm@(?:\^11|11\.\d+\.\d+)\b", body):
-            install_idx = i
+        if install_idx is None:
+            m = re.search(r"npm\s+install\s+-g\s+npm@(?:\^(\d+)|(\d+)\.(\d+)\.(\d+))\b", body)
+            if m and (int(m.group(1) or 0) >= 11 or (int(m.group(2) or 0), int(m.group(3) or 0), int(m.group(4) or 0)) >= (11, 5, 1)):
+                install_idx = i
         if publish_idx is None and re.search(r"\bnpm\s+publish\b", body):
             publish_idx = i
     if install_idx is None:

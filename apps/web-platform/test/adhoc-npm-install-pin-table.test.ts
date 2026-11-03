@@ -3,11 +3,12 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 // Pin-table guard (#11855): every npm tree resolved OUTSIDE a lockfile —
-// `npm install -g`, `npm i -g`, `npm install --no-save`, and `npx pkg@ver`
-// invocations — must carry an exact version declared here, reconciled BOTH
-// ways: every scanned site needs a row, and every row needs a live site.
-// Extends the single-site parity pattern (dockerfile-vitest-version-pin) into
-// a table so an added or unpinned site reddens instead of floating silently.
+// `npm install -g`, `npm i -g`, `npm install --no-save`, `npm exec`, and
+// `npx pkg@ver` invocations — must carry an exact version declared here,
+// reconciled BOTH ways: every scanned site needs a row, every row needs a
+// live site. Extends the single-site parity pattern
+// (dockerfile-vitest-version-pin) into a table so an added or unpinned site
+// reddens instead of floating silently.
 //
 // SITE SHAPES, three kinds:
 //   literal  — `npm install -g vitest@4.1.12`, `npx playwright@1.61.0-alpha-…`
@@ -16,42 +17,45 @@ import path from "node:path";
 //              `VAR="x.y.z"`), or to a version PIN FILE (`< .bun-version`,
 //              `.nvmrc`, `.tool-versions`) whose content is exact semver.
 //   bare-npx — `npx playwright test`: resolves LOCAL node_modules only when the
-//              package is bound by a tracked lockfile or a declared install row
-//              in the same file; on a miss npx fetches `latest` — the float this
-//              guard exists to kill. `npx --no-install` is never a site (it
-//              cannot fetch).
+//              row names the binding (a tracked lockfile, or a pinned install
+//              in the same file); on a miss npx fetches `latest` — the float
+//              this guard exists to kill. `npx --no-install` is never a site.
+//              (Same-JOB limitation: a same-file pin in job A does not license
+//              bare npx in job B's fresh runner — `resolves` rows name the
+//              binding that actually exists today; a cross-job reuse is a
+//              deliberate new row, not an accidental pass.)
 //
 // MANIFEST COVERAGE: a tracked `package.json` whose declared deps bind no
 // lockfile (not a workspace member, no same-dir package-lock.json) must sit in
 // MANIFEST_CARVEOUTS with its dep specs recorded — the row reddens on drift so
 // a dep added to an unbound manifest is a deliberate edit, not a silent float.
 //
-// EXTRACTION is command-position, not raw-string: `npm install`/`npx` counts as
-// an invocation only when it is the command word of a segment — leading
-// `RUN`/`run:`/YAML-bullet/`env`/`sudo`/`exec`-class prefixes are consumed,
-// segments split on `&&`/`;`/`|`/`&` and on a standalone `--` (proxy-wrapper
-// inner command, e.g. `proxy.py -- npx pkg@ver`). What this skips, by design:
+// EXTRACTION is command-position, not raw-string: `npm`/`npx` counts as an
+// invocation only when it is the command word of a segment — leading
+// `RUN`/`run:`/YAML-bullet/`env`/`sudo`/`exec`/`time`-class prefixes are
+// consumed, segments split on `&&`/`;`/`|`/`&` OUTSIDE quotes and recurse on a
+// standalone `--` token (proxy-wrapper inner command, `sudo -- npm …`, and
+// `npx npm@x install …` nested installs). What this skips, by design:
 //   * `npx` inside a `for`-list word, inside `die "…"`/`echo "…"` arguments,
 //     inside `::error::` help text — none sits at command position;
-//   * `npm ci` (subcommand isn't install|i) — lockfile-bound, drain guard owns;
+//   * `npm ci` (subcommand isn't install|i|exec|x) — lockfile-bound;
 //   * `apt-get install`, `pip install`, `bun install`, `bunx` — other package
 //     managers; lint-workflow-install-sites.sh owns the bun side.
 // BOUNDARY — surfaces enumerated and NOT scanned here:
 //   * `*.test.{sh,ts,tsx}` and `**/test/**` — mutation fixtures necessarily
 //     carry violating text (same exclusion as lint-workflow-install-sites.sh);
 //   * `*.md`/SKILL.md prose — scaffolded examples; kept honest by review;
+//   * `.ts`/`.mjs`/`.py` spawn sites — none carry `npm install`/`npx` today
+//     (checked: only prose strings and a token-echo); named, not silent;
 //   * nested-shell strings (`bash -c "…"`, `$(…)`) inside .sh/.yml — no such
 //     invocation exists today; .mcp.json IS handled (its args arrays split
 //     `npx` from its spec across JSON lines, so invocations are re-synthesized
 //     per server before scanning);
-//   * `.ts`/`.mjs` spawn sites — none carry `npm install`/`npx` today (checked:
-//     only prose strings and a token-echo); the class is named, not silent;
-//   * `*.tf` heredoc `user_data`, `lefthook.yml`, `.github/actions/**`,
-//     `cloud-init-*.yml` — all in the scan assembly (listed so the enumeration
-//     is stated, not discovered later); none carries an install today;
+//   * prefix words beyond PREFIX_WORDS (`doas`, `pkexec`, `nix run`) — none
+//     today; extend the list when one lands;
 //   * line-continuation (`\`-joined) install commands — none today.
-// Anti-vacuity floors sit in the first test: a broken extractor that finds
-// zero sites must report red, not green.
+// Anti-vacuity: floors near measured reality AND sentinel member assertions —
+// a walk that silently drops a whole surface class must report red.
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 
@@ -65,13 +69,18 @@ function existsRel(rel: string): boolean {
 // ---------------------------------------------------------------------------
 // THE TABLE. One row per (file, pkg); `expect` is asserted against EVERY
 // scanned occurrence of that pkg in that file — two differing pins of one pkg
-// in one file cannot both be declared, by construction.
+// in one file cannot both be declared, by construction (see the conflict note
+// in the site-satisfaction test's message).
 // ---------------------------------------------------------------------------
 
 type PinRow =
   | { kind: "literal"; file: string; pkg: string; expect: string }
   | { kind: "env"; file: string; pkg: string; envVar: string }
-  | { kind: "bare-npx"; file: string; pkg: string };
+  | { kind: "bare-npx"; file: string; pkg: string; resolves: BareNpxBinding[] };
+
+/** What binds a bare-npx package: a lockfile path, or "same-file-install"
+ *  (a declared literal/env install row for the same pkg in the same file). */
+type BareNpxBinding = string | "same-file-install";
 
 const PIN_TABLE: PinRow[] = [
   // ---- apps/web-platform/Dockerfile (cli-tools stage globals) ----
@@ -86,15 +95,15 @@ const PIN_TABLE: PinRow[] = [
   { kind: "literal", file: ".github/workflows/ci.yml", pkg: "http-server", expect: "14.1.1" },
   { kind: "env", file: ".github/workflows/ci.yml", pkg: "@openai/codex", envVar: "CODEX_PIN" },
   { kind: "env", file: ".github/workflows/ci.yml", pkg: "@opencode/cli", envVar: "OPENCODE_PIN" },
-  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "playwright" },
-  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "@11ty/eleventy" },
-  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "http-server" },
+  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "playwright", resolves: ["apps/web-platform/package-lock.json"] },
+  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "@11ty/eleventy", resolves: ["package-lock.json"] },
+  { kind: "bare-npx", file: ".github/workflows/ci.yml", pkg: "http-server", resolves: ["same-file-install"] },
   // ---- .github/workflows/deploy-docs.yml ----
   { kind: "literal", file: ".github/workflows/deploy-docs.yml", pkg: "playwright", expect: "1.60.0" },
   { kind: "literal", file: ".github/workflows/deploy-docs.yml", pkg: "http-server", expect: "14.1.1" },
   { kind: "literal", file: ".github/workflows/deploy-docs.yml", pkg: "wrangler", expect: "4.124.0" },
-  { kind: "bare-npx", file: ".github/workflows/deploy-docs.yml", pkg: "@11ty/eleventy" },
-  { kind: "bare-npx", file: ".github/workflows/deploy-docs.yml", pkg: "http-server" },
+  { kind: "bare-npx", file: ".github/workflows/deploy-docs.yml", pkg: "@11ty/eleventy", resolves: ["package-lock.json"] },
+  { kind: "bare-npx", file: ".github/workflows/deploy-docs.yml", pkg: "http-server", resolves: ["same-file-install"] },
   // ---- .github/workflows/gdpr-gate-self-test.yml ----
   { kind: "literal", file: ".github/workflows/gdpr-gate-self-test.yml", pkg: "lefthook", expect: "2.2.2" },
   // ---- .github/workflows/main-health-monitor.yml ----
@@ -104,7 +113,7 @@ const PIN_TABLE: PinRow[] = [
   // ---- .github/workflows/scheduled-marketplace-drift.yml ----
   { kind: "env", file: ".github/workflows/scheduled-marketplace-drift.yml", pkg: "@anthropic-ai/claude-code", envVar: "CLI_VERSION" },
   // ---- .github/workflows/web-platform-release.yml ----
-  { kind: "bare-npx", file: ".github/workflows/web-platform-release.yml", pkg: "playwright" },
+  { kind: "bare-npx", file: ".github/workflows/web-platform-release.yml", pkg: "playwright", resolves: ["apps/web-platform/package-lock.json"] },
   // ---- .mcp.json (both surfaces pin @playwright/mcp@0.0.78; the lockfile's
   // nested copy is 0.0.75 — the 0.0.78 pin is the attested direction per
   // knowledge-base/legal/compliance-posture.md, recorded not re-litigated) ----
@@ -115,12 +124,12 @@ const PIN_TABLE: PinRow[] = [
   // ---- apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh ----
   { kind: "env", file: "apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh", pkg: "bun", envVar: "BUN_VERSION" },
   // ---- package.json script surfaces ----
-  { kind: "bare-npx", file: "package.json", pkg: "@11ty/eleventy" },
-  { kind: "bare-npx", file: "apps/web-platform/package.json", pkg: "playwright" },
-  { kind: "bare-npx", file: "plugins/soleur/docs/package.json", pkg: "@11ty/eleventy" },
+  { kind: "bare-npx", file: "package.json", pkg: "@11ty/eleventy", resolves: ["package-lock.json"] },
+  { kind: "bare-npx", file: "apps/web-platform/package.json", pkg: "playwright", resolves: ["apps/web-platform/package-lock.json"] },
+  { kind: "bare-npx", file: "plugins/soleur/docs/package.json", pkg: "@11ty/eleventy", resolves: ["package-lock.json"] },
   // ---- scripts/validate-blog-links.sh builds the docs site via npx when no
   // _site dir is passed — resolves the root lockfile's @11ty/eleventy ----
-  { kind: "bare-npx", file: "scripts/validate-blog-links.sh", pkg: "@11ty/eleventy" },
+  { kind: "bare-npx", file: "scripts/validate-blog-links.sh", pkg: "@11ty/eleventy", resolves: ["package-lock.json"] },
 ];
 
 // Manifests whose declared deps bind no lockfile. `deps` records the live
@@ -185,6 +194,7 @@ function inScanSet(rel: string): boolean {
   if (/^cloud-init.*\.(ya?ml)$/.test(base)) return true;
   if (/^lefthook.*\.(ya?ml)$/.test(base)) return true;
   if (rel.endsWith(".sh")) return true;
+  if (rel.endsWith(".tf")) return true;
   if (rel.endsWith(".template")) return true;
   if (base === ".mcp.json") return true;
   if (base === "package.json") return true;
@@ -202,7 +212,8 @@ type Site = {
   /** null = unpinned (bare spec) */
   spec: string | null;
   via: "npm-install" | "npx" | "npm-install-unpinned";
-  line: number;
+  /** File line number, or a synthesized key (`scripts.x`, `mcpServers.x`). */
+  loc: string;
 };
 
 // Words consumed while looking for the command word: YAML step keys, Dockerfile
@@ -227,14 +238,35 @@ const PREFIX_WORDS = new Set([
   "{",
   "(",
 ]);
-// Prefix flags that consume one argument of their own (env -u NAME, env -C DIR).
-const PREFIX_ARG_FLAGS = new Set(["-u", "-C", "-v", "-S", "-g", "-n"]);
+// Prefix flags that consume one argument of their own (env -u NAME, env -C DIR,
+// env -S STRING). Deliberately excludes -v/-n/-g: those are arg-taking for env
+// but bare flags for `time`/`command -v`, and eating the next token there loses
+// a real command.
+const PREFIX_ARG_FLAGS = new Set(["-u", "-C", "-S"]);
+// npm flags that take a separate (non `=`-joined) value; each consumes the next
+// token so it never parses as a package spec.
+const NPM_ARG_FLAGS = new Set([
+  "--prefix",
+  "--cache",
+  "--userconfig",
+  "--globalconfig",
+  "--before",
+  "--tag",
+  "--registry",
+  "--loglevel",
+  "--scope",
+  "--otp",
+  "--access",
+  "--workspace",
+  "-w",
+]);
 
 /** Index of the command word, or -1 when the segment has none. */
 function commandIndex(toks: string[]): number {
   let i = 0;
   while (i < toks.length) {
     const t = toks[i];
+    if (t === "--") return i; // boundary at command position — caller recurses
     if (PREFIX_WORDS.has(t)) {
       i++;
       continue;
@@ -247,7 +279,7 @@ function commandIndex(toks: string[]): number {
       i++;
       continue;
     }
-    if (t.startsWith("-") && t !== "--") {
+    if (t.startsWith("-")) {
       i++;
       continue;
     }
@@ -256,8 +288,12 @@ function commandIndex(toks: string[]): number {
   return i < toks.length ? i : -1;
 }
 
+function unquote(t: string): string {
+  return t.replace(/^["'`]+|["'`]+$/g, "");
+}
+
 function parseSpecToken(tok: string): { pkg: string; spec: string | null } | null {
-  const t = tok.replace(/^["'`]+|["'`),.;]+$/g, "");
+  const t = unquote(tok).replace(/[),.;]+$/, "");
   const m = t.match(/^(@[\w.-]+\/)?([\w][\w.-]*?)(?:@(.+))?$/);
   if (!m) return null;
   const pkg = (m[1] ?? "") + m[2];
@@ -320,49 +356,156 @@ function segmentsOf(line: string): string[] {
   return segs;
 }
 
-function processTokens(file: string, lineNo: number, toks: string[], out: Site[]): void {
+/** Whitespace-split a segment, keeping quoted spans as single tokens so a
+ *  `--` inside `"do not run -- npx foo"` never reads as a boundary. */
+function tokenize(seg: string): string[] {
+  const toks: string[] = [];
+  let cur = "";
+  let sq = false;
+  let dq = false;
+  const flush = () => {
+    if (cur) toks.push(cur);
+    cur = "";
+  };
+  for (const c of seg) {
+    if (sq) {
+      cur += c;
+      if (c === "'") sq = false;
+      continue;
+    }
+    if (dq) {
+      cur += c;
+      if (c === '"') dq = false;
+      continue;
+    }
+    if (c === "'") {
+      sq = true;
+      cur += c;
+      continue;
+    }
+    if (c === '"') {
+      dq = true;
+      cur += c;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      flush();
+      continue;
+    }
+    cur += c;
+  }
+  flush();
+  return toks;
+}
+
+/** Index of the first non-flag token at/after `from`; npm's own value-taking
+ *  flags consume their argument (handles `npm --prefix /opt install …`). */
+function npmSubcommandIndex(toks: string[], from: number): number {
+  for (let i = from; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === "--") return -1; // options closed without a subcommand
+    if (NPM_ARG_FLAGS.has(t)) {
+      i++;
+      continue;
+    }
+    if (t.startsWith("-")) continue;
+    return i;
+  }
+  return -1;
+}
+
+function processTokens(file: string, loc: string, toks: string[], out: Site[]): void {
   const ci = commandIndex(toks);
   if (ci === -1) return;
-  const cmd = toks[ci];
+  const cmd = unquote(toks[ci]);
+
+  if (cmd === "--") {
+    // A standalone `--` at command position opens a nested command
+    // (`sudo -- npm install …`, `proxy.py -- npx pkg@ver`).
+    processTokens(file, loc, toks.slice(ci + 1), out);
+    return;
+  }
 
   if (cmd === "npm") {
-    const sub = toks[ci + 1];
-    if (sub !== "install" && sub !== "i") return;
-    for (const tok of toks.slice(ci + 2)) {
-      if (tok === "--") break;
-      if (tok.startsWith("-")) continue;
-      if (/^[A-Z_][A-Z0-9_]*=/.test(tok)) continue;
-      const parsed = parseSpecToken(tok);
-      if (!parsed) continue;
-      out.push({
-        file,
-        pkg: parsed.pkg,
-        spec: parsed.spec,
-        via: parsed.spec === null ? "npm-install-unpinned" : "npm-install",
-        line: lineNo,
-      });
+    const si = npmSubcommandIndex(toks, ci + 1);
+    if (si === -1) return;
+    const sub = unquote(toks[si]);
+    if (sub === "install" || sub === "i") {
+      for (let i = si + 1; i < toks.length; i++) {
+        const tok = toks[i];
+        if (tok === "--") continue; // end-of-OPTIONS for npm, not end of args
+        if (NPM_ARG_FLAGS.has(tok)) {
+          i++;
+          continue;
+        }
+        if (tok.startsWith("-")) continue;
+        if (/^[A-Z_][A-Z0-9_]*=/.test(tok)) continue;
+        const parsed = parseSpecToken(tok);
+        if (!parsed) continue;
+        out.push({
+          file,
+          pkg: parsed.pkg,
+          spec: parsed.spec,
+          via: parsed.spec === null ? "npm-install-unpinned" : "npm-install",
+          loc,
+        });
+      }
+    } else if (sub === "exec" || sub === "x") {
+      // `npm exec [--yes] pkg@ver -- cmd…`: the spec is the first non-flag
+      // token before `--`; args after `--` are the invoked command's, not pkgs.
+      for (let i = si + 1; i < toks.length; i++) {
+        const tok = toks[i];
+        if (tok === "--") break;
+        if (NPM_ARG_FLAGS.has(tok)) {
+          i++;
+          continue;
+        }
+        if (tok.startsWith("-")) continue;
+        const parsed = parseSpecToken(tok);
+        if (!parsed) continue;
+        emitNpxSite(file, loc, parsed, toks.slice(i + 1), out);
+        break;
+      }
     }
   } else if (cmd === "npx") {
     const rest = toks.slice(ci + 1);
     if (rest.some((t) => t === "--no-install" || t === "--offline")) return;
-    for (const tok of rest) {
+    for (let i = 0; i < rest.length; i++) {
+      const tok = rest[i];
       if (tok === "--") break;
       if (tok.startsWith("-")) continue;
       const parsed = parseSpecToken(tok);
-      if (parsed) out.push({ file, pkg: parsed.pkg, spec: parsed.spec, via: "npx", line: lineNo });
+      if (!parsed) continue;
+      emitNpxSite(file, loc, parsed, rest.slice(i + 1), out);
       break;
     }
-  } else {
-    // A standalone `--` opens a nested command (proxy-wrapper inner command,
-    // e.g. `proxy.py -- npx pkg@ver`).
+  }
+  else {
+    // A standalone `--` inside the segment opens a nested command
+    // (proxy-wrapper inner command, `python3 proxy.py -- npx pkg@ver`).
     const dashIdx = toks.indexOf("--", ci + 1);
-    if (dashIdx !== -1) processTokens(file, lineNo, toks.slice(dashIdx + 1), out);
+    if (dashIdx !== -1) processTokens(file, loc, toks.slice(dashIdx + 1), out);
   }
   // Any other command word: segment carries no npm/npx invocation at command
   // position — a later `npx` token is prose (for-list, message, positional).
 }
 
-function extractFromLine(file: string, lineNo: number, rawLine: string, out: Site[]): void {
+function emitNpxSite(
+  file: string,
+  loc: string,
+  parsed: { pkg: string; spec: string | null },
+  rest: string[],
+  out: Site[],
+): void {
+  out.push({ file, pkg: parsed.pkg, spec: parsed.spec, via: "npx", loc });
+  // `npx npm@x install …` runs a nested npm invocation — the spec names the
+  // runner AND the inner install resolves its own tree: both need declaring.
+  if (parsed.pkg === "npm") {
+    processTokens(file, loc, ["npm", ...rest], out);
+  }
+}
+
+function extractFromLine(file: string, loc: string, rawLine: string, out: Site[]): void {
   const trimmed = rawLine.trimStart();
   if (trimmed.startsWith("#")) return;
   // A trailing comment is stripped before tokenizing — `# see TOOLCHAIN PINS`
@@ -371,28 +514,28 @@ function extractFromLine(file: string, lineNo: number, rawLine: string, out: Sit
   const line = commentAt === -1 ? rawLine : rawLine.slice(0, commentAt);
 
   for (const seg of segmentsOf(line)) {
-    processTokens(file, lineNo, seg.split(/\s+/).filter(Boolean), out);
+    processTokens(file, loc, tokenize(seg), out);
   }
 }
 
 /** .mcp.json: args arrays split `npx` from its spec across lines — parse the
  *  JSON and re-synthesize each server's invocation as one line. */
-function mcpInvocationLines(rel: string): string[] {
+function mcpInvocationLines(rel: string): [loc: string, line: string][] {
   const doc = JSON.parse(readRel(rel)) as {
     mcpServers?: Record<string, { command?: string; args?: unknown }>;
   };
-  const lines: string[] = [];
-  for (const srv of Object.values(doc.mcpServers ?? {})) {
+  const lines: [string, string][] = [];
+  for (const [name, srv] of Object.entries(doc.mcpServers ?? {})) {
     const args = Array.isArray(srv.args) ? (srv.args as unknown[]).join(" ") : String(srv.args ?? "");
-    lines.push(`${srv.command ?? ""} ${args}`);
+    lines.push([`mcpServers.${name}`, `${srv.command ?? ""} ${args}`]);
   }
   return lines;
 }
 
 /** package.json: only the `scripts` map holds invocations. */
-function manifestScriptLines(rel: string): string[] {
+function manifestScriptLines(rel: string): [loc: string, line: string][] {
   const doc = JSON.parse(readRel(rel)) as { scripts?: Record<string, string> };
-  return Object.values(doc.scripts ?? {});
+  return Object.entries(doc.scripts ?? {}).map(([k, v]) => [`scripts.${k}`, v]);
 }
 
 const LOCKFILES = [
@@ -409,11 +552,11 @@ function loadSites(): { sites: Site[]; files: string[] } {
   const sites: Site[] = [];
   for (const rel of files) {
     const base = path.basename(rel);
-    let lines: string[];
-    if (base === ".mcp.json") lines = mcpInvocationLines(rel);
-    else if (base === "package.json") lines = manifestScriptLines(rel);
-    else lines = readRel(rel).split("\n");
-    lines.forEach((l, i) => extractFromLine(rel, i + 1, l, sites));
+    let entries: [loc: string, line: string][];
+    if (base === ".mcp.json") entries = mcpInvocationLines(rel);
+    else if (base === "package.json") entries = manifestScriptLines(rel);
+    else entries = readRel(rel).split("\n").map((l, i): [string, string] => [`${i + 1}`, l]);
+    for (const [loc, l] of entries) extractFromLine(rel, loc, l, sites);
   }
   return { sites, files };
 }
@@ -428,7 +571,7 @@ function rowSatisfies(row: PinRow, s: Site): boolean {
   if (row.kind === "env") return s.spec === `\${${row.envVar}}`;
   return s.spec === null;
 }
-/** A row is live iff a site exists only it can explain (its own shape). */
+/** A row is live iff a site exists it can explain (its own shape). */
 function rowIsLive(row: PinRow, sites: Site[]): boolean {
   return sites.some((s) => rowSatisfies(row, s));
 }
@@ -440,13 +583,25 @@ function rowIsLive(row: PinRow, sites: Site[]): boolean {
 const { sites, files } = loadSites();
 
 describe("adhoc npm install pin-table (#11855)", () => {
-  it("scan assembly is non-vacuous (floors)", () => {
-    // ~30 scan files and ~30 site occurrences today; a broken extractor or a
-    // truncated walk must report red, never a quiet green.
-    expect(files.length).toBeGreaterThanOrEqual(25);
-    expect(sites.length).toBeGreaterThanOrEqual(20);
-    expect(PIN_TABLE.length).toBeGreaterThanOrEqual(18);
+  it("scan assembly is non-vacuous (floors near measured reality + sentinels)", () => {
+    // Measured: 933 scan files, 35 sites, 31 rows. A walk that silently drops a
+    // whole surface class (e.g. only .github/workflows/ survives = ~103 files /
+    // ~21 sites) must report red, not green.
+    expect(files.length).toBeGreaterThanOrEqual(800);
+    expect(sites.length).toBeGreaterThanOrEqual(30);
+    expect(PIN_TABLE.length).toBeGreaterThanOrEqual(28);
     expect(MANIFEST_CARVEOUTS.length).toBeGreaterThanOrEqual(3);
+    for (const sentinel of [
+      "apps/web-platform/Dockerfile",
+      ".mcp.json",
+      "package.json",
+      ".github/workflows/ci.yml",
+      "apps/web-platform/.github/workflows/constraint-gates.yml",
+      "lefthook.yml",
+      "plugins/soleur/scripts/render-c4-model.sh",
+    ]) {
+      expect(files, `scan set must contain ${sentinel}`).toContain(sentinel);
+    }
   });
 
   it("every scanned site is satisfied by a declared row", () => {
@@ -454,14 +609,19 @@ describe("adhoc npm install pin-table (#11855)", () => {
     for (const s of sites) {
       const rows = PIN_TABLE.filter((r) => r.file === s.file && r.pkg === s.pkg);
       if (rows.length === 0) {
-        violations.push(`UNDECLARED site ${s.file}:${s.line} ${s.pkg}@${s.spec ?? "<bare>"} — add a pin or a table row`);
+        violations.push(`UNDECLARED site ${s.file}:${s.loc} ${s.pkg}@${s.spec ?? "<bare>"} — add a pin or a table row`);
         continue;
       }
       if (!rows.some((r) => rowSatisfies(r, s))) {
         const declared = rows
-          .map((r) => (r.kind === "literal" ? `${r.pkg}@${r.expect}` : r.kind === "env" ? `${r.pkg}@\${${r.envVar}}` : `bare ${r.pkg}`))
+          .map((r) =>
+            r.kind === "literal" ? `${r.pkg}@${r.expect}` : r.kind === "env" ? `${r.pkg}@\${${r.envVar}}` : `bare ${r.pkg}`,
+          )
           .join(", ");
-        violations.push(`${s.file}:${s.line} ${s.pkg}@${s.spec ?? "<bare>"} matches no declared row (${declared})`);
+        violations.push(
+          `${s.file}:${s.loc} ${s.pkg}@${s.spec ?? "<bare>"} matches no declared row (${declared}) ` +
+            `[one file may declare only one pin per pkg — a second differing pin cannot be declared, it must be unified]`,
+        );
       }
     }
     expect(violations).toEqual([]);
@@ -483,46 +643,66 @@ describe("adhoc npm install pin-table (#11855)", () => {
     expect(dead).toEqual([]);
   });
 
-  it("env-pin variables bind an exact semver — literal in-file or via pin file", () => {
+  it("env-pin variables bind an exact semver — every uncommented assignment", () => {
     const violations: string[] = [];
     for (const r of PIN_TABLE) {
       if (r.kind !== "env") continue;
-      const text = readRel(r.file);
-      const assign = text.match(new RegExp(`${r.envVar}\\s*[:=]\\s*(.+)`));
-      if (!assign) {
-        violations.push(`${r.file}: ${r.envVar} is never assigned`);
-        continue;
+      // Every line that binds the var (anchor: no `#` between line start and
+      // the name — a commented-out `# CODEX_PIN: "x"` is not a binding, and a
+      // `JUNK_CODEX_PIN:` name cannot shadow the match).
+      const re = new RegExp(`^\\s*[^#\\n]*?\\b${r.envVar}\\s*[:=]\\s*(.+)$`, "gm");
+      let found = false;
+      for (const m of readRel(r.file).matchAll(re)) {
+        found = true;
+        const rhs = m[1].replace(/\s+#.*$/, "").trim(); // strip trailing comment BEFORE pin-file read
+        if (EXACT_RE.test(rhs.replace(/^["']|["']$/g, ""))) continue;
+        const pinFile = rhs.match(PIN_FILE_RE)?.[1];
+        if (pinFile && existsRel(pinFile) && EXACT_RE.test(readRel(pinFile).trim())) continue;
+        violations.push(
+          `${r.file}: ${r.envVar} binds ${JSON.stringify(rhs.slice(0, 60))} — not an exact semver literal and not a version pin file`,
+        );
       }
-      const rhs = assign[1].trim();
-      if (EXACT_RE.test(rhs.replace(/^["']|["'\s]*$/g, ""))) continue;
-      const pinFile = rhs.match(PIN_FILE_RE)?.[1];
-      if (pinFile && existsRel(pinFile) && EXACT_RE.test(readRel(pinFile).trim())) continue;
-      violations.push(
-        `${r.file}: ${r.envVar} binds ${JSON.stringify(rhs.slice(0, 60))} — not an exact semver literal and not a version pin file`,
-      );
+      if (!found) violations.push(`${r.file}: ${r.envVar} is never assigned`);
     }
     expect(violations).toEqual([]);
   });
 
-  it("bare-npx packages resolve through a bound tree (lockfile or same-file install)", () => {
-    const locks = LOCKFILES.map((lf) => JSON.parse(readRel(lf)) as { packages: Record<string, unknown> });
-    const locked = new Set<string>();
-    for (const l of locks) {
-      for (const k of Object.keys(l.packages)) {
-        const m = k.match(/(?:^|\/)node_modules\/(.+)$/);
-        if (m) locked.add(m[1]);
+  it("bare-npx packages resolve through the binding the row names", () => {
+    const lockCache = new Map<string, Set<string>>();
+    const lockedIn = (lf: string): Set<string> => {
+      if (!lockCache.has(lf)) {
+        const l = JSON.parse(readRel(lf)) as { packages: Record<string, unknown> };
+        const names = new Set<string>();
+        for (const k of Object.keys(l.packages)) {
+          const m = k.match(/(?:^|\/)node_modules\/(.+)$/);
+          if (m) names.add(m[1]);
+        }
+        lockCache.set(lf, names);
       }
-    }
+      return lockCache.get(lf)!;
+    };
     const installedHere = new Set(
-      PIN_TABLE.filter((r) => r.kind !== "bare-npx").map((r) => `${r.file}${r.pkg}`),
+      PIN_TABLE.filter((r) => r.kind !== "bare-npx").map((r) => `${r.file} ${r.pkg}`),
     );
     const violations: string[] = [];
     for (const r of PIN_TABLE) {
       if (r.kind !== "bare-npx") continue;
-      if (!locked.has(r.pkg) && !installedHere.has(`${r.file}${r.pkg}`)) {
-        violations.push(
-          `${r.file}: bare \`npx ${r.pkg}\` resolves nothing bound — it fetches latest. Pin it or install it in-file`,
-        );
+      if (!Array.isArray(r.resolves) || r.resolves.length === 0) {
+        violations.push(`${r.file}: bare-npx row for ${r.pkg} names no binding (resolves is empty)`);
+        continue;
+      }
+      for (const b of r.resolves) {
+        if (b === "same-file-install") {
+          if (!installedHere.has(`${r.file} ${r.pkg}`)) {
+            violations.push(`${r.file}: ${r.pkg} claims same-file-install but no declared install row exists`);
+          }
+        } else {
+          if (!existsRel(b)) {
+            violations.push(`${r.file}: ${r.pkg} resolves via ${b} — lockfile does not exist`);
+          } else if (!lockedIn(b).has(r.pkg)) {
+            violations.push(`${r.file}: bare \`npx ${r.pkg}\` names ${b} but it has no node_modules/${r.pkg} — it fetches latest`);
+          }
+        }
       }
     }
     expect(violations).toEqual([]);
@@ -531,7 +711,7 @@ describe("adhoc npm install pin-table (#11855)", () => {
   it("unpinned npm-install specs are violations by construction", () => {
     const bad = sites.filter((s) => s.via === "npm-install-unpinned");
     expect(
-      bad.map((s) => `${s.file}:${s.line} ${s.pkg}`),
+      bad.map((s) => `${s.file}:${s.loc} ${s.pkg}`),
       "a package token after `npm install` with no @version floats",
     ).toEqual([]);
   });
