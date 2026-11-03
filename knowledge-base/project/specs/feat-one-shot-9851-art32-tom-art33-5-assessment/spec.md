@@ -18,7 +18,7 @@ The Art. 30 register's Art. 32 list names the ADR-272 credential deny and the ar
 ## Functional Requirements
 
 - **FR1.** One Art. 32 bullet, status `open residual`, in named-gap order (in force and how far measured; not measured; not covered; reliability limit; exit event; no-public-claim sentence with as-of date; ledger rows by ID; one clause pointing at the breach-register row).
-- **FR2.** One additive dated Superseded marker under the arm-F bullet covering five statements, no existing character edited.
+- **FR2.** One additive dated Superseded marker under the arm-F bullet covering six statements, no existing character edited.
 - **FR3.** One breach-register row (nine cells, no pipe) recording REACHABILITY-ONLY, PROVISIONAL, evidentiary limbs inconclusive, Art. 33 No, Art. 34 No, for the inner Bash sandbox tier only; canonical source is the ADR-075 record.
 - **FR4.** CLO review recorded in decision-challenges.md on the final diff.
 
@@ -55,7 +55,7 @@ The Art. 30 register's Art. 32 list names the ADR-272 credential deny and the ar
 | Sandbox enabled in production | PR 1559 merged 2026-04-05T22:01:06Z (the commit date 2026-04-06 is local time) |
 | Defective command shape repo-evidenced | PR 5928 merged 2026-07-03T09:39:47Z (in-image fixture capture) |
 | Window end about 2026-10-09T04:52Z | post-mortem timeline, row "Image carrying the splice begins to ship (approx.)"; ADR-075 addendum 2026-10-11 (#10032) |
-| Realization changed twice | ADR-075 addenda 2026-10-11 (#10032, PR 10039 merged 2026-10-11T18:29:11Z) and nested 2026-10-12 (#10065); ADR-272 Note 2026-10-08 |
+| Realization changed afterwards | ADR-075 addenda 2026-10-11 (#10032, PR 10039 merged 2026-10-11T18:29:11Z) and nested 2026-10-12 (#10065); ADR-272 Note 2026-10-08 |
 | File-capability arm reverted | PR 9874 merged 2026-10-09T17:13:40Z; ADR-075 addendum 2026-10-09 (#9873 disposition) |
 | `proc_mask` is part of the canary verdict | `sandbox-canary.mjs`: the first entry of `HARDENING_PROBES`, defeat classed `sandbox_broken` |
 | Canary pass read | post-mortem "Recovery verification": `verdict=pass reason=ok` 2026-10-12 00:51:13Z and 01:01:35Z |

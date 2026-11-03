@@ -29,6 +29,8 @@ Headless plan-phase record (2026-11-03). Every row is a technical ruling by the 
 
 The live merge timestamp of the pull request that enabled the sandbox in production is 2026-04-05T22:01:06Z (the 2026-04-06 date in the CTO and CLO text is the commit date in local time), so the register cites the UTC timestamp. The architecture reviewer questioned the ADR-272 bullet's pending-canary sentence; ruling T6 stands (left alone, not repeated). The deepen-pass user-impact review added wording hardenings (window scoped to the Bash tier, inline measurement clause, rotation wording, dated measurements, disclosure-delta rule, conditional sixth superseded sentence); they narrow claims, are reversible inside the diff and set no durable contract, so they are planner notes and the fresh CLO review may strike any of them. The simplicity reviewer's suggestion to drop the learnings-file allowance was not applied because the operator's brief allows an optional learnings file.
 
+Reconciliation (work phase, 2026-11-03): D12 ruled five statements; the marker carries six (S6 added after the public-document keyword check), and the planned "7797 rows" citation became the 2026-10-29 and 2026-10-31 rows before the panel removed it from the breach row.
+
 ## CLO Review Record
 
 Not yet written. The work phase appends it after the fresh end-of-work CLO review: reviewer context (fresh instance), the patch id of the two-register diff and both blob hashes it read, verdict (DISCHARGED or BLOCKED), conditions applied, and the stale compliance-posture pointer noted in D12.

@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-11-03-docs-art32-tom-residual-and-art33
 
 - [x] 1.1 Draft the bullet per plan Phase 1 specification (named-gap order, status `open residual`).
 - [x] 1.2 Insert it after the arm-F bullet and its 2026-10-31 pointer comment, before Audit logging.
-- [x] 1.3 Add the Superseded blockquote directly under the arm-F bullet (five statements); no existing character edited.
+- [x] 1.3 Add the Superseded blockquote directly under the arm-F bullet (six statements); no existing character edited.
 - [x] 1.4 Fill the claim-to-source table in spec.md with the resolved anchors.
 
 ## Phase 2: Art. 33(5) row
