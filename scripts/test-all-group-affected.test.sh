@@ -311,5 +311,116 @@ else
 fi
 
 echo ""
+echo "--- Part C: environment hygiene — a runner-spawned suite never observes TEST_GROUP ---"
+# WHY (#11939). main-health-monitor.yml delivers the group as a step `env:` while ci.yml
+# passes it positionally. The runner resolves `TEST_GROUP="${TEST_GROUP:-${1:-all}}"`
+# (env wins) and, before the fix, left the variable EXPORTED, so every suite it spawned
+# inherited TEST_GROUP=scripts and any suite that itself ran a nested
+# `test-all.sh --enumerate-commands | --print-selection` got a narrowed or refused answer
+# (lint-orphan-test-suites-mutations-a/b and Part B above, red only under the monitor).
+# The fix consumes the carrier at the point of coupling, next to `unset SCRIPTS_SHARD`.
+#
+# HOW. Two probe suites are spliced into a sandbox runner; each records whether
+# TEST_GROUP is in its own environment and in a grandchild's. C3 is the positive
+# control: the same sandbox with the demotion line removed MUST read `set`, which is what
+# proves the probes can see a leak (C1 pins that the line exists exactly once, so a
+# control that removed nothing cannot pass).
+SBC="$TMP/sbc"; mkdir -p "$SBC/lib"
+for lib in repo-write-boundary.sh test-relevance-paths.sh test-affected-paths.sh affected-glob.sh; do
+  cp "$REPO_ROOT/scripts/lib/$lib" "$SBC/lib/" || { echo "FATAL: part C lib copy $lib failed"; exit 2; }
+done
+for probe in probe-a probe-b; do
+  cat > "$FX/scripts/$probe.test.sh" <<'PROBE'
+#!/usr/bin/env bash
+# Records whether TEST_GROUP is exported into this process and into a grandchild.
+name="$(basename "$0" .test.sh)"
+if [ -n "${TEST_GROUP+x}" ]; then own=set; else own=absent; fi
+gc="$(bash -c 'if [ -n "${TEST_GROUP+x}" ]; then echo set; else echo absent; fi')"
+printf 'child=%s\ngrandchild=%s\n' "$own" "$gc" > "$PROBE_DIR/$name.reading"
+exit 0
+PROBE
+done
+python3 - "$TARGET" "$SBC/real.sh" "$SBC/ctl.sh" <<'PY' || { echo "FATAL: part C sandbox splice failed"; exit 2; }
+import re, sys
+src, real_out, ctl_out = sys.argv[1:4]
+s = open(src).read()
+start_anchor = 'tc_acquire "test-all"'
+end_anchor = 'tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"'
+assert s.count(start_anchor) == 1 and s.count(end_anchor) == 1
+i = s.index(start_anchor) + len(start_anchor)
+j = s.index(end_anchor)
+calls = ('\nrun_suite "probe-a" bash scripts/probe-a.test.sh\n'
+         'run_suite "probe-b" bash scripts/probe-b.test.sh\n')
+s = s[:i] + calls + s[j:]
+assert s.count('tc_acquire "test-all"') == 1
+s = s.replace('tc_acquire "test-all"', 'true "test-all"  # sandbox: lock neutered')
+s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=1, flags=re.M)
+open(real_out, 'w').write(s)
+# Control: the same runner with the export-attribute demotion removed. Zero or one hit is
+# tolerated HERE on purpose; the suite's own C1 row pins the count to exactly one.
+open(ctl_out, 'w').write(re.sub(r'^export -n TEST_GROUP$', '', s, flags=re.M))
+PY
+
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+run_sbx() { # <runner> <probe-dir> <env pairs...> -- <runner argv...> — serial (no _pj_submit deferral)
+  local runner="$1" pd="$2"; shift 2
+  local envs=()
+  while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
+  [[ "${1:-}" == "--" ]] && shift
+  assert_fixture_dir "$pd"
+  rm -rf "$pd"; mkdir -p "$pd"
+  (cd "$FX" && env $SIB_SCRUB -u SOLEUR_TEST_JOBS -u TEST_GROUP -u SCRIPTS_SHARD \
+          SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= SOLEUR_TEST_FORCE_ALL= \
+          TEST_TIMING_LOG=/dev/null PROBE_DIR="$pd" "${envs[@]+"${envs[@]}"}" \
+          timeout 120 bash "$runner" "$@" 2>&1)
+}
+c_clean=$'child=absent\ngrandchild=absent'
+c_leak=$'child=set\ngrandchild=set'
+# Both probes dispatched (floor: a run that executed zero probes cannot pass), both read
+# `want`, and the run itself succeeded.
+c_check() { # <label> <runner> <want> <env pairs...> -- <runner argv...>
+  local label="$1" runner="$2" want="$3"; shift 3
+  local pd="$TMP/probe-out" out rc ra rb dispatched
+  out=$(run_sbx "$runner" "$pd" "$@"); rc=$?
+  ra=$(cat "$pd/probe-a.reading" 2>/dev/null); rb=$(cat "$pd/probe-b.reading" 2>/dev/null)
+  dispatched=$(grep -cE '^\[ok\] probe-(a|b) ' <<<"$out")
+  if [[ "$rc" == "0" && "$dispatched" == "2" && "$ra" == "$want" && "$rb" == "$want" ]]; then
+    pass "$label"
+  else
+    fail "$label (rc=$rc dispatched=$dispatched probe-a=[${ra//$'\n'/ }] probe-b=[${rb//$'\n'/ }])"; dump "$out"
+  fi
+}
+
+# C1 — the demotion exists exactly once: the line the control removes is the line that
+# fixes the leak, so a rename or a second copy must be a deliberate edit of this row.
+if [[ "$(grep -c '^export -n TEST_GROUP$' "$TARGET")" == "1" ]]; then
+  pass "C1 — the runner demotes TEST_GROUP's export attribute exactly once"
+else
+  fail "C1 — expected exactly one export-attribute demotion of TEST_GROUP in the runner"
+fi
+# C2 — the monitor's channel (step env): no spawned suite or grandchild observes it.
+c_check "C2 — TEST_GROUP=scripts (the monitor's channel) is invisible to runner-spawned suites" \
+  "$SBC/real.sh" "$c_clean" TEST_GROUP=scripts
+# C3 — positive control: without the demotion the same probes DO see it.
+c_check "C3 — control: with the demotion removed both probes read set" \
+  "$SBC/ctl.sh" "$c_leak" TEST_GROUP=scripts
+# C4/C5 — must-PASS non-canonical inputs: the positional channel (ci.yml's) and another
+# permitted env value stay clean. These guard over-rejection only; they cannot see a
+# missing demotion in the positional case, by construction.
+c_check "C4 — the positional channel (ci.yml's) reads absent" \
+  "$SBC/real.sh" "$c_clean" -- scripts
+c_check "C5 — TEST_GROUP=scripts-heavy is invisible to runner-spawned suites" \
+  "$SBC/real.sh" "$c_clean" TEST_GROUP=scripts-heavy
+
+echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" == "0" ]]
