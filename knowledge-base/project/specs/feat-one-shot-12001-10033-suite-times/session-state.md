@@ -20,3 +20,9 @@
 
 ## Technical-Ruling Gate
 - cto_spawns=1 (batched, 5 rows): all assumed defaults ratified; Items 12/13 reclassified to `technical`; `single-user incident` + `requires_cpo_signoff` stand. Note: parent session CAN spawn subagents (nested spawn was the gap) — review-time user-impact-reviewer can genuinely run, so sequential-fallback disclosure only needed if it cannot.
+
+## Work Phase (in progress)
+- Implementation complete at bae6070657: ratchet repair (exit=0), report, redrive arm + W-suite rewrite + runbook + ADR-318.
+- Issues filed: #12015 #12016 #12017 (report outliers), #12018 #12019 (deferrals).
+- Self-test green; full apply-delivery-gap-follower.test.sh run in progress at commit time.
+- Remaining: push, review (user-impact-reviewer seat required — requires_cpo_signoff path), qa, compound, ship, postmerge.
