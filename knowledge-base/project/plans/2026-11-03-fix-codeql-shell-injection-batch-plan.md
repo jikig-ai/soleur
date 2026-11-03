@@ -12,6 +12,21 @@ lane: single-domain
 
 # fix(security): batch-clear three js/shell-command-injection-from-environment CodeQL alerts (279, 302, 303)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** 3 (Proposed Solution, Research Insights, References & Research)
+**Research agents used:** inline sequential-fallback (no Task tool on this harness — query source read directly, precedent diff verified via `git show`, citations probed live)
+
+### Key Improvements
+1. `resolveBin` rewrite gains a `statSync().isFile()` conjunct — `command -v` requires an executable *regular file*; `accessSync(X_OK)` alone would accept an executable-bit directory.
+2. Citations probed live in this pass: alerts 279/302/303 OPEN on `refs/heads/main@aa2e3aed00`; #8574 OPEN ("ci: pin harness-discovery … as a required check after soak" — matches the `alert_target` usage); precedent commit `f5f51c84b0` verified ancestor of `origin/main`.
+3. PAT-shaped variable sweep (Phase 4.8) clean; Scope Check adequacy read passes — every `asked` row quotes the operator brief verbatim.
+
+### New Considerations Discovered
+- `command -v` can also resolve shell builtins/functions; the PATH walk only finds files — for binary names (`opencode`, `git`, vendor CLIs) that is the intended domain, and a builtin hit would be wrong input anyway.
+- `command -v` never expands `~` in PATH entries, so `join(dir, bin)` matches it byte-for-byte; relative PATH entries resolve cwd-relative in both implementations.
+
 ## Overview
 
 Freeform ask (operator $ARGUMENTS): fix three open `js/shell-command-injection-from-environment` (medium-severity, `@problem.severity warning`) CodeQL alerts in one PR — alert 279 in `plugins/soleur/scripts/harness-discovery-smoke.ts` (start line 473, the `execFileSync` inside `run()`), and alerts 302 + 303 in `apps/web-platform/test/sdk-bash-probe-runtime.test.ts` (lines 418 and 473, two `spawn("sh", ["-c", …])` FIFO writers). No tracker issues exist for medium-severity alerts; the PR body references the alert numbers instead of `Closes` lines. All three are verifiably OPEN on `refs/heads/main` at merge-base `aa2e3aed00` (gh api code-scanning/alerts, 2026-11-03).
@@ -27,7 +42,7 @@ The query (`Security/CWE-078/ShellCommandInjectionFromEnvironment.ql`, precision
 
 Apply the repo's proven remediation for this exact query (alerts 213/214, fixed by commit `f5f51c84b0` / PR #7566): remove the inline-script `-c` form so nothing argv-shaped is shell-interpreted — a shape change, not a behaviour change.
 
-1. **`harness-discovery-smoke.ts` — rewrite `resolveBin` without a shell.** Replace `run("bash", ["-c", <command-v + readlink -f script>], …)` with a pure-Node equivalent: walk `process.env.PATH` entries, `accessSync(candidate, fs.constants.X_OK)` on `join(dir, bin)`, return `realpathSync(candidate)` (fall back to `candidate` when realpath throws, mirroring the script's `|| r="$p"` arm). `command -v` semantics that matter here — executable-bit check, first PATH hit wins, absent → `undefined` — are preserved; empty PATH entries are skipped rather than resolved against CWD (deliberate: a `.` hit is not the real launcher this function exists to find). With no `bash -c` caller left, `run()` stops being an indirect shell execution and all six flows die.
+1. **`harness-discovery-smoke.ts` — rewrite `resolveBin` without a shell.** Replace `run("bash", ["-c", <command-v + readlink -f script>], …)` with a pure-Node equivalent: walk `process.env.PATH` entries, `statSync(join(dir, bin)).isFile()` + `accessSync(candidate, fs.constants.X_OK)` on `join(dir, bin)` (a regular executable file — `command -v`'s requirement), return `realpathSync(candidate)` (fall back to `candidate` when realpath throws, mirroring the script's `|| r="$p"` arm). `command -v` semantics that matter here — regular-file + executable-bit check, first PATH hit wins, absent → `undefined` — are preserved; empty PATH entries are skipped rather than resolved against CWD (deliberate: a `.` hit is not the real launcher this function exists to find). With no `bash -c` caller left, `run()` stops being an indirect shell execution and all six flows die.
 2. **`sdk-bash-probe-runtime.test.ts` — write the two writer scripts to temp files inside the existing `scratch()` dirs** (tracked in `tmps[]`, removed by `afterEach`), then `spawn("sh", [scriptPath, fifo, …])` — argv without `-c` is not shell-interpreted. `HOME` passes as `"$2"` so the single-source property of the `HOME` const survives (302); the printf payloads move byte-identical into the files (302, 303).
 
 ## Technical Considerations
