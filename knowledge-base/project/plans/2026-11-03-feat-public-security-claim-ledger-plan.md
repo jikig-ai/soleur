@@ -16,6 +16,24 @@ requires_cpo_signoff: false
 
 # feat: internal public-security-claim ledger (#9603)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03 (after the five-seat plan-review panel and 20 CTO rulings).
+**Method:** the deepen halts and quality checks were run mechanically against this documentation-only plan; the broad agent fan-out was not repeated because the plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer) and the plan-time CLO and CTO consults had already covered every section, and a second fan-out would only re-read the same ADRs.
+
+**Halts and checks (all pass):** User-Brand Impact present with threshold `single-user incident` (4.6); Observability skipped, pure-docs (4.7); no PAT-shaped variable (4.8); no UI surface, no wireframe needed (4.9); no store or connection (4.10); no guard deliverable (4.11); exactly one unfenced `## Scope Check`, a `Recommendation:` line, zero `unmapped` cells, no BLOCKED marker (4.12); no new autonomous task (4.13). Every cited ADR file (14), issue and PR was re-resolved live with `gh` and `git`; the one cited rule id (`wg-ui-feature-requires-pen-wireframe`) is an active rule. AC1 was run against synthetic archived and live paths (clean copy prints 0, forbidden copy prints 5, the branch diff prints 0), and AC2's pattern and negative control print 0 and 1.
+
+### Key improvements folded in from review
+1. Status model hardened: flag tags `[residual]` and `[prod-unmeasured]`, owning-ADR `accepted` requirement, host class, measured-commit SHA with decay check, weakest-mapped-row rule (D17 to D19).
+2. Findings given a closed type and a disposition with an `escalate` stop, plus neutral wording rules (D20).
+3. Acceptance criteria made runnable and non-vacuous: count-based negated greps, concrete column-extraction commands, census-based Part 2 check, split AC6a and AC6b, and an ordering that puts the fresh CLO review last.
+4. Candidate rows corrected against the ADR corpus (ADR-075 later addenda, ADR-052 scope, ADR-305 legacy-runner scope, ADR-277 re-filed under approval).
+
+### New considerations discovered
+- The ship counsel-review gate stays quiet only because the PR body carries no plan path; any plan link in the body makes it fire (Findings For The Lead item 1).
+- Archive timestamps starting 01, 11 or 21 followed by 12:37 can contain the withheld digit string.
+- ADR-272 cannot pass the Publication Criterion until its own status text reads `accepted`, which is outside this PR.
+
 ## Overview
 
 Issue #9603 asks for a public security/control page once hosted-agent controls are measured. The CTO ruled a narrower scope for this PR (2026-11-03): one internal ledger file, `knowledge-base/legal/public-security-claim-ledger.md`, recording per claim topic across isolation, egress and human approval which control would measure it, its status and its evidence; a check of what public surfaces already say; and the criterion any future public sentence must meet. No page, no gate script, no public-surface edit and no issue traffic ships here. The CLO agent prepares the ledger at work time; this plan fixes its structure, its candidate row set (verified at plan time, re-verified at work time), its checks and its review path. Rulings: `knowledge-base/project/specs/feat-one-shot-9603-public-security-claim-ledger/decision-challenges.md` (D1 to D20). The PR carries `Ref #9603` and `Ref #9601` only; #9603 stays open and unticked in the #9601 checklist.
