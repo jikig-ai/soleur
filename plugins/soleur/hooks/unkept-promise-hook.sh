@@ -264,7 +264,7 @@ PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0
 # a promise anywhere else in it"). Measured on the first revision: "I revoked the
 # old token as part of cleanup. Paused: PR #8244 is green and awaiting
 # your merge." ALLOWED, because `revoke` appeared in an unrelated sentence.
-PARKED_AUTH_RE='(spawn(ing)?[[:space:]]+[a-z -]{0,30}agents?|irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
+PARKED_AUTH_RE='(spawn(ing)?[[:space:]]+[a-z -]{0,30}agents?|invoice|customer|irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
 
 # ALL THREE TERMS ARE TESTED ON THE MARKER'S OWN SENTENCE, not on the window.
 #

@@ -342,6 +342,8 @@ expect BLOCK "approval before running compound and ship" \
 # `review` object to PARKED_GO_RE SURVIVES and is EQUIVALENT: PARKED_RE already blocks every (your ... review) sentence.
 expect ALLOW "rule-mandated agent-spawn gate still allowed (wg-zero-agents-until-user-confirms)" \
   "Paused: pending your go before I spawn the review agents."
+expect ALLOW "outward-facing send (invoice to a customer) stays an operator gate" \
+  "Paused: awaiting your approval to mark the invoice ready to send to the customer."
 expect ALLOW "in-flight CI that will end in marking ready is an external event, not a go" \
   "Paused: waiting on CI run 123; once it is green I mark the PR ready."
 
@@ -480,7 +482,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=80
+MIN_EXPECT_ROWS=81
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -489,7 +491,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=93
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
