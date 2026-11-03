@@ -54,3 +54,14 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-one-shot-10861-pr5-strict-ze
 - [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet --base origin/main` → `exit=0 reason=pass live=0 baseline=0`
 - [ ] `grep -n "audit exits 0, ratchet strict" knowledge-base/engineering/architecture/decisions/ADR-276-*.md`
 - [ ] `grep -n PR_AFFECTED_LOCKED scripts/ci-pr-selection.sh` still matches; `gh api repos/jikig-ai/soleur/variables/CI_PR_AFFECTED` still 404
+
+## Fix round (PR #11950 review — completed 2026-11-03)
+
+- [x] FR-1 Rebase onto `f1fc303`; merge main's 3 unique `image-cve-triage` accept rows; keep our reason on the shared `betterstack-emitter-read → image-cve-triage.sh` key.
+- [x] FR-2 F1: 13 `argv-bearer-sweep` pairs reclassified `edge-real` (S7 stat/cp/content-scan + SETUP_MD/ceiling greps on real files); 20 accept rows deleted; pairs-decisions + slice-map updated (PR5d bucket).
+- [x] FR-3 F2: 190 rows rewritten to name the always-on `-live` twin or enumerate real-tree arms across 12 affected suites.
+- [x] FR-4 F3: 16 fabricated `recorder not-opened x2` citations replaced with real batch1/batch2 evidence.
+- [x] FR-5 F4: recorder run over 48 code-line suites (`receipts/recorder-runs/`); 45 pairs with positive open evidence reclassified `edge-real` (incl. bulk readers `plugins/soleur` 32, `test-affected-kb-consumers` 36); rows now carry honest recorder citations or explicit "recording unreliable" notes.
+- [x] FR-6 Baseline regenerated (239 lines); audit `stale=0 unaudited=0 gap_refs=345 accepted=1402` (`receipts/audit-fix-round.txt`).
+- [x] FR-7 F6: hot-anchor scope ruling recorded as decision-challenges row 17 + session-state disclosure.
+- [ ] FR-8 Follow-up for Phase 2: re-run reveal sizing (task 0.5) — the ~93 recorder-reclassified pairs enlarge the PR5b/PR5c edge set.

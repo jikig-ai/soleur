@@ -1,0 +1,16 @@
+NONCE	3a85fd31f9c1c1cd
+REV	e6903626b07dc421cd62155fe80dc25ef5f7b1c3
+NETNS	unshare
+IDMAP	current
+W	1	scripts/pre-push-ratchet-lane	1	0	-	19.61	scripts/pre-push-ratchet-lane.test.sh	scripts/pre-push-ratchet-lane.test.sh	-
+W	2	scripts/pre-push-ratchet-lane	2	0	-	20.23	scripts/pre-push-ratchet-lane.test.sh	scripts/pre-push-ratchet-lane.test.sh	-
+W	3	scripts/followthroughs/registry-clientip-alert-7530	1	1	-	19.68	scripts/followthroughs/registry-clientip-alert-7530.test.sh	scripts/followthroughs/registry-clientip-alert-7530.test.sh	-
+W	4	plugins/soleur	1	1	contaminated	19.18	test/|plugins/soleur/	-	dirty:plugins/soleur/skills/preflight/scripts/__pycache__/
+W	5	plugins/soleur/test/audit-flag-flip.test.sh	1	0	-	10.23	plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/test/audit-flag-flip.test.sh	-
+W	6	plugins/soleur/test/audit-flag-flip.test.sh	2	0	-	10.23	plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/test/audit-flag-flip.test.sh	-
+W	7	plugins/soleur/test/boundary-prefix.test.sh	1	0	-	10.23	plugins/soleur/test/boundary-prefix.test.sh	plugins/soleur/test/boundary-prefix.test.sh	-
+W	8	plugins/soleur/test/boundary-prefix.test.sh	2	0	-	9.73	plugins/soleur/test/boundary-prefix.test.sh	plugins/soleur/test/boundary-prefix.test.sh	-
+W	9	plugins/soleur/test/zot-http-deadlines-required.test.sh	1	0	-	9.73	plugins/soleur/test/zot-http-deadlines-required.test.sh	plugins/soleur/test/zot-http-deadlines-required.test.sh	-
+W	10	plugins/soleur/test/zot-http-deadlines-required.test.sh	2	0	-	9.73	plugins/soleur/test/zot-http-deadlines-required.test.sh	plugins/soleur/test/zot-http-deadlines-required.test.sh	-
+W	11	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1	0	-	9.73	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	-
+W	12	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2	0	-	9.35	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	-

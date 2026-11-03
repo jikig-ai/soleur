@@ -127,7 +127,7 @@ apps/web-platform/test/vitest-related	tests/scripts/test-registry-gate-mutation-
 apps/web-platform/test/vitest-related	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
 apps/web-platform/test/vitest-related	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
 plugins/soleur	.agents/plugins/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	.bun-version	PR5a	accept-rows
+plugins/soleur	.bun-version	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	.claude-plugin/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.claude/hooks/devin-dispositions.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
@@ -139,7 +139,7 @@ plugins/soleur	.claude/workflow-transitions.json	PR5b	edge-real exact-file edge 
 plugins/soleur	.codex/config.toml	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.cursor-plugin/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.devin/config.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	.gitattributes	PR5a	accept-rows
+plugins/soleur	.gitattributes	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	.github/actions/notify-ops-email/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.github/workflows/apply-deploy-pipeline-fix.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
@@ -157,56 +157,56 @@ plugins/soleur	AGENTS.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	CLAUDE.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	CONTRIBUTING.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	LICENSE	PR5a	accept-rows
+plugins/soleur	LICENSE	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	apps/web-platform/.dockerignore	PR5a	accept-rows
-plugins/soleur	apps/web-platform/app/(public)/invite/[token]/invite-actions.tsx	PR5a	accept-rows
-plugins/soleur	apps/web-platform/app/(public)/invite/[token]/page.tsx	PR5a	accept-rows
-plugins/soleur	apps/web-platform/app/api/account/delete/route.ts	PR5a	accept-rows
-plugins/soleur	apps/web-platform/app/api/conversations/route.ts	PR5a	accept-rows
-plugins/soleur	apps/web-platform/app/page.tsx	PR5a	accept-rows
-plugins/soleur	apps/web-platform/e2e/smoke.e2e.ts	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/10-inngest-redis-doppler-token.conf	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/10-inngest-server-doppler-token.conf	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/10-vector-doppler-token.conf	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/apparmor-soleur-bwrap.profile	PR5a	accept-rows
+plugins/soleur	apps/web-platform/.dockerignore	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/app/(public)/invite/[token]/invite-actions.tsx	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/app/(public)/invite/[token]/page.tsx	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/app/api/account/delete/route.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/app/api/conversations/route.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/app/page.tsx	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/e2e/smoke.e2e.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/10-inngest-redis-doppler-token.conf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/10-inngest-server-doppler-token.conf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/10-vector-doppler-token.conf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/apparmor-soleur-bwrap.profile	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
-plugins/soleur	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/cron-egress-allowlist-cidr.txt	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/cloud-init-registry.yml	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/cloud-init.yml	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/cron-egress-allowlist-cidr.txt	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
-plugins/soleur	apps/web-platform/infra/deploy-inngest-bootstrap.sudoers	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/egress-deny-cidrs.txt	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/deploy-inngest-bootstrap.sudoers	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/egress-deny-cidrs.txt	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	apps/web-platform/infra/git-data-luks.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	apps/web-platform/infra/git-data.tf	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/hooks.json.tmpl	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/git-data.tf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/hooks.json.tmpl	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/inngest-redis-luks.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	apps/web-platform/infra/main.tf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/main.tf	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/modules/git-data-userdata/main.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	apps/web-platform/infra/push-infra-config.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
-plugins/soleur	apps/web-platform/infra/seccomp-bwrap.json	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/seccomp-bwrap.json	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/infra/seo-bulk-redirects.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	apps/web-platform/infra/seo-rulesets.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	apps/web-platform/infra/server.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	apps/web-platform/infra/soleur-doppler-token.tmpl	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/web-2-ssh-host-key.pub	PR5a	accept-rows
-plugins/soleur	apps/web-platform/infra/webhook.service	PR5a	accept-rows
-plugins/soleur	apps/web-platform/lib/auth/dev-mode.ts	PR5a	accept-rows
-plugins/soleur	apps/web-platform/lib/feature-flags/server.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/soleur-doppler-token.tmpl	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/web-2-ssh-host-key.pub	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/infra/webhook.service	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/lib/auth/dev-mode.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	apps/web-platform/lib/feature-flags/server.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	apps/web-platform/lib/types.ts	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
 plugins/soleur	apps/web-platform/package.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
 plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts	PR5d	deferred-sweep (glob-rate + D2 dispositions)
-plugins/soleur	apps/web-platform/server/workspace.ts	PR5a	accept-rows
-plugins/soleur	eleventy.config.js	PR5a	accept-rows
+plugins/soleur	apps/web-platform/server/workspace.ts	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur	eleventy.config.js	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	knowledge-base/engineering/policies/content-vendoring.md	PR5a	accept-rows
 plugins/soleur	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur	package.json	PR5a	accept-rows
+plugins/soleur	package.json	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur	scripts/betterstack-query.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	scripts/check-web-host-escrow-config.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 plugins/soleur	scripts/ensure-kb-index.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
@@ -224,7 +224,7 @@ plugins/soleur/scripts/affected-tests.test.sh	README.md	PR5a	accept-rows
 plugins/soleur/scripts/affected-tests.test.sh	package.json	PR5a	accept-rows
 plugins/soleur/scripts/emit-decision.test.sh	.gitignore	PR5a	accept-rows
 plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/guardrails.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
-plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	AGENTS.rules.md	PR5a	accept-rows
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	README.md	PR5a	accept-rows
 plugins/soleur/scripts/sync-pr-behind.test.sh	README.md	PR5a	accept-rows
 plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.c4	PR5a	accept-rows
@@ -254,7 +254,7 @@ plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platf
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/.github/workflows/constraint-gates.yml	PR5a	accept-rows
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/scripts/constraint-gates.sh	PR5a	accept-rows
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/server/README.md	PR5a	accept-rows
-plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	package.json	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	package.json	PR5a	accept-rows
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	.github/workflows/fix-constraints-stage-a.yml	PR5a	accept-rows
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	.github/workflows/fix-constraints-stage-b.yml	PR5a	accept-rows
@@ -521,24 +521,24 @@ plugins/soleur/test/pr-overlap-preflight.test.sh	scripts/suite-shard-legs.tsv	PR
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	.bun-version	PR5a	accept-rows
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	.gitattributes	PR5a	accept-rows
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	AGENTS.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	AGENTS.rules.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	AGENTS.rules.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	README.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	package.json	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	package.json	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/affected-tests.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/SKILL.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/references/plan-issue-templates.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/references/plan-issue-templates.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/references/check-13-founder-check.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/scripts/parse-form-a.awk	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/review/SKILL.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/ship/SKILL.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/test-fix-loop/SKILL.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/SKILL.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-agent-teams.md	PR5a	accept-rows
-plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-subagent-fanout.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/scripts/parse-form-a.awk	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/review/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/ship/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/test-fix-loop/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/SKILL.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-agent-teams.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-subagent-fanout.md	PR5d	edge-real in the suite's Phase-3 deferred-sweep bucket (fix-round F4 recorder reclassify): recorder opened the named path; disposition per the suite's glob-rate verdict
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/test/c4-model-freshness.test.sh	PR5a	accept-rows
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/betterstack-query.sh	PR5a	accept-rows
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/lint-agents-rule-budget.py	PR5a	accept-rows
@@ -1080,16 +1080,16 @@ scripts/test-affected-derive-cache	tests/scripts/test-plan-gate-preamble.sh	PR5a
 scripts/test-affected-derive-cache	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
 scripts/test-affected-derive-cache	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
 scripts/test-affected-derive-cache	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/scripts/test/run-all.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	.github/scripts/test/run-all.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	.github/workflows/apply-deploy-pipeline-fix.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-affected-kb-consumers	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/scheduled-terraform-drift.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-affected-kb-consumers	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
 scripts/test-affected-kb-consumers	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	.gitignore	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.gitignore	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-affected-kb-consumers	.nvmrc	PR5a	accept-rows
 scripts/test-affected-kb-consumers	AGENTS.md	PR5a	accept-rows
 scripts/test-affected-kb-consumers	AGENTS.rules.md	PR5a	accept-rows
@@ -1097,47 +1097,47 @@ scripts/test-affected-kb-consumers	CLAUDE.md	PR5a	accept-rows
 scripts/test-affected-kb-consumers	README.md	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/.npmrc	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/.nvmrc	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/infra/cloud-init.yml	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	apps/web-platform/infra/doppler-config-inventory.txt	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	apps/web-platform/infra/run-registered-suites.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	apps/web-platform/package-lock.json	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-affected-kb-consumers	apps/web-platform/package.json	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/scripts/vitest-related.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	apps/web-platform/test/global-setup-git-tripwire.ts	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	apps/web-platform/test/repo-wide-containment.test.ts	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
 scripts/test-affected-kb-consumers	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
 scripts/test-affected-kb-consumers	apps/web-platform/tsconfig.json	PR5a	accept-rows
-scripts/test-affected-kb-consumers	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/vitest.config.ts	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
 scripts/test-affected-kb-consumers	package-lock.json	PR5a	accept-rows
 scripts/test-affected-kb-consumers	package.json	PR5a	accept-rows
-scripts/test-affected-kb-consumers	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
-scripts/test-affected-kb-consumers	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/registry-pull-path-health.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	plugins/soleur/scripts/generate-c4-from-components.ts	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	plugins/soleur/test/c4-from-components.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	plugins/soleur/test/test-helpers.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/battery-tag-authorship-mutations.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/battery-tag-authorship.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/guard-vacuity-floor.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/registry-pull-path-health.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/registry-restore-from-ghcr.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/suite-exit-class-parity.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
 scripts/test-affected-kb-consumers	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/suite-shard-legs.tsv	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/test-all-affected.test.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/suite-shard-legs.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-affected-kb-consumers	scripts/test-all-affected.test.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	scripts/zot-mirror-diagnosis.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
 scripts/test-affected-kb-consumers	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
 scripts/test-affected-kb-consumers	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
-scripts/test-affected-kb-consumers	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
-scripts/test-all-infra-coverage-notice	.gitignore	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/test-plan-gate-preamble.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-gate-mutation-battery.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-pull-path-health.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-restore-from-ghcr.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
+scripts/test-all-infra-coverage-notice	.gitignore	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-all-infra-coverage-notice	.nvmrc	PR5a	accept-rows
 scripts/test-all-infra-coverage-notice	AGENTS.md	PR5a	accept-rows
 scripts/test-all-infra-coverage-notice	AGENTS.rules.md	PR5a	accept-rows
@@ -1294,8 +1294,8 @@ scripts/test-all-pr-battery-gate	scripts/lint-orphan-test-suites.test.sh	PR5a	ac
 scripts/test-all-pr-battery-gate	scripts/registry-pull-path-health.sh	PR5a	accept-rows
 scripts/test-all-pr-battery-gate	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
 scripts/test-all-pr-battery-gate	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
-scripts/test-all-pr-battery-gate	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
-scripts/test-all-pr-battery-gate	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/suite-shard-legs-heavy.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+scripts/test-all-pr-battery-gate	scripts/suite-shard-legs.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 scripts/test-all-pr-battery-gate	scripts/test-all-affected.test.sh	PR5a	accept-rows
 scripts/test-all-pr-battery-gate	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
 scripts/test-all-pr-battery-gate	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
@@ -1343,21 +1343,21 @@ tests/hooks/emissions	knowledge-base/product/roadmap.md	PR5a	accept-rows
 tests/scripts/apply-github-infra-mint-shape	.claude-plugin/marketplace.json	PR5a	accept-rows
 tests/scripts/apply-github-infra-mint-shape	tests/scripts/lib/destroy-guard-filter.jq	PR5b	edge-real exact-file edge (non-code, reveal-free)
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/infra/infra-security.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/review/deployment-verification-agent.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/cf-token-scope/references/widen-playbook.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-bootstrap/SETUP.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-delete/SKILL.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-list/SKILL.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/SKILL.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/preflight/SKILL.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/reproduce-bug/SKILL.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/skill-creator/references/api-security.md	PR5a	accept-rows
-tests/scripts/argv-bearer-sweep	plugins/soleur/skills/trigger-cron/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/infra/infra-security.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/review/deployment-verification-agent.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/cf-token-scope/references/widen-playbook.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-bootstrap/SETUP.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-delete/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-list/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/preflight/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/reproduce-bug/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/skill-creator/references/api-security.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/trigger-cron/SKILL.md	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
 tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
-tests/scripts/argv-bearer-sweep	scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv	PR5d	edge-real in the argv-bearer-sweep Phase-3 bucket (fix-round F1 reclassify): real read — S7 stat/cp/content-scan or direct grep of the real file; exact-file edge or glob per the suite's PR5d disposition, no accept rows
 tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
 tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
@@ -1468,10 +1468,10 @@ tests/scripts/scratch-session	plugins/soleur/test/ship-incident-pir-gate.test.ts
 tests/scripts/scratch-session	scripts/tmpfs-guard.timer	PR5a	accept-rows
 tests/scripts/scratch-session	tests/scripts/lib/git-data-birth-readiness-gate.sh	PR5a	accept-rows
 tests/scripts/sentry-alert-drift-workflow	.github/workflows/scheduled-sentry-alert-drift.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
-tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/alert-reference.json	PR5a	accept-rows
-tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/vendor-default-workflows.json	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/alert-reference.json	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
+tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/vendor-default-workflows.json	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 tests/scripts/sentry-alert-drift-workflow	apps/web-platform/scripts/sentry-monitors-audit.sh	PR5a	accept-rows
-tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json	PR5b	edge-real exact-file edge (non-code, reveal-free) — fix-round F4 recorder reclassify
 tests/scripts/sentry-alert-live-fidelity	apps/web-platform/scripts/sentry-monitors-audit.sh	PR5a	accept-rows
 tests/scripts/sentry-alert-live-fidelity	scripts/sentry-issue-alert-create-tripwire.sh	PR5a	accept-rows
 tests/scripts/sentry-alert-reference-gate	README.md	PR5a	accept-rows
@@ -1512,3 +1512,4 @@ tests/scripts/zot-disk-sample	scripts/betterstack-query.sh	PR5a	accept-rows
 tests/scripts/zot-log-channel-probe	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
 tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
 tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/lib/restore-engine-header.sh	PR5b/PR5c	edge-real (fix-round F4 recorder reclassify): recorder opened the named path; exact-file edge or held-back per reveal trial
