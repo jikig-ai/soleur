@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1223
-# generated-at=2026-11-02T13:37:36Z
+# default-weight-ms=1251
+# generated-at=2026-11-03T13:07:56Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -142,6 +142,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	3
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	6
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	1
 plugins/soleur/skills/launch-check/test/render.test.sh	1
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	1

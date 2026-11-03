@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1223
-# generated-at=2026-11-02T13:37:36Z
+# default-weight-ms=1251
+# generated-at=2026-11-03T13:07:56Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -140,6 +140,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	407	measured
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	6665	measured
 plugins/soleur/skills/launch-check/test/baseline.test.sh	6400	measured
 plugins/soleur/skills/launch-check/test/identity.test.sh	10200	measured
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	95000	measured
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	211000	measured
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	3200	measured
 plugins/soleur/skills/launch-check/test/render.test.sh	31700	measured
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	200	measured
