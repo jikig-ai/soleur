@@ -21,7 +21,7 @@ Plan: knowledge-base/project/plans/2026-11-03-fix-g4-2-mutant-deterministic-sigp
 ## Phase 3 Proof (one suite at a time)
 - 3.1 Five sequential green runs of the suite (158 passed), keep the G4-2 RED line and the pristine early-exit line from each
 - 3.2 One run with PROBE_SUITE_TARGET at a scratch mutant (0:0:141 removed): pristine early-exit row must FAIL
-- 3.3 Scratch checks M4 (gate broken) and M5 (no drain) read RED
+- 3.3 Scratch check M4 (shim argv gate broken, marker absent) reads RED; note the drain is a stability control (no mutation row)
 
 ## Phase 4 Ship
 - 4.1 Commit, push, wait for CI (deploy-script-tests 2/4); PR body Ref #11752 only

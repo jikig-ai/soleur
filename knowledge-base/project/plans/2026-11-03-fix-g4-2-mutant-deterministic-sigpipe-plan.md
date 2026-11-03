@@ -11,6 +11,22 @@ requires_cpo_signoff: false
 
 # test: make the inngest-luks-key-probe G4-2 mutant deterministic
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Research Insights (Deepen Findings D1-D5), Guard Contract (matrix corrected), Phase 1 constraints, Sharp Edges, Scope Check (rewritten to the canonical schema)
+**Verification used:** scratchpad micro-repros of the exact `sed | head | tr | cryptsetup-stub` pipeline (no tracked file edited), the repo gates `scripts/lint-guard-contract.py` and `scripts/lint-infra-no-human-steps.py`, and live checks of every cited issue, rule id, learning path and source line.
+
+### Key Improvements
+1. The shim's heredoc generation (the `\\n` escape and `$WORK`/real-`tr` baking) was executed, not just read: generated shim text is exactly `[ "$*" = '-d \n' ]` and fired 200/200 under bash-as-sh and 200/200 under dash.
+2. A claimed mutation row (M5, "remove the drain") was falsified by measurement and removed: the drain is a pristine-stability control, not a detection control.
+3. Added the missing-interpreter failure mode and the marker check that catches it.
+
+### New Considerations Discovered
+- The hit rate of the natural race on this host is 0.5%/run, so even a 60-run loop would be GREEN-blind about 26% of the time; only construction removes the dependence.
+- `timeout` re-raises the child's SIGPIPE on itself, which is why the shim's death reads as 141 in `PIPESTATUS`.
+
+
 Ref #11752 (never `Closes`; the issue's own re-evaluation trigger is verified on `main` CI after merge). Draft PR: #11992.
 
 ## Overview
@@ -70,15 +86,17 @@ to the fix. Collision pre-check: only the draft PR #11992 (this branch) names #1
 
 **CTO ruling (2026-11-03):** Option A, folded in, argv-gated, marker-checked, with a `PRODUCER_JOIN` row and a `PJ_TRIPLES` bump. Recorded in `knowledge-base/project/specs/feat-one-shot-11752-g4-2-mutant-deterministic/decision-challenges.md`.
 
+### Deepen Findings
+
+- **D1 (shim text, executed).** Generated shim via the plan's exact heredoc in a scratch dir: the gate line renders as `if [ "$*" = '-d \n' ]; then`, the marker path and `exec /usr/bin/tr "$@"` bake in correctly. Result under `env --default-signal=PIPE`: `0 0 141 4` in 200/200 runs, marker present (shell: bash as `/bin/sh`; and real dash: 200/200).
+- **D2 (pass-through).** The gated shim forwards a non-matching call (`tr '\n' ' '`) to the real `tr` unchanged, so the tick's other `tr` call sites at inngest-cutover-flip.sh lines ~258 and ~590 are unaffected (T6).
+- **D3 (harness mutations, measured).** Gate broken (never fires): marker absent, run reads `0 0 0 4`, which still passes the summary check, so ONLY the marker check catches it (M4 stands). Missing interpreter in the shebang: `execvp` falls through to the real `tr`, same outcome, same catch. Drain removed: 1/200 runs read `0 141 141 4`, so it is a flake source, not a deterministic RED; M5 was dropped from the matrix.
+- **D4 (mutant side, by arithmetic from source).** With `0:0:141` dropped, `pst=(0 0 141 4)` falls to the default arm: `pst[0]=0` so the first branch is skipped, `pst[1]=0` so the second is skipped, the else sets `rc=pst[2]=141`, and the row is `indeterminate rc=141 at=key`, which cannot equal `verdict=indeterminate rc=4 at=kdf`. Deterministic RED.
+- **D5 (what stays probabilistic, stated plainly).** The 20 natural-race runs remain a coverage bonus, not the detector. Deleting the forced run restores the flake; Guard Contract Anchor records that residual.
+
 ## Open Code-Review Overlap
 
 None. Checked open `code-review` issues against `apps/web-platform/infra/inngest-luks-key-probe.test.sh`, `apps/web-platform/infra/inngest-cutover-flip.sh` and `.claude/hooks/grep-q-pipe-guard.test.sh`: no body names any of them.
-
-## Scope Check
-
-- Ask mapping: "make the mutant deterministic" -> Phase 1; "keep 158" -> AC1; "keep the mutant's intent" -> Guard Contract; "run the suite at least 5 times green, one at a time" -> Phase 3; "show the mutant row RED against the mutant and GREEN against the real code" -> Phase 3 evidence step; "Ref only" -> AC9.
-- Item provenance: the `PRODUCER_JOIN` row and the `PJ_TRIPLES` bump are `derived` (a consequence of adding a `tr` shim to a suite, enforced by a repo ratchet); the comment and description rewording is `derived` (the old text says "about 4 of 10 runs").
-- Split assessment: one PR, two files plus planning artifacts.
 
 ## Files to Edit
 
@@ -136,7 +154,7 @@ SHIM
 Constraints (from the CTO ruling; each is also an acceptance criterion):
 1. The shim misbehaves ONLY for argv exactly `-d \n`; the script also runs `tr` at lines ~258 and ~590 and the shim is on `PATH` for the whole tick. Everything else `exec`s the absolute real `tr`, resolved BEFORE `PATH` is prepended.
 2. The marker file is the anti-vacuity control: a missing marker adds to `bad`. No new assertion line.
-3. The shim drains stdin before dying: without the drain, `head` takes SIGPIPE too (`0 141 141 4`), the pristine run would read rc=141 at=key, and the predicate would be RED on the real code.
+3. The shim drains stdin before dying. Measured on this host (200 runs of the exact pipeline): without the drain, 199 runs still read `0 0 141 4` but 1 run read `0 141 141 4` (head wrote after the shim died), which would put the PRISTINE predicate RED at rc=141 about 0.5% of the time. The drain closes that flake; it is a stability control, not a detection control, so it is not a mutation-matrix row.
 4. Pin `env --default-signal=PIPE` (CI inherits SIGPIPE ignored).
 5. The heredoc is unquoted so `$WORK` and `$real_tr` bake in; the `\\n` yields the two characters backslash-n in the shim (verify by `cat`ing the generated shim once during the work phase).
 6. Rewording only: the stub comment (line ~127) and the assertion description lose the "about 4 of 10" claim and say "20 natural-race runs plus one forced tr SIGPIPE run". Keep the G4-2 `expect_red` description unchanged.
@@ -158,6 +176,38 @@ Constraints (from the CTO ruling; each is also an acceptance criterion):
 ### Phase 4 — Ship
 
 Commit the suite, the guard file, and (if regenerated) the baseline; push; wait for CI (`deploy-script-tests (2/4)` green; CI is the authority). PR body uses `Ref #11752`, never `Closes`. After merge, verify `main` CI is green for the shard and then close #11752 against its own re-evaluation trigger (the mutant is deterministic and the count is unchanged).
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Make the mutant deterministic (the issue's own re-evaluation trigger)" [brief] | Phase 1; Files-to-Edit entry 1 | mapped |
+| 2 | "keep the assertion count at exactly 158" [brief] | Phase 1 (fold-in, no assertion line added); AC1 | mapped |
+| 3 | "keep the mutant's intent (the guard must be blind-detectable)" [brief] | Guard Contract; Phase 1 | mapped |
+| 4 | "run the suite >=5 times green locally (ONE suite at a time, host is low on memory)" [brief] | Phase 3.1; AC2 | mapped |
+| 5 | "show the mutant row goes RED against the mutant and GREEN against the real code" [brief] | Phase 3.2; AC3 | mapped |
+| 6 | "Use \"Ref #11752\" only, never \"Closes\"." [brief] | Phase 4; AC9 | mapped |
+| 7 | "never write an owner hand-typed marker; no production writes; no agent dispatches inngest-key-rotate or key-rotate workflows" [brief] | Phase 3.4 (no production file is edited, AC8) | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Edit: apps/web-platform/infra/inngest-luks-key-probe.test.sh | "Make the mutant deterministic" | asked |
+| Phase 1 forced run with argv-gated tr shim and marker check | "Make the mutant deterministic" and "the guard must be blind-detectable" | asked |
+| Files to Edit: .claude/hooks/grep-q-pipe-guard.test.sh (PRODUCER_JOIN row, PJ_TRIPLES) | - | inferred - justification: the repo ratchet derives (suite, verb, producer) triples, so any new tr shim in the suite reddens CI until the row and count are updated |
+| Files to Edit: plugins/soleur/test/fixture-relative-assert.baseline.txt (conditional) | - | inferred - justification: the row-by-row baseline ratchet reddens on any scanner delta; edited only if the delta appears |
+| Phase 0 baseline reproduction | "reproduces 3/3 locally" | asked |
+| Phase 3 proof runs | "Prove it: run the suite >=5 times green locally" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 2 - apps/web-platform, .claude (plus plugins/soleur only if the baseline moves)
+- Planned files: 3 | Estimated changed lines: 70
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Acceptance Criteria
 
@@ -205,9 +255,8 @@ Commit the suite, the guard file, and (if regenerated) the baseline; push; wait 
 | M2 | Replace `0:0:141` by `0:0:1` (the EPIPE spelling) | pristine early-exit row RED (forced run reads rc=141) | a second, wrong member after a compliant first: the SIGPIPE-ignored row passes with `0:0:1` while the default-signal row does not |
 | M3 | Neuter the arm to `*) ;;` (the G4-1 mutant) | `expect_red G4-1` (pred_upstream_fail) RED | the allowance must stay an enumeration, not a wildcard |
 | M4 | Change the shim's argv gate so it never fires (harness mutation, scratch copy of the suite) | pristine early-exit row RED via the marker check | the forced run cannot pass vacuously |
-| M5 | Remove the `cat >/dev/null` drain from the shim (scratch copy) | pristine early-exit row RED (`0 141 141 4`) | the forced status must be tr's alone |
 
-**Harness rows.** M4 and M5 edit the suite, not the guard, and must drive it RED. Must-PASS inputs that differ from the canonical: the existing `pred_early_exit_sigpipe_ignored` row (SIGPIPE ignored, EPIPE exits) and the natural-race loop on a host where tr wins the race (all `0 0 0 4`).
+**Harness rows.** M4 edits the suite, not the guard, and must drive it RED (measured in scratch, see Deepen Findings D3). Must-PASS inputs that differ from the canonical: the existing `pred_early_exit_sigpipe_ignored` row (SIGPIPE ignored, EPIPE exits) and the natural-race loop on a host where tr wins the race (all `0 0 0 4`).
 
 **Anchor.** The stored value is `EXPECTED_ASSERTIONS=158`. It is a count floor, so by itself it survives a swap that keeps 158. What outside the commit must also move for a weakening to pass: the pristine/G4-2 pair is identified by its description strings (`pristine: a cryptsetup that exits before reading` and `G4-2 without the allowance ...`), and CI's `deploy-script-tests` shard plus PR review are the independent anchor. Residual, stated plainly: deleting the forced run from `pred_early_exit_rc` reverts to the race and is caught only probabilistically (the very defect fixed here); no in-suite control can make that deletion deterministic without adding an assertion line.
 
@@ -258,5 +307,6 @@ No cross-domain implications detected — infrastructure/tooling change.
 - The shim must drain stdin BEFORE dying and must only act on argv `-d \n`; both were measured. Dropping either turns the pristine row RED (`0 141 141 4`) or alters unrelated `tr` calls.
 - `grep-q-pipe-guard.test.sh` reads only tracked files and is not selected by the pre-push affected gate for every producer: run it by hand; CI runs it in its full battery.
 - Run the proof suites strictly one at a time (foreign `test-all.sh` processes are live on this host; free memory is low). Each suite run is about 57 s.
+- A shebang whose interpreter is missing does not fail the shim: `execvp` falls through to the next `PATH` entry and runs the REAL `tr` (measured: `0 0 0 4`, no marker). The marker check is what turns that into a loud failure; keep it.
 - A plan that tests only the mutated predicate would miss that the pristine run could go RED if the shim leaks into other `tr` calls: AC5 and T6 cover it.
 - Do not let the PR body, commit message, or any trailer say `Closes #11752`.
