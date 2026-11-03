@@ -561,7 +561,7 @@ lc_issues_preview() {
   else
     parent=${ISSUES_PLAN_OUT:-${TMPDIR:-/tmp}}
     ( umask 077; mkdir -p "$parent" ) || lc_abort write-failed 2 "detail=plan-out"
-    plandir=$(mktemp -d "$parent/lc-issues-plan.XXXXXX") || lc_abort write-failed 2 "detail=plan-dir"
+    plandir=$(mktemp -d "$parent/lc-issues-plan.XXXXXX") || lc_abort write-failed 2 "detail=plan-dir"  # lint-trap-ownership: ok the saved plan directory is preview's output and must outlive the process (--create reads it); the customer removes it with the printed guarded discard
     chmod 700 "$plandir"
     cp -R "$pb/." "$plandir/" || lc_abort write-failed 2 "detail=plan-copy"
     plandir=$(cd "$plandir" && pwd -P)
