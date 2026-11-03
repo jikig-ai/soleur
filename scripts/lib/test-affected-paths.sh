@@ -425,6 +425,15 @@ AFFECTED_SCRIPTS_PROD_VERSION_DRIFT_CHECK_PATHS=(
   "scripts/lib/test-affected-paths.sh"                   # THIS FILE
 )
 
+# scripts/image-cve-triage — the script under test execs the default reader at
+# image-cve-triage.sh:66 (QUERY="${IMAGE_CVE_QUERY_SCRIPT:-$REPO_ROOT/scripts/
+# betterstack-query.sh}"), so a reader change must select the suite.
+AFFECTED_SCRIPTS_IMAGE_CVE_TRIAGE_PATHS=(
+  "scripts/betterstack-query.sh"
+  "scripts/image-cve-triage.sh"                        # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                 # THIS FILE
+)
+
 # tests/hooks/drop-sentinel-parity — parity over the producer/consumer file sets
 # it enumerates internally (PRODUCER_FILES / CONSUMER_FILES).
 AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(
@@ -3335,6 +3344,20 @@ AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   "scripts/inngest-probe-heartbeat-feeder.sh"
   "scripts/inngest-probe-heartbeat-feeder.test.sh"
   "scripts/lib/inngest-probe-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/inngest-a5-a6-owner-ask-10136 — the #11218 owner-ask probe suite execs the REAL
+# trusted-verdict lib through its SUT: the probe sources $libdir/trusted-verdict.sh
+# (scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh:177), a computed path no derivation
+# channel reaches; the test header pins "the real trusted-verdict lib therefore runs
+# unmodified". Derivation reaches relayed-verdict.sh via the $REPO_ROOT cp literal (:737) but
+# the only trusted-verdict literal is the $FORCED scratch write (:739).
+AFFECTED_SCRIPTS_INNGEST_A5_A6_OWNER_ASK_10136_PATHS=(
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh"
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh"
+  "scripts/lib/trusted-verdict.sh"
+  "scripts/lib/relayed-verdict.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -51,6 +51,7 @@ jobs:
     env:
       REPO_FULL: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout main
@@ -212,8 +213,11 @@ jobs:
             exit 1
           fi
 
-      # Upload both artifacts to R2 at timestamps/<yyyy-mm>/. The manifest and
-      # the .tsr together let any future auditor re-run the verify command
+      # Upload both artifacts to R2 at timestamps/<yyyy-mm>/ under a per-run
+      # versioned key (manifest-<run_id>-<attempt>.{jsonl,tsr}): the bucket's
+      # Lock Rule seals every written object, so a fixed monthly key would make
+      # any same-month re-dispatch fail ObjectLockedByBucketPolicy. The manifest
+      # and the .tsr together let any future auditor re-run the verify command
       # offline using only the bundled FreeTSA certs.
       - name: Upload manifest + .tsr to R2
         env:
@@ -226,10 +230,10 @@ jobs:
         run: |
           set -euo pipefail
           aws --endpoint-url "$R2_ENDPOINT" s3 cp out/manifest.jsonl \
-            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.jsonl" \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest-${RUN_ID}-${RUN_ATTEMPT}.jsonl" \
             --content-type application/x-ndjson
           aws --endpoint-url "$R2_ENDPOINT" s3 cp out/response.tsr \
-            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.tsr" \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest-${RUN_ID}-${RUN_ATTEMPT}.tsr" \
             --content-type application/timestamp-reply
 
       # Persist via PR-with-auto-merge to the cla-signatures branch (learning
@@ -264,7 +268,8 @@ jobs:
 
           # If a prior run for the same month already landed identical bytes,
           # there is nothing to commit; exit cleanly. The R2 upload above is
-          # idempotent in practice (PUT overwrites).
+          # never an overwrite — the Lock Rule seals every object, and the
+          # versioned key makes each PutObject write a never-before-written key.
           if git diff --cached --quiet; then
             echo "No new bytes for ${YYYY_MM}; nothing to commit."
             exit 0
@@ -295,7 +300,11 @@ jobs:
             --head "$branch" \
             --title "chore(cla-evidence): RFC 3161 timestamp ${YYYY_MM}" \
             --body-file out/pr-body.txt
-          gh pr merge "$branch" --squash --auto
+          # Direct merge, not --auto: cla-signatures has no required checks,
+          # so GitHub refuses enablePullRequestAutoMerge on the always-clean
+          # PR ("Pull request is in clean status") — the shape that failed
+          # every monthly run since Aug 2026 (#11946). No checks to wait on.
+          gh pr merge "$branch" --squash
 
       # Kieran F9: persistent-failure escalation. On any failure, file or
       # update a tracking issue. If an issue for this month already exists

@@ -361,6 +361,10 @@ Live standing alarms over this source:
 
 - **`logtail_exploration_alert.inngest_cutover_flip_silent`** (#11820, `lower_than 1` over 900 s,
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
+  **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
+  `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
+  stuck-at-0 shows on `egress_gw_probe_silent` (no `JSONType`), so the cause is not yet isolated and no
+  replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
   row the flip script emits is object-typed (the throttled `noop-*` heartbeat and the FSM transition
