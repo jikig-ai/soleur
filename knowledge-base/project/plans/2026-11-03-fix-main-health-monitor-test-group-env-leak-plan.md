@@ -63,6 +63,10 @@ Inert (query modes exit before group resolution, or already scrub/set the group)
 full audit found them safe. Row 3 above and `test-suite-lanes.test.sh` are the two "silently narrowed but
 currently green" members the dry run may newly surface (see Sharp Edges).
 
+Reader check (plan-review P1): `scripts/lib/test-affected-derive-cache.sh:356` reads `${TEST_GROUP:-all}`,
+but that library is `source`d by the runner (`test-all.sh` ~1136-1139), so it reads the shell variable,
+which `export -n` preserves; it is not an exec'd child.
+
 ### Premise Validation (Phase 0.6)
 
 Checked: #11939 is OPEN; #9323 and #10233 cited as related; PR #11952 is this branch's own draft
@@ -160,7 +164,10 @@ user-data, auth, billing or deploy path.`
    true after `export -n`). Update the stale SCOPE NOTE near ~1647 that says the monitor "runs
    `TEST_GROUP=all`" (it has run per-group legs since #11119).
 2. In `scripts/test-all-group-affected.test.sh`, add **Part C — environment hygiene** using the existing
-   fixture-sandbox builder (`run_sb`): register two probe suites in the spliced region; each prints
+   fixture-sandbox builder (`run_sb`). It lives here because this is the suite that already owns runner
+   `TEST_GROUP` semantics (env-vs-positional, the alias) and the only one whose sandbox splices
+   registrations after the demotion point; a new suite would cost a registration, a shard-manifest slot
+   and an affected-class declaration for one assertion group: register two probe suites in the spliced region; each prints
    `PROBE <name> TEST_GROUP=<set|absent>` from its own environment and a grandchild `bash -c`.
 3. Verify the monitor shape end to end with a branch dry run (below), not by reasoning.
 
@@ -204,7 +211,18 @@ which is what rows 2 and 4 drive.
 | 4 | Second member after a compliant first: inject `export TEST_GROUP` between probe A and probe B registrations | RED on probe B while probe A stays green (a check that stops at the first member is the defect) |
 | 5 | Grandchild: demote only for first-level children (e.g. re-export inside the probe's own wrapper) | RED (the probe's `bash -c` grandchild reports `set`) |
 
-**Harness rows.** (H1, edit the suite) replace the probe's `${TEST_GROUP+set}` read with a constant
+**Committed vs driven-once (plan-review, DHH + simplicity: proportionality).** The matrix above is the
+design contract the gate requires. To keep the committed suite proportionate to a one-line fix, only
+rows **1** (delete → probe A reads `set`, which doubles as the positive control), **5** (the grandchild
+reading, folded into the probe itself rather than a separate mutated runner) and the H2 must-PASS rows
+are committed as suite assertions. Rows **2** (reorder), **3** (silent probes) and **4** (second member
+after a compliant first) are each driven **once by hand** during the work phase against a scratch copy
+of the sandbox runner and the RED output recorded in the PR body; they are not committed. H1 is dropped
+(row 1's RED against the control already proves the probe can see a leak). The sandbox is known to
+reach registration dispatch: `test-all-group-affected.test.sh` B4 already asserts `[ok] alpha-fixture`
+from `run_sb`, so a spike is one extra `run_suite` line, not an unknown.
+
+**Harness rows (as reduced above).** (H1, dropped: edit the suite) replace the probe's `${TEST_GROUP+set}` read with a constant
 `absent`: the suite's built-in positive control — the same probe run against the row-1 mutant runner —
 must read `set`, so a constant probe turns the control RED. (H2, must-PASS non-canonical inputs) the
 positional channel (`runner.sh scripts`, `TEST_GROUP` unset in the caller) and an env value the contract
@@ -260,13 +278,14 @@ the post-fix tree rather than the one we found.
   `0 failed` (B1/B2/B3 PASS), **both run as children of the runner**, i.e. via
   `TEST_GROUP=scripts SCRIPTS_SHARD=<k>/8 bash scripts/test-all.sh` on the shard that owns them
   (find it with `SCRIPTS_SHARD=k/8 bash scripts/test-all.sh --enumerate scripts`).
-- [ ] Part C: >= 2 probes, >= 1 positive control, the positional-channel must-PASS, and the five
-  mutation rows each demonstrated RED once (record the RED output in the PR body); no existing assertion in
+- [ ] Part C: committed rows are the probe(s) incl. grandchild reading, the row-1 positive control and the
+  positional-channel / `scripts-heavy` must-PASS; mutation rows 2, 3, 4 are each demonstrated RED once by
+  hand (RED output recorded in the PR body, not committed); no existing assertion in
   `test-all-group-affected.test.sh` is edited, removed or loosened (`git diff` shows additions only to that
   file).
-- [ ] Spot-run under the monitor shape (`TEST_GROUP=scripts` exported to the runner): the suites in the
-  inventory above that live in the scripts group (`lib/test-suite-lanes`, `lib/repo-write-boundary`,
-  `tests/scripts/test-scratch-residue`) pass as runner children; any newly red one is root-caused, not skipped.
+- [ ] The inventory's scripts-group suites (`lib/test-suite-lanes`, `lib/repo-write-boundary`,
+  `tests/scripts/test-scratch-residue`) are checked in the dry run's leg captures (no separate spot-run);
+  any newly red one is root-caused, not skipped.
 - [ ] `plugins/soleur/test/main-health-monitor-workflow.test.sh` and
   `scripts/followthroughs/jobs1-stopgap-7432.test.sh` pass unchanged (they pin the step-env channel).
 - [ ] `lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh` exits 0.
