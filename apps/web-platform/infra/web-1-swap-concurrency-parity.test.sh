@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the EIGHT GitHub Actions jobs that mutate web-1 — or that invalidate the
+# Drift guard: the NINE GitHub Actions jobs that mutate web-1 — or that invalidate the
 # credential the jobs mutating web-1 authenticate with — MUST share ONE job-level
 # `web-1-swap` concurrency group so GitHub's scheduler serializes them across
 # pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
@@ -17,9 +17,9 @@
 #
 # reason: 5 job-level members -> 3 (the `warm_standby` and `web_2_recreate` members were
 # DELETED with the web-2 dispatch sweep, #6575, 2026-07-20) -> 4 (#6854) -> 5 (#6730)
-# -> 6 (#6969) -> 7 (#7095) -> 8 (#7542).
+# -> 6 (#6969) -> 7 (#7095) -> 8 (#7542) -> 9 (#11294: key-rotate.yml job `redeploy`, in its own workflow file).
 #
-# The eight job-level members (allow-list — an explicit named list so a DELIBERATE
+# The nine job-level members (eight in the three shared workflows, a ninth in key-rotate.yml; allow-list — an explicit named list so a DELIBERATE
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                  (tagged-release deploy)
@@ -30,6 +30,7 @@
 #   6. apply-web-platform-infra.yml    job `web_host_replace`        (#6969 replaces a web host; same singleton, same reason)
 #   7. apply-web-platform-infra.yml    job `ci_ssh_token_replace`    (#7095 destroys the credential the other members' SSH bridges use)
 #   8. apply-web-platform-infra.yml    job `vector_redeliver`        (#7542 root remote-exec on web-1; restarts vector + systemd-journald)
+#   9. key-rotate.yml                  job `redeploy`                (#11294: the same track.sh canary-then-prod fleet redeploy as member 1, in its own workflow file)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
@@ -40,6 +41,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
+#   - key-rotate.yml carries exactly ONE `group: web-1-swap` (its redeploy job), counted separately from the eight below;
 #   - the TOTAL count of `group: web-1-swap` across the three workflows == 8
 #     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
@@ -60,13 +62,14 @@ RELEASE_WF="${WF_DIR}/web-platform-release.yml"
 APPLY_INFRA_WF="${WF_DIR}/apply-web-platform-infra.yml"
 PIPELINE_FIX_WF="${WF_DIR}/apply-deploy-pipeline-fix.yml"
 FREEZE_WF="${WF_DIR}/workspaces-luks-cutover.yml"
+KEY_ROTATE_WF="${WF_DIR}/key-rotate.yml"
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF"; do
+for f in "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" "$FREEZE_WF" "$KEY_ROTATE_WF"; do
   [ -f "$f" ] || { echo "FAIL: workflow not found at $f" >&2; exit 1; }
 done
 
@@ -149,6 +152,19 @@ assert_member "$APPLY_INFRA_WF"  "ci_ssh_token_replace"    "ci-ssh-token-replace
 # authenticated with the credential member 7 destroys, so it needs the mutex in both directions.
 assert_member "$APPLY_INFRA_WF"  "vector_redeliver"        "vector-redeliver"
 
+# #11294: the key-rotate workflow's `redeploy` job runs the same track.sh canary-then-prod fleet redeploy as member 1 (it swaps the
+# web-1 container so the new secret value is picked up), so it holds the same job-level group. It lives in its OWN workflow file
+# (key-rotate.yml), so it is a ninth member that is asserted here and counted separately below: the eight-count over the three shared
+# workflows is unchanged. (The sibling inngest-key-rotate.yml redeploy job also holds the group and predates this guard; it is not
+# enrolled here, which is a pre-existing gap, not something this PR widens.)
+assert_member "$KEY_ROTATE_WF"   "redeploy"                "key-rotate-redeploy"
+key_rotate_count=$(grep -cE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' "$KEY_ROTATE_WF")
+if [ "$key_rotate_count" -eq 1 ]; then
+  pass
+else
+  fail "key-rotate.yml: expected exactly 1 'group: web-1-swap' (the redeploy job), found $key_rotate_count"
+fi
+
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
 # is asserted directly, not via job_block. It stops/repoints web-1's /mnt/data and MUST
@@ -177,7 +193,8 @@ fi
 # accidentally-enrolled or duplicated job pushes above 8. The freeze workflow's
 # workflow-level group is asserted above and NOT part of this count.
 #
-# KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE. The count and the allow-list are
+# KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE FOR THE THREE SHARED WORKFLOWS (8 of the 9 assert_member calls; the ninth,
+# key-rotate.yml's redeploy job, is a different file and has its own exactly-one check above). The count and the allow-list are
 # two encodings of one fact, and #6730 tripped exactly that: the job enrolled itself in the
 # group without adding either, so the count went 4 -> 5 and this suite reddened on a change
 # that was otherwise correct. The failure is the guard working; the fix is enrolling, never

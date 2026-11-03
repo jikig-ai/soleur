@@ -48,7 +48,7 @@ jobs:
           bun plugins/soleur/scripts/sync-npm-package.ts
 
       - name: Install npm CLI >= 11.5.1 for trusted publishing
-        run: npm install -g npm@^11
+        run: npm install -g npm@11.21.1
 
       - name: Resolve version and publish to npm
         id: publish

@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
 
       - name: Install lefthook
-        run: npm install --no-save --no-audit --no-fund lefthook@2
+        run: npm install --no-save --no-audit --no-fund lefthook@2.2.2
 
       - name: Put lefthook on PATH
         run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"

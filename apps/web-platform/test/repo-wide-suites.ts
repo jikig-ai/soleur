@@ -27,6 +27,7 @@
 // A file escapes only when its longest `..` run EXCEEDS its depth below
 // `apps/web-platform`, or it names a repo-root helper (GIT_ROOT, repoRoot, …).
 export const REPO_WIDE_SUITES: readonly string[] = [
+  "test/adhoc-npm-install-pin-table.test.ts",
   "test/agent-outer-wrap.test.ts",
   "test/agent-runner-system-prompt.test.ts",
   "test/approval/gate-deps.test.ts",

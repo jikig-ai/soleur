@@ -222,6 +222,7 @@
 1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
+106	apps/web-platform/infra/key-rotate-workflow.test.sh
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
@@ -487,6 +488,7 @@
 2	scripts/infra-config-red-alert.test.sh
 8	scripts/inngest-key-rotate.sh
 1	scripts/kb-staleness-metric.sh
+3	scripts/key-rotate.sh
 9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
 6	scripts/lib/mutation-harness-controls.sh

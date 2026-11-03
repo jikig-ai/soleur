@@ -5,12 +5,14 @@ date: 2026-10-27
 supersedes: none
 issue: 10540
 related: [10540, 10205, 10382, 10136, 11215, 11218, 11292, 11293, 11294]
-related_adrs: [ADR-100, ADR-294, ADR-241, ADR-280]
+related_adrs: [ADR-100, ADR-294, ADR-241, ADR-280, ADR-317]
 brand_survival_threshold: single-user incident
 tags: [inngest, secrets, rotation, terraform, doppler, hetzner, ci]
 ---
 
 # ADR-307: Inngest key rotation runs through a dedicated dispatch-only workflow in two Terraform phases, derives the app copy from the dedicated random_id, and restarts the scheduler with a Hetzner soft reboot
+
+See also [ADR-317](ADR-317-key-rotation-second-dispatch-only-route-sourcing-the-inngest-route.md): the seven non-tunnel secrets rotate through a second dispatch-only route that sources this one and overrides it (single key per dispatch, no converge mode).
 
 ## Context
 
