@@ -3,6 +3,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import {
+  ERASURE_RETRY_QUALIFIER,
+  NEW_TAB_CUE,
+  PRIVACY_POLICY_CITATION,
+  PRIVACY_POLICY_URL,
+} from "@/lib/legal/account-deletion-copy";
 
 interface DeleteAccountDialogProps {
   userEmail: string;
@@ -84,11 +90,37 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
   return (
     <div className="rounded-xl border border-red-800/50 bg-red-950/20 p-6">
       <h3 className="mb-2 text-lg font-semibold text-red-400">
-        Permanently delete your account
+        Delete your account
       </h3>
+      {/*
+        Copy derived from the merged Privacy Policy, "Pending-erasure record after account
+        deletion" (lib/legal/account-deletion-copy.ts). The dialog cannot know the
+        repository-removal outcome before the call, so the best-effort qualifier is stated up
+        front; the outcome itself rides the post-delete URL (?erasure=pending, see handleDelete).
+        Never say the repository copy is erased/deleted/removed, and never promise a timeline.
+      */}
+      <p className="mb-3 text-sm text-soleur-text-secondary">
+        This action cannot be undone. Your account and conversations are deleted from our
+        application. Payment records are kept as French tax law requires.
+      </p>
+      <p
+        id="delete-account-erasure-qualifier"
+        className="mb-2 text-sm text-soleur-text-secondary"
+      >
+        {ERASURE_RETRY_QUALIFIER}
+      </p>
       <p className="mb-4 text-sm text-soleur-text-secondary">
-        This action cannot be undone. All your data, API keys, conversations,
-        and workspace files will be permanently deleted.
+        Read more in the{" "}
+        <a
+          href={PRIVACY_POLICY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-soleur-text-primary"
+        >
+          {PRIVACY_POLICY_CITATION}
+          <span className="sr-only">{NEW_TAB_CUE}</span>
+        </a>
+        .
       </p>
 
       <label className="mb-2 block text-sm text-soleur-text-secondary">
@@ -103,6 +135,7 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
         className="mb-4 w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-red-700 focus:outline-none focus:ring-1 focus:ring-red-700"
         autoComplete="off"
         spellCheck={false}
+        aria-describedby="delete-account-erasure-qualifier"
       />
 
       {error && (
@@ -117,6 +150,7 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
           disabled={!emailMatches || isDeleting}
           loading={isDeleting}
           loadingLabel="Deleting"
+          aria-describedby="delete-account-erasure-qualifier"
         >
           Confirm Deletion
         </Button>
