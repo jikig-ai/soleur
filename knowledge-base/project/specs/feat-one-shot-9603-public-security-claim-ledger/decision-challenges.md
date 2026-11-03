@@ -55,3 +55,15 @@ These record how the committed ledger differs from the plan after the work phase
 - IDs `E1a` and `E1b` carry a letter suffix; the AC patterns use `[IEA][0-9]+[a-z]?`.
 - The finding-type names `register entry beyond row scope` and `disclosure differs from a later decision record` replace the plan's earlier names (D31); the sixth type, `no mapped row`, has a count of 0.
 - Open for the final report: the plan's AC2 text derives the withheld digit string by pattern and by timestamp arithmetic; it cannot be removed from already pushed history.
+
+## CLO Review Record
+
+End-of-work CLO review of the internal public security claim ledger for issue 9603. Reviewer context: fresh CLO instance that prepared no row. Ledger reviewed: commit 384950500f, blob 2fef2e8c05aaf5cae9cd8d515a545e2537084d47, pinned to origin/main f05eaab78faec600bb8a2c763891bf79a34d748b, threshold single-user incident. This is the v1 internal sign-off by an agent; it is not counsel, the human principal retains an optional veto and signs any public wording, and outside-counsel review of the withheld per-statement table is recommended before it is shared beyond the human principal.
+
+Verdict: DISCHARGED. The first review ran at commit 1c8e2e0f1a (blob 51c0de4b6b) and returned DISCHARGED-WITH-CONDITIONS; conditions C-1 to C-5 and issues 1 to 10 were applied and re-verified by the same reviewer. An earlier pass at commit 0d4b9312e3 had returned conditions for pushing the per-statement table; under D30 to D32 the table stays outside the repository and the committed ledger carries counts only.
+
+Final counts of 182 findings: `CLO-owned` 66, `accepted-by-CLO` 35, `escalate` 81, equal in the committed ledger and the withheld table. F113, F114 and F115 were reverted to `CLO-owned`. Of the 13 `accepted-by-CLO` rows individually re-read (F1, F25, F28, F38, F47, F51, F61, F108, F114, F127, F141, F148, F152), 12 were confirmed and F114 was reverted; F113 and F115 were reverted on the descriptor pattern. The other `accepted-by-CLO` rows are not individually attested by this record. Evidence spot-checks: 19 findings in the first pass (16 confirmed, 3 corrected: F60, F84, F133) and 17 in the second (every 8th `escalate` row, five of the six `register entry beyond row scope` rows, and F5), all confirmed.
+
+Decisions: publishing the committed counts-only ledger is YES; the labels and finding-type names are not an admission or a legal opinion, YES; counting the Article 30 register, breach register and in-app statements without naming them is acceptable, YES; the recommendation, not a decision, is outside counsel before the withheld table travels further.
+
+Also run before this record: a six-seat report-only review panel (security, user-impact, architecture, simplicity, pattern, documentation quality) whose fixes are in commit 1c8e2e0f1a; no seat reported a defect outside the ledger wording and its plan records.
