@@ -63,10 +63,12 @@ locals {
     scheduled_deadman_heartbeat_feeder = "the Better Stack heartbeats are the paging surface; route after three measured check-ins (tracked on #11672)"
     # #8211 PR-B2 — the git-data erasure re-drive's liveness monitor, added under the two-PR rule: a
     # monitor id that does not exist yet must not appear in monitor_ids (the plan projection errors).
-    # Real cover meanwhile: the oldest-pending-age gauge and the 20/28-day Sentry error issues the
-    # handler raises itself, and the unrouted monitor still opens a Sentry issue on a missed check-in.
-    # Routing it, and the paging rule for the escalation events, are tracked in #10914.
-    scheduled_git_data_erasure_redrive = "handler raises its own 20/28-day Sentry error issues; routing this monitor and the escalation paging rule follow after the first measured check-in (#10914)"
+    # There is NO independent cover for a DEAD cron: the oldest-pending-age gauge and the 20/28-day Sentry error
+    # issues are emitted BY the cron, so a cron that never fires emits none of them. The only dead-cron signal is this
+    # monitor's missed-check-in issue, which emails nobody until it is routed. Routing it into cron_monitor_failure
+    # (and the paging rule for the 20/28-day escalation events, #11898) is tracked in #10914; route before the real
+    # git-data flip.
+    scheduled_git_data_erasure_redrive = "routing is a flip-checklist item: no independent cover exists for a dead cron (the age gauge and the 20/28-day escalations are emitted by the cron itself); route after the first measured check-in (#10914)"
   }
 }
 
