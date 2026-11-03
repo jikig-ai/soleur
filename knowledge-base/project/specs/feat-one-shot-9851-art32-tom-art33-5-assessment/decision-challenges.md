@@ -27,7 +27,7 @@ Headless plan-phase record (2026-11-03). Every row is a technical ruling by the 
 
 ## Planner notes (not rulings)
 
-The live merge timestamp of the pull request that enabled the sandbox in production is 2026-04-05T22:01:06Z (the 2026-04-06 date in the CTO and CLO text is the commit date in local time), so the register cites the UTC timestamp. The architecture reviewer questioned the ADR-272 bullet's pending-canary sentence; ruling T6 stands (left alone, not repeated). The simplicity reviewer's suggestion to drop the learnings-file allowance was not applied because the operator's brief allows an optional learnings file.
+The live merge timestamp of the pull request that enabled the sandbox in production is 2026-04-05T22:01:06Z (the 2026-04-06 date in the CTO and CLO text is the commit date in local time), so the register cites the UTC timestamp. The architecture reviewer questioned the ADR-272 bullet's pending-canary sentence; ruling T6 stands (left alone, not repeated). The deepen-pass user-impact review added wording hardenings (window scoped to the Bash tier, inline measurement clause, rotation wording, dated measurements, disclosure-delta rule, conditional sixth superseded sentence); they narrow claims, are reversible inside the diff and set no durable contract, so they are planner notes and the fresh CLO review may strike any of them. The simplicity reviewer's suggestion to drop the learnings-file allowance was not applied because the operator's brief allows an optional learnings file.
 
 ## CLO Review Record
 
