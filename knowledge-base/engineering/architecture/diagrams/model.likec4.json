@@ -1050,7 +1050,7 @@
 },
 "technology": "Readiness Gap Analyzer",
 "description": {
-"txt": "Read-only analysis of a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. The analysis writes only that report, through one redaction-checked chokepoint. Optionally, after a preview and the customer's explicit yes, it files an epic and severity-ranked sub-issues in the customer's own repository through one allowlisted gh wrapper from a saved plan (never headless); no Jikigai-hosted sink, no telemetry (ADR-314)"
+"txt": "Analysis is read-only; filing issues is opt-in. It examines a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. The analysis writes only that report, through one redaction-checked chokepoint. Optionally, a preview makes read-only authenticated GETs to the customer's own repository and writes a private plan directory, and after the customer's explicit yes it files an epic and severity-ranked sub-issues there through one allowlisted gh wrapper from that saved plan (never headless); no Jikigai-hosted sink, no telemetry (ADR-314)"
 },
 "title": "launch-check skill",
 "kind": "component",
@@ -1485,6 +1485,17 @@
 },
 "id": "1535lse94kiah",
 "title": "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; an absent or malformed pin refuses the dial (#5914)"
+},
+"15jcg8gdjqck": {
+"technology": "HTTPS (GitHub REST API via gh)",
+"source": {
+"model": "platform.plugin"
+},
+"target": {
+"model": "github"
+},
+"id": "15jcg8gdjqck",
+"title": "launch-check issue writes (ADR-314 amendment, #11910): after a preview and the customer's explicit yes, `launch-check.sh issues --create` creates absent lc: labels, one epic and severity-ranked sub-issues, links them, and edits only the marked section of the epic body, in the customer's OWN repository on github.com (or the explicit --host), from a saved plan, never headless, through one allowlisted gh api wrapper. The preview before it makes read-only authenticated GETs to the same repository (its metadata, the labelled issue listing, the signed-in login). Authenticated with the customer's own gh login (their token, on their machine); every byte the tool authors passes the redaction gate first. Jikigai receives nothing and runs no server in this path; GitHub and, on a public repository, the world see the issue text."
 },
 "15nyjgb72ed3l": {
 "technology": "PostgreSQL / PostgREST RPC",
@@ -2407,17 +2418,6 @@
 },
 "id": "2qpqjo6rm4u14",
 "title": "CONSUMER serviceability probe (#7228): inngest-consumer-probe.sh sources inngest-registry-probe.sh and sends its functions-id GQL query to 10.0.1.40:8288/v0/gql over the private net, pinging the inngest_consumer heartbeat ONLY on a non-empty registry; a transport failure, a GraphQL error envelope, an unrecognised shape, and — decisively — a well-formed but EMPTY registry all SUPPRESS the ping so absence alarms. The response SHAPE is the discriminator, not the HTTP code: a GraphQL server answers 200 with an errors envelope, and a host serving an empty registry passes every reachability check while owning nothing. Distinct from the api -> inngest dispatch edge — this proves the scheduler SERVES, not that the app can reach it"
-},
-"2r3rh2xw73fco": {
-"technology": "HTTPS (GitHub REST API via gh)",
-"source": {
-"model": "platform.plugin"
-},
-"target": {
-"model": "github"
-},
-"id": "2r3rh2xw73fco",
-"title": "launch-check issue writes (ADR-314 amendment, #11910): after a preview and the customer's explicit yes, `launch-check.sh issues --create` creates absent lc: labels, one epic and severity-ranked sub-issues, links them, and edits only the marked section of the epic body, in the customer's OWN repository on github.com, from a saved plan, never headless, through one allowlisted gh api wrapper. Authenticated with the customer's own gh login (their token, on their machine); every byte sent passes the redaction gate first. Jikigai receives nothing and runs no server in this path; GitHub and, on a public repository, the world see the issue text."
 },
 "2rswfecyw10gi": {
 "technology": "Docker",
@@ -6641,10 +6641,10 @@
 "parent": null,
 "relations": [
 "12uwtp6e65sao",
+"15jcg8gdjqck",
 "1sqwkvp8bvaqw",
 "21oqpwt1wvybl",
 "2jy9gkus366d6",
-"2r3rh2xw73fco",
 "33oelk4lvl3u7",
 "3mxkvx15xswfp",
 "3q20kgm5yx0v"
@@ -12945,7 +12945,7 @@
 },
 "parent": null,
 "relations": [
-"2r3rh2xw73fco",
+"15jcg8gdjqck",
 "3mxkvx15xswfp"
 ],
 "color": "gray",
@@ -28120,7 +28120,7 @@
 },
 "parent": null,
 "relations": [
-"2r3rh2xw73fco",
+"15jcg8gdjqck",
 "3mxkvx15xswfp"
 ],
 "color": "gray",

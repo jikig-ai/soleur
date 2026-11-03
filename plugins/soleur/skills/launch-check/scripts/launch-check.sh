@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# launch-check.sh: read-only production-readiness + Soleur-baseline gap analysis for a customer repository.
+# launch-check.sh: production-readiness + Soleur-baseline gap analysis for a customer repository. The analysis is read-only apart from its report.
 #
 #   scan          --target <repo> --facts <file> [--files-out <file>] [--show-secrets]
 #   render        --target <repo> --facts <file> [--judged <file>] [--dry-run]
@@ -7,8 +7,10 @@
 #   report-path   (prints the report's repo-relative path)
 #   issues        --preview | --create | --check-plan  (see "issues" below)
 #
-# The analysis writes nothing but the report file. No telemetry. The only network use is `issues --create`: confirm-gated
-# writes to the customer's OWN repository, from a saved plan, with the customer's own gh credentials (lib/issues.sh).
+# The analysis (scan, render, verify-report) writes nothing but the report file and uses no network. No telemetry. `issues` is the only
+# part that talks to GitHub, with the customer's own gh credentials, on github.com or the explicit --host (lib/issues.sh, ADR-314):
+# `--preview` makes read-only authenticated GETs of the customer's OWN repository and writes a mode-700 plan directory (TMPDIR or --plan-out);
+# `--create` is the only writer to the tracker: confirm-gated, from that saved plan.
 # Exit codes: 0 ok (a preview in an unusable environment prints a report-only marker and also exits 0) ·
 #   1 redaction hit (render, issues) / invalid report (verify-report) · 2 usage, preflight, scanner, input, write failure.
 # Every abort prints one SOLEUR_LAUNCH_CHECK_ABORT marker; this tool's only sink is the caller's tool result.

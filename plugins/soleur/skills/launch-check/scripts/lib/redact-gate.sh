@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# The write chokepoint. Every byte that reaches the report goes through lc_emit_checked.
+# The write chokepoint. Every byte that reaches the report, and every byte the issue writer authors into a tracker (scan-only mode), goes through lc_emit_checked.
 # Requires SKILL_DIR and PLUGIN_DIR. Test seams (honoured only when LAUNCH_CHECK_TEST=1, see lc_seam):
 # LAUNCH_CHECK_REDACT_SENTINEL, LAUNCH_CHECK_GITLEAKS. Optional LC_DEST_ROOT: the write must stay inside it.
 source "$SKILL_DIR/scripts/lib/common.sh"
