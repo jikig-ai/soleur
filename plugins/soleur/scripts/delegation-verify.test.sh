@@ -1045,6 +1045,36 @@ run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" -
 assert_eq "2" "$(last_rc)" "render refuses --method web-session"
 run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method
 assert_eq "2" "$(last_rc)" "render refuses a trailing --method with no value"
+run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method tty-ack --method tty-ack
+assert_eq "2" "$(last_rc)" "render refuses a duplicate --method"
+run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method ""
+assert_eq "2" "$(last_rc)" "render refuses an empty --method"
+# Which lines count as a claim: any line a reader would take for a Method claim (indented, quoted, any letter case, inside a
+# fenced block), but not text a renderer hides (an HTML comment). A claim that is not exactly one canonical tty-ack line is refused.
+s_method_indent() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "   **Method:** tty-ack" }'; }
+s_method_quote() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "> **Method:** tty-ack" }'; }
+s_method_lower() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "**method:** tty-ack" }'; }
+s_method_hidden() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "<!-- **Method:** web-session -->" }'; }
+s_method_fence() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "```"; print "**Method:** web-session"; print "```" }'; }
+scn; s_method_indent; run_v verify --delegation "$URL"; expect "an indented Method claim is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_quote;  run_v verify --delegation "$URL"; expect "a quoted Method claim is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_lower;  run_v verify --delegation "$URL"; expect "a lower-case method claim is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_fence;  run_v verify --delegation "$URL"; expect "a Method claim inside a fenced block is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_hidden; run_v verify --delegation "$URL"; expect "a Method claim hidden in an HTML comment is not a claim" 0 "$V_OK"
+# The label must not select a lighter check: every refusal below keeps its verdict when a Method line is added.
+with_method() { # add a Method line (tty-ack) to the comment body already posted in this scenario
+  local nb
+  nb="$(jq -r .body "$STUB_DIR/comment-1001.json" | awk '/^\*\*Scope/ { print "**Method:** tty-ack"; print "" } { print }')"
+  jq --arg b "$nb" '.body = $b' "$STUB_DIR/comment-1001.json" > "$STUB_DIR/c.json" && mv "$STUB_DIR/c.json" "$STUB_DIR/comment-1001.json"
+}
+for fn in s_edited s_app s_bot s_nonadmin s_noconfirm s_exclinc s_noexp s_toolong s_expired s_closed s_noscope; do
+  scn; "$fn"; run_v verify --delegation "$URL"; base="$(last_rc)|$(head -1 "$TMP/o")"
+  scn; "$fn"; with_method; run_v verify --delegation "$URL"; with="$(last_rc)|$(head -1 "$TMP/o")"
+  assert_eq "$base" "$with" "a Method line does not change the verdict of $fn"
+  assert_eq "1" "$([[ "${base%%|*}" != 0 ]] && echo 1 || echo 0)" "the $fn base case really is a refusal"
+done
+s_edited_method() { s_edited; with_method; }
+s_exclinc_method() { s_exclinc; with_method; }
 bounded() { # <seconds> <args...>: run the verifier, kill it after <seconds>; rc 124 when it hung
   local secs="$1" pid k=0; shift
   ( cd "$REPO" && git_fixture_env "$REPO" && PATH="$BIN:$PATH" bash "$SUT" "$@" ) >"$TMP/o" 2>"$TMP/e" </dev/null &
@@ -1449,10 +1479,12 @@ mutate method "$(noop method)" && {
 }
 mutate method-parse 's/^(  P_METHOD_N=).*# mut:method-parse$/\10 # mut:method-parse/' && killed method-parse "1|$(inv method-unknown)|0" s_method_web verify --delegation "$URL"
 mutate render-method "$(noop render-method)" && killed render-method "2||0" s_render_ok "${rargs[@]}" --answer-file "$TMP/a.txt" --method web-session
+mutate method-skip-edited 's/\[ "\$UPDATED" = "\$CREATED" \] \|\| fail_invalid edited/[ "$P_METHOD" = tty-ack ] || [ "$UPDATED" = "$CREATED" ] || fail_invalid edited/' && killed method-skip-edited "1|$(inv edited)|0" s_edited_method verify --delegation "$URL"
+mutate method-skip-excluded 's/\[ "\$P_EXCL_OK" = 1 \] \|\| fail_invalid excluded-incomplete/[ "$P_METHOD" = tty-ack ] || [ "$P_EXCL_OK" = 1 ] || fail_invalid excluded-incomplete/' && killed method-skip-excluded "1|$(inv excluded-incomplete)|0" s_exclinc_method verify --delegation "$URL"
 
 echo "=== Floors: the SUT answered every row (zero slack) ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-CALLS_FLOOR=2871; RESULTS_FLOOR=1840
+CALLS_FLOOR=2991; RESULTS_FLOOR=1883
 if (( n_calls >= CALLS_FLOOR )); then
   echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
 else

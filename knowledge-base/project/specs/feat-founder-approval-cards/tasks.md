@@ -10,7 +10,7 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 - [x] 2.1 Write failing tests first: `delegation-verify.test.sh` rows for `Method:` (tty-ack valid, `web-session` invalid, unknown invalid, absent valid, verdict identical with and without, admin check not skipped, bot author still rejected, parser removed) with fixtures `delegation-method-tty-ack.md` and `delegation-method-unknown.md`
 - [x] 2.2 Implement `render --method tty-ack` and the `Method:` parser in `delegation-verify.sh`
 - [x] 3.1 Add the decision-table test (TTY with account, headless with account, no account) for the card messages
-- [ ] 4.1 Run `bash plugins/soleur/scripts/delegation-verify.test.sh` and the standing-delegation fixtures; run the forbidden-wording grep over `approval-card.md`
+- [x] 4.1 Run `bash plugins/soleur/scripts/delegation-verify.test.sh` and the standing-delegation fixtures; run the forbidden-wording grep over `approval-card.md`
 - [ ] 4.2 Open follow-up work: confirm migration number 184 against `origin/main` before PR-B
 
 ## PR-B — Database record, text registry, ADR, C4, legal documents (dark; starts after the spike passes and PR-A merges)

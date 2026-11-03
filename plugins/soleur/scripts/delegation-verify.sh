@@ -31,8 +31,8 @@
 #   epic-open against now.
 #
 # Reason tokens: bad-url wrong-repo comment-unreadable api-error tool-missing usage no-marker wrong-issue
-#   epic-is-pr bot-author not-admin-author edited no-quote quote-too-short no-confirmation no-scope-item
-#   excluded-incomplete method-unknown expiry-missing expiry-too-long expired before-delegation epic-closed envelope-missing
+#   epic-is-pr bot-author not-admin-author edited no-quote quote-too-short no-confirmation method-unknown no-scope-item
+#   excluded-incomplete expiry-missing expiry-too-long expired before-delegation epic-closed envelope-missing
 #   envelope-not-committed envelope-outside-repo envelope-not-regular-file parse-ambiguous
 #   envelope-delegation-mismatch envelope-incomplete epic-mismatch rollback-unnamed non-delegable-command
 #   command-not-delegable scope-mismatch command-not-in-envelope.
@@ -188,7 +188,7 @@ parse_body() {
   P_ONE_CONF=0; [ "$(grep -c '^\*\*Confirmation:\*\*' "$b")" = 1 ] && P_ONE_CONF=1
   P_ONE_EXP=0; [ "$(grep -c '^\*\*Expiry:\*\*' "$b")" = 1 ] && P_ONE_EXP=1
   # The Method line is a LABEL only (how the operator's answer was given). Nothing below reads it to choose a check.
-  P_METHOD_N="$(grep -c '^\*\*Method:\*\*' "$b")" # mut:method-parse
+  P_METHOD_N="$(grep -ciE '^[[:space:]>]*\*\*method:' "$b")" # mut:method-parse
   P_METHOD="$(trim "$(grep -m1 '^\*\*Method:\*\*' "$b" | sed 's/^\*\*Method:\*\*//')")"
 }
 
@@ -622,7 +622,7 @@ do_verify() {
 
 # do_render: build the record, then prove it parses (fail closed: a record that would not verify is never printed).
 do_render() {
-  local EPIC="" QF="" AF="" SF="" EXPIRY="" METHOD="" today limit f ans
+  local EPIC="" QF="" AF="" SF="" EXPIRY="" METHOD="" METHOD_SET=0 today limit f ans
   while [ $# -gt 0 ]; do
     case "$1" in
       --epic)          [ $# -ge 2 ] || die_render "--epic needs a value"; EPIC="$2"; shift 2 ;;
@@ -630,7 +630,7 @@ do_render() {
       --answer-file)   [ $# -ge 2 ] || die_render "--answer-file needs a value"; AF="$2"; shift 2 ;;
       --scope-file)    [ $# -ge 2 ] || die_render "--scope-file needs a value"; SF="$2"; shift 2 ;;
       --expiry)        [ $# -ge 2 ] || die_render "--expiry needs a value"; EXPIRY="$2"; shift 2 ;;
-      --method)        [ $# -ge 2 ] || die_render "--method needs a value"; METHOD="$2"; shift 2 ;;
+      --method)        [ $# -ge 2 ] && [ -n "$2" ] || die_render "--method needs a value"; [ "$METHOD_SET" = 0 ] || die_render "--method may be given once"; METHOD="$2"; METHOD_SET=1; shift 2 ;;
       *) die_render "unknown argument: $1" ;;
     esac
   done
