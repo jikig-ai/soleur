@@ -20,7 +20,7 @@ Proposed. This ADR ships no control. The control in force today is ADR-075 (bwra
 - This ADR relates to ADR-075. It amends nothing and supersedes nothing.
 - The topology of record belongs to #9854, the pending decision record under epic #9842.
   Its issue body says it amends ADR-068 section 8 (the Phase 4a placement and trigger wording) and ADR-075 Option B (label: unverified, mutable source: issue body, 2026-11-03).
-  If #9854's decision merges first with overlapping content, this ADR stays `proposed` and gains one Status line: "Topology of record: the ADR for #9854; this ADR keeps only the option record and measurement gate"; when #9854 picks per-tenant containers or a gVisor- or Kata-class runtime, only the line "closed as an option record by the ADR for #9854" is added, not this one.
+  If #9854's decision merges first with overlapping content, this ADR stays `proposed` and gains one Status line: "Topology of record: the ADR for #9854; this ADR keeps only the option record and measurement gate"; when #9854 picks per-tenant containers or a gVisor- or Kata-class runtime, only the line "closed as an option record by the ADR for #9854" is added, not the Topology-of-record line.
   It is not marked superseded.
 - Flip to `adopting` requires all of the following.
   - #9854's merged decision names per-session ephemeral containers on a runc-class runtime as the topology. A #9854 decision for per-tenant containers, or for a gVisor- or Kata-class runtime, leaves this ADR `proposed`, adds the Status line "closed as an option record by the ADR for #9854", and does not flip it.
@@ -28,7 +28,7 @@ Proposed. This ADR ships no control. The control in force today is ADR-075 (bwra
   - Before the P2 to P5 measurement run starts, a CTO ruling, committed to the repository and dated, records a limit for each of P2, P3, P4 and P5: a ceiling for cold start, for memory and CPU per session, and for image-pull and warm-pool cost in time and capacity terms, and a floor for concurrency per host. The dated amendment cites that ruling and its date, and the ruling's date precedes the measurement date. A limit may be revised after the data is seen only by a dated ruling that states the reason and does not loosen it. A measurement outside its limit leaves this ADR `proposed`.
   - The dated amendment names the ADR-075 residual its measurements address, citing the ADR-075 anchor. An amendment that names none leaves the status `proposed`.
   - The cost-per-hosted-session ceiling and the go-ahead to adopt are operator-class (money), put as a plain-words question when the measurements land. Any monetary ceiling for P5 is part of that operator-class question, not of the CTO ceiling.
-  - The flip is made by the PR that adds the dated amendment, authored by the engineering owner of #9602, and is reviewed by a second reviewer other than the author (a person, or a separate review pass recorded in the PR) who confirms each gate's recorded result against the private measurement record, including that the record exists by its opaque id.
+  - The flip is made by the PR that adds the dated amendment, authored by the engineering owner of #9602, and is reviewed by a second reviewer other than the author (a person, or a separate review pass recorded in the PR) who confirms each gate's recorded result against the private measurement record, including that the record exists by its opaque id, and confirms that the operator's recorded answer to the operator-class question is cited in the amendment with its date and that the cited CTO ruling's date precedes the measurement date.
 - `adopting` is a decision to plan, not to ship: shipping needs its own PR and operator approval.
   A first trigger starts measurement and does not flip the status.
 - "Not adopted" is a sequencing decision gated on evidence. It is not acceptance of the residual risk in ADR-075.
@@ -48,7 +48,7 @@ A hosted agent session is one tenant's agent conversation run by the SDK.
 "Ephemeral" means created for one hosted agent session and destroyed when it ends.
 "Broker" means the credential broker (#9543), which is not shipped. "Canary" means the faithful canary of ADR-079.
 "Session" here means the hosted agent session; ADR-075's per-sandboxed-command wording is not restated and no sandbox instances are counted here.
-"Per-session container" means one container per hosted agent session on a runc-class runtime, one that shares the host kernel (the Docker default; no alternative runtime is configured in apps/web-platform/infra, label: measured absence in scope, 2026-11-03; a gVisor- or Kata-class runtime is option 4); the "per-session" of #5863 is process-level isolation, which is not a container.
+"Per-session container" means one container per hosted agent session on a runc-class runtime, one that shares the host kernel (the Docker default; no alternative runtime is configured in apps/web-platform/infra, label: measured absence in scope: `git grep -n -i -E -e '--runtime' -e 'runsc' -e 'kata' -e 'gvisor' -e 'default-runtime' origin/main -- apps/web-platform/infra`, 0 hits, 2026-11-03; a gVisor- or Kata-class runtime is option 4); the "per-session" of #5863 is process-level isolation, which is not a container.
 
 Today's shape is recorded by existing ADRs and restated here only as far as they publish it.
 The rows below are the claims this ADR rests on; each carries one label.
@@ -75,8 +75,8 @@ It is to be revisited after slice 1 of #9601 and the credential broker, or on a 
 No decision in this ADR rests only on that issue body; the gate below stands on the measurements it asks for.
 
 Earlier deferrals and a related not-now verdict.
-ADR-075 says of its per-tenant Option B (not per-session, which this ADR records) that it is "the correct end-state, but ... unbuilt infra", and its original entry reads "Deferred (tracked in #5863)" (read from ADR-075, anchor "Deferred (tracked in #5863)"). Two later addenda supersede that status: the 2026-10-08 addendum (#5863) is headed "Option B adopted in arm-F", and the 2026-10-09 addendum records that Option B "exits only with **#9773 Stage 1**" after "arm-F elevation dropped" (read from ADR-075, those two anchors).
-The #9773 issue body says per-tenant containers were deferred twice on capacity grounds (label: unverified, mutable source: issue body, 2026-11-03). #5863 is closed (read from issue metadata, 2026-11-03); its title scopes it to per-session process-level isolation, which is not a container, and ADR-075 records the outer wrap as flag-off on the shared production container (C4c), so the closure does not state that per-session isolation is in force.
+ADR-075 says of its per-tenant Option B (not per-session, which this ADR records) that it is "the correct end-state, but ... unbuilt infra", and its original entry reads "Deferred (tracked in #5863)" (read from ADR-075, anchor "Deferred (tracked in #5863)"). Two later addenda supersede that status: the 2026-10-08 addendum (#5863) is headed "Option B adopted in arm-F" (the full heading names a mount-namespace-only outer wrap, not a container), and the 2026-10-09 addendum records that Option B "exits only with **#9773 Stage 1**" after "arm-F elevation dropped" (read from ADR-075, those two anchors).
+The #9773 issue body says per-tenant containers were deferred twice on capacity grounds (label: unverified, mutable source: issue body, 2026-11-03). #5863 is closed (label: unverified, mutable source: issue state and title, 2026-11-03); its title scopes it to per-session process-level isolation, which is not a container, and ADR-075 records the outer wrap as flag-off on the shared production container (C4c), so the closure does not state that per-session isolation is in force.
 A 2026-09-25 managed-runtime evaluation recorded in knowledge-base/project/brainstorms/archive/20261013-051752-2026-09-25-ax-substrate-hosted-agents-brainstorm.md recommended not adopting a managed runtime then, because it needed Kubernetes (label: unverified; this ADR did not re-read the evaluation beyond its verdict line).
 Row 4.6 of the roadmap carries the standing trigger "5+ concurrent users" (C7).
 
@@ -149,7 +149,7 @@ The #9842 spec names this shape as a bounded exception and a non-goal as the gen
 
 Option 4, runtime-level isolation per tenant session.
 
-A gVisor sandbox per tenant session is the operator-selected direction under epic #9842 (Approach B, Stage 0 spikes pending). A Kata-class runtime is a comparison candidate in the Stage 0 spike #9859 and has its own canary spike, #9863 (S1b); the issue body does not name it as selected. This ADR neither decides nor ships either; its topology decision is reserved to #9854. Label: unverified (mutable source: issue body #9842, 2026-11-03).
+A gVisor sandbox per tenant session is the operator-selected direction under epic #9842 (Approach B, Stage 0 spikes pending). A Kata-class runtime is a comparison candidate in the Stage 0 spike #9859 and has its own canary spike, #9863 (S1b); the issue body does not name it as selected. This ADR neither decides nor ships either; its topology decision is reserved to #9854. Label: unverified (mutable source: issue body #9842 and the titles of #9859 and #9863, 2026-11-03).
 
 Option 4 carries no disposition word here by design: it is #9854's to decide, and this ADR neither endorses nor dismisses it.
 
@@ -174,7 +174,7 @@ That private record must exist before the amendment merges, or the gate fails.
   The trigger recorded in #9854 wins on conflict (C6), and alert and capacity thresholds stay in #9854 and are not restated here.
 - P2, cold start. p50 and p95 for a per-session container, against a baseline arm that is the production configuration today: the SDK's inner bwrap only, with the outer wrap flag-off (C4c).
 - P3, memory and CPU per hosted agent session, with and without a per-session container, read against the cap recorded in ADR-079 and ADR-062 (C3a).
-- P4, the maximum number of concurrent hosted agent sessions per host, with and without per-session containers.
+- P4, the maximum number of concurrent hosted agent sessions per host, with and without per-session containers, read against the concurrency floor recorded before the run (Status).
 - P5, image-pull and warm-pool cost, on the registry path ADR-096 records.
 - P6, a consistency condition and not a measurement: #9854's merged decision names per-session ephemeral containers on a runc-class runtime as the topology (C5, C6). P2 to P5 are defined for that shape only.
 

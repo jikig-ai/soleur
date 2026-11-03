@@ -21,7 +21,7 @@ Proposed. This ADR ships no control. The control in force today is ADR-075 (bwra
   A ruleset applied beneath bwrap would have the same Bash-tier coverage and nothing wider.
 - The option recorded here is a layer beneath bwrap.
   It supersedes nothing: bwrap, seccomp and AppArmor stay as they are.
-- Flip to `adopting` is made only when every one of the six gates G1 to G6 in the Decision section is recorded as MET in a dated amendment, together with G3 (the faithful canary green with the Landlock probe, run per the spike-branch rule in the Decision section).
+- Flip to `adopting` is made only when every one of the six gates G1 to G6 in the Decision section is recorded as MET in a dated amendment, including G3 (the faithful canary green with the Landlock probe, run per the spike-branch rule in the Decision section).
   A recorded miss leaves the status `proposed`. A green canary is necessary and not sufficient: the prior hosted-Bash outage ran with the canary green (L8; the post-incident report records that the canary was green during the outage).
   The dated amendment names the ADR-075 residual its measurements address, citing the ADR-075 anchor. An amendment that names none leaves the status `proposed`.
   The flip is made by the PR that adds the dated amendment, authored by the engineering owner of #9602, and is reviewed by a second reviewer other than the author (a person, or a separate review pass recorded in the PR) who confirms each gate's recorded result against the private measurement record, including that the record exists by its opaque id. No money or topology decision is involved in that flip.
@@ -105,7 +105,7 @@ Cons: it is the shape whose residual risk ADR-075 records and owns.
 Disposition: the control in force.
 
 Option 2, a ruleset applied in the sandboxed child, after the sandbox view is built and before exec of the command, by a small helper.
-This is the position the vendored apply-seccomp helper holds in the SDK's wrapper chain when it runs: it wraps the command the sandbox executes (read from ADR-075 :423-424, anchor "wraps **every** sandboxed command in that helper").
+This is the position the vendored apply-seccomp helper holds in the SDK's wrapper chain when it runs: it wraps the command the sandbox executes (read from ADR-075 :423-424, anchor "wraps **every**").
 ADR-075's 2026-10-16 addendum records that this helper is not run under the production configuration (anchor "Skipping seccomp filter"); the position named above therefore has no occupant as of 2026-11-03 per that addendum (unverified against the 2026-10-19 addendum's second seccomp artifact, and unverified for any new helper until G2).
 The injection mechanism (argv rewrite in the PATH shim, a patch of the vendored builder, or another) is chosen at the spike and recorded in its amendment. A wrapper that restricts its own process before bwrap setup is not a candidate (L9). G5 is run with the helper present under the shim's filter.
 May be evaluated once the gate conditions below are met; no commitment to proceed.
@@ -141,7 +141,7 @@ That private record must exist before the amendment merges, or the gate fails.
 - G1, kernel and privilege prerequisites for the call, and Landlock ABI support.
   G1 is MET when, inside the production container and on the production host, the unprivileged-caller prerequisite holds and the reported ABI number is at or above the minimum the spike's rule set needs (L10).
   Absent, disabled at boot, or a lower ABI is a recorded miss, and the amendment records which.
-  The production-host half is taken by a read-only probe that mirrors to Sentry, delivered by its own PR; this ADR schedules no shell access to the host. Unverified until measured.
+  The production-host half would be taken by a read-only probe that mirrors to Sentry, which would be delivered by its own PR; neither is scheduled by this ADR, and this ADR schedules no shell access to the host. Unverified until measured.
 - G2, placement.
   The ruleset is applied in the child after the sandbox view is built and before exec of the command.
   The measurement shows two things (L3, L9). First, from a thread of the server process, the same access succeeds after the child applied its ruleset. Second, a sandboxed command started after that child's ruleset was applied is not confined by it.
@@ -154,6 +154,7 @@ That private record must exist before the amendment merges, or the gate fails.
   This is the hosted-Bash outage class (L8). The baked SDK Bash probe that `run_sdk_bash_smoke` execs (read from ADR-079 :700, anchor "`run_sdk_bash_smoke` in `ci-deploy.sh`") must return verdict `pass` with coverage `sdk_wrapper_shim_prodtuple`, not `replay_only`, with the layer present. It is run against the throwaway image, per the spike-branch rule below. The verdict is read from the probe's own `SDK_BASH_RESULT` line. It is not read from deploy success (the production smoke call site is non-blocking, anchor "`run_sdk_bash_smoke || true`"), not from the deploy-time host ledger, and not from canary green (L8).
 - G6, degrade and signal.
   On a kernel or ABI that lacks the needed rights, the child degrades to bwrap-only and emits a signal mirrored to Sentry.
+  The absent and the disabled-at-boot outcomes are produced on a host or kernel that has them, or by forcing the helper's ruleset call to return ENOSYS or EOPNOTSUPP in the prototype, and the amendment records which.
   A silent skip and a fail-closed Bash outage both fail the gate.
 
 Ownership.
@@ -163,7 +164,7 @@ If a #9842 spike already covers Landlock, this ADR cites it and drops G1 only if
 Measured (absence in scope: `gh issue view 9842 --json body --jq .body | grep -ci landlock`, epic issue body only, 2026-11-03; child spike issues not searched): 0.
 A 2026-10-09 comment on #9859 names a Landlock-plus-seccomp candidate as an optional comparison arm (label: unverified, mutable source: issue comment, 2026-11-03). Whether any #9842 spike measures kernel ABI support is unverified, so G1 stays in this gate until a #9842 spike records an ABI result.
 
-G3 to G6 are measured on a spike branch or a throwaway image, on a non-production host of the machine class the amendment records, with prototype helper, probe and signal code that lives on that branch and is not merged. Shipping delivers the production version of that code in a separate flag-off PR after the flip. G3 and G5 are taken by running the canary replay and the baked SDK Bash probe against the throwaway image; the deploy-time smoke and its host ledger are not their source, because they run only inside a production deploy. Measurements on the production host (G1) are read-only and run under the operator's authorization at that time.
+G2 to G6 are measured on a spike branch or a throwaway image, on a non-production host of the machine class the amendment records, with prototype helper, probe and signal code that lives on that branch and is not merged. G2 to G6 record the host's Landlock ABI number, which is not lower than the production ABI recorded at G1. Shipping delivers the production version of that code in a separate flag-off PR after the flip. G3 and G5 are taken by running the canary replay and the baked SDK Bash probe against the throwaway image; the deploy-time smoke and its host ledger are not their source, because they run only inside a production deploy. Measurements on the production host (G1) are read-only and run under the operator's authorization at that time.
 
 Tracker: #9602 (open on 2026-11-03).
 

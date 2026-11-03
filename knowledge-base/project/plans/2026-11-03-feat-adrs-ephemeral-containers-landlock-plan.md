@@ -305,6 +305,7 @@ The design text above is the pre-implementation record. Review rounds 1 and 2 ch
 - Flip semantics: every gate recorded as MET, a recorded miss leaves `proposed`, canary green is not sufficient, ceilings and floors for P2 to P5 are recorded before the run, a second reviewer confirms (rulings AF, AG, AH, AQ, AU, AV).
 - Ledger rows were split to one label per claim (C3a/C3b, C4a-c, L4a/L4b, new L11); ADR-316 options are numbered 1 to 4; dispositions are "the control in force", "may be evaluated", "not evaluated", "not a candidate" (ruling AN).
 - `related_adrs` of ADR-315 gained ADR-078, ADR-062, ADR-027 and ADR-278 because the body cites them (ruling AP).
+- Gate measurability and terms: G1 MET criterion, G3 and G5 run against a throwaway image reading `SDK_BASH_RESULT`, the runc-class definition, ADR-315 Option 3 not evaluated, and the flip "made only when", not mechanically (rulings AR, AS, AU, AV).
 - Option 4 and Option 3 wording, the outage cause wording and the third-party product names follow rulings AJ, AK, AL, AW.
 
 ## Test Scenarios
