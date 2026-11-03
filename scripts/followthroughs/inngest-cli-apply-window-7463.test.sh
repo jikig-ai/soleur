@@ -115,20 +115,23 @@ new_fx() {
   printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$d/runs.json"
   printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$d/health.json"
 }
-# add_run <fx> <databaseId> <created_at> [conclusion] — append a dispatch run. Call order
+# add_run <fx> <run id> <created_at> [conclusion] — append a dispatch run. Call order
 # IS the wire order — the API serves newest-first, so each arm decides its own recency
-# by the order it calls this helper (not by created_at sorting).
+# by the order it calls this helper (not by created_at sorting). The key is `id`:
+# the REST runs payload has no `databaseId` (that is `gh run list --json`'s GraphQL
+# name) — fixtures must match the wire shape or the suite pins a field the API
+# never sends (#7081 stub-fidelity class).
 add_run() {
   local d="$1"; assert_fixture_dir "$d"
   jq --argjson id "$2" --arg c "$3" --arg k "${4:-null}" \
-    '.workflow_runs += [{databaseId:$id, created_at:$c, conclusion:(if $k == "null" then null else $k end)}]' \
+    '.workflow_runs += [{id:$id, created_at:$c, conclusion:(if $k == "null" then null else $k end)}]' \
     "$d/runs.json" > "$d/runs.tmp" && mv "$d/runs.tmp" "$d/runs.json"
 }
-# add_health <fx> <databaseId> <created_at> <conclusion|null> — append a health run.
+# add_health <fx> <run id> <created_at> <conclusion|null> — append a health run.
 add_health() {
   local d="$1"; assert_fixture_dir "$d"
   jq --argjson id "$2" --arg c "$3" --arg k "$4" \
-    '.workflow_runs += [{databaseId:$id, created_at:$c, conclusion:(if $k == "null" then null else $k end)}]' \
+    '.workflow_runs += [{id:$id, created_at:$c, conclusion:(if $k == "null" then null else $k end)}]' \
     "$d/health.json" > "$d/health.tmp" && mv "$d/health.tmp" "$d/health.json"
 }
 # add_job <fx> <run_id> <name> <conclusion|null> — append a job to page 1 of jobs-<rid>.json.
@@ -212,7 +215,7 @@ expect_out "runsjunk" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
 # iterates object VALUES, so a drifted payload emits a phantom run row that a
 # real jobs read would then confirm — the same counted-fault class as `.jobs`.
 fx="$WORK/fx-runsobject"; new_fx runsobject
-printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":91,"created_at":"2026-10-05T09:00:00Z","conclusion":"success"}}}' > "$fx/runs.json"
+printf '%s' '{"total_count":1,"workflow_runs":{"a":{"id":91,"created_at":"2026-10-05T09:00:00Z","conclusion":"success"}}}' > "$fx/runs.json"
 # The planted phantom's jobs + health make the UNGUARDED path a demonstrable
 # false-PASS (rc 0), not merely rc != 3 — the pin survives a weakened message.
 add_job "$fx" 91 inngest_host_replace success
@@ -231,6 +234,13 @@ expect_out "runsabsent" "$fx" "NOT-YET: no post-merge apply dispatches on main"
 fx="$WORK/fx-runsnull"; new_fx runsnull
 printf '%s' '{"total_count":0,"workflow_runs":null}' > "$fx/runs.json"
 expect "null .workflow_runs -> measured-empty NOT-YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+# `.workflow_runs: false` — jq's `//` would swallow it into a measured-empty
+# read, but the contract pins it as a counted fault (only absent/null is empty).
+fx="$WORK/fx-runsfalse"; new_fx runsfalse
+printf '%s' '{"total_count":0,"workflow_runs":false}' > "$fx/runs.json"
+expect "false .workflow_runs -> counted fault CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "runsfalse" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
 
 # A run carrying a successful replace job but created AT or BEFORE the merge second —
 # the probe's own jq applies the strict `>` filter on the fixture's raw list; either
@@ -303,6 +313,14 @@ add_run "$fx" 207 "$T1"
 jobs_raw "$fx" 207 '{"total_count":1,"jobs":{"a":{"name":"inngest_host_replace","conclusion":"success","status":"completed"}}}'
 expect "non-array .jobs is a counted fault, not phantom evidence -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "jobsobject" "$fx" "CANNOT-ESTABLISH: all 1 per-run job queries failed"
+
+# `.jobs: false` — the `== null` predicate (not `//`) keeps it a counted fault;
+# a coalesce would read it as a valid empty page.
+fx="$WORK/fx-jobsfalse"; new_fx jobsfalse
+add_run "$fx" 208 "$T1"
+jobs_raw "$fx" 208 '{"total_count":1,"jobs":false}'
+expect "false .jobs is a counted fault -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "jobsfalse" "$fx" "CANNOT-ESTABLISH: all 1 per-run job queries failed"
 
 # A dispatch for a different apply_target: jobs exist, none replace-named.
 fx="$WORK/fx-othertarget"; new_fx othertarget
@@ -471,7 +489,7 @@ expect_out "healthjunk" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
 fx="$WORK/fx-healthobject"; new_fx healthobject
 add_run "$fx" 298 "$T1"
 add_job "$fx" 298 inngest_host_replace success
-printf '%s' '{"total_count":1,"workflow_runs":{"a":{"databaseId":301,"created_at":"2026-10-07T09:00:00Z","conclusion":"success"}}}' > "$fx/health.json"
+printf '%s' '{"total_count":1,"workflow_runs":{"a":{"id":301,"created_at":"2026-10-07T09:00:00Z","conclusion":"success"}}}' > "$fx/health.json"
 expect "non-array .workflow_runs on health list -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "healthobject" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
 
@@ -483,6 +501,13 @@ add_job "$fx" 299 inngest_host_replace success
 printf '%s' '{"total_count":0,"incomplete_results":false}' > "$fx/health.json"
 expect "absent .workflow_runs on health list -> measured-empty NOT-YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "healthabsent" "$fx" "NOT-YET: replace ran (299) but no health run post-dates it yet"
+
+fx="$WORK/fx-healthfalse"; new_fx healthfalse
+add_run "$fx" 306 "$T1"
+add_job "$fx" 306 inngest_host_replace success
+printf '%s' '{"total_count":0,"workflow_runs":false}' > "$fx/health.json"
+expect "false .workflow_runs on health list -> counted fault CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthfalse" "$fx" "CANNOT-ESTABLISH: health run list unreadable"
 
 printf 'inngest-cli-apply-window-7463.test.sh: %s passed, %s failed\n' "$((total - fails))" "$fails"
 [[ "$fails" -eq 0 ]]

@@ -76,7 +76,12 @@ echo "anchor: PR #9201 merged_at=$merged_at"
 # it is a counted fault (the `.jobs` guard below applies to both list reads).
 raw_runs="$(gh api "repos/$REPO/actions/workflows/$APPLY_WF/runs?event=workflow_dispatch&branch=main&per_page=15" 2>/dev/null)" \
   || { echo "CANNOT-ESTABLISH: apply dispatch list read failed" >&2; exit 3; }
-runs="$(jq -r "(.workflow_runs // []) | if type == \"array\" then .[] else error(\".workflow_runs is not an array\") end | select(.created_at > \"$merged_at\") | [.databaseId, .created_at, .conclusion] | @tsv" <<<"$raw_runs")" \
+# `.id` is the REST field (`.databaseId` is `gh run list --json`'s GraphQL name —
+# a null projection collapses the TSV and the jobs read then queries a run whose
+# id is a timestamp: permanent CANNOT-ESTABLISH, or on the health side a false
+# NOT-YET forever). `== null` (not `// []`): jq's `//` also swallows `false`,
+# which must stay a counted fault, not a measured-empty read.
+runs="$(jq -r "if .workflow_runs == null then empty elif (.workflow_runs | type) == \"array\" then .workflow_runs[] else error(\".workflow_runs is not an array\") end | select(.created_at > \"$merged_at\") | [.id, .created_at, .conclusion] | @tsv" <<<"$raw_runs")" \
   || { echo "CANNOT-ESTABLISH: apply dispatch list unreadable" >&2; exit 3; }
 if [[ -z "$runs" ]]; then
   echo "NOT-YET: no post-merge apply dispatches on main" >&2
@@ -101,7 +106,7 @@ while IFS=$'\t' read -r rid created _concl; do
     || { jobq_failed=$((jobq_failed + 1)); continue; }
   # A `.jobs` value that is not an array (drifted/error shape) is a counted fault,
   # not a silently-empty read — only absent/null .jobs parses as "no replace job".
-  jobs="$(jq -rs '[.[].jobs? // [] | if type == "array" then .[] else error(".jobs is not an array") end | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' <<<"$raw")" \
+  jobs="$(jq -rs '[.[].jobs? | if . == null then empty elif type == "array" then .[] else error(".jobs is not an array") end | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' <<<"$raw")" \
     || { jobq_failed=$((jobq_failed + 1)); continue; }
   [[ -n "$jobs" ]] || continue   # this dispatch was a different apply_target
   replace_run_id="$rid"; replace_at="$created"
@@ -130,7 +135,7 @@ fi
 # two-step capture — a failed health read is rc 3, a measured-empty one rc 2.
 raw_health="$(gh api "repos/$REPO/actions/workflows/$HEALTH_WF/runs?branch=main&per_page=10" 2>/dev/null)" \
   || { echo "CANNOT-ESTABLISH: health run list read failed" >&2; exit 3; }
-health_rows="$(jq -r "(.workflow_runs // []) | if type == \"array\" then .[] else error(\".workflow_runs is not an array\") end | select(.created_at > \"$replace_at\") | [.databaseId, .created_at, .conclusion] | @tsv" <<<"$raw_health")" \
+health_rows="$(jq -r "if .workflow_runs == null then empty elif (.workflow_runs | type) == \"array\" then .workflow_runs[] else error(\".workflow_runs is not an array\") end | select(.created_at > \"$replace_at\") | [.id, .created_at, .conclusion] | @tsv" <<<"$raw_health")" \
   || { echo "CANNOT-ESTABLISH: health run list unreadable" >&2; exit 3; }
 health="${health_rows%%$'\n'*}"
 if [[ -z "$health" ]]; then
