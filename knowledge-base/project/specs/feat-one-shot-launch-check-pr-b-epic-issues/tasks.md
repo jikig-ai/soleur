@@ -43,23 +43,23 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 5 — Docs and architecture
 
-- 5.1 `SKILL.md`: replace "Planned" and the no-`gh` rule; preview/ask/create flow, decline path, lost-session recovery, public and fork questions, abort reasons; no `description:` edit
-- 5.2 ADR-314 dated amendment (decisions 6 and 7, Art. 28(3) posture note, markers unmirrored, one alternatives row); status stays `adopting`
-- 5.3 `model.c4`: second `plugin -> github` edge (customer's own `gh` token), rewrite `launchcheck` description; `bash scripts/regenerate-c4-model.sh`
-- 5.3b Comment-only block in `apps/web-platform/server/git-lock-marker-telemetry.ts` (unmirrored `ISSUES` markers, hosted run dark); `redact-gate.sh` runs its scans from the scratch directory (+ `.gitleaksignore` test; DONE with Phases 2-4, only the comment-only TS block remains)
-- 5.3c `SKILL.md` Undo paragraph; decline deletes the plan directory
-- 5.4 Suite assertion: no `skills/*/scripts/*.sh` emits `SOLEUR_LAUNCH_CHECK_ISSUES*` or `_PLAN_OK`
+- [x] 5.1 `SKILL.md`: replace "Planned" and the no-`gh` rule; preview/ask/create flow, decline path, lost-session recovery, public and fork questions, abort reasons; no `description:` edit
+- [x] 5.2 ADR-314 dated amendment (decisions 6 and 7, Art. 28(3) posture note, markers unmirrored, one alternatives row); status stays `adopting`
+- [x] 5.3 `model.c4`: second `plugin -> github` edge (customer's own `gh` token), rewrite `launchcheck` description; `bash scripts/regenerate-c4-model.sh`
+- [x] 5.3b Comment-only block in `apps/web-platform/server/git-lock-marker-telemetry.ts` (unmirrored `ISSUES` markers, hosted run dark); `redact-gate.sh` runs its scans from the scratch directory (+ `.gitleaksignore` test; DONE with Phases 2-4, only the comment-only TS block remains)
+- [x] 5.3c `SKILL.md` Undo paragraph; decline deletes the plan directory
+- [x] 5.4 Suite assertion: no `skills/*/scripts/*.sh` emits `SOLEUR_LAUNCH_CHECK_ISSUES*` or `_PLAN_OK`
 
 ## Phase 6 — Ratchets and registry rows
 
-- 6.1 `components.test.ts` (no budget edit), `lint-skill-body-budget.py`
+- [x] 6.1 `components.test.ts` (no budget edit), `lint-skill-body-budget.py`
 - 6.2 Accept rows via `ci-pr-affected-replay.py audit --all-refs`; re-run `ratchet`
-- 6.3 `.claude/hooks/grep-q-pipe-guard.test.sh` recount (`PJ_TRIPLES` 316)
-- 6.4 Telemetry drift test (`git-lock-marker-telemetry.test.ts`) unchanged and green
-- 6.5 `regenerate-shard-manifest.py --incremental --write`, then the measured duration row
-- 6.6 `fixture-relative-assert.test.sh --write-baseline`, then the plain check
-- 6.7 C4 set: `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness`
-- 6.8 `lint-orphan-test-suites.sh`, `lint-guard-contract.py` on the plan
+- [x] 6.3 `.claude/hooks/grep-q-pipe-guard.test.sh` recount (`PJ_TRIPLES` 316)
+- [x] 6.4 Telemetry drift test (`git-lock-marker-telemetry.test.ts`) unchanged and green
+- [x] 6.5 `regenerate-shard-manifest.py --incremental --write`, then the measured duration row (suite split into `issues-guards` 95 s and `issues-resume` 211 s; `issues-common.sh` holds the shared harness)
+- [x] 6.6 `fixture-relative-assert.test.sh --write-baseline`, then the plain check
+- [x] 6.7 C4 set: `c4-code-syntax`, `c4-render`, `c4-count-parity`, `c4-model-freshness`
+- [x] 6.8 `lint-orphan-test-suites.sh`, `lint-guard-contract.py` on the plan
 
 ## Phase 7 — Review and ship
 
