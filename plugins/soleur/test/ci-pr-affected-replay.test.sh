@@ -2546,10 +2546,10 @@ row_rt_generic() { rt_in std raises 2 internal --baseline scripts/bl-ok.tsv; }
 
 # ---- the failure text: golden templates per cause --------------------------------------------------------------
 rt_remedy_new() {   # the five remedy lines of a new pair (an independent copy of the golden text)
-  printf '%s\n' 'remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file (that is what the selector must know); editing that file runs the full battery once' \
+  printf '%s\n' 'remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, or the file'"'"'s state feeds its verdict (that is what the selector must know); editing that file runs the full battery once' \
     'remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind' \
     'remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)' \
-    'remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository'"'"'s ruleset' \
+    'remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository'"'"'s ruleset' \
     'remedy: a baseline row cannot be added'
 }
 rt_golden() {   # rt_golden <repo> <list> <cause line> <suite> <path> <ref text> <live> <baseline> [ref line]: compare the WHOLE stdout

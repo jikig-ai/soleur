@@ -2475,10 +2475,12 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   # (`git ls-files -ci --exclude-standard`), so a `.gitignore`-only diff can flip
   # its verdict while selecting nothing. `.gitignore` carries no CODE_EXT
   # extension, so these edges never enter the audit's naming walk and mint zero
-  # pairs — the ~442-pair premise of the #11779 revert does not reproduce. NEVER
-  # the recursive `**`-rooted form (`glob:` + `**` + `.gitignore` or
-  # `**/.gitignore`): a root-anchored arm with a `/`-bearing tail degrades to
-  # always-match. A `.gitignore` under a NEW
+  # pairs — the ~442-pair premise recorded at #11779 does not reproduce. NEVER
+  # the recursive `**` spellings: `glob:`-prefixed `**/.gitignore` is malformed
+  # (root-anchored arm, `/`-bearing tail → always-match degrade), while
+  # `glob:`-prefixed `**.gitignore` is well-formed but silently under-covers —
+  # it mints a root-only edge matching dir-less lines, masquerading as coverage.
+  # A `.gitignore` under a NEW
   # top-level dir stays uncovered until re-enumerated — same residual as the
   # #11648 enumeration above; the th6 census bounds it.
   ".gitignore"
