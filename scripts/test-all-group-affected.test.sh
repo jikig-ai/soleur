@@ -333,12 +333,15 @@ echo "--- Part C: environment hygiene — a runner-spawned suite never observes 
 # control that removed nothing cannot pass). The splice removes the registration region
 # (tc_acquire .. tc_epilogue), and the probes run serially without a log directory, so the
 # registration region, the tee branch and the parallel launcher are not exercised by them:
-# C1b is the static half for those. It is a CLOSED set, not a list of spellings: every line
-# of the runner and its libs that assigns, env-prefixes or exports the variable must be one of
-# three reviewed lines, so a spelling nobody thought of is flagged rather than missed
-# (an indirect `export "$name"` is the one form it cannot see; the probes catch that wherever
-# they run). C6-C9 vary the environment the monitor really has: the other groups, the alias,
-# CI=true, and a shard binding.
+# C1b is the static half for those. It is LEXICAL: a line-oriented pass over heredoc-, comment-
+# and quote-stripped text that flags any line assigning, env-prefixing or exporting the variable
+# (or an eval mentioning it, or allexport) unless it is one of three reviewed lines in the runner.
+# What it cannot see is stated, not hoped away: an indirect `export "$name"`, a name built at run
+# time, and an executed heredoc (`source /dev/stdin <<X`). The probes (C2-C9) catch those wherever
+# they run; in the registration region nothing does, which is the residual risk this suite
+# accepts. The durable alternative is a runtime recorder (check every spawn's environment), which
+# is out of scope for a one-line fix. C6-C9 vary the environment the monitor really has: the
+# other groups, the alias, CI=true, and shard bindings.
 SB_REAL="$SB/real.sh"; SB_CTL="$SB/ctl.sh"   # beside runner.sh so they resolve $SB/lib
 C_P0=$PASS; C_F0=$FAIL; C_ASSERTED=0
 for probe in probe-a probe-b; do
@@ -377,38 +380,60 @@ PY
 # matched in three shapes (assignment or env-pair, an export-family word with the name as any
 # operand, allexport) and compared against the reviewed set by exact normalised line.
 cat > "$TMP/c_static.py" <<'PYS'
-import re, sys
+import os, re, sys
 REVIEWED = {
     'TEST_GROUP=Q',                                      # the resolution line
     'if [[ Q == Q ]]; then TEST_GROUP=all; fi',          # the affected -> all alias
     'export -n TEST_GROUP',                              # the demotion itself
 }
+path = sys.argv[1]
+base = os.path.basename(path)
+reviewed = REVIEWED if (len(sys.argv) > 2 and sys.argv[2] == 'runner') else set()
 ASSIGN = re.compile(r'(^|[^A-Za-z0-9_$-])TEST_GROUP\+?=')
 EXPORT = re.compile(r'\b(export|declare|typeset|local|readonly)\b[^;|&]*\bTEST_GROUP\b')
-ALLEXPORT = re.compile(r'(^|[;&|(\s])set\s+(-[a-z]*a[a-z]*\b|-o\s+allexport\b)')
+EVAL = re.compile(r'\beval\b.*TEST_GROUP')
+ALLEXPORT = re.compile(r'(^|[;&|(\s])set(\s+-\S+)*\s+(-[a-z]*a[a-z]*|-o\s+allexport)\b')
+OPENER = re.compile(r"(?<!<)<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?")
 hd = None
-for raw in open(sys.argv[1], errors='replace'):
+buf = ''
+def analyse(line):
+    global hd
+    s = line.strip()
+    if s.startswith('#'):
+        return
+    m = OPENER.search(line)
+    if m:
+        hd = m.group(1)
+    if EVAL.search(s):
+        print('%s: %s' % (base, s))
+        return
+    s = re.sub(r"[\"']TEST_GROUP(?=[\"'=])", 'TEST_GROUP', s)
+    s = re.sub(r'"[^"]*"', 'Q', s)
+    s = re.sub(r"'[^']*'", 'Q', s)
+    s = re.sub(r'\s#.*$', '', s)
+    if s in reviewed:
+        return
+    if ASSIGN.search(s) or EXPORT.search(s) or ALLEXPORT.search(s):
+        print('%s: %s' % (base, s))
+for raw in open(path, errors='replace'):
     line = raw.rstrip('\n')
     if hd is not None:
         if line.strip() == hd:
             hd = None
         continue
-    s = line.strip()
-    if s.startswith('#'):
+    if line.endswith('\\'):
+        buf += line[:-1] + ' '
         continue
-    m = re.search(r"(?<!<)<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?", line)
-    if m:
-        hd = m.group(1)
-    s = re.sub(r"[\"']TEST_GROUP[\"']", 'TEST_GROUP', s)
-    s = re.sub(r'\s#.*$', '', s)
-    s = re.sub(r'"[^"]*"', 'Q', s)
-    s = re.sub(r"'[^']*'", 'Q', s)
-    if s in REVIEWED:
-        continue
-    if ASSIGN.search(s) or EXPORT.search(s) or ALLEXPORT.search(s):
-        print(s)
+    analyse(buf + line)
+    buf = ''
+if buf:
+    analyse(buf)
+if hd is not None:
+    # a `<<` inside a string or an arithmetic expression opens a phantom heredoc that would hide
+    # the rest of the file; fail loudly instead of reporting clean
+    print('%s: UNTERMINATED-HEREDOC <%s> (a << inside a string or arithmetic?)' % (base, hd))
 PYS
-c_static() { python3 -I "$TMP/c_static.py" "$1"; } # <file> -> offending normalised lines, empty = clean
+c_static() { python3 -I "$TMP/c_static.py" "$1" "${2:-lib}"; } # <file> [runner|lib] -> offending lines, empty = clean
 
 assert_fixture_dir() {
   case "${1-}" in
@@ -459,25 +484,27 @@ c_check() { # <label> <runner> <want> <env pairs...> -- <runner argv...>
     fail "$label — $kind (rc=$rc dispatched=$dispatched probe-a=[${ra//$'\n'/ }] probe-b=[${rb//$'\n'/ }])"; dump "$out"
   fi
 }
-# Shards 5/6/7 were the incident. With a shard bound the probes split across the legs: every
-# probe that runs on either leg must read absent, and the two legs together run both probes.
-c_shard_check() { # <label> <runner> <group>
-  local label="$1" runner="$2" group="$3" pd="$TMP/probe-out" k p out rc seen=0 bad=""
+# Shards 5/6/7 were the incident. With a shard bound the probes split across the legs: each probe
+# runs on exactly one leg, and every reading must be absent. Run with a 2-way and a 7-way split.
+c_shard_check() { # <label> <runner> <group> <n legs>
+  local label="$1" runner="$2" group="$3" n="$4" pd="$TMP/probe-out" k out rc bad="" seen_a=0 seen_b=0
   C_ROWS=$((C_ROWS + 1)); C_ASSERTED=$((C_ASSERTED + 1))
-  for k in 1/2 2/2; do
-    out=$(run_sbx "$runner" "$pd" SCRIPTS_SHARD=$k TEST_GROUP=$group); rc=$?
-    [[ "$rc" == "0" ]] || bad+=" shard $k rc=$rc"
-    for p in probe-a probe-b; do
-      if [[ -f "$pd/$p.reading" ]]; then
-        seen=$((seen + 1))
-        [[ "$(cat "$pd/$p.reading")" == "$c_clean" ]] || bad+=" $p@$k=[$(tr '\n' ' ' < "$pd/$p.reading")]"
-      fi
-    done
+  for ((k = 1; k <= n; k++)); do
+    out=$(run_sbx "$runner" "$pd" SCRIPTS_SHARD=$k/$n TEST_GROUP=$group); rc=$?
+    [[ "$rc" == "0" ]] || bad+=" leg $k/$n rc=$rc"
+    if [[ -f "$pd/probe-a.reading" ]]; then
+      seen_a=$((seen_a + 1))
+      [[ "$(cat "$pd/probe-a.reading")" == "$c_clean" ]] || bad+=" probe-a@$k/$n=[$(tr '\n' ' ' < "$pd/probe-a.reading")]"
+    fi
+    if [[ -f "$pd/probe-b.reading" ]]; then
+      seen_b=$((seen_b + 1))
+      [[ "$(cat "$pd/probe-b.reading")" == "$c_clean" ]] || bad+=" probe-b@$k/$n=[$(tr '\n' ' ' < "$pd/probe-b.reading")]"
+    fi
   done
-  if [[ -z "$bad" && "$seen" == "2" ]]; then
+  if [[ -z "$bad" && "$seen_a" == "1" && "$seen_b" == "1" ]]; then
     pass "$label"
   else
-    fail "$label — a probe read the group on a sharded leg, or the legs did not run both probes (seen=$seen):$bad"
+    fail "$label — a probe read the group on a sharded leg, or a probe did not run exactly once across the legs (probe-a x$seen_a, probe-b x$seen_b):$bad"
   fi
 }
 
@@ -493,14 +520,17 @@ fi
 # exports the group (the registration region, the tee path and the parallel launcher are outside
 # what the probes execute).
 C_ASSERTED=$((C_ASSERTED + 1))
-c_bad=$(c_static "$TARGET")
-for c_lib in "$REPO_ROOT"/scripts/lib/*.sh; do
-  c_bad+=$(c_static "$c_lib")
-done
+c_bad=$(
+  c_static "$TARGET" runner
+  for c_lib in "$REPO_ROOT"/scripts/lib/*.sh "$REPO_ROOT"/plugins/soleur/scripts/lib/session-state.sh; do
+    case "$c_lib" in *.test.sh) continue ;; esac
+    c_static "$c_lib" lib
+  done
+)
 if [[ -z "$c_bad" ]]; then
-  pass "C1b — no assignment, env-prefix or export of TEST_GROUP in the runner or its libs beyond the three reviewed lines"
+  pass "C1b — no assignment, env-prefix, eval or export of TEST_GROUP in the runner or its libs beyond the three reviewed runner lines"
 else
-  fail "C1b — the runner or a lib writes TEST_GROUP outside the reviewed lines (review them, then extend REVIEWED in c_static.py if one is legitimate):"; dump "$c_bad"
+  fail "C1b — a write of TEST_GROUP outside the reviewed lines (a read: quote it; prose: move it into a comment or heredoc; a legitimate runner write: extend REVIEWED in c_static.py):"; dump "$c_bad"
 fi
 # C1b-ctl — the detector fires on each spelling and stays quiet on prose, comments, reads and the
 # reviewed lines, so an empty C1b result means something.
@@ -509,7 +539,10 @@ c1b_fire=('export TEST_GROUP' 'declare -x TEST_GROUP' 'declare -xg TEST_GROUP' '
           'local -x TEST_GROUP' 'export TMPDIR TEST_GROUP' 'export "TEST_GROUP"' 'export -- TEST_GROUP'
           'set -a' 'set -o allexport' 'run_suite x env TEST_GROUP="${TEST_GROUP:-}" bash y'
           'TEST_GROUP=$TEST_GROUP run_suite x bash y' 'x | env TEST_GROUP=a bash y'
-          'export -n TEST_GROUP; export TEST_GROUP' 'local TEST_GROUP="$TEST_GROUP"')
+          'export -n TEST_GROUP; export TEST_GROUP' 'local TEST_GROUP="$TEST_GROUP"'
+          'export "TEST_GROUP=scripts"' 'run_suite x env "TEST_GROUP=$TEST_GROUP" bash y'
+          'eval "export TEST_GROUP"' 'set -e -a' 'echo "n #1"; export TEST_GROUP'
+          'echo "see <<ZZZ notes"')
 c1b_quiet=('# export TEST_GROUP' 'export -n TEST_GROUP' 'echo "refusing to export TEST_GROUP here"'
            ': "note: TEST_GROUP=scripts is rejected"' '[[ "$TEST_GROUP" == "all" ]] && echo ok'
            'env -u TEST_GROUP bash y' 'true  # historically: export TEST_GROUP'
@@ -517,21 +550,27 @@ c1b_quiet=('# export TEST_GROUP' 'export -n TEST_GROUP' 'echo "refusing to expor
 c1b_fired=0; c1b_quiet_n=0
 for c_shape in "${c1b_fire[@]}"; do
   printf '%s\n' "$c_shape" > "$TMP/c1b-sample.txt"
-  [[ -n "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_fired=$((c1b_fired + 1))
+  [[ -n "$(c_static "$TMP/c1b-sample.txt" runner)" ]] && c1b_fired=$((c1b_fired + 1))
 done
 for c_shape in "${c1b_quiet[@]}"; do
   printf '%s\n' "$c_shape" > "$TMP/c1b-sample.txt"
-  [[ -z "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_quiet_n=$((c1b_quiet_n + 1))
+  [[ -z "$(c_static "$TMP/c1b-sample.txt" runner)" ]] && c1b_quiet_n=$((c1b_quiet_n + 1))
 done
 # a heredoc body is prose (quiet); a write AFTER the heredoc closes is code (fires)
 printf '%s\n' "cat <<'X'" 'TEST_GROUP=scripts is prose' 'X' > "$TMP/c1b-sample.txt"
-[[ -z "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_quiet_n=$((c1b_quiet_n + 1))
+[[ -z "$(c_static "$TMP/c1b-sample.txt" runner)" ]] && c1b_quiet_n=$((c1b_quiet_n + 1))
 printf '%s\n' "cat <<'X'" 'prose' 'X' 'export TEST_GROUP' > "$TMP/c1b-sample.txt"
-[[ -n "$(c_static "$TMP/c1b-sample.txt")" ]] && c1b_fired=$((c1b_fired + 1))
-if [[ "$c1b_fired" == "$(( ${#c1b_fire[@]} + 1 ))" && "$c1b_quiet_n" == "$(( ${#c1b_quiet[@]} + 1 ))" ]]; then
+[[ -n "$(c_static "$TMP/c1b-sample.txt" runner)" ]] && c1b_fired=$((c1b_fired + 1))
+# a backslash continuation does not hide the name on the next physical line
+printf '%s\n' 'export \' 'TEST_GROUP' > "$TMP/c1b-sample.txt"
+[[ -n "$(c_static "$TMP/c1b-sample.txt" runner)" ]] && c1b_fired=$((c1b_fired + 1))
+# the reviewed lines are reviewed for the RUNNER only: the same line in a lib is an offender
+printf '%s\n' 'export -n TEST_GROUP' > "$TMP/c1b-sample.txt"
+[[ -n "$(c_static "$TMP/c1b-sample.txt" lib)" ]] && c1b_fired=$((c1b_fired + 1))
+if [[ "$c1b_fired" == "$(( ${#c1b_fire[@]} + 3 ))" && "$c1b_quiet_n" == "$(( ${#c1b_quiet[@]} + 1 ))" ]]; then
   pass "C1b-ctl — the static detector fires on $c1b_fired spellings and stays quiet on $c1b_quiet_n prose, comment, read and reviewed lines"
 else
-  fail "C1b-ctl — detector self-check wrong (fired=$c1b_fired of $(( ${#c1b_fire[@]} + 1 )), quiet=$c1b_quiet_n of $(( ${#c1b_quiet[@]} + 1 )))"
+  fail "C1b-ctl — detector self-check wrong (fired=$c1b_fired of $(( ${#c1b_fire[@]} + 3 )), quiet=$c1b_quiet_n of $(( ${#c1b_quiet[@]} + 1 )))"
 fi
 # C2 — the monitor's channel (step env): no spawned suite or grandchild observes it.
 c_check "C2 — TEST_GROUP=scripts (the monitor's channel) is invisible to runner-spawned suites" \
@@ -559,11 +598,12 @@ c_check "C7 — TEST_GROUP=scripts under CI=true is invisible to runner-spawned 
 c_check "C8 — TEST_GROUP=scripts with a shard bound (SCRIPTS_SHARD=1/1) is invisible to runner-spawned suites" \
   "$SB_REAL" "$c_clean" SCRIPTS_SHARD=1/1 TEST_GROUP=scripts
 # C9 — the legs of a real split: shards 5/6/7 were the incident.
-c_shard_check "C9 — TEST_GROUP=scripts is invisible on both legs of a 2-way shard split" "$SB_REAL" scripts
+c_shard_check "C9 — TEST_GROUP=scripts is invisible on both legs of a 2-way shard split" "$SB_REAL" scripts 2
+c_shard_check "C9 — TEST_GROUP=scripts is invisible on every leg of a 7-way shard split (the monitor's n)" "$SB_REAL" scripts 7
 
 # Floor: rows that actually ran. Deleting the c_check calls above must not leave a green suite;
 # it reports through printf+exit, never through the helpers it backstops.
-C_ROWS_MIN=12
+C_ROWS_MIN=13
 if [[ "$C_ROWS" -lt "$C_ROWS_MIN" ]]; then
   printf '[FATAL] anti-vacuity floor: Part C ran %s of %s probe rows\n' "$C_ROWS" "$C_ROWS_MIN" >&2
   exit 1
@@ -571,7 +611,7 @@ fi
 # Conservation: every Part C assertion bumps C_ASSERTED independently of pass()/fail(), so a
 # neutered verdict helper (which leaves the floor above satisfied) cannot hide a failure.
 if [[ "$(( PASS - C_P0 + FAIL - C_F0 ))" -ne "$C_ASSERTED" ]]; then
-  printf '[FATAL] conservation: Part C made %s assertions but the verdict counters moved by %s\n' \
+  printf '[FATAL] conservation: Part C made %s assertions but the verdict counters moved by %s (a neutered pass()/fail(), or a Part C row added without bumping C_ASSERTED)\n' \
     "$C_ASSERTED" "$(( PASS - C_P0 + FAIL - C_F0 ))" >&2
   exit 1
 fi
