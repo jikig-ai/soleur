@@ -39,9 +39,13 @@
 
 import {
   chmodSync,
+  closeSync,
+  constants,
   copyFileSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -140,8 +144,23 @@ export function walkPayloadFiles(root: string, dir: string): Array<[string, Payl
       }
       if (!entry.isFile()) continue;
       const full = join(root, path);
-      const executable = (statSync(full).mode & 0o111) !== 0;
-      found.push([path, { content: readFileSync(full, "utf-8"), executable }]);
+      // One descriptor for kind + mode + bytes: a stat-then-read window would let
+      // a mid-walk swap change what is observed between the two calls (CodeQL
+      // js/file-system-race). O_NOFOLLOW turns a symlink swapped in after the
+      // Dirent check into an ELOOP error rather than a dereference — the refusal
+      // above only saw the entry as it was at readdir time — and O_NONBLOCK keeps
+      // a swapped-in FIFO from parking the install. Kind is re-checked on the
+      // descriptor, not trusted from the Dirent.
+      const fd = openSync(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) {
+          throw new Error(`Refusing non-regular file in payload tree: ${full}`);
+        }
+        found.push([path, { content: readFileSync(fd, "utf-8"), executable: (st.mode & 0o111) !== 0 }]);
+      } finally {
+        closeSync(fd);
+      }
     }
   };
   visit(dir);
