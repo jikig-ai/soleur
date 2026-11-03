@@ -222,18 +222,20 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 #
 # The fallback this whole block relies on is "an unhandled `--print-suite-globs` reads as an
 # unknown TEST_GROUP, so the runner exits 2 and we fail closed". That sentence is only true when
-# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`, which exports
-# `TEST_GROUP=<shard>` — so the child inherits a *valid* group, the unknown-group branch is never
+# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`; whenever the
+# caller exported `TEST_GROUP=<shard>` (the monitor's step env, or a developer's shell) the child
+# inherited a *valid* group — until #11939 the runner kept it exported — so the unknown-group branch is never
 # reached, and instead of exiting 2 the mutant RUNS THE ENTIRE SHARD. That shard contains this
 # suite, which mutates and re-invokes again: unbounded recursion.
 #
-# Measured 2026-08-13, and it is not subtle:
+# Measured 2026-08-13, before the runner dropped the export attribute (#11939), and it is not subtle:
 #   TEST_GROUP unset    -> 17 rows, 65 passed, 10 s
 #   TEST_GROUP=scripts  -> still running at 120 s, three nested copies of the suite alive at once
-#
-# It reproduces in CI, which sets TEST_GROUP per shard, and in the documented local exit gate
-# (`TEST_GROUP=scripts bash scripts/test-all.sh`). It did NOT reproduce standalone, which is
-# exactly why it survived: the suite's own green run leaves TEST_GROUP unset.
+# It reproduced under a caller that exported the group (the monitor's step env, the documented local
+# exit gate `TEST_GROUP=scripts bash scripts/test-all.sh`). The runner now drops the attribute, so the
+# scrub below is defence in depth for direct runs and for any caller that exports it, and must stay.
+# It did NOT reproduce standalone, which is exactly why it survived: the suite's own green run
+# leaves TEST_GROUP unset.
 #
 # Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
 # environment happens to hold, which is the only form of "fail closed" worth the name.
