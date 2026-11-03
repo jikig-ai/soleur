@@ -59,6 +59,13 @@ Zero existing content on model-tier economics despite BYOK cost being a live buy
 - **Pipeline:** ship tweet + Discord with-merge; blog "Pay 10x Only for Judgment" at merge+2-5 days (slot via campaign-calendar); social-distribute with blog.
 - **Tracking:** #5115 (content brief, ship Phase 5.5 CMO gate).
 
+### Gap 16: Plain-Language Consent for Agent Approvals (Medium) [NEW 2026-11-03]
+
+No content on how a founder is asked to approve what an AI agent does for them. PR #12012 (CLI approval card, PR-A of #12011) supplies the design principle: consequence first, whole-word yes/no/changes with no default, two fixed messages, a label-only audit trail. The web slices of #12011 are unbuilt, so nothing is announced until they ship.
+
+- **Pipeline:** no with-merge distribution; one combined blog post plus feature-tweet thread after the web legal-acceptance slice ships (HN Tue-Thu).
+- **Tracking:** #12039 (content brief, ship Phase 5.5 CMO gate, disposition schedule).
+
 ### Gap 1: Cross-Domain Compounding Narrative (Critical) [UPDATED 2026-03-20]
 
 **What is missing:** The "Why Most Agentic Engineering Tools Plateau" blog post (SAP 4.8/5.0) partially addresses this gap by explaining compound knowledge. However, no dedicated article exists that explains the compounding knowledge base as Soleur's core differentiator in depth. The homepage mentions "knowledge compounds" as a tagline but never elaborates.
@@ -394,6 +401,7 @@ This calendar complements the perpetual cadence above. It defines what to write 
 | Oct 2-9 (post-PR #8301 merge +5-7d, and >=14d after #8100 publishes) | Draft "Your AI Workflow Has a State Machine. Nobody Is Enforcing It." methodology post-mortem (Issue #8326, Pillar 2 incident/methodology lane, P1). Sources: ADR-229 + classifier script. No with-merge distribution; HN only if #8100 did not take the fortnight's slot. | 6-8 | Draft |
 | Undated — keyed to #8295 AND #8296 CLOSED (+5-7d) | Draft "Six Crash Sequences Passed Green Because My Test Modelled a Mount as a Symlink" post-mortem (PR #8248, Pillar 2 incident/methodology lane). Sources: 2026-09-18 crash-is-not-a-kill learning + ADR-142 amendment + the measured cutover (bytes, sha256 parity, rollback fired or not). No with-merge distribution; HN Tue-Thu only if not adjacent to #5104 / #8100. | 4-6 | Scheduled-on-trigger |
 | Sep 29-Oct 3 (post-PR #8352 merge +5-7d) | Draft "Nine AI Reviewers, One Host, Five Bugs None Could See" post-mortem (Issue #8396, Pillar 2 incident/methodology lane, P2). Sources: 2026-09-19 window-not-arms learning + PR #8352 §Review + ADR-071 amendment / ADR-230. One with-merge tweet only; HN Tue-Thu only if not adjacent to #8100 / #8326. | 4-6 | Draft |
+| Unscheduled (keyed to the web legal-acceptance slice of #12011 shipped, +5-7d) | Draft "What are you actually agreeing to?" plain-language approval post (Issue #12039, Pillar 2 methodology lane). Sources: PR #12012 approval-card.md + the web slice. Blog via content-writer plus fact-checker; X thread via social-distribute; HN Tue-Thu. No assurance wording; describe only shipped behaviour. | 3-4 | Scheduled-on-trigger |
 | 2026-09-25 (published; thread 2026-09-26) | Publish "Parked or Forgotten? How to Tell Before It Costs You" (Issue #8548, Pillar 2, P3) at /blog/parked-vs-forgotten-ideas/ for non-technical solo founders. Distribution file schedules the X thread plus Discord, Bluesky and both LinkedIn pages for the day after the post; no Hacker News. | 3-4 | Published |
 | 2026-09-26 (published with PR #8868; distribution next publisher run) | Publish "Your First Beta Testers Went Quiet. Now What?" (CMO gate at PR #8868 ship, Pillar 2, P3) at /blog/beta-testers-went-quiet/ for non-technical solo founders — beta-program visibility + privacy-respecting measurement angle. Distribution: X thread, Discord, Bluesky, both LinkedIn pages; no Hacker News. | 3-4 | Published |
 | Oct 12-19 (post-PR #8511 merge +5-7d) | Draft "The Guards Said the Pin Was There. ssh Never Used It." post-mortem (Issue #8550, Pillar 2 incident/methodology lane, P2). Sources: ADR-237 + 2026-09-21 host-key pinning learning. No with-merge distribution; HN Tue-Thu only if not adjacent to #8326 / #8396. | 4-6 | Draft |
