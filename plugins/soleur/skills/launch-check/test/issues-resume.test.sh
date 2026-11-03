@@ -39,9 +39,39 @@ check "G3.6: a pre-existing lc:severity-high label is untouched: no label write 
 check "G3.6 control: absent labels were created (lc:launch-check and lc:epic exist now)" bash -c 'jq -e "map(.name)|index(\"lc:launch-check\") != null and index(\"lc:epic\") != null" "$1/labels.json" >/dev/null' _ "$ST"
 full_case 7; D_ID=$(create_ids | sed -n 1p); A_ID=$(create_ids | sed -n 2p); B_ID=$(create_ids | sed -n 3p)
 stub_reset acme/demo private; seed 401 open stub-user lc:launch-check "<!-- launch-check:gap=$D_ID -->"; seed 402 open stub-user lc:launch-check "<!-- launch-check:gap=$D_ID -->"
-seed 403 open stub-user lc:launch-check "<!-- launch-check:gap=$A_ID --> <!-- launch-check:gap=$B_ID -->"
 prev; calls_reset; create
-check "G3.7: duplicates of one id resolve to the lowest number (no create for it) and a two-marker body is ignored: 6 item creates + the epic" test "$(n_post POST 'repos/acme/demo/issues$')" = 7
+check "G3.7: duplicates of one id resolve to the lowest number (no create for it): 6 item creates + the epic" test "$(n_post POST 'repos/acme/demo/issues$')" = 7
+# a several-marker issue (each marker on its own line) that names a finding of this plan stops the run before any write
+full_case 7; stub_reset acme/demo private
+seed 403 open stub-user lc:launch-check $'<!-- launch-check:gap='"$A_ID"$' -->\n\n<!-- launch-check:gap='"$B_ID"$' -->'
+prev
+check "G3.13: the preview warns about the several-marker issue and counts it as ignored" bash -c 'grep -q "^Ignored 1 issues" "$1" && grep -q "#403" "$1" && grep -q "more than one launch-check marker" "$1"' _ "$OUT"
+calls_reset; create
+check "G3.13: a several-marker issue that carries a marker of this plan writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
+check "G3.13: ... and aborts issue-ambiguous (rc 2)" abort_is 2 issue-ambiguous
+# several-marker issues that name no finding of this plan are only ignored and counted
+full_case 7; stub_reset acme/demo private
+seed 404 open stub-user lc:launch-check $'<!-- launch-check:gap=ZZ-01 -->\n<!-- launch-check:gap=ZZ-02 -->'
+prev; calls_reset; create
+check "G3.13: a several-marker issue that names no finding of this plan is ignored: the run completes (rc 0) and files all 7 (8 issues on the tracker with the seeded one)" bash -c '[ "$1" = 0 ] && [ "$2" = 8 ]' _ "$RC" "$(items_n)"
+# a several-marker issue that is an epic candidate is an ambiguous epic
+full_case 3; stub_reset acme/demo private
+seed 405 open stub-user lc:launch-check,lc:epic $'<!-- launch-check:epic -->\n\n<!-- launch-check:gap=ZZ-09 -->'
+prev; calls_reset; create
+check "G3.13: a several-marker epic candidate writes nothing" bash -c '[ "$1" = 0 ]' _ "$(n_writes)"
+check "G3.13: ... and aborts epic-ambiguous (rc 2)" abort_is 2 epic-ambiguous
+# a marker that is only QUOTED mid-text (or in a quote block) is not a marker: the epic stays the one epic and no second one is filed
+full_case 3; stub_reset acme/demo private; seed_label lc:launch-check ededed; seed_label lc:epic ededed
+QID=$(create_ids | sed -n 1p)
+seed 531 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"$'\n\nCustomer note: we saw <!-- launch-check:gap='"$QID"$' --> in an old issue.\n> <!-- launch-check:gap=ZZ-77 -->\n'
+prev; calls_reset; create
+check "G3.14: an epic body that quotes a marker is still read as the one epic: rc 0, no second epic is filed" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$RC" "$(epics_n)"
+check "G3.14: ... and the quoted gap id is still filed (a quote hides nothing): its marker is carried by a sub-issue" test "$(marker_n "$QID")" -ge 1
+# label-bearing issues with no usable marker (null, empty, or a marker that is not alone on its line) are ignored and counted in the preview
+full_case 3; stub_reset acme/demo private
+seed 611 open stub-user lc:launch-check NULL; seed 612 open stub-user lc:launch-check 'no marker here'; seed 613 open stub-user lc:launch-check 'inline <!-- launch-check:gap=ZZ-05 --> only'
+prev
+check "G3.15: the preview counts the three marker-less issues as ignored and names them" bash -c 'grep -q "^Ignored 3 issues" "$1" && grep -q "#611" "$1" && grep -q "#613" "$1"' _ "$OUT"
 full_case 3; stub_reset acme/demo private; seed 501 closed stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
 prev
 check "G3.8: preview prints a plain warning for a closed epic" bash -c 'grep -qi "closed" "$1" && grep -qi "epic" "$1"' _ "$OUT"
@@ -157,5 +187,5 @@ check "G4.6 mutation: a splice that replaces the whole body loses the customer t
 LCS="$SB0"
 
 # ---------------------------------------------------------------- 9. the exit-code table: every fail_loud reason this half owns was exercised by a row above
-check "every fail_loud abort reason owned by this half (resume and epic) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in confirm-public-required epic-closed epic-ambiguous issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
+check "every fail_loud abort reason owned by this half (resume and epic) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in confirm-public-required epic-closed epic-ambiguous issue-ambiguous issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
 finish 65

@@ -207,36 +207,48 @@ lc_issues_origin_check() {
 
 # ---------------------------------------------------------------- Guard 3: the live identity
 # lc_issues_live: one paginated listing of every issue that carries the scope label, kept as validated rows in $WORK/live.tsv:
-# number, database id, state, epic-label flag, author, key (a gap id or @epic). A failed or malformed listing is never read as
-# "none found".
+# number, database id, state, epic-label flag, author, key (a gap id, @epic, or - for no usable marker). A marker counts only as a
+# whole line (a customer note that quotes one mid-text is not a marker; a trailing CR is tolerated). A failed or malformed listing
+# is never read as "none found".
 lc_issues_live() {
   : > "$WORK/live.tsv"
   if ! lc_gh_read api "repos/$ISSUES_REPO/issues" -f labels=lc:launch-check -f state=all -f per_page=100 --paginate \
-    --jq '.[] | select(.pull_request == null) | . as $i | ((.body // "") | scan("<!-- launch-check:(?:gap=[A-Z]+-[A-Za-z0-9-]+|epic) -->")) as $m | [$i.number, $i.id, $i.state, (("\t" + ([$i.labels[].name] | @tsv) + "\t") | test("\tlc:epic\t")), ($i.user.login // "-"), $m] | @tsv'; then
+    --jq '.[] | select(.pull_request == null) | . as $i | ((.body // "") | ((scan("(?m)^<!-- launch-check:(gap=[A-Z]+-[A-Za-z0-9-]+|epic) -->\r?$") | .[0]) // "-")) as $m | [$i.number, $i.id, $i.state, (("\t" + ([$i.labels[].name] | @tsv) + "\t") | test("\tlc:epic\t")), ($i.user.login // "-"), $m] | @tsv'; then
     lc__incomplete lookup "$LC_GH_KIND"
   fi
-  RE_MARK='^<!-- launch-check:(gap=[A-Z]+-[A-Za-z0-9-]+|epic) -->$' RE_LOGIN='^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$' \
+  RE_MARK='^(gap=[A-Z]+-[A-Za-z0-9-]+|epic|-)$' RE_LOGIN='^[A-Za-z0-9][A-Za-z0-9_-]*(\[bot\])?$' \
   awk -F'\t' -v OFS='\t' '
     NF != 6 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || ($3 != "open" && $3 != "closed") || ($4 != "true" && $4 != "false") || $6 !~ ENVIRON["RE_MARK"] { bad = 1; exit }
-    { m = $6; sub(/^<!-- launch-check:/, "", m); sub(/ -->$/, "", m)
-      key = (m == "epic") ? "@epic" : substr(m, 5)
+    { key = ($6 == "epic") ? "@epic" : ($6 == "-") ? "-" : substr($6, 5)
       login = $5; if (login !~ ENVIRON["RE_LOGIN"]) login = "-"
       print $1, $2, $3, $4, login, key }
     END { if (bad) exit 1 }' "$WORK/gh.out" > "$WORK/live.new" || lc__incomplete lookup malformed
   mv "$WORK/live.new" "$WORK/live.tsv"
 }
 
-# lc_live_tables: derive live.items (id, number, database id, state; lowest number wins, an issue with several distinct markers is
-# ignored and counted), live.epics (number, database id, state, author) and live.ignored from live.tsv.
+# lc_live_tables: derive live.items (id, number, database id, state; lowest number wins), live.epics (number, database id, state,
+# author) and the ignored issues from live.tsv. An issue is ignored when it carries several distinct markers or none: live.ignored
+# holds the count, live.ign.nums their numbers, live.ign.epic the numbers of the several-marker ones that are epic candidates (the
+# epic label or an epic marker) and live.ign.keys "number<TAB>gap id" for every gap marker of a several-marker issue.
 lc_live_tables() {
-  : > "$WORK/live.items"; : > "$WORK/live.epics"; : > "$WORK/live.ignored"
-  F_ITEMS="$WORK/live.items" F_EPICS="$WORK/live.epics" F_IGN="$WORK/live.ignored" awk -F'\t' -v OFS='\t' '
-    { n = $1; if (!(n in first)) { first[n] = $6; ord[++cnt] = n; row[n] = $0 } else if (first[n] != $6) multi[n] = 1 }
+  : > "$WORK/live.items"; : > "$WORK/live.epics"; : > "$WORK/live.ignored"; : > "$WORK/live.ign.nums"; : > "$WORK/live.ign.epic"; : > "$WORK/live.ign.keys"
+  F_ITEMS="$WORK/live.items" F_EPICS="$WORK/live.epics" F_IGN="$WORK/live.ignored" F_NUMS="$WORK/live.ign.nums" F_IGNE="$WORK/live.ign.epic" F_IGNK="$WORK/live.ign.keys" \
+  awk -F'\t' -v OFS='\t' '
+    { n = $1
+      if (!(n in first)) { first[n] = $6; ord[++cnt] = n; row[n] = $0; nk[n] = 1; ks[n, 1] = $6; ep[n] = ($4 == "true") }
+      else { dup = 0; for (j = 1; j <= nk[n]; j++) if (ks[n, j] == $6) dup = 1
+             if (!dup) { ks[n, ++nk[n]] = $6; multi[n] = 1 } } }
     END {
       for (i = 1; i <= cnt; i++) {
         n = ord[i]
-        if (n in multi) { ign++; continue }
+        if (n in multi) {
+          ign++; print n > (ENVIRON["F_NUMS"]); isep = ep[n]
+          for (j = 1; j <= nk[n]; j++) { if (ks[n, j] == "@epic") isep = 1; else print n, ks[n, j] > (ENVIRON["F_IGNK"]) }
+          if (isep) print n > (ENVIRON["F_IGNE"])
+          continue
+        }
         split(row[n], f, "\t")
+        if (f[6] == "-") { ign++; print n > (ENVIRON["F_NUMS"]); continue }
         if (f[6] == "@epic") { if (f[4] == "true") print f[1], f[2], f[3], f[5] > (ENVIRON["F_EPICS"]); continue }
         k = f[6]
         if (!(k in bn) || n + 0 < bn[k] + 0) { bn[k] = n; bd[k] = f[2]; bs[k] = f[3] }
@@ -247,6 +259,21 @@ lc_live_tables() {
   [ -s "$WORK/live.ignored" ] || printf '0\n' > "$WORK/live.ignored"
   sort -o "$WORK/live.items" "$WORK/live.items"
   EPIC_CANDIDATES=$(grep -c . "$WORK/live.epics")
+}
+
+# lc__live_gate: stop before any write when the listing holds something the run cannot read safely. A several-marker issue that is
+# an epic candidate is an ambiguous epic; one that carries a marker of a gap in this plan could hide that gap, so the run stops
+# with one closed reason instead of filing it a second time.
+lc__live_gate() {
+  [ ! -s "$WORK/live.ign.epic" ] || lc_abort epic-ambiguous 2 "detail=ignored-epic"
+  if [ -s "$WORK/live.ign.keys" ]; then
+    F_ROWS="$WORK/plan.rows.tsv" awk -F'\t' '
+      FILENAME == ENVIRON["F_ROWS"] { id[$1] = 1; next }
+      ($2 in id) { hit = 1 }
+      END { exit !hit }' "$WORK/plan.rows.tsv" "$WORK/live.ign.keys" && lc_abort issue-ambiguous 2 "detail=several-markers"
+  fi
+  if [ "$EPIC_CANDIDATES" -gt 1 ]; then lc_abort epic-ambiguous 2 "detail=several-epics"; fi
+  return 0
 }
 
 # ---------------------------------------------------------------- Guard 2: bodies are built from the catalog, never typed
@@ -489,7 +516,12 @@ lc_issues_preview() {
   [ "$ISSUES_VIS" = PRIVATE ] || lc__fmt issues_public_warn
   if [ "$EPIC_CANDIDATES" -gt 1 ]; then lc__fmt issues_epic_ambiguous_warn
   elif [ "$EPIC_CANDIDATES" = 1 ] && [ "$(cut -f3 "$WORK/live.epics")" = closed ]; then lc__fmt issues_epic_closed_warn; fi
-  n=$(cat "$WORK/live.ignored"); [ "$n" = 0 ] || lc__fmt issues_ignored "$n"
+  n=$(cat "$WORK/live.ignored")
+  [ "$n" = 0 ] || lc__fmt issues_ignored "$n" "$(head -n 10 "$WORK/live.ign.nums" | sed 's/^/#/' | paste -s -d, -)"
+  [ ! -s "$WORK/live.ign.epic" ] || lc__fmt issues_epic_ambiguous_warn
+  if [ -s "$WORK/live.ign.keys" ] && F_PART="$WORK/part.tsv" awk -F'\t' 'FILENAME == ENVIRON["F_PART"] { id[$1] = 1; next } ($2 in id) { hit = 1 } END { exit !hit }' "$WORK/part.tsv" "$WORK/live.ign.keys"; then
+    lc__fmt issues_ignored_conflict_warn
+  fi
   lc__fmt issues_counts "$n_create" "$n_exists" "$n_closed" "$n_accepted" "$n_excluded" "$n_capped"
   c_crit=0; c_high=0; c_med=0; c_low=0
   c_crit=$(awk -F'\t' '$5 == "create" && $2 == "critical"' "$WORK/part.tsv" | grep -c .)
@@ -696,7 +728,7 @@ lc_issues_create() {
   # Live state decides what exists.
   lc_issues_live
   lc_live_tables
-  if [ "$EPIC_CANDIDATES" -gt 1 ]; then lc_abort epic-ambiguous 2 "detail=several-epics"; fi
+  lc__live_gate
   if [ "$EPIC_CANDIDATES" = 1 ]; then
     EPIC_NUM=$(cut -f1 "$WORK/live.epics"); EPIC_REF="#$EPIC_NUM"
     if [ "$(cut -f3 "$WORK/live.epics")" = closed ]; then lc__fmt epic_closed_fix; lc_abort epic-closed 2 "detail=epic-closed"; fi
@@ -736,7 +768,7 @@ lc_issues_create() {
       printf 'EPIC\t%s\thttps://%s/%s/issues/%s\n' "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv"
       lc_issues_live
       lc_live_tables
-      [ "$EPIC_CANDIDATES" -le 1 ] || lc_abort epic-ambiguous 2 "detail=several-epics"
+      lc__live_gate
     fi
   fi
 

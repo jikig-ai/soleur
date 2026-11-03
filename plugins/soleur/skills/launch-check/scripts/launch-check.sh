@@ -20,7 +20,7 @@
 # issues --check-plan   --plan P      (parse-only: no network, no scanner, no repository)
 # Abort reason -> exit code (issues):
 #   usage 2 · headless-write-refused 2 · report-missing 2 · report-stale 2 · plan-missing 2 · plan-invalid 2 · plan-repo-mismatch 2 ·
-#   repo-unresolved 2 · confirm-public-required 2 · epic-closed 2 · epic-ambiguous 2 · issues-unavailable 2 · write-shape-refused 2 ·
+#   repo-unresolved 2 · confirm-public-required 2 · epic-closed 2 · epic-ambiguous 2 · issue-ambiguous 2 · issues-unavailable 2 · write-shape-refused 2 ·
 #   issues-incomplete 2 (the run stopped part-way: re-run the printed command) · redaction-hit 1 · write-failed 2 · scanner-* 2.
 set -uo pipefail
 
