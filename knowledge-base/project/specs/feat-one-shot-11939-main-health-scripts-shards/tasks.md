@@ -5,17 +5,17 @@ Issue: #11939 | Draft PR: #11952 | Deferral: #11953
 
 ## Phase 1 — Failing test first
 
-- 1.1 Add Part C ("environment hygiene") to `scripts/test-all-group-affected.test.sh`, reusing the `run_sb` fixture sandbox: two probe suites registered in the spliced region, each printing `PROBE <name> TEST_GROUP=<set|absent>` plus a `bash -c` grandchild reading.
-- 1.2 Add the built-in positive control (probe run against a sandbox runner with the demotion stripped must read `set`) and the must-PASS rows (positional channel; `TEST_GROUP=scripts-heavy`).
+- 1.1 Add Part C ("environment hygiene") to `scripts/test-all-group-affected.test.sh`, reusing the `run_sb` fixture sandbox (run serially: `env -u SOLEUR_TEST_JOBS`): probe suite(s) registered in the spliced region, each printing `PROBE <name> TEST_GROUP=<set|absent>` plus a `bash -c` grandchild reading (a free extra reading, not a mutation row).
+- 1.2 Add the built-in positive control (row 1: delete the demotion line from the sandbox runner copy via a `re.M` `^export -n TEST_GROUP$` match asserting exactly one hit; probe must read `set`) and the must-PASS rows (positional channel; `TEST_GROUP=scripts-heavy`; these guard over-rejection only).
 - 1.3 Add the ledger floors (>= 2 probes, >= 1 control, each sentinel exactly once).
 - 1.4 Run against the unfixed runner with `TEST_GROUP=scripts` exported; record the RED output.
 
 ## Phase 2 — The fix
 
-- 2.1 `scripts/test-all.sh`: add `export -n TEST_GROUP` directly after `unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY`; extend the comment (consume at the point of coupling; placement after group resolution/alias/parse).
+- 2.1 `scripts/test-all.sh`: add `export -n TEST_GROUP` directly after `unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY`; extend the comment (consume at the point of coupling; placement after group resolution/alias/parse) WITHOUT writing the literal `export -n TEST_GROUP` in the comment (the sandbox splice asserts exactly one line match).
 - 2.2 `scripts/test-all.sh`: correct the SCOPE NOTE near `_shard_selects` that says the monitor runs `TEST_GROUP=all`.
 - 2.3 Re-run Part C: GREEN.
-- 2.4 Drive mutation rows 1-5 once each (delete; reorder after first registration; silent probes; re-export between probes; grandchild-only demotion) and record RED per row; restore.
+- 2.4 Drive mutation rows 2, 3, 4 once each by hand against a scratch copy of the sandbox runner (reorder into the registration window; silent probes; `export TEST_GROUP` injected between probe A and probe B) and record RED per row in the PR body (not committed); row 1 is the committed control.
 
 ## Phase 3 — Verification
 

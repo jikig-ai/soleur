@@ -12,6 +12,30 @@ brand_survival_threshold: none
 lane: cross-domain # spec.md absent for this branch: defaulted fail-closed (TR2)
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03 (proportionate pass: the full all-agents fan-out was not run for a one-line
+runner change; the gates and verification below were).
+**Sections enhanced:** Research Insights, Guard Contract, Acceptance Criteria.
+**Agents/gates used:** CTO ruling (3 forks), repo-research audit of every child-runner spawn, learnings
+search, plan-review panel (DHH, Kieran, code-simplicity), Phase 4.6 (User-Brand Impact present), 4.8 (no
+PAT-shaped variable), 4.11 (`lint-guard-contract.py` green), 4.12 (one unfenced Scope Check); 4.7/4.9/4.10/4.13
+skip (no code under `apps/*`, no UI, no store, no new autonomous task).
+
+### Key improvements
+1. Root cause promoted from inference to reproduction on this worktree (28/0 vs 23/5; C0 PASS vs FAIL) and
+   confirmed on one SHA (merge_group green, monitor red).
+2. Repo-wide exposed-spawn inventory, so the single demotion is shown to cover every affected child.
+3. Guard Contract made implementable: splice anchor rule, serial mode pin, grandchild row recognised as
+   not a mutation, committed vs driven-once split.
+
+### New considerations discovered
+- `ci.yml` push runs elide test legs, so the `0/50` metric is blind here (#11953).
+- The derive-cache lib reads `TEST_GROUP` in-shell (sourced), so `export -n` does not affect it.
+- Cited issues/PRs verified live: #11119, #11844, #11665 MERGED; #9457, #11662, #7902 CLOSED; #9323, #10233,
+  #9217, #7942, #11939, #11952, #11953 OPEN. Only one rule id is cited (`cq-write-failing-tests-before`,
+  active). Labels used (`deferred-scope-out`, `meta/machinery`) verified to exist.
+
 ## Overview
 
 The scheduled `main-health-monitor` has reported three scripts-group suites red on every run since the
@@ -52,7 +76,7 @@ of the runner in the monitor, so all are covered by the single demotion):
 | Spawn | Target | Effect when inherited |
 |---|---|---|
 | `scripts/lint-orphan-test-suites.test.sh:223` | `--enumerate-commands` (no group) | silent narrowing → C0/M16 (the observed failure) |
-| `scripts/test-all-group-affected.test.sh` (`--print-selection`, positional `affected`) | runner | env beats positional; `--print-selection` needs `all` → rc 2 (B1/B2/B3, observed: `23 passed, 5 failed`, reproduced locally) |
+| `scripts/test-all-group-affected.test.sh` (`--print-selection`, positional `affected`) | runner | env beats positional; `--print-selection` needs `all` → rc 2 (B1/B2/B3). Reproduced locally on this worktree: `TEST_GROUP` unset → `28 passed, 0 failed` rc 0; `TEST_GROUP=scripts` → `23 passed, 5 failed` rc 1, the exact count in the CI log |
 | `scripts/lib/test-suite-lanes.test.sh:30` | `--enumerate-commands all` | positional `all` overridden by env → narrowed enumeration (silent, currently green) |
 | `scripts/lib/repo-write-boundary.test.sh:438,458` | sandboxed runner copies, no args | would run the scripts dispatch instead of `all` (unverified whether it reaches dispatch) |
 | `tests/scripts/test-scratch-residue.sh:198` | `--enumerate-commands` | narrowing only; assertion unaffected |
@@ -84,7 +108,9 @@ registration line, `scripts/lint-orphan-test-suites.test.sh`, `scripts/test-all-
 Properties: (P1) a suite run by the runner sees the same environment whichever channel selected the
 group; (P2) the monitor and `ci.yml` legs exercise identical suite behaviour on one SHA; (P3) no assertion
 is weakened and no alert predicate changes; (P4) a future caller (developer who exports the variable,
-a new workflow) cannot reintroduce the leak.
+a new workflow) cannot reintroduce the leak **into runner-spawned suites** (a suite run directly with an
+exported `TEST_GROUP`, outside the runner, is unchanged; `lint-orphan-test-suites.sh` already scrubs per call
+site at lines ~250/1073/1352).
 
 Cut List: (a) patch each affected suite with `env -u TEST_GROUP` — buys P1 for two suites only, fails P4
 (the two earlier learnings did exactly this and the class recurred); cut. (b) re-pin the monitor to the
@@ -209,22 +235,34 @@ which is what rows 2 and 4 drive.
 | 2 | REORDER: move the demotion to after the spliced registrations (into the window the first probe runs in), instead of deleting it | RED (probe A, registered first, observes `set`; a delete-only battery would not distinguish this) |
 | 3 | The guard's own dispatch: make the probe suites print nothing (or register zero probes) | RED (the suite requires each probe's sentinel exactly once and a probe count floor of 2; "0 checked, exit 0" cannot pass) |
 | 4 | Second member after a compliant first: inject `export TEST_GROUP` between probe A and probe B registrations | RED on probe B while probe A stays green (a check that stops at the first member is the defect) |
-| 5 | Grandchild: demote only for first-level children (e.g. re-export inside the probe's own wrapper) | RED (the probe's `bash -c` grandchild reports `set`) |
+| 5 | Grandchild reading (not a mutation row: a grandchild's environment is a subset of its parent's, so it can only see the variable if the child re-exported it, which is a fixture edit, not a runner mutation) | folded into each probe as a free extra reading; no separate row |
 
 **Committed vs driven-once (plan-review, DHH + simplicity: proportionality).** The matrix above is the
 design contract the gate requires. To keep the committed suite proportionate to a one-line fix, only
-rows **1** (delete → probe A reads `set`, which doubles as the positive control), **5** (the grandchild
-reading, folded into the probe itself rather than a separate mutated runner) and the H2 must-PASS rows
-are committed as suite assertions. Rows **2** (reorder), **3** (silent probes) and **4** (second member
+row **1** (delete → probe A reads `set`, which doubles as the positive control), the grandchild reading
+folded into each probe, and the H2 must-PASS rows are committed as suite assertions. Rows **2** (reorder), **3** (silent probes) and **4** (second member
 after a compliant first) are each driven **once by hand** during the work phase against a scratch copy
 of the sandbox runner and the RED output recorded in the PR body; they are not committed. H1 is dropped
 (row 1's RED against the control already proves the probe can see a leak). The sandbox is known to
 reach registration dispatch: `test-all-group-affected.test.sh` B4 already asserts `[ok] alpha-fixture`
 from `run_sb`, so a spike is one extra `run_suite` line, not an unknown.
 
+**Splice mechanics (Kieran review, verified against the worktree).** The sandbox keeps the runner's
+line-~1446 demotion because the splice replaces only `tc_acquire`..`tc_epilogue`. Row 1 deletes that
+line with a `re.M` match on `^export -n TEST_GROUP$` and asserts **exactly one** match, so the new
+comment above it MUST NOT contain that literal (it would break the count-1 assertion; describe it as
+"the export-attribute demotion"). Row 2 deletes the line and splices
+`run_suite probeA; export -n TEST_GROUP; run_suite probeB` into the registration window; row 4 splices
+`run_suite probeA; export TEST_GROUP; run_suite probeB`. `run_sb` for Part C must run serially
+(`env -u SOLEUR_TEST_JOBS`): a caller's `SOLEUR_TEST_JOBS` engages `_pj_submit` (~1855), which defers
+suite bodies and would make probe-A-green / probe-B-red ordering racy. Probe stdout reaches the captured
+`OUT` on the serial path, so asserting on the `PROBE` lines is sound.
+
 **Harness rows (as reduced above).** (H1, dropped: edit the suite) replace the probe's `${TEST_GROUP+set}` read with a constant
 `absent`: the suite's built-in positive control — the same probe run against the row-1 mutant runner —
-must read `set`, so a constant probe turns the control RED. (H2, must-PASS non-canonical inputs) the
+must read `set`, so a constant probe turns the control RED. (H2, must-PASS non-canonical inputs; it
+reads `absent` even on the deleted-line mutant, so it guards against over-rejection only, never against a
+missing demotion) the
 positional channel (`runner.sh scripts`, `TEST_GROUP` unset in the caller) and an env value the contract
 permits (`TEST_GROUP=scripts-heavy`) both read `absent` and must stay GREEN; RED rows alone cannot see a
 guard that rejects everything. The counts are floors on the suite's own ledger (`>= N probes`, `>= 1`
