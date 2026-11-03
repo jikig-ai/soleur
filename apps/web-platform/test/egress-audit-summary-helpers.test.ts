@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripSqlComments } from "./helpers/sql-lex";
 import {
   DECISION_FILTERS,
   DEFAULT_TIME_WINDOW,
@@ -152,10 +153,7 @@ describe("WINDOW_LABEL and windowPhrase", () => {
 describe("TypeScript/SQL allowlist drift", () => {
   it("the keys of the `CASE p_window` map in migration 183 equal TIME_WINDOWS (otherwise a drift surfaces only as a runtime 22023)", () => {
     const file = path.join(__dirname, "..", "supabase", "migrations", "183_egress_audit_window_summary.sql");
-    const sql = readFileSync(file, "utf8")
-      .split("\n")
-      .map((l) => l.replace(/--.*$/, ""))
-      .join("\n");
+    const sql = stripSqlComments(readFileSync(file, "utf8")); // one literal-aware pass (helpers/sql-lex.ts)
     const caseBlock = /CASE\s+p_window\b([\s\S]*?)\bEND\b/i.exec(sql);
     expect(caseBlock, "a `CASE p_window ... END` map must exist in migration 183").not.toBeNull();
     const keys = [...(caseBlock?.[1] ?? "").matchAll(/WHEN\s+'([^']+)'\s+THEN/gi)].map((m) => m[1]);
