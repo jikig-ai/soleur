@@ -117,7 +117,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	1000	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	3500	measured
 apps/web-platform/infra/inngest.test.sh	9500	measured
 apps/web-platform/infra/journald-config.test.sh	1000	measured
-apps/web-platform/infra/key-rotate-workflow.test.sh	190000	estimate
+apps/web-platform/infra/key-rotate-workflow.test.sh	420000	estimate
 apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	9000	measured
 apps/web-platform/infra/lb-weight-gate.test.sh	2000	measured
 apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh	29500	measured

@@ -280,7 +280,7 @@ wf_variant redeploy_nosuccess '.jobs.redeploy.if |= sub(" && needs.apply.result 
 for v in if_always no_redaction notify_plan no_dispatch redeploy_nosuccess; do
   [[ "$(matrix_of "$TMP/wfv-$v.json")" != "$MATRIX_NOW" ]] && ok "A21 matrix mutant $v changes the evaluated matrix" || bad "A21 matrix mutant $v is invisible to the evaluated matrix"
 done
-eq "A22 timeouts are the literals of the budget (guard 15/25, apply 40/50, redeploy 85/95, notify 5/15 minutes)" \
+eq "A22 timeouts are the literals of the budget (guard 15/25, apply 40/50, redeploy 85/105, notify 5/15 minutes)" \
   "$(wqc '[.jobs.guard."timeout-minutes", (.jobs.guard.steps[] | select(.id == "guard") | ."timeout-minutes"), .jobs.apply."timeout-minutes", (.jobs.apply.steps[] | select(.id == "apply") | ."timeout-minutes"), .jobs.redeploy."timeout-minutes", (.jobs.redeploy.steps[] | select(.id == "track") | ."timeout-minutes"), .jobs.notify."timeout-minutes", (.jobs.notify.steps[] | select(has("run")) | ."timeout-minutes")]')" \
   "[$MIN_GUARD_JOB,$MIN_GUARD_STEP,$MIN_APPLY_JOB,$MIN_APPLY_STEP,$MIN_REDEPLOY_JOB,$MIN_REDEPLOY_STEP,$MIN_NOTIFY_JOB,$MIN_NOTIFY_STEP]"
 eq "A23 every run and loader step carries its own timeout-minutes" "$(wqc '[.jobs[].steps[] | select(has("run") or ((.uses // "") | startswith("./"))) | has("timeout-minutes")] | all')" 'true'
@@ -377,7 +377,9 @@ eq "B7 under GITHUB_ACTIONS=true a stray KR_ name, a stray KK_ name each exit 78
 B7_OUT="$(env -i PATH="$PATH" HOME="$TMP" GITHUB_ACTIONS=true KR_STRAY=sekret-value bash "$BODY" --print-contract 2>&1)"
 eq "B7b the refusal names the variable and prints no value" "$(grep -c 'KR_STRAY' <<<"$B7_OUT")|$(grep -c 'sekret-value' <<<"$B7_OUT")" '1|0'
 eq "B8 no set -e in any form and no trap in the script (the sourced kr_init owns the EXIT trap that removes the key-bearing temp files)" "$(code_only "$BODY" | grep -Ec '(^|[[:space:];])set +-[a-zA-Z]*e|(^|[[:space:];])trap ')" '0'
-eq "B9 no terraform command anywhere in the script: the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | grep -Ec '(^|[^_a-zA-Z-])terraform[[:space:]]+(init|plan|apply|show|state|output|refresh|destroy|import|console)')|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
+B9_RE='(^|[^_a-zA-Z-])(command[[:space:]]+|env[[:space:]]+|exec[[:space:]]+|sudo[[:space:]]+)?(\$TF|\$\{TF\}|terraform)([[:space:]]+-[^[:space:]]+)*[[:space:]]+(init|plan|apply|show|state|output|refresh|destroy|import|console)'
+eq "B9 no terraform command anywhere in the script, in any form the workflow-side check knows (-chdir and other flags, command/env/exec/sudo prefixes, a TF variable): the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | grep -Ec "$B9_RE")|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
+eq "B9b control rows: the script-side regex sees terraform -chdir=x show -json, a prefixed command, a TF variable, env terraform and a flagged plan (5 must-match) and misses kr_tf, a token name and plain prose (3 must-not-match)" "$(printf '%s\n' 'terraform -chdir=x show -json p' 'command terraform apply' '$TF plan' 'env terraform show -json p' 'terraform -chdir=x -no-color plan' | grep -Ec "$B9_RE")|$(printf '%s\n' 'echo terraform' 'kr_tf plan' 'a terraform_failed show' | grep -Ec "$B9_RE")" '5|0'
 eq "B10 kr_tf is called for plan, show and apply only" "$(code_only "$BODY" | grep -oE 'kr_tf +"?(plan|show|apply)' | sed -E 's/kr_tf +"?//' | sort | tr '\n' ' ')" 'apply plan show '
 eq "B11 the sourced kr_tf has exactly one terraform call and sends BOTH streams to files (the chokepoint this script relies on)" "$(code_only "$SIB" | grep -Ec '(^|[^_a-zA-Z-])terraform +\"\$@\"')|$(fn_text kr_tf "$SIB" | grep -c '> "$KR_TMP/tf-${name}.out" 2> "$KR_TMP/tf-${name}.err"')" '1|1'
 eq "B12 no Terraform stream file is ever printed: no cat/head/tail/tee/printf/echo/sed/grep of a tf-*.out|err" "$(code_only "$BODY" | grep -Ec '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9${}_-]*\.(out|err)')" '0'
@@ -408,10 +410,14 @@ eq "B21 --print-contract prints the key-rotate header" "$(head -1 <<<"$PRINTED")
 eq "B22 the printed token set equals the literal 35 (set equality, no duplicates)" "$(tail -n +2 <<<"$PRINTED" | sort | tr '\n' ' ')|$(tail -n +2 <<<"$PRINTED" | sort | uniq -d | wc -l | tr -d ' ')" "$(tr ' ' '\n' <<<"$TOKENS" | sort | tr '\n' ' ')|0"
 eq "B22b there are exactly 35 tokens" "$(wc -w <<<"$TOKENS" | tr -d ' ')" '35'
 RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/key-rotation.md"
-rb_missing() { local t; for t in $(tail -n +2 <<<"$PRINTED"); do grep -qw -- "$t" "$1" || printf '%s ' "$t"; done; }
+# a token counts only when it is a backticked cell of a table row in the Refusals / Verdicts sections (prose elsewhere does not count)
+rb_rows() { sed -n '/^## Refusals (nothing written)/,/^## The GitHub webhook owner step/p' "$1" | grep '^|'; }
+rb_missing() { local t rows; rows="$(rb_rows "$1")"; for t in $(tail -n +2 <<<"$PRINTED"); do grep -qF -- "\`$t\`" <<<"$rows" || printf '%s ' "$t"; done; }
 eq "B22c every token printed by --print-contract appears in the runbook (an operator can look up each verdict: cause and next action)" "$(rb_missing "$RUNBOOK")" ''
 sed 's/job_cancelled/xxx/g' "$RUNBOOK" > "$TMP/runbook-mut.md"
 eq "B22d control: a runbook copy without the job_cancelled token is seen by the contract check" "$(rb_missing "$TMP/runbook-mut.md")" 'job_cancelled '
+sed 's/^| `rotate_ok` |/| rotate_ok_prose |/' "$RUNBOOK" > "$TMP/runbook-mut2.md"
+eq "B22e control: a token that survives only outside the Refusals and Verdicts tables (here rotate_ok moved out of its table row) is still reported missing" "$(rb_missing "$TMP/runbook-mut2.md")" 'rotate_ok '
 EMITTED="$(code_only "$BODY" | grep -oE '(kr_refuse|kr_ok|kr_post_write_failure|kk_redeploy_refuse|KR_CHECK_TOKEN=|tok=)[ "]*[a-z][a-z0-9]*(_[a-z0-9]+)+' | awk '{print $NF}' | sed -E 's/^(KR_CHECK_TOKEN=|tok=)//' | tr -d '"' | sort -u)"
 UNLISTED="$(comm -13 <(tr ' ' '\n' <<<"$TOKENS" | sort) <(grep -E '^[a-z]' <<<"$EMITTED" | sort) | grep -vxE 'rotate_ok|reason|kr_ok|kr_refuse' | tr '\n' ' ')"
 eq "B23 every verdict literal the script emits is in the list" "$UNLISTED" ""
@@ -464,6 +470,20 @@ WALK_TMO="$(awk '/timeout-minutes:/ {print $2; exit}' "$WALKER_WF")"
 read -r KB_WIN_S KB_WIN_L <<<"$(env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_KB_WIN_START_S $KK_KB_WIN_LEN_S"' _ "$BODY")"
 eq "B36 the kb-drift walker's cron (parsed from kb-drift-walker.yml) and job timeout lie inside the script's [03:00, 03:30] window constants" "$WALK_CRON|$WALK_TMO|$(win_covers "$WALK_CRON" "$WALK_TMO" "$KB_WIN_S" "$KB_WIN_L")" '0 3 * * *|15|covered'
 eq "B36b control: a 45-minute walker timeout, a 04:00 cron and a weekly cron are each outside or not-daily for the same window" "$(win_covers '0 3 * * *' 45 "$KB_WIN_S" "$KB_WIN_L")|$(win_covers '0 4 * * *' 15 "$KB_WIN_S" "$KB_WIN_L")|$(win_covers '0 3 * * 1' 15 "$KB_WIN_S" "$KB_WIN_L")" 'outside|outside|not-daily'
+
+# N3: the web-1-swap member workflows the redeploy poll skips are pinned against the workflow files and the parity test
+SWAP_LIT="web-platform-release.yml apply-deploy-pipeline-fix.yml"
+swap_probe() { env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "${KK_SWAP_MEMBER_WORKFLOWS[*]}"' _ "$1"; }
+HOLD_GROUP=""; for w in $(tr ' ' '\n' <<<"$INF" | sort); do grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' "$REPO_ROOT/.github/workflows/$w" && HOLD_GROUP="$HOLD_GROUP $w"; done
+PARITY="$REPO_ROOT/apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh"
+eq "B37 N3 the web-1-swap members the redeploy poll skips equal the literal pair; every in-flight workflow that carries a job-level web-1-swap group line is either one of them or a deliberate non-member (apply-web-platform-infra.yml: its routine apply job is not a member); the parity test enrols both members" \
+  "$(swap_probe "$BODY")|${HOLD_GROUP# }|$(grep -cE 'assert_member "\$(RELEASE|PIPELINE_FIX)_WF"' "$PARITY")" "$SWAP_LIT|apply-deploy-pipeline-fix.yml apply-web-platform-infra.yml web-platform-release.yml|2"
+bud2_of() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_KB_BUDGET_APPLY_S $KK_KB_BUDGET_PREAPPLY_S $KK_RECHECK_STEP_S $KK_REDEPLOY_JOB_S"' _ "$1"; }
+RECHECK_MIN="$(wq '.jobs.redeploy.steps[] | select(.id == "recheck") | ."timeout-minutes"')"
+eq "B31b N12 the kb_drift window budgets include the Re-checks step: apply 8100 s (2400 + 600 + 5100), pre-apply 6900 s (900 + 300 + 600 + 5100), the step is 600 s = the workflow's 10 minutes, the redeploy job 6300 s" "$(bud2_of "$BODY")|$RECHECK_MIN" '8100 6900 600 6300|10'
+rd_probe() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_REDEPLOY_WAIT_S $KK_REDEPLOY_ITER_S $KK_GH_POLL_S"' _ "$1"; }
+rd_fits() { local w i g; read -r w i g <<<"$(rd_probe "$1")"; echo "$w $i $g $(( w + i <= RECHECK_MIN * 60 ? 1 : 0 ))"; }
+eq "B38 N6 the redeploy wait (480 s) plus one poll iteration (five run lists at the 20 s cap = 100 s) fits the Re-checks step's 10-minute timeout" "$(rd_fits "$BODY")" '480 100 20 1'
 
 printf '\n=== C0. --print-contract: offline, credential-free, fast ===\n'
 T0=$SECONDS
@@ -665,6 +685,13 @@ SH
 echo "timeout $*" >> "$STUB/timeout.log"
 exec /usr/bin/timeout "$@"
 SH
+  cat > "$d/bin/rm" <<'SH'
+#!/usr/bin/env bash
+# a logging shim over rm: a DIRECTORY argument (the EXIT trap removing the temp dir) is logged with the number of Terraform stream or
+# saved-plan files still inside it; the suite requires 0 on every path (N1)
+for a in "$@"; do [[ -d "$a" ]] && echo "$(ls "$a" 2>/dev/null | grep -Ec '^(tf-|tfplan-)')" >> "$STUB/tfleft.log"; done
+exec "$(PATH=/usr/bin:/bin command -v rm)" "$@"
+SH
   cat > "$d/bin/ssh-keygen" <<'SH'
 #!/usr/bin/env bash
 f=""; while [[ $# -gt 0 ]]; do [[ "$1" == -f ]] && f="$2"; shift; done
@@ -744,6 +771,7 @@ mk_tree() {
   printf '#!/usr/bin/env bash\nprintf "[ok] tainted-must-be-replaced block redacted\\n[ok] deposed-will-be-destroyed block redacted\\n[ok] drift-has-changed block redacted\\n[ok] another row\\n"\nexit 0\n' > "$t/tests/scripts/test-tf-redact-random-ids.sh"
 }
 RT_REAL="$TMP/rt-real"; mk_tree "$RT_REAL"
+RT_CTL="$TMP/mt-ctl"; mk_tree "$RT_CTL"   # the instrument controls run here: a mt-* path is exempt from the refusals.log census (a seeded refusal is the point)
 RT="$RT_REAL"
 D=""
 fresh() { D="$(mktemp -u "$TMP/s.XXXXXX")"; cp -a "$WORLD0" "$D"; }
@@ -756,6 +784,7 @@ a_env() { # mode key -> the apply job's environment
   printf '%s\n' AWS_ACCESS_KEY_ID=AKIAfixture AWS_SECRET_ACCESS_KEY=secretfixture DOPPLER_TOKEN=dp.fixture DOPPLER_TOKEN_TF=dp.tffixture GH_TOKEN=ghs_fixture "EFF_MODE=$1" "EFF_KEY=$2" "EFF_GUARD_EPOCH=$NOW0" "${@:3}"
 }
 
+neutralize_confirm() { sed -E '/STOP: do not re-run the failed jobs/ s/confirm=ROTATE-[A-Z_]+-YYYY-MM-DD/confirm=CONFIRM/g'; }
 STREAMS="$TMP/all-streams.txt"; : > "$STREAMS"
 SCAN_ASSERT=1; : > "$TMP/runs.cnt"; : > "$TMP/scans.cnt"; : > "$TMP/leaks.log"; : > "$TMP/refusals.seen"
 LEAK_RE="$S_HEX|$S_B64|signkey-(prod|test)-[A-Za-z0-9_-]{8,}|\[id=[A-Za-z0-9_-]{20,}\]|[0-9a-f]{64}|[A-Za-z0-9_-]{43}|$(printf '%s' "$S_STD" | sed 's/[+/]/./g')|$S_TOKV"
@@ -767,8 +796,9 @@ scan_streams() {
   echo x >> "$TMP/scans.cnt"
   txt="$ALL"$'\n'"$(cat "$D"/gh.log "$D"/doppler.log "$D"/tf.log "$D"/track.log "$D"/issue_body_*.md "$D"/comment_body_*.md 2>/dev/null)"
   txt="${txt//egress_rotate_unsupported_no_vector_restart_lever/EGRESS}"
-  # the re-dispatch command's confirm (ROTATE-<KEY>-YYYY-MM-DD, up to 51 token-class characters) is appended AFTER the scrub on purpose
-  txt="$(sed -E 's/confirm=ROTATE-[A-Z_]+-YYYY-MM-DD/confirm=CONFIRM/g' <<<"$txt")"
+  # the re-dispatch command's confirm (ROTATE-<KEY>-YYYY-MM-DD, up to 51 token-class characters) is appended AFTER the scrub on purpose;
+  # it is neutralized ONLY on the stop-sentence lines (stderr, summary, issue body), never on any other stream
+  txt="$(neutralize_confirm <<<"$txt")"
   hits="$(grep -Ec "$LEAK_RE" <<<"$txt" || true)"
   LAST_HITS="$hits"
   if [[ "$hits" != 0 && "$SCAN_ASSERT" == 1 ]]; then echo "'$LAST_LABEL' $(grep -Eo "$LEAK_RE" <<<"$txt" | head -2 | cut -c1-6 | tr '\n' ' ')" >> "$TMP/leaks.log"; fi
@@ -841,6 +871,11 @@ guard_row() { # id desc token key [VAR=val ...] : a ROTATE guard run that must r
 }
 ctl_guard_row() { fresh; guard_row CTL "ctl" confirm_mismatch "$DEVK"; }   # a compliant run answers guard_ok, not confirm_mismatch
 ctl_report "guard_row()" "$(ctl_moves_fail ctl_guard_row)"
+# second controls: the verdict clause HOLDS, the LAST clauses fail (a Terraform call on record; a fake refusal on record)
+ctl_guard_row_w() { RT="$RT_CTL"; fresh; echo "terraform plan" > "$D/tf.log"; guard_row CTL2 "ctl" confirm_mismatch "$DEVK" INPUT_CONFIRM=; }
+ctl_guard_row_r() { RT="$RT_CTL"; fresh; echo "doppler REFUSED: x" > "$D/refusals.log"; guard_row CTL3 "ctl" confirm_mismatch "$DEVK" INPUT_CONFIRM=; }
+ctl_report "guard_row() with a write on record" "$(ctl_moves_fail ctl_guard_row_w)"
+ctl_report "guard_row() with a fake refusal on record" "$(ctl_moves_fail ctl_guard_row_r)"
 fresh; run_g guard g_rotate "$DEVK"
 guard_pass && [[ "$(out_of mode)|$(out_of key)|$(out_of run_apply)|$(out_of run_redeploy)|$(out_of guard_epoch)" == "rotate|$DEVK|true|true|$NOW0" ]] && ok "C2.1 a compliant dev-key rotate passes the guard: go=true, apply and redeploy enabled, guard_epoch from the single clock" || bad "C2.1 rc=$RC" "$(cat "$D/gh_output")"
 [[ "$(nlog "$D/tf.log" .)" == 0 && "$(nlog "$D/doppler.log" .)" == 0 && "$(refusals)" == 0 ]] && ok "C2.1b the guard calls neither Terraform nor Doppler (it holds no Doppler credential)" || bad "C2.1b guard touched terraform/doppler"
@@ -907,14 +942,14 @@ guard_pass && ok "C2.18b an owner_step_pending title for ANOTHER key does not bl
 fresh; printf '%s' '[{"name":"action-required"}]' > "$D/state/labels.json"; RT="$RT_LIFT" guard_row C2.19 "the owner_step_pending label does not exist (fail closed)" owner_step_open github_webhook_secret
 fresh; set_state issue_list_rc 1; RT="$RT_LIFT" guard_row C2.19b "the owner_step_pending listing fails (fail closed)" owner_step_open github_webhook_secret
 fresh; jq -cn '[range(0;1000) | {title:("x" + (.|tostring))}]' > "$D/state/issues_owner.json"; RT="$RT_LIFT" guard_row C2.19c "a truncated listing (1000 entries) refuses" owner_step_open github_webhook_secret
-# kb_drift windows: the budget is 40 min apply + 85 min redeploy = 7500 s (literal), window [03:00:00, 03:30:00] inclusive
+# kb_drift windows: the budget is 40 min apply + 10 min re-checks + 85 min redeploy = 8100 s (literal), window [03:00:00, 03:30:00] inclusive
 KB=kb_drift_ingest_signing_key
 kb_at() { # time expected
   fresh; set_state now "$(at "$1")"; RT="$RT_LIFT" run_g guard g_rotate "$KB"
   if [[ "$2" == ok ]]; then guard_pass && ok "C2.20 kb_drift at $1 UTC is accepted" || bad "C2.20 kb_drift at $1 UTC refused: $(verdict_of)"
   else [[ "$RC" != 0 && "$(verdict_of)" == "$2" ]] && ok "C2.20 kb_drift at $1 UTC is refused ($2)" || bad "C2.20 kb_drift at $1 UTC: $(verdict_of) want $2"; fi
 }
-kb_at 00:54:59 ok; kb_at 00:55:00 kb_drift_cron_window; kb_at 01:00:00 kb_drift_cron_window; kb_at 02:50:00 kb_drift_cron_window
+kb_at 00:44:59 ok; kb_at 00:45:00 kb_drift_cron_window; kb_at 01:00:00 kb_drift_cron_window; kb_at 02:50:00 kb_drift_cron_window
 kb_at 03:00:00 kb_drift_cron_window; kb_at 03:30:00 kb_drift_cron_window; kb_at 03:30:01 ok; kb_at 23:50:00 ok
 fresh; set_state now "$(at 02:50:00)"; RT="$RT_LIFT" run_g guard g_rotate inngest_signing_key_dev
 guard_pass && ok "C2.21 a dev key at 02:50 UTC is not subject to the kb_drift window" || bad "C2.21 dev key refused: $(verdict_of)"
@@ -930,6 +965,7 @@ fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release
 fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_requested.json"; guard_row C2.24c "a requested run" run_in_flight "$DEVK"
 fresh; set_state runlist_rc 1; guard_row C2.25 "the run list fails (a harness that reads an error as none-in-flight is vacuous)" run_list_unreadable "$DEVK"
 fresh; printf '%s' '[{"databaseId":8000}]' > "$D/state/runs_key-rotate.yml_queued.json"; guard_row C2.26 "an EARLIER key-rotate.yml run (lower run id) is still queued" run_in_flight "$DEVK"
+eq "C2.26d N9 the earlier-run detail says the run may be a plan or a rotate dispatch (it counts both)" "$(grep -c 'an earlier key-rotate.yml run (a plan or a rotate dispatch) is still queued' <<<"$OUT")" '1'
 fresh; printf '%s' '[{"databaseId":9500},{"databaseId":9001}]' > "$D/state/runs_key-rotate.yml_in_progress.json"; run_g guard g_rotate "$DEVK"
 guard_pass && ok "C2.26b a LATER key-rotate.yml run (higher id) and this run itself do not refuse" || bad "C2.26b refused: $(verdict_of)"
 for st in in_progress waiting pending requested; do
@@ -986,6 +1022,10 @@ fresh; set_state late_after_web-platform-release.yml_in_progress 1; run_g apply 
 eq "C3.8b a release run that appears only on the SECOND read (the pre-apply re-check) leaves the stub apply uncalled and write_started unset" "$RC|$(verdict_of)|$(tfapplied)|$(out_of write_started)" '1|run_in_flight|0|'
 fresh; printf '%s' '[{"databaseId":8000}]' > "$D/state/runs_key-rotate.yml_queued.json"; run_g apply a_env rotate "$DEVK"
 eq "C3.8c an earlier key-rotate.yml run at apply refuses run_in_flight, no Terraform call" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)" '1|run_in_flight|0'
+for w in web-platform-release.yml apply-deploy-pipeline-fix.yml; do
+  fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_${w}_in_progress.json"; run_g apply a_env rotate "$DEVK"
+  eq "C3.8d N3 a web-1-swap member ($w) in progress still blocks APPLY mode: only the redeploy poll skips members" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)" '1|run_in_flight|0'
+done
 fresh; set_state now "$(at 02:50:00)"; run_g apply a_env rotate "$KB" EFF_GUARD_EPOCH="$(at 02:50:00)"
 eq "C3.9 kb_drift: the window is re-checked at the first act of apply (no Terraform call)" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)" '1|kb_drift_cron_window|0'
 fresh; set_state now "$(at 04:00:00)"; printf '%s' '[{"databaseId":5}]' > "$D/state/runs_kb-drift-walker.yml_queued.json"; run_g apply a_env rotate "$KB" EFF_GUARD_EPOCH="$(at 04:00:00)"
@@ -1024,7 +1064,7 @@ plan_would C3.15b "egress_audit_ingest_token reports its refusal token (plan sta
 NOLIFT=1 plan_would C3.15c "a prd key reports approval_environment_missing on the real tree" approval_environment_missing inngest_manual_trigger_secret_prd :
 plan_would C3.15d "kb_drift at 02:50 UTC reports kb_drift_cron_window" kb_drift_cron_window "$KB" st_now_0250 EFF_GUARD_EPOCH="$(at 02:50:00)"
 plan_would C3.15e "a related run in flight reports run_in_flight" run_in_flight "$DEVK" st_rel_inflight
-plan_would C3.15f "a guard epoch older than 60 minutes reports authorization_stale" authorization_stale "$DEVK" : EFF_GUARD_EPOCH=$((NOW0 - 3601))
+plan_would C3.15f "N9 a guard epoch older than 60 minutes is NOT evaluated by plan (it would measure the plan run's own guard age): reports none" none "$DEVK" : EFF_GUARD_EPOCH=$((NOW0 - 3601))
 plan_would C3.15g "a kb-drift walker in flight reports kb_drift_walker_in_flight" kb_drift_walker_in_flight "$KB" st_walker_0400 EFF_GUARD_EPOCH="$(at 04:00:00)"
 plan_would C3.15h "an unreadable run list reports run_list_unreadable (never none)" run_list_unreadable "$DEVK" st_runlist_down
 
@@ -1036,6 +1076,13 @@ gate_row() { # id desc token key setup-fn : a ROTATE apply that must refuse with
 }
 ctl_gate_row() { gate_row CTL "ctl" plan_gate_refused "$DEVK" st_none; }   # a compliant plan is applied, not refused
 ctl_report "gate_row()" "$(ctl_moves_fail ctl_gate_row)"
+st_extra() { printf '%s' '[{"address":"hcloud_server.web","mode":"managed","type":"hcloud_server","name":"web","change":{"actions":["update"],"before":{},"after":{},"after_unknown":{}}}]' > "$D/state/plan_extra"; }   # (redefined identically below; the controls need it before the C4 rows)
+st_extra_applied() { st_extra; echo apply >> "$D/tf.log"; }
+st_extra_refused() { st_extra; echo "gh REFUSED: x" > "$D/refusals.log"; }
+ctl_gate_row_a() { RT="$RT_CTL"; gate_row CTL2 "ctl" plan_gate_refused "$DEVK" st_extra_applied; }   # right verdict, but an apply is on record
+ctl_gate_row_r() { RT="$RT_CTL"; gate_row CTL3 "ctl" plan_gate_refused "$DEVK" st_extra_refused; }
+ctl_report "gate_row() with an apply on record" "$(ctl_moves_fail ctl_gate_row_a)"
+ctl_report "gate_row() with a fake refusal on record" "$(ctl_moves_fail ctl_gate_row_r)"
 A2="doppler_secret.kb_drift_ingest_signing_key_app_runtime"; A1="doppler_secret.kb_drift_ingest_signing_key"; R1="random_id.kb_drift_ingest_signing_key"
 st_drop() { touch_state "drop_$A2"; }
 gate_row C4.1 "a plan that touches only ONE kb_drift copy (the second is missing)" plan_gate_refused "$KB" st_drop
@@ -1113,6 +1160,8 @@ tf_class_row C4.20f "Error: something unfamiliar" 1 other "unfamiliar"
 tf_class_row C4.20g "" 124 timeout "zzz-none"
 fresh; printf '%s\n' "Error: Failed to install provider" > "$D/state/tf_err_text"; set_state init_rc 1; run_g apply a_env rotate "$DEVK"
 eq "C4.20h a failing terraform init: terraform_failed (sourced text) plus the fixed cause class init, nothing printed from the stream" "$RC|$(verdict_of)|$(grep -c 'terraform_failed cause class: init' <<<"$OUT")|$(grep -c 'install provider' <<<"$OUT")" '1|terraform_failed|1|0'
+fresh; set_state init_rc 124; run_g apply a_env rotate "$DEVK"
+eq "C4.20j N7 a terraform init that times out (exit 124) reports the cause class timeout, not other" "$RC|$(verdict_of)|$(grep -c 'terraform_failed cause class: timeout' <<<"$OUT")" '1|terraform_failed|1'
 fresh; set_state show_rc 1; run_g apply a_env rotate "$DEVK"
 eq "C4.20i a failing terraform show: terraform_failed with its own cause class (other: no pattern matched)" "$RC|$(verdict_of)|$(grep -c 'plan-to-JSON step exited 1 (cause class: other)' <<<"$OUT")" '1|terraform_failed|1'
 
@@ -1151,9 +1200,9 @@ fresh; run_g "redeploy recheck" r_env "$DEVK"
 eq "C6.1 the re-checks pass on a quiet repo" "$RC|$(verdict_of)" '0|'
 fresh; run_g "redeploy recheck" r_env "$DEVK"; RT="$RT_REAL" run_script "redeploy recheck" EFF_MODE=rotate "EFF_KEY=$DEVK" GH_TOKEN=ghs_fixture GITHUB_RUN_ATTEMPT=2
 eq "C6.2 attempt 2 at the redeploy re-checks: rotated_redeploy_failed (reason rerun_refused), non-zero exit" "$RC|$(verdict_of)|$(grep -c 'reason=rerun_refused' <<<"$OUT")" '1|rotated_redeploy_failed|1'
-fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release.yml_in_progress.json"; run_g "redeploy recheck" r_env "$DEVK"
-eq "C6.3 R1: a release run that never clears: the leg polls 30 s apart for 480 s (16 sleeps), then rotated_redeploy_failed naming the blocking workflow and saying the new value is landed and the old containers are running" "$RC|$(verdict_of)|$(grep -c 'reason=run_in_flight' <<<"$OUT")|$(nlog "$D/sleep.log" 'sleep 30')|$(grep -c 'web-platform-release.yml has 1 in_progress' <<<"$OUT")|$(grep -c 'the new value is landed and the old containers are running' <<<"$OUT")" '1|rotated_redeploy_failed|1|16|1|1'
-fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release.yml_in_progress.json"; set_state clear_after_web-platform-release.yml_in_progress 2; run_g "redeploy recheck" r_env "$DEVK"
+fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; run_g "redeploy recheck" r_env "$DEVK"
+eq "C6.3 R1: a (non-member) cutover run that never clears: the leg polls 30 s apart for 480 s (16 sleeps), then rotated_redeploy_failed naming the blocking workflow and saying the new value is landed and the old containers are running" "$RC|$(verdict_of)|$(grep -c 'reason=run_in_flight' <<<"$OUT")|$(nlog "$D/sleep.log" 'sleep 30')|$(grep -c 'cutover-inngest.yml has 1 in_progress' <<<"$OUT")|$(grep -c 'the new value is landed and the old containers are running' <<<"$OUT")" '1|rotated_redeploy_failed|1|16|1|1'
+fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; set_state clear_after_cutover-inngest.yml_in_progress 2; run_g "redeploy recheck" r_env "$DEVK"
 eq "C6.3c R1: a release run that clears on the third read: the re-check passes after two 30 s waits (a transient rung is waited out, not refused)" "$RC|$(verdict_of)|$(nlog "$D/sleep.log" 'sleep 30')" '0||2'
 fresh; set_state now "$(at 04:00:00)"; printf '%s' '[{"databaseId":5}]' > "$D/state/runs_kb-drift-walker.yml_in_progress.json"; run_g "redeploy recheck" r_env "$KB"
 eq "C6.3d R1: a kb-drift walker that never clears is waited on for 480 s and then refused (reason kb_drift_walker_in_flight)" "$RC|$(verdict_of)|$(grep -c 'reason=kb_drift_walker_in_flight' <<<"$OUT")|$(nlog "$D/sleep.log" 'sleep 30')" '1|rotated_redeploy_failed|1|16'
@@ -1201,7 +1250,7 @@ n_env() { # key mode apply_result write_started apply_verdict redeploy_result re
   printf '%s\n' "EFF_MODE=$2" "EFF_KEY=$1" "EFF_RESULT_APPLY=$3" "EFF_WRITE_STARTED=$4" "EFF_APPLY_VERDICT=$5" "EFF_RESULT_REDEPLOY=$6" "EFF_REDEPLOY_VERDICT=$7" GH_TOKEN=ghs_fixture "${@:8}"
 }
 nrow() { # id desc expected-title-or-"none" key mode ra ws av rr rv
-  local id="$1" desc="$2" want="$3"; shift 3; fresh; run_g notify n_env "$@"
+  local id="$1" desc="$2" want="$3"; shift 3; fresh; [[ -n "${CTL_SEED_REFUSAL:-}" ]] && echo "gh REFUSED: seeded" > "$D/refusals.log"; run_g notify n_env "$@"
   local got; got="$(cut -d'|' -f1 "$D/issues_created.log" 2>/dev/null | sed 's/ $//' | tr '\n' ';')"
   [[ "$want" == none ]] && want=""
   [[ "$want" == "" || "$want" == *";" ]] || want="$want;"
@@ -1209,6 +1258,8 @@ nrow() { # id desc expected-title-or-"none" key mode ra ws av rr rv
 }
 ctl_nrow() { nrow CTL "ctl" "key-rotate $DEVK apply_failed (run 9001)" "$DEVK" rotate success true "" success rotate_ok; }   # a green rotate files nothing
 ctl_report "nrow()" "$(ctl_moves_fail ctl_nrow)"
+ctl_nrow_r() { RT="$RT_CTL"; CTL_SEED_REFUSAL=1 nrow CTL2 "ctl" "key-rotate $DEVK apply_failed (run 9001)" "$DEVK" rotate failure true apply_failed skipped ""; }   # the right filing, with a fake refusal on record
+ctl_report "nrow() with a fake refusal on record" "$(ctl_moves_fail ctl_nrow_r)"
 nrow C7.1 "write_started=true and the apply failed: files key-rotate <key> apply_failed (run 9001)" "key-rotate $DEVK apply_failed (run 9001)" "$DEVK" rotate failure true apply_failed skipped ""
 nrow C7.2 "the apply failed with NO verdict and NO write_started (killed): fails toward filing" "key-rotate $DEVK job_cancelled (run 9001)" "$DEVK" rotate failure "" "" skipped ""
 nrow C7.3 "the apply was cancelled: files" "key-rotate $DEVK job_cancelled (run 9001)" "$DEVK" rotate cancelled "" "" skipped ""
@@ -1248,9 +1299,9 @@ fresh; set_state issue_list_rc 1; run_g notify n_env "$DEVK" rotate failure true
 eq "C7.14d a failing open-issue listing: issue_unfiled" "$(verdict_of)" 'issue_unfiled'
 fresh; run_g notify n_env github_webhook_secret rotate success true "" cancelled ""
 eq "C7.15 the neutral text when the redeploy verdict is missing: check the run, do not update the GitHub App webhook secret until the verdict is read" "$(grep -c 'do not update the GitHub App webhook secret until you have read the verdict' "$D"/issue_body_1.md)" '1'
-fresh; printf '%s' "[{\"number\":11,\"title\":\"key-rotate $DEVK apply_failed (run 8000)\"},{\"number\":12,\"title\":\"key-rotate $DEVK owner_step_pending (run 8001)\"},{\"number\":13,\"title\":\"key-rotate $KB apply_failed (run 8002)\"},{\"number\":14,\"title\":\"unrelated\"}]" > "$D/state/issues.json"
+fresh; printf '%s' "[{\"number\":11,\"title\":\"key-rotate $DEVK apply_failed (run 8000)\"},{\"number\":12,\"title\":\"key-rotate $DEVK owner_step_pending (run 8001)\"},{\"number\":13,\"title\":\"key-rotate $KB apply_failed (run 8002)\"},{\"number\":14,\"title\":\"unrelated\"},{\"number\":15,\"title\":\"key-rotate $DEVK apply_failed (run 9500)\"},{\"number\":16,\"title\":\"key-rotate $DEVK apply_failed (run 9001)\"}]" > "$D/state/issues.json"
 run_g notify n_env "$DEVK" rotate success true "" success rotate_ok
-eq "C7.16 on rotate_ok the key's earlier open key-rotate issues are closed; an owner_step_pending issue, another key's issue and an unrelated issue are not" "$(sort "$D/issues_closed.log" | tr '\n' ' ')|$(nlog "$D/issues_created.log" .)" '11 |0'
+eq "C7.16 on rotate_ok the key's EARLIER open key-rotate issues (run number below this run's 9001) are closed; a LATER run's issue (9500), this run's own number, an owner_step_pending issue, another key's issue and an unrelated issue are not (N2)" "$(sort "$D/issues_closed.log" | tr '\n' ' ')|$(nlog "$D/issues_created.log" .)" '11 |0'
 WHK=github_webhook_secret
 WH_ISSUES="[{\"number\":11,\"title\":\"key-rotate $WHK rotated_redeploy_failed (run 8000)\"},{\"number\":12,\"title\":\"key-rotate $WHK owner_step_pending (run 8001)\"},{\"number\":13,\"title\":\"key-rotate $KB apply_failed (run 8002)\"}]"
 fresh; printf '%s' "$WH_ISSUES" > "$D/state/issues.json"; run_g notify n_env "$WHK" rotate success true "" failure owner_step_pending
@@ -1315,6 +1366,8 @@ mrow() { # id desc scenario-words want_real want_mut   (uses MT_TREE; skipped wh
 }
 ctl_mrow() { MT_TREE="$RT_REAL"; mrow CTL "ctl" "echo real" "other" "mut"; }   # real != the expected literal
 ctl_report "mrow()" "$(ctl_moves_fail ctl_mrow)"
+ctl_mrow_m() { MT_TREE="$RT_REAL"; mrow CTL2 "ctl" "echo real" "real" "mut"; }   # the real side matches, the mutant side does NOT proceed as the row demands
+ctl_report "mrow() with a mutant that does not proceed" "$(ctl_moves_fail ctl_mrow_m)"
 M() { # id desc scen target want_real want_mut anchor repl [func]
   mt "m$((++MUT_N))" "$4" "$7" "$8" "${9:-}" && mrow "$1" "$2" "$3" "$5" "$6"
 }
@@ -1341,7 +1394,7 @@ st_kb_walker_late() { set_state now "$(at 04:00:00)"; set_state late_after_kb-dr
 st_plan_adv() { set_state plan_adv 3601; }
 st_plan_adv_short() { set_state plan_adv 20; }
 st_plan_adv_budget() { set_state plan_adv $((APPLY_STEP_S - APPLY_BOUND_S - APPLY_MARGIN_S + 1)); }
-st_kb_plan_adv() { set_state now "$(at 00:54:30)"; set_state plan_adv 1250; }   # accepted at the start (7500 s ends 02:59:30), refused before the write (1250 s later + 6300 s reaches 03:00:00+)
+st_kb_plan_adv() { set_state now "$(at 00:44:30)"; set_state plan_adv 1250; }   # accepted at the start (8100 s ends 02:59:30), refused before the write (1250 s later + 6900 s reaches 03:00:20)
 st_kb_0250() { set_state now "$(at 02:50:00)"; }
 st_earlier() { printf '%s' '[{"databaseId":8000}]' > "$D/state/runs_key-rotate.yml_queued.json"; }
 st_walker_now() { set_state now "$(at 04:00:00)"; printf '%s' '[{"databaseId":5}]' > "$D/state/runs_kb-drift-walker.yml_in_progress.json"; }
@@ -1434,34 +1487,34 @@ M D3.6a "an unknown subcommand falls through to success (the '0 checked and gree
 M D3.6b "an empty mode is accepted (rotate-only checks are skipped as if it were plan)" "sc_guard $DEVK INPUT_MODE=" body inputs_invalid guard_ok '  case "${1:-}" in plan|rotate) ;; *) kr_refuse inputs_invalid "mode must be plan or rotate"; return 1 ;; esac' '  case "${1:-}" in plan|rotate) ;; *) ;; esac' kk_valid_inputs
 # reorder: the gate AFTER the apply, observed inside the window
 M D3.7a "REORDER: the gate runs after the apply (the stub apply observes whether the projection existed)" "sc_obs" body "proj=1" "proj=0" $'  kk_gate_plan "$key" p || return 1\n  if [[ "$mode" == plan ]]; then' $'  if [[ "$mode" == plan ]]; then'
-M D3.7b "REORDER: the final pre-apply re-check runs AFTER the apply (the late run is only seen when it is too late)" "sc_apply $DEVK st_late_run" body run_in_flight "applied:run_in_flight" $'  kk_chk_stale || return 1\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n  kk_chk_apply_budget || return 1\n  kr_out write_started true\n  KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?\n' $'  kk_chk_apply_budget || return 1\n  kr_out write_started true\n  KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?\n  kk_chk_stale || return 1\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n'
+M D3.7b "REORDER: the final pre-apply re-check runs AFTER the apply (the late run is only seen when it is too late)" "sc_apply $DEVK st_late_run" body run_in_flight "applied:run_in_flight" $'  kk_chk_stale || { kk_tf_clean; return 1; }\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n  kk_chk_apply_budget || { kk_tf_clean; return 1; }\n  kr_out write_started true\n  KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?\n' $'  kk_chk_apply_budget || { kk_tf_clean; return 1; }\n  kr_out write_started true\n  KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?\n  kk_chk_stale || { kk_tf_clean; return 1; }\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n'
 # re-checks deleted one at a time
 sc_stale_start() { sc_apply_tf "$DEVK" st_none EFF_GUARD_EPOCH=$((NOW0 - 3601)); }
 M D3.8a "delete authorization_stale at the start of apply (the pre-apply check still refuses, but only after init and two plans)" "sc_stale_start" body "authorization_stale:tf0" "authorization_stale:tf3" $'    kk_chk_stale || return 1\n    kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S"' $'    kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S"'
 # the go goes stale during a SHORT plan (20 s) so the pre-write time budget (R3) is not what refuses
-M D3.8b "delete authorization_stale before the apply (the go goes stale during the plan)" "sc_apply $DEVK st_plan_adv_short EFF_GUARD_EPOCH=$((NOW0 - 3590))" body authorization_stale "applied" $'  kk_chk_stale || return 1\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"'
-M D3.8k "delete the pre-write time budget (R3): a plan that took 1261 s of the 2400 s step is applied" "sc_apply $DEVK st_plan_adv_budget" body authorization_stale "applied" $'  kk_chk_apply_budget || return 1\n' ''
-M D3.8c "delete the in-flight/kb re-check before the apply (a release run appears during the plan)" "sc_apply $DEVK st_late_run" body run_in_flight "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
-M D3.8d "delete the kb_drift window re-check before the apply (the plan took an hour)" "sc_apply $KB st_kb_plan_adv EFF_GUARD_EPOCH=$(at 00:54:30)" body kb_drift_cron_window "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
-M D3.8e "delete the walker re-check before the apply (a walker appears during the plan)" "sc_apply $KB st_kb_walker_late EFF_GUARD_EPOCH=$(at 04:00:00)" body kb_drift_walker_in_flight "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
+M D3.8b "delete authorization_stale before the apply (the go goes stale during the plan)" "sc_apply $DEVK st_plan_adv_short EFF_GUARD_EPOCH=$((NOW0 - 3590))" body authorization_stale "applied" $'  kk_chk_stale || { kk_tf_clean; return 1; }\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"'
+M D3.8k "delete the pre-write time budget (R3): a plan that took 1261 s of the 2400 s step is applied" "sc_apply $DEVK st_plan_adv_budget" body authorization_stale "applied" $'  kk_chk_apply_budget || { kk_tf_clean; return 1; }\n' ''
+M D3.8c "delete the in-flight/kb re-check before the apply (a release run appears during the plan)" "sc_apply $DEVK st_late_run" body run_in_flight "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
+M D3.8d "delete the kb_drift window re-check before the apply (the plan took an hour)" "sc_apply $KB st_kb_plan_adv EFF_GUARD_EPOCH=$(at 00:44:30)" body kb_drift_cron_window "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
+M D3.8e "delete the walker re-check before the apply (a walker appears during the plan)" "sc_apply $KB st_kb_walker_late EFF_GUARD_EPOCH=$(at 04:00:00)" body kb_drift_walker_in_flight "applied" $'  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S" || { kk_tf_clean; kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
 M D3.8f "delete the re-check at the start of apply (the pre-apply re-check refuses later, after init and the plan)" "sc_apply_tf $DEVK st_earlier" body "run_in_flight:tf0" "run_in_flight:tf3" $'    kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
-M D3.8g "R1: the redeploy re-check reads the kb window again (the flag removed): kb_drift at 03:10 UTC is refused after a landed write" "sc_redeploy_recheck $KB 03:10:00" body passed rotated_redeploy_failed '    [[ "${3:-}" == redeploy ]] || { kk_chk_kb_window "$2" || return 1; }' '    kk_chk_kb_window "$2" || return 1' kk_recheck
-sc_redeploy_poll() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release.yml_in_progress.json"; set_state clear_after_web-platform-release.yml_in_progress 2; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; [[ "$RC" == 0 ]] && printf passed || v; }
-M D3.8h "R1: polling disabled (one read, then refuse): a release run that clears on the third read is refused" "sc_redeploy_poll" body passed rotated_redeploy_failed '    kk_recheck "$1" 0 redeploy && return 0' '    kk_recheck "$1" 0 redeploy && return 0; return 1' kk_redeploy_wait
-sc_redeploy_sleeps() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release.yml_in_progress.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; printf 'sleeps=%s' "$(nlog "$D/sleep.log" 'sleep 30')"; }
+M D3.8g "R1: the redeploy re-check reads the kb window again (the flag removed): kb_drift at 03:10 UTC is refused after a landed write" "sc_redeploy_recheck $KB 03:10:00" body passed rotated_redeploy_failed '    [[ "${3:-}" == redeploy ]] || { KK_RECHECK_RUNG=kb; kk_chk_kb_window "$2" || return 1; }' '    KK_RECHECK_RUNG=kb; kk_chk_kb_window "$2" || return 1' kk_recheck
+sc_redeploy_poll() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; set_state clear_after_cutover-inngest.yml_in_progress 2; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; [[ "$RC" == 0 ]] && printf passed || v; }
+M D3.8h "R1: polling disabled (one read, then refuse): a release run that clears on the third read is refused" "sc_redeploy_poll" body passed rotated_redeploy_failed '    kr_sleep "$KK_REDEPLOY_POLL_S"' '    unset -f gh; return 1' kk_redeploy_wait
+sc_redeploy_sleeps() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; printf 'sleeps=%s' "$(nlog "$D/sleep.log" 'sleep 30')"; }
 M D3.8h2 "R1: the wait cap is raised from 480 to 960 s: twice the sleeps" "sc_redeploy_sleeps" body "sleeps=16" "sleeps=32" 'KK_REDEPLOY_WAIT_S=480' 'KK_REDEPLOY_WAIT_S=960'
 M D3.8h3 "R1: the wait cap is zero: no sleep at all" "sc_redeploy_sleeps" body "sleeps=16" "sleeps=0" 'KK_REDEPLOY_WAIT_S=480' 'KK_REDEPLOY_WAIT_S=0'
-sc_redeploy_inflight() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_web-platform-release.yml_in_progress.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; [[ "$RC" == 0 ]] && printf passed || v; }
+sc_redeploy_inflight() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; [[ "$RC" == 0 ]] && printf passed || v; }
 M D3.8i "delete the in-flight re-check at the redeploy start (a release run is in flight)" "sc_redeploy_inflight" body rotated_redeploy_failed passed '  if ! kk_redeploy_wait "$EFF_KEY"; then kk_redeploy_refuse "$KR_CHECK_TOKEN" "$KR_CHECK_DETAIL"; return 1; fi' ''
 M D3.8j "delete the kb_drift window re-check at the start of apply" "sc_apply_tf $KB st_kb_0250 EFF_GUARD_EPOCH=$(at 02:50:00)" body "kb_drift_cron_window:tf0" "kb_drift_cron_window:tf3" $'    kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
 sc_lower_guard() { fresh; st_earlier; mapfile -t _b < <(g_rotate "$DEVK"); run_script guard "${_b[@]}"; v; }
 M D3.9c "delete the lower-run-id rung from the guard" "sc_lower_guard" body run_in_flight guard_ok $'  kk_check no_earlier_run kk_chk_lower_run || { kk_guard_report; return 1; }\n' ''
-M D3.9d "delete the lower-run-id rung from the re-checks (apply)" "sc_apply_tf $DEVK st_earlier" body "run_in_flight:tf0" "applied:tf4" $'  kk_chk_lower_run || return 1\n' ''
+M D3.9d "delete the lower-run-id rung from the re-checks (apply)" "sc_apply_tf $DEVK st_earlier" body "run_in_flight:tf0" "applied:tf4" $'  KK_RECHECK_RUNG=lower; kk_chk_lower_run || return 1\n' ''
 # kb boundaries (literal seconds); the unit scenario calls kk_chk_kb_window directly
-M D3.10a "flip <= to < at the 03:30 edge: a dispatch at exactly 03:30:00 is accepted" "sc_kb_unit 03:30:00 7500" body 1 0 '    if (( now <= we && now + b >= ws )); then' '    if (( now < we && now + b >= ws )); then' kk_chk_kb_window
-M D3.10b "flip >= to > at the start edge: a dispatch whose budget ends exactly at 03:00:00 is accepted" "sc_kb_unit 00:55:00 7500" body 1 0 '    if (( now <= we && now + b >= ws )); then' '    if (( now <= we && now + b > ws )); then' kk_chk_kb_window
+M D3.10a "flip <= to < at the 03:30 edge: a dispatch at exactly 03:30:00 is accepted" "sc_kb_unit 03:30:00 8100" body 1 0 '    if (( now <= we && now + b >= ws )); then' '    if (( now < we && now + b >= ws )); then' kk_chk_kb_window
+M D3.10b "flip >= to > at the start edge: a dispatch whose budget ends exactly at 03:00:00 is accepted" "sc_kb_unit 00:45:00 8100" body 1 0 '    if (( now <= we && now + b >= ws )); then' '    if (( now <= we && now + b > ws )); then' kk_chk_kb_window
 M D3.10c "drop the midnight wrap (tomorrow's window): a long budget from 23:50 reaches the next 03:00" "sc_kb_unit 23:50:00 36000" body 1 0 '  for d in 0 1; do' '  for d in 0; do' kk_chk_kb_window
-eq "D3.10d the boundary table on the real function: 00:54:59 ok, 00:55:00 refused, 03:30:00 refused, 03:30:01 ok, 23:50:00 (7500 s) ok" "$(for t in 00:54:59 00:55:00 03:30:00 03:30:01 23:50:00; do RT="$RT_REAL" sc_kb_unit "$t" 7500; done | tr '\n' ' ')" '0 1 1 0 0 '
+eq "D3.10d the boundary table on the real function: 00:44:59 ok, 00:45:00 refused, 03:30:00 refused, 03:30:01 ok, 23:50:00 (8100 s) ok" "$(for t in 00:44:59 00:45:00 03:30:00 03:30:01 23:50:00; do RT="$RT_REAL" sc_kb_unit "$t" 8100; done | tr '\n' ' ')" '0 1 1 0 0 '
 BASE_BODY="$LIFT_BODY"
 sc_walker_guard() { fresh; st_walker_now; mapfile -t _b < <(g_rotate "$KB"); run_script guard "${_b[@]}"; v; }
 sc_window_guard() { fresh; st_kb_0250; mapfile -t _b < <(g_rotate "$KB"); run_script guard "${_b[@]}"; v; }
@@ -1521,7 +1574,7 @@ sc_would_stale() { sc_would "$DEVK" st_none "EFF_GUARD_EPOCH=$((NOW0 - 3601))"; 
 sc_would_egress() { sc_would egress_audit_ingest_token st_none; }
 M D5.16a "R2 the approval branch removed from the would-refuse evaluation" "sc_would_approval" body "rotate_would_refuse=approval_environment_missing" "rotate_would_refuse=none" $'  elif ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"\n' '' kk_rotate_would_refuse
 M D5.16b "R2 the re-check branch removed from the would-refuse evaluation" "sc_would_inflight" body "rotate_would_refuse=run_in_flight" "rotate_would_refuse=none" $'  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' '' kk_rotate_would_refuse
-M D5.16c "R2 the staleness branch removed from the would-refuse evaluation" "sc_would_stale" body "rotate_would_refuse=authorization_stale" "rotate_would_refuse=none" $'  elif ! kk_stale_test; then tok="$KR_CHECK_TOKEN"\n' '' kk_rotate_would_refuse
+M D5.16c "N9 the staleness rung is NOT evaluated by plan: re-adding it (a plan run would report its own guard age) turns the field" "sc_would_stale" body "rotate_would_refuse=none" "rotate_would_refuse=authorization_stale" $'  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' $'  elif ! kk_stale_test; then tok="$KR_CHECK_TOKEN"\n  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' kk_rotate_would_refuse
 M D5.16d "R2 the egress branch removed from the would-refuse evaluation" "sc_would_egress" body "rotate_would_refuse=egress_rotate_unsupported_no_vector_restart_lever" "rotate_would_refuse=none" '  if ! kk_chk_egress "$1"; then tok="$KR_CHECK_TOKEN"' '  if false; then tok="$KR_CHECK_TOKEN"' kk_rotate_would_refuse
 sc_lower_status() { fresh; printf '%s' '[{"databaseId":8000}]' > "$D/state/runs_key-rotate.yml_$1.json"; mapfile -t _b < <(g_rotate "$DEVK"); run_script guard "${_b[@]}"; v; }
 for st in in_progress waiting pending requested; do
@@ -1588,7 +1641,7 @@ BATTERY_REAL="$(RT="$RT_REAL"; sc_battery)"
 eq "D4.6-0 the override battery is clean on the real script (output, argv logs and issue bodies carry no Inngest-route or converge text; every expected outcome holds)" "$BATTERY_REAL" 'clean'
 for fnm in $OVERRIDES kr_out; do
   if delete_fn "$TMP/m/del-$fnm.body" "$BODY" "$fnm" >/dev/null 2>&1; then
-    mk_tree "$TMP/mt-del-$fnm" "$TMP/m/del-$fnm.body"; res="$(RT="$TMP/mt-del-$fnm"; sc_battery)"
+    mk_tree "$TMP/mt-del-$fnm" "$TMP/m/del-$fnm.body"; res="$(RT="$TMP/mt-del-$fnm"; SCAN_ASSERT=0; sc_battery)"   # a tree with an override deleted LEAKS on purpose (the sourced stop sentence carries the unscrubbed confirm): not a real leak
     [[ "$res" != clean && "$res" == dirty:* ]] && ok "D4.6 deleting the redefinition of $fnm turns the battery ($res)" || bad "D4.6 deleting $fnm is invisible to the battery" "$res"
   else bad "D4.6 could not delete $fnm"; fi
 done
@@ -1599,15 +1652,115 @@ eq "D4.H1 harness (a): a copy of the sourced script with an extra, unrelated fun
 : > "$TMP/m/decoy.sib"; mk_tree "$TMP/mt-decoy" "" "$TMP/m/decoy.sib"
 eq "D4.H2 harness (b): a decoy (empty) path for the sourced script makes setup FAIL instead of passing" "$(RT="$TMP/mt-decoy"; sc_contract_rc)" 'rc78'
 
+# ---------------------------------------------------------------------------------------------------------------------------
+printf '\n=== D6. round 2: stream cleanup, close-earlier ordering, member skip, rung re-poll, caps, derivations ===\n'
+BASE_BODY=""; BASE_SIB=""
+# N1: no Terraform stream or saved-plan file is left when the EXIT trap runs (the rm shim logs the count inside the directory it removes)
+tfleft_of() { # <setup-command> [mode]
+  local setup="$1" mode="${2:-rotate}"; fresh; eval "$setup"; mapfile -t _e < <(a_env "$mode" "$DEVK"); run_script apply "${_e[@]}"
+  if [[ ! -s "$D/tfleft.log" ]]; then printf nolog; elif [[ "$(awk '{s += $1} END {print s + 0}' "$D/tfleft.log")" == 0 ]]; then printf none; else printf some; fi
+}
+for cs in ":|a clean rotate|rotate" ":|a plan-mode run|plan" "set_state show_rc 1|a failed terraform show|rotate" "set_state plan_rc 1|a failed terraform plan|rotate" "set_state init_rc 1|a failed terraform init|rotate" \
+          "set_state apply_rc 1|a failed apply|rotate" "st_extra|a plan the gate refuses|rotate" "set_state plan_adv 3601|a go that went stale during the plan|rotate" "touch_state apply_noeffect|an apply that changed nothing|rotate"; do
+  IFS='|' read -r su nm md <<<"$cs"
+  eq "D6.1 N1 $nm: no Terraform stream file and no saved plan is left in the temp dir when the EXIT trap runs" "$(tfleft_of "$su" "$md")" 'none'
+done
+sc_tfleft_show() { tfleft_of "set_state show_rc 1"; }
+sc_tfleft_plan() { tfleft_of "set_state plan_rc 1"; }
+sc_tfleft_ok() { tfleft_of ":"; }
+sc_tfleft_gate() { tfleft_of "st_extra"; }
+sc_tfleft_stale() { tfleft_of "set_state plan_adv 3601"; }
+M D6.2a "N1 the show-failure path keeps the stream files" sc_tfleft_show body none some $'    cls="$(kk_tf_class "show-${name}" "$rc")"; kk_tf_clean\n' $'    cls="$(kk_tf_class "show-${name}" "$rc")"\n' kk_gate_plan
+M D6.2b "N1 the plan-failure path keeps the stream files" sc_tfleft_plan body none some $'    cls="$(kk_tf_class "plan-${name}" "$rc")"; kk_tf_clean\n' $'    cls="$(kk_tf_class "plan-${name}" "$rc")"\n' kk_gate_plan
+M D6.2c "N1 nothing is deleted after the apply: the apply stream and the saved plan stay" sc_tfleft_ok body none some $'  kk_tf_clean\n  kk_post_state' $'  kk_post_state' kk_cmd_apply
+M D6.2d "N1 the gate-refusal path keeps the saved plan" sc_tfleft_gate body none some $'  kk_gate "$key" "$proj" "$want" || { kk_tf_clean; return 1; }' $'  kk_gate "$key" "$proj" "$want" || return 1' kk_gate_plan
+M D6.2e "N1 the stale-after-plan refusal keeps the saved plan" sc_tfleft_stale body none some $'  kk_chk_stale || { kk_tf_clean; return 1; }\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' $'  kk_chk_stale || return 1\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' kk_cmd_apply
+
+# N1 (static): a Terraform stream file is named only in kk_tf_class (a count), kk_tf_clean (the rm) and kk_gate_plan (the projection);
+# the saved plan additionally in kk_cmd_apply (the apply argument). A variable-named reader ("$f" in a loop over tf-*) needs a mention of tf- first.
+strip_fns() { awk -v names="$2" 'BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) skip[a[i]] = 1 }
+  { if (!inf && match($0, /^[a-z_]+\(\) \{/)) { nm = substr($0, 1, RLENGTH - 4); if (nm in skip) inf = 1 }
+    if (inf) { if ($0 ~ /^}/) inf = 0; next } print }' "$1"; }
+tf_stream_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan" | grep -v '^ *#' | grep -Ec '/tf-[a-z$\{*]'; }
+tf_plan_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan kk_cmd_apply" | grep -v '^ *#' | grep -Ec 'tfplan-'; }
+tf_class_readers() { # lines of kk_tf_class that use "$f" other than as the file of a fixed-pattern grep -c or a -f test
+  fn_text kk_tf_class "$1" | sed -E "s/grep -Eic '[^']*' \"\\\$f\"//g; s/\[\[ -f \"\\\$f\" \]\]//g" | grep -c '"\$f"'; }
+tf_gate_readers() { fn_text kk_gate_plan "$1" | grep -o 'tf-' | wc -l | tr -d ' '; }
+tf_clean_lines() { fn_text kk_tf_clean "$1" | grep 'tf-' | grep -vc '^  rm -f -- '; }
+eq "D6.3 N1 static: a tf- stream name appears nowhere outside kk_tf_class, kk_tf_clean and kk_gate_plan; the saved plan nowhere outside those and kk_cmd_apply; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once (the jq projection); kk_tf_clean only rm's" \
+  "$(tf_stream_outside "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")" '0|0|0|1|0'
+mut_ok "$TMP/m/tfm1.body" "$BODY" $'"$KR_TMP/tfplan-p" || rc=$?\n' $'"$KR_TMP/tfplan-p" || rc=$?\n  tail "$KR_TMP/tf-apply-apply.err" >&2\n' && eq "D6.3a mutant: a tail of the apply stream added to kk_cmd_apply is seen" "$(tf_stream_outside "$TMP/m/tfm1.body")" '1'
+mut_ok "$TMP/m/tfm2.body" "$BODY" $'"$KR_TMP/tfplan-p" || rc=$?\n' $'"$KR_TMP/tfplan-p" || rc=$?\n  for f in "$KR_TMP"/tf-*; do cat "$f"; done\n' && eq "D6.3b mutant: a loop over the stream files with a variable-named reader (invisible to the literal-name check B12) is seen" "$(tf_stream_outside "$TMP/m/tfm2.body")|$(code_only "$TMP/m/tfm2.body" | grep -Ec '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9${}_-]*\.(out|err)')" '1|0'
+mut_ok "$TMP/m/tfm3.body" "$BODY" $'    if [[ "$(grep -Eic \'Error acquiring the state lock|state lock\' "$f")" -gt 0 ]]; then' $'    cat "$f"\n    if [[ "$(grep -Eic \'Error acquiring the state lock|state lock\' "$f")" -gt 0 ]]; then' && eq "D6.3c mutant: a cat of the stream file inside kk_tf_class is seen" "$(tf_class_readers "$TMP/m/tfm3.body")" '1'
+mut_ok "$TMP/m/tfm4.body" "$BODY" $'jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-${name}.out" > "$proj" 2>/dev/null )' $'jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-${name}.out" > "$proj" 2>/dev/null; cat "$KR_TMP/tf-plan-${name}.out" )' && eq "D6.3d mutant: a second stream mention inside kk_gate_plan is seen" "$(tf_gate_readers "$TMP/m/tfm4.body")" '2'
+
+# N2: kk_close_earlier closes only issues of a LOWER run number
+sc_nlater() { fresh; printf '%s' "[{\"number\":11,\"title\":\"key-rotate $DEVK apply_failed (run 8000)\"},{\"number\":15,\"title\":\"key-rotate $DEVK apply_failed (run 9500)\"},{\"number\":16,\"title\":\"key-rotate $DEVK apply_failed (run 9001)\"}]" > "$D/state/issues.json"; mapfile -t _e < <(n_env "$DEVK" rotate success true "" success rotate_ok); run_script notify "${_e[@]}"; printf 'closed=%s' "$(sort "$D/issues_closed.log" 2>/dev/null | tr '\n' ',')"; }
+M D6.4 "N2 the run-number comparison removed from kk_close_earlier: a re-run of an old notify closes a LATER run's open issue (and its own)" sc_nlater body "closed=11," "closed=11,15,16," $'tonumber) < $me)) | .number\'' $'tonumber) >= 0)) | .number\'' kk_close_earlier
+eq "D6.4b N2 an unset run id closes nothing (a warning, not a guess)" "$(fresh; printf '%s' "[{\"number\":11,\"title\":\"key-rotate $DEVK apply_failed (run 8000)\"}]" > "$D/state/issues.json"; mapfile -t _e < <(n_env "$DEVK" rotate success true "" success rotate_ok); run_script notify "${_e[@]}" GITHUB_RUN_ID=; printf '%s|%s' "$(nlog "$D/issues_closed.log" .)" "$(grep -c 'the run id is unknown' <<<"$OUT")")" '0|1'
+
+# N3: the web-1-swap members are skipped by the redeploy poll only
+sc_rd_run() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_$1_$2.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"; printf '%s|%s|%s' "$RC" "$(verdict_of)" "$(nlog "$D/sleep.log" 'sleep 30')"; }
+for w in web-platform-release.yml apply-deploy-pipeline-fix.yml; do for st in in_progress queued waiting pending requested; do
+  eq "D6.5 N3 a web-1-swap member ($w, $st) is NOT a blocker in redeploy mode: its deploy job is queued behind this job's own hold (no sleep, the re-check passes)" "$(RT="$RT_REAL" sc_rd_run $w $st)" '0||0'
+done; done
+for w in apply-web-platform-infra.yml cutover-inngest.yml deploy-inngest-image.yml inngest-link-flip.yml inngest-key-rotate.yml; do
+  eq "D6.5b N3 a non-member ($w, in_progress) still blocks: the poll runs the full 480 s, then rotated_redeploy_failed" "$(RT="$RT_REAL" sc_rd_run $w in_progress)" '1|rotated_redeploy_failed|16'
+done
+M D6.5c "N3 the member skip removed: a release run in progress blocks the redeploy poll again (the false failure of the first round-2 finding)" "sc_rd_run web-platform-release.yml in_progress" body "0||0" "1|rotated_redeploy_failed|16" $'    if [[ "${1:-}" == redeploy ]] && kk_swap_member "$wf"; then continue; fi\n' '' kk_chk_inflight
+M D6.5d "N3 a non-member (cutover-inngest.yml) enrolled in the member list: it stops blocking" "sc_rd_run cutover-inngest.yml in_progress" body "1|rotated_redeploy_failed|16" "0||0" 'KK_SWAP_MEMBER_WORKFLOWS=(web-platform-release.yml apply-deploy-pipeline-fix.yml)' 'KK_SWAP_MEMBER_WORKFLOWS=(web-platform-release.yml apply-deploy-pipeline-fix.yml cutover-inngest.yml)'
+mut_ok "$TMP/m/swap.body" "$BODY" 'KK_SWAP_MEMBER_WORKFLOWS=(web-platform-release.yml apply-deploy-pipeline-fix.yml)' 'KK_SWAP_MEMBER_WORKFLOWS=(web-platform-release.yml apply-deploy-pipeline-fix.yml cutover-inngest.yml)' && eq "D6.5e mutant: the B37 member pin sees the enrolled non-member" "$([[ "$(swap_probe "$(ptree swap "$TMP/m/swap.body")")" != "$SWAP_LIT" ]] && echo differs)" 'differs'
+
+# a probe that SOURCES a mutated body needs the repo-shaped tree around it (the script finds the sibling relative to itself)
+ptree() { mk_tree "$TMP/mt-p-$1" "$2"; printf '%s' "$TMP/mt-p-$1/scripts/key-rotate.sh"; }
+# N5: kk_stop_tail / kr_converge_cmd use EFF_KEY only and print <key> for anything outside the list
+tail_of() { env -i PATH="$PATH" bash -c 'source "$1"; EFF_KEY="$2"; INPUT_KEY="$3"; KR_VERDICT=apply_failed; GITHUB_RUN_ID=77; kk_stop_tail' _ "$1" "$2" "$3" 2>&1; }
+n5_probe() { echo "$(tail_of "$1" "" inngest_signing_key_dev | grep -o -- '-f key=[^ ]*' | head -1)|$(tail_of "$1" 'x::evil' "" | grep -o -- '-f key=[^ ]*' | head -1)|$(tail_of "$1" inngest_signing_key_dev "" | grep -o -- '-f key=[^ ]*' | head -1)|$(tail_of "$1" "" 'evil::$(id) abc' | grep -c 'evil')"; }
+N5_WANT='-f key=<key>|-f key=<key>|-f key=inngest_signing_key_dev|0'
+eq "D6.6 N5 the stop tail never falls back to INPUT_KEY and prints <key> for anything outside the seven names (a valid INPUT_KEY with an empty EFF_KEY, an invalid EFF_KEY, a valid EFF_KEY, and a hostile INPUT_KEY)" "$(n5_probe "$BODY")" "$N5_WANT"
+mut_ok "$TMP/m/n5a.body" "$BODY" '  local k="${EFF_KEY:-}" v ok=1 extra=""' '  local k="${EFF_KEY:-${INPUT_KEY:-<key>}}" v ok=1 extra=""' && eq "D6.6a mutant: the INPUT_KEY fallback restored is seen" "$([[ "$(n5_probe "$(ptree n5a "$TMP/m/n5a.body")")" != "$N5_WANT" ]] && echo differs)" 'differs'
+mut_ok "$TMP/m/n5b.body" "$BODY" '  [[ "$ok" == 0 ]] || k="<key>"' '  :' && eq "D6.6b mutant: the list validation removed is seen" "$([[ "$(n5_probe "$(ptree n5b "$TMP/m/n5b.body")")" != "$N5_WANT" ]] && echo differs)" 'differs'
+
+# N6: every gh call of the poll is capped, only the rung that blocked is re-polled, WAIT + ITER fits the step
+sc_gh_capped() { fresh; printf '%s' '[{"databaseId":4242}]' > "$D/state/runs_cutover-inngest.yml_in_progress.json"; mapfile -t _e < <(r_env "$DEVK"); run_script "redeploy recheck" "${_e[@]}"
+  local a b; a="$(grep -c '^timeout 20 .*/gh run list' "$D/timeout.log")"; b="$(grep -c '^gh run list' "$D/gh.log")"; if [[ "$a" == "$b" && "$a" -gt 0 ]]; then printf capped; else printf uncapped; fi; }
+M D6.7 "N6 the 20 s cap removed from the poll's gh calls" sc_gh_capped body capped uncapped $'  gh() { timeout "$KK_GH_POLL_S" "$KK_GH_BIN" "$@"; }' $'  gh() { "$KK_GH_BIN" "$@"; }' kk_redeploy_wait
+sc_rung_only() { fresh; set_state now "$(at 04:00:00)"; printf '%s' '[{"databaseId":5}]' > "$D/state/runs_kb-drift-walker.yml_in_progress.json"; mapfile -t _e < <(r_env "$KB"); run_script "redeploy recheck" "${_e[@]}"
+  printf 'cutover=%s,walker=%s,sleeps=%s' "$(grep -c -- '--workflow cutover-inngest.yml' "$D/gh.log")" "$(grep -c -- '--workflow kb-drift-walker.yml' "$D/gh.log")" "$(nlog "$D/sleep.log" 'sleep 30')"; }
+M D6.8 "N6 the rung re-poll removed (every poll runs the full ladder again): the unrelated cutover-inngest.yml is listed on every poll" sc_rung_only body "cutover=5,walker=34,sleeps=16" "cutover=85,walker=34,sleeps=16" $'    if [[ -z "$rung" ]] || kk_recheck_rung "$rung"; then' '    if true; then' kk_redeploy_wait
+mut_ok "$TMP/m/gh40.body" "$BODY" 'KK_GH_POLL_S=20' 'KK_GH_POLL_S=40' && eq "D6.8a mutant: a 40 s cap per gh call no longer fits the Re-checks step (B38 turns)" "$(RECHECK_MIN="$RECHECK_MIN"; rd_fits "$(ptree gh40 "$TMP/m/gh40.body")")" '480 200 40 0'
+
+# N7: a timed-out init reports the cause class timeout
+sc_initclass() { fresh; set_state init_rc 124; mapfile -t _e < <(a_env rotate "$DEVK"); run_script apply "${_e[@]}"; grep -o 'terraform_failed cause class: [a-z_]*' <<<"$OUT" | head -1; }
+M D6.9 "N7 the init exit code is no longer passed to the class: a timeout reads as other" sc_initclass body "terraform_failed cause class: timeout" "terraform_failed cause class: other" 'kk_tf_class init "$irc"' 'kk_tf_class init 1' kk_cmd_apply
+
+# N8: the pre-write margin and the post-state worst case it does not cover
+post_worst() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$(( KK_RETRIES * 1 * 2 * KK_DOPPLER_READ_S + (KK_RETRIES - 1) * KK_RETRY_SLEEP_S )) $(( KK_RETRIES * 2 * 2 * KK_DOPPLER_READ_S + (KK_RETRIES - 1) * KK_RETRY_SLEEP_S )) $KK_APPLY_MARGIN_S"' _ "$1"; }
+eq "D6.10 N8 the post-state worst case derives from KK_RETRIES x copies x (listing + read) x KK_DOPPLER_READ_S + the retry sleeps: 400 s for one copy, 760 s for the two kb_drift copies; the pre-write margin is the literal 240 s, documented in the script as NOT covering it" "$(post_worst "$BODY")|$(grep -c '400 s for one copy, 760 s for the two' "$BODY")" '400 760 240|1'
+mut_ok "$TMP/m/ret4.body" "$BODY" 'KK_RETRIES=3' 'KK_RETRIES=4' && eq "D6.10a mutant: a fourth retry changes the derived worst case (the pinned literal turns)" "$([[ "$(post_worst "$(ptree ret4 "$TMP/m/ret4.body")")" != '400 760 240' ]] && echo differs)" 'differs'
+
+# N10: every post-write token returns 1 from kk_prewrite_token (a post-write token added to the list would silently file nothing)
+POSTWRITE_TOKENS="$(comm -23 <(tr ' ' '\n' <<<"$TOKENS" | sort) <(tr ' ' '\n' <<<"$PREWRITE_TOKENS" | sort) | tr '\n' ' ')"
+pw_rc() { env -i PATH="$PATH" bash -c 'source "$1"; kk_prewrite_token "$2"; echo $?' _ "$1" "$2"; }
+pw_neg_bad() { local t r=""; for t in $POSTWRITE_TOKENS; do [[ "$(pw_rc "$1" "$t")" == 1 ]] || r="$r $t"; done; printf '%s' "$r"; }
+eq "D6.11 N10 every token that is NOT one of the 15 pre-write tokens (the other 20 of the 35, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '20|'
+mut_ok "$TMP/m/pw.body" "$BODY" '|approval_environment_missing) return 0 ;;' '|approval_environment_missing|apply_failed) return 0 ;;' && eq "D6.11a mutant: apply_failed added to the pre-write list is seen" "$(pw_neg_bad "$(ptree pw "$TMP/m/pw.body")")" ' apply_failed'
+# N10: the confirm neutralizer is scoped to the stop sentence
+eq "D6.12 N10 the confirm placeholder is neutralized on a stop-sentence line only: the same 45-character run on any other line is still a leak hit" \
+  "$(printf 'x confirm=ROTATE-KB_DRIFT_INGEST_SIGNING_KEY-YYYY-MM-DD\n' | neutralize_confirm | grep -Ec "$LEAK_RE")|$(printf 'STOP: do not re-run the failed jobs. a confirm=ROTATE-KB_DRIFT_INGEST_SIGNING_KEY-YYYY-MM-DD\n' | neutralize_confirm | grep -Ec "$LEAK_RE")" '1|0'
+# N12: the kb budget pin sees a missing Re-checks term
+mut_ok "$TMP/m/bud.body" "$BODY" 'KK_RECHECK_STEP_S=600' 'KK_RECHECK_STEP_S=0' && eq "D6.13 N12 mutant: dropping the Re-checks term from the budget turns B31b" "$([[ "$(bud2_of "$(ptree bud "$TMP/m/bud.body")")" != '8100 6900 600 6300' ]] && echo differs)" 'differs'
+
 # --- final accounting for the whole run
 sleep 0.2
 SCAN_N="$(wc -l < "$TMP/scans.cnt" | tr -d ' ')"; RUN_N="$(wc -l < "$TMP/runs.cnt" | tr -d ' ')"
 eq "D9.1 NO-STREAM (whole suite incl. mutation scenarios): the number of stream scans equals the number of run_script calls ($RUN_N)" "$SCAN_N" "$RUN_N"
-eq "D9.2 NO-STREAM (whole suite): zero leaks outside the deliberate control and issue-leak scenarios" "$(wc -l < "$TMP/leaks.log" | tr -d ' ')" '0'
+eq "D9.2 NO-STREAM (whole suite): zero leaks outside the deliberate control and issue-leak scenarios" "$(wc -l < "$TMP/leaks.log" | tr -d ' ')$([[ -s "$TMP/leaks.log" ]] && printf ' [%s]' "$(head -c 300 "$TMP/leaks.log" | tr '\n' ';')")" '0'
+eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake refusals (the strict fakes log each unmodelled call)" "$(wc -l < "$TMP/refusals.seen" | tr -d ' ')" '0'
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=524
+FLOOR=592
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

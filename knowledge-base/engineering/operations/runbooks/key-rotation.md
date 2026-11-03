@@ -115,10 +115,13 @@ Do not arm reminders and do not tag cohorts while it runs: between the apply and
 
 A refusal before any write prints one fixed verdict (`key-rotate verdict=<token>`), writes nothing, fails the job and files no issue.
 Every token below is in `bash scripts/key-rotate.sh --print-contract`; the suite fails when a printed token is missing from this page.
-The passing verdicts are `guard_ok` (the ladder passed), `plan_ok` and `rotate_ok`.
+The three passing verdicts (`guard_ok`, `plan_ok`, `rotate_ok`) are the first rows.
 
 | Verdict | Cause | Next action |
 |---|---|---|
+| `guard_ok` | passing: every guard rung passed (exit 0; the guard wrote nothing) | none: the apply job runs |
+| `plan_ok` | passing: the plan gate passed in `mode=plan` (exit 0; nothing was applied); `rotate_would_refuse` is advisory (see above) | read `rotate_would_refuse`, then dispatch the rotate when it is `none` |
+| `rotate_ok` | passing: the apply landed, every copy changed and the fleet redeploy was confirmed by `track.sh` (exit 0) | none (it does not prove each consumer picked up the value) |
 | `ref_refused` | dispatched from a ref other than `main` | dispatch from `main` |
 | `inputs_invalid` | mode not `plan`/`rotate`, or key not one of the seven (an API dispatch bypasses the choice list) | correct the input |
 | `actor_refused` | `github.actor` or `github.triggering_actor` is empty or a `[bot]` | dispatch as the owner, not through a bot |
