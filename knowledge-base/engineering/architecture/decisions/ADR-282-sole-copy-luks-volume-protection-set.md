@@ -238,6 +238,8 @@ nothing was changed.
   `infra-validation.yml`, whose context is not in the required list, and `scripts/test-all.sh` runs infra suites only for
   `TEST_GROUP` of `all`, `infra` or `affected`, which no CI shard sets. A red Guard 1 therefore does not by itself block a
   merge. This gap goes to #9927 (promote the suite into a required context, or add a thin required aggregator).
+  > **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** Guard 1 is registered in the `want_scripts` region of
+  > `scripts/test-all.sh` and runs in the required `test` context through `test-scripts`; see the addendum of 2026-11-03 at the end of this file.
 - **CODEOWNERS.** `/apps/web-platform/infra/` is owned (`@deruelle`), so `inngest-redis-luks.tf`, `inngest-host.tf` and
   Guard 1 are covered. The other guard files (`plugins/soleur/test/terraform-target-parity.test.ts`,
   `tests/scripts/test-infra-privileged-tier-census.sh`, `tests/scripts/lib/hcl-effective-text.sh`, the host-replace gate
@@ -251,6 +253,7 @@ nothing was changed.
   the parity test, which runs in the required `test` check, plus the live read (the post-apply read-back and the drift
   plan), which a weakening of text alone cannot change. Guard 1 remains non-required. The anchors are as strong as those
   being required checks, which is the measurement above.
+  > **Superseded 2026-11-03 (#9927 item 10, conditional on its PR merging):** "Guard 1 remains non-required" no longer holds; see the addendum of 2026-11-03.
 
 ### Fresh-host provisioning tension (`hr-fresh-host-provisioning-reachable-from-terraform-apply`)
 
@@ -529,3 +532,17 @@ Appended; nothing above is edited and the status stays `accepted`. No new ordina
 ## Addendum - 2026-11-02 (#11831, #11820)
 
 Appended; nothing above is edited and the status stays `accepted`. Two items the 2026-11-01 build record deferred now exist. (1) The replace gate pins the token `access` level: on any plan entry that creates `doppler_service_token.inngest_flip` or `doppler_service_token.inngest` (create, delete+create, create+delete) `.change.after.access` must be `read/write` and `read` respectively, a missing value fails closed, and a violation aborts before any apply with `reason=doppler_token_access` (counter `doppler_token_access_wrong`); a no-op token is not judged (the pin judges what the plan mints, not state; the `apply_target=inngest-host` shape gate for an already-absent host does not carry it). This replaces the "neither gate reads `.after`" limit and makes the owner's pre-go read of the two `access` lines a cross-check rather than the only cover. (2) `logtail_exploration_alert.inngest_cutover_flip_silent` emails when no JSON `inngest-cutover-flip` row arrives from the production Inngest host for 15 minutes, which narrows the "A revoked or stalled flip token is unalarmed (CTO N8)" limit to a failure that reaches the script's `emit_state` (those still write JSON rows, so the alert does not see them). It has no replace-window suppression and will email during an owner-authorized host replace (expected); suppression stays open on #11820. Ruled by CTO agent, 2026-11-02: ship the query alert now, discriminated by `JSONType(raw,'message')='Object'` (measured: flip rows are object-typed, the doppler error lines under the same tag are strings).
+
+## Addendum - 2026-11-03 (#9927 item 10)
+
+Appended; nothing above is edited and the status stays `accepted`. Every statement here is conditional on the PR that carries it merging.
+
+**What changed.** Guard 1 (`apps/web-platform/infra/inngest-luks-sole-copy.test.sh`) is registered as `run_suite "apps/web-platform/infra/inngest-luks-sole-copy"` in the `want_scripts` region of `scripts/test-all.sh`. That region runs in the `test-scripts` leg, which is in the `needs` list of the required `test` context, so a red Guard 1 now blocks merge. The ruleset (`infra/github/ruleset-ci-required.tf`) is unchanged and no new required context exists. The suite stays covered by the infra runner glob as well (`deploy-script-tests`), so `scripts/lint-orphan-test-suites.sh` sees two registration surfaces and carries a `DOUBLE_COVERED_ACK` entry for it.
+
+**Before and after.** Before: a diff that weakened the Terraform pins and Guard 1 together merged green because nothing required Guard 1 to run. After: Guard 1 runs on every pull request that reaches `test-scripts`. Local run: 89 of 89 cases in about 40 s (the infra runner's own manifest records 72 s). The wall time on the CI runner is recorded in a follow-up append once the first run on the branch has finished.
+
+**What keeps the registration in place.** The G2f pin in `plugins/soleur/test/terraform-target-parity.test.ts` (leg `test-bun`, a different required leg) fails if the `run_suite` line is deleted, stubbed, given a control suffix such as `|| true`, moved out of its `want_scripts` region, wrapped in a dead conditional, or duplicated. This is a consistency check, not an integrity proof: one diff can still edit the registration and the pin together. The G2e attribute pin is kept as the independent, different-language anchor; its sunset comment now says it may stay, and executing the sunset is a tracked follow-up that waits until the new leg has run green on `main` and in the merge queue.
+
+**CODEOWNERS.** Explicit rows now name the guard files outside `/apps/web-platform/infra/`. They are routing text only: `*` already names the same owner and the ruleset has no `require_code_owner_review`, so they are not a second reviewer and not enforcement.
+
+**What this does not do (owner-facing, plain words).** Guard 1 is a regression check on Terraform text. It does not stop an Admin or Member on the Hetzner project from switching delete protection off, it does not stop a compromise of the account, and it does not help if the account is suspended or terminated: Hetzner states that deletion protection does not guarantee data retention after account termination (support reply of 2026-11-02, recorded on #9927). The volume is the only copy, and there is no recovery path for it until the owner decides on an off-project copy of the ciphertext (header plus data). That decision is item 1b of #9927, deferred and not declined, with re-evaluation at the earliest of 2027-01-08, the next planned `apply_target=inngest-host-replace`, or a written Hetzner answer (the answer has now arrived). It is the owner's call and is not taken here.

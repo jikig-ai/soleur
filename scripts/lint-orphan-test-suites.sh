@@ -339,9 +339,9 @@ fi
 # workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
-# claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
+# claimed. Measured 2026-08-13: five suites were legitimately covered twice (seven as of #9927, see the array) -- registered both
 # locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
-# listed in DOUBLE_COVERED_ACK below and the check fails on any SIXTH.
+# listed in DOUBLE_COVERED_ACK below and the check fails on any suite not in that array.
 #
 # An earlier revision of this comment asserted disjointness flatly while the live tree carried
 # violations of it, and enforced the invariant only inside the companion suite's synthetic
@@ -439,6 +439,7 @@ DOUBLE_COVERED_ACK=(
   "plugins/soleur/test/gdpr-gate-self-test.test.sh|test-all glob AND its own gdpr-gate-self-test.yml workflow, #7402"
   "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh|test-all glob AND its own gdpr-gate-self-test.yml job -- the two surfaces do DIFFERENT things and both are load-bearing: under the glob lefthook is absent so the suite loud-skips, while the workflow installs lefthook and sets SOLEUR_REQUIRE_LEFTHOOK=1 so the skip becomes a hard failure. De-registering either is NOT a no-op. #7710"
+  "apps/web-platform/infra/inngest-luks-sole-copy.test.sh|infra runner glob (deploy-script-tests) AND an explicit test-all.sh run_suite in the required test-scripts leg -- both are load-bearing: the glob is the existing path-filtered job, the run_suite is what makes a red Guard 1 block merge. The G2f pin in terraform-target-parity.test.ts keeps the run_suite line from being dropped silently (a de-registration is a no-op for this lint). #9927"
 )
 : > "$WORK/dupes"
 cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \

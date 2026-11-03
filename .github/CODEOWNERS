@@ -36,6 +36,14 @@
 /scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
+# Sole-copy Inngest LUKS guard files outside /apps/web-platform/infra/ (#9927 item 10, ADR-282). ROUTING TEXT ONLY: `*` already names the same
+# owner and the CI ruleset has no require_code_owner_review, so these rows are not a second reviewer and not enforcement.
+/plugins/soleur/test/terraform-target-parity.test.ts    @deruelle
+/tests/scripts/test-infra-privileged-tier-census.sh     @deruelle
+/tests/scripts/lib/hcl-effective-text.sh                @deruelle
+/tests/scripts/lib/inngest-host-replace-gate.sh         @deruelle
+/tests/scripts/test-inngest-host-replace-gate.sh        @deruelle
+
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
 # gdpr-gate-self-test.yml is the self-test that asserts the operator-attested-mode
 # banner literal.
