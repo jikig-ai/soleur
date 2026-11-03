@@ -178,3 +178,26 @@ Both rules apply in every mode and are not approval gates, so they fire in pipel
 6. Section 3 (two-spawn cap and tally), section 6 (on exhaustion the PR stays draft and ship files one `domain/engineering` issue, never an operator question) and section 4 (operator row for data loss, an irreversible act, money or legal exposure) apply unchanged.
 
 **Why:** #10499 - on PR #10376 a review/work session ended with an "Owner decisions" list in which three of four items were technical forks; the CTO settled all three in one pass once asked. Each earlier enforcer reads a different carrier (AskUserQuestion, the Decision Classes table, closing prose); the report list was a fourth.
+
+## 9. Owner-knowledge acts: relay, do not hand off
+
+An act that only the owner can complete (a knowledge claim, acceptance of a named risk, a scope change; the Inngest arc's A5, A6 and A7 records are the worked example) is never handed back as "paste this text" or "post this yourself". The agent does everything that is not the owner's words and asks once. Applies in every mode; it is a routing rule, not an approval gate. Rulings: CTO and CLO, 2026-11-02.
+
+**What the agent does.** Measure, enumerate, draft, file, post, link and read back. The agent may post the record and the evidence when the owner has delegated the posting in their own user turn of this session. A production act the owner reserves (a credential rotation, an environment approval) stays the owner's own dispatch or click; only the record of it is relayed.
+
+**What stays the owner's.** The owner states, in their own user turn (never an agent message, a brief, a resume prompt or an automated notification): a knowledge claim, in their own words; acceptance of a named risk, referencing the exact record by comment id or digest; any scope change. A knowledge claim (what the owner knows) is ONLY the owner's own words: the agent never drafts it, and the ask does not offer a draft. An acceptance sentence MAY be drafted by the agent for the owner to confirm; the provenance field `Agent-drafted text` says so. The agent never posts under a heading that claims the owner typed it, and the line `SIGNED BY OWNER (human, not an agent)` is a human-only marker an agent must never write.
+
+**The ask.** ONE plain-words confirmation, for the owner and for any Soleur operator, saying in one line what the agent will post and where. For a knowledge claim it asks the owner to state the sentence; for an acceptance it shows the drafted sentence to confirm or edit. The owner's typed in-session reply is quoted verbatim in the record. A reply that does not contain the sentence, or an answer such as "ok" to a question that did not, is not the sentence: ask again.
+
+**Provenance block, mandatory on every agent-posted record:**
+
+```text
+Posted by <agent> at <UTC> on the owner's instruction given in session at <time>.
+Owner's words, verbatim: «...». Agent-drafted text: yes/no. Not typed by the owner into this thread.
+```
+
+An agent-posted record that claims human typing is void.
+
+**A probe cannot tell an agent's post from the owner's.** Both come from the owner's login and `scripts/lib/trusted-verdict.sh` checks permission only. So the agent NEVER writes a DONE marker (`S5-A5-DONE:`, `S6-A6-DONE:`): those stay the owner's hand-typed lines, and "an agent-posted DONE line does not count" is a rule the agent follows, not one a probe enforces. It posts a `<MARKER>-RELAYED: <UTC Z>` record instead, in one comment, with `relayed-by: agent`, `owner-words: <the quote, in « » or straight double quotes>` and `owner-reply-at: <UTC Z>` after it, plus a `run=<id>` of the artifact the record rests on when the probe verifies one. Format, limits and parser: followthrough-convention.md, "Relayed records" (`scripts/lib/relayed-verdict.sh`). Worked example: the Inngest A5/A6 probe, where the S5 record needs a successful signing-key rotate or converge run of `inngest-key-rotate.yml` on `main` that finished before the owner's reply.
+
+**Why:** 2026-11-02 - the owner said that A5, A6 and A7 must not be handed back as text to paste, and that Soleur should gather the evidence, draft and, once delegated in session, post, asking for one confirmation. Refs #10205, #11294.

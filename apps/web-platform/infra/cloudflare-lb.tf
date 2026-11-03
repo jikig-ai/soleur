@@ -100,11 +100,13 @@ resource "cloudflare_notification_policy" "web_lb_health" {
   filters {
     pool_id      = [cloudflare_load_balancer_pool.web_1.id]
     event_source = ["pool", "origin"]
-    # new_health stays ["Down"]: an "Up" (recovery) page is deliberately out of
-    # scope — flap-vs-sustained recovery paging was not verified against this
-    # alert_type's new_health vocabulary before merge; record it as a follow-up
-    # rather than guessing a value the provider may reject.
-    new_health = ["Down"]
+    # new_health is ["Unhealthy"] only — the documented vocabulary for
+    # load_balancing_health_alert is {Unhealthy, Healthy} (CF docs; the shipped
+    # "Down" was API-rejected with Error 17108 on run 41504420340).
+    # A "Healthy" (recovery) page is deliberately out of scope: flap-vs-sustained
+    # recovery paging was never verified — a follow-up may add it after
+    # verification.
+    new_health = ["Unhealthy"]
   }
 
   email_integration {

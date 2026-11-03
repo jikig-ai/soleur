@@ -138,6 +138,13 @@ ALWAYS_ON_SUITES=(
   # construction (git ls-files + per-file comment-stripped invocation discovery).
   "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
+  # #9826 slice 2a: the public-claim guard greps every public-copy surface (docs, legal, README, site data,
+  # public app pages) for image-scan claims, so any edit to those surfaces can trip it — repo-global by
+  # construction, and a cheap grep, so always-on rather than a hand-listed edge set.
+  "scripts/image-cve-public-claim-guard"
+  # #9826 slice 2a: the verdict consumer sweep reads every tracked script, workflow and composite action (a poller of the
+  # verdict marker can live anywhere), so it is repo-global; it is its own small suite so the ~75 s verdict suite stays edge-selected.
+  "scripts/image-cve-verdict-consumers"
   "scripts/inngest-liveness-classify"
   "scripts/lint-agents-compound-sync-live"
   "scripts/lint-agents-enforcement-tags-live"
@@ -3328,6 +3335,20 @@ AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   "scripts/inngest-probe-heartbeat-feeder.sh"
   "scripts/inngest-probe-heartbeat-feeder.test.sh"
   "scripts/lib/inngest-probe-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/inngest-a5-a6-owner-ask-10136 — the #11218 owner-ask probe suite execs the REAL
+# trusted-verdict lib through its SUT: the probe sources $libdir/trusted-verdict.sh
+# (scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh:177), a computed path no derivation
+# channel reaches; the test header pins "the real trusted-verdict lib therefore runs
+# unmodified". Derivation reaches relayed-verdict.sh via the $REPO_ROOT cp literal (:737) but
+# the only trusted-verdict literal is the $FORCED scratch write (:739).
+AFFECTED_SCRIPTS_INNGEST_A5_A6_OWNER_ASK_10136_PATHS=(
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh"
+  "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh"
+  "scripts/lib/trusted-verdict.sh"
+  "scripts/lib/relayed-verdict.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
