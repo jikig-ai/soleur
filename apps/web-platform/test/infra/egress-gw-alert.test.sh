@@ -726,6 +726,11 @@ s = s.replace(old, old + "    if: false\n")' \
 assert s.count(old) == 1
 s = s.replace(old, "          fi\n    continue-on-error: true\n\n  # Aggregator (#8736): the single verdict")' \
     "continue-on-error: lines seen"
+  mutate_red "the workflow gains a top-level defaults: (a run.shell or env default would reach every job)" IV \
+    'old = "\nenv:\n  TERRAFORM_VERSION"
+assert s.count(old) == 1
+s = s.replace(old, "\ndefaults:\n  run:\n    shell: bash\nenv:\n  TERRAFORM_VERSION")' \
+    "top-level-defaults"
 
   mutate_red "the count = 0 mute knob is added inside the fail alert resource" TF \
     's = edit(s, FAILRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
@@ -757,7 +762,7 @@ fi
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
 # row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
 PRESENCE_ROWS=58
-MUT_ROWS=41
+MUT_ROWS=42
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
