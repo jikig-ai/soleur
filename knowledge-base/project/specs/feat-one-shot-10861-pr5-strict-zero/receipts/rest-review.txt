@@ -1,0 +1,657 @@
+##### .claude/hooks/pre-closing-technical-fork-gate.test.sh
+  plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md (1) @.claude/hooks/pre-closing-technical-fork-gate.sh:241 | Do this now: spawn soleur:engineering:cto with the Agent tool (legal questions: soleur:legal:clo), hand it the
+##### .claude/hooks/pre-merge-rebase.test.sh
+  knowledge-base/engineering/architecture/diagrams/model.likec4.json (1) @plugins/soleur/scripts/resolve-regenerable-conflicts.sh:160 | RESOLVABLE_PATHS=("knowledge-base/engineering/architecture/diagrams/model.likec4.json") # RESOLVABLE-SET: defa
+  plugins/soleur/skills/ship/references/merge-queue-dequeue.md (2) @.claude/hooks/pre-merge-rebase.sh:740 | _Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran 
+##### .claude/hooks/rule-incident-marker-capture.test.sh
+  AGENTS.rules.md (1) @.claude/hooks/rule-incident-marker-capture.test.sh:91 | assert "2: forged section-prefixed rule id absent from AGENTS.rules.md is rejected (and the hook still exits 0
+##### .claude/hooks/security_reminder_hook.test.sh
+  .github/actions/notify-ops-email/action.yml (1) @.claude/hooks/security_reminder_hook.test.sh:175 | file_path: ".github/actions/notify-ops-email/action.yml",
+  .github/workflows/ci.yml (10) @.claude/hooks/security_reminder_hook.test.sh:85 | file_path: ".github/workflows/ci.yml",
+  .github/workflows/web-platform-release.yml (1) @.claude/hooks/security_reminder_hook.test.sh:75 | file_path: ".github/workflows/web-platform-release.yml",
+##### apps/web-platform/test/vitest-related
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### plugins/soleur/scripts/admin-merge-ready.test.sh
+  README.md (2) @plugins/soleur/scripts/admin-merge-ready.test.sh:344 | for p in '[[{"filename":"README.md"}],[{"filename":".github/workflows/new.yml"}]]' \x5c
+##### plugins/soleur/scripts/affected-tests.test.sh
+  .gitignore (5) @plugins/soleur/scripts/affected-tests.test.sh:490 | printf 'node_modules/\x5cn' > "$r/.gitignore"
+  README.md (5) @plugins/soleur/scripts/affected-tests.test.sh:924 | commit_chg "$R_MD_RUNNER" README.md 'docs only'
+##### plugins/soleur/scripts/sync-pr-behind.test.sh
+  README.md (3) @plugins/soleur/scripts/sync-pr-behind.test.sh:71 | printf 'readme base\x5cn' > "$wt/README.md"
+  knowledge-base/engineering/architecture/diagrams/model.c4 (1) @plugins/soleur/scripts/sync-pr-behind.test.sh:55 | SRC="knowledge-base/engineering/architecture/diagrams/model.c4"
+  knowledge-base/engineering/architecture/diagrams/model.likec4.json (1) @plugins/soleur/scripts/sync-pr-behind.test.sh:54 | MODEL="knowledge-base/engineering/architecture/diagrams/model.likec4.json"
+  plugins/soleur/.claude-plugin/plugin.json (1) @plugins/soleur/scripts/sync-pr-behind.test.sh:82 | printf '{\x5cn "name": "soleur"\x5cn}\x5cn' > "$wt/plugins/soleur/.claude-plugin/plugin.json"
+  plugins/soleur/skills/ship/references/merge-queue-dequeue.md (2) @plugins/soleur/scripts/sync-pr-behind.sh:402 | printf '%s' "PR #$PR is BEHIND, auto-merge is armed (not in the queue yet) and $b has a merge queue: not synci
+##### plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh
+  .claude/settings.json (7) @plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh:292 | settings_commands = commands_of(os.path.join(root, ".claude/settings.json"))
+##### plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh
+  .mcp.json (17) @plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:59 | PIN="$(python3 -c "import json,re,sys; s=json.load(open(sys.argv[1]))['mcpServers']['playwright']['args'][1]; 
+  apps/web-platform/.dockerignore (1) @plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1381 | assert_true 'Guard 3: .dockerignore re-excludes _plugin-vendored/.mcp.json after the **/*.json re-include' pyt
+  plugins/soleur/.claude-plugin/plugin.json (1) @plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1358 | assert_true 'Guard 3: plugin.json carries mcpServers but NO playwright entry (the plugin server is .mcp.json-o
+##### plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
+  README.md (1) @plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh:223 | printf 'base\x5cn' > "$d/README.md"
+##### plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh
+  package.json (2) @plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh:310 | if _needs_gl "AC8 missing package.json"; then
+##### plugins/soleur/skills/community/test/community-argv.test.sh
+  apps/web-platform/Dockerfile (2) @plugins/soleur/skills/community/test/community-argv.test.sh:2879 | DOCKERFILE_REL="../../../../../apps/web-platform/Dockerfile"
+##### plugins/soleur/skills/compound/test/phase-16.test.sh
+  AGENTS.md (1) @plugins/soleur/skills/compound/test/phase-16.test.sh:41 | > "$root/AGENTS.md"
+##### plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh
+  .github/workflows/fix-constraints-stage-a.yml (1) @plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:556 | "$FX_A/apps/web-platform/.github/workflows/constraint-gates.yml" "$FX_A/apps/web-platform/.github/workflows/fi
+  .github/workflows/fix-constraints-stage-b.yml (1) @plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:557 | "$FX_A/apps/web-platform/.github/workflows/fix-constraints-stage-b.yml" "$FX_A/apps/web-platform/.dependency-c
+  .gitignore (1) @plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:283 | printf 'node_modules\x5cn' > "$fx/.gitignore"
+  AGENTS.md (17) @plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:310 | [[ "$agents" -eq 1 ]] && printf '# Agents\x5cn\x5cnPrior agent notes.\x5cn' > "$fx/AGENTS.md"
+  apps/web-platform/.github/workflows/constraint-gates.yml (1) @plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:556 | "$FX_A/apps/web-platform/.github/workflows/constraint-gates.yml" "$FX_A/apps/web-platform/.github/workflows/fi
+##### plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh
+  package.json (1) @plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh:297 | printf '{"name":"constraint-scaffold-test","private":true}\x5cn' > "$TMPROOT/package.json"
+##### plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh
+  .gitignore (1) @plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh:50 | printf 'node_modules\x5cn' > "$fx/.gitignore"
+##### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
+  .github/workflows/fix-constraints-stage-a.yml (1) @plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:101 | FIXWORKFLOW_A="$TARGET/.github/workflows/fix-constraints-stage-a.yml"
+  .github/workflows/fix-constraints-stage-b.yml (1) @plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:102 | FIXWORKFLOW_B="$TARGET/.github/workflows/fix-constraints-stage-b.yml"
+  AGENTS.md (1) @plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:493 | f="$REPO_ROOT/AGENTS.md"
+  README.md (3) @plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:105 | README="$TARGET/server/README.md"
+##### plugins/soleur/skills/eval-harness/test/eval-gate.test.sh
+  README.md (1) @plugins/soleur/skills/eval-harness/test/eval-gate.test.sh:38 | out=$(node "$GATE" --check plugins/soleur/skills/eval-harness/README.md)
+  plugins/soleur/agents/support/ticket-triage.md (1) @plugins/soleur/skills/eval-harness/test/eval-gate.test.sh:30 | out=$(node "$GATE" --check plugins/soleur/agents/support/ticket-triage.md)
+##### plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/skills/incident/test/redact-sentinel.test.sh
+  knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md (1) @plugins/soleur/skills/incident/test/redact-sentinel.test.sh:26 | NEGATIVE_BASELINE="${REPO_ROOT}/knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.
+##### plugins/soleur/test/admin-merge-ready-wiring.test.sh
+  knowledge-base/project/constitution.md (1) @plugins/soleur/test/admin-merge-ready-wiring.test.sh:29 | CONST_REL="knowledge-base/project/constitution.md"
+##### plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh
+  .claude/settings.json (3) @plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh:201 | > "$d/.claude/settings.json"
+  .devin/config.json (2) @plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh:207 | > "$d/.devin/config.json"
+##### plugins/soleur/test/ci-classify-step-exec.test.sh
+  .github/workflows/ci.yml (1) @plugins/soleur/test/ci-classify-step-exec.test.sh:24 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+  README.md (6) @plugins/soleur/test/ci-classify-step-exec.test.sh:155 | printf 'readme\x5cn' > "$work/README.md"
+##### plugins/soleur/test/ci-e2e-skip-anchors.test.sh
+  .github/workflows/ci.yml (2) @plugins/soleur/test/ci-e2e-skip-anchors.test.sh:53 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+  README.md (8) @plugins/soleur/test/ci-e2e-skip-anchors.test.sh:110 | expect_verdict "pure kb + root-md diff skips" false pull_request "$(mrow knowledge-base/project/specs/x.md; mr
+##### plugins/soleur/test/ci-pr-affected-preactivation.test.sh
+  README.md (1) @plugins/soleur/test/ci-pr-affected-preactivation.test.sh:401 | resp "repos/$R/pulls/77/files?per_page=100" 200 "[{\x5c"filename\x5c":\x5c"${KBDIR}/project/x.md\x5c"},{\x5c"f
+##### plugins/soleur/test/ci-shard-totality-skip.test.sh
+  README.md (10) @plugins/soleur/test/ci-shard-totality-skip.test.sh:79 | expect_verdict "kb markdown added + root md skips" false pull_request "$(arow knowledge-base/a.md; mrow README
+  scripts/suite-shard-legs.tsv (1) @plugins/soleur/test/ci-shard-totality-skip.test.sh:86 | expect_verdict "shard legs tsv edit runs" true pull_request "$(mrow scripts/suite-shard-legs.tsv)"
+##### plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh
+  .github/workflows/codeql-main-alert-gate.yml (1) @plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh:27 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+##### plugins/soleur/test/codeql-main-alert-gate.test.sh
+  .github/workflows/codeql-main-alert-gate.yml (1) @plugins/soleur/test/codeql-main-alert-gate.test.sh:41 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+##### plugins/soleur/test/destructive-command-guard-hook.test.sh
+  .claude/settings.json (3) @plugins/soleur/test/destructive-command-guard-hook.test.sh:2551 | printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\x5cn' > "$WORK/decoy/.claude/settings.json"
+##### plugins/soleur/test/destructive-command-guard-mutation.test.sh
+  .claude/settings.json (3) @plugins/soleur/test/destructive-command-guard-hook.test.sh:2551 | printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\x5cn' > "$WORK/decoy/.claude/settings.json"
+##### plugins/soleur/test/domain-model-headless-append.test.sh
+  knowledge-base/engineering/architecture/domain-model.md (1) @plugins/soleur/test/domain-model-headless-append.test.sh:45 | REG="$REPO/knowledge-base/engineering/architecture/domain-model.md"
+##### plugins/soleur/test/domain-model-init.test.sh
+  knowledge-base/engineering/architecture/domain-model.md (1) @plugins/soleur/test/domain-model-init.test.sh:43 | REG_REL="knowledge-base/engineering/architecture/domain-model.md"
+##### plugins/soleur/test/ext-filter-detect-hook.test.sh
+  .claude/hooks/devin-dispositions.tsv (1) @plugins/soleur/test/ext-filter-detect-hook.test.sh:15 | DISPOSITIONS="$REPO_ROOT/.claude/hooks/devin-dispositions.tsv"
+  .claude/settings.json (6) @plugins/soleur/test/ext-filter-detect-hook.test.sh:61 | printf '{"hooks":{"PreToolUse":[{"command":"rtk hook rewrite"}]}}' > "$HOME_DIR/.claude/settings.json"
+##### plugins/soleur/test/fanout-suite-scope.test.sh
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  plugins/soleur/skills/review/SKILL.md (1) @plugins/soleur/test/fanout-suite-scope.test.sh:35 | REVIEW_SKILL="$REPO_ROOT/plugins/soleur/skills/review/SKILL.md"
+  plugins/soleur/skills/work/SKILL.md (1) @plugins/soleur/test/fanout-suite-scope.test.sh:34 | WORK_SKILL="$REPO_ROOT/plugins/soleur/skills/work/SKILL.md"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### plugins/soleur/test/flag-org-scoping-pr2.test.sh
+  apps/web-platform/.env.example (1) @plugins/soleur/skills/flag-create/scripts/create.sh:71 | readonly ENV_EXAMPLE="apps/web-platform/.env.example"
+##### plugins/soleur/test/flagsmith-stdin-config.test.sh
+  apps/web-platform/.env.example (3) @plugins/soleur/skills/flag-create/scripts/create.sh:71 | readonly ENV_EXAMPLE="apps/web-platform/.env.example"
+##### plugins/soleur/test/gdpr-gate-self-test.test.sh
+  README.md (2) @plugins/soleur/test/gdpr-gate-self-test.test.sh:210 | bash "$GATE" "README.md" "docs/x.md" 2>/dev/null)
+##### plugins/soleur/test/generate-kb-index.test.sh
+  knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md (1) @plugins/soleur/test/generate-kb-index.test.sh:489 | "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-featur
+##### plugins/soleur/test/git-env-list-parity.test.sh
+  bunfig.toml (1) @tests/conftest.py:3 | Guard 3 registers a prelude per runner RUNTIME: a `bunfig.toml` preload for bun, a `globalSetup`
+  knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md (1) @tests/scripts/_git_fixture_env.py:4 | ``knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md``.
+  scripts/test-affected-kb-consumers.baseline.txt (1) @scripts/pre-push-ratchet-lane.sh:108 | "scripts/test-affected-kb-consumers.baseline.txt"
+##### plugins/soleur/test/git-repo-readiness-diag.test.sh
+  .gitignore (2) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1412 | if ! grep -q "^\x5c.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
+  .mcp.json (1) @.claude/hooks/bare-root-cwd-guard.sh:71 | [bare-root-cwd] worktree-manager.sh cleanup-merged, the .mcp.json restore.
+  AGENTS.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4732 | (bare repos only -- overwrites AGENTS.md,
+  CLAUDE.md (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:4733 | CLAUDE.md, hooks, settings, plugin manifest,
+  bunfig.toml (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1755 | if [[ -f "$dir/bunfig.toml" ]]; then
+  package-lock.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1935 | elif [[ -f "$worktree_path/package-lock.json" ]]; then
+  package.json (4) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:1919 | if [[ "$SKIP_INSTALL" != true ]] && [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_mod
+  scripts/tmpfs-guard.timer (1) @plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:3443 | echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --dr
+##### plugins/soleur/test/gitleaks-rules.test.sh
+  .gitleaks.toml (1) @plugins/soleur/test/gitleaks-rules.test.sh:17 | CONFIG="$REPO_ROOT/.gitleaks.toml"
+##### plugins/soleur/test/go-routing-table-parity.test.sh
+  .claude-plugin/marketplace.json (1) @plugins/soleur/lib/workflow-fidelity.ts:188 | * (`.claude-plugin/marketplace.json`) and does not carry `.claude/`, so a runtime
+  .claude/phase-surface-map.json (1) @plugins/soleur/lib/workflow-fidelity.ts:187 | * `.claude/phase-surface-map.json`. The plugin ships as `./plugins/soleur`
+  .claude/workflow-transitions.json (1) @plugins/soleur/lib/workflow-fidelity.ts:230 | * Mirrored in .claude/workflow-transitions.json under `sub_steps`
+##### plugins/soleur/test/go-session-gates.test.sh
+  knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt (1) @plugins/soleur/test/go-session-gates.test.sh:45 | ARM5_DELIVERED="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-
+  knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md (1) @plugins/soleur/test/go-session-gates.test.sh:46 | PROBE_MD="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor
+##### plugins/soleur/test/hook-input-classification-mutation.test.sh
+  .claude/settings.json (2) @.claude/hooks/hook-input-contract.test.sh:936 | if [[ ! -f "$settings" ]]; then bad "A9 .claude/settings.json not found"; return; fi
+  AGENTS.md (1) @.claude/hooks/hook-input-contract.test.sh:785 | cat > "$root/AGENTS.md" <<'EOF'
+##### plugins/soleur/test/inngest-config-bundle-mirror.test.sh
+  .github/workflows/reusable-release.yml (1) @plugins/soleur/test/inngest-config-bundle-mirror.test.sh:66 | RR="$REPO_ROOT/.github/workflows/reusable-release.yml"
+##### plugins/soleur/test/kb-search-lockstep.test.sh
+  knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md (1) @scripts/learning-retrieval-bench.sh:111 | Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-br
+  knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md (1) @scripts/learning-retrieval-bench.sh:729 | "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md"
+  knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md (1) @scripts/learning-retrieval-bench.sh:734 | "knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md"
+  knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md (1) @scripts/learning-retrieval-bench.sh:730 | "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md"
+  knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md (1) @scripts/learning-retrieval-bench.sh:735 | "knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md"
+  knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md (1) @scripts/learning-retrieval-bench.sh:733 | "knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md"
+  knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md (1) @scripts/learning-retrieval-bench.sh:732 | "knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md"
+  knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md (1) @scripts/learning-retrieval-bench.sh:731 | "knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md"
+  knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md (1) @scripts/learning-retrieval-bench.sh:1394 | got="$(build_close_comment_line vindicate 0.83 knowledge-base/project/learnings/2026-05-19-retrieval-diagnosti
+  knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md (1) @scripts/learning-retrieval-bench.sh:109 | Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+  knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md (1) @scripts/learning-retrieval-bench.sh:110 | Spec: knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+##### plugins/soleur/test/lane-frontmatter.test.sh
+  knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md (1) @plugins/soleur/test/lane-frontmatter.test.sh:21 | AUDIT_SPEC="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md"
+##### plugins/soleur/test/main-health-monitor-workflow.test.sh
+  .github/workflows/infra-validation.yml (1) @plugins/soleur/test/main-health-monitor-workflow.test.sh:48 | INFRA_VALIDATION="${MHM_INFRA_VALIDATION:-$REPO_ROOT/.github/workflows/infra-validation.yml}"
+##### plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh
+  .github/workflows/merge-queue-cla-synthetics.yml (1) @plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh:30 | WF_REL=".github/workflows/merge-queue-cla-synthetics.yml"
+  scripts/ci-cla-required-ruleset-canonical-required-status-checks.json (1) @plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh:32 | CANON_REL="scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+##### plugins/soleur/test/merge-queue-stall-check.test.sh
+  .github/workflows/merge-queue-stall-check.yml (1) @plugins/soleur/test/merge-queue-stall-check.test.sh:29 | WF_REAL="$REPO_ROOT/.github/workflows/merge-queue-stall-check.yml"
+  infra/github/ruleset-ci-required.tf (1) @plugins/soleur/test/merge-queue-stall-check.test.sh:30 | TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+##### plugins/soleur/test/notice-frontmatter.test.sh
+  knowledge-base/engineering/policies/content-vendoring.md (1) @plugins/soleur/test/notice-frontmatter.test.sh:464 | registry: knowledge-base/engineering/policies/content-vendoring.md
+##### plugins/soleur/test/operator-9321-stages.test.sh
+  .gitignore (1) @knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh:248 | printf 'The credentials file would be committed. Add it to .gitignore first (a pattern such as .env* covers bo
+##### plugins/soleur/test/plugin-version.test.sh
+  README.md (2) @plugins/soleur/test/plugin-version.test.sh:277 | "filename": "README.md",
+##### plugins/soleur/test/pr-fanout-ledger.test.sh
+  scripts/pr-fanout-ledger.txt (1) @plugins/soleur/test/pr-fanout-ledger.test.sh:77 | LEDGER="${PR_FANOUT_LEDGER:-$REPO_ROOT/scripts/pr-fanout-ledger.txt}"
+##### plugins/soleur/test/pr-overlap-preflight.test.sh
+  .claude/rule-body-hashes.txt (1) @plugins/soleur/test/pr-overlap-preflight.test.sh:828 | for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/su
+  README.md (2) @plugins/soleur/test/pr-overlap-preflight.test.sh:305 | printf 'x\x5cn' > "$REPO_B/README.md"
+  package-lock.json (1) @plugins/soleur/test/pr-overlap-preflight.test.sh:828 | for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/su
+  scripts/suite-durations.tsv (1) @plugins/soleur/test/pr-overlap-preflight.test.sh:828 | for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/su
+  scripts/suite-shard-legs.tsv (1) @plugins/soleur/test/pr-overlap-preflight.test.sh:828 | for nm in package-lock.json bun.lock bun.lockb yarn.lock pnpm-lock.yaml scripts/suite-durations.tsv scripts/su
+##### plugins/soleur/test/preflight-check10-suite-integrity.test.sh
+  .bun-version (1) @plugins/soleur/test/preflight-discoverability-test.test.ts:696 | "expected value comes from Bun.YAML at the .bun-version pin; if the Bun pin just moved, the oracle moved, not 
+  README.md (1) @plugins/soleur/test/preflight-founder-check.test.ts:184 | writeFileSync(join(dir, "README.md"), "fixture\x5cn");
+  plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md (1) @plugins/soleur/test/observability-schema-parity.test.ts:196 | "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md",
+  plugins/soleur/skills/deepen-plan/SKILL.md (1) @plugins/soleur/test/observability-schema-parity.test.ts:35 | const DEEPEN = "plugins/soleur/skills/deepen-plan/SKILL.md";
+  plugins/soleur/skills/plan/SKILL.md (1) @plugins/soleur/test/observability-schema-parity.test.ts:33 | const PLAN_SKILL = "plugins/soleur/skills/plan/SKILL.md";
+  plugins/soleur/skills/plan/references/plan-issue-templates.md (1) @plugins/soleur/test/observability-schema-parity.test.ts:34 | const TEMPLATES = "plugins/soleur/skills/plan/references/plan-issue-templates.md";
+  plugins/soleur/skills/preflight/references/check-13-founder-check.md (1) @plugins/soleur/test/preflight-check10-suite-integrity.test.sh:586 | REF13_FILE="plugins/soleur/skills/preflight/references/check-13-founder-check.md"
+  plugins/soleur/skills/review/SKILL.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:52 | const REVIEW_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/review/SKILL.md");
+  plugins/soleur/skills/ship/SKILL.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:50 | const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
+  plugins/soleur/skills/test-fix-loop/SKILL.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:53 | const TESTFIX_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/test-fix-loop/SKILL.md");
+  plugins/soleur/skills/work/SKILL.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:51 | const WORK_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/work/SKILL.md");
+  plugins/soleur/skills/work/references/work-agent-teams.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:58 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-agent-teams.md"),
+  plugins/soleur/skills/work/references/work-subagent-fanout.md (1) @plugins/soleur/test/fullsuite-merge-gate.test.ts:59 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-subagent-fanout.md"),
+##### plugins/soleur/test/required-checks-canonical-parity.test.sh
+  .github/workflows/ci.yml (1) @plugins/soleur/test/required-checks-canonical-parity.test.sh:68 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+  .github/workflows/main-health-monitor.yml (1) @plugins/soleur/test/required-checks-canonical-parity.test.sh:73 | MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
+  .github/workflows/secret-scan.yml (1) @plugins/soleur/test/required-checks-canonical-parity.test.sh:67 | SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
+  scripts/ci-cla-required-ruleset-canonical-required-status-checks.json (1) @plugins/soleur/test/required-checks-canonical-parity.test.sh:74 | CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+  scripts/ci-required-ruleset-canonical-required-status-checks.json (1) @plugins/soleur/test/required-checks-canonical-parity.test.sh:65 | CANONICAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+##### plugins/soleur/test/reusable-release-degraded-pointer.test.sh
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### plugins/soleur/test/ship-battery-owed.test.sh
+  README.md (3) @plugins/soleur/test/ship-battery-owed.test.sh:95 | printf 'seed\x5cn' > README.md
+##### plugins/soleur/test/ship-followthrough-directive.test.sh
+  .github/workflows/scheduled-followthrough-sweeper.yml (1) @scripts/sweep-followthroughs.sh:680 | Fix: add the name to the \x5c`env:\x5c` block of \x5c`.github/workflows/scheduled-followthrough-sweeper.yml\x5
+##### plugins/soleur/test/ship-pir-action-items-gate.test.sh
+  README.md (3) @plugins/soleur/test/ship-pir-action-items-gate.test.sh:223 | printf 'base\x5cn' > "$REPO_A/README.md"
+##### plugins/soleur/test/test-pyramid-fixtures.test.sh
+  package-lock.json (1) @plugins/soleur/skills/review/workflows/review.workflow.js:279 | - anyLockfile = any path matches package-lock.json|bun.lock|yarn.lock|Cargo.lock|go.sum|Gemfile.lock|poetry.lo
+##### plugins/soleur/test/vendor-pin-integrity.test.sh
+  knowledge-base/engineering/policies/content-vendoring.md (3) @plugins/soleur/test/vendor-pin-integrity.test.sh:111 | registry: knowledge-base/engineering/policies/content-vendoring.md
+##### plugins/soleur/test/worktree-manager-bare-sync.test.sh
+  .claude-plugin/marketplace.json (2) @plugins/soleur/test/worktree-manager-bare-sync.test.sh:142 | ".claude-plugin/marketplace.json"
+  apps/web-platform/infra/cutover-monitor-baseline.txt (1) @plugins/soleur/test/worktree-manager-bare-sync.test.sh:155 | "apps/web-platform/infra/cutover-monitor-baseline.txt"
+  apps/web-platform/supabase/migrations/071_ux_audit_artifacts_bucket.sql (1) @plugins/soleur/test/worktree-manager-bare-sync.test.sh:145 | "apps/web-platform/supabase/migrations/071_ux_audit_artifacts_bucket.sql"
+  plugins/soleur/agents/community/.gitkeep (1) @plugins/soleur/test/worktree-manager-bare-sync.test.sh:154 | "plugins/soleur/agents/community/.gitkeep"
+  plugins/soleur/cursor/skills/soleur-xcode-test/SKILL.md (1) @plugins/soleur/test/worktree-manager-bare-sync.test.sh:148 | "plugins/soleur/cursor/skills/soleur-xcode-test/SKILL.md"
+##### plugins/soleur/test/worktree-manager-hook-deps.test.sh
+  package-lock.json (1) @plugins/soleur/test/worktree-manager-hook-deps.test.sh:94 | > "$repo/package-lock.json"
+  package.json (1) @plugins/soleur/test/worktree-manager-hook-deps.test.sh:91 | printf '{"name":"fixture","private":true}\x5cn' > "$repo/package.json"
+##### plugins/soleur/test/worktree-manager-install-bounded.test.sh
+  package.json (2) @plugins/soleur/test/worktree-manager-install-bounded.test.sh:93 | printf '{"name":"fixture","private":true}\x5cn' > "$repo/package.json"
+##### scripts/actions-queue-tail-8450
+  .github/workflows/web-platform-release.yml (1) @scripts/followthroughs/actions-queue-tail-8450.test.sh:458 | RELEASE_YML="$(cd "$HERE/../.." && pwd)/.github/workflows/web-platform-release.yml"
+##### scripts/betterstack-emitter-read
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lint-betterstack-emitter-read.sh:118 | [".github/workflows/apply-web-platform-infra.yml"]="hint-only: betterstack-query.sh references are remediation
+  .github/workflows/build-inngest-bootstrap-image.yml (1) @scripts/lint-betterstack-emitter-read.sh:119 | [".github/workflows/build-inngest-bootstrap-image.yml"]="hint-only: _ptr evidence strings embed the query reci
+  .github/workflows/git-data-cutover.yml (3) @scripts/lint-betterstack-emitter-read.test.sh:307 | ".github/workflows/git-data-cutover.yml"
+  .github/workflows/reusable-release.yml (1) @scripts/lint-betterstack-emitter-read.sh:128 | [".github/workflows/reusable-release.yml"]="evidence capture: :1325 tees the --grep SOLEUR_ZOT_DISK read to a 
+  .github/workflows/scheduled-inngest-health.yml (2) @scripts/lint-betterstack-emitter-read.test.sh:306 | ".github/workflows/scheduled-inngest-health.yml"
+  .github/workflows/scheduled-zot-restart-loop.yml (1) @scripts/lint-betterstack-emitter-read.sh:120 | [".github/workflows/scheduled-zot-restart-loop.yml"]="hint-only: references live in remediation printf blocks;
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### scripts/check-backstop-revision
+  README.md (1) @scripts/check-backstop-revision.test.sh:71 | printf 'unrelated\x5cn' >> "$S/a1/work/README.md" && git -C "$S/a1/work" add -A \x5c
+##### scripts/check-deploy-script-parity
+  knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md (1) @apps/web-platform/infra/ci-deploy.sh:5539 | echo " knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md" >&2
+##### scripts/ci-demand-census
+  .github/workflows/secret-scan.yml (4) @scripts/ci-demand-census.test.sh:842 | run_census "$S" --fixture "$FIXTURE" --workflow .github/workflows/secret-scan.yml
+##### scripts/ci-draft-light
+  knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md (2) @apps/web-platform/server/inngest/functions/_cron-safe-commit.ts:776 | `section of knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md.`,
+##### scripts/ci-pr-selection
+  .github/workflows/ci.yml (3) @scripts/ci-pr-selection.test.sh:248 | ".github/workflows/ci.yml"
+  CLAUDE.md (1) @scripts/ci-pr-selection.test.sh:270 | mk CLAUDE.md
+  README.md (3) @scripts/ci-pr-selection.test.sh:269 | mk README.md
+  scripts/suite-shard-legs-heavy.tsv (2) @scripts/ci-pr-selection.test.sh:252 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (2) @scripts/ci-pr-selection.test.sh:251 | "scripts/suite-shard-legs.tsv"
+  scripts/test-affected-kb-consumers.baseline.txt (2) @scripts/ci-pr-selection.test.sh:253 | "scripts/test-affected-kb-consumers.baseline.txt"
+##### scripts/compound-promote
+  AGENTS.md (2) @scripts/compound-promote.test.sh:139 | printf 'idx\x5cn' > "$root/AGENTS.md"
+  AGENTS.rules.md (2) @scripts/compound-promote.test.sh:140 | printf 'core\x5cn' > "$root/AGENTS.rules.md"
+  knowledge-base/project/promotion-config.yml (7) @scripts/compound-promote.test.sh:248 | cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+  scripts/retired-rule-ids.txt (1) @scripts/compound-promote.test.sh:327 | cat > "$root/scripts/retired-rule-ids.txt" <<EOF
+##### scripts/compound-promote-draft-edit-10552
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### scripts/content-publisher
+  plugins/soleur/docs/images/logo-mark-512.png (1) @scripts/content-publisher.sh:62 | AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.pn
+##### scripts/dogfood/grok-gpu-bootstrap
+  .grok/config.toml (1) @scripts/dogfood/grok-gpu-bootstrap.sh:180 | local cfg="/home/${DOGFOOD_USER}/.grok/config.toml"
+  LICENSE (5) @scripts/dogfood/grok-gpu-bootstrap.test.sh:51 | if grep -qE '\x5c[\x5c[\x5cs*"\x5c$LICENSE_OK"\x5cs+-eq\x5cs+1\x5cs*\x5c]\x5c]\x5cs*\x5c|\x5c|\x5cs*die' "$SCR
+##### scripts/followthrough-predicate-parity
+  .github/workflows/scheduled-followthrough-sweeper.yml (1) @scripts/sweep-followthroughs.sh:680 | Fix: add the name to the \x5c`env:\x5c` block of \x5c`.github/workflows/scheduled-followthrough-sweeper.yml\x5
+  knowledge-base/engineering/operations/runbooks/followthrough-convention.md (1) @.claude/hooks/ship-soak-followthrough-gate.sh:417 | See knowledge-base/engineering/operations/runbooks/followthrough-convention.md and ship/SKILL.md §Soak-Gated F
+##### scripts/followthrough-varq-ban
+  knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md (1) @scripts/followthroughs/plugin-delivery-canary-7490.sh:34 | REPORTS="knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-deliv
+##### scripts/followthroughs/ccla-representative-icla-7922
+  apps/cla-evidence/roster/ccla-roster.json (2) @scripts/followthroughs/ccla-representative-icla-7922.test.sh:39 | ROSTER_REL="apps/cla-evidence/roster/ccla-roster.json"
+  scripts/followthroughs/ccla-representative-icla-7922.acknowledged (6) @scripts/followthroughs/ccla-representative-icla-7922.test.sh:1029 | printf '0\x5cn' > "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged" 2>/dev/null \x5
+##### scripts/followthroughs/ci-draft-light-soak-9728
+  .github/workflows/ci.yml (1) @plugins/soleur/scripts/ci-head-verdict.sh:322 | gh api -H 'Accept: application/vnd.github.raw+json' "repos/{owner}/{repo}/contents/.github/workflows/ci.yml" >
+##### scripts/followthroughs/ci-push-dedupe-soak-9512
+  .github/workflows/ci.yml (18) @scripts/ci-push-dedupe.test.sh:58 | WF="$REPO_ROOT/.github/workflows/ci.yml"
+  .github/workflows/web-platform-release.yml (1) @scripts/ci-push-dedupe.test.sh:828 | REL_YML="$REPO_ROOT/.github/workflows/web-platform-release.yml"
+##### scripts/followthroughs/pr-battery-gate-saving-9323
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/followthroughs/registry-clientip-alert-7530
+  knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md (5) @scripts/followthroughs/registry-clientip-alert-7530.test.sh:289 | PASS_POINTER_KEY='re-date them per knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-75
+##### scripts/git-data-reboot-evidence-landed-8210
+  apps/web-platform/infra/cloud-init-git-data.yml (3) @scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh:91 | printf '#cloud-config\x5cn# fixture\x5cn' > "$d/apps/web-platform/infra/cloud-init-git-data.yml"
+  apps/web-platform/infra/git-data-rung2-boot-evidence.env (4) @scripts/followthroughs/git-data-reboot-evidence-landed-8210.test.sh:96 | } > "$d/apps/web-platform/infra/git-data-rung2-boot-evidence.env"
+  knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md (2) @scripts/followthroughs/git-data-reboot-evidence-landed-8210.sh:201 | echo " knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md"
+##### scripts/inngest-probe-heartbeat-feeder
+  apps/web-platform/infra/sentry/cron-monitors.tf (1) @scripts/inngest-probe-heartbeat-feeder.test.sh:454 | _tfmaxrt="$(awk '/resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat"/{on=1} on && /max_runtime
+##### scripts/learning-retrieval-bench
+  knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md (1) @scripts/learning-retrieval-bench.sh:111 | Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-br
+  knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md (1) @scripts/learning-retrieval-bench.sh:729 | "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md"
+  knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md (1) @scripts/learning-retrieval-bench.sh:734 | "knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md"
+  knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md (1) @scripts/learning-retrieval-bench.sh:730 | "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md"
+  knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md (1) @scripts/learning-retrieval-bench.sh:735 | "knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md"
+  knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md (1) @scripts/learning-retrieval-bench.sh:733 | "knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md"
+  knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md (1) @scripts/learning-retrieval-bench.sh:732 | "knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md"
+  knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md (1) @scripts/learning-retrieval-bench.sh:731 | "knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md"
+  knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md (1) @scripts/learning-retrieval-bench.sh:109 | Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+  knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md (1) @scripts/learning-retrieval-bench.sh:110 | Spec: knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+##### scripts/lib/inngest-probe-row.test.sh
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+  knowledge-base/engineering/operations/runbooks/inngest-server.md (5) @scripts/cutover-inngest.sh:1244 | local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
+##### scripts/lib/rule-line-regex-parity.test.sh
+  .claude/rule-body-hashes.txt (1) @scripts/lint-rule-bodies.py:14 | (.claude/rule-body-hashes.txt) over the current corpus. Run this
+  .claude/rule-weakening-acks.txt (1) @scripts/lint-rule-bodies.py:7 | WORM file `.claude/rule-weakening-acks.txt`. The safe primitive is "add a new
+  .mcp.json (2) @.claude/hooks/session-rules-loader.sh:388 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/.mcp.
+  AGENTS.md (28) @.claude/hooks/session-rules-loader.sh:174 | fb_total=$(grep -c '^- \x5c[id: ' "$root/AGENTS.md" 2>/dev/null || true)
+  AGENTS.rules.md (38) @.claude/hooks/session-rules-loader.sh:160 | if [[ ! -L "$root/AGENTS.rules.md" && -r "$root/AGENTS.rules.md" ]]; then
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @apps/web-platform/server/inngest/functions/cron-compound-promote.ts:356 | * `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`;
+  knowledge-base/project/learnings/promotion-log.md (1) @apps/web-platform/server/inngest/functions/cron-compound-promote.ts:2697 | "knowledge-base/project/learnings/promotion-log.md",
+  lefthook.yml (1) @scripts/lint-agents-rule-budget.py:22 | Wired into lefthook.yml at pre-commit time on AGENTS*.md changes.
+  scripts/migrated-rule-ids.txt (1) @scripts/lint-agents-rule-budget.py:198 | "(cq-agents-md-tier-gate, scripts/migrated-rule-ids.txt). Retirement is an "
+  scripts/retired-rule-ids.txt (6) @apps/web-platform/server/inngest/functions/cron-compound-promote.ts:1644 | /** Learning paths named by `scripts/retired-rule-ids.txt`; shared by both input arms. */
+##### scripts/lib/tweet-eligibility.test.sh
+  apps/web-platform/.env.example (1) @scripts/lib/tweet-eligibility.test.sh:130 | "feat(web): x" "app:web-platform" "apps/web-platform/.env.example"
+  apps/web-platform/infra/main.tf (1) @scripts/lib/tweet-eligibility.test.sh:126 | "feat(web): x" "app:web-platform" "apps/web-platform/infra/main.tf"
+  apps/web-platform/supabase/config.toml (1) @scripts/lib/tweet-eligibility.test.sh:148 | "feat(web): x" "app:web-platform" "apps/web-platform/supabase/config.toml"
+##### scripts/lint-agents-compound-sync-unit
+  lefthook.yml (1) @scripts/lint-agents-rule-budget.py:22 | Wired into lefthook.yml at pre-commit time on AGENTS*.md changes.
+  scripts/migrated-rule-ids.txt (1) @scripts/lint-agents-rule-budget.py:198 | "(cq-agents-md-tier-gate, scripts/migrated-rule-ids.txt). Retirement is an "
+##### scripts/lint-integration-env-gates-battery
+  package.json (1) @scripts/lint-integration-env-gates.sh:65 | "RLS_FUZZ_LOCAL|wired via package.json test:rls-fuzz script prefix (RLS_FUZZ_LOCAL=1 vitest …), a wiring surfa
+##### scripts/lint-orphan-test-suites
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+##### scripts/lint-skill-body-budget
+  .claude/workflow-transitions.json (1) @scripts/lint-skill-body-budget.py:32 | earlier version derived the set from .claude/workflow-transitions.json and the
+##### scripts/no-dangling-committed-symlinks
+  README.md (1) @scripts/no-dangling-committed-symlinks.test.sh:48 | printf 'test/fixtures/orphan-proc-dangling/README.md. Synthesize such links at run time instead.\x5cn' >&2
+  test/fixtures/orphan-proc-dangling/README.md (1) @scripts/no-dangling-committed-symlinks.test.sh:48 | printf 'test/fixtures/orphan-proc-dangling/README.md. Synthesize such links at run time instead.\x5cn' >&2
+##### scripts/plugin-delivery-canary
+  README.md (1) @scripts/plugin-delivery-canary.test.sh:725 | + [ {path: "README.md", mode: "100644", type: "blob"},
+##### scripts/pre-push-ratchet-lane
+  .claude/rule-body-hashes.txt (1) @scripts/lint-rule-bodies.py:14 | (.claude/rule-body-hashes.txt) over the current corpus. Run this
+  .claude/rule-weakening-acks.txt (1) @scripts/lint-rule-bodies.py:7 | WORM file `.claude/rule-weakening-acks.txt`. The safe primitive is "add a new
+  .claude/workflow-transitions.json (1) @scripts/lint-skill-body-budget.py:32 | earlier version derived the set from .claude/workflow-transitions.json and the
+  .github/workflows/cutover-inngest.yml (1) @scripts/lint-supabase-deprecated-endpoints.sh:141 | '.github/workflows/cutover-inngest.yml|2026-08-26|env plumbing only (secrets.SUPABASE_ACCESS_TOKEN into a step
+  .github/workflows/scheduled-followthrough-sweeper.yml (1) @scripts/lint-supabase-deprecated-endpoints.sh:142 | '.github/workflows/scheduled-followthrough-sweeper.yml|2026-08-26|env plumbing only; the calls live in scripts
+  .github/workflows/scheduled-supabase-advisor-scan.yml (1) @scripts/lint-supabase-deprecated-endpoints.sh:143 | '.github/workflows/scheduled-supabase-advisor-scan.yml|2026-08-26|env plumbing plus remediation prose naming t
+  .github/workflows/web-platform-release.yml (1) @scripts/lint-workflow-step-env-refs.py:4 | WHY THIS EXISTS. `.github/workflows/web-platform-release.yml`'s "Email the operator
+  AGENTS.md (1) @scripts/test-affected-kb-consumers.test.sh:700 | printf '#!/usr/bin/env bash\x5cncat knowledge-base/../AGENTS.md >/dev/null\x5cnbash knowledge-base/../scripts/
+  AGENTS.rules.md (5) @scripts/lint-rule-bodies.py:5 | deletion of a hard-rule / workflow-gate BODY line in AGENTS.rules.md
+  README.md (2) @scripts/test-affected-kb-consumers.test.sh:394 | bash "$RUNNER" --print-selection --paths=README.md ) > "$ROWS" 2>/dev/null
+  apps/web-platform/infra/inngest.tf (1) @scripts/lint-supabase-deprecated-endpoints.sh:145 | 'apps/web-platform/infra/inngest.tf|2026-08-27|env plumbing only: a github_actions_secret resource whose secre
+  apps/web-platform/infra/supabase-project.tf (1) @scripts/lint-supabase-deprecated-endpoints.sh:156 | 'apps/web-platform/infra/supabase-project.tf|2026-09-29|imported supabase_project resource (#9168); /v1/projec
+  plugins/soleur/test/skill-body-budget.json (1) @scripts/lint-skill-body-budget.py:48 | BUDGET_REL = "plugins/soleur/test/skill-body-budget.json"
+  scripts/lint-supabase-deprecated-endpoints.highwater (1) @scripts/lint-supabase-deprecated-endpoints.sh:146 | 'scripts/lint-supabase-deprecated-endpoints.highwater|2026-08-27|this guard'"'"'s own baseline. Its only non-c
+  scripts/lint-trap-tempfile-ownership.highwater (1) @scripts/lint-trap-tempfile-ownership.py:31 | Ratchet: scripts/lint-trap-tempfile-ownership.highwater records the accepted
+##### scripts/registry-htpasswd-stdin-10119
+  knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md (1) @scripts/followthroughs/registry-htpasswd-stdin-10119.sh:98 | echo " Read knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md § Reading a verdi
+##### scripts/registry-luks-live-8386
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/followthroughs/registry-luks-live-8386.test.sh:203 | head -c "${CASE_APPLY:-1000}" /dev/zero | tr '\x5c0' 'x' > "$root/.github/workflows/apply-web-platform-infra.y
+  scripts/encryption-posture-ledger.json (3) @scripts/followthroughs/registry-luks-live-8386.test.sh:197 | available) printf '{"stores":[{"store":"hcloud_volume.registry","at_rest":{"live_verification":"available"}}]}
+##### scripts/rules-loader-stamp-probe
+  AGENTS.md (3) @scripts/rules-loader-stamp-probe.test.sh:54 | cp "$REPO_ROOT/AGENTS.md" "$d/AGENTS.md"
+  knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md (1) @scripts/rules-loader-stamp-probe.test.sh:115 | PLAN="$REPO_ROOT/knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-
+##### scripts/secret-scan-smoke-gate
+  .gitattributes (4) @scripts/secret-scan-smoke-gate.test.sh:145 | ".gitattributes"
+  .github/CODEOWNERS (1) @scripts/secret-scan-smoke-gate.test.sh:1069 | m2_variant first .github/CODEOWNERS "sorts first"
+  .gitignore (4) @scripts/secret-scan-smoke-gate.test.sh:144 | ".gitignore"
+  .gitleaksignore (6) @scripts/secret-scan-smoke-gate.test.sh:138 | ".gitleaksignore"
+  AGENTS.md (1) @scripts/secret-scan-smoke-gate.test.sh:1070 | m2_variant middle AGENTS.md "sorts in the middle"
+  apps/web-platform/.gitignore (1) @scripts/secret-scan-smoke-gate.test.sh:146 | "apps/web-platform/.gitignore"
+##### scripts/sentry-issue-discover
+  .github/workflows/git-data-rung2-rehearsal.yml (2) @tests/scripts/lib/git-data-birth-readiness-gate.sh:967 | GIT_DATA_RUNG2_WORKFLOW_PATH=".github/workflows/git-data-rung2-rehearsal.yml"
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+  knowledge-base/engineering/operations/runbooks/git-data-birth.md (2) @tests/scripts/lib/git-data-birth-readiness-gate.sh:181 | knowledge-base/engineering/operations/runbooks/git-data-birth.md (the DO-NOT-DISPATCH
+  knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md (3) @tests/scripts/lib/git-data-birth-readiness-gate.sh:1287 | printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN 
+##### scripts/test-affected-derive
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  README.md (20) @scripts/test-affected-derive.test.sh:362 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.same" --probe README.md --runs 1)"; _rc=$?
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  docs/legal/cookie-policy.md (1) @scripts/affected-prepass-bench.sh:763 | PROBES=("README.md" "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh,docs/legal/cookie-policy.m
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-affected-derive-cache
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-affected-kb-consumers
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (3) @scripts/test-affected-kb-consumers.test.sh:700 | printf '#!/usr/bin/env bash\x5cncat knowledge-base/../AGENTS.md >/dev/null\x5cnbash knowledge-base/../scripts/
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  README.md (2) @scripts/test-affected-kb-consumers.test.sh:394 | bash "$RUNNER" --print-selection --paths=README.md ) > "$ROWS" 2>/dev/null
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-all-infra-coverage-notice
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  README.md (1) @scripts/test-all-infra-coverage-notice.test.sh:526 | DOCS_ONLY_DIFF='README.md
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-all-killed-classification
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-all-orphan-log-retention
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+##### scripts/test-all-pr-battery-gate
+  .github/actions/cf-tunnel-ssh-bridge/action.yml (1) @scripts/lib/test-relevance-paths.sh:148 | ".github/actions/cf-tunnel-ssh-bridge/action.yml" # BRIDGE_REL — the gate under test
+  .github/workflows/apply-deploy-pipeline-fix.yml (1) @scripts/lib/test-relevance-paths.sh:151 | ".github/workflows/apply-deploy-pipeline-fix.yml" # W7_EXPECTED
+  .github/workflows/apply-web-platform-infra.yml (1) @scripts/lib/test-relevance-paths.sh:152 | ".github/workflows/apply-web-platform-infra.yml" # W7_EXPECTED (also APPLY_REL)
+  .github/workflows/ci.yml (1) @scripts/lib/test-relevance-paths.sh:111 | ".github/workflows/ci.yml" # binds the event and the shard legs the gate runs in
+  .github/workflows/git-data-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:153 | ".github/workflows/git-data-cutover.yml" # W7_EXPECTED, and mutated directly by M4
+  .github/workflows/scheduled-terraform-drift.yml (1) @scripts/lib/test-relevance-paths.sh:150 | ".github/workflows/scheduled-terraform-drift.yml" # mutated by the M6 escalation arm
+  .github/workflows/workspaces-luks-cutover.yml (1) @scripts/lib/test-relevance-paths.sh:154 | ".github/workflows/workspaces-luks-cutover.yml" # W7_EXPECTED (two call sites)
+  .github/workflows/workspaces-luks-verify.yml (1) @scripts/lib/test-relevance-paths.sh:155 | ".github/workflows/workspaces-luks-verify.yml" # W7_EXPECTED
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+  .nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  AGENTS.md (2) @scripts/lib/test-relevance-paths.sh:304 | "AGENTS.md" # same scan (auto-loaded content surface)
+  AGENTS.rules.md (2) @scripts/lib/test-relevance-paths.sh:305 | "AGENTS.rules.md" # same scan
+  CLAUDE.md (2) @scripts/lib/test-relevance-paths.sh:306 | "CLAUDE.md" # same scan
+  README.md (2) @scripts/test-all-pr-battery-gate.test.sh:179 | printf 'base\x5cn' > "$BASE/README.md"
+  apps/web-platform/.npmrc (1) @scripts/lib/test-relevance-paths.sh:368 | "apps/web-platform/.npmrc"
+  apps/web-platform/.nvmrc (1) @scripts/lib/test-relevance-paths.sh:369 | "apps/web-platform/.nvmrc"
+  apps/web-platform/infra/cloud-init.yml (1) @scripts/lib/test-relevance-paths.sh:129 | "apps/web-platform/infra/cloud-init.yml" # copied fixture
+  apps/web-platform/infra/doppler-config-inventory.txt (1) @scripts/lib/test-relevance-paths.sh:149 | "apps/web-platform/infra/doppler-config-inventory.txt" # INVENTORY_REL — copied fixture; its absence is a hard
+  apps/web-platform/package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  apps/web-platform/package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  apps/web-platform/tsconfig.json (1) @scripts/lib/test-relevance-paths.sh:367 | "apps/web-platform/tsconfig.json"
+  package-lock.json (1) @scripts/lib/test-relevance-paths.sh:366 | "apps/web-platform/package-lock.json"
+  package.json (1) @scripts/lib/test-relevance-paths.sh:365 | "apps/web-platform/package.json"
+  scripts/suite-shard-legs-heavy.tsv (1) @scripts/lib/test-relevance-paths.sh:113 | "scripts/suite-shard-legs-heavy.tsv"
+  scripts/suite-shard-legs.tsv (1) @scripts/lib/test-relevance-paths.sh:112 | "scripts/suite-shard-legs.tsv" # leg assignment: a mid-block shift changes which leg RUNS a battery
+##### scripts/test-all-runtime-ceiling
+  .gitignore (1) @scripts/lib/repo-write-boundary.sh:840 | - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+##### scripts/tmpfs-guard
+  .mcp.json (2) @.claude/hooks/session-rules-loader.sh:388 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/.mcp.
+  AGENTS.md (2) @.claude/hooks/session-rules-loader.sh:174 | fb_total=$(grep -c '^- \x5c[id: ' "$root/AGENTS.md" 2>/dev/null || true)
+  plugins/soleur/.claude-plugin/plugin.json (1) @.claude/hooks/session-rules-loader.sh:389 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugi
+  plugins/soleur/.mcp.json (1) @.claude/hooks/session-rules-loader.sh:390 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugi
+##### scripts/web2-luks-live-6931
+  .github/workflows/scheduled-followthrough-sweeper.yml (1) @scripts/followthroughs/web2-luks-live-6931.test.sh:260 | SWEEPER="$ROOT/.github/workflows/scheduled-followthrough-sweeper.yml"
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### scripts/zot-fill-rate-standing-wiring
+  .github/workflows/scheduled-zot-restart-loop.yml (1) @scripts/zot-fill-rate-standing-wiring.test.sh:49 | WF_REL=".github/workflows/scheduled-zot-restart-loop.yml"
+  apps/web-platform/infra/cloud-init-registry.yml (1) @scripts/followthroughs/zot-log-channel-7440.sh:592 | echo " apps/web-platform/infra/cloud-init-registry.yml." >&2
+##### tests/scripts/apply-github-infra-mint-shape
+  .claude-plugin/marketplace.json (2) @tests/scripts/test-apply-github-infra-mint-shape.sh:231 | row env-token-leak "token:holders" " RAW_URL: https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/ma
+##### tests/scripts/argv-bearer-sweep
+  knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md (1) @.github/scripts/bump-inngest-bootstrap-pin.sh:536 | "- decision record: [ADR-232](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architec
+  plugins/soleur/agents/engineering/infra/infra-security.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7076 | plugins/soleur/agents/engineering/infra/infra-security.md
+  plugins/soleur/agents/engineering/review/deployment-verification-agent.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7077 | plugins/soleur/agents/engineering/review/deployment-verification-agent.md
+  plugins/soleur/skills/cf-token-scope/references/widen-playbook.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7082 | S7_SAFE=(plugins/soleur/skills/cf-token-scope/references/widen-playbook.md plugins/soleur/skills/trigger-cron/
+  plugins/soleur/skills/flag-bootstrap/SETUP.md (1) @tests/scripts/test-argv-bearer-sweep.sh:1515 | SETUP_MD="plugins/soleur/skills/flag-bootstrap/SETUP.md"
+  plugins/soleur/skills/flag-delete/SKILL.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7078 | plugins/soleur/skills/flag-delete/SKILL.md
+  plugins/soleur/skills/flag-list/SKILL.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7079 | plugins/soleur/skills/flag-list/SKILL.md
+  plugins/soleur/skills/postmerge/SKILL.md (3) @tests/scripts/test-argv-bearer-sweep.sh:7070 | plugins/soleur/skills/postmerge/SKILL.md
+  plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7071 | plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md
+  plugins/soleur/skills/preflight/SKILL.md (4) @tests/scripts/test-argv-bearer-sweep.sh:7074 | plugins/soleur/skills/preflight/SKILL.md
+  plugins/soleur/skills/skill-creator/references/api-security.md (2) @tests/scripts/test-argv-bearer-sweep.sh:7007 | "plugins/soleur/skills/skill-creator/references/api-security.md 5"
+  plugins/soleur/skills/trigger-cron/SKILL.md (1) @tests/scripts/test-argv-bearer-sweep.sh:7082 | S7_SAFE=(plugins/soleur/skills/cf-token-scope/references/widen-playbook.md plugins/soleur/skills/trigger-cron/
+##### tests/scripts/audit-ruleset-bypass
+  .github/actions/bot-pr-with-synthetic-checks/action.yml (1) @scripts/update-ci-required-ruleset.sh:70 | ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+##### tests/scripts/betterstack-query-archive
+  knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (1) @scripts/betterstack-query.sh:104 | knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+##### tests/scripts/destroy-guard-regex-parity
+  .github/workflows/apply-deploy-pipeline-fix.yml (2) @tests/scripts/test-destroy-guard-counter-web-platform.sh:856 | wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  apps/web-platform/infra/dns.tf (2) @tests/scripts/test-destroy-guard-counter-web-platform.sh:1986 | "$REPO_ROOT/apps/web-platform/infra/dns.tf" | grep -oE '[0-9]+\x5c.[0-9]+\x5c.[0-9]+\x5c.[0-9]+' || true)
+##### tests/scripts/git-data-birth-readiness-gate
+  apps/web-platform/infra/cloud-init-git-data.yml (3) @tests/scripts/test-git-data-birth-readiness-gate.sh:392 | LIVE="${ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
+  knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md (3) @tests/scripts/lib/git-data-birth-readiness-gate.sh:1287 | printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN 
+##### tests/scripts/git-data-boot-signal-poll
+  knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md (3) @tests/scripts/lib/git-data-birth-readiness-gate.sh:1287 | printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN 
+##### tests/scripts/git-data-rung2-evidence-capture
+  knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md (4) @tests/scripts/test-git-data-rung2-evidence-capture.sh:1220 | RUNBOOK="${ROOT}/knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md"
+##### tests/scripts/kb-drift-walker
+  AGENTS.md (2) @tests/scripts/test-kb-drift-walker.sh:54 | cat > "$FIXTURE/AGENTS.md" <<'EOF'
+  AGENTS.rules.md (2) @tests/scripts/test-kb-drift-walker.sh:46 | cat > "$FIXTURE/AGENTS.rules.md" <<'EOF'
+##### tests/scripts/lint-rule-ids
+  AGENTS.md (28) @tests/scripts/test_lint_rule_ids.py:53 | path = Path(tmp) / "AGENTS.md"
+  AGENTS.rules.md (9) @tests/scripts/test_lint_rule_ids.py:387 | {"AGENTS.md": "# placeholder\x5cn", "AGENTS.rules.md": "# placeholder\x5cn"},
+  scripts/retired-rule-ids.txt (6) @tests/scripts/test_lint_rule_ids.py:308 | the real scripts/retired-rule-ids.txt. If an id is removed from the
+##### tests/scripts/no-tofu-ssh-mutation
+  .github/workflows/git-data-cutover.yml (1) @tests/scripts/test-no-tofu-ssh-mutation.sh:152 | printf ' %s /dev/null\x5cn' "$UKHF" >> "$COPY/.github/workflows/git-data-cutover.yml"

@@ -1,0 +1,1514 @@
+# PR5 slice map (Ref #10861): pair -> slice -> disposition -> edge count.
+# PR5a = mention accepts (this PR, accept rows only, no index edit). PR5b/PR5c = edge slices. PR5d = sweeps+mega-edge. PR5z = deletion+machinery.
+.claude/hooks/bare-head-self-heal.test.sh	AGENTS.md	PR5a	accept-rows
+.claude/hooks/bare-head-self-heal.test.sh	AGENTS.rules.md	PR5a	accept-rows
+.claude/hooks/brand-hex-commit-gate.test.sh	apps/web-platform/app/globals.css	PR5a	accept-rows
+.claude/hooks/brand-hex-commit-gate.test.sh	apps/web-platform/app/page.tsx	PR5a	accept-rows
+.claude/hooks/brand-hex-commit-gate.test.sh	apps/web-platform/server/notifications.ts	PR5a	accept-rows
+.claude/hooks/brand-hex-commit-gate.test.sh	knowledge-base/marketing/brand-guide.md	PR5a	accept-rows
+.claude/hooks/browser-snapshot-credential-guard.test.sh	.claude/hooks/README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/browser-snapshot-credential-guard.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/browser-snapshot-credential-guard.test.sh	README.md	PR5a	accept-rows
+.claude/hooks/browser-snapshot-credential-guard.test.sh	plugins/soleur/hooks/hooks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/devin-matcher-parity.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/devin-matcher-parity.test.sh	.devin/config.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/devin-matcher-parity.test.sh	plugins/soleur/hooks/hooks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/git-commit-secret-scan.test.sh	.gitattributes	PR5a	accept-rows
+.claude/hooks/git-commit-secret-scan.test.sh	knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md	PR5a	accept-rows
+.claude/hooks/hook-input-contract.test.sh	AGENTS.md	PR5a	accept-rows
+.claude/hooks/hook-input-contract.test.sh	scripts/rule-metrics-aggregate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+.claude/hooks/hook-tool-kind.test.sh	plugins/soleur/scripts/lib/session-state.sh	PR5a	accept-rows
+.claude/hooks/hook-tool-kind.test.sh	plugins/soleur/scripts/lib/wrapper-boundary.sh	PR5a	accept-rows
+.claude/hooks/hook-tool-kind.test.sh	scripts/lib/rule-metrics-constants.sh	PR5a	accept-rows
+.claude/hooks/iac-plan-write-guard.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/memory-backstop.test.sh	.claude/settings.json	PR5a	accept-rows
+.claude/hooks/no-memory-write.test.sh	.claude/settings.json	PR5a	accept-rows
+.claude/hooks/no-memory-write.test.sh	AGENTS.rules.md	PR5a	accept-rows
+.claude/hooks/no-memory-write.test.sh	knowledge-base/project/constitution.md	PR5a	accept-rows
+.claude/hooks/phase-surface-hint.test.sh	.claude/phase-surface-map.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/pkill-self-match-guard.test.sh	README.md	PR5a	accept-rows
+.claude/hooks/pkill-self-match-guard.test.sh	plugins/soleur/scripts/lib/proc.sh	PR5a	accept-rows
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md	PR5a	accept-rows
+.claude/hooks/pre-merge-rebase.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json	PR5a	accept-rows
+.claude/hooks/pre-merge-rebase.test.sh	plugins/soleur/skills/ship/references/merge-queue-dequeue.md	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/prod-write-defer-gate.test.sh	apps/web-platform/infra/inngest-cutover-flip.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	apps/web-platform/scripts/audit-sentry-extra-text-references.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/skills/flag-create/scripts/create.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/skills/flag-delete/scripts/delete.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/skills/user-set-role/scripts/set-role.sh	PR5a	accept-rows
+.claude/hooks/prod-write-defer-gate.test.sh	plugins/soleur/test/fixtures/operator-ack-arms.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/rule-incident-marker-capture.test.sh	AGENTS.rules.md	PR5a	accept-rows
+.claude/hooks/rule-incident-marker-capture.test.sh	scripts/migrated-rule-ids.txt	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/rule-incident-marker-capture.test.sh	scripts/rule-metrics-aggregate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+.claude/hooks/security_reminder_hook.test.sh	.github/actions/notify-ops-email/action.yml	PR5a	accept-rows
+.claude/hooks/security_reminder_hook.test.sh	.github/workflows/ci.yml	PR5a	accept-rows
+.claude/hooks/security_reminder_hook.test.sh	.github/workflows/web-platform-release.yml	PR5a	accept-rows
+.claude/hooks/security_reminder_hook.test.sh	apps/web-platform/lib/security-headers.ts	PR5a	accept-rows
+.claude/hooks/session-rules-loader.test.sh	.mcp.json	PR5a	accept-rows
+.claude/hooks/session-rules-loader.test.sh	AGENTS.md	PR5a	accept-rows
+.claude/hooks/session-rules-loader.test.sh	AGENTS.rules.md	PR5a	accept-rows
+.claude/hooks/session-rules-loader.test.sh	README.md	PR5a	accept-rows
+.claude/hooks/session-rules-loader.test.sh	plugins/soleur/.claude-plugin/plugin.json	PR5a	accept-rows
+.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/devin-dispositions.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/pre-merge-rebase.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+.claude/hooks/ship-kb-archive-gate.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/ship-kb-archive-gate.test.sh	.devin/config.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/ship-kb-archive-gate.test.sh	knowledge-base/project/specs/.gitkeep	PR5a	accept-rows
+.claude/hooks/ship-net-issue-flow-gate.test.sh	plugins/soleur/skills/ship/scripts/net-issue-flow.sh	PR5a	accept-rows
+.claude/hooks/ship-unpushed-commits-gate.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/ship-unpushed-commits-gate.test.sh	.devin/config.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+.claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md	PR5a	accept-rows
+.claude/hooks/skill-context-queries.test.sh	plugins/soleur/skills/frontend-design/SKILL.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/cla-evidence/test/ccla-add.test.sh	README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/cla-evidence/test/ccla-add.test.sh	apps/cla-evidence/roster/ccla-roster.json	PR5a	accept-rows
+apps/cla-evidence/test/ccla-add.test.sh	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+apps/web-platform/scripts/dev-ledger-parity.test.sh	.github/actions/dev-migration-drift-probe/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/web-platform/scripts/dev-ledger-parity.test.sh	.github/workflows/dev-ledger-reconcile.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/web-platform/scripts/dev-ledger-parity.test.sh	.github/workflows/scheduled-dev-migration-drift.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/web-platform/scripts/dev-ledger-parity.test.sh	.github/workflows/tenant-integration.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/web-platform/scripts/dev-ledger-parity.test.sh	README.md	PR5a	accept-rows
+apps/web-platform/scripts/dev-ledger-parity.test.sh	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md	PR5a	accept-rows
+apps/web-platform/scripts/dev-ledger-parity.test.sh	scripts/dev-suite-mutex.sh	PR5a	accept-rows
+apps/web-platform/scripts/lib/in-image-copy-src.test.sh	.gitignore	PR5a	accept-rows
+apps/web-platform/scripts/lib/in-image-copy-src.test.sh	.nvmrc	PR5a	accept-rows
+apps/web-platform/scripts/lib/in-image-copy-src.test.sh	package-lock.json	PR5a	accept-rows
+apps/web-platform/scripts/lib/in-image-copy-src.test.sh	package.json	PR5a	accept-rows
+apps/web-platform/scripts/lint-migration-immutability.test.sh	.github/workflows/tenant-integration.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+apps/web-platform/scripts/lint-migration-immutability.test.sh	README.md	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	README.md	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	apps/web-platform/infra/sandbox-canary-argv.json	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	apps/web-platform/scripts/sandbox-canary.mjs	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	apps/web-platform/server/agent-auth-env-vars.ts	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	apps/web-platform/server/c4-staging-root.ts	PR5a	accept-rows
+apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	package-lock.json	PR5a	accept-rows
+apps/web-platform/scripts/sentry-monitors-audit.test.sh	README.md	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/scripts/test/run-all.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/ci.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+apps/web-platform/test/vitest-related	.nvmrc	PR5a	accept-rows
+apps/web-platform/test/vitest-related	AGENTS.md	PR5a	accept-rows
+apps/web-platform/test/vitest-related	AGENTS.rules.md	PR5a	accept-rows
+apps/web-platform/test/vitest-related	CLAUDE.md	PR5a	accept-rows
+apps/web-platform/test/vitest-related	package-lock.json	PR5a	accept-rows
+apps/web-platform/test/vitest-related	package.json	PR5a	accept-rows
+apps/web-platform/test/vitest-related	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+apps/web-platform/test/vitest-related	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/lib/repo-write-boundary.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/lib/repo-write-boundary.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/test-all-affected.test.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+apps/web-platform/test/vitest-related	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+plugins/soleur	.agents/plugins/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.bun-version	PR5a	accept-rows
+plugins/soleur	.claude-plugin/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.claude/hooks/devin-dispositions.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	.claude/hooks/opencode-dispositions.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.claude/hooks/prod-write-defer-gate.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur	.claude/hooks/ship-soak-followthrough-gate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.claude/workflow-transitions.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.codex/config.toml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.cursor-plugin/marketplace.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.devin/config.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.gitattributes	PR5a	accept-rows
+plugins/soleur	.github/actions/notify-ops-email/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/apply-deploy-pipeline-fix.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/cutover-inngest.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/git-data-cutover.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/git-data-rung2-rehearsal.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/infra-validation.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/reusable-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.github/workflows/web-platform-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.grok/commands/help.md	PR5a	accept-rows
+plugins/soleur	.grok/commands/sync.md	PR5a	accept-rows
+plugins/soleur	.grok/config.toml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	.grok/plugins/soleur	PR5a	accept-rows
+plugins/soleur	AGENTS.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	CLAUDE.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	CONTRIBUTING.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	LICENSE	PR5a	accept-rows
+plugins/soleur	README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/.dockerignore	PR5a	accept-rows
+plugins/soleur	apps/web-platform/app/(public)/invite/[token]/invite-actions.tsx	PR5a	accept-rows
+plugins/soleur	apps/web-platform/app/(public)/invite/[token]/page.tsx	PR5a	accept-rows
+plugins/soleur	apps/web-platform/app/api/account/delete/route.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/app/api/conversations/route.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/app/page.tsx	PR5a	accept-rows
+plugins/soleur	apps/web-platform/e2e/smoke.e2e.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/10-inngest-redis-doppler-token.conf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/10-inngest-server-doppler-token.conf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/10-vector-doppler-token.conf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/apparmor-soleur-bwrap.profile	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/cron-egress-allowlist-cidr.txt	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/infra/deploy-inngest-bootstrap.sudoers	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/egress-deny-cidrs.txt	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/infra/git-data-luks.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/git-data.tf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/hooks.json.tmpl	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/inngest-redis-luks.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/main.tf	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/modules/git-data-userdata/main.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/push-infra-config.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur	apps/web-platform/infra/seccomp-bwrap.json	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/seo-bulk-redirects.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/seo-rulesets.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/server.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/infra/soleur-doppler-token.tmpl	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/web-2-ssh-host-key.pub	PR5a	accept-rows
+plugins/soleur	apps/web-platform/infra/webhook.service	PR5a	accept-rows
+plugins/soleur	apps/web-platform/lib/auth/dev-mode.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/lib/feature-flags/server.ts	PR5a	accept-rows
+plugins/soleur	apps/web-platform/lib/types.ts	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur	apps/web-platform/package.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	apps/web-platform/server/workspace.ts	PR5a	accept-rows
+plugins/soleur	eleventy.config.js	PR5a	accept-rows
+plugins/soleur	knowledge-base/engineering/policies/content-vendoring.md	PR5a	accept-rows
+plugins/soleur	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	package.json	PR5a	accept-rows
+plugins/soleur	scripts/betterstack-query.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/check-web-host-escrow-config.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/ensure-kb-index.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/lint-agents-rule-budget.py	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/lint-workflows.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/prod-version-drift-b9-probe.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	scripts/web-host-escrow-preflight.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+plugins/soleur	tests/scripts/lib/destroy-guard-filter-web-platform.jq	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur	tests/scripts/test-infra-privileged-tier-census.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/scripts/admin-merge-ready.test.sh	.github/workflows/ci.yml	PR5a	accept-rows
+plugins/soleur/scripts/admin-merge-ready.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/scripts/affected-tests.test.sh	.github/workflows/ci.yml	PR5a	accept-rows
+plugins/soleur/scripts/affected-tests.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/scripts/affected-tests.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/scripts/affected-tests.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/scripts/emit-decision.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/guardrails.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	AGENTS.rules.md	PR5a	accept-rows
+plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/scripts/sync-pr-behind.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.c4	PR5a	accept-rows
+plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json	PR5a	accept-rows
+plugins/soleur/scripts/sync-pr-behind.test.sh	plugins/soleur/.claude-plugin/plugin.json	PR5a	accept-rows
+plugins/soleur/scripts/sync-pr-behind.test.sh	plugins/soleur/skills/ship/references/merge-queue-dequeue.md	PR5a	accept-rows
+plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh	.claude/settings.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	.claude/playwright-mcp.config.json	PR5a	accept-rows
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	.mcp.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	apps/web-platform/.dockerignore	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	plugins/soleur/.claude-plugin/plugin.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh	PR5a	accept-rows
+plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	scripts/lib/scratch-root.sh	PR5a	accept-rows
+plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/community/test/community-argv.test.sh	.gitignore	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/community/test/community-argv.test.sh	apps/web-platform/Dockerfile	PR5a	accept-rows
+plugins/soleur/skills/compound/test/phase-16.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-a.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-b.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/.dependency-cruiser-known-violations.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/.dependency-cruiser.cjs	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/.github/workflows/constraint-gates.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/scripts/constraint-gates.sh	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	apps/web-platform/server/README.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	.github/workflows/fix-constraints-stage-a.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	.github/workflows/fix-constraints-stage-b.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	.github/workflows/fix-constraints-stage-a.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	.github/workflows/fix-constraints-stage-b.yml	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	CLAUDE.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	plugins/soleur/agents/support/ticket-triage.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/skills/incident/test/redact-sentinel.test.sh	apps/web-platform/test/plugin-root-anchoring.test.ts	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/linear-fetch/test/parity.test.sh	.github/workflows/pr-quality-guards.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	knowledge-base/legal/tenant-dpa-register.md	PR5a	accept-rows
+plugins/soleur/skills/review/test/fix-round-seats.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.gitleaks.toml	PR5a	accept-rows
+plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/bare-root-cwd-guard.sh	PR5a	accept-rows
+plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/session-rules-loader.sh	PR5a	accept-rows
+plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.devin/config.json	PR5a	accept-rows
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/guardrails.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/ci-classify-step-exec.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ci-classify-step-exec.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	scripts/followthroughs/actions-queue-tail-8450.sh	PR5a	accept-rows
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	scripts/sweep-followthroughs.sh	PR5a	accept-rows
+plugins/soleur/test/ci-head-verdict.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ci-head-verdict.test.sh	scripts/audit-bot-codeql-coverage.sh	PR5a	accept-rows
+plugins/soleur/test/ci-head-verdict.test.sh	scripts/codeql-main-alert-gate.sh	PR5a	accept-rows
+plugins/soleur/test/ci-head-verdict.test.sh	scripts/merge-queue-cla-verify.sh	PR5a	accept-rows
+plugins/soleur/test/ci-path-gating.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/ci-pr-selection.sh	PR5a	accept-rows
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/suite-durations-heavy.tsv	PR5a	accept-rows
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	scripts/suite-durations.tsv	PR5a	accept-rows
+plugins/soleur/test/ci-shard-totality-skip.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/ci-shard-totality-skip.test.sh	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	scripts/lint-encryption-posture.py	PR5a	accept-rows
+plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	apps/web-platform/.dockerignore	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	apps/web-platform/Dockerfile	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	.github/workflows/codeql-main-alert-gate.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/codeql-main-alert-gate.test.sh	.github/workflows/codeql-main-alert-gate.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/deploy-arm.test.sh	.github/workflows/web-platform-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/destructive-command-guard-hook.test.sh	.claude/hooks/README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/destructive-command-guard-hook.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/destructive-command-guard-hook.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/destructive-command-guard-hook.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	.claude/hooks/README.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/destructive-command-guard-mutation.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/domain-model-headless-append.test.sh	knowledge-base/engineering/architecture/domain-model.md	PR5a	accept-rows
+plugins/soleur/test/domain-model-init.test.sh	knowledge-base/engineering/architecture/domain-model.md	PR5a	accept-rows
+plugins/soleur/test/ext-filter-detect-hook.test.sh	.claude/hooks/devin-dispositions.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ext-filter-detect-hook.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/scripts/test/run-all.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/ci.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	.nvmrc	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	AGENTS.rules.md	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/.npmrc	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/.nvmrc	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/package-lock.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/package.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/tsconfig.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/fanout-suite-scope.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/lib/session-state.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/skills/review/SKILL.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/skills/work/SKILL.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/test-all-affected.test.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+plugins/soleur/test/flag-org-scoping-pr2.test.sh	apps/web-platform/.env.example	PR5a	accept-rows
+plugins/soleur/test/flag-org-scoping-pr2.test.sh	apps/web-platform/lib/feature-flags/server.ts	PR5a	accept-rows
+plugins/soleur/test/flagsmith-stdin-config.test.sh	apps/web-platform/.env.example	PR5a	accept-rows
+plugins/soleur/test/flagsmith-stdin-config.test.sh	apps/web-platform/lib/feature-flags/server.ts	PR5a	accept-rows
+plugins/soleur/test/gdpr-gate-self-test.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/generate-kb-index.test.sh	knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/generate-kb-index.test.sh	scripts/ensure-kb-index.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	.claude/hooks/incident-sandbox-coverage.test.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	.claude/hooks/lib/test-incident-sandbox.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/alarm-issue-filing-guard.test.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-diagnosis-claims.test.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-rule-bodies.py	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-skill-body-budget.py	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-supabase-deprecated-endpoints.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-trap-tempfile-ownership.py	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/lint-workflow-step-env-refs.py	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/plugin-root-anchor-debt.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/test-affected-kb-consumers.baseline.txt	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/test-affected-kb-consumers.test.sh	PR5a	accept-rows
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-scratch-residue.sh	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	.mcp.json	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	CLAUDE.md	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+plugins/soleur/test/git-repo-readiness-diag.test.sh	scripts/tmpfs-guard.timer	PR5a	accept-rows
+plugins/soleur/test/git-tripwire.test.sh	bunfig.toml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/gitleaks-rules.test.sh	.gitleaks.toml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/gitleaks-rules.test.sh	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	.claude-plugin/marketplace.json	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	.claude/phase-surface-map.json	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	.claude/workflow-transitions.json	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	apps/web-platform/server/phase-surface-map.ts	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	plugins/soleur/test/workflow-fidelity.test.ts	PR5a	accept-rows
+plugins/soleur/test/go-routing-table-parity.test.sh	scripts/classify-workflow-transitions.test.sh	PR5a	accept-rows
+plugins/soleur/test/go-session-gates.test.sh	.mcp.json	PR5a	accept-rows
+plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt	PR5a	accept-rows
+plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md	PR5a	accept-rows
+plugins/soleur/test/hook-input-classification-mutation.test.sh	.claude/settings.json	PR5a	accept-rows
+plugins/soleur/test/hook-input-classification-mutation.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/inngest-config-bundle-mirror.test.sh	.github/workflows/reusable-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	scripts/compound-promote.sh	PR5a	accept-rows
+plugins/soleur/test/kb-search-lockstep.test.sh	scripts/ensure-kb-index.sh	PR5a	accept-rows
+plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/lefthook-typecheck-heap.test.sh	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/lint-questionnaire-identity.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/2026-09-20-accountant-prepaid-hosting-contract.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md	PR5a	accept-rows
+plugins/soleur/test/lint-rejected-register.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/infra-validation.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/main-health-monitor-workflow.test.sh	scripts/regenerate-shard-manifest.py	PR5a	accept-rows
+plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	.github/workflows/merge-queue-cla-synthetics.yml	PR5a	accept-rows
+plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json	PR5a	accept-rows
+plugins/soleur/test/merge-queue-stall-check.test.sh	.github/workflows/merge-queue-stall-check.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/merge-queue-stall-check.test.sh	infra/github/ruleset-ci-required.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/net-issue-flow.test.sh	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md	PR5a	accept-rows
+plugins/soleur/test/operator-9321-stages.test.sh	.github/actions/infra-credentials/action.yml	PR5a	accept-rows
+plugins/soleur/test/operator-9321-stages.test.sh	.github/actions/mint-infra-app-token/action.yml	PR5a	accept-rows
+plugins/soleur/test/operator-9321-stages.test.sh	.github/workflows/apply-git-data-root-key.yml	PR5a	accept-rows
+plugins/soleur/test/operator-9321-stages.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/test/operator-script.test.sh	.gitignore	PR5a	accept-rows
+plugins/soleur/test/plugin-version.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/pr-fanout-ledger.test.sh	scripts/pr-fanout-ledger.txt	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/pr-overlap-preflight.test.sh	.claude/rule-body-hashes.txt	PR5a	accept-rows
+plugins/soleur/test/pr-overlap-preflight.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/pr-overlap-preflight.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/pr-overlap-preflight.test.sh	scripts/suite-durations.tsv	PR5a	accept-rows
+plugins/soleur/test/pr-overlap-preflight.test.sh	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	.bun-version	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	.gitattributes	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	AGENTS.rules.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/affected-tests.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/references/plan-issue-templates.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/references/check-13-founder-check.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/preflight/scripts/parse-form-a.awk	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/review/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/ship/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/test-fix-loop/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-agent-teams.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/work/references/work-subagent-fanout.md	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/test/c4-model-freshness.test.sh	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/betterstack-query.sh	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/lint-agents-rule-budget.py	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/lint-workflows.sh	PR5a	accept-rows
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	scripts/prod-version-drift-b9-probe.sh	PR5a	accept-rows
+plugins/soleur/test/regenerate-shard-manifest.test.sh	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+plugins/soleur/test/regenerate-shard-manifest.test.sh	scripts/suite-durations.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.github/workflows/main-health-monitor.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.github/workflows/secret-scan.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	scripts/ci-required-ruleset-canonical-required-status-checks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-canonical-parity.test.sh	scripts/required-checks.txt	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	.github/workflows/merge-queue-cla-synthetics.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	infra/github/ruleset-ci-required.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	scripts/ci-required-ruleset-canonical-required-status-checks.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	tests/scripts/test-audit-ruleset-bypass.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+plugins/soleur/test/reusable-release-degraded-pointer.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+plugins/soleur/test/reusable-release-degraded-pointer.test.sh	scripts/ensure-doppler.sh	PR5a	accept-rows
+plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	scripts/ensure-doppler.sh	PR5a	accept-rows
+plugins/soleur/test/scripts-shard-manifest.test.sh	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+plugins/soleur/test/scripts-shard-totality.test.sh	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/scripts-shard-totality.test.sh	scripts/suite-shard-legs-heavy.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/shell-argv-parity.test.sh	.claude/hooks/lib/filing-shape.pl	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ship-battery-owed.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/ship-followthrough-directive.test.sh	.github/workflows/scheduled-followthrough-sweeper.yml	PR5a	accept-rows
+plugins/soleur/test/ship-followthrough-directive.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md	PR5a	accept-rows
+plugins/soleur/test/ship-pir-action-items-gate.test.sh	README.md	PR5a	accept-rows
+plugins/soleur/test/technical-ruling-gate.test.sh	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/test-pyramid-fixtures.test.sh	apps/web-platform/infra/suite-durations.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/test-pyramid-fixtures.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations-heavy.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations.tsv	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	AGENTS.md	PR5a	accept-rows
+plugins/soleur/test/vendor-bundle-coverage.test.sh	.github/workflows/vendor-pin-verify.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/vendor-bundle-coverage.test.sh	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md	PR5a	accept-rows
+plugins/soleur/test/vendor-pin-integrity.test.sh	lefthook.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	.claude-plugin/marketplace.json	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	.claude/hooks/new-scheduled-cron-prefer-inngest.test.sh	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	apps/web-platform/infra/cutover-monitor-baseline.txt	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	apps/web-platform/supabase/migrations/071_ux_audit_artifacts_bucket.sql	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	apps/web-platform/test/sandbox-credential-deny-runtime.test.ts	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	apps/web-platform/test/server/kb-active-workspace-scoping.test.ts	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	plugins/soleur/agents/community/.gitkeep	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	plugins/soleur/cursor/skills/soleur-xcode-test/SKILL.md	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-bare-sync.test.sh	tests/scripts/lib/vector-redeliver-gate.sh	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-hook-deps.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-hook-deps.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-install-bounded.test.sh	bunfig.toml	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-install-bounded.test.sh	package-lock.json	PR5a	accept-rows
+plugins/soleur/test/worktree-manager-install-bounded.test.sh	package.json	PR5a	accept-rows
+plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/cloud-init-registry.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/zot-image-mirror-publish.test.sh	.github/workflows/zot-image-mirror.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+plugins/soleur/test/zot-image-mirror-publish.test.sh	apps/web-platform/infra/zot-image-oci-archive.sh	PR5a	accept-rows
+scripts/actions-queue-health	.github/workflows/scheduled-actions-queue-health.yml	PR5a	accept-rows
+scripts/actions-queue-tail-8450	.github/workflows/web-platform-release.yml	PR5a	accept-rows
+scripts/anthropic-admin-key-6297	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/anthropic-double-bill-8611	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/audit-suite-reads	README.md	PR5a	accept-rows
+scripts/audit-suite-reads	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/battery-tag-authorship	.github/scripts/test/test-vinngest-digest-freshness.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/battery-tag-authorship	apps/web-platform/infra/run-registered-suites.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/battery-tag-authorship	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/battery-tag-authorship	scripts/battery-ref-guard.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/battery-tag-authorship	scripts/lib/repo-write-boundary.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/battery-tag-authorship	tests/scripts/test-plan-gate-preamble.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/build-inngest-bootstrap-image.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/inngest-config-drift.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/reusable-release.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/scheduled-inngest-health.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	.github/workflows/scheduled-zot-restart-loop.yml	PR5a	accept-rows
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/betterstack-emitter-read	scripts/check-deploy-script-parity.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/cutover-inngest.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rehearsal-evidence.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rung2-evidence-capture.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-private-nic-8539.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-soak-6178.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-clientip-alert-7530.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-htpasswd-stdin-10119.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/registry-luks-live-8386.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/send-failed-alert-probe-8097.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/workspaces-luks-soak-6604.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/zot-log-channel-7440.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/followthroughs/zot-soak-6122.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/image-cve-triage.sh	PR5a	accept-rows
+scripts/betterstack-emitter-read	scripts/inngest-probe-heartbeat-feeder.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/probe-inngest-524-count.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/registry-replace-preflight.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/betterstack-emitter-read	scripts/zot-restart-loop-alarm.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/capture-web-1-host-key	apps/web-platform/infra/web-1-ssh-host-key.pub	PR5a	accept-rows
+scripts/capture-web-2-host-key	apps/web-platform/infra/web-2-ssh-host-key.pub	PR5a	accept-rows
+scripts/check-backstop-revision	.claude/hooks/lib/log-rotation.sh	PR5a	accept-rows
+scripts/check-backstop-revision	.claude/hooks/memory-backstop.sh	PR5a	accept-rows
+scripts/check-backstop-revision	README.md	PR5a	accept-rows
+scripts/check-deploy-script-parity	knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md	PR5a	accept-rows
+scripts/check-deploy-script-parity	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/ci-demand-census	.github/workflows/secret-scan.yml	PR5a	accept-rows
+scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md	PR5a	accept-rows
+scripts/ci-pr-selection	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/ci-pr-selection	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/ci-pr-selection	CLAUDE.md	PR5a	accept-rows
+scripts/ci-pr-selection	README.md	PR5a	accept-rows
+scripts/ci-pr-selection	apps/cla-evidence/test/ccla-add.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/ci-pr-selection	apps/web-platform/test/destroy-ask-mutation.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	apps/web-platform/test/vitest-related.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	plugins/soleur/test/operator-agent-runnable.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/ci-e2e-classify.sh	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/followthroughs/ccla-representative-icla-7922.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/test-affected-kb-consumers.baseline.txt	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/test-affected-kb-consumers.test.sh	PR5a	accept-rows
+scripts/ci-pr-selection	scripts/validate-blog-links.sh	PR5a	accept-rows
+scripts/ci-pr-selection	test/content-publisher.test.ts	PR5a	accept-rows
+scripts/ci-pr-selection	test/linkedin-community.test.ts	PR5a	accept-rows
+scripts/ci-pr-selection	test/pre-merge-rebase.test.ts	PR5a	accept-rows
+scripts/ci-pr-selection	test/x-community.test.ts	PR5a	accept-rows
+scripts/ci-pr-selection	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/ci-push-dedupe	plugins/soleur/test/ci-e2e-skip-anchors.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/ci-push-dedupe	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/compound-promote	AGENTS.md	PR5a	accept-rows
+scripts/compound-promote	AGENTS.rules.md	PR5a	accept-rows
+scripts/compound-promote	knowledge-base/project/promotion-config.yml	PR5a	accept-rows
+scripts/compound-promote	scripts/learning-retrieval-bench.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/compound-promote	scripts/retired-rule-ids.txt	PR5a	accept-rows
+scripts/compound-promote-draft-edit-10552	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/compound-promote-draft-edit-10552	scripts/ensure-doppler.sh	PR5a	accept-rows
+scripts/compound-promote-outcome-8281	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/content-publisher	plugins/soleur/docs/images/logo-mark-512.png	PR5a	accept-rows
+scripts/content-publisher	plugins/soleur/skills/community/scripts/bsky-community.sh	PR5a	accept-rows
+scripts/content-publisher	plugins/soleur/skills/community/scripts/x-community.sh	PR5a	accept-rows
+scripts/dogfood/grok-gpu-bootstrap	.grok/config.toml	PR5a	accept-rows
+scripts/dogfood/grok-gpu-bootstrap	LICENSE	PR5a	accept-rows
+scripts/dogfood/grok-measure	.grok/config.toml	PR5a	accept-rows
+scripts/followthrough-predicate-parity	.github/workflows/scheduled-followthrough-sweeper.yml	PR5a	accept-rows
+scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/runbooks/followthrough-convention.md	PR5a	accept-rows
+scripts/followthrough-predicate-parity	scripts/followthroughs/reconcile-ff-only-sentry-4977.sh	PR5a	accept-rows
+scripts/followthrough-varq-ban	README.md	PR5a	accept-rows
+scripts/followthrough-varq-ban	knowledge-base/project/README.md	PR5a	accept-rows
+scripts/followthrough-varq-ban	knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md	PR5a	accept-rows
+scripts/followthrough-varq-ban	scripts/betterstack-query.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/followthrough-varq-ban	scripts/lib/trusted-verdict.sh	PR5a	accept-rows
+scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/followthroughs/ccla-representative-icla-7922	apps/cla-evidence/roster/ccla-roster.json	PR5a	accept-rows
+scripts/followthroughs/ccla-representative-icla-7922	scripts/followthroughs/ccla-representative-icla-7922.acknowledged	PR5a	accept-rows
+scripts/followthroughs/ci-draft-light-soak-9728	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/followthroughs/ci-push-dedupe-soak-9512	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/followthroughs/ci-push-dedupe-soak-9512	.github/workflows/web-platform-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/followthroughs/ci-push-dedupe-soak-9512	plugins/soleur/test/ci-e2e-skip-anchors.test.sh	PR5a	accept-rows
+scripts/followthroughs/ci-push-dedupe-soak-9512	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	PR5a	accept-rows
+scripts/followthroughs/inngest-provision-rehearsal-capture	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	.nvmrc	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	AGENTS.md	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	AGENTS.rules.md	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	CLAUDE.md	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/package.json	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	package-lock.json	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	package.json	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/ci-battery-gate-replay.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/followthroughs/pr-battery-gate-saving-9323	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	.bun-version	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	.github/workflows/infra-validation.yml	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	AGENTS.md	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	apps/web-platform/infra/zot-registry.tf	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/followthroughs/registry-clientip-alert-7530	package.json	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	plugins/soleur/skills/preflight/SKILL.md	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	plugins/soleur/skills/preflight/scripts/parse-form-a.awk	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	plugins/soleur/test/c4-model-freshness.test.sh	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	scripts/lint-agents-rule-budget.py	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	scripts/lint-workflows.sh	PR5a	accept-rows
+scripts/followthroughs/registry-clientip-alert-7530	scripts/prod-version-drift-b9-probe.sh	PR5a	accept-rows
+scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/git-data-reboot-evidence-landed-8210	apps/web-platform/infra/cloud-init-git-data.yml	PR5a	accept-rows
+scripts/git-data-reboot-evidence-landed-8210	apps/web-platform/infra/git-data-rung2-boot-evidence.env	PR5a	accept-rows
+scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5a	accept-rows
+scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+scripts/git-data-rehearsal-evidence-8211	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/image-cve-triage	scripts/betterstack-query.sh	PR5b	edge-real exact-file edge
+scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/uptime-alerts.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/inngest-probe-heartbeat-feeder	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/inngest-tls-soak-10136	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/ci-deploy.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-plugin-seed.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/git-data-cutover-access.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/git-data-ownership.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/git-data-wipe-assert.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/infra-config-repush-mutation.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/registry-userdata-budget.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/run-registered-suites.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/workspaces-boot-unlock.test.sh	PR5a	accept-rows
+scripts/jobs1-stopgap-7432	apps/web-platform/infra/workspaces-luks-provision.test.sh	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md	PR5a	accept-rows
+scripts/learning-retrieval-bench	scripts/compound-promote.sh	PR5a	accept-rows
+scripts/learning-retrieval-bench	scripts/ensure-kb-index.sh	PR5a	accept-rows
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	.claude/rule-body-hashes.txt	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	.claude/rule-weakening-acks.txt	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	.mcp.json	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	AGENTS.md	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	AGENTS.rules.md	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	knowledge-base/project/learnings/promotion-log.md	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	lefthook.yml	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	plugins/soleur/.claude-plugin/plugin.json	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	plugins/soleur/.mcp.json	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	scripts/_agents_md_sections.py	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	scripts/lint-agents-enforcement-tags.py	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	scripts/lint-migrated-rule-ids.sh	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	scripts/migrated-rule-ids.txt	PR5a	accept-rows
+scripts/lib/rule-line-regex-parity.test.sh	scripts/retired-rule-ids.txt	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/.env.example	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/app/(auth)/login/page.tsx	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/infra/main.tf	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/lib/stripe.ts	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/middleware.ts	PR5a	accept-rows
+scripts/lib/tweet-eligibility.test.sh	apps/web-platform/supabase/config.toml	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	.claude/hooks/README.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	AGENTS.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	AGENTS.rules.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	README.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	apps/web-platform/server/inngest/functions/cron-compound-promote.ts	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	lefthook.yml	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	plugins/soleur/scripts/grok-fidelity-gate.sh	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	plugins/soleur/skills/compound/SKILL.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	plugins/soleur/skills/plan/references/plan-sharp-edges.md	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	scripts/compound-promote.sh	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	scripts/lint-agents-enforcement-tags.py	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	scripts/lint-rule-ids.py	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	scripts/migrated-rule-ids.txt	PR5a	accept-rows
+scripts/lint-agents-compound-sync-unit	scripts/retired-rule-ids.txt	PR5a	accept-rows
+scripts/lint-feature-map-coverage-battery	apps/web-platform/app/(auth)/setup-key/page.tsx	PR5a	accept-rows
+scripts/lint-feature-map-coverage-battery	apps/web-platform/app/(dashboard)/dashboard/chat/page.tsx	PR5a	accept-rows
+scripts/lint-feature-map-coverage-battery	apps/web-platform/app/(dashboard)/dashboard/page.tsx	PR5a	accept-rows
+scripts/lint-feature-map-coverage-battery	apps/web-platform/app/(public)/invite/[token]/page.tsx	PR5a	accept-rows
+scripts/lint-feature-map-coverage-battery	apps/web-platform/app/page.tsx	PR5a	accept-rows
+scripts/lint-gh-argv-arg	.github/workflows/scheduled-actions-queue-health.yml	PR5a	accept-rows
+scripts/lint-integration-env-gates-battery	README.md	PR5a	accept-rows
+scripts/lint-integration-env-gates-battery	apps/web-platform/test/README.md	PR5a	accept-rows
+scripts/lint-integration-env-gates-battery	package.json	PR5a	accept-rows
+scripts/lint-orphan-test-suites	.gitignore	PR5a	accept-rows
+scripts/lint-orphan-test-suites	.nvmrc	PR5a	accept-rows
+scripts/lint-orphan-test-suites	AGENTS.md	PR5a	accept-rows
+scripts/lint-orphan-test-suites	AGENTS.rules.md	PR5a	accept-rows
+scripts/lint-orphan-test-suites	CLAUDE.md	PR5a	accept-rows
+scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md	PR5a	accept-rows
+scripts/lint-orphan-test-suites	package-lock.json	PR5a	accept-rows
+scripts/lint-orphan-test-suites	package.json	PR5a	accept-rows
+scripts/lint-skill-body-budget	.claude/workflow-transitions.json	PR5a	accept-rows
+scripts/lint-skill-body-budget	plugins/soleur/skills/plan/SKILL.md	PR5a	accept-rows
+scripts/lint-skill-body-budget	plugins/soleur/skills/qa/SKILL.md	PR5a	accept-rows
+scripts/lint-skill-body-budget	plugins/soleur/skills/work/SKILL.md	PR5a	accept-rows
+scripts/lint-skill-body-budget	plugins/soleur/test/components.test.ts	PR5a	accept-rows
+scripts/lint-skill-body-budget	plugins/soleur/test/skill-body-budget.json	PR5a	accept-rows
+scripts/lint-trap-tempfile-ownership	bunfig.toml	PR5a	accept-rows
+scripts/lint-workflow-install-sites	apps/web-platform/scripts/cla-evidence/build-record.ts	PR5a	accept-rows
+scripts/lint-workflow-local-action-checkout	.gitignore	PR5a	accept-rows
+scripts/lint-workflow-local-action-checkout	tests/scripts/test-argv-bearer-sweep.sh	PR5a	accept-rows
+scripts/lint-workflow-local-action-checkout-live	scripts/lib/bearer-curl.sh	PR5a	accept-rows
+scripts/lint-workflow-local-action-checkout-live	tests/scripts/test-argv-bearer-sweep.sh	PR5a	accept-rows
+scripts/no-dangling-committed-symlinks	README.md	PR5a	accept-rows
+scripts/no-dangling-committed-symlinks	test/fixtures/orphan-proc-dangling/README.md	PR5a	accept-rows
+scripts/orphan-process-reaper	plugins/soleur/scripts/lib/session-state.sh	PR5a	accept-rows
+scripts/orphan-process-reaper	scripts/tmpfs-guard.sh	PR5a	accept-rows
+scripts/orphan-process-reaper-mutations	plugins/soleur/scripts/lib/session-state.sh	PR5a	accept-rows
+scripts/orphan-process-reaper-mutations	scripts/tmpfs-guard.sh	PR5a	accept-rows
+scripts/plugin-delivery-canary	README.md	PR5a	accept-rows
+scripts/plugin-legacy-resolver-probe	.claude/settings.json	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.claude/hooks/incident-sandbox-coverage.test.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.claude/rule-body-hashes.txt	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.claude/rule-weakening-acks.txt	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.claude/workflow-transitions.json	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/scripts/test/test-infra-suite-registration-mutations.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/cutover-inngest.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/dev-ledger-reconcile.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/scheduled-followthrough-sweeper.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/scheduled-supabase-advisor-scan.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/tenant-integration.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	.github/workflows/web-platform-release.yml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	AGENTS.md	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	AGENTS.rules.md	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	README.md	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/cutover-inngest-workflow.test.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/git-data-pre-receive.test.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/inngest.tf	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/registry-userdata-budget.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/infra/supabase-project.tf	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/scripts/dev-ledger-parity.test.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/scripts/run-migrations.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/scripts/verify-required-secrets.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/test/server/inngest/cron-supabase-advisor-scan.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/test/server/inngest/cron-supabase-watchdog-dispatch.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	apps/web-platform/test/server/inngest/supabase-watchdog-workflow-parity.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	bunfig.toml	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	knowledge-base/legal/article-30-register.md	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	knowledge-base/legal/compliance-posture.md	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	plugins/soleur/skills/community/scripts/discord-setup.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	plugins/soleur/test/components.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	plugins/soleur/test/lib/scratch-session.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	plugins/soleur/test/skill-body-budget.json	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	plugins/soleur/test/terraform-target-parity.test.ts	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/_agents_md_sections.py	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/assert-dev-doppler-scope.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/content-publisher.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/cutover-inngest.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/lib/test-relevance-paths.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/lint-migrated-rule-ids.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/lint-supabase-deprecated-endpoints.highwater	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/lint-trap-tempfile-ownership.highwater	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/skill-freshness-aggregate.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/supabase-advisor-scan.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/supabase-watchdog-classify.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	scripts/zot-restart-loop-alarm.sh	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	tests/conftest.py	PR5a	accept-rows
+scripts/pre-push-ratchet-lane	tests/scripts/test-argv-bearer-sweep.sh	PR5a	accept-rows
+scripts/prod-version-drift-check	.github/workflows/ci.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/prod-version-drift-check	.github/workflows/scheduled-prod-version-drift.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/prod-version-drift-check	.github/workflows/web-platform-release.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/prod-version-drift-check	apps/web-platform/infra/sentry/cron-monitors.tf	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/registry-htpasswd-stdin-10119	knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md	PR5a	accept-rows
+scripts/registry-htpasswd-stdin-10119	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/registry-luks-live-8386	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/registry-luks-live-8386	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/registry-luks-live-8386	scripts/encryption-posture-ledger.json	PR5a	accept-rows
+scripts/rules-loader-stamp-probe	AGENTS.md	PR5a	accept-rows
+scripts/rules-loader-stamp-probe	AGENTS.rules.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	.gitattributes	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	.github/CODEOWNERS	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	.gitignore	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	.gitleaksignore	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	AGENTS.md	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	apps/web-platform/.gitignore	PR5a	accept-rows
+scripts/secret-scan-smoke-gate	scripts/lint-workflows.sh	PR5a	accept-rows
+scripts/sentry-issue-discover	.github/workflows/git-data-rung2-rehearsal.yml	PR5a	accept-rows
+scripts/sentry-issue-discover	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/sentry-issue-discover	knowledge-base/engineering/operations/runbooks/git-data-birth.md	PR5a	accept-rows
+scripts/sentry-issue-discover	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5a	accept-rows
+scripts/sentry-issue-discover	scripts/betterstack-ingest-probe.sh	PR5a	accept-rows
+scripts/sentry-issue-discover	scripts/ensure-doppler.sh	PR5a	accept-rows
+scripts/test-affected-derive	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/test-affected-derive	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/test-affected-derive	.gitignore	PR5a	accept-rows
+scripts/test-affected-derive	.nvmrc	PR5a	accept-rows
+scripts/test-affected-derive	AGENTS.md	PR5a	accept-rows
+scripts/test-affected-derive	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-affected-derive	CLAUDE.md	PR5a	accept-rows
+scripts/test-affected-derive	README.md	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-affected-derive	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-affected-derive	docs/legal/cookie-policy.md	PR5a	accept-rows
+scripts/test-affected-derive	package-lock.json	PR5a	accept-rows
+scripts/test-affected-derive	package.json	PR5a	accept-rows
+scripts/test-affected-derive	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-affected-derive	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh	PR5a	accept-rows
+scripts/test-affected-derive	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-affected-derive	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-affected-derive	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-affected-derive	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-derive	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	.gitignore	PR5a	accept-rows
+scripts/test-affected-derive-cache	.nvmrc	PR5a	accept-rows
+scripts/test-affected-derive-cache	AGENTS.md	PR5a	accept-rows
+scripts/test-affected-derive-cache	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-affected-derive-cache	CLAUDE.md	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-affected-derive-cache	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	package-lock.json	PR5a	accept-rows
+scripts/test-affected-derive-cache	package.json	PR5a	accept-rows
+scripts/test-affected-derive-cache	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-affected-derive-cache	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-derive-cache	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.gitignore	PR5a	accept-rows
+scripts/test-affected-kb-consumers	.nvmrc	PR5a	accept-rows
+scripts/test-affected-kb-consumers	AGENTS.md	PR5a	accept-rows
+scripts/test-affected-kb-consumers	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-affected-kb-consumers	CLAUDE.md	PR5a	accept-rows
+scripts/test-affected-kb-consumers	README.md	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	package-lock.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	package.json	PR5a	accept-rows
+scripts/test-affected-kb-consumers	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-affected-kb-consumers	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-affected-kb-consumers	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	.gitignore	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	.nvmrc	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	AGENTS.md	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	CLAUDE.md	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	README.md	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	package-lock.json	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	package.json	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-all-infra-coverage-notice	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	.gitignore	PR5a	accept-rows
+scripts/test-all-killed-classification	.nvmrc	PR5a	accept-rows
+scripts/test-all-killed-classification	AGENTS.md	PR5a	accept-rows
+scripts/test-all-killed-classification	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-all-killed-classification	CLAUDE.md	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/ci-deploy.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/cloud-init-plugin-seed.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/git-data-cutover-access.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/git-data-ownership.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/git-data-wipe-assert.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/infra-config-repush-mutation.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/inngest-redis-luks-import-rehearsal.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/registry-userdata-budget.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/run-registered-suites.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/workspaces-boot-unlock.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/infra/workspaces-luks-provision.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-all-killed-classification	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	package-lock.json	PR5a	accept-rows
+scripts/test-all-killed-classification	package.json	PR5a	accept-rows
+scripts/test-all-killed-classification	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-all-killed-classification	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-all-killed-classification	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-orphan-log-retention	.gitignore	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/scripts/test/run-all.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/ci.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/scheduled-terraform-drift.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/workspaces-luks-cutover.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.github/workflows/workspaces-luks-verify.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.gitignore	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	.nvmrc	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	AGENTS.md	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	AGENTS.rules.md	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	CLAUDE.md	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	README.md	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/.npmrc	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/.nvmrc	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/infra/doppler-config-inventory.txt	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/package-lock.json	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/package.json	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/scripts/vitest-related.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/global-setup-git-tripwire.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/repo-wide-containment.test.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/repo-wide-suites.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/setup-dom.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/setup-node.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/test/vitest.canary.config.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/tsconfig.json	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	apps/web-platform/vitest.config.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	package-lock.json	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	package.json	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	plugins/soleur/scripts/generate-c4-from-components.ts	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	plugins/soleur/test/c4-from-components.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	plugins/soleur/test/test-helpers.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/battery-tag-authorship-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/battery-tag-authorship.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/cf-tunnel-liveness-gate-mutations.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/check-cloudflare-token-drift.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/guard-vacuity-floor.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/lint-orphan-test-suites.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/lint-orphan-test-suites.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/suite-exit-class-parity.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/suite-shard-legs-heavy.tsv	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/suite-shard-legs.tsv	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/test-all-affected.test.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	scripts/zot-mirror-diagnosis.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/fixtures/battery-tag-bare-fetch.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/test-plan-gate-preamble.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/test-registry-gate-mutation-battery.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/test-registry-pull-path-health.sh	PR5a	accept-rows
+scripts/test-all-pr-battery-gate	tests/scripts/test-registry-restore-from-ghcr.sh	PR5a	accept-rows
+scripts/test-all-runtime-ceiling	.gitignore	PR5a	accept-rows
+scripts/tmpfs-guard	.mcp.json	PR5a	accept-rows
+scripts/tmpfs-guard	AGENTS.md	PR5a	accept-rows
+scripts/tmpfs-guard	AGENTS.rules.md	PR5a	accept-rows
+scripts/tmpfs-guard	plugins/soleur/.claude-plugin/plugin.json	PR5a	accept-rows
+scripts/tmpfs-guard	plugins/soleur/.mcp.json	PR5a	accept-rows
+scripts/web-host-escrow-preflight	scripts/check-web-host-escrow-config.sh	PR5a	accept-rows
+scripts/web2-luks-live-6931	.github/workflows/scheduled-followthrough-sweeper.yml	PR5a	accept-rows
+scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+scripts/web2-luks-live-6931	scripts/ensure-doppler.sh	PR5a	accept-rows
+scripts/zot-fill-rate-standing-wiring	.github/workflows/scheduled-zot-restart-loop.yml	PR5a	accept-rows
+scripts/zot-fill-rate-standing-wiring	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+scripts/zot-fill-rate-standing-wiring	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/zot-fill-rate-standing-wiring	scripts/lib/zot-telemetry-parse.sh	PR5a	accept-rows
+scripts/zot-fill-rate-standing-wiring	scripts/zot-restart-loop-alarm.sh	PR5a	accept-rows
+scripts/zot-last-err-redact-7500	scripts/betterstack-query.sh	PR5a	accept-rows
+scripts/zot-mirror-diagnosis	scripts/followthroughs/zot-restart-plateau-6288.sh	PR5a	accept-rows
+scripts/zot-restart-loop-alarm-scrub	apps/web-platform/infra/cloud-init-registry.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/commands/sync-domain-model	apps/web-platform/server/workspace-resolver.ts	PR5a	accept-rows
+tests/commands/sync-producer-reachability	plugins/soleur/commands/sync.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/commands/sync-producer-reachability	scripts/rule-metrics-aggregate.sh	PR5a	accept-rows
+tests/commands/sync-producer-reachability	scripts/rule-prune.sh	PR5a	accept-rows
+tests/commands/sync-rule-prune	.claude/hooks/README.md	PR5a	accept-rows
+tests/commands/sync-rule-prune	AGENTS.md	PR5a	accept-rows
+tests/commands/sync-rule-prune	README.md	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	.claude/hooks/README.md	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	AGENTS.md	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	README.md	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-freshness.json	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	plugins/soleur/scripts/lib/session-state.sh	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	plugins/soleur/scripts/lib/wrapper-boundary.sh	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	scripts/lib/rule-metrics-constants.sh	PR5a	accept-rows
+tests/hooks/drop-sentinel-parity	scripts/retired-rule-ids.txt	PR5a	accept-rows
+tests/hooks/emissions	.claude/settings.json	PR5a	accept-rows
+tests/hooks/emissions	AGENTS.rules.md	PR5a	accept-rows
+tests/hooks/emissions	knowledge-base/product/roadmap.md	PR5a	accept-rows
+tests/scripts/apply-github-infra-mint-shape	.claude-plugin/marketplace.json	PR5a	accept-rows
+tests/scripts/apply-github-infra-mint-shape	tests/scripts/lib/destroy-guard-filter.jq	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/argv-bearer-sweep	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/infra/infra-security.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/agents/engineering/review/deployment-verification-agent.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/cf-token-scope/references/widen-playbook.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-bootstrap/SETUP.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-delete/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/flag-list/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/preflight/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/reproduce-bug/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/skill-creator/references/api-security.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	plugins/soleur/skills/trigger-cron/SKILL.md	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+tests/scripts/argv-bearer-sweep	scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv	PR5a	accept-rows
+tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh	PR5d	deferred-sweep (glob-rate + D2 dispositions)
+tests/scripts/audit-ruleset-bypass	.github/actions/bot-pr-with-synthetic-checks/action.yml	PR5a	accept-rows
+tests/scripts/audit-ruleset-bypass	README.md	PR5a	accept-rows
+tests/scripts/betterstack-ingest-probe	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	PR5a	accept-rows
+tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+tests/scripts/betterstack-query-archive	scripts/ensure-doppler.sh	PR5a	accept-rows
+tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/cleanup-merged-space	.gitignore	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	AGENTS.md	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	CLAUDE.md	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	bunfig.toml	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	package-lock.json	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	package.json	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	scripts/soleur-tmp-purge.sh	PR5a	accept-rows
+tests/scripts/cleanup-merged-space	scripts/tmpfs-guard.timer	PR5a	accept-rows
+tests/scripts/destroy-guard-counter-web-platform	.github/workflows/infra-validation.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/destroy-guard-regex-parity	.github/workflows/apply-deploy-pipeline-fix.yml	PR5a	accept-rows
+tests/scripts/destroy-guard-regex-parity	apps/web-platform/infra/apex-single-node-replace.test.sh	PR5a	accept-rows
+tests/scripts/destroy-guard-regex-parity	apps/web-platform/infra/dns.tf	PR5a	accept-rows
+tests/scripts/destroy-guard-regex-parity	scripts/sentry-destroy-counts.sh	PR5a	accept-rows
+tests/scripts/destroy-guard-sentry-scope-guard	tests/scripts/test-destroy-guard-counter-sentry.sh	PR5a	accept-rows
+tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	PR5d	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/git-data-birth-readiness-gate	.github/workflows/apply-web-platform-infra.yml	PR5a	accept-rows
+tests/scripts/git-data-birth-readiness-gate	.github/workflows/git-data-rung2-rehearsal.yml	PR5a	accept-rows
+tests/scripts/git-data-birth-readiness-gate	README.md	PR5a	accept-rows
+tests/scripts/git-data-birth-readiness-gate	apps/web-platform/infra/cloud-init-git-data.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md	PR5a	accept-rows
+tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	.github/workflows/git-data-rung2-rehearsal.yml	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	knowledge-base/engineering/operations/runbooks/git-data-birth.md	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	scripts/betterstack-ingest-probe.sh	PR5a	accept-rows
+tests/scripts/git-data-boot-signal-poll	scripts/ensure-doppler.sh	PR5a	accept-rows
+tests/scripts/git-data-root-key-arm	apps/web-platform/infra/git-data-root-key.fingerprint	PR5a	accept-rows
+tests/scripts/git-data-rung2-evidence-capture	.github/workflows/git-data-rung2-rehearsal.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-birth.md	PR5a	accept-rows
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/inngest-host-dark-gate	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/inngest-host-dark-gate	scripts/lib/inngest-probe-row.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/inngest-host-shape-gate	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/kb-drift-walker	AGENTS.md	PR5a	accept-rows
+tests/scripts/kb-drift-walker	AGENTS.rules.md	PR5a	accept-rows
+tests/scripts/lint-rule-bodies	AGENTS.rules.md	PR5a	accept-rows
+tests/scripts/lint-rule-bodies	scripts/migrated-rule-ids.txt	PR5a	accept-rows
+tests/scripts/lint-rule-ids	AGENTS.md	PR5a	accept-rows
+tests/scripts/lint-rule-ids	AGENTS.rules.md	PR5a	accept-rows
+tests/scripts/lint-rule-ids	scripts/retired-rule-ids.txt	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/no-tofu-ssh-mutation	.github/actions/cf-tunnel-ssh-bridge/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/no-tofu-ssh-mutation	.github/workflows/git-data-cutover.yml	PR5a	accept-rows
+tests/scripts/no-tofu-ssh-mutation	apps/web-platform/infra/infra-config-gate.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/no-tofu-ssh-mutation	apps/web-platform/package.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/no-tofu-ssh-mutation	package.json	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/registry-d10-workflow-wiring	.github/actions/cf-tunnel-registry-bridge/action.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/registry-d10-workflow-wiring	.github/workflows/apply-web-platform-infra.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/registry-d10-workflow-wiring	apps/web-platform/infra/variables.tf	PR5a	accept-rows
+tests/scripts/registry-delivery-change	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+tests/scripts/registry-delivery-change-mutation-battery	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+tests/scripts/registry-heartbeat-poll	scripts/betterstack-query.sh	PR5a	accept-rows
+tests/scripts/registry-pull-path-health	apps/web-platform/infra/cloud-init.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/registry-pull-path-health	scripts/check-cloudflare-token-drift.sh	PR5a	accept-rows
+tests/scripts/registry-pull-path-health	scripts/followthroughs/zot-restart-plateau-6288.sh	PR5a	accept-rows
+tests/scripts/registry-replace-preflight	scripts/betterstack-query.sh	PR5a	accept-rows
+tests/scripts/registry-replace-preflight	scripts/registry-pull-path-health.sh	PR5a	accept-rows
+tests/scripts/rule-id-regex-parity	AGENTS.md	PR5a	accept-rows
+tests/scripts/rule-id-regex-parity	scripts/lib/rule-metrics-constants.sh	PR5a	accept-rows
+tests/scripts/rule-id-regex-parity	scripts/retired-rule-ids.txt	PR5a	accept-rows
+tests/scripts/rule-id-regex-parity	scripts/rule-metrics-aggregate.sh	PR5a	accept-rows
+tests/scripts/rule-metrics-aggregate	.claude/hooks/README.md	PR5a	accept-rows
+tests/scripts/rule-metrics-aggregate	AGENTS.md	PR5a	accept-rows
+tests/scripts/rule-metrics-aggregate	README.md	PR5a	accept-rows
+tests/scripts/rule-metrics-aggregate	scripts/retired-rule-ids.txt	PR5a	accept-rows
+tests/scripts/scratch-residue	.claude/hooks/brand-hex-commit-gate.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.claude/hooks/phase-surface-hint.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.claude/hooks/security_reminder_hook.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.claude/hooks/ship-unpushed-commits-gate.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.claude/hooks/skill-context-queries.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.github/actions/bot-pr-with-synthetic-checks/action.yml	PR5a	accept-rows
+tests/scripts/scratch-residue	.github/scripts/bump-inngest-bootstrap-pin.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	.github/workflows/build-inngest-bootstrap-image.yml	PR5a	accept-rows
+tests/scripts/scratch-residue	.github/workflows/git-data-rung2-rehearsal.yml	PR5a	accept-rows
+tests/scripts/scratch-residue	.github/workflows/scheduled-vinngest-digest-freshness.yml	PR5a	accept-rows
+tests/scripts/scratch-residue	.github/workflows/weakness-miner.yml	PR5a	accept-rows
+tests/scripts/scratch-residue	bunfig.toml	PR5a	accept-rows
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-birth.md	PR5a	accept-rows
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md	PR5a	accept-rows
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	PR5a	accept-rows
+tests/scripts/scratch-residue	knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md	PR5a	accept-rows
+tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md	PR5a	accept-rows
+tests/scripts/scratch-residue	scripts/dogfood/grok-gpu-bootstrap.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	scripts/lint-agents-rule-budget.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-residue	scripts/review-reminder-liveness.test.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/scratch-session	.claude/hooks/lib/test-incident-sandbox.sh	PR5a	accept-rows
+tests/scripts/scratch-session	.gitignore	PR5a	accept-rows
+tests/scripts/scratch-session	AGENTS.md	PR5a	accept-rows
+tests/scripts/scratch-session	CLAUDE.md	PR5a	accept-rows
+tests/scripts/scratch-session	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+tests/scripts/scratch-session	bunfig.toml	PR5a	accept-rows
+tests/scripts/scratch-session	package-lock.json	PR5a	accept-rows
+tests/scripts/scratch-session	package.json	PR5a	accept-rows
+tests/scripts/scratch-session	plugins/soleur/test/gdpr-gate.test.ts	PR5a	accept-rows
+tests/scripts/scratch-session	plugins/soleur/test/kb-coverage.test.ts	PR5a	accept-rows
+tests/scripts/scratch-session	plugins/soleur/test/ship-incident-pir-gate.test.ts	PR5a	accept-rows
+tests/scripts/scratch-session	scripts/tmpfs-guard.timer	PR5a	accept-rows
+tests/scripts/scratch-session	tests/scripts/lib/git-data-birth-readiness-gate.sh	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	.github/workflows/scheduled-sentry-alert-drift.yml	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/alert-reference.json	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	apps/web-platform/infra/sentry/vendor-default-workflows.json	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	apps/web-platform/scripts/sentry-monitors-audit.sh	PR5a	accept-rows
+tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json	PR5a	accept-rows
+tests/scripts/sentry-alert-live-fidelity	apps/web-platform/scripts/sentry-monitors-audit.sh	PR5a	accept-rows
+tests/scripts/sentry-alert-live-fidelity	scripts/sentry-issue-alert-create-tripwire.sh	PR5a	accept-rows
+tests/scripts/sentry-alert-reference-gate	README.md	PR5a	accept-rows
+tests/scripts/sentry-alert-reference-gate	apps/web-platform/infra/sentry/README.md	PR5a	accept-rows
+tests/scripts/sentry-alert-reference-gate	apps/web-platform/infra/sentry/alert-reference.json	PR5a	accept-rows
+tests/scripts/sentry-alert-reference-gate	apps/web-platform/infra/sentry/cron-monitor-alerts.tf	PR5a	accept-rows
+tests/scripts/sentry-alert-reference-gate	scripts/sentry-monitor-binding-gate.sh	PR5a	accept-rows
+tests/scripts/sentry-full-root-apply	scripts/sentry-alert-reference-gate.sh	PR5a	accept-rows
+tests/scripts/sentry-full-root-apply	tests/scripts/test-destroy-guard-counter-sentry.sh	PR5a	accept-rows
+tests/scripts/sentry-monitors-audit-class-d	apps/web-platform/infra/sentry/cron-monitor-alerts.tf	PR5a	accept-rows
+tests/scripts/sentry-monitors-audit-class-d	apps/web-platform/infra/sentry/cron-monitors.tf	PR5a	accept-rows
+tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md	PR5a	accept-rows
+tests/scripts/soleur-sandbox	.claude/hooks/lib/test-incident-sandbox.sh	PR5a	accept-rows
+tests/scripts/soleur-sandbox	.gitignore	PR5a	accept-rows
+tests/scripts/soleur-sandbox	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+tests/scripts/soleur-sandbox	package.json	PR5a	accept-rows
+tests/scripts/soleur-sandbox	plugins/soleur/agents/engineering/review/test-design-reviewer.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/soleur-sandbox	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/soleur-sandbox	plugins/soleur/skills/work/references/work-scratch-sandboxes.md	PR5b	edge-real exact-file edge (non-code, reveal-free)
+tests/scripts/soleur-sandbox	plugins/soleur/test/gdpr-gate.test.ts	PR5a	accept-rows
+tests/scripts/soleur-sandbox	plugins/soleur/test/kb-coverage.test.ts	PR5a	accept-rows
+tests/scripts/soleur-sandbox	plugins/soleur/test/ship-incident-pir-gate.test.ts	PR5a	accept-rows
+tests/scripts/soleur-sandbox	tests/scripts/lib/git-data-birth-readiness-gate.sh	PR5a	accept-rows
+tests/scripts/supabase-logs-query	scripts/betterstack-query.sh	PR5a	accept-rows
+tests/scripts/tmp-purge	.claude/hooks/lib/test-incident-sandbox.sh	PR5a	accept-rows
+tests/scripts/tmp-purge	.gitignore	PR5a	accept-rows
+tests/scripts/tmp-purge	apps/web-platform/infra/run-registered-suites.sh	PR5a	accept-rows
+tests/scripts/tmp-purge	plugins/soleur/test/gdpr-gate.test.ts	PR5a	accept-rows
+tests/scripts/tmp-purge	plugins/soleur/test/kb-coverage.test.ts	PR5a	accept-rows
+tests/scripts/tmp-purge	plugins/soleur/test/ship-incident-pir-gate.test.ts	PR5a	accept-rows
+tests/scripts/tmp-purge	scripts/lib/git-data-boot-signal-poll.sh	PR5a	accept-rows
+tests/scripts/tmp-purge	tests/scripts/lib/git-data-birth-readiness-gate.sh	PR5a	accept-rows
+tests/scripts/weakness-miner	apps/web-platform/infra/cloud-init-inngest.yml	PR5a	accept-rows
+tests/scripts/weakness-miner	apps/web-platform/infra/cloud-init.yml	PR5a	accept-rows
+tests/scripts/weakness-miner	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md	PR5a	accept-rows
+tests/scripts/weakness-miner	knowledge-base/project/weakness-digest.md	PR5a	accept-rows
+tests/scripts/zot-disk-sample	scripts/betterstack-query.sh	PR5a	accept-rows
+tests/scripts/zot-log-channel-probe	apps/web-platform/infra/cloud-init-registry.yml	PR5a	accept-rows
+tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh	PR5b/PR5c	held-back edge (trial-declare; narrow glob if over-cap/hot-anchor)
+tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh	PR5a	accept-rows
