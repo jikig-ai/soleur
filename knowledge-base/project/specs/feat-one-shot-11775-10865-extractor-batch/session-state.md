@@ -25,3 +25,10 @@ None. (Disclosure: no nested-subagent capability — all research, review, and r
 - Roles run inline (sequential-fallback): repo-research-analyst, learnings-researcher, functional-overlap, CTO rulings
 - Commands: cloud-detect.sh, collision-precheck.sh, gh issue/pr/run/api, ratchet-observation-window-10865.sh (live run: `wall_p95_s=206 wall_max_s=284`, NOT YET — window paused)
 - Artifacts committed & pushed: the plan file (2 commits), specs/feat-one-shot-11775-10865-extractor-batch/{tasks.md,decision-challenges.md}
+
+## Integration state (pre-review)
+- All 3 workstreams committed+pushed (da48304370 + ad0320eda2). Ratchet exit=0 live=1481=baseline1481 (pure-removal regen); 73-pair reveal → 87 accept rows; s4-drain claimed (label + #10448 mirror comment; concurrent drain PR #11950 is draft/stalled).
+- AC5 verified: trusted-verdict edge mints via derive after declaration retired (var-chain `||` residue strip fixed in _affected_edge_token).
+- Budget PR #11965 open (ship ceiling 273955→276000, budget-only diff) — `test` check failed at "Aggregate shard results" 2s, rerun kicked.
+- Guard-1 stream-diff (probe scripts/inngest-a5-a6-owner-ask-10136.sh, base=chore-skill-body-budget worktree vs head): sel flips all 0→1 (replay-a/b/c). OPEN QUESTION: edge losses — image-cve-triage lost ^scripts/betterstack-query.sh + ^scripts/lib/test-affected-paths.sh (declared→derived flip), emissions lost ^plugins/soleur/test/lib/. Under investigation — if genuine removals, Guard-1 invariant violated.
+- Next: resolve Guard-1 question → soleur:review → qa → compound → ship. AC status: AC1-2,4-6,8 likely met; AC3 call-site pairing done; AC7 pending this question; AC9 suites green so far; AC10 PR-body refs pending at ship.
