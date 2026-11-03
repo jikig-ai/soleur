@@ -30,24 +30,10 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 
 import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP, deleteAccount } from "../server/account-delete";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
+import { GIT_DATA_ERASURE_LEDGER_FEATURE, LEDGER_WRITE_TIMEOUT_MS } from "../server/git-data-erasure-ledger";
+import { LEDGER_RPC, UID, setupAccountDeleteFakes } from "./helpers/account-delete-ledger-fakes";
 
-const UID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
-const LEDGER_RPC = "record_git_data_erasure_pending";
-
-function setup() {
-  mockAuth.admin.getUserById.mockResolvedValue({ data: { user: { id: UID, email: "t@example.test" } }, error: null });
-  mockAuth.admin.deleteUser.mockResolvedValue({ data: {}, error: null });
-  mockStorageFrom.mockReturnValue({
-    list: vi.fn().mockResolvedValue({ data: [], error: null }),
-    remove: vi.fn().mockResolvedValue({ data: [], error: null }),
-  });
-  mockFrom.mockImplementation(() => ({
-    update: () => ({ eq: () => ({ in: () => Promise.resolve({ error: null }) }) }),
-    delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
-    select: () => ({ eq: () => Promise.resolve({ count: 1, data: [], error: null }) }),
-  }));
-  mockRpc.mockResolvedValue({ data: 0, error: null });
-}
+const setup = () => setupAccountDeleteFakes({ mockFrom, mockRpc, mockAuth, mockStorageFrom });
 
 const ledgerCalls = () => mockRpc.mock.calls.filter((c) => c[0] === LEDGER_RPC);
 const art17Calls = () =>
@@ -139,8 +125,14 @@ describe("deleteAccount -> git-data erasure pending ledger (#8211)", () => {
       // as gitDataRepoId (never as userId)
       const ledgerReport = mockReport.mock.calls.find((c) => (c[1] as { op?: string }).op === "record-pending");
       expect(ledgerReport).toBeDefined();
-      expect((ledgerReport![1] as { feature: string }).feature).toBe("git-data-erasure-ledger");
-      expect((ledgerReport![1] as { extra: Record<string, unknown> }).extra).toMatchObject({ gitDataRepoId: UID });
+      expect((ledgerReport![1] as { feature: string }).feature).toBe(GIT_DATA_ERASURE_LEDGER_FEATURE);
+      // null err (an Error would be deduplicated against the pino mirror and lose tags/extra, #8629)
+      expect(ledgerReport![0]).toBeNull();
+      expect((ledgerReport![1] as { extra: Record<string, unknown> }).extra).toMatchObject({
+        gitDataRepoId: UID,
+        outcome: "refused",
+        cause: expect.any(String),
+      });
       expect((ledgerReport![1] as { extra: Record<string, unknown> }).extra).not.toHaveProperty("userId");
     });
   }
@@ -215,7 +207,7 @@ describe("deleteAccount -> git-data erasure pending ledger (#8211)", () => {
         name === LEDGER_RPC ? new Promise(() => {}) : Promise.resolve({ data: 0, error: null }),
       );
       const pending = deleteAccount(UID, "t@example.test");
-      await vi.advanceTimersByTimeAsync(4_999);
+      await vi.advanceTimersByTimeAsync(LEDGER_WRITE_TIMEOUT_MS - 1);
       expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled(); // still waiting inside the bound
       await vi.advanceTimersByTimeAsync(2);
       const result = await pending;
@@ -223,7 +215,30 @@ describe("deleteAccount -> git-data erasure pending ledger (#8211)", () => {
       expect(mockAuth.admin.deleteUser).toHaveBeenCalledTimes(1);
       const ledgerReport = mockReport.mock.calls.find((c) => (c[1] as { op?: string }).op === "record-pending");
       expect(ledgerReport).toBeDefined();
-      expect((ledgerReport![0] as Error).message).toMatch(/exceeded 5000 ms/);
+      expect((ledgerReport![1] as { extra: { cause: string } }).extra.cause).toContain(
+        `ledger write exceeded ${LEDGER_WRITE_TIMEOUT_MS} ms`,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a HUNG ledger RPC after a THROWN removeGitDataRepo is also abandoned at the bound (behavioural, not a source grep)", async () => {
+    vi.useFakeTimers();
+    try {
+      mockRemoveGitDataRepo.mockRejectedValue(new Error("boom"));
+      mockRpc.mockImplementation((name: string) =>
+        name === LEDGER_RPC ? new Promise(() => {}) : Promise.resolve({ data: 0, error: null }),
+      );
+      const pending = deleteAccount(UID, "t@example.test");
+      await vi.advanceTimersByTimeAsync(LEDGER_WRITE_TIMEOUT_MS - 1);
+      expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(await pending).toEqual({ success: true, gitDataErasurePending: true });
+      expect(mockAuth.admin.deleteUser).toHaveBeenCalledTimes(1);
+      expect(art17Calls()).toHaveLength(1);
+      expect((art17Calls()[0][1] as { tags: Record<string, string> }).tags).toEqual({ erasure_outcome: "threw" });
+      expect(mockReport.mock.calls.some((c) => (c[1] as { op?: string }).op === "record-pending")).toBe(true);
     } finally {
       vi.useRealTimers();
     }

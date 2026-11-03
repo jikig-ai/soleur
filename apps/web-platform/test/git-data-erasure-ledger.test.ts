@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { isUuid } from "../lib/is-uuid";
 
 vi.mock("@/server/observability", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/observability")>()),
   reportSilentFallback: vi.fn(),
 }));
 
+import { reportSilentFallback } from "@/server/observability";
 import {
+  GIT_DATA_ERASURE_LEDGER_FEATURE,
+  LEDGER_WRITE_TIMEOUT_MS,
   recordGitDataErasurePendingBestEffort,
   gitDataErasureOwnerGone,
-  isLedgerWorkspaceId,
   recordGitDataErasurePending,
 } from "../server/git-data-erasure-ledger";
 
@@ -18,11 +21,16 @@ const svc = (result: { data?: unknown; error?: { message: string } | null }) => 
 });
 
 describe("git-data erasure ledger helpers", () => {
-  it("isLedgerWorkspaceId accepts canonical UUIDs only", () => {
-    expect(isLedgerWorkspaceId(A)).toBe(true);
-    expect(isLedgerWorkspaceId(A.toUpperCase())).toBe(true);
-    for (const bad of ["", "user-123", `${A}\n`, ` ${A}`, `${A}x`, null, undefined, 7, {}]) {
-      expect(isLedgerWorkspaceId(bad), String(bad)).toBe(false);
+  it("the ledger's id guard (isUuid) accepts canonical UUIDs only, including a short or long last group", () => {
+    expect(isUuid(A)).toBe(true);
+    expect(isUuid(A.toUpperCase())).toBe(true);
+    const head = A.slice(0, A.lastIndexOf("-") + 1);
+    for (const bad of [
+      "", "user-123", `${A}\n`, ` ${A}`, `${A}x`, null, undefined, 7, {},
+      `${head}${"0".repeat(11)}`, // 11-hex last group
+      `${head}${"0".repeat(13)}`, // 13-hex last group
+    ]) {
+      expect(isUuid(bad), String(bad)).toBe(false);
     }
   });
 
@@ -70,17 +78,36 @@ describe("git-data erasure ledger helpers", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
+    it("a failed write reaches Sentry as a TAGGED message (null err) with the cause in extra, not as an Error", async () => {
+      vi.mocked(reportSilentFallback).mockClear();
+      await recordGitDataErasurePendingBestEffort(svc({ error: { message: "23514" } }) as never, A, "refused");
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      const [err, opts] = vi.mocked(reportSilentFallback).mock.calls[0];
+      expect(err).toBeNull(); // an Error would be deduplicated against the pino mirror, dropping tags/extra (#8629)
+      expect(opts).toMatchObject({
+        feature: GIT_DATA_ERASURE_LEDGER_FEATURE,
+        op: "record-pending",
+        extra: { gitDataRepoId: A, outcome: "refused", cause: expect.stringMatching(/23514/) },
+      });
+    });
+
     it("a hung write is abandoned at exactly the timeout, and no timer remains afterwards", async () => {
       vi.useFakeTimers();
       const hung = { rpc: vi.fn(() => new Promise(() => {})) };
       let done = false;
-      const p = recordGitDataErasurePendingBestEffort(hung as never, A, "refused", 5_000).then(() => (done = true));
-      await vi.advanceTimersByTimeAsync(4_999);
+      vi.mocked(reportSilentFallback).mockClear();
+      const p = recordGitDataErasurePendingBestEffort(hung as never, A, "refused", LEDGER_WRITE_TIMEOUT_MS).then(
+        () => (done = true),
+      );
+      await vi.advanceTimersByTimeAsync(LEDGER_WRITE_TIMEOUT_MS - 1);
       expect(done).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       await p;
       expect(done).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
+      expect(vi.mocked(reportSilentFallback).mock.calls[0][1]).toMatchObject({
+        extra: { cause: `ledger write exceeded ${LEDGER_WRITE_TIMEOUT_MS} ms; the deletion cascade continues` },
+      });
     });
   });
 });

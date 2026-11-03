@@ -10,6 +10,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { reportSilentFallback } from "@/server/observability";
+import { isUuid } from "@/lib/is-uuid";
 import type { GitDataErasureOutcome } from "@/server/git-data-replication";
 
 /**
@@ -51,14 +52,13 @@ export const GIT_DATA_ERASURE_LEDGER_FEATURE = "git-data-erasure-ledger";
 /** A hung ledger RPC must not stall the deletion cascade (account-delete awaits the best-effort write). */
 export const LEDGER_WRITE_TIMEOUT_MS = 5_000;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** True for a canonical-shape UUID: the only id shape the ledger column and the host wrapper accept. */
-export function isLedgerWorkspaceId(value: unknown): value is string {
-  return typeof value === "string" && UUID_RE.test(value);
-}
-
-type Rpc = Pick<SupabaseClient, "rpc">;
+/**
+ * The minimal client the ledger helpers need. Exported so callers (the re-drive cron) type their
+ * service client with it instead of casting through `never`.
+ * The id shape guard is `isUuid` (lib/is-uuid.ts): the only id shape the ledger column and the host
+ * wrapper accept.
+ */
+export type Rpc = Pick<SupabaseClient, "rpc">;
 
 /**
  * Upsert a pending row (keeps the earlier requested_at). `requestedAt` is for the seed path only:
@@ -106,7 +106,7 @@ export async function recordGitDataErasurePendingBestEffort(
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (!isLedgerWorkspaceId(workspaceId)) {
+    if (!isUuid(workspaceId)) {
       throw new Error("workspace id is not a UUID; the ledger column cannot hold it");
     }
     await Promise.race([
@@ -120,12 +120,18 @@ export async function recordGitDataErasurePendingBestEffort(
     ]);
   } catch (err) {
     try {
-      reportSilentFallback(err instanceof Error ? err : new Error(String(err)), {
+      // `null` + a static message, NOT the Error: reportSilentFallback(Error) is deduplicated against the
+      // pino mirror (#8629), which drops these tags and extras. The cause rides `extra`.
+      reportSilentFallback(null, {
         feature: GIT_DATA_ERASURE_LEDGER_FEATURE,
         op: "record-pending",
         message:
           "pending git-data erasure could not be recorded in the ledger — only the Art. 17 Sentry event names it; seed it by hand",
-        extra: { gitDataRepoId: workspaceId, outcome },
+        extra: {
+          gitDataRepoId: workspaceId,
+          outcome,
+          cause: err instanceof Error ? err.message : String(err),
+        },
       });
     } catch {
       // Reporting must not break the deletion cascade either.
