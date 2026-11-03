@@ -4,12 +4,12 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 
 ## PR-A — CLI approval card and Method label (branch feat-founder-approval-cards, PR #12012)
 
-- [ ] 0.1 Spike: prove an email code can be sent and verified on a throwaway Supabase client on the dev project without touching the user's session (`signInWithOtp` with `shouldCreateUser: false`, then `verifyOtp({type:'email'})`); identical response on send success and failure; record the call shape in the plan's Research Insights
-- [ ] 1.1 Create `plugins/soleur/skills/brainstorm-techniques/references/approval-card.md` (structure, consequence-before-choices, no default on Enter, `y` refused, frame-18 messages, three-way decision table, reserved classes, `method` vocabulary, assurance-wording ban list, pointer to the `go.md` headless issue)
-  - [ ] 1.1.1 Link it from `standing-delegation.md` epic-start section
-- [ ] 2.1 Write failing tests first: `delegation-verify.test.sh` rows for `Method:` (tty-ack valid, `web-session` invalid, unknown invalid, absent valid, verdict identical with and without, admin check not skipped, bot author still rejected, parser removed) with fixtures `delegation-method-tty-ack.md` and `delegation-method-unknown.md`
-- [ ] 2.2 Implement `render --method tty-ack` and the `Method:` parser in `delegation-verify.sh`
-- [ ] 3.1 Add the decision-table test (TTY with account, headless with account, no account) for the card messages
+- [ ] 0.1 Spike (API surface verified 2026-11-03, see plan Research Insights; the live email round trip needs the founder's inbox and stays open as a PR-B precondition): prove an email code can be sent and verified on a throwaway Supabase client on the dev project without touching the user's session (`signInWithOtp` with `shouldCreateUser: false`, then `verifyOtp({type:'email'})`); identical response on send success and failure; record the call shape in the plan's Research Insights
+- [x] 1.1 Create `plugins/soleur/skills/brainstorm-techniques/references/approval-card.md` (structure, consequence-before-choices, no default on Enter, `y` refused, frame-18 messages, three-way decision table, reserved classes, `method` vocabulary, assurance-wording ban list, pointer to the `go.md` headless issue)
+  - [x] 1.1.1 Link it from `standing-delegation.md` epic-start section
+- [x] 2.1 Write failing tests first: `delegation-verify.test.sh` rows for `Method:` (tty-ack valid, `web-session` invalid, unknown invalid, absent valid, verdict identical with and without, admin check not skipped, bot author still rejected, parser removed) with fixtures `delegation-method-tty-ack.md` and `delegation-method-unknown.md`
+- [x] 2.2 Implement `render --method tty-ack` and the `Method:` parser in `delegation-verify.sh`
+- [x] 3.1 Add the decision-table test (TTY with account, headless with account, no account) for the card messages
 - [ ] 4.1 Run `bash plugins/soleur/scripts/delegation-verify.test.sh` and the standing-delegation fixtures; run the forbidden-wording grep over `approval-card.md`
 - [ ] 4.2 Open follow-up work: confirm migration number 184 against `origin/main` before PR-B
 

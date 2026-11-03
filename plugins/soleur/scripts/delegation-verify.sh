@@ -17,6 +17,7 @@
 #   delegation-verify.sh verify --delegation <comment-url> [--envelope <path[#title]>] [--command <line>]...
 #                               [--audit --at <YYYY-MM-DDTHH:MM:SSZ>]
 #   delegation-verify.sh render --epic <N> --question-file <f> --answer-file <f> --scope-file <f> --expiry <YYYY-MM-DD>
+#                               [--method tty-ack]
 #
 # stdout (verify): `delegation: valid|invalid|unverifiable reason=<token>`; on `valid` always, next,
 #   `verified-created-at: <ISO time the delegation comment was created>` and `verified-expiry: <YYYY-MM-DD>` (the
@@ -31,7 +32,7 @@
 #
 # Reason tokens: bad-url wrong-repo comment-unreadable api-error tool-missing usage no-marker wrong-issue
 #   epic-is-pr bot-author not-admin-author edited no-quote quote-too-short no-confirmation no-scope-item
-#   excluded-incomplete expiry-missing expiry-too-long expired before-delegation epic-closed envelope-missing
+#   excluded-incomplete method-unknown expiry-missing expiry-too-long expired before-delegation epic-closed envelope-missing
 #   envelope-not-committed envelope-outside-repo envelope-not-regular-file parse-ambiguous
 #   envelope-delegation-mismatch envelope-incomplete epic-mismatch rollback-unnamed non-delegable-command
 #   command-not-delegable scope-mismatch command-not-in-envelope.
@@ -186,14 +187,17 @@ parse_body() {
   P_EXPDATE="$(grep -m1 '^\*\*Expiry:\*\*' "$b" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
   P_ONE_CONF=0; [ "$(grep -c '^\*\*Confirmation:\*\*' "$b")" = 1 ] && P_ONE_CONF=1
   P_ONE_EXP=0; [ "$(grep -c '^\*\*Expiry:\*\*' "$b")" = 1 ] && P_ONE_EXP=1
+  # The Method line is a LABEL only (how the operator's answer was given). Nothing below reads it to choose a check.
+  P_METHOD_N="$(grep -c '^\*\*Method:\*\*' "$b")" # mut:method-parse
+  P_METHOD="$(trim "$(grep -m1 '^\*\*Method:\*\*' "$b" | sed 's/^\*\*Method:\*\*//')")"
 }
 
 # says_yes <text>: the Confirmation starts with the word Yes.
 says_yes() { [[ "$1" =~ ^Yes([^[:alnum:]]|$) ]]; }
 
-# render_body <epic> <date> <qfile> <afile> <scopefile> <expiry>: the delegation record on stdout.
+# render_body <epic> <date> <qfile> <afile> <scopefile> <expiry> [method]: the delegation record on stdout.
 render_body() {
-  local epic="$1" date="$2" qf="$3" af="$4" sf="$5" expiry="$6" first=1 n=0 line ans
+  local epic="$1" date="$2" qf="$3" af="$4" sf="$5" expiry="$6" method="${7:-}" first=1 n=0 line ans
   printf '%s\n' "$MARKER"
   printf '## Standing delegation - epic #%s (recorded %s)\n\n' "$epic" "$date"
   printf '**Operator instruction, verbatim (%s):**\n' "$date"
@@ -213,6 +217,7 @@ render_body() {
   done < "$af"
   ans="$(tr '\r\n' '  ' < "$af")"; ans="$(trim "$ans")"
   printf '\n**Confirmation:** %s\n\n' "$ans"
+  [ -z "$method" ] || printf '**Method:** %s\n\n' "$method"
   printf '**Scope (act classes the CTO agent may run without a further per-command prompt):**\n'
   while IFS= read -r line || [ -n "$line" ]; do
     line="$(trim "${line%$'\r'}")"
@@ -501,6 +506,7 @@ do_verify() {
   [ -s "$WORK/quote.txt" ] || fail_invalid no-quote "The standing approval does not quote the operator's own words."
   [ "${#P_QUOTE}" -ge 40 ] || fail_invalid quote-too-short "The quoted words in the standing approval are too short to show what was agreed." # mut:quote-len
   { [ "$P_ONE_CONF" = 1 ] && says_yes "$P_CONF"; } || fail_invalid no-confirmation "The standing approval does not record a clear Yes from the operator." # mut:confirmation
+  { [ "$P_METHOD_N" = 0 ] || { [ "$P_METHOD_N" = 1 ] && [ "$P_METHOD" = tty-ack ]; }; } || fail_invalid method-unknown "The standing approval names a way of answering that I do not recognise." # mut:method
   [ -s "$WORK/scope.nums" ] || fail_invalid no-scope-item "The standing approval lists no numbered acts." # mut:scope
   ! grep -qE '<[!?]' "$WORK/scope.items" || fail_invalid no-scope-item "A numbered act in the standing approval holds hidden markup, so it cannot be relied on." # mut:scope-html
   [ "$P_EXCL_OK" = 1 ] || fail_invalid excluded-incomplete "The standing approval does not carry the exact list of what stays with the operator." # mut:excluded
@@ -616,7 +622,7 @@ do_verify() {
 
 # do_render: build the record, then prove it parses (fail closed: a record that would not verify is never printed).
 do_render() {
-  local EPIC="" QF="" AF="" SF="" EXPIRY="" today limit f ans
+  local EPIC="" QF="" AF="" SF="" EXPIRY="" METHOD="" today limit f ans
   while [ $# -gt 0 ]; do
     case "$1" in
       --epic)          [ $# -ge 2 ] || die_render "--epic needs a value"; EPIC="$2"; shift 2 ;;
@@ -624,6 +630,7 @@ do_render() {
       --answer-file)   [ $# -ge 2 ] || die_render "--answer-file needs a value"; AF="$2"; shift 2 ;;
       --scope-file)    [ $# -ge 2 ] || die_render "--scope-file needs a value"; SF="$2"; shift 2 ;;
       --expiry)        [ $# -ge 2 ] || die_render "--expiry needs a value"; EXPIRY="$2"; shift 2 ;;
+      --method)        [ $# -ge 2 ] || die_render "--method needs a value"; METHOD="$2"; shift 2 ;;
       *) die_render "unknown argument: $1" ;;
     esac
   done
@@ -635,11 +642,12 @@ do_render() {
   says_yes "$ans" || die_render "the answer must start with Yes: a record of anything else is not a standing approval" # mut:render-yes
   [ "${#ans}" -le "$ANSWER_CAP" ] || die_render "the answer is longer than $ANSWER_CAP characters; it is posted word for word on a public issue, so keep it short" # mut:render-cap
   if grep -Eq -- "$SECRET_RE" "$QF" "$AF"; then die_render "the question or answer looks like it holds a password or key; it would be posted publicly, so I will not write it"; fi # mut:render-secret
+  { [ -z "$METHOD" ] || [ "$METHOD" = tty-ack ]; } || die_render "--method only accepts tty-ack: it is a label for how the answer was given, never a way to choose a lighter check" # mut:render-method
   valid_date "$EXPIRY" || die_render "--expiry needs a real date (YYYY-MM-DD)"
   today="$(date -u +%Y-%m-%d)"; limit="$(add_days "$today" 30)"
   [[ ! "$EXPIRY" > "$limit" ]] || die_render "the expiry is more than 30 days away"
   [[ ! "$EXPIRY" < "$today" ]] || die_render "the expiry is in the past"
-  render_body "$EPIC" "$today" "$QF" "$AF" "$SF" "$EXPIRY" > "$WORK/rendered.md"
+  render_body "$EPIC" "$today" "$QF" "$AF" "$SF" "$EXPIRY" "$METHOD" > "$WORK/rendered.md"
   parse_body "$WORK/rendered.md"
   [ "$P_MARKER_OK" = 1 ] && [ "${#P_QUOTE}" -ge 40 ] && [ "$P_ONE_CONF" = 1 ] && [ -s "$WORK/scope.nums" ] && [ "$P_EXCL_OK" = 1 ] && valid_date "$P_EXPDATE" \
     || die_render "the record would not verify (the quoted question and answer must total at least 40 characters)"

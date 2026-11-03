@@ -1015,6 +1015,36 @@ done
 printf 'Yes, go ahead, and the build is sk-short.\n' > "$TMP/a-sk-short.txt"
 run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a-sk-short.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10"
 assert_eq "0" "$(last_rc)" "ordinary text that merely contains sk- is not a secret"
+echo "=== Arm 5b: the Method label (a label only: it never selects a lighter check) ==="
+s_method() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "**Method:** '"$1"'" }'; }
+s_method_ok() { s_method tty-ack; }
+s_method_web() { s_method web-session; }
+s_method_unknown() { s_method carrier-pigeon; }
+s_method_empty() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "**Method:**" }'; }
+s_method_two() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "**Method:** tty-ack"; print ""; print "**Method:** tty-ack" }'; }
+scn; s_method_ok;      run_v verify --delegation "$URL"; expect "Method tty-ack is accepted" 0 "$V_OK"
+scn; run_v verify --delegation "$URL"; cp "$TMP/o" "$TMP/o-nomethod"
+scn; s_method_ok;      run_v verify --delegation "$URL"
+assert_eq "$(cat "$TMP/o-nomethod")" "$(cat "$TMP/o")" "the verdict output is identical with and without a Method line"
+scn; s_method_web;     run_v verify --delegation "$URL"; expect "Method web-session is not a valid label on a comment" 1 "$(inv method-unknown)"
+scn; s_method_unknown; run_v verify --delegation "$URL"; expect "an unknown Method value is invalid" 1 "$(inv method-unknown)"
+scn; s_method_empty;   run_v verify --delegation "$URL"; expect "an empty Method value is invalid" 1 "$(inv method-unknown)"
+scn; s_method_two;     run_v verify --delegation "$URL"; expect "two Method lines are ambiguous" 1 "$(inv method-unknown)"
+scn; s_method_ok; mk_comment 1001 "$STUB_DIR/b.md" other-user; echo '{"permission":"write"}' > "$STUB_DIR/perm-other-user.json"
+run_v verify --delegation "$URL"; expect "a Method line does not skip the admin check" 1 "$(inv not-admin-author)"
+scn; s_method_ok; mk_comment 1001 "$STUB_DIR/b.md" owner-user Bot
+run_v verify --delegation "$URL"; expect "a Method line does not let a bot author through" 1 "$(inv bot-author)"
+run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method tty-ack
+assert_eq "0" "$(last_rc)" "render accepts --method tty-ack"
+cp "$TMP/o" "$TMP/rendered-method.md"
+assert_eq "1" "$(grep -c '^\*\*Method:\*\* tty-ack$' "$TMP/rendered-method.md")" "the rendered record carries exactly one Method line"
+scn; mk_comment 1001 "$TMP/rendered-method.md"
+run_v verify --delegation "$URL"; expect "a rendered record with a Method line verifies as valid" 0 "$V_OK"
+assert_eq "0" "$(grep -c '^\*\*Method:\*\*' "$TMP/rendered.md")" "a record rendered without --method carries no Method line"
+run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method web-session
+assert_eq "2" "$(last_rc)" "render refuses --method web-session"
+run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method
+assert_eq "2" "$(last_rc)" "render refuses a trailing --method with no value"
 bounded() { # <seconds> <args...>: run the verifier, kill it after <seconds>; rc 124 when it hung
   local secs="$1" pid k=0; shift
   ( cd "$REPO" && git_fixture_env "$REPO" && PATH="$BIN:$PATH" bash "$SUT" "$@" ) >"$TMP/o" 2>"$TMP/e" </dev/null &
@@ -1412,9 +1442,17 @@ mutate render-guard 's/\[ \$# -ge 2 \] \|\| die_render "--epic needs a value"; E
   [[ "$r1" == 124 ]] && { echo "  PASS: mutant render-guard killed (the unguarded --epic hangs)"; PASS=$((PASS + 1)); } || { echo "  FAIL: mutant render-guard SURVIVED (rc $r1)"; FAIL=$((FAIL + 1)); }
 }
 
+mutate method "$(noop method)" && {
+  killed method "1|$(inv method-unknown)|0" s_method_web verify --delegation "$URL"
+  killed method "1|$(inv method-unknown)|0" s_method_unknown verify --delegation "$URL"
+  killed method "1|$(inv method-unknown)|0" s_method_two verify --delegation "$URL"
+}
+mutate method-parse 's/^(  P_METHOD_N=).*# mut:method-parse$/\10 # mut:method-parse/' && killed method-parse "1|$(inv method-unknown)|0" s_method_web verify --delegation "$URL"
+mutate render-method "$(noop render-method)" && killed render-method "2||0" s_render_ok "${rargs[@]}" --answer-file "$TMP/a.txt" --method web-session
+
 echo "=== Floors: the SUT answered every row (zero slack) ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-CALLS_FLOOR=2800; RESULTS_FLOOR=1800
+CALLS_FLOOR=2871; RESULTS_FLOOR=1840
 if (( n_calls >= CALLS_FLOOR )); then
   echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
 else

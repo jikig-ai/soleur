@@ -31,6 +31,7 @@ sentence):
 | Never edited | `updated_at` equals `created_at`; an edit is a revocation, the operator re-records instead | `edited` |
 | Quote | under the line `Operator instruction, verbatim`, a blockquote (lines starting `>`) of at least 40 bytes, not counting the two `Question shown:` / `Operator answer:` labels: the EXACT question shown plus the operator's answer, so a bare "Yes" is never the whole quote | `no-quote`, `quote-too-short` |
 | Confirmation | exactly one `**Confirmation:**` line whose text starts with the word `Yes` (the option label or the free-text reply, as the calling skill received it); a No, a maybe or any other answer is never a delegation | `no-confirmation` |
+| Method | optional: at most one `**Method:**` line whose value is exactly `tty-ack` (the operator typed the answer in a terminal session); it is a label for how the answer was given and never selects a lighter check, so a record with it and one without it get the same verdict, and any other value (including `web-session`, which only the web app's own record can carry) is refused | `method-unknown` |
 | Scope | numbered items, each an act class; an item that names an exact command embeds it in backticks and names the command's target in words (section 2, scope binding) | `no-scope-item` |
 | Excluded | exactly one `**Excluded (still operator-only):**` paragraph, equal to the fixed sentence in section 5 after whitespace is normalised | `excluded-incomplete` |
 | Expiry | exactly one `**Expiry:**` line with an ISO date no later than the comment's creation date plus 30 days, not in the past; the epic closing also ends it | `expiry-missing`, `expiry-too-long`, `expired`, `epic-closed` |
@@ -280,6 +281,8 @@ I will only come back to you for money, what is in or out of scope, how it looks
 
 Yes writes the record (section 1). No keeps today's behaviour: ask once, naming the action, at each operator-class step.
 
+How a terminal session puts this question (typed answers, no default, what to say at a step that needs the browser) is in [approval-card.md](./approval-card.md). When the operator typed the answer in a terminal session, the calling skill passes `--method tty-ack` to `render`.
+
 ### Stall sentences
 
 One plain sentence in the session for every stall, in addition to any issue filed.
@@ -352,6 +355,7 @@ source of these sentences; other documents point here and do not restate them.
 | `no-confirmation` | Your standing approval does not show a clear Yes from you, so I have not used it. Please confirm it again. |
 | `no-scope-item` | Your standing approval does not list what I may do, or does not list the step I am about to take, so I have not done it. |
 | `excluded-incomplete` | Your standing approval does not carry the exact list of things I may never do for you, so I have not used it. Please confirm it again. |
+| `method-unknown` | Your standing approval names a way of answering that I do not recognise, so I have not used it. Please confirm it again. |
 | `expiry-missing` | Your standing approval has no valid end date, so I have not used it. Please confirm it again. |
 | `expiry-too-long` | Your standing approval runs for more than 30 days, which is not allowed, so I have not used it. Please confirm it again. |
 | `expired` | Your standing approval has run out, so I have paused and done nothing. Please confirm it again and I will carry on. |
