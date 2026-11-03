@@ -10,6 +10,27 @@ requires_cpo_signoff: true
 brand_survival_threshold: single-user incident
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-03
+**Sections enhanced:** Research Insights, Architecture Decision, Phase 0, Phase 1, Phase 6, Guard Contract, Domain Review
+**Agents and passes used:** repo-research-analyst, learnings-researcher, spec-flow-analyzer, CPO, CLO (prepare-and-review), CTO (three rulings), ux-design-lead, gdpr-gate, plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, CTO devex lens), plus the deepen verification gates below.
+
+### Key Improvements
+
+1. Same-name overload replaced by a distinct function after the RLS fuzz AC7/AC8 no-overload gate was found (CTO row 5); no security-gate harness rewrite.
+2. Plan-review cuts applied: identity helpers, redundant verify rows, clamp/top-N live reruns, Guard matrices trimmed to rows that test distinct properties, decision axis and source scan removed from Guard 2.
+3. Staleness sweep widened: three `model.c4` places, the DSAR allowlist comment, the runbook rollback order, and the Art. 30 register and DPIA rows carried to the flag-on legal sign-off.
+4. Copy honesty: the default-window view changes four strings (CLO-reviewed) and the plan now says so instead of claiming byte-identity.
+5. A retirement path for the duplicated body is written into the ADR amendment so the card-count PR cannot add a third copy.
+
+### Deepen verification log (run 2026-11-03)
+
+- Halt gates: 4.6 User-Brand Impact present (threshold `single-user incident`); 4.7 Observability present, probe verb `grep` is allowlisted and the block is new in this change; 4.8 no PAT-shaped token (grep: none); 4.9 the plan references a committed `.pen` (`git ls-files` confirms `knowledge-base/product/design/settings/egress-audit-log.pen`); 4.10 Encryption Posture present, stated by reference to the existing `supabase.prd` ledger entry; 4.11 `python3 scripts/lint-guard-contract.py` on this plan: 1 plan, 2 guard entries, exit 0; 4.12 exactly one unfenced `## Scope Check`.
+- Cited paths verified present: C4 tests (`c4-code-syntax`, `c4-render`, `c4-count-parity`), `dsar-allowlist-completeness.test.ts`, `web-egress-toggle.test.tsx`, the Sentry op-contract test, `scope-grants-page-egress-wiring.test.ts`, `migration-rpc-grants.test.ts`, `regenerate-c4-model.sh`, `run-migrations.sh`, `run-verify.sh`, ADR-112.
+- Cited issues verified live: #9601 open, #11238 open, #9545 closed (the parent whose deferral this is). Ordinal: `origin/main` has no `183_*` migration (count 0) and 182 is the highest.
+- Negative claims verified by grep: `EgressAuditPayload.window` is read by no runtime code (research pass); the `webapp -> supabase` edge in `model.c4` says "fixed 30-day window"; `verify/177` has twelve rows (ten function rows, two table rows); the enablement issue's number appears nowhere in the plan, tasks or decision file (grep count 0).
+
 ## Overview
 
 Issue #11238 (epic #9601, deferred out of #9545 PR2) asks for a time-range choice on the workspace egress audit view: 24 hours, 7 days, 30 days. The view today shows a fixed 30-day window and the member read function (migration 177) has no window argument.
@@ -65,7 +86,7 @@ Checked 2026-11-03 before any research fan-out:
 - `2026-10-26-posture-sentinel-must-track-the-diff-that-changes-the-posture.md`: `run-verify.sh` runs every file in `supabase/verify/`; add `verify/183_*.sql` for the new signature (grant posture is new, so a new sentinel is required).
 - `bug-fixes/2026-06-01-postgrest-rpc-named-arg-mismatch-silent-client-revert.md`: PostgREST resolves by the set of supplied argument names; a mismatch is PGRST202 that `tsc` cannot see. A loader test pins the exact four argument names.
 - `2026-05-29-legal-doc-triple-lockstep-and-rpc-grants-invoker-before-definer.md` and `best-practices/2026-06-19-sql-function-body-parser-must-anchor-to-create-not-bare-function.md`: the static grants lint and any body parser must anchor on `CREATE ... FUNCTION`, not the bare function name, now that two functions share a prefix.
-- `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`: a new function may not be callable until the schema cache reloads. `run-migrations.sh` sends the reload in-band; on the direct-pg fallback it can lag. The loader reports it as a paged `rpc_error` (`pg_code` PGRST202), which is the correct loud outcome; the view is dark so no member sees it.
+- `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`: a new function may not be callable until the schema cache reloads. `run-migrations.sh` forces a reload through the Supabase Management API after every run (best-effort when no access token is present); the direct-pg pooler path cannot deliver `NOTIFY`, so without the token the cache can lag up to the natural poll interval. The loader reports it as a paged `rpc_error` (`pg_code` PGRST202), which is the correct loud outcome; the view is dark so no member sees it.
 - `2026-05-30-migration-number-collision-and-stale-plan-current-state.md` and `workflow-patterns/2026-06-30-migration-number-collision-mid-pipeline.md`: re-check the ordinal at ship after every sync.
 
 ### Repo facts (anchors, not line numbers)
@@ -431,6 +452,9 @@ logs:
 discoverability_test:
   command: grep -c '"get_egress_audit_window_summary"' apps/web-platform/server/egress-audit-read.ts
   expected_output: 1
+  # Holds once Phase 3 lands (0 on the pre-implementation tree). It proves the page path is wired to the new
+  # function and, with the unchanged loader test, that the card path is not; the runtime signal is the Sentry
+  # events named in liveness_signal.
 ```
 
 ## Encryption Posture
