@@ -355,34 +355,77 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 [ "$n_run" -eq 1 ] \
   && ok "G4: this guard's run line is registered in infra-validation.yml exactly once" \
   || no "G4: run line count is $n_run, want 1 — the suite is unregistered or double-registered"
-# Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP", a GUARD-fragment
-# prefix) or a shell-injection env reaches the step with no literal present — GUARD covers
-# EGW_GUARD_* and every sibling's *_GUARD_* axis; MUT_/_SKIP cover MUT_SKIP at either split.
+# A CI-dead guard must not pass (the clientip idiom, #11899). The step's allowed keys are
+# name + run ONLY — an `env:`, `shell:`, `with:`, `if:` or `continue-on-error:` can neuter or
+# redirect the run — at EITHER step position (the `      - ` dash line or an `        ` key
+# line). The HOSTING JOB is derived from the step's position (the last `jobs:`-level header
+# above the run line — a trailing-comment or quoted-id header included), never named here,
+# and is read WHOLE: header, steps AND any keys after `steps:` (YAML key order is free, so a
+# post-steps key must grade). Its `^    if:` must occur exactly once and equal the known
+# literal, `^    continue-on-error:` zero times over the whole block, needs/runs-on the known
+# literals, and its own keys only the known set (no `env`, `defaults`, `container`,
+# `strategy`, `services` ...).
+# hdr LINE -> the job id when LINE is a `jobs:`-level key header (`  id:`, `  "id":`,
+# `  id: # note`), else "".
+AWK_HDR='function hdr(l,   n) { if (l ~ /^  [\047"]?[A-Za-z0-9_-]+[\047"]?:[ \t]*(#.*)?$/) { n = l; sub(/^  [\047"]?/, "", n); sub(/[\047"]?:.*$/, "", n); return n } return "" }'
+STEP_BLOCK="$(awk -v r="$REG_RUN" "$AWK_HDR"'
+  function flush() { if (blk != "" && index(blk, r "\n") > 0) printf "%s", blk; blk = "" }
+  /^      - / || hdr($0) != "" { flush() }
+  { if ($0 !~ /^[[:space:]]*#/) blk = blk $0 "\n" }
+  END { flush() }' "$IV")"
+HOST_JOB="$(awk -v r="$REG_RUN" "$AWK_HDR"'{ h = hdr($0); if (h != "") j = h } $0 == r { print j; exit }' "$IV")"
+JOB_BLOCK=""
+[ -n "$HOST_JOB" ] && JOB_BLOCK="$(awk -v j="$HOST_JOB" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f && !/^[[:space:]]*#/ { print }' "$IV")"
+JOB_IF="$(awk '/^    if:/ { print }' <<<"$JOB_BLOCK")"
+JOB_NEEDS="$(awk '/^    needs:/ { print }' <<<"$JOB_BLOCK")"
+JOB_RUNS_ON="$(awk '/^    runs-on:/ { print }' <<<"$JOB_BLOCK")"
+JOB_IF_N="$(awk '/^    if:/ { n++ } END { print n + 0 }' <<<"$JOB_BLOCK")"
+JOB_COE_N="$(awk '/^    continue-on-error:/ { n++ } END { print n + 0 }' <<<"$JOB_BLOCK")"
+# Key allowlists: the step is `- name:` + `run:`; the job is the known set. Any other key —
+# or an unrecognised line shape, which grades "?" — is listed.
+STEP_BAD="$(awk -v allow=" name run " 'NF == 0 { next } { k = "?" }
+  /^      - [A-Za-z_-]+:/ { k = $0; sub(/^      - /, "", k); sub(/:.*/, "", k) }
+  /^        [A-Za-z_-]+:/ { k = $0; sub(/^        /, "", k); sub(/:.*/, "", k) }
+  index(allow, " " k " ") == 0 { print k }' <<<"$STEP_BLOCK")"
+JOB_BAD="$(awk -v allow=" name needs if runs-on permissions timeout-minutes steps " '/^    [A-Za-z_-]+:/ { k = $0; sub(/^    /, "", k); sub(/:.*/, "", k); if (index(allow, " " k " ") == 0) print k }' <<<"$JOB_BLOCK")"
+{ [ -n "$STEP_BLOCK" ] && [ -n "$HOST_JOB" ] && [ -n "$JOB_BLOCK" ] && grep -qFx "$REG_RUN" <<< "$JOB_BLOCK"; } \
+  && ok "G4: the registered step and its hosting job '$HOST_JOB' were located (run-line-derived, comment-stripped, the slice carries the run line)" \
+  || no "G4: the registered step or its hosting job could not be located (step ${#STEP_BLOCK}B, host '${HOST_JOB:-none}', job ${#JOB_BLOCK}B) — every step/job pin below would grade vacuous"
+[ -n "$STEP_BLOCK" ] && [ -z "$STEP_BAD" ] \
+  && [[ "$STEP_BLOCK" != *continue-on-error* ]] \
+  && ! [[ "$STEP_BLOCK" =~ $'\n'[[:space:]]+if: ]] \
+  && ! [[ "$STEP_BLOCK" =~ ^[[:space:]]*-[[:space:]]+if: ]] \
+  && ok "G4: the registered step has only name+run keys — no env/shell/with/if:/continue-on-error: at the run-key or - dash position" \
+  || no "G4: the registered step is conditional, non-blocking or redirected (offending keys beyond name+run: '${STEP_BAD//$'\n'/ }'; an if: or continue-on-error: at the run-key or - dash position), or the step could not be located"
+[ -n "$JOB_BLOCK" ] && [ -z "$JOB_BAD" ] \
+  && [ "$JOB_IF_N" -eq 1 ] && [ "$JOB_IF" = "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" ] \
+  && [ "$JOB_COE_N" -eq 0 ] && [[ "$JOB_BLOCK" != *continue-on-error* ]] \
+  && [ "$JOB_NEEDS" = "    needs: detect-changes" ] && [ "$JOB_RUNS_ON" = "    runs-on: ubuntu-24.04" ] \
+  && ok "G4: the hosting job '$HOST_JOB' keeps the one known if:, the needs+runs-on literals, the known key set and no continue-on-error anywhere (post-steps keys grade)" \
+  || no "G4: the hosting job '$HOST_JOB' is conditional, non-blocking or carries keys beyond name/needs/if/runs-on/permissions/timeout-minutes/steps: '${JOB_BAD//$'\n'/ }' (^    if: lines seen: $JOB_IF_N, want 1 and the known literal; ^    continue-on-error: lines seen: $JOB_COE_N, want 0 over the WHOLE job — post-steps keys included; needs/runs-on differ), or the job could not be located"
+# File-wide seam (over the comment-stripped workflow view): guard env axes may not reach
+# executable text. Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP",
+# a GUARD-fragment prefix) or a shell-injection env reaches the step with no literal present
+# — MUT_/_SKIP cover MUT_SKIP at either split, GUARD covers EGW_GUARD_* and every sibling's
+# *_GUARD_* axis; EGW_ stays literal so a future EGW_* seam carrying no GUARD fragment still
+# reds. A top-level `defaults:` block would smuggle run.shell/env into every job — banned.
 seam_bad=""
-for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
-  printf '%s\n' "$IV_CODE" | grep -nF "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS' 'EGW_'; do
+  [[ "$IV_CODE" == *"$_frag"* ]] && seam_bad="$seam_bad ${_frag}-fragment"
 done
+[[ $'\n'"$IV_CODE" == *$'\ndefaults:'* ]] && seam_bad="$seam_bad top-level-defaults"
 [ -z "$seam_bad" ] \
-  && ok "G4: no muting/shell-injection env fragment (MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS) reaches the workflow's executable text" \
-  || no "G4: workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
-# The only DYNAMIC channel is a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside
-# the enclosing job. The slice is DERIVED from the pinned run line — back to the nearest
-# `^  <job-id>:` header, forward to the next or EOF — never a hardcoded job name, and it must
-# carry the run line or the ban below would pass vacuously on a misslice.
-IV_JOB="$(awk -v run="$REG_RUN" '
-  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { if (inside) exit; n = 0 }
-  { buf[++n] = $0 }
-  index($0, run) { inside = 1 }
-  END { if (inside) for (i = 1; i <= n; i++) print buf[i] }' <<< "$IV_CODE")"
-{ [ -n "$IV_JOB" ] && grep -qFx "$REG_RUN" <<< "$IV_JOB"; } \
-  && ok "G4: the enclosing-job slice is non-empty and carries the pinned run line (the env-write ban cannot pass vacuously)" \
-  || no "G4: the enclosing-job slice is empty or lost the pinned run line — a missliced job-scope ban would grade green"
+  && ok "G4: no muting/shell-injection env fragment (MUT_, _SKIP, GUARD, EGW_, BASH_ENV, SHELLOPTS, BASHOPTS) or top-level defaults: reaches the workflow's executable text" \
+  || no "G4: workflow seam violated:$seam_bad — a guard env axis or a top-level defaults: is reachable from infra-validation.yml"
+# The only DYNAMIC channel is a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults:
+# inside the HOSTING job. JOB_BLOCK is derived above — an empty slice reds the located row
+# and is re-checked here, so the ban cannot pass vacuously on a misslice.
 job_bad=""
-printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_ENV' >/dev/null && job_bad="$job_bad GITHUB_ENV"
-printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_PATH' >/dev/null && job_bad="$job_bad GITHUB_PATH"
-printf '%s\n' "$IV_JOB" | grep -nF 'defaults:' >/dev/null && job_bad="$job_bad defaults:"
-[ -n "$IV_JOB" ] && [ -z "$job_bad" ] \
-  && ok "G4: no GITHUB_ENV/GITHUB_PATH write or defaults: sits inside the enclosing job (the only dynamic env channel)" \
+[[ "$JOB_BLOCK" == *GITHUB_ENV* ]] && job_bad="$job_bad GITHUB_ENV"
+[[ "$JOB_BLOCK" == *GITHUB_PATH* ]] && job_bad="$job_bad GITHUB_PATH"
+[[ "$JOB_BLOCK" == *defaults:* ]] && job_bad="$job_bad defaults:"
+[ -n "$JOB_BLOCK" ] && [ -z "$job_bad" ] \
+  && ok "G4: no GITHUB_ENV/GITHUB_PATH write or defaults: sits inside the hosting job '$HOST_JOB' (the only dynamic env channel)" \
   || no "G4: job-scope seam violated:${job_bad:- empty-slice} — a runtime env write inside the job can carry a composed name past the literal seam"
 
 echo ""
@@ -644,6 +687,46 @@ assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
 
+  # ── Step/job shape rows (#11899): the clientip idiom — the step's keys are name+run only  #
+  # at either position, the hosting job's keys are the known set, `if:` is exactly one known  #
+  # literal, and continue-on-error: is absent over the WHOLE job (post-steps keys grade —     #
+  # YAML key order is free).                                                                  #
+  mutate_red "the registered step gets an env: key (a step-scope redirect needs no if:)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO: bar\n" + old)' \
+    "beyond name+run: 'env"
+  mutate_red "the registered step gets an if: key line (a conditional step, key form)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "beyond name+run: 'if"
+  mutate_red "the registered step gets a continue-on-error: key line (a non-blocking step)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "beyond name+run: 'continue-on-error"
+  mutate_red "the registered step is made conditional on the - dash line (- if: false)" IV \
+    'old = "      - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - if: false\n        name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)\n")' \
+    "dash position"
+  mutate_red "the hosting job gets an env: key (outside the known job key set)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    env:\n      FOO: bar\n")' \
+    "steps: 'env'"
+  mutate_red "a second, differing if: is added to the hosting job (count != 1 and not the known literal)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    if: false\n")' \
+    "if: lines seen"
+  mutate_red "a job-level continue-on-error: is placed AFTER the job's steps (key order is free in YAML)" IV \
+    'old = "          fi\n\n  # Aggregator (#8736): the single verdict"
+assert s.count(old) == 1
+s = s.replace(old, "          fi\n    continue-on-error: true\n\n  # Aggregator (#8736): the single verdict")' \
+    "continue-on-error: lines seen"
+
   mutate_red "the count = 0 mute knob is added inside the fail alert resource" TF \
     's = edit(s, FAILRES, "  paused = false\n", "  count = 0\n  paused = false\n")' \
     "mute knob"
@@ -673,8 +756,8 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
 # row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
-PRESENCE_ROWS=56
-MUT_ROWS=34
+PRESENCE_ROWS=58
+MUT_ROWS=41
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
