@@ -15,8 +15,8 @@ frame 18. Spec: `knowledge-base/project/specs/feat-founder-approval-cards/spec.m
    or `changes` in any letter case answers; anything else (`y`, `yep`, `yes please`, `no changes`) is refused with "Please
    type the whole word: yes, no or changes." so a reflex keystroke cannot answer for the founder.
 5. **`yes` is recorded as `Yes`.** The session writes the answer file with a capital first letter and changes nothing else,
-   because the verifier requires a confirmation that starts with `Yes`. It then prints: "Recorded. Typed in this terminal on
-   your computer; it was not re-checked against your account."
+   because the verifier requires a confirmation that starts with `Yes`. It then prints: "Recorded. The terminal session reported a
+   typed yes; it was not re-checked against your account."
 6. **`no` and `changes` record nothing.** `no` ends the question. `changes` asks "What would you like changed?", prints the
    answer in the session, keeps the hold standing, and the card is not shown again in that session unless the founder asks.
 
@@ -65,6 +65,7 @@ A session with nobody to answer asks nothing; the existing standing-delegation i
 ## 5. The `method` label
 
 `tty-ack` is the only value a delegation comment may carry; see the Method row in [standing-delegation.md](./standing-delegation.md).
+A session with nobody to answer (headless, cloud, piped or unknown input) never passes `--method` and never writes a `Yes`.
 
 ## 6. Wording rules for every card and message
 

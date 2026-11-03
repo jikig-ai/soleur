@@ -66,7 +66,7 @@ Wireframes approved by the operator 2026-11-03: `knowledge-base/product/design/a
 - TR9 in-place email-code check (states: start, enter code, wrong/expired code, password, provider): frames 12 (desktop) and 15 (mobile).
 - FR4 result states: frame 16. Waiting-for-you list (FR2): frame 17. CLI plain-words prompts (FR1, FR2, FR6): frame 18.
 - Approved scope of the code check: Yes only; No and Request changes record straight away with "Signed in with your account".
-- Open wording items for planning: replace the made-up CLI delegation example with the real Standing Delegation wording; confirm the CLI honesty line ("Typed in this terminal on your computer. It was not re-checked against your account."); code lifetime is "a few minutes" until a number is chosen.
+- Open wording items for planning: replace the made-up CLI delegation example with the real Standing Delegation wording; the CLI honesty line is now "The terminal session reported a typed yes; it was not re-checked against your account." (an agent can share the keyboard, so the card does not claim who typed); code lifetime is "a few minutes" until a number is chosen.
 
 ## Amendments from plan review (2026-11-03)
 

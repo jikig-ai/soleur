@@ -50,6 +50,7 @@ assert_contains "$SEC1_FLAT" "Please type the whole word: yes, no or changes." "
 assert_contains "$SEC1_FLAT" "in any letter case" "section 1 accepts the whole word in any letter case"
 assert_contains "$SEC1_FLAT" "\`yes\` is recorded as \`Yes\`" "section 1 says yes is recorded as Yes"
 assert_contains "$SEC1_FLAT" "it was not re-checked against your account" "section 1 prints the plain strength caveat after a yes"
+assert_contains "$SEC1_FLAT" "The terminal session reported a typed yes" "section 1 reports what the session was told, not who typed"
 assert_contains "$SEC1_FLAT" "\`no\` and \`changes\` record nothing" "section 1 says no and changes record nothing"
 assert_contains "$SEC1_FLAT" "What would you like changed?" "changes asks what to change"
 FIRST="$(printf '%s\n' "$SEC1" | grep -n 'What will happen, in business terms, first' | head -1 | cut -d: -f1)"
@@ -78,7 +79,8 @@ assert_contains "$SEC2_FLAT" "never answered at \`tty-ack\` strength" "legal, ir
 
 echo "=== The method label: one accepted value, in step with the verifier ==="
 assert_contains "$CARD_FLAT" "\`tty-ack\` is the only value a delegation comment may carry" "the card names tty-ack as the only comment label"
-assert_eq "2" "$(grep -c '= tty-ack' "$VERIFIER")" "the verifier accepts the label at exactly two sites (verify and render); a second label means updating the card"
+assert_contains "$CARD_FLAT" "never passes \`--method\` and never writes a \`Yes\`" "a session with nobody to answer never records the label or a Yes"
+assert_eq "2" "$(grep -c '= tty-ack' "$VERIFIER")" "the verifier accepts the label at exactly two sites (verify and render). Pinned on purpose: a third accepted value must be added to the card and to the Method row in standing-delegation.md in the same change"
 
 echo "=== Assurance wording stays out of the card ==="
 assert_eq "0" "$(grep -ciE 'verified|reviewed|legally binding|audit-ready|compliant|proven|certified|guaranteed' "$CARD")" "approval-card.md carries none of the barred assurance words"
@@ -89,4 +91,4 @@ assert_contains "$(cat "$SD")" "[--method tty-ack]" "the render sentence shows t
 assert_contains "$(grep -E '^\| Method \|' "$SD")" "method-unknown" "the Method row names the method-unknown reason"
 assert_contains "$(grep -F '| `method-unknown` |' "$SD")" "I have not used it" "method-unknown has a plain sentence"
 
-print_results 31
+print_results 33

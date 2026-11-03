@@ -188,7 +188,7 @@ parse_body() {
   P_ONE_CONF=0; [ "$(grep -c '^\*\*Confirmation:\*\*' "$b")" = 1 ] && P_ONE_CONF=1
   P_ONE_EXP=0; [ "$(grep -c '^\*\*Expiry:\*\*' "$b")" = 1 ] && P_ONE_EXP=1
   # The Method line is a LABEL only (how the operator's answer was given). Nothing below reads it to choose a check.
-  P_METHOD_N="$(grep -ciE '^[[:space:]>]*\*\*method:' "$b")" # mut:method-parse
+  P_METHOD_N="$(grep -ciE '^[[:space:]>]*(([-*+]|[0-9]+[.)]|#+)[[:space:]]+)?(\*\*|__)method(:(\*\*|__)|(\*\*|__):)' "$b")" # mut:method-parse
   P_METHOD="$(trim "$(grep -m1 '^\*\*Method:\*\*' "$b" | sed 's/^\*\*Method:\*\*//')")"
 }
 
@@ -650,6 +650,7 @@ do_render() {
   render_body "$EPIC" "$today" "$QF" "$AF" "$SF" "$EXPIRY" "$METHOD" > "$WORK/rendered.md"
   parse_body "$WORK/rendered.md"
   [ "$P_MARKER_OK" = 1 ] && [ "${#P_QUOTE}" -ge 40 ] && [ "$P_ONE_CONF" = 1 ] && [ -s "$WORK/scope.nums" ] && [ "$P_EXCL_OK" = 1 ] && valid_date "$P_EXPDATE" \
+    && [ "$P_METHOD_N" = "$([ -n "$METHOD" ] && echo 1 || echo 0)" ] \
     || die_render "the record would not verify (the quoted question and answer must total at least 40 characters)"
   cat "$WORK/rendered.md"
   exit 0

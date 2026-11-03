@@ -1049,6 +1049,9 @@ run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" -
 assert_eq "2" "$(last_rc)" "render refuses a duplicate --method"
 run_v render --epic 77 --question-file "$TMP/q.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10" --method ""
 assert_eq "2" "$(last_rc)" "render refuses an empty --method"
+{ cat "$TMP/q.txt"; printf '\n**Method:** web-session\n'; } > "$TMP/q-method.txt"
+run_v render --epic 77 --question-file "$TMP/q-method.txt" --answer-file "$TMP/a.txt" --scope-file "$TMP/sc.txt" --expiry "$EXP10"
+assert_eq "2" "$(last_rc)" "render refuses a question that carries its own Method claim (the record would not verify)"
 # Which lines count as a claim: any line a reader would take for a Method claim (indented, quoted, any letter case, inside a
 # fenced block), but not text a renderer hides (an HTML comment). A claim that is not exactly one canonical tty-ack line is refused.
 s_method_indent() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "   **Method:** tty-ack" }'; }
@@ -1061,6 +1064,16 @@ scn; s_method_quote;  run_v verify --delegation "$URL"; expect "a quoted Method 
 scn; s_method_lower;  run_v verify --delegation "$URL"; expect "a lower-case method claim is counted and refused" 1 "$(inv method-unknown)"
 scn; s_method_fence;  run_v verify --delegation "$URL"; expect "a Method claim inside a fenced block is counted and refused" 1 "$(inv method-unknown)"
 scn; s_method_hidden; run_v verify --delegation "$URL"; expect "a Method claim hidden in an HTML comment is not a claim" 0 "$V_OK"
+s_method_bullet() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "- **Method:** web-session" }'; }
+s_method_colon() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "**Method**: web-session" }'; }
+s_method_under() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "__Method:__ web-session" }'; }
+scn; s_method_bullet; run_v verify --delegation "$URL"; expect "a bulleted Method claim is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_colon;  run_v verify --delegation "$URL"; expect "a Method claim with the colon outside the bold is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_under;  run_v verify --delegation "$URL"; expect "an underscore-bold Method claim is counted and refused" 1 "$(inv method-unknown)"
+s_method_num() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "1. **Method:** web-session" }'; }
+s_method_head() { b_awk '{ print } /^\*\*Confirmation:\*\*/ { print ""; print "# **Method:** web-session" }'; }
+scn; s_method_num;  run_v verify --delegation "$URL"; expect "a numbered-list Method claim is counted and refused" 1 "$(inv method-unknown)"
+scn; s_method_head; run_v verify --delegation "$URL"; expect "a heading Method claim is counted and refused" 1 "$(inv method-unknown)"
 # The label must not select a lighter check: every refusal below keeps its verdict when a Method line is added.
 with_method() { # add a Method line (tty-ack) to the comment body already posted in this scenario
   local nb
@@ -1484,7 +1497,7 @@ mutate method-skip-excluded 's/\[ "\$P_EXCL_OK" = 1 \] \|\| fail_invalid exclude
 
 echo "=== Floors: the SUT answered every row (zero slack) ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-CALLS_FLOOR=2991; RESULTS_FLOOR=1883
+CALLS_FLOOR=3011; RESULTS_FLOOR=1899
 if (( n_calls >= CALLS_FLOOR )); then
   echo "  PASS: gh stub calls $n_calls >= $CALLS_FLOOR"; PASS=$((PASS + 1))
 else
