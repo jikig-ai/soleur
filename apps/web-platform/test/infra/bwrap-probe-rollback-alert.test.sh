@@ -119,10 +119,19 @@ SQL_N="$(sed 's/^[[:space:]]*//; s/[[:space:]][[:space:]]*/ /g; s/ $//' <<< "$LO
 # The alert and exploration blocks, from their exact header to the first column-0 "}".
 ALERT="$(res_block logtail_exploration_alert bwrap_probe_rollback)"
 EXPL="$(res_block logtail_exploration bwrap_probe_rollback)"
-# The push-triggered MAIN plan: from the first `terraform plan -no-color` to its `rc=$?`. The workflow
-# has other plan commands (inngest host, host replace, volume recut) whose -target lists never run on
-# a push to main, so the allowlist rows below read THIS region, not the whole file.
-MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=\$\?/{exit}' "$WF")"
+# The push-triggered MAIN plan: from the first `terraform plan -no-color` to the first `rc=`
+# line-start below it (the plan step's own rc=${PIPESTATUS[0]} capture). The workflow has other
+# plan commands (inngest host, host replace, volume recut) whose -target lists never run on a
+# push to main, so the allowlist rows below read THIS region, not the whole file.
+MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=/{exit}' "$WF")"
+# The slice must actually TERMINATE on the plan step's own rc=${PIPESTATUS[0]} capture: a
+# deleted or renamed capture line would silently reopen the run-to-EOF overshoot this bound
+# fixes (a bare `rc=` terminator lands on a LATER step's `rc=0` and overshoots undetected).
+# Anchored ERE on tail -1 — never `| grep -q` (SIGPIPE under pipefail); a prefix match would
+# let rc=${PIPESTATUS[1]} or rc=${PIPESTATUS[0]}x through.
+[ "$(tail -1 <<< "$MAIN_PLAN" | grep -cE '^[[:space:]]*rc=\$\{PIPESTATUS\[0\]\}$')" -eq 1 ] \
+  && ok "the MAIN plan slice terminates on the plan step's rc=\${PIPESTATUS[0]} capture (no run-to-EOF overshoot)" \
+  || no "the MAIN plan slice never terminated on the plan step's rc=\${PIPESTATUS[0]} capture — a deleted or renamed capture line reopened the run-to-EOF overshoot"
 
 # Every grep over a captured VARIABLE reads a HERE-STRING, never `printf … | grep -q`: under pipefail, grep -q exiting on its
 # first match can SIGPIPE the writer and fail the pipeline, which fails a negated check OPEN.
@@ -294,11 +303,10 @@ PY
   && ok "the runbook anchor '#${RB_SLUG}' resolves to a heading in canary-probe-set.md" \
   || no "the runbook anchor '#${RB_SLUG:-?}' matches no heading in canary-probe-set.md — the alert's link would dangle"
 
-# ── Workflow seam — the suite is registered, and no env axis may reach the workflow ──────────
+# ── Workflow seam — registered, unconditionally blocking, and no env axis may reach it ───────
 # The run line pins byte-exact (exactly once) so a rename/moved step cannot silently unregister
-# the suite; and no BWRAP_GUARD_ or MUT_SKIP literal may appear in the workflow's executable text —
-# the shipped convention's seam check, strictly stronger than an env-prefix pin. Whole-line
-# comments are stripped; an inline ` # MUT_SKIP` still reds — deliberate over-caution.
+# the suite; whole-line comments are stripped before the executable text is graded (an inline
+# ` # MUT_SKIP` still reds — deliberate over-caution).
 REG_RUN='        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh'
 IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
@@ -306,12 +314,99 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
   && ok "this suite's run line is registered in infra-validation.yml exactly once" \
   || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
 
-seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'BWRAP_GUARD_' >/dev/null && seam_bad="$seam_bad BWRAP_GUARD_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
-[ -z "$seam_bad" ] \
-  && ok "no BWRAP_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
-  || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+# A CI-dead guard must not pass. The step: ONLY the keys name + run — a `shell:`/`env:`/`with:`/
+# `if:`/`continue-on-error:` (or any unrecognised line shape) flags, with if:/continue-on-error:
+# read at BOTH `        ` and `      - ` positions. The HOSTING JOB is derived from the step's
+# position (the last `jobs:`-level header above the run line — a quoted id or a trailing-comment
+# header included), never named here, and is read WHOLE (header, steps, anything after them: YAML
+# key order is free): `continue-on-error` must appear NOWHERE in it (post-steps included), its
+# `if:` must be the one known literal (total == 1), `needs:`/`runs-on:` the known literals, and
+# its own keys the known set {name needs if runs-on permissions timeout-minutes steps} — no
+# `defaults`/`env`/`container`/`strategy`/`services` … . The workflow itself carries no top-level
+# `defaults:` and no env-composition FRAGMENT — {MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS,
+# BASHOPTS} — so literal, runtime-composed ("MUT_""SKIP"), *_GUARD_*-prefixed and shell-injection
+# env muting are all barred; and no GITHUB_ENV/GITHUB_PATH/defaults: inside the hosting job. The
+# verdict must also REACH the aggregator (a job needing the host, under if: always(), reading its
+# result and carrying its entries slot), so dropping the leg is not a quiet way to make this
+# guard CI-dead. Every violation accrues to the composite verdict below — slice-validity folds
+# in, so no ban can pass vacuously on an empty or missed slice.
+# hdr LINE -> the job id when LINE is a `jobs:`-level key header (`  id:`, `  "id":`, `  id: # note`), else "".
+AWK_HDR='function hdr(l,   n) { if (l ~ /^  [\047"]?[A-Za-z0-9_-]+[\047"]?:[ \t]*(#.*)?$/) { n = l; sub(/^  [\047"]?/, "", n); sub(/[\047"]?:.*$/, "", n); return n } return "" }'
+STEP_BLOCK="$(awk -v r="$REG_RUN" "$AWK_HDR"'
+  function flush() { if (blk != "" && index(blk, r "\n") > 0) printf "%s", blk; blk = "" }
+  /^      - / || hdr($0) != "" { flush() }
+  { if ($0 !~ /^[[:space:]]*#/) blk = blk $0 "\n" }
+  END { flush() }' "$IV")"
+HOST_JOB="$(awk -v r="$REG_RUN" "$AWK_HDR"'{ h = hdr($0); if (h != "") j = h } $0 == r { print j; exit }' "$IV")"
+JOB_BLOCK=""
+[ -n "$HOST_JOB" ] && JOB_BLOCK="$(awk -v j="$HOST_JOB" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f && !/^[[:space:]]*#/ { print }' "$IV")"
+JOB_IF="$(awk '/^    if:/ { print }' <<<"$JOB_BLOCK")"
+JOB_NEEDS="$(awk '/^    needs:/ { print }' <<<"$JOB_BLOCK")"
+JOB_RUNS_ON="$(awk '/^    runs-on:/ { print }' <<<"$JOB_BLOCK")"
+# Key allowlists: the step is `- name:` + `run:`; the job is the known set. Anything else (or an
+# unrecognised line shape) is listed by name — env:/shell:/with:/if:/continue-on-error: included.
+STEP_BAD="$(awk -v allow=" name run " 'NF == 0 { next } { k = "?" }
+  /^      - [A-Za-z_-]+:/ { k = $0; sub(/^      - /, "", k); sub(/:.*/, "", k) }
+  /^        [A-Za-z_-]+:/ { k = $0; sub(/^        /, "", k); sub(/:.*/, "", k) }
+  index(allow, " " k " ") == 0 { print k }' <<<"$STEP_BLOCK")"
+JOB_BAD="$(awk -v allow=" name needs if runs-on permissions timeout-minutes steps " '/^    [A-Za-z_-]+:/ { k = $0; sub(/^    /, "", k); sub(/:.*/, "", k); if (index(allow, " " k " ") == 0) print k }' <<<"$JOB_BLOCK")"
+WF_BAD=""
+[[ $'\n'"$IV_CODE" == *$'\ndefaults:'* ]] && WF_BAD="$WF_BAD top-level-defaults"
+# Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP", a GUARD-fragment
+# prefix) or a shell-injection env (BASH_ENV/SHELLOPTS/BASHOPTS) reaches the step with no
+# literal present — MUT_/_SKIP cover MUT_SKIP at either split, GUARD covers every *_GUARD_* axis
+# (BWRAP_GUARD_ included — no separate literal grep needed).
+_seam_frag=""
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF -- "$_frag" >/dev/null && _seam_frag="$_seam_frag ${_frag}-fragment"
+done
+[ -n "$_seam_frag" ] && WF_BAD="$WF_BAD suite-seam-in-workflow:$_seam_frag"
+# The only DYNAMIC channel: a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside the
+# hosting job. An empty JOB_BLOCK reds the composite below via job-slice-empty AND the slice-
+# validity conjuncts, so the ban cannot pass vacuously.
+if [ -z "$JOB_BLOCK" ]; then
+  WF_BAD="$WF_BAD job-slice-empty"
+else
+  _job_seam=""
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'GITHUB_ENV' >/dev/null && _job_seam="$_job_seam GITHUB_ENV"
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'GITHUB_PATH' >/dev/null && _job_seam="$_job_seam GITHUB_PATH"
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'defaults:' >/dev/null && _job_seam="$_job_seam defaults:"
+  [ -n "$_job_seam" ] && WF_BAD="$WF_BAD job-scope-env-write:$_job_seam"
+fi
+# The aggregator: every job (other than the host) whose `needs:` names the host; one of them must
+# run under if: always() AND read needs.<host>.result AND carry "<host>:$" in its entries array.
+AGG_CANDS="$(awk -v host="$HOST_JOB" "$AWK_HDR"'
+  function emit(l,   n, t, i) { sub(/[ \t]#.*$/, "", l); gsub(/[\[\],"\047]/, " ", l); n = split(l, t, /[ \t]+/); for (i = 1; i <= n; i++) if (t[i] == host && job != host) print job }
+  /^[[:space:]]*#/ { next }
+  { h = hdr($0); if (h != "") { job = h; innd = 0; next } }
+  job == "" { next }
+  /^    needs:/ { innd = 1; l = $0; sub(/^    needs:/, "", l); emit(l); next }
+  innd && /^      -/ { l = $0; sub(/^      -/, "", l); emit(l); next }
+  /^    [A-Za-z_-]+:/ { innd = 0 }' <<<"$IV_CODE")"
+AGG_OK=0; AGG_NAMES=""
+if [ -n "$HOST_JOB" ]; then
+  while IFS= read -r _agg; do
+    [ -n "$_agg" ] || continue
+    AGG_NAMES="$AGG_NAMES $_agg"
+    _agg_block="$(awk -v j="$_agg" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f { print }' <<<"$IV_CODE")"
+    if [[ $'\n'"$_agg_block" == *$'\n    if: always()'* ]] && [[ "$_agg_block" == *"needs.${HOST_JOB}.result"* ]] && [[ "$_agg_block" == *"\"${HOST_JOB}:\$"* ]]; then AGG_OK=1; fi
+  done <<<"$AGG_CANDS"
+fi
+if [ -n "$STEP_BLOCK" ] && [[ "$STEP_BLOCK" != *continue-on-error* ]] && ! [[ "$STEP_BLOCK" =~ $'\n'[[:space:]]+if: ]] && ! [[ "$STEP_BLOCK" =~ ^[[:space:]]*-[[:space:]]+if: ]] \
+   && [ -z "$STEP_BAD" ] && [ -n "$HOST_JOB" ] && [ -n "$JOB_BLOCK" ] && [[ "$JOB_BLOCK" != *continue-on-error* ]] && [ -z "$JOB_BAD" ] && [ -z "$WF_BAD" ] \
+   && [ "$JOB_IF" = "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" ] \
+   && [ "$JOB_NEEDS" = "    needs: detect-changes" ] && [ "$JOB_RUNS_ON" = "    runs-on: ubuntu-24.04" ] && [ "$AGG_OK" -eq 1 ]; then
+  ok "the registered step has only name+run keys (no continue-on-error / if: / shell / env / ...), its hosting job '$HOST_JOB' (derived from the step's position) has the one known if:, needs and runs-on, the known key set and no continue-on-error anywhere, the workflow carries no top-level defaults: or suite-seam fragment, and the verdict reaches the aggregator ('${AGG_NAMES# }': if: always(), the leg's result, its entries slot): it cannot be skipped, non-blocking, redirected or dropped"
+else
+  no "infra-validation.yml: the registered step or its hosting job '$HOST_JOB' is conditional, non-blocking, redirected or unaggregated (step keys beyond name/run: '${STEP_BAD//$'\n'/ }'; job keys beyond the known set: '${JOB_BAD//$'\n'/ }'; workflow:${WF_BAD:- none}; aggregator ok=$AGG_OK; continue-on-error anywhere in the job; an if:/needs/runs-on other than the known literals), or could not be located"
+fi
+
+echo ""
+echo "=== bwrap-probe-rollback-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
 
 # ── Mutation rows: each must make a row above RED (must-PASS rows stay GREEN) ─────────────────
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
@@ -330,8 +425,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -398,11 +492,20 @@ PY
     esac
   }
 
-  # mutate_green <label> <python-program-on-tf-copy>: a legitimate edit must NOT red the guard.
+  # mutate_green <label> <TF|WF|CI|RB|IV> <python-program-on-s>: a legitimate edit must NOT red
+  # the guard. Axis-widened past the donor's TF-only shape so the workflow/wiring must-PASS
+  # controls ride the same helper.
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" src copy rc=0
+    case "$which" in
+      TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
+      CI) src="$CI"; copy="$MUT_DIR/ci-deploy.sh" ;;
+      RB) src="$RB"; copy="$MUT_DIR/canary-probe-set.md" ;;
+      IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -413,7 +516,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    BWRAP_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "BWRAP_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -571,17 +674,98 @@ s = s.replace(old, "## Blocking bwrap sandbox probe (renamed)")' \
     'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
-    "workflow seam"
-  mutate_red "a BWRAP_GUARD_ literal reaches the workflow's executable text" IV \
+    "suite-seam-in-workflow"
+  mutate_red "a BWRAP_GUARD_ literal reaches the workflow's executable text (the GUARD fragment sees it)" IV \
     'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, old + "        env:\n          BWRAP_GUARD_TF: /dev/null\n")' \
-    "workflow seam"
+    "suite-seam-in-workflow"
   mutate_red "the suite's own run line is dropped from the workflow" IV \
     'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+  mutate_red "a runtime-composed MUT_/SKIP name is written to \$GITHUB_ENV inside the job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
+    "suite-seam-in-workflow"
+  mutate_red "a foreign-prefix *_GUARD_* env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO_GUARD_X: /dev/null\n" + old)' \
+    "suite-seam-in-workflow"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          BASH_ENV: /tmp/x\n" + old)' \
+    "suite-seam-in-workflow"
+  mutate_red "a \$GITHUB_ENV write lands inside the suite's own job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "      - run: echo \"POISON=1\" >> \"$GITHUB_ENV\"\n")' \
+    "job-scope-env-write"
+  mutate_red "a top-level defaults: is added to the workflow (the file-wide ban is keyed on column 0)" IV \
+    'old = "\nenv:\n  TERRAFORM_VERSION"
+assert s.count(old) == 1
+s = s.replace(old, "\ndefaults:\n  run:\n    shell: /bin/true {0}\nenv:\n  TERRAFORM_VERSION")' \
+    "top-level-defaults"
+
+  # ── Step/job-shape rows: an if:/continue-on-error: or a foreign key on the step or job would
+  # mute this suite — read at BOTH `        ` and `      - ` positions across the WHOLE job block.
+  mutate_red "the suite's step becomes conditional (if: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "name/run: 'if'"
+  mutate_red "the suite's step opens with a dash-line if: (the step body never runs)" IV \
+    'old = "      - name: Run bwrap-probe rollback alert drift guard (#9342)\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - if: false\n        name: Run bwrap-probe rollback alert drift guard (#9342)\n")' \
+    "name/run: 'if'"
+  mutate_red "the suite's step becomes non-blocking (continue-on-error: at step indent)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "name/run: 'continue-on-error'"
+  mutate_red "the suite's step gets an env: key (only name+run are legal on a step)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env: {NEUTRAL: \"1\"}\n" + old)' \
+    "name/run: 'env'"
+  mutate_red "the suite's job becomes non-blocking (continue-on-error: on the job)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    continue-on-error: true\n")' \
+    "known set: 'continue-on-error'"
+  mutate_red "a continue-on-error: is placed AFTER the job's steps (key order is free in YAML)" IV \
+    'old = "\n  deploy-script-tests-done:\n"
+assert s.count(old) == 1
+s = s.replace(old, "\n    continue-on-error: true\n\n  deploy-script-tests-done:\n")' \
+    "known set: 'continue-on-error'"
+  mutate_red "the suite's job gets a job-level env: key (outside the known key set)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    env: {NEUTRAL: \"1\"}\n")' \
+    "known set: 'env'"
+  mutate_red "a second, differing job-level if: is appended (the job's if: must be the one literal)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    if: github.event_name == \x27push\x27\n")' \
+    "an if:/needs/runs-on other than the known literals"
+
+  # ── MAIN_PLAN bound rows: the slice must end at the first rc= line-start ────────────────────
+  mutate_red "the plan step's rc= capture line is deleted (the slice would silently run to EOF)" WF \
+    'old = "              -target=supabase_project.prd 2>&1 | tf_redact_random_ids\n          rc=${PIPESTATUS[0]}\n"
+assert s.count(old) == 1
+s = s.replace(old, "              -target=supabase_project.prd 2>&1 | tf_redact_random_ids\n")' \
+    "never terminated on the plan step"
+  mutate_red "the plan step's rc= capture is renamed to plan_rc= (the terminator misses)" WF \
+    'old = "          rc=${PIPESTATUS[0]}\n"
+i = s.index("              -target=supabase_project.prd 2>&1 | tf_redact_random_ids\n")
+j = s.index(old, i)
+s = s[:j] + "          plan_rc=${PIPESTATUS[0]}\n" + s[j + len(old):]' \
+    "never terminated on the plan step"
 
   # ── Scorer negative control — a mutant that reds a row other than the named one must grade
   # WRONG (never RED), or the fragment check is decoration.
@@ -593,13 +777,23 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "a comment-only edit to the tf" \
+  mutate_green "a comment-only edit to the tf" TF \
     's = s + "\n# control comment\n"'
   # Indentation inside the heredoc is not part of the contract (the resource collapses it).
-  mutate_green "the AND conjuncts are re-indented (whitespace inside the heredoc is legal)" \
+  mutate_green "the AND conjuncts are re-indented (whitespace inside the heredoc is legal)" TF \
     'i = s.index(SQLLOC); j = s.index("\n  SQL\n", i)
 block = s[i:j].replace("\n      AND ", "\n          AND ")
 s = s[:i] + block + s[j:]'
+  # Over-breadth control: a $GITHUB_ENV write inside a DIFFERENT job (plan:) is legitimate —
+  # the enclosing-job slice must not reach past this suite's own job block.
+  mutate_green "a \$GITHUB_ENV write inside a different job (the plan: job) stays green" IV \
+    'old = "          printf \x27AWS_SECRET_ACCESS_KEY=%s\\n\x27 \"$SECRET\" >> \"$GITHUB_ENV\"\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"CROSS_JOB=1\" >> \"$GITHUB_ENV\"\n")'
+  # Second-member control: a decoy `terraform plan` block appended after the real step is
+  # outside the bounded slice — the -target= pins grade only the FIRST plan's span.
+  mutate_green "a second terraform plan block with decoy -target= lines stays green (only the first bounded span is graded)" WF \
+    's = s + "\n      - name: decoy second plan\n        run: |\n          terraform plan -no-color\n          -target=logtail_exploration.decoy_block \\\n"'
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
@@ -607,8 +801,10 @@ fi
 # one row per mutation. The instrument control is what catches a floor drifting past the rows.
 # Floor/ledger trips exit 1 (verdict-class: the battery grades inner rc 1 as a CAUGHT mutation);
 # instrument failures exit 2.
-PRESENCE_ROWS=32
-MUT_ROWS=34
+# Self-reference (accepted residual, #11899 item 8): a row-count decrement landing alongside a
+# row deletion stays green — PRESENCE_ROWS/MUT_ROWS are declared here and read only below.
+PRESENCE_ROWS=33
+MUT_ROWS=51
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

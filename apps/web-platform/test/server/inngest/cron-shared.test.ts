@@ -182,6 +182,13 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-approval-expiry")).toBe(false);
   });
 
+  // #8211 PR-B2: cron-git-data-erasure-redrive re-drives the durable pending-erasure ledger every 15 minutes (service-role
+  // RPCs plus the git-data host removal call, no git, no PR). Never Tier-2 deferred: a deferred tick is a missed Art. 17
+  // erasure retry. Asserted here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("git-data-erasure-redrive (#8211, ledger re-drive) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-git-data-erasure-redrive")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS

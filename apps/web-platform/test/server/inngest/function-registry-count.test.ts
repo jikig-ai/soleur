@@ -256,8 +256,9 @@ describe("Inngest function registry — drift guards", () => {
   // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
   // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
   // 72 -> 73: cron-approval-expiry (#4672, ADR-309).
+  // 73 -> 74: cron-git-data-erasure-redrive (#8211 PR-B2, pending git-data erasure ledger re-drive).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(73);
+    expect(routeEntries.length).toBe(74);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle

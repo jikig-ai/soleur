@@ -368,24 +368,24 @@ END {
 }'
 # Every root *.tf is scanned (a local may live in another file than the resource that reads it), and the key is the
 # substring LUKS_KEY_PROBE of the marker, so a renamed prefix (SOLEUR_<other>_LUKS_KEY_PROBE) still carries it.
-_census="$(awk -v MARK="LUKS_KEY_PROBE" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
+CENSUS="$(awk -v MARK="LUKS_KEY_PROBE" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
-done <<<"$_census" | sort -u | tr '\n' ' ')"
+done <<<"$CENSUS" | sort -u | tr '\n' ' ')"
 _dal="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = A ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$KEY_PROBE_STEM"* ]] || [[ "$_b" == "$KEY_PROBE_STEM"* ]]; then printf '%s\n' "$_n"; fi
-done <<<"$_census" | sort -u | tr '\n' ' ')"
+done <<<"$CENSUS" | sort -u | tr '\n' ' ')"
 _want="$(printf '%s\n' $KEY_PROBE_EXPLORATIONS | sort -u | tr '\n' ' ')"
-_extra_e="$(comm -23 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_extra_a="$(comm -23 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_gone_e="$(comm -13 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-_gone_a="$(comm -13 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
-if [ -z "$_extra_e$_extra_a$_gone_e$_gone_a" ] && [ -n "$_want" ]; then
+CENSUS_EXTRA_E="$(comm -23 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_EXTRA_A="$(comm -23 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_GONE_E="$(comm -13 <(printf '%s\n' $_dexp | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+CENSUS_GONE_A="$(comm -13 <(printf '%s\n' $_dal | sort -u) <(printf '%s\n' $_want | sort -u) | tr '\n' ' ')"
+if [ -z "$CENSUS_EXTRA_E$CENSUS_EXTRA_A$CENSUS_GONE_E$CENSUS_GONE_A" ] && [ -n "$_want" ]; then
   ok "the .tf declares exactly the KEY_PROBE_EXPLORATIONS pair set (${_want% }), each once as an exploration and once as an alert, by marker and by stem"
 else
-  no "key-probe census differs from KEY_PROBE_EXPLORATIONS (${_want% }): undeclared exploration(s) [${_extra_e% }], undeclared alert(s) [${_extra_a% }], missing exploration(s) [${_gone_e% }], missing alert(s) [${_gone_a% }]: add it to KEY_PROBE_EXPLORATIONS in this PR"
+  no "key-probe census differs from KEY_PROBE_EXPLORATIONS (${_want% }): undeclared exploration(s) [${CENSUS_EXTRA_E% }], undeclared alert(s) [${CENSUS_EXTRA_A% }], missing exploration(s) [${CENSUS_GONE_E% }], missing alert(s) [${CENSUS_GONE_A% }]: add it to KEY_PROBE_EXPLORATIONS in this PR"
 fi
 
 # ── NEGATIVE rows (D12): the dead-man is a follow-up PR, so nothing of it may exist here ─────────
@@ -404,8 +404,15 @@ grep -qE 'inngest_luks_key_probe_dark' "$WF" \
   && ok "the apply workflow carries exactly the 2 paging -target lines for the key probe" \
   || no "the apply workflow does not carry exactly 2 key-probe -target lines"
 
+echo ""
+echo "=== inngest-luks-key-probe-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
+
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
-SELF="${BASH_SOURCE[0]}"
+SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t keyprobealert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
@@ -700,6 +707,8 @@ fi
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer run
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a row
+# deletion stays green — PRESENCE_ROWS is two-write-site (here + the floor row's sed anchor).
 PRESENCE_ROWS=37
 MUT_ROWS=46
 _floor=$((PRESENCE_ROWS + MUT_ROWS))

@@ -142,6 +142,10 @@ const READ_ONLY_PROBES = [
 // service client plus generic notifications, holding no git and opening no PR — the safe-commit invariant does not
 // apply and it needs no MIGRATED/EXEMPT entry (covered by invariant 1's directory walk). Acknowledged here so the
 // cron-tier2-parity sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+// `cron-git-data-erasure-redrive` (#8211 PR-B2) is the `cron-approval-expiry` class: it claims rows from the pending-erasure
+// ledger through service-role RPCs and calls the git-data host removal, holding no git and opening no PR — the safe-commit
+// invariant does not apply and it needs no MIGRATED/EXEMPT entry (covered by invariant 1's directory walk). Acknowledged
+// here so the cron-tier2-parity sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
 
 // #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
 // live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub

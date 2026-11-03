@@ -923,13 +923,13 @@ jobs:
 
       - name: Override bundled npm with npm@11
         # `actions/setup-node@v4.4.0` ships npm 10.9.x with node-version 22 and
-        # has no `npm-version` input — `npm install -g npm@<major>` is the only
+        # has no `npm-version` input — `npm install -g npm@<exact>` is the only
         # available pin mechanism. Operators on Node 23+ or post-`bun add`
         # flows produce npm 11 lockfiles; pinning here keeps CI and the
         # committed lockfile on the same major so the regenerate-and-diff
         # check below is meaningful. The bundled npm 10.x is discarded
         # (the global install replaces it for the rest of this job only).
-        run: npm install -g npm@11
+        run: npm install -g npm@11.21.1
 
       # Root is covered as of ADR-191: it is now an install site for `test-bun` and
       # `e2e`, so an unsynced root lockfile breaks CI exactly the way an unsynced
@@ -2483,7 +2483,7 @@ jobs:
         # npm package drifts off the container's Chromium revision. Keep this
         # pin in sync with the container image tag above and with
         # deploy-docs.yml's matching step.
-        run: npm install --no-save playwright@1.60.0 http-server@14
+        run: npm install --no-save playwright@1.60.0 http-server@14.1.1
 
       - name: Screenshot + stylesheet-swap gates
         run: |

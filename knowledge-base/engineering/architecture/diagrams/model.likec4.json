@@ -1551,17 +1551,6 @@
 "id": "18qt3whw1zxxc",
 "title": "Step 3"
 },
-"191nqis5a4o5i": {
-"technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "sentry"
-},
-"id": "191nqis5a4o5i",
-"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 20 workflows, in two groups — 14 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -deadman-heartbeat-feeder (#11631 — the archive-fed feeder for the luks-monitor and cost-capture dead-man heartbeats; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 26 cron monitors, 15 check in from here and 11 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. NB the #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed 43 monitors but kept their emitters per spec NG4 — 8 workflow + 35 Inngest producers still post check-ins to now-unknown slugs, which Sentry drops (deliberate void-post, tracked by PRUNED_MONITOR_SLUGS); the 15/11 split counts only slugs a live resource answers. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)"
-},
 "198ah9kid4ha3": {
 "technology": "HTTPS (cosign)",
 "source": {
@@ -2386,17 +2375,6 @@
 "id": "2mxax9b4p3nnd",
 "title": "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244); the non-blocking real-SDK ask probe (ADR-284)"
 },
-"2ngf8bh29pbpl": {
-"technology": "HTTPS (Sentry SDK envelope + cron check-in API)",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "sentry"
-},
-"id": "2ngf8bh29pbpl",
-"title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND — since #9178/ADR-260 — field Core Web Vitals RUM: sampled pageload/navigation transactions from browserTracingIntegration carrying LCP/CLS/INP/FCP/TTFB measurements (tracesSampler 0.1 real sessions, 1.0 under the soleur.perf-probe marker; the standalone webVitalsIntegration path was rejected — it covers only cls/inp/lcp, never FCP/TTFB), scrubbed by the same beforeSend* PII chain extended to transaction and span payloads; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 11 Inngest-substrate sentry_cron_monitors"
-},
 "2pdvbpkpcib7q": {
 "technology": "systemd unit dependency",
 "source": {
@@ -3103,6 +3081,17 @@
 "id": "7lwv9h6xngcj",
 "title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a completed non-push release-workflow run (the sha it scans is the one /health serves, never the event's head sha)"
 },
+"8ej1bndmrot7": {
+"technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "sentry"
+},
+"id": "8ej1bndmrot7",
+"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 20 workflows, in two groups — 14 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -deadman-heartbeat-feeder (#11631 — the archive-fed feeder for the luks-monitor and cost-capture dead-man heartbeats; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 27 cron monitors, 15 check in from here and 12 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. NB the #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed 43 monitors but kept their emitters per spec NG4 — 8 workflow + 35 Inngest producers still post check-ins to now-unknown slugs, which Sentry drops (deliberate void-post, tracked by PRUNED_MONITOR_SLUGS); the 15/12 split counts only slugs a live resource answers. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)"
+},
 "8p9oloc4osac": {
 "source": {
 "model": "platform.plugin.brainstorm"
@@ -3166,6 +3155,17 @@
 },
 "id": "bhqehbyrdsul",
 "title": "cron-ux-audit per-fire overlay: UNWRAPPED @playwright/mcp@0.0.75, --snapshot-mode none only; holds no tree- or value-returning tool (PA-31 §(g))"
+},
+"c1r9edv5z006": {
+"technology": "HTTPS (Sentry SDK envelope + cron check-in API)",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "sentry"
+},
+"id": "c1r9edv5z006",
+"title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND — since #9178/ADR-260 — field Core Web Vitals RUM: sampled pageload/navigation transactions from browserTracingIntegration carrying LCP/CLS/INP/FCP/TTFB measurements (tracesSampler 0.1 real sessions, 1.0 under the soleur.perf-probe marker; the standalone webVitalsIntegration path was rejected — it covers only cls/inp/lcp, never FCP/TTFB), scrubbed by the same beforeSend* PII chain extended to transaction and span payloads; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 12 Inngest-substrate sentry_cron_monitors"
 },
 "de9r7gnfj59q": {
 "technology": "SSH connect-and-close (private-net, BatchMode ConnectTimeout)",
@@ -7475,8 +7475,8 @@
 "parent": null,
 "relations": [
 "26c9aw13zugvx",
-"2ngf8bh29pbpl",
 "3c8of06gao2w5",
+"c1r9edv5z006",
 "jzagcoobk6s8"
 ],
 "color": "gray",
@@ -9064,7 +9064,7 @@
 },
 "parent": null,
 "relations": [
-"191nqis5a4o5i"
+"8ej1bndmrot7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15294,7 +15294,7 @@
 },
 "parent": null,
 "relations": [
-"2ngf8bh29pbpl"
+"c1r9edv5z006"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15332,7 +15332,7 @@
 },
 "parent": null,
 "relations": [
-"191nqis5a4o5i"
+"8ej1bndmrot7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26212,7 +26212,7 @@
 },
 "parent": null,
 "relations": [
-"191nqis5a4o5i"
+"8ej1bndmrot7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -28158,7 +28158,7 @@
 },
 "parent": null,
 "relations": [
-"2ngf8bh29pbpl"
+"c1r9edv5z006"
 ],
 "color": "gray",
 "line": "dashed",

@@ -9,6 +9,7 @@ import {
   WorkspaceReapError,
   type ReapFailure,
 } from "@/server/workspace-reap-error";
+import { recordGitDataErasurePendingBestEffort } from "@/server/git-data-erasure-ledger";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
@@ -283,7 +284,10 @@ export async function deleteAccount(
   // deleteWorkspace above reaps only the host-local working tree; when the multi-host
   // git-data split is live the workspace's refs also live in a bare repo on the git-data
   // host, which must be erased too. Keyed on userId (=== workspaces.id, mig 053 N2 —
-  // the sole-owned workspace's git-data repo id). NO-OP at flag-off (inside the call).
+  // the sole-owned workspace's git-data repo id). Gated on arming, not on the live flag:
+  // no REMOVE key and nothing armed gives `skipped` (no-op, no ledger row). An armed env
+  // attempts the erase regardless of GIT_DATA_STORE_ENABLED, and any non-erased outcome or
+  // throw is ledgered for the re-drive (#8211).
   // Best-effort, mirroring the attachments/logo purges: reports, never throws — a
   // reachability blip must not abort the auth-user deletion that follows.
   // (#8094) The OUTCOME is consumed, not discarded. `removeGitDataRepo` used to return
@@ -358,6 +362,9 @@ export async function deleteAccount(
           `git-data erasure ${outcome.status}${reason ? ` (${reason})` : ""}: bare-repo erasure ` +
           "did not complete during Art. 17 deletion — the repo may persist on the git-data host",
       });
+      // #8211: make the owed erasure durable so the re-drive cron can finish it. Best-effort and
+      // AFTER the report above, so a ledger fault can neither alter that event nor the response.
+      await recordGitDataErasurePendingBestEffort(service, userId, outcome.status);
     }
   } catch (err) {
     // An unexpected throw (assertSafeWorkspaceId, a programming fault) must reach the
@@ -378,6 +385,7 @@ export async function deleteAccount(
         "git-data erasure threw: removeGitDataRepo threw during Art. 17 deletion — bare repo may " +
         "persist on the git-data host",
     });
+    await recordGitDataErasurePendingBestEffort(service, userId, "threw"); // #8211, never throws, 5 s bound
   }
 
   // 3.6 Purge the workspace logo Storage object (#4916). Sole-owned teardown
