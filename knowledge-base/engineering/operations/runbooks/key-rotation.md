@@ -225,3 +225,15 @@ the bare phrase "signature verification failed" also matches the Stripe and Rese
 - A manual `workflow_dispatch` of `kb-drift-walker.yml` mid-rotation is not blocked (the guard sees a walker in flight, but only at
   its own check times).
 - Dev-key rotations gain no pickup from the production redeploy (#11927); it runs anyway because it is the shakedown of the route.
+- The redeploy poll skips workflows per file, but `web-1-swap` membership is per job. `apply-web-platform-infra.yml` has six swap jobs
+  and is deliberately NOT skipped in redeploy mode (its routine apply job is not in the group). This is the conservative side and it
+  is UNVERIFIED live: a merge to main during a redeploy can queue one of that file's jobs, block the poll for the 480 s wait and end in
+  a false `rotated_redeploy_failed` although the new value is landed (check both hosts' version, then run the owner step or the
+  redeploy as the Refusals table says). The first dev rehearsal settles it.
+- The redeploy re-check step's 10-minute timeout is not strictly implied by the 480 s wait: an iteration can run up to about 25 `gh`
+  calls (the in-flight rung covers five non-member workflows with several statuses each), each capped at 20 s, so if EVERY call is slow
+  but succeeds a single pass could pass 500 s and the step timeout could end it before `rotated_redeploy_failed` is printed. Arithmetic
+  only, UNVERIFIED; a hung call fails fast (the rung reports unreadable at the first failure). The budgets are unchanged.
+- The suite's CI wall time is an estimate. Record the first CI wall time of the suite's leg (the infra-validation leg that runs
+  `key-rotate-workflow.test.sh`) in the PR; if that leg exceeds about 700 s, move the suite to a lighter leg (the per-suite bound is 840 s,
+  below the leg's 15-minute ceiling, so a hung suite fails by name).

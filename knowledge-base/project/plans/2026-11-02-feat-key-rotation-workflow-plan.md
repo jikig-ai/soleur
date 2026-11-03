@@ -35,6 +35,21 @@ Ref #11294. Ref #10205. Existing draft PR for this branch: #11918. Decision reco
 
 Spec lacks valid `lane:` (no `spec.md` exists for this branch) - defaulted to `cross-domain` (TR2 fail-closed).
 
+## Amendment of review rounds 1 and 2 (2026-11-03; supersedes the plan text below where it differs; the text below is not rewritten)
+
+The full rulings are rows R1-R4 and N3/N12 of `knowledge-base/project/specs/feat-one-shot-key-rotation-workflow-11294/decision-challenges.md`. In short:
+
+- **R1** after a landed write the redeploy leg never refuses on staleness, the kb window or `quiet_window`; it polls only the transient rungs (`kk_chk_inflight`, `kk_chk_lower_run`, `kk_chk_walker`) for at most `KK_REDEPLOY_WAIT_S` = 480 s, then refuses `rotated_redeploy_failed` naming the blocker.
+- **R2** the `plan_ok` line carries `rotate_would_refuse=<existing token|none>`; no new token (the contract stays 35 tokens); the field is advisory.
+- **R3** `terraform show` is capped (`KK_TF_SHOW_S` = 120 s); immediately before the write the apply job refuses with the existing `authorization_stale` when the time left in its step is below the apply budget plus a 240 s margin; the Doppler reads of the per-copy state run under `timeout 60`.
+- **R4** a re-run of notify does not add `run_attempt == 1` anywhere; `kr_file_issue` returns quietly when the attempt is above 1 and an open issue with the identical title exists.
+- **N1** the Terraform stream files and the saved plan are deleted the moment the exit code is read, on every path (`kk_tf_clean`); the suite pins this with an allow-list of every script line that reaches the temp dir.
+- **N2** `kk_close_earlier` closes only issues of a LOWER run number than the current run. **N3** (refinement of R1, UNVERIFIED live) in redeploy mode the poll skips the workflows whose deploy job is a `web-1-swap` member (`KK_SWAP_MEMBER_WORKFLOWS`: the release and pipeline-fix workflows), because those jobs are queued behind this job's own hold; `apply-web-platform-infra.yml` also carries `web-1-swap` jobs but is deliberately NOT skipped (its routine apply job is not in the group), the conservative side.
+- **N5-N9** the stop-sentence key comes only from `EFF_KEY`; the redeploy re-poll covers only the rung that blocked with a 20 s cap per `gh` call; the init cause class reads the real exit code; the 240 s margin is derived and documented as not covering the post-state worst case; `rotate_would_refuse` drops the plan-run-age rung.
+- **N12** `KK_KB_BUDGET_APPLY_S` includes the Re-checks step (600 s): apply 8100 s, pre-apply 6900 s, so the first unsafe `kb_drift_ingest_signing_key` start is about **00:45 UTC** (not 00:55 and not 01:20).
+- `notify` also closes a key's earlier issues on `owner_step_pending` (never the `owner_step_pending` ones themselves). The redeploy job's `timeout-minutes` is **105** (step sum 102 plus slack).
+- Not changed and recorded as residuals: the redeploy re-check poll may exceed the 10-minute Re-checks step if every `gh` call is slow (arithmetic only), and the suite's CI wall time is an estimate until the first CI run records it.
+
 ## Amendment 2026-11-02 (CTO ruling on the Terraform advisory; supersedes any "replace both" wording below for three keys)
 
 Ruled by CTO agent, 2026-11-02: for the three secrets WITHOUT `ignore_changes` (`kb_drift_ingest_signing_key` both copies, `github_webhook_secret`, `egress_audit_ingest_token`), the rotation `-replace`s the `random_id` ONLY; the `doppler_secret` copies update in place (their `value` derives from `random_id.<x>.hex`), so there is no absent-secret window. "Replace both" stays for the four `inngest_*` secrets that carry `ignore_changes=[value]`. Wherever this plan says "replace the `random_id` AND its `doppler_secret`" for a key in the first group, read it as this amendment: the gate-table row for the copy is `update`, derived from the HCL by the Guard 5 parity test; kb_drift keeps its count of 3 (one `random_id` replace plus two `update` rows); the G1 all-absent recovery path still applies to the inngest keys. A dev plan rehearsal showing anything other than `["update"]` with `after_unknown.value` flips this back. Also ruled: the PR stops at ready and unarmed with the two prerequisite PRs named in its body; one key per dispatch; the guard job holds no credential.

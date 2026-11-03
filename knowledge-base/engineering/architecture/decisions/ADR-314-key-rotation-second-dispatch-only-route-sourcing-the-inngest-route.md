@@ -116,6 +116,17 @@ the first dev rehearsal settles it); every other related workflow still blocks. 
 so the budget is 8100 s and the first unsafe start is about 00:45 UTC. Terraform stream files are deleted as soon as their exit code is
 read, and `rotate_would_refuse` no longer reports `authorization_stale` (in plan mode it would measure the plan run's own age).
 
+Membership in the `web-1-swap` group is per JOB, while the poll skips per WORKFLOW. `apply-web-platform-infra.yml` carries six
+`web-1-swap` jobs (`ci_ssh_token_replace`, `vector_redeliver`, `web_host_create`, `web_host_replace`, `workspaces_luks_cutover`,
+`workspaces_luks_recut`) but is deliberately NOT skipped in redeploy mode, because its routine apply job is not in the group. This is the
+conservative side and it is UNVERIFIED live: a merge to main during a redeploy can make that file's routine apply block the poll for the
+480 s wait and end in a false `rotated_redeploy_failed` (the new value is landed either way). The first dev rehearsal settles it. The suite
+parses each in-flight workflow's swap jobs from the yml and pins the per-job map against a literal.
+
+Suite timing: the suite's weight row is an estimate that has never been measured on CI and its per-suite bound is 840 s, below the leg's
+15-minute ceiling so a hung suite fails by name. The first CI wall time of the suite's leg must be recorded here; if the leg exceeds about
+700 s the suite moves to a lighter leg.
+
 ## Consequences
 
 - Seven more secrets rotate without a Terraform stream in a log, with an exact gate, a recovery arm for an interrupted replace, and one

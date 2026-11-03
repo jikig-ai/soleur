@@ -193,7 +193,8 @@ fi
 # accidentally-enrolled or duplicated job pushes above 8. The freeze workflow's
 # workflow-level group is asserted above and NOT part of this count.
 #
-# KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE. The count and the allow-list are
+# KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE FOR THE THREE SHARED WORKFLOWS (8 of the 9 assert_member calls; the ninth,
+# key-rotate.yml's redeploy job, is a different file and has its own exactly-one check above). The count and the allow-list are
 # two encodings of one fact, and #6730 tripped exactly that: the job enrolled itself in the
 # group without adding either, so the count went 4 -> 5 and this suite reddened on a change
 # that was otherwise correct. The failure is the guard working; the fix is enrolling, never

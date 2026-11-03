@@ -377,11 +377,11 @@ eq "B7 under GITHUB_ACTIONS=true a stray KR_ name, a stray KK_ name each exit 78
 B7_OUT="$(env -i PATH="$PATH" HOME="$TMP" GITHUB_ACTIONS=true KR_STRAY=sekret-value bash "$BODY" --print-contract 2>&1)"
 eq "B7b the refusal names the variable and prints no value" "$(grep -c 'KR_STRAY' <<<"$B7_OUT")|$(grep -c 'sekret-value' <<<"$B7_OUT")" '1|0'
 eq "B8 no set -e in any form and no trap in the script (the sourced kr_init owns the EXIT trap that removes the key-bearing temp files)" "$(code_only "$BODY" | grep -Ec '(^|[[:space:];])set +-[a-zA-Z]*e|(^|[[:space:];])trap ')" '0'
-B9_RE='(^|[^_a-zA-Z-])(command[[:space:]]+|env[[:space:]]+|exec[[:space:]]+|sudo[[:space:]]+)?(\$TF|\$\{TF\}|terraform)([[:space:]]+-[^[:space:]]+)*[[:space:]]+(init|plan|apply|show|state|output|refresh|destroy|import|console)'
-eq "B9 no terraform command anywhere in the script, in any form the workflow-side check knows (-chdir and other flags, command/env/exec/sudo prefixes, a TF variable): the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | grep -Ec "$B9_RE")|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
-eq "B9b control rows: the script-side regex sees terraform -chdir=x show -json, a prefixed command, a TF variable, env terraform and a flagged plan (5 must-match) and misses kr_tf, a token name and plain prose (3 must-not-match)" "$(printf '%s\n' 'terraform -chdir=x show -json p' 'command terraform apply' '$TF plan' 'env terraform show -json p' 'terraform -chdir=x -no-color plan' | grep -Ec "$B9_RE")|$(printf '%s\n' 'echo terraform' 'kr_tf plan' 'a terraform_failed show' | grep -Ec "$B9_RE")" '5|0'
-eq "B10 kr_tf is called for plan, show and apply only" "$(code_only "$BODY" | grep -oE 'kr_tf +"?(plan|show|apply)' | sed -E 's/kr_tf +"?//' | sort | tr '\n' ' ')" 'apply plan show '
-eq "B11 the sourced kr_tf has exactly one terraform call and sends BOTH streams to files (the chokepoint this script relies on)" "$(code_only "$SIB" | grep -Ec '(^|[^_a-zA-Z-])terraform +\"\$@\"')|$(fn_text kr_tf "$SIB" | grep -c '> "$KR_TMP/tf-${name}.out" 2> "$KR_TMP/tf-${name}.err"')" '1|1'
+B9_RE='(^|[^_a-zA-Z-])(command[[:space:]]+|env[[:space:]]+|exec[[:space:]]+|sudo[[:space:]]+)?(\$TF|\$\{TF\}|terraform)"?([[:space:]]+-[^[:space:]]+)*[[:space:]]+(init|plan|apply|show|state|output|refresh|destroy|import|console)'
+# b9_join: fold a backslash line continuation into one line (a `terraform -chdir=x \` + newline + `show` is one command)
+b9_join() { sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ta}'; }
+eq "B9 no terraform command anywhere in the script, in any form the workflow-side check knows (-chdir and other flags, command/env/exec/sudo prefixes, a TF variable bare or quoted, a line continuation): the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | b9_join | grep -Ec "$B9_RE")|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
+eq "B9b control rows: the script-side regex sees terraform -chdir=x show -json, a prefixed command, a TF variable, a QUOTED TF variable, env terraform, a flagged plan and a backslash-continued terraform -chdir=x (7 must-match) and misses kr_tf, a token name and plain prose (3 must-not-match)" "$(printf '%s\n' 'terraform -chdir=x show -json p' 'command terraform apply' '$TF plan' '"$TF" show -json p' 'env terraform show -json p' 'terraform -chdir=x -no-color plan' 'terraform -chdir=x \' '  show -json p' | b9_join | grep -Ec "$B9_RE")|$(printf '%s\n' 'echo terraform' 'kr_tf plan' 'a terraform_failed show' | b9_join | grep -Ec "$B9_RE")" '7|0'
 eq "B12 no Terraform stream file is ever printed: no cat/head/tail/tee/printf/echo/sed/grep of a tf-*.out|err" "$(code_only "$BODY" | grep -Ec '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9${}_-]*\.(out|err)')" '0'
 eq "B13 every doppler secrets get is the exact value-silent form (| sha256sum | cut -c1-64) and there is exactly one" "$(code_only "$BODY" | grep -c 'doppler secrets get')|$(code_only "$BODY" | grep -c 'doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64)')" '1|1'
 # gate table
@@ -474,10 +474,28 @@ eq "B36b control: a 45-minute walker timeout, a 04:00 cron and a weekly cron are
 # N3: the web-1-swap member workflows the redeploy poll skips are pinned against the workflow files and the parity test
 SWAP_LIT="web-platform-release.yml apply-deploy-pipeline-fix.yml"
 swap_probe() { env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "${KK_SWAP_MEMBER_WORKFLOWS[*]}"' _ "$1"; }
-HOLD_GROUP=""; for w in $(tr ' ' '\n' <<<"$INF" | sort); do grep -qE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' "$REPO_ROOT/.github/workflows/$w" && HOLD_GROUP="$HOLD_GROUP $w"; done
+# the web-1-swap jobs PER in-flight workflow, parsed from the yml (a job's concurrency, string or mapping), against a literal map: membership is per JOB
+# but the redeploy poll skips per WORKFLOW, so a workflow with several swap jobs is only safe to skip when ALL of its swap jobs are the ones queued behind us.
+cat > "$TMP/swapjobs.py" <<'SJPY'
+import sys, yaml
+d = sys.argv[1]
+for w in sorted(sys.argv[2:]):
+    y = yaml.safe_load(open("%s/%s" % (d, w)))
+    jobs = []
+    for n, j in (y.get("jobs") or {}).items():
+        c = j.get("concurrency")
+        g = c.get("group") if isinstance(c, dict) else c
+        if g == "web-1-swap": jobs.append(n)
+    if jobs: print(w + ":" + ",".join(sorted(jobs)))
+SJPY
+swap_jobs() { python3 "$TMP/swapjobs.py" "$REPO_ROOT/.github/workflows" "$@"; }
+mapfile -t SWAP_WFS < <(tr ' ' '\n' <<<"$INF" | sort)
+SWAP_JOBS_LIT="apply-deploy-pipeline-fix.yml:apply apply-web-platform-infra.yml:ci_ssh_token_replace,vector_redeliver,web_host_create,web_host_replace,workspaces_luks_cutover,workspaces_luks_recut web-platform-release.yml:deploy"
 PARITY="$REPO_ROOT/apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh"
-eq "B37 N3 the web-1-swap members the redeploy poll skips equal the literal pair; every in-flight workflow that carries a job-level web-1-swap group line is either one of them or a deliberate non-member (apply-web-platform-infra.yml: its routine apply job is not a member); the parity test enrols both members" \
-  "$(swap_probe "$BODY")|${HOLD_GROUP# }|$(grep -cE 'assert_member "\$(RELEASE|PIPELINE_FIX)_WF"' "$PARITY")" "$SWAP_LIT|apply-deploy-pipeline-fix.yml apply-web-platform-infra.yml web-platform-release.yml|2"
+eq "B37 N3 the web-1-swap members the redeploy poll skips equal the literal pair; the per-JOB map of the in-flight workflows (parsed from the yml) equals the literal map: the pipeline-fix apply job, six apply-web-platform-infra jobs and the release deploy job; the parity test enrols both members" \
+  "$(swap_probe "$BODY")|$(swap_jobs "${SWAP_WFS[@]}" | tr '\n' ' ' | sed 's/ $//')|$(grep -cE 'assert_member "\$(RELEASE|PIPELINE_FIX)_WF"' "$PARITY")" "$SWAP_LIT|$SWAP_JOBS_LIT|2"
+eq "B37b N3 the redeploy poll skips web-platform-release.yml and apply-deploy-pipeline-fix.yml but NOT apply-web-platform-infra.yml although that file carries six swap jobs: the conservative side (a queued swap job of that file blocks the poll for the wait and ends rotated_redeploy_failed; UNVERIFIED live, the first dev rehearsal settles it); its routine apply job is not in the group (the parity test pins that)" \
+  "$(swap_probe "$BODY" | grep -c 'apply-web-platform-infra.yml' || true)|$(grep -c 'routine .apply. job in apply-web-platform-infra.yml is enrolled' "$PARITY")" '0|1'
 bud2_of() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_KB_BUDGET_APPLY_S $KK_KB_BUDGET_PREAPPLY_S $KK_RECHECK_STEP_S $KK_REDEPLOY_JOB_S"' _ "$1"; }
 RECHECK_MIN="$(wq '.jobs.redeploy.steps[] | select(.id == "recheck") | ."timeout-minutes"')"
 eq "B31b N12 the kb_drift window budgets include the Re-checks step: apply 8100 s (2400 + 600 + 5100), pre-apply 6900 s (900 + 300 + 600 + 5100), the step is 600 s = the workflow's 10 minutes, the redeploy job 6300 s" "$(bud2_of "$BODY")|$RECHECK_MIN" '8100 6900 600 6300|10'
@@ -1372,6 +1390,14 @@ M() { # id desc scen target want_real want_mut anchor repl [func]
   mt "m$((++MUT_N))" "$4" "$7" "$8" "${9:-}" && mrow "$1" "$2" "$3" "$5" "$6"
 }
 MUT_N=0
+# V4: the two clauses the other controls leave unguarded. guard_row's `go == false` and gate_row's `-z write_started` each get a tree that gets
+# the VERDICT right but breaks only that clause (go=true on a refusal; a write_started marker on a refusal), built outside the subshell.
+mt ctlgo body $'  kr_out go false\n  kk_chk_ref || return 1' $'  kr_out go true\n  kk_chk_ref || return 1' kk_cmd_guard; RT_CTL_GO="$MT_TREE"
+mt ctlws body $'  kk_pre_state || return 1\n  kk_gate_plan "$key" p || return 1\n' $'  kk_pre_state || return 1\n  kr_out write_started true\n  kk_gate_plan "$key" p || return 1\n' kk_cmd_apply; RT_CTL_WS="$MT_TREE"
+ctl_guard_row_go() { RT="$RT_CTL_GO"; fresh; guard_row CTL4 "ctl" confirm_mismatch "$DEVK" INPUT_CONFIRM=; }   # right verdict, but go=true on the refusal
+ctl_gate_row_ws() { RT="$RT_CTL_WS"; gate_row CTL4 "ctl" plan_gate_refused "$DEVK" st_extra; }   # right verdict, but a write_started marker on the refusal
+ctl_report "guard_row() with go=true on a refusal" "$(ctl_moves_fail ctl_guard_row_go)"
+ctl_report "gate_row() with a write_started marker on a refusal" "$(ctl_moves_fail ctl_gate_row_ws)"
 v() { local x; x="$(verdict_of)"; printf '%s' "${x:-rc$RC}"; }
 a_out() { local x; x="$(verdict_of)"; if [[ "$(tfapplied)" -gt 0 ]]; then printf 'applied%s' "${x:+:$x}"; else printf '%s' "${x:-rc$RC}"; fi; }
 st_none() { :; }
@@ -1676,23 +1702,56 @@ M D6.2c "N1 nothing is deleted after the apply: the apply stream and the saved p
 M D6.2d "N1 the gate-refusal path keeps the saved plan" sc_tfleft_gate body none some $'  kk_gate "$key" "$proj" "$want" || { kk_tf_clean; return 1; }' $'  kk_gate "$key" "$proj" "$want" || return 1' kk_gate_plan
 M D6.2e "N1 the stale-after-plan refusal keeps the saved plan" sc_tfleft_stale body none some $'  kk_chk_stale || { kk_tf_clean; return 1; }\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' $'  kk_chk_stale || return 1\n  kk_recheck "$key" "$KK_KB_BUDGET_PREAPPLY_S"' kk_cmd_apply
 
-# N1 (static): a Terraform stream file is named only in kk_tf_class (a count), kk_tf_clean (the rm) and kk_gate_plan (the projection);
-# the saved plan additionally in kk_cmd_apply (the apply argument). A variable-named reader ("$f" in a loop over tf-*) needs a mention of tf- first.
+# N1 (static, V1): an ALLOW-LIST, not a search for the stream names. Every comment-stripped line of the script that touches the temp dir
+# (KR_TMP, TMPDIR, RUNNER_TEMP, mktemp), a saved plan (tfplan), a tf- stream name or a *.out/*.err glob must sit inside kk_tf_class,
+# kk_tf_clean or kk_gate_plan (the sourced kr_tf is outside the script) or be one of the enumerated, pinned lines below. A variable-named
+# reader (`f=tf-apply-apply.err; cat "$KR_TMP/$f"`, `cat "$KR_TMP"/*.err`, a loop over "$KR_TMP"/*) must name KR_TMP to reach the file, so it is an
+# unlisted line. The three functions are pinned by their own line counts.
 strip_fns() { awk -v names="$2" 'BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) skip[a[i]] = 1 }
   { if (!inf && match($0, /^[a-z_]+\(\) \{/)) { nm = substr($0, 1, RLENGTH - 4); if (nm in skip) inf = 1 }
     if (inf) { if ($0 ~ /^}/) inf = 0; next } print }' "$1"; }
-tf_stream_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan" | grep -v '^ *#' | grep -Ec '/tf-[a-z$\{*]'; }
+KR_TMP_RE='KR_TMP|TMPDIR|RUNNER_TEMP|mktemp|tfplan|(^|[^a-z-])tf-|\*\.(out|err)'
+KR_TMP_ALLOW="$TMP/kr-tmp-allow.txt"
+cat > "$KR_TMP_ALLOW" <<'ALLOW'
+printf '%s' "$body" > "$KR_TMP/issue.md"
+gh issue comment "$num" --repo "$repo" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || { kr_refuse issue_unfiled "the follow-up comment could not be posted"; return 1; }
+gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || true
+f="$KR_TMP/redaction.out"
+KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?
+ALLOW
+kr_tmp_refs() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan" | grep -v '^ *#' | sed -E 's/^([^"'"'"']*[^"'"'"' ]) +#[^"'"'"']*$/\1/' | sed -E 's/^[[:space:]]+//' | grep -E "$KR_TMP_RE"; }
+tf_stream_outside() { kr_tmp_refs "$1" | grep -vxFf "$KR_TMP_ALLOW" | grep -c . || true; }
+tf_allow_present() { kr_tmp_refs "$1" | grep -xFf "$KR_TMP_ALLOW" | sort -u | wc -l | tr -d ' '; }
 tf_plan_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan kk_cmd_apply" | grep -v '^ *#' | grep -Ec 'tfplan-'; }
 tf_class_readers() { # lines of kk_tf_class that use "$f" other than as the file of a fixed-pattern grep -c or a -f test
   fn_text kk_tf_class "$1" | sed -E "s/grep -Eic '[^']*' \"\\\$f\"//g; s/\[\[ -f \"\\\$f\" \]\]//g" | grep -c '"\$f"'; }
 tf_gate_readers() { fn_text kk_gate_plan "$1" | grep -o 'tf-' | wc -l | tr -d ' '; }
 tf_clean_lines() { fn_text kk_tf_clean "$1" | grep 'tf-' | grep -vc '^  rm -f -- '; }
-eq "D6.3 N1 static: a tf- stream name appears nowhere outside kk_tf_class, kk_tf_clean and kk_gate_plan; the saved plan nowhere outside those and kk_cmd_apply; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once (the jq projection); kk_tf_clean only rm's" \
-  "$(tf_stream_outside "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")" '0|0|0|1|0'
-mut_ok "$TMP/m/tfm1.body" "$BODY" $'"$KR_TMP/tfplan-p" || rc=$?\n' $'"$KR_TMP/tfplan-p" || rc=$?\n  tail "$KR_TMP/tf-apply-apply.err" >&2\n' && eq "D6.3a mutant: a tail of the apply stream added to kk_cmd_apply is seen" "$(tf_stream_outside "$TMP/m/tfm1.body")" '1'
+tf_fn_tmp_lines() { fn_text "$1" "$2" | grep -v '^ *#' | grep -Ec 'KR_TMP|\*\.(out|err)'; }   # per-function pin: the lines that reach the temp dir
+eq "D6.3 N1 static (allow-list): no line outside kk_tf_class, kk_tf_clean and kk_gate_plan reaches the temp dir except the 5 pinned ones (all 5 present); the saved plan nowhere outside those and kk_cmd_apply; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once and has exactly 4 temp-dir lines; kk_tf_class 1; kk_tf_clean 2, both rm's" \
+  "$(tf_stream_outside "$BODY")|$(tf_allow_present "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")|$(tf_fn_tmp_lines kk_gate_plan "$BODY")|$(tf_fn_tmp_lines kk_tf_class "$BODY")|$(tf_fn_tmp_lines kk_tf_clean "$BODY")" '0|5|0|0|1|0|4|1|2'
+tfm_n=0
+tfm_try() { # id desc inserted-line(s): the line is added to kk_cmd_apply right after the apply call; the allow-list check must see exactly one unlisted line
+  local f="$TMP/m/tfm$((++tfm_n)).body"
+  mut_ok "$f" "$BODY" $'"$KR_TMP/tfplan-p" || rc=$?\n' $'"$KR_TMP/tfplan-p" || rc=$?\n'"$3"$'\n' && eq "$1 mutant: $2 is seen" "$(tf_stream_outside "$f")" '1'
+}
+tfm_try D6.3a "a tail of the apply stream added to kk_cmd_apply" '  tail "$KR_TMP/tf-apply-apply.err" >&2'
 mut_ok "$TMP/m/tfm2.body" "$BODY" $'"$KR_TMP/tfplan-p" || rc=$?\n' $'"$KR_TMP/tfplan-p" || rc=$?\n  for f in "$KR_TMP"/tf-*; do cat "$f"; done\n' && eq "D6.3b mutant: a loop over the stream files with a variable-named reader (invisible to the literal-name check B12) is seen" "$(tf_stream_outside "$TMP/m/tfm2.body")|$(code_only "$TMP/m/tfm2.body" | grep -Ec '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9${}_-]*\.(out|err)')" '1|0'
 mut_ok "$TMP/m/tfm3.body" "$BODY" $'    if [[ "$(grep -Eic \'Error acquiring the state lock|state lock\' "$f")" -gt 0 ]]; then' $'    cat "$f"\n    if [[ "$(grep -Eic \'Error acquiring the state lock|state lock\' "$f")" -gt 0 ]]; then' && eq "D6.3c mutant: a cat of the stream file inside kk_tf_class is seen" "$(tf_class_readers "$TMP/m/tfm3.body")" '1'
 mut_ok "$TMP/m/tfm4.body" "$BODY" $'jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-${name}.out" > "$proj" 2>/dev/null )' $'jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-${name}.out" > "$proj" 2>/dev/null; cat "$KR_TMP/tf-plan-${name}.out" )' && eq "D6.3d mutant: a second stream mention inside kk_gate_plan is seen" "$(tf_gate_readers "$TMP/m/tfm4.body")" '2'
+tfm_n=4
+tfm_try D6.3e 'a glob reader cat "$KR_TMP"/*.err' '  cat "$KR_TMP"/*.err >&2'
+tfm_try D6.3f 'a reader named through a variable (f=tf-apply-apply.err; cat "$KR_TMP/$f")' '  f=tf-apply-apply.err; cat "$KR_TMP/$f" >&2'
+tfm_try D6.3g 'a reader whose file name is assembled from a variable (p=tf; cat "$KR_TMP/$p-apply-apply.out")' '  p=tf; cat "$KR_TMP/$p-apply-apply.out" >&2'
+tfm_try D6.3h 'a quoted-prefix reader ("$KR_TMP/tf-"x)' '  cat "$KR_TMP/tf-"x >&2'
+tfm_try D6.3i 'a for-loop over "$KR_TMP"/*' '  for f in "$KR_TMP"/*; do cat "$f" >&2; done'
+tfm_try D6.3j 'an alias of the temp dir (d="$KR_TMP"; cat "$d"/*)' '  d="$KR_TMP"; cat "$d"/* >&2'
+# a pinned allow-list line removed from the script leaves the list stale: the presence count (5) is what notices
+mut_ok "$TMP/m/tfmk.body" "$BODY" $'f="$KR_TMP/redaction.out"' $'f="$KR_TMP/redaction.log"' && eq "D6.3k mutant: an allow-list line edited in the script is seen twice (one unlisted line, one stale entry: presence 4)" "$(tf_stream_outside "$TMP/m/tfmk.body")|$(tf_allow_present "$TMP/m/tfmk.body")" '1|4'
+# the post-apply clean runs BEFORE the post-state read (the EXIT-trap shim reads at exit only, so a move would stay green at runtime)
+order_clean_post() { fn_text kk_cmd_apply "$1" | awk '/^  kk_tf_clean$/ { c = NR } /^  kk_post_state$/ { p = NR } END { print (c && p && c < p) ? "clean-first" : "post-first" }'; }
+eq "D6.2f N1 static: in kk_cmd_apply the post-apply kk_tf_clean precedes kk_post_state (the stream files are gone before the Doppler read-back starts)" "$(order_clean_post "$BODY")" 'clean-first'
+mut_ok "$TMP/m/ord.body" "$BODY" $'  kk_tf_clean\n  kk_post_state\n  kk_print_post\n' $'  kk_post_state\n  kk_tf_clean\n  kk_print_post\n' kk_cmd_apply && eq "D6.2g mutant: the clean moved after kk_post_state is seen" "$(order_clean_post "$TMP/m/ord.body")" 'post-first'
 
 # N2: kk_close_earlier closes only issues of a LOWER run number
 sc_nlater() { fresh; printf '%s' "[{\"number\":11,\"title\":\"key-rotate $DEVK apply_failed (run 8000)\"},{\"number\":15,\"title\":\"key-rotate $DEVK apply_failed (run 9500)\"},{\"number\":16,\"title\":\"key-rotate $DEVK apply_failed (run 9001)\"}]" > "$D/state/issues.json"; mapfile -t _e < <(n_env "$DEVK" rotate success true "" success rotate_ok); run_script notify "${_e[@]}"; printf 'closed=%s' "$(sort "$D/issues_closed.log" 2>/dev/null | tr '\n' ',')"; }
@@ -1746,8 +1805,21 @@ pw_neg_bad() { local t r=""; for t in $POSTWRITE_TOKENS; do [[ "$(pw_rc "$1" "$t
 eq "D6.11 N10 every token that is NOT one of the 15 pre-write tokens (the other 20 of the 35, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '20|'
 mut_ok "$TMP/m/pw.body" "$BODY" '|approval_environment_missing) return 0 ;;' '|approval_environment_missing|apply_failed) return 0 ;;' && eq "D6.11a mutant: apply_failed added to the pre-write list is seen" "$(pw_neg_bad "$(ptree pw "$TMP/m/pw.body")")" ' apply_failed'
 # N10: the confirm neutralizer is scoped to the stop sentence
-eq "D6.12 N10 the confirm placeholder is neutralized on a stop-sentence line only: the same 45-character run on any other line is still a leak hit" \
-  "$(printf 'x confirm=ROTATE-KB_DRIFT_INGEST_SIGNING_KEY-YYYY-MM-DD\n' | neutralize_confirm | grep -Ec "$LEAK_RE")|$(printf 'STOP: do not re-run the failed jobs. a confirm=ROTATE-KB_DRIFT_INGEST_SIGNING_KEY-YYYY-MM-DD\n' | neutralize_confirm | grep -Ec "$LEAK_RE")" '1|0'
+# D6.12 drives the REAL scan_streams (V3), in a subshell with its own TMP so the suite's scan/run census (D9.1) and leak log are untouched:
+# d612_entries <ALL text> [function-definition override] -> the number of leak-log entries scan_streams records for that text
+d612_entries() {
+  local t; t="$(mktemp -d "$TMP/d612.XXXXXX")"
+  ( TMP="$t"; D="$t"; STREAMS="$t/streams"; ALL="$1"; SCAN_ASSERT=1; LAST_LABEL=d612; RT=x
+    : > "$t/scans.cnt"; : > "$t/leaks.log"; : > "$t/refusals.seen"; : > "$STREAMS"
+    [[ -n "${2:-}" ]] && eval "$2"
+    scan_streams; wc -l < "$t/leaks.log" | tr -d ' ' )
+}
+CONF45='confirm=ROTATE-KB_DRIFT_INGEST_SIGNING_KEY-YYYY-MM-DD'; HEX64="$(printf '%064d' 0)"
+eq "D6.12 N10 scan_streams neutralizes the confirm placeholder on a stop-sentence line only: the same 45-character run on a non-stop line is a leak entry, with key-shaped bytes on a non-stop line is a leak entry, a stop-sentence line carrying a 64-hex value is still an entry, and the bare stop sentence is clean" \
+  "$(d612_entries "x $CONF45")|$(d612_entries "x $CONF45 $HEX64")|$(d612_entries "STOP: do not re-run the failed jobs. $CONF45 $HEX64")|$(d612_entries "STOP: do not re-run the failed jobs. $CONF45")" '1|1|1|0'
+D612_WIDE="$(declare -f scan_streams | sed 's#neutralize_confirm <<<#sed -E "s/confirm=ROTATE-[A-Z_]+-YYYY-MM-DD/confirm=CONFIRM/g" <<<#')"
+eq "D6.12b mutant: a scan_streams that inlines a global (not stop-line-scoped) neutralizer hides the non-stop confirm run, so the row's first field turns" "$([[ "$D612_WIDE" != "$(declare -f scan_streams)" ]] && d612_entries "x $CONF45" "$D612_WIDE")" '0'
+
 # N12: the kb budget pin sees a missing Re-checks term
 mut_ok "$TMP/m/bud.body" "$BODY" 'KK_RECHECK_STEP_S=600' 'KK_RECHECK_STEP_S=0' && eq "D6.13 N12 mutant: dropping the Re-checks term from the budget turns B31b" "$([[ "$(bud2_of "$(ptree bud "$TMP/m/bud.body")")" != '8100 6900 600 6300' ]] && echo differs)" 'differs'
 
@@ -1760,7 +1832,7 @@ eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=592
+FLOOR=603
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
