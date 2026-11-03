@@ -343,8 +343,12 @@ issue-list author=github-actions[bot] state=open limit=500 json=number,title,lab
   eq "S1 the recipe extracts the full 40-hex sha for the dedup" "$(printf '%s\n' "$log_row" | grep -E -- "$recipe_re" | grep -oE 'sha=[0-9a-f]{40}' | cut -d= -f2)" "$(sha 0x101)"
   tn "S1 the old ::row spelling does not match the rendered line (the defect this pattern replaces)" grep -q 'apply-delivery-gap::row' <<<"$log_row"
   cmdline="$(grep '^gh workflow run ' "$B")"
-  hasre "S1 printed command shape" <(printf '%s\n' "$cmdline") "^gh workflow run [a-z0-9.-]+\.yml --ref main( -f [a-z_]+=[a-z-]+)* -f reason='apply-delivery-gap [0-9a-f]{7}'$"
-  has "S1 printed command names the deploy-fix file and sha7" <(printf '%s\n' "$cmdline") "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason='apply-delivery-gap 0000101'"
+  # S1's gap is fully eligible (evicted-before-start, nothing in flight, no later
+  # non-cancelled run): the arm dispatches automatically, so the body carries the
+  # do-not-redispatch note instead of a manual deploy-fix command — a printed manual
+  # command here invites a double-dispatch into the shared group's pending slot.
+  has "S1 body announces the auto-redrive" "$B" "auto-redrive in flight"
+  tn "S1 body prints no manual deploy-fix dispatch while armed" grep -qF "gh workflow run apply-deploy-pipeline-fix.yml" <<<"$cmdline"
   tn "S1 body has no closing keyword next to a number" grep -qiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[: ]+#?[0-9]' "$B"
   tn "S1 body references no issue number" grep -qE '(^|[^&/a-z0-9])#[0-9]+' "$B"
   has "S1 summary: mode fixture, workflows_read" <(summary) "mode=fixture workflows_read=2 candidates=1 rows=1"
@@ -429,6 +433,10 @@ if want S3; then
   has "S3 class" "$ST/all.txt" "class=cancelled-mid-run"
   has "S3 p0 label on create" "$ST/out/actions.log" "labels=apply-delivery-gap,action-required,priority/p1-high,priority/p0-critical"
   has "S3 body warns not to dispatch before reading the run" "$(body 1)" "do NOT dispatch before reading the run"
+  # a mid-run row suppresses the arm, so the manual deploy-fix command still prints (the ineligible path)
+  cmdline="$(grep '^gh workflow run ' "$(body 1)")"
+  hasre "S3 printed command shape" <(printf '%s\n' "$cmdline") "^gh workflow run [a-z0-9.-]+\.yml --ref main( -f [a-z_]+=[a-z-]+)* -f reason='apply-delivery-gap [0-9a-f]{7}'$"
+  has "S3 printed command names the deploy-fix file" <(printf '%s\n' "$cmdline") "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason='apply-delivery-gap"
   has "S3 summary mid_run=1" <(summary) "mid_run=1"
   gend
 fi
@@ -1277,6 +1285,8 @@ rsteps = redrive.get("steps", [])
 chk("exactly three steps (checkout, reconcile, dispatch)", len(steps) == 3)
 chk("step key sets are exactly {name, uses, with}, {name, id, env, run} and {name, env, run}", [set(x) for x in steps] == [{"name", "uses", "with"}, {"name", "id", "env", "run"}, {"name", "env", "run"}])
 chk("the reconcile step carries id: reconcile (the single output source)", fsteps[1].get("id") == "reconcile" if len(fsteps) > 1 else False)
+chk("the dispatch lives on the gated redrive job, never on follow", len(rsteps) == 1 and "gh workflow run" in str(rsteps[0].get("run", "")) and all("gh workflow" not in str(s.get("run", "")) for s in fsteps))
+chk("the dispatch step env is exactly GH_TOKEN and GH_REPO (no checkout, so gh needs the repo name)", len(rsteps) == 1 and rsteps[0].get("env") == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"})
 def keys_anywhere(o):
     if isinstance(o, dict):
         for k, v in o.items():

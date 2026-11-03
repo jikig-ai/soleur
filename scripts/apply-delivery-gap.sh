@@ -9,7 +9,9 @@
 # every completed run of either workflow, reconciles from the Actions API alone and files ONE deduplicated
 # `apply-delivery-gap` issue naming each push that never reached production.
 #
-# DETECTION ONLY. No apply, no dispatch, no state or host read, no secrets. A filed gap is a GREEN run (the issue is
+# DETECTION plus a bounded redrive arm (ADR-318): the script only emits the eligibility output
+# redrive_deploy_fix - the follower's `redrive` job performs the dispatch. No apply, no state or host
+# read, no secrets. A filed gap is a GREEN run (the issue is
 # the page); only a failed or partial read is red, and a blind follower pages a human through a distinct degraded issue.
 #
 # STATELESS. Every run is a full reconcile of the last WINDOW_DAYS days; nothing is read back from a previous body.
@@ -31,7 +33,8 @@
 #
 # ENV: GH_REPO (owner/repo, required), GH_TOKEN (live), TRIGGER_RUN_ID (digits, the run that fired the follower; required
 #      in live mode, may be empty only with --fixture-dir),
-#      GITHUB_RUN_ID (digits, linked from issue text).
+#      GITHUB_RUN_ID (digits, linked from issue text),
+#      GITHUB_OUTPUT (optional path; when set, redrive_deploy_fix / redrive_infra are appended for the redrive job).
 # EXIT: 0 reconcile complete; 1 any read/write failure (::error::apply_delivery_gap_<reason> is the LAST line);
 #       2 rejected input.
 
@@ -106,11 +109,21 @@ class_for_total() { if [[ "${1-}" == "0" ]]; then printf 'evicted-before-start';
 # this slice - deploy-fix only until the arm is observed). Defined before
 # self_test: the --self-test dispatch precedes the count_inflight site.
 emit_redrive_output() {
-  local nb
+  local n b f
   REDRIVE_DEPLOY_FIX=false
   if [[ -f "$ROWS" ]]; then
-    nb="$(awk -F'\t' '$1=="deploy-fix"{n++} $1=="deploy-fix"&&$4!="evicted-before-start"{b++} END{printf "%d\t%d", n+0, b+0}' "$ROWS")"
-    if [[ "${nb%%$'\t'*}" -gt 0 && "${nb##*$'\t'}" -eq 0 && "${N_INFLIGHT_deploy_fix:-0}" -eq 0 ]]; then
+    IFS=$'\t' read -r n b f <<<"$(awk -F'\t' '$1=="deploy-fix"{n++} $4!="evicted-before-start"{b++} $1=="deploy-fix"&&$7!="-"&&$7!="cancelled"{f++} END{printf "%d\t%d\t%d", n+0, b+0, f+0}' "$ROWS")"
+    # b counts ANY row not evicted-before-start, infra included, and the
+    # in-flight gate is the EITHER-key total: the protected resource is the
+    # shared apply group + single state file, not the deploy-fix key. An infra
+    # cancelled-mid-run (possibly-partial state) or a non-stale run of either
+    # workflow (whose completion re-fires this follower anyway) suppresses it.
+    # f is the failure circuit-breaker: a redispatched run ending in any
+    # non-cancelled outcome (failure, success-without-delivery, ...) never
+    # becomes a candidate row, so without this gate the same evicted rows would
+    # re-fire the arm forever, re-applying over possibly-partial state. Only
+    # `cancelled` (evicted again - the storm) or `-` (no later run) re-drives.
+    if [[ "$n" -gt 0 && "$b" -eq 0 && "$f" -eq 0 && "${N_INFLIGHT:-0}" -eq 0 ]]; then
       REDRIVE_DEPLOY_FIX=true
     fi
   fi
@@ -153,20 +166,30 @@ self_test() {
   printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
   j='{"jobs":[{"name":"apply","conclusion":"success"}]}'
   printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
-  # redrive predicate (Ref #10033): deploy-fix rows all evicted-before-start
-  # with zero in-flight -> true; a mid-run row, zero deploy-fix rows, or an
-  # in-flight deploy-fix run -> false.
-  local _rrows; _rrows="$(mktemp)"; ROWS="$_rrows"; GITHUB_OUTPUT=""
+  # redrive predicate (Ref #10033): a deploy-fix row, all rows evicted-before-start,
+  # and zero in-flight of EITHER key -> true; a mid-run row (either key), zero
+  # deploy-fix rows, or an in-flight run -> false.
+  local _rrows _rout; _rrows="$(mktemp)"; _rout="$(mktemp)"; ROWS="$_rrows"; GITHUB_OUTPUT="$_rout"
   printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
-  N_INFLIGHT_deploy_fix=0; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == true ]] || bad=1
+  N_INFLIGHT=0; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == true ]] || bad=1
+  grep -qx 'redrive_deploy_fix=true' "$_rout" || bad=1
+  grep -qx 'redrive_infra=false' "$_rout" || bad=1
   printf 'deploy-fix\t1\tabc1234\tcancelled-mid-run\t5\t-\t-\t100\n' >"$_rrows"
+  : >"$_rout"; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\ninfra\t2\tdef5678\tcancelled-mid-run\t5\t-\t-\t100\n' >"$_rrows"
   emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
   printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
-  N_INFLIGHT_deploy_fix=1; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
-  N_INFLIGHT_deploy_fix=0
+  N_INFLIGHT=1; emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  N_INFLIGHT=0
   printf 'infra\t1\tabc1234\tevicted-before-start\t5\t-\t-\t100\n' >"$_rrows"
   emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
-  rm -f "$_rrows"
+  # failure circuit-breaker: a later non-cancelled run suppresses; cancelled re-drives
+  printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t9\tfailure\t100\n' >"$_rrows"
+  emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == false ]] || bad=1
+  printf 'deploy-fix\t1\tabc1234\tevicted-before-start\t5\t9\tcancelled\t100\n' >"$_rrows"
+  emit_redrive_output; [[ "$REDRIVE_DEPLOY_FIX" == true ]] || bad=1
+  GITHUB_OUTPUT=""
+  rm -f "$_rrows" "$_rout"
   if [[ "$bad" -ne 0 ]]; then
     printf '::error::apply_delivery_gap_self_test_failed\n'
     exit 1
@@ -581,7 +604,6 @@ count_inflight() {
     n="$(jq --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" --argjson cutoff "$CUTOFF" "$JQ_LIVE"'
       [ .[] | select(live and .ce >= $cutoff) ] | length' "$f")" || fail_loud malformed_response
     total=$((total + n))
-    declare "N_INFLIGHT_${key//-/_}=$n"
   done
   N_INFLIGHT="$total"
 }
@@ -616,6 +638,8 @@ render_body() {
       if [[ -z "$sname" ]]; then continue; fi
       if [[ "$key" == "infra" ]]; then
         cmd="gh workflow run ${wf} --ref main -f apply_target=manual-rerun -f reason='apply-delivery-gap ${sname}'"
+      elif [[ "${REDRIVE_DEPLOY_FIX:-false}" == true ]]; then
+        cmd="# auto-redrive in flight: follower run ${GITHUB_RUN_ID:-?} is dispatching ${wf} on main - do NOT run a manual dispatch (a second one only churns the shared group's pending slot)"
       else
         cmd="gh workflow run ${wf} --ref main -f reason='apply-delivery-gap ${sname}'"
       fi
@@ -740,10 +764,10 @@ main() {
     reconcile_workflow "$key" "$file" "$ks" "$cap"
   done
   count_inflight
-  reconcile_issue
   emit_redrive_output
-  printf '::notice::apply_delivery_gap_summary mode=%s workflows_read=%s candidates=%s rows=%s deferred=%s delivered=%s dropped=%s mid_run=%s inflight=%s issue=%s\n' \
-    "$MODE" "$WORKFLOWS_READ" "$N_CAND" "$N_ROWS" "$N_DEFERRED" "$N_DELIVERED" "$N_DROPPED" "$N_MID" "$N_INFLIGHT" "$ISSUE_ACTION"
+  reconcile_issue
+  printf '::notice::apply_delivery_gap_summary mode=%s workflows_read=%s candidates=%s rows=%s deferred=%s delivered=%s dropped=%s mid_run=%s inflight=%s issue=%s redrive=%s\n' \
+    "$MODE" "$WORKFLOWS_READ" "$N_CAND" "$N_ROWS" "$N_DEFERRED" "$N_DELIVERED" "$N_DROPPED" "$N_MID" "$N_INFLIGHT" "$ISSUE_ACTION" "${REDRIVE_DEPLOY_FIX:-false}"
 }
 
 main

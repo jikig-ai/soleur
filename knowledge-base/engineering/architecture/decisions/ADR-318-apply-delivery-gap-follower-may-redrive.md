@@ -21,4 +21,4 @@ Rejected: native `concurrency.queue: max` (arriving-run-governs semantics requir
 
 ## Consequences
 
-A standing `actions: write` grant exists that can autonomously dispatch a production apply into `infra-privileged` (branch_policy only — verified). The eligibility predicate is the control: it is asserted by `apply-delivery-gap-follower.test.sh` fixture rows and the script's `--self-test`, and the workflow's `if:` is the single dispatch chokepoint pinned by the W wiring assertions.
+A standing `actions: write` grant exists that can autonomously dispatch a production apply into `infra-privileged` (branch_policy only — verified). The eligibility predicate is the control: it is asserted by the script's `--self-test` rows (all four suppression shapes, including an `infra` `cancelled-mid-run` suppressing a deploy-fix redrive over the shared state file), and the workflow's `if:` is the single dispatch chokepoint pinned by the W wiring assertions in `apply-delivery-gap-follower.test.sh`.
