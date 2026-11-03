@@ -25,7 +25,7 @@ Proposed. This ADR ships no control. The control in force today is ADR-075 (bwra
   A recorded miss leaves the status `proposed`. A green canary is necessary and not sufficient: the prior hosted-Bash outage ran with the canary green (L8; the post-incident report records that the canary was green during the outage).
   The dated amendment names the ADR-075 residual its measurements address, citing the ADR-075 anchor. An amendment that names none leaves the status `proposed`.
   The flip is made by the PR that adds the dated amendment, authored by the engineering owner of #9602, and is reviewed by a second reviewer other than the author (a person, or a separate review pass recorded in the PR) who confirms each gate's recorded result against the private measurement record, including that the record exists by its opaque id. No money or topology decision is involved in that flip.
-- `adopting` is a decision to plan, not to ship: shipping is a separate PR with the flag off.
+- `adopting` is a decision to plan, not to ship: shipping is a separate PR with the flag off and needs operator approval.
 - "Not adopted" is a sequencing decision gated on evidence. It is not acceptance of the residual risk in ADR-075.
 - Residual-risk owner: ADR-075. This ADR neither closes nor accepts that risk.
 
@@ -139,12 +139,12 @@ The exact kernel release and the image digest live in a private measurement reco
 That private record must exist before the amendment merges, or the gate fails.
 
 - G1, kernel and privilege prerequisites for the call, and Landlock ABI support.
-  G1 is MET when, inside the production container and on the production host, the unprivileged-caller prerequisite holds and the reported ABI number is at or above the minimum the spike's rule set needs (L10).
+  G1 is MET when, inside the production container and on the production host, the unprivileged-caller prerequisite holds and the reported ABI number is at or above the minimum the spike's rule set needs (L10). The minimum ABI number and the G4 access class are recorded in a dated note before the spike run starts and are not loosened afterwards.
   Absent, disabled at boot, or a lower ABI is a recorded miss, and the amendment records which.
   The production-host half would be taken by a read-only probe that mirrors to Sentry, which would be delivered by its own PR; neither is scheduled by this ADR, and this ADR schedules no shell access to the host. Unverified until measured.
 - G2, placement.
   The ruleset is applied in the child after the sandbox view is built and before exec of the command.
-  The measurement shows two things (L3, L9). First, from a thread of the server process, the same access succeeds after the child applied its ruleset. Second, a sandboxed command started after that child's ruleset was applied is not confined by it.
+  The measurement shows two things (L3, L9). First, from a thread of the server process, the same access succeeds after the child applied its ruleset. Second, a sibling sandboxed command, not descended from that child, that starts after the ruleset was applied is not confined by it.
 - G3, the faithful canary stays green.
   The canary is extended by a Landlock hardening probe among its derived probes, and the replay argv is unchanged (L5).
   It is run against the throwaway image, per the spike-branch rule below.
