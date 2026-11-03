@@ -1181,13 +1181,15 @@ done
 # WHY THIS IS A ROW AND NOT A COMMENT. The linter's fail-closed path for an unanswered
 # `--print-suite-globs` is "the flag reads as an unknown TEST_GROUP, so the runner exits 2".
 # That holds ONLY when TEST_GROUP is unset. This suite runs as a registered suite inside
-# `test-all.sh`, which exports `TEST_GROUP=<shard>` — so the child inherits a VALID group, never
+# `test-all.sh`; whenever the caller exported `TEST_GROUP=<shard>` the child inherits a VALID group, never
 # reaches the unknown-group branch, and runs the whole shard instead. The shard contains this
-# suite. It mutates and re-invokes. Unbounded recursion.
+# suite. It mutates and re-invokes. Unbounded recursion. (Since #11939 the runner drops the
+# export attribute of TEST_GROUP, so a runner-spawned copy no longer inherits it; the scrub stays as defence for
+# direct runs and for callers that export it, which is what this row pins.)
 #
 # Measured 2026-08-13: TEST_GROUP unset -> 65 passed in 10 s; TEST_GROUP=scripts -> still running
-# at 120 s with three nested copies alive. It reproduces in CI (which sets TEST_GROUP per shard)
-# and in the documented local exit gate, and it did NOT reproduce standalone — which is precisely
+# at 120 s with three nested copies alive. It reproduced under a caller that exported the group (the
+# monitor's step env) and in the documented local exit gate, and it did NOT reproduce standalone — which is precisely
 # why a green run of this very suite could not see it.
 #
 # Asserted structurally, on the invocation construct rather than a bare token: a comment
@@ -1197,7 +1199,7 @@ _r1_line=$(grep -nE '^[[:space:]]*env -u TEST_GROUP .*bash "\$RUNNER" --print-su
 if [[ -n "$_r1_line" ]]; then
   pass "R1 — the runner query clears TEST_GROUP (no shard inheritance, no recursion)"
 else
-  fail "R1 — scripts/lint-orphan-test-suites.sh queries the runner WITHOUT 'env -u TEST_GROUP'. Inside test-all.sh the child inherits a valid shard name, the unknown-group fail-closed branch is unreachable, and an unanswered --print-suite-globs runs the whole shard recursively."
+  fail "R1 — scripts/lint-orphan-test-suites.sh queries the runner WITHOUT 'env -u TEST_GROUP'. Whenever the caller exported TEST_GROUP the child inherits a valid shard name, the unknown-group fail-closed branch is unreachable, and an unanswered --print-suite-globs runs the whole shard recursively."
 fi
 ROWS=$(( ROWS + 1 ))
 

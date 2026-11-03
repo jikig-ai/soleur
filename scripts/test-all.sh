@@ -1445,6 +1445,19 @@ fi
 # inherited by a nested runner.
 unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 
+# `TEST_GROUP` rides the same rule (#11939). Env beats the positional (`${TEST_GROUP:-${1:-all}}`),
+# so main-health-monitor.yml (step `env:`) and ci.yml (positional) reach this point by different
+# channels, and only the env channel left the variable exported: every suite the runner spawned
+# inherited `TEST_GROUP=scripts`, and a suite that itself ran a nested `--enumerate-commands` or
+# `--print-selection` got a narrowed or refused answer — red under the monitor, green under ci.yml
+# on the same SHA. So demote the export attribute: descendants then see the same environment
+# whichever channel selected the group. Only the attribute goes; the value stays, so no reader below
+# changes (every read is a shell-variable read, and the affected-walk child gets the group as an
+# explicit positional). The line sits beside the SCRIPTS_SHARD unset by convention; what is
+# load-bearing is that it precedes the first suite spawn. Pinned by
+# scripts/test-all-group-affected.test.sh Part C.
+export -n TEST_GROUP
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -1645,8 +1658,8 @@ _aff_edges=()
 # locale, and a hash fallback is collation-free.
 # SCOPE NOTE: this filter lives at the chokepoint, so it is GROUP-AGNOSTIC — with SCRIPTS_SHARD
 # set and TEST_GROUP=all it would partition the webplat/bun/infra registrations too. That is not
-# reachable today (the variable is bound only on ci.yml's test-scripts and test-scripts-heavy
-# jobs, and main-health-monitor.yml's TEST_GROUP=all run does not set it), and the name says
+# reachable today (the variable is bound only on the test-scripts and test-scripts-heavy jobs
+# of ci.yml and of main-health-monitor.yml, each alongside its own scripts group), and the name says
 # `SCRIPTS_` for that reason. Anyone binding it more widely must revisit this.
 _shard_ordinal=0
 _shard_assigned=0

@@ -3924,6 +3924,10 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PARKED_GREEN_SYNTHESIS_11362_PATHS=(
 # TEST_GROUP=affected mutation suite: copies the runner and its affected-selection libs
 # into a sandbox and splices fixture registrations between the lock and the epilogue.
 # Real reads: the runner (TARGET + sandbox copy), the five libs below, and self.
+# Part C's static census (#11939) also reads every non-test lib under scripts/lib/ and
+# plugins/soleur/scripts/lib/session-state.sh to prove none re-exports TEST_GROUP, so a
+# new export in any of them must select this suite: the glob row and the named
+# session-state.sh row below declare that read.
 # (knowledge-base/support/community/2026-10-26-digest.md is a synthetic --paths member,
 # never read — argv-code citation recorded in the kb-consumers baseline if flagged.)
 AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS=(
@@ -3933,6 +3937,8 @@ AFFECTED_SCRIPTS_TEST_ALL_GROUP_AFFECTED_PATHS=(
   "scripts/lib/affected-glob.sh"
   "scripts/lib/test-affected-derive-cache.sh"
   "scripts/lib/repo-write-boundary.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "glob:scripts/lib/*.sh"
   "scripts/test-all-group-affected.test.sh"
 )
 
