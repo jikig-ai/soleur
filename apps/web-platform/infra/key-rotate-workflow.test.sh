@@ -792,7 +792,7 @@ RT_REAL="$TMP/rt-real"; mk_tree "$RT_REAL"
 RT_CTL="$TMP/mt-ctl"; mk_tree "$RT_CTL"   # the instrument controls run here: a mt-* path is exempt from the refusals.log census (a seeded refusal is the point)
 RT="$RT_REAL"
 D=""
-fresh() { D="$(mktemp -u "$TMP/s.XXXXXX")"; cp -a "$WORLD0" "$D"; }
+fresh() { D="$(mktemp -d "$TMP/s.XXXXXX")"; cp -a "$WORLD0/." "$D"; }
 
 # base environments
 G_COMMON=(GH_TOKEN=ghs_fixture)
