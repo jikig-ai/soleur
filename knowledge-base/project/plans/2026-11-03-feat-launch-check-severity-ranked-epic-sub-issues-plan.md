@@ -561,7 +561,7 @@ Not edited by design: `plugins/soleur/test/components.test.ts`, `plugins/soleur/
 - Given the report is missing, when preview runs, then abort `report-missing`; given facts rescanned after the report was rendered, then abort `report-stale`.
 - Given `CI=1`, when `--create` runs, then rc 2 `headless-write-refused` and the stub log is empty (not even reads).
 - Given `--create --dry-run`, then zero write records.
-- Given a PUBLIC stub repo, when preview runs, then the warning and the `--confirm-public` command line are printed; when `--create` runs without the flag, then abort `confirm-public-required`; given a plan recorded PRIVATE but a live PUBLIC repo, the same abort.
+- Given a PUBLIC stub repo, when preview runs, then the warning and a separate line naming the `--confirm-public` flag are printed (the printed create command never carries it, L2); when `--create` runs without the flag, then abort `confirm-public-required`; given a plan recorded PRIVATE but a live PUBLIC repo, the same abort.
 - Given 35 gaps, then 30 `create` rows and 5 `capped`, the capped ids in the epic section and the cap line in the preview.
 - Given the sub-issue endpoint returns 404 (then, separately, 422) on the first link, then no later link call is recorded and the epic section lists `- [ ] #N` for every created item.
 - Given the stub fails the 4th create, then the run ends `issues-incomplete` with `created=3`; re-running the same plan creates the remaining items and the tracker holds each id once. Given the stub kills the run after a create and before its link, the re-run links the orphan and creates nothing twice.
