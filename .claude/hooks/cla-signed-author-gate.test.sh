@@ -197,7 +197,7 @@ assert_pass() {
 
 # T1: unsigned-author commit + gh pr merge → DENY
 t1() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-x "$UNSIGNED")
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')") || rc=$?
   assert_deny "T1 unsigned author + gh pr merge denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T1b: rtk-prefixed merge reaches the gate identically (#10248)
@@ -207,17 +207,17 @@ t1b() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branc
 
 # T2: all-signed commits + gh pr merge → PASS
 t2() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-y test@test.local)
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 123 --squash --auto')") || rc=$?
   assert_pass "T2 signed authors pass" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T3: unsigned author + gh pr ready → DENY (gate also covers ready)
 t3() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-z "$UNSIGNED")
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready 123')") || rc=$?
   assert_deny "T3 unsigned author + gh pr ready denies" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T4: unrelated command → no fire (PASS)
 t4() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-w "$UNSIGNED")
-  out=$(run_hook "$inc" "$(make_payload "$work" 'git status')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'git status')") || rc=$?
   assert_pass "T4 non-gh-pr command does not fire" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T5: on main → fail-open PASS even with command match
@@ -226,14 +226,14 @@ t5() { local t; t=$(mktemp -d -p "$SUITE_TMP"); local work="$t/work" inc="$t/inc
   echo b > "$work/f"; git -C "$work" add f
   GIT_AUTHOR_EMAIL="$UNSIGNED" git -C "$work" commit -q -m c
   git -C "$work" remote add origin "$t/o.git"; git -C "$work" push -q origin main
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')") || rc=$?
   assert_pass "T5 main branch fail-opens" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T6 (#5192): a `git commit` whose MESSAGE documents `gh pr merge` must NOT
 # fire — even with an unsigned-author commit on the branch (which would deny if
 # the trigger grep ran on the raw command). The strip blanks the -m body first.
 t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-fp "$UNSIGNED")
-  out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')") || rc=$?
   assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # ==========================================================================
@@ -256,21 +256,21 @@ t7() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "
   git -C "$work" config user.email jean.deruelle@jikigai.com
   push_cla_yml "$work"
   commit_branch "$work" feat-c "jean@jikig.ai"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T7 wrong-identity -c email denies (#12027)" "$inc" "$out" "$rc" "jean@jikig.ai"; rm -rf "$t"; }
 
 # T8 (#7218): unsigned non-noreply identity unconfigured anywhere → DENY.
 t8() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"; push_cla_signatures "$work"
   commit_branch "$work" feat-ops "ops@jikigai.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')") || rc=$?
   assert_deny "T8 unsigned non-noreply email denies (#7218)" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
 
 # T9: allowlisted-bot noreply author + configured committer → PASS.
 t9() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-bot "273333864+soleur-ai[bot]@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T9 allowlisted-bot noreply passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T10: signed-contributor noreply (login in cla.json signatures, NOT in the
@@ -278,7 +278,7 @@ t9() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "
 t10() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_signatures "$work"
   commit_branch "$work" feat-sig "92384917+Elvalio@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T10 signed-login noreply passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T11: devin-bot noreply — in NEITHER roster (measured cla-check fail, PR
@@ -286,7 +286,7 @@ t10() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t11() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"; push_cla_signatures "$work"
   commit_branch "$work" feat-devin "158243242+devin-ai-integration[bot]@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T11 devin-bot noreply denies" "$inc" "$out" "$rc" "devin-ai-integration[bot]"; rm -rf "$t"; }
 
 # T12: explicit-exclusion precedence — the devin-bot email AS the session's
@@ -295,7 +295,7 @@ t12() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
   git -C "$work" config user.email "158243242+devin-ai-integration[bot]@users.noreply.github.com"
   push_cla_yml "$work"; push_cla_signatures "$work"
   commit_branch "$work" feat-dcfg "158243242+devin-ai-integration[bot]@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T12 devin-bot as config user.email still denies" "$inc" "$out" "$rc" "devin-ai-integration[bot]"; rm -rf "$t"; }
 
 # T13: committer-only offender — sanctioned author, unsanctioned COMMITTER →
@@ -303,7 +303,7 @@ t12() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t13() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-cmt "test@test.local,ops@jikigai.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T13 committer-only offender denies" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
 
 # T14: mixed authors — compliant FIRST commit, unsanctioned SECOND → DENY
@@ -311,7 +311,7 @@ t13() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t14() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-mix "test@test.local" "ops@jikigai.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T14 mixed authors denies (second member)" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
 
 # T15: unset config + pinned human email — the sanctioned `-c` override path
@@ -320,7 +320,7 @@ t15() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
   git -C "$work" config --unset user.email
   push_cla_yml "$work"
   commit_branch "$work" feat-pin "jean.deruelle@jikigai.com,jean.deruelle@jikigai.com"
-  out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T15 unset-config + pinned human email passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T16: all sanctioned sources absent — no cla.yml at origin/main, no
@@ -329,7 +329,7 @@ t15() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t16() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   git -C "$work" config --unset user.email
   commit_branch "$work" feat-open "ops@jikigai.com,ops@jikigai.com"
-  out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T16 all-sources-absent fail-opens" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T17: pre-2017 bare-login noreply form `login@users.noreply.github.com`
@@ -337,7 +337,7 @@ t16() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t17() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"; push_cla_signatures "$work"
   commit_branch "$work" feat-bare "deruelle@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T17 bare-login noreply on roster passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T18: pre-2017 bare-login noreply form whose login is in NEITHER roster →
@@ -345,7 +345,7 @@ t17() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t18() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"; push_cla_signatures "$work"
   commit_branch "$work" feat-badeny "madeup@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T18 bare-login noreply off roster denies" "$inc" "$out" "$rc" "madeup@users.noreply.github.com"; rm -rf "$t"; }
 
 # T19: case-insensitive roster match — `92384917+elvalio@…` (lowercase) vs
@@ -353,7 +353,7 @@ t18() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t19() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_signatures "$work"
   commit_branch "$work" feat-fold "92384917+elvalio@users.noreply.github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T19 case-folded login matches roster" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T20: remedy-path injection — a `$(…)` payload survives git's ident
@@ -364,7 +364,7 @@ t19() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t20() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-inj 'x$(echo INJECTED)@bad.example' 'ops@jikigai.com'
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T20 injected-payload email denies" "$inc" "$out" "$rc" 'x$(echo INJECTED)@bad.example'
   local reason fixline ok=1
   reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
@@ -382,7 +382,7 @@ t20() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t21() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-web "test@test.local,noreply@github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_pass "T21 web-flow committer passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T22: the carve-out is committer-ONLY — `noreply@github.com` as AUTHOR
@@ -390,7 +390,7 @@ t21() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t22() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-webauth "noreply@github.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T22 noreply@github.com author denies" "$inc" "$out" "$rc" "noreply@github.com"; rm -rf "$t"; }
 
 # T23: combined offender detail — a branch carrying BOTH a stage-1 unsigned
@@ -399,7 +399,7 @@ t22() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
 t23() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
   push_cla_yml "$work"
   commit_branch "$work" feat-both "$UNSIGNED" "ops@jikigai.com"
-  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')") || rc=$?
   assert_deny "T23 stage-1 deny names stage-2 offender" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
 
 # T24: pinned-literal parity — the emails the hook pins by name must be the
