@@ -22,3 +22,6 @@ review was performed at this stage. Reviewed-Coverage: sequential-fallback.
 ### Components Invoked
 - soleur:plan (in-process), premise validation, collision precheck,
   pr-overlap-preflight, code-review overlap probe, external research (CodeQL docs).
+- soleur:deepen-plan (in-process): halt gates 4.6–4.13 all pass.
+- CTO ruling: cto_spawns=1 (in-process Rule interface adjudication; rulings recorded
+  in decision-challenges.md, technical-ruling-gate PASS).
