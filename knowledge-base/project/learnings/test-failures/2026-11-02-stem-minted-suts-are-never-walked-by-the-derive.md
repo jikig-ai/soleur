@@ -49,3 +49,5 @@ seats reproduced the gap three ways (derive-cache record, extracted-harness repl
 `--print-selection` row). `ratchet exit=0 reason=pass live=1510 baseline=1510`
 after the declaration. See also the sibling rule — the SUT-source boundary decides
 declare-vs-accept (`2026-11-01-ratchet-repair-pair-disposition-moved-echoes-and-sut-source-boundary.md`).
+
+See also: `2026-11-03-a-widen-only-derive-fix-can-lose-edges-the-bug-itself-minted.md` — adjudicating the edge losses the fix's stream diff produced (phantom `^dir/` edges minted by the `||`-residue bug, ruled bug-correction).
