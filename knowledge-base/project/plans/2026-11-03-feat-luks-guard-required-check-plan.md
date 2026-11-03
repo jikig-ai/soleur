@@ -208,7 +208,7 @@ Product/UX Gate: not relevant (no UI surface).
 
 ## Non-Goals
 
-- Executing the G2e sunset (follow-up after the new leg soaks green on `main`). Owner: the engineering owner of #9927; a tracked issue is filed at ship time with the re-evaluation criterion "two weeks green on `main` and the merge queue", and the issue states that G2e and G2f coexist until then.
+- Executing the G2e sunset (follow-up after the new leg has run green on `main` and in the merge queue). Owner: the engineering owner of #9927. Tracked as a checklist comment on #9927 (not a new issue, to keep the PR net-neutral); G2e and G2f coexist until then.
 - `require_code_owner_review`, ruleset changes, the off-project ciphertext copy, the A6 sentence, the host replace, closing #9927, item 8.
 
 ## Sharp Edges

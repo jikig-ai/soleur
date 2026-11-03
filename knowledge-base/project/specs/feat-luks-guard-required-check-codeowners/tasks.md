@@ -36,4 +36,4 @@ Plan: knowledge-base/project/plans/2026-11-03-feat-luks-guard-required-check-pla
 
 - [ ] 5.1 Open code-review overlap query on the final file lists
 - [ ] 5.2 PR body: `Ref #9927`; legal amendments listed; G2e sunset and off-project copy not in scope
-- [ ] 5.3 File the G2e-sunset follow-up issue (owner and criterion per the plan)
+- [x] 5.3 Record the G2e-sunset follow-up as a checklist comment on #9927 (owner and criterion per the plan; no new issue)
