@@ -52,6 +52,8 @@ None checked against live issues beyond the scope of this plan; the work phase r
 
 **If this leaks, the user's workflow data is exposed via:** no new exposure vector. The change adds a test registration and records; it reads and writes no user data and no secrets.
 
+**Residuals this change does not close (review 2026-11-03, stated so they are not read as covered):** (1) one diff can still edit the Terraform pins, Guard 1, the G2e pin, the `test-all.sh` registration, the G2f pin and the `DOUBLE_COVERED_ACK` entry together and merge green; CODEOWNERS rows are routing text and no independent reviewer is enforced. (2) A required check is a regression check on Terraform text. It does not stop an Admin or Member from switching delete protection off, an account compromise, or account suspension or termination (Hetzner's written answer of 2026-11-02), so the owner must not read "required" as "safe". The owner-facing wording is "regression-checked" and the decision on an off-project ciphertext copy stays with the owner (#9927 item 1b). (3) Guard 1 now couples to unrelated edits (the `infra-validation.yml` path list, the runbook heading, the `.tf` text), so a contributor can trip the required check on a change that does not touch the volume; that is intended and the failure messages name the runbook section.
+
 **Brand-survival threshold:** single-user incident.
 
 CPO sign-off: required by this threshold (`requires_cpo_signoff: true`). The brainstorm did not spawn the CPO (no product surface); the sign-off is requested in the plan-review step below and recorded here before `soleur:work` starts.

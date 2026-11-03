@@ -339,7 +339,7 @@ fi
 # workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
-# claimed. Measured 2026-08-13: five suites were legitimately covered twice (seven as of #9927, see the array) -- registered both
+# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds seven as of #9927 (the count had already drifted to six) -- registered both
 # locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
 # listed in DOUBLE_COVERED_ACK below and the check fails on any suite not in that array.
 #

@@ -43,6 +43,8 @@
 /tests/scripts/lib/hcl-effective-text.sh                @deruelle
 /tests/scripts/lib/inngest-host-replace-gate.sh         @deruelle
 /tests/scripts/test-inngest-host-replace-gate.sh        @deruelle
+/scripts/test-all.sh                                    @deruelle
+/scripts/lint-orphan-test-suites.sh                    @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
 # gdpr-gate-self-test.yml is the self-test that asserts the operator-attested-mode

@@ -109,9 +109,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 324 -> 349 (#11294 key-rotate route, +9): the "key-rotate route: the gate table versus the HCL (Guard 5)" describe (real conformance, the literal -target pin on key-rotate.yml,
 // the parser floor, the must-PASS prose fixture and five mutation rows). main stood at 340 declared against a floor of 324; the 16 rows of slack are absorbed here, so it is exact again:
 // grep -cE '^\s*test\(' = 349.
-// 349 -> 352 (#9927 item 10, +3): the G2f registration pin (live, mutation matrix, must-PASS rows) - Guard 1 stays registered in the required test-scripts leg.
-// Exact: grep -cE '^\s*test\(' = 352.
-const TEST_FLOOR = 352;
+// 349 -> 353 (#9927 item 10, +4): the G2f registration pin (live, mutation matrix, must-PASS rows) and its ci.yml wiring pin - Guard 1 stays registered in the required test-scripts leg.
+// Exact: grep -cE '^\s*test\(' = 353.
+const TEST_FLOOR = 353;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -5284,12 +5284,16 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 });
 
 // --- G2e attribute pin (#9879): the INDEPENDENT anchor for the Guard 1 suite, in a REQUIRED check ---------------------------
+// [Updated 2026-11-03 (#9927 item 10): Guard 1 is now ALSO registered in the required test-scripts leg (see the G2f pin below and the ADR-282 addendum);
+// the paragraph below describes the state at #9879 and is kept as the reason G2e exists.]
 // Guard 1 (apps/web-platform/infra/inngest-luks-sole-copy.test.sh) runs in infra-validation.yml, which is NOT a required check,
 // so one diff could weaken the pins and the guard that pins them together and merge green. This file runs in the required `test`
 // check (ADR-282), so the same attributes are asserted here on EFFECTIVE text (comments removed), with a lexer of its own: a
 // defect shared by both lexers would have to be written twice, in two languages, in one reviewed diff.
 // Fail closed: a block that cannot be found, is found twice, or reads as zero attributes is RED, never "zero checks, green".
-// SUNSET: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
+// SUNSET (deferred, #9927 item 10): the condition below is now met, but G2e STAYS as the independent different-language anchor until the new
+// test-scripts leg has run green on main and in the merge queue; folding it in the same diff that adds the gate would remove the anchor in the diff that
+// could weaken it. Original wording: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
 // it holds what one diff must not weaken (delete_protection, prevent_destroy, no ignore_changes, no depth-0 count/for_each/provider/
 // provisioner, the attachment unpinned), over exactly the six addresses G2 and census G4h name (tied below).
 
@@ -10023,18 +10027,25 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
 // --- G2f registration pin (#9927 item 10): Guard 1 must keep EXECUTING inside the required `test` check ----------------------
 // Guard 1 (apps/web-platform/infra/inngest-luks-sole-copy.test.sh) is registered in the `want_scripts` region of scripts/test-all.sh, which the
 // required `test` context reaches through `test-scripts`. It is ALSO covered by the infra runner's glob, so scripts/lint-orphan-test-suites.sh sees
-// two surfaces and a single-surface de-registration is a silent no-op there (hence its DOUBLE_COVERED_ACK entry). THIS pin is what turns a dropped,
-// stubbed, moved or neutered registration RED, in a different required leg (`test-bun`) from the one it protects (`test-scripts`).
-// It proves CONSISTENCY, not integrity: one diff can still edit the registration and this pin together (ADR-282 addendum records that residual).
-// Fail closed: zero regions, zero lines, or a second line carrying the label is RED, never "nothing checked, green".
+// two surfaces and a single-surface de-registration is a silent no-op there (hence its DOUBLE_COVERED_ACK entry). THIS pin turns a dropped, stubbed,
+// shadowed or neutered registration RED, in a different required leg (`test-bun`) from the one it protects (`test-scripts`). A diff that edits
+// scripts/test-all.sh is a full-battery trigger (scripts/ci-pr-selection.sh), so the pin always runs for it.
+// What it proves: CONSISTENCY of the registration text and its wiring, not integrity: one diff can still edit the registration and this pin together
+// (ADR-282 addendum records that residual). Dead-code wrappers are closed by NEIGHBOURHOOD, not by enumerating spellings: the registration's previous
+// and next code lines must themselves be plain `run_suite` registrations, so no `&& \`, heredoc, `if`/`while`/`case`/function wrapper, `exit` or
+// `return` can sit directly around it. Fail closed: zero regions, zero lines, or a second line carrying the label is RED, never "nothing checked".
 const G2F_LABEL = "apps/web-platform/infra/inngest-luks-sole-copy";
 const G2F_SUITE = "apps/web-platform/infra/inngest-luks-sole-copy.test.sh";
 const G2F_COMMAND = `run_suite "${G2F_LABEL}" bash ${G2F_SUITE}`;
+/** A plain registration line: run_suite "<label>" <interpreter> <path>, no operator, no continuation (comments are stripped first). */
+const G2F_PLAIN_REG = /^[ \t]*run_suite[ \t]+"[^"]+"[ \t]+(bash|python3|bun|node)[ \t]+[^\s|&;`$()<>\\]+([ \t]+[^\s|&;`$()<>\\]+)*$/;
 
 function g2fVerdict(testAll: string, suiteExists: boolean): { defects: string[]; checks: number } {
   const defects: string[] = [];
   let checks = 0;
   const lines = testAll.split("\n");
+  const code = (l: string): string => l.replace(/[ \t]+#.*$/, "").trim();
+  const isSkippable = (l: string): boolean => /^[ \t]*(#.*)?$/.test(l);
   // Column-0 `if want_scripts; then` ... column-0 `fi` regions (the file has two; the registration must sit inside ONE of them).
   const regions: Array<[number, number]> = [];
   let open = -1;
@@ -10051,37 +10062,84 @@ function g2fVerdict(testAll: string, suiteExists: boolean): { defects: string[];
   const hits = lines.map((l, i) => ({ l, i })).filter(({ l }) => new RegExp(`^[ \\t]*run_suite[ \\t]+"${G2F_LABEL}"`).test(l));
   checks++;
   if (hits.length !== 1) defects.push(`the label ${G2F_LABEL} starts ${hits.length} run_suite lines (expected exactly 1)`);
+  // The label may be mentioned by COMMENTS (the registration's own explanation) and nowhere else: a label-specific early return in run_suite()
+  // or in _shard_selects() is a mention outside the registration line.
+  checks++;
+  const stray = lines.filter((l) => !isSkippable(l) && l.includes("luks-sole-copy") && !new RegExp(`^[ \\t]*run_suite[ \\t]+"${G2F_LABEL}"`).test(l));
+  if (stray.length > 0) defects.push(`non-comment line(s) other than the registration mention the suite: ${stray[0].trim().slice(0, 80)}`);
+  // run_suite(), want_scripts() and _shard_selects() are each defined exactly once (a second definition silently shadows the first).
+  checks++;
+  for (const fn of ["run_suite", "want_scripts", "_shard_selects"]) {
+    const n = lines.filter((l) => new RegExp(`^${fn}\\(\\)`).test(l)).length;
+    if (n !== 1) defects.push(`${fn}() is defined ${n} times at column 0 (expected exactly 1)`);
+  }
   if (hits.length >= 1) {
     const { l, i } = hits[0];
     checks++;
     // A plain trailing comment is allowed; any control suffix (|| true, && :, ;) is not.
-    const cmd = l.replace(/[ \t]+#.*$/, "").trim();
-    if (cmd !== G2F_COMMAND) defects.push(`the registration line is not exactly \`${G2F_COMMAND}\` (got: ${cmd})`);
+    if (code(l) !== G2F_COMMAND) defects.push(`the registration line is not exactly \`${G2F_COMMAND}\` (got: ${code(l)})`);
     checks++;
     const region = regions.find(([a, b]) => i > a && i < b);
     if (!region) defects.push("the registration is not inside a column-0 `if want_scripts; then` region");
-    else {
-      // No enclosing INDENTED conditional between the region opener and the line (an `if false; then` wrapper is a dead registration).
+    // Neighbourhood: the previous and next CODE lines are plain run_suite registrations (or the region opener / closer), so nothing wraps the line.
+    checks++;
+    let k = i - 1;
+    while (k >= 0 && isSkippable(lines[k])) k--;
+    const prevOk = k >= 0 && (G2F_PLAIN_REG.test(code(lines[k])) || (region !== undefined && k === region[0]));
+    if (!prevOk) defects.push(`the previous code line is not a plain run_suite registration (got: ${k >= 0 ? lines[k].trim().slice(0, 80) : "<start of file>"})`);
+    let m = i + 1;
+    while (m < lines.length && isSkippable(lines[m])) m++;
+    const nextOk = m < lines.length && (G2F_PLAIN_REG.test(code(lines[m])) || (region !== undefined && m === region[1]));
+    if (!nextOk) defects.push(`the next code line is not a plain run_suite registration (got: ${m < lines.length ? lines[m].trim().slice(0, 80) : "<end of file>"})`);
+    // No enclosing INDENTED conditional between the region opener and the line (kept alongside the neighbourhood rule).
+    checks++;
+    if (region) {
       let depth = 0;
-      for (let k = region[0] + 1; k < i; k++) {
-        if (/^[ \t]+if\b.*;[ \t]*then[ \t]*$/.test(lines[k])) depth++;
-        else if (/^[ \t]+fi([ \t;]|$)/.test(lines[k])) depth--;
+      for (let q = region[0] + 1; q < i; q++) {
+        if (/^[ \t]+if\b.*;[ \t]*then[ \t]*(#.*)?$/.test(lines[q])) depth++;
+        else if (/^[ \t]+fi([ \t;]|$)/.test(lines[q])) depth--;
       }
-      checks++;
       if (depth !== 0) defects.push(`the registration sits inside ${depth} enclosing indented conditional(s)`);
     }
+  } else {
+    checks += 4; // keep the verdict's check count independent of which arm failed: a missing line is RED above, never "fewer checks, green"
   }
   checks++;
   if (!suiteExists) defects.push(`${G2F_SUITE} does not exist`);
   return { defects, checks };
 }
 
+/** The ci.yml wiring that carries test-scripts into the required `test` context. Parsed YAML, so comments cannot satisfy it. */
+function g2fCiVerdict(ciYaml: string): { defects: string[]; checks: number } {
+  const defects: string[] = [];
+  let checks = 0;
+  const doc = parseYaml(ciYaml) as { jobs?: Record<string, any> };
+  const job = doc?.jobs?.["test-scripts"];
+  checks++;
+  if (!job) defects.push("ci.yml has no `test-scripts` job");
+  const steps: any[] = Array.isArray(job?.steps) ? job.steps : [];
+  const runner = steps.filter((st) => typeof st?.run === "string" && st.run.trim() === "bash scripts/test-all.sh scripts");
+  checks++;
+  if (runner.length !== 1) defects.push(`test-scripts has ${runner.length} steps running exactly \`bash scripts/test-all.sh scripts\` (expected exactly 1)`);
+  checks++;
+  if (job?.["continue-on-error"] !== undefined || runner.some((st) => st["continue-on-error"] !== undefined)) defects.push("test-scripts (or its runner step) sets continue-on-error");
+  checks++;
+  if (runner.length === 1 && runner[0].if !== undefined) defects.push("the test-scripts runner step carries an `if:` (it can be skipped)");
+  const needs = doc?.jobs?.["test"]?.needs;
+  checks++;
+  if (!Array.isArray(needs) || !needs.includes("test-scripts")) defects.push("the `test` aggregator's `needs:` does not list test-scripts");
+  checks++;
+  if (!/entries=\([^)]*"test-scripts:\$SCRIPTS_RESULT"/.test(ciYaml)) defects.push("the `test` aggregator's entries array does not carry test-scripts:$SCRIPTS_RESULT");
+  return { defects, checks };
+}
+
 describe("G2f registration pin (#9927): Guard 1 stays registered inside the required test-scripts leg (ADR-282)", () => {
   const testAll = readFileSync(resolve(REPO_ROOT, "scripts/test-all.sh"), "utf8");
+  const ciYaml = readFileSync(resolve(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
   const exists = existsSync(resolve(REPO_ROOT, G2F_SUITE));
-  const LIVE_CHECKS = 6; // regions, label count, exact command, region membership, nesting depth, suite exists
+  const LIVE_CHECKS = 9; // regions, label count, stray mentions, single definitions, exact command, region, prev/next, depth, suite exists
 
-  test("G2f: live tree - Guard 1 is registered exactly once, byte-exact, inside a want_scripts region, unwrapped", () => {
+  test("G2f: live tree - Guard 1 is registered exactly once, byte-exact, between plain registrations, with single run_suite/want_scripts definitions", () => {
     const v = g2fVerdict(testAll, exists);
     expect(v.defects).toEqual([]);
     expect(v.checks).toBe(LIVE_CHECKS); // a verdict that evaluated nothing is not GREEN
@@ -10096,9 +10154,19 @@ describe("G2f registration pin (#9927): Guard 1 stays registered inside the requ
       ["stub the command", testAll.replace(line, `  run_suite "${G2F_LABEL}" bash -c true`), /is not exactly/],
       ["swallow the exit status", testAll.replace(line, `${line} || true`), /is not exactly/],
       ["comment the call out", testAll.replace(line, `  # ${G2F_COMMAND}`), /starts 0 run_suite lines/],
-      ["wrap in a dead conditional", testAll.replace(line, `  if false; then\n${line}\n  fi`), /enclosing indented conditional/],
+      ["indented dead conditional", testAll.replace(line, `  if false; then\n${line}\n  fi`), /previous code line is not a plain run_suite/],
+      ["column-0 dead conditional", testAll.replace(line, `if false; then\n${line}\nfi`), /previous code line is not a plain run_suite/],
+      ["split if/then dead conditional", testAll.replace(line, `  if false\n  then\n${line}\n  fi`), /previous code line is not a plain run_suite/],
+      ["line-continuation prefix", testAll.replace(line, `  [[ -n "\${NEVER:-}" ]] && \\\n${line}`), /previous code line is not a plain run_suite/],
+      ["heredoc around the line", testAll.replace(line, `  : <<'X'\n${line}\nX`), /previous code line is not a plain run_suite/],
+      ["while false wrapper", testAll.replace(line, `  while false; do\n${line}\n  done`), /previous code line is not a plain run_suite/],
+      ["function wrapper never called", testAll.replace(line, `  _never() {\n${line}\n  }`), /previous code line is not a plain run_suite/],
+      ["early return before the line", testAll.replace(line, `  return 0\n${line}`), /previous code line is not a plain run_suite/],
       ["add a decoy second line for the same label", testAll.replace(line, `${line}\n  run_suite "${G2F_LABEL}" bash -c true || true`), /starts 2 run_suite lines/],
-      ["move into the infra group region", testAll.replace(line + "\n", "").replace(/^if want_infra; then$/m, `if want_infra; then\n${line}`), /not inside a column-0|starts 0/],
+      ["move into the infra group region", testAll.replace(line + "\n", "").replace(/^if want_infra; then$/m, `if want_infra; then\n${line}`), /not inside a column-0/],
+      ["redefine run_suite", testAll.replace(/^run_suite\(\) \{$/m, "run_suite() { :; }\nrun_suite() {"), /run_suite\(\) is defined 2 times/],
+      ["redefine want_scripts", testAll.replace(/^want_scripts\(\) .*$/m, (m) => `${m}\nwant_scripts() { false; }`), /want_scripts\(\) is defined 2 times/],
+      ["label-specific early return in run_suite", testAll.replace(/^run_suite\(\) \{$/m, `run_suite() {\n  [[ "$1" == *luks-sole-copy ]] && return 0`), /mention the suite/],
       ["own dispatch: no want_scripts region at all", testAll.replace(/^if want_scripts; then$/gm, "if want_scripts_x; then"), /no column-0 `if want_scripts; then` region/],
     ];
     for (const [name, mutated, re] of rows) {
@@ -10119,6 +10187,32 @@ describe("G2f registration pin (#9927): Guard 1 stays registered inside the requ
     const withHeader = testAll.replace(line, `  # Guard 1, retitled\n${line}`);
     expect(withHeader).not.toBe(testAll);
     expect(g2fVerdict(withHeader, exists).defects).toEqual([]);
+    // A sibling registration added directly after it is fine: the neighbourhood rule only forbids WRAPPERS.
+    const withSibling = testAll.replace(line, `${line}\n  run_suite "tests/scripts/some-other-suite" bash tests/scripts/test-some-other-suite.sh`);
+    expect(g2fVerdict(withSibling, exists).defects).toEqual([]);
+  });
+
+  test("G2f: ci.yml wiring - test-scripts runs the runner un-skippably and is a hard need of the test aggregator (parsed YAML, mutation rows)", () => {
+    const v = g2fCiVerdict(ciYaml);
+    expect(v.defects).toEqual([]);
+    expect(v.checks).toBe(6);
+    const runLine = "        run: bash scripts/test-all.sh scripts";
+    expect(ciYaml.includes(runLine)).toBe(true);
+    const needsLine = "needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy,";
+    expect(ciYaml.includes(needsLine)).toBe(true);
+    const rows: Array<[string, string, RegExp]> = [
+      ["swallow the runner's exit status", ciYaml.replace(runLine, `${runLine} || true`), /steps running exactly/],
+      ["continue-on-error on the runner step", ciYaml.replace(runLine, `${runLine}\n        continue-on-error: true`), /continue-on-error/],
+      ["step-level if on the runner", ciYaml.replace(runLine, `${runLine}\n        if: \${{ false }}`), /carries an `if:`/],
+      ["drop test-scripts from the aggregator needs", ciYaml.replace(needsLine, "needs: [test-webplat, test-bun, test-scripts-heavy,"), /does not list test-scripts/],
+      ["drop test-scripts from the aggregator entries", ciYaml.replace('"test-scripts:$SCRIPTS_RESULT" ', ""), /entries array/],
+    ];
+    for (const [name, mutated, re] of rows) {
+      expect(mutated, `mutation "${name}" did not land`).not.toBe(ciYaml);
+      const mv = g2fCiVerdict(mutated);
+      expect(mv.defects.length, `mutation "${name}" stayed GREEN`).toBeGreaterThan(0);
+      expect(mv.defects.join("\n"), `mutation "${name}" went RED for the wrong reason`).toMatch(re);
+    }
   });
 });
 
