@@ -245,6 +245,9 @@ t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch
 #   BOT_ALLOW    — allowlisted-bot noreply (soleur-ai[bot], login in cla.yml)
 #   SIGNED_LOGIN — signed contributor noreply (Elvalio, in cla.json only)
 #   DEVIN        — devin-ai-integration[bot] noreply (NEITHER roster; DENIED)
+#   BARE_LOGIN   — pre-2017 `login@users.noreply.github.com` (no <id>+)
+#   INJECTED     — `$(…)` payload email (survives git ident into %ae verbatim)
+#   WEB          — `noreply@github.com` (sanctioned in the committer slot only)
 # ==========================================================================
 
 # T7 (#12027): config supplies the CLA-signed identity; commits authored by a
@@ -329,7 +332,104 @@ t16() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
   out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
   assert_pass "T16 all-sources-absent fail-opens" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
-t1; t1b; t2; t3; t4; t5; t6; t7; t8; t9; t10; t11; t12; t13; t14; t15; t16
+# T17: pre-2017 bare-login noreply form `login@users.noreply.github.com`
+# (no `<id>+` prefix) whose login IS in the roster → PASS.
+t17() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"; push_cla_signatures "$work"
+  commit_branch "$work" feat-bare "deruelle@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T17 bare-login noreply on roster passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T18: pre-2017 bare-login noreply form whose login is in NEITHER roster →
+# DENY naming the email.
+t18() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"; push_cla_signatures "$work"
+  commit_branch "$work" feat-badeny "madeup@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T18 bare-login noreply off roster denies" "$inc" "$out" "$rc" "madeup@users.noreply.github.com"; rm -rf "$t"; }
+
+# T19: case-insensitive roster match — `92384917+elvalio@…` (lowercase) vs
+# the roster's `Elvalio` → PASS (GitHub logins compare case-insensitively).
+t19() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_signatures "$work"
+  commit_branch "$work" feat-fold "92384917+elvalio@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T19 case-folded login matches roster" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T20: remedy-path injection — a `$(…)` payload survives git's ident
+# sanitization into %ae verbatim (measured), so the offender denies, but the
+# payload must NOT appear in the executable `for e in` args; it is demoted
+# to a "manual rewrite required for" line while the conforming offender
+# still gets an executable arg.
+t20() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-inj 'x$(echo INJECTED)@bad.example' 'ops@jikigai.com'
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T20 injected-payload email denies" "$inc" "$out" "$rc" 'x$(echo INJECTED)@bad.example'
+  local reason fixline ok=1
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+  printf '%s' "$reason" | grep -qF 'manual rewrite required for' || ok=0
+  fixline=$(printf '%s' "$reason" | grep 'for e in' || true)
+  printf '%s' "$fixline" | grep -qF 'INJECTED' && ok=0
+  printf '%s' "$fixline" | grep -qF 'ops@jikigai.com' || ok=0
+  if [[ "$ok" -eq 1 ]]; then echo "PASS: T20b payload excluded from executable remedy"; PASS=$((PASS+1));
+  else echo "FAIL: T20b payload reached executable remedy args (fixline: $fixline)"; FAIL=$((FAIL+1)); fi
+  TOTAL=$((TOTAL+1)); rm -rf "$t"; }
+
+# T21: committer-slot web-merge carve-out — sanctioned author +
+# `noreply@github.com` COMMITTER (the GitHub web-edit/update-branch shape,
+# which cla-check never evaluates) → PASS.
+t21() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-web "test@test.local,noreply@github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T21 web-flow committer passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T22: the carve-out is committer-ONLY — `noreply@github.com` as AUTHOR
+# resolves to the unsigned web-flow login → DENY.
+t22() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-webauth "noreply@github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T22 noreply@github.com author denies" "$inc" "$out" "$rc" "noreply@github.com"; rm -rf "$t"; }
+
+# T23: combined offender detail — a branch carrying BOTH a stage-1 unsigned
+# commit and a stage-2 unsanctioned commit denies on stage 1 but NAMES the
+# stage-2 offender too, so one rewrite round fixes both classes.
+t23() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-both "$UNSIGNED" "ops@jikigai.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T23 stage-1 deny names stage-2 offender" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
+
+# T24: pinned-literal parity — the emails the hook pins by name must be the
+# SAME literals INSTRUCTIONS.md's commit-author section teaches. They are
+# extracted from the hook source (never a second copy) so a hook/doc drift
+# fails here. Anchored on the section's bullet phrase so a literal appearing
+# in an unrelated bullet cannot satisfy the check.
+t24() { local doc="$SCRIPT_DIR/../../plugins/soleur/devin/INSTRUCTIONS.md" ca e login bad=0
+  ca=$(grep -F 'Commit author identity' "$doc" 2>/dev/null || true)
+  if [[ -z "$ca" ]]; then
+    echo "FAIL: T24 no 'Commit author identity' section in INSTRUCTIONS.md"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return
+  fi
+  # SANCTIONED_EMAILS literals must appear verbatim in the section.
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    printf '%s' "$ca" | grep -qF -- "$e" \
+      || { printf '  drift: sanctioned literal %s absent from INSTRUCTIONS.md commit-author section\n' "$e" >&2; bad=1; }
+  done < <(awk '/^SANCTIONED_EMAILS="/,/"$/' "$HOOK" | grep -oE '[^"[:space:]]+@[^"[:space:]]+')
+  # DENIED_EMAILS identities are documented by login — assert the login form.
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    login="${e%@users.noreply.github.com}"; login="${login#*+}"
+    printf '%s' "$ca" | grep -qF -- "$login" \
+      || { printf '  drift: denied-bot login %s absent from INSTRUCTIONS.md commit-author section\n' "$login" >&2; bad=1; }
+  done < <(awk '/^DENIED_EMAILS="/,/"$/' "$HOOK" | grep -oE '[^"[:space:]]+@users\.noreply\.github\.com')
+  if [[ "$bad" -eq 0 ]]; then echo "PASS: T24 hook-pinned literals match INSTRUCTIONS.md"; PASS=$((PASS+1));
+  else echo "FAIL: T24 hook/doc literal drift"; FAIL=$((FAIL+1)); fi
+  TOTAL=$((TOTAL+1)); }
+
+t1; t1b; t2; t3; t4; t5; t6; t7; t8; t9; t10; t11; t12; t13; t14; t15; t16; t17; t18; t19; t20; t21; t22; t23; t24
 
 # === Instrument self-test ===
 # Drives BOTH assert helpers through their pass AND fail branches on
