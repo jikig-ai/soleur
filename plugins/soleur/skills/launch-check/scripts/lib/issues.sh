@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # The issue writer: the only part of launch-check that writes to a customer's tracker, and only from a saved plan.
-# Contract with launch-check.sh: TARGET, WORK, FACTS, JUDGED, DRY, REPORT_REL, SKILL_DIR and the ISSUES_* option variables
+# Contract with launch-check.sh: TARGET, WORK, FACTS, JUDGED, LC_DRY, REPORT_REL, SKILL_DIR and the ISSUES_* option variables
 # are set by cmd_issues. Sourced; never executed. Bash 3.2 safe (no associative arrays, no mapfile).
 #
 # Four guards (see the plan's Guard Contract and test/issues-guards.test.sh and test/issues-resume.test.sh):
@@ -20,7 +20,7 @@ ISSUES_CAP=30
 LC_TAB=$(printf '\t')
 ISSUES_MAX_BYTES=65536
 LC_WRITES_DONE=0
-LC_GH_RC=0; LC_GH_HTTP=""; LC_GH_KIND=ok
+LC_GH_HTTP=""; LC_GH_KIND=ok
 
 lc__say() { printf '%s\n' "$(lc_scrub "$*")"; }
 # lc__fmt <phrase-key> [values...]: a shipped phrase with its %s slots filled, as one scrubbed line.
@@ -40,21 +40,23 @@ lc__same_slug() { [ "$(lc__lower "$1")" = "$(lc__lower "$2")" ]; }
 # ---------------------------------------------------------------- Guard 1: the gh wrappers
 # lc__gh_exec <args...>: the ONLY place the GitHub CLI is invoked. Environment scrubbed (a repository's shell profile cannot
 # redirect the call), a neutral working directory (except for the two verbs that resolve the repository from its remotes),
-# stderr captured and classified, never printed. Sets LC_GH_RC, LC_GH_HTTP and LC_GH_KIND (ok | rate-limit | http-NNN | failed);
+# stderr captured and classified, never printed. Sets LC_GH_HTTP and LC_GH_KIND (ok | rate-limit | http-NNN | failed);
 # stdout lands in $WORK/gh.out.
 lc__gh_exec() {
-  local cwd=$WORK rc=0 bound="" hostenv="" err="$WORK/gh.err"
+  local cwd=$WORK rc=0 bound="" err="$WORK/gh.err"
+  local -a scrub=(-u GH_REPO -u GH_ENTERPRISE_TOKEN -u GH_DEBUG -u DEBUG -u GH_CONFIG_DIR -u GH_PATH -u GH_FORCE_TTY -u SSL_CERT_FILE -u SSL_CERT_DIR
+    -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY -u http_proxy -u https_proxy -u all_proxy -u no_proxy)
   case "${1:-}" in auth|repo) cwd=$TARGET ;; esac
-  [ "${ISSUES_HOST:-github.com}" = github.com ] || hostenv="GH_HOST=$ISSUES_HOST"
+  # An enterprise token is the credential of the host that --host named; for github.com it must not steer the call.
+  [ "${ISSUES_HOST:-github.com}" != github.com ] || scrub+=(-u GITHUB_ENTERPRISE_TOKEN)
   if command -v timeout >/dev/null 2>&1; then bound="timeout 120"; elif command -v gtimeout >/dev/null 2>&1; then bound="gtimeout 120"; fi
   : > "$WORK/gh.out"; : > "$err"
+  # GH_HOST is always the target host (github.com included), so an inherited value or a remote on another host cannot redirect the call.
   # shellcheck disable=SC2086  # $bound is deliberately split into command and argument
-  ( cd "$cwd" && exec $bound env -u GH_REPO -u GH_HOST -u GH_ENTERPRISE_TOKEN -u GH_DEBUG -u GH_CONFIG_DIR \
-      -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY -u http_proxy -u https_proxy -u all_proxy -u no_proxy \
-      GH_PROMPT_DISABLED=1 NO_COLOR=1 GH_NO_UPDATE_NOTIFIER=1 ${hostenv:+"$hostenv"} \
-      gh "$@" ) > "$WORK/gh.out" 2> "$err" || rc=$?
-  # shellcheck disable=SC2034  # LC_GH_RC is read by callers that want the raw exit status
-  LC_GH_RC=$rc; LC_GH_HTTP=""; LC_GH_KIND=ok
+  ( cd "$cwd" && exec $bound env "${scrub[@]}" \
+      GH_HOST="${ISSUES_HOST:-github.com}" GH_PROMPT_DISABLED=1 NO_COLOR=1 GH_NO_UPDATE_NOTIFIER=1 \
+      gh "$@" ) > "$WORK/gh.out" 2> "$err" < /dev/null || rc=$?
+  LC_GH_HTTP=""; LC_GH_KIND=ok
   if [ "$rc" -ne 0 ]; then
     LC_GH_HTTP=$(grep -o 'HTTP [0-9][0-9][0-9]' "$err" | tail -n 1 | cut -c6-)
     if grep -qi 'rate limit' "$err"; then LC_GH_KIND=rate-limit
@@ -193,15 +195,24 @@ lc_issues_preflight() {
   return 0
 }
 
-# The resolved repository must be the one `origin` names, unless the caller gave --repo <that slug>: a fork can resolve to its
-# upstream, and the gaps of a customer's repository would then be filed in a third party's tracker.
+# The resolved repository must be the one `origin` names, and origin must be on the target host. `--repo <slug>` does not choose the
+# target: it acknowledges the repository gh resolved (it must equal that slug) when that differs from origin, e.g. a fork that
+# resolves to its upstream. The only ways to change the target are `gh repo set-default` and the origin remote.
 lc_issues_origin_check() {
-  local url slug
+  local url slug ohost
+  url=$(git -C "$TARGET" remote get-url origin 2>/dev/null) || url=""
+  case "$url" in
+    *://*) ohost=$(printf '%s\n' "$url" | sed -e 's#^[^:/]*://##' -e 's#/.*$##' -e 's#^.*@##' -e 's#:.*$##') ;;
+    *@*:*) ohost=$(printf '%s\n' "$url" | sed -e 's#^.*@##' -e 's#:.*$##') ;;
+    *) ohost="" ;;
+  esac
+  if [ -n "$ohost" ] && [ "$(lc__lower "$ohost")" != "$(lc__lower "${ISSUES_HOST:-github.com}")" ]; then
+    lc__fmt origin_host_fix; lc_abort repo-unresolved 2 "detail=host-differs resolved=$ISSUES_RESOLVED"
+  fi
   if [ -n "${ISSUES_REPO_ARG:-}" ]; then
     lc__same_slug "$ISSUES_REPO_ARG" "$ISSUES_RESOLVED" || lc_abort repo-unresolved 2 "detail=repo-flag-differs resolved=$ISSUES_RESOLVED"
     return 0
   fi
-  url=$(git -C "$TARGET" remote get-url origin 2>/dev/null) || url=""
   slug=$(printf '%s\n' "$url" | sed -e 's#^.*[:/]\([^/:]*/[^/:]*\)$#\1#' -e 's#\.git$##')
   lc__same_slug "$slug" "$ISSUES_RESOLVED" || lc_abort repo-unresolved 2 "detail=origin-differs resolved=$ISSUES_RESOLVED"
 }
@@ -256,7 +267,7 @@ lc_live_tables() {
       }
       for (k in bn) print k, bn[k], bd[k], bs[k] > (ENVIRON["F_ITEMS"])
       print ign + 0 > (ENVIRON["F_IGN"])
-    }' "$WORK/live.tsv"
+    }' "$WORK/live.tsv" || lc__incomplete lookup malformed
   [ -s "$WORK/live.ignored" ] || printf '0\n' > "$WORK/live.ignored"
   sort -o "$WORK/live.items" "$WORK/live.items"
   EPIC_CANDIDATES=$(grep -c . "$WORK/live.epics")
@@ -305,6 +316,14 @@ lc_epic_initial() {
     "$(cat "$SKILL_DIR/references/banner.txt")" "$(lc_phrase epic_heading)" "$(lc_phrase epic_intro)" "$(lc_phrase epic_outro)"
 }
 
+# lc__labels_for <rows file>: the lc: labels a create of these rows ensures (id, severity, domain, class, action, ...), one line, in the
+# order the create ensures them. The preview prints it and the create uses it, so the two cannot differ.
+lc__labels_for() {
+  awk -F'\t' 'BEGIN { s = "lc:launch-check lc:epic"; seen[s] = 1; seen["lc:launch-check"] = 1; seen["lc:epic"] = 1 }
+    $5 == "create" { for (i = 1; i <= 2; i++) { l = (i == 1) ? "lc:severity-" $2 : "lc:domain-" $3; if (!(l in seen)) { seen[l] = 1; s = s " " l } } }
+    END { print s }' "$1"
+}
+
 lc__label_color() {
   case "$1" in
     lc:launch-check) printf '5319e7' ;; lc:epic) printf '3e4b9e' ;;
@@ -349,7 +368,7 @@ lc_issues_stale_check() {
 # PLAN_CREATE_N and writes plan.rows.tsv, plan.create.ids in $WORK. Strict mode also checks owner and mode (create); the parse-only
 # check skips them so the committed sample is accepted under any umask.
 lc_plan_load() {
-  local src=$1 strict=$2 real dst="$WORK/plan" bad uid f mode id n sz m
+  local src=$1 strict=$2 real dst="$WORK/plan" bad uid f mode id n sz m vrc=0
   [ -d "$src" ] || lc__pbad not-a-directory
   [ ! -L "$src" ] || lc__pbad plan-dir-symlink
   real=$(cd "$src" 2>/dev/null && pwd -P) || lc__pbad unreadable
@@ -372,7 +391,7 @@ lc_plan_load() {
   done
   rm -rf "${dst:?}"; mkdir -p "$dst/issues" || lc__pbad copy
   cp -P "$real/plan.tsv" "$dst/plan.tsv" && cp -P "$real/epic.md" "$dst/epic.md" || lc__pbad copy
-  bad=$(RE_SLUG="$ISSUES_RE_SLUG" RE_ID="$ISSUES_RE_ID" RE_TITLE="$ISSUES_RE_TITLE" awk -F'\t' '
+  bad=$(CAPN="$ISSUES_CAP" RE_SLUG="$ISSUES_RE_SLUG" RE_ID="$ISSUES_RE_ID" RE_TITLE="$ISSUES_RE_TITLE" awk -F'\t' '
     function fail(t) { print t; failed = 1; exit 1 }
     BEGIN { split("repo host visibility catalog_hash report_hash created", K, " ") }
     NR <= 6 {
@@ -395,14 +414,16 @@ lc_plan_load() {
       if ($5 !~ /^(create|exists|closed|accepted|excluded|capped)$/) fail("action")
       if ($6 !~ ENVIRON["RE_TITLE"] || length($6) > 120 || $6 ~ /GH-[0-9]/) fail("title")
       if ($5 == "create") n++ }
-    END { if (failed) exit 1; if (NR < 7) fail("columns"); if (n > 30) fail("cap") }' "$dst/plan.tsv" | head -n 1)
+    END { if (failed) exit 1; if (NR < 7) fail("columns"); if (n > ENVIRON["CAPN"] + 0) fail("cap") }' "$dst/plan.tsv") || vrc=$?
+  # A validator that died (no awk, a crash) said nothing: that is not "valid".
+  if [ "$vrc" -ne 0 ]; then lc__pbad "$(printf '%s\n' "${bad:-validator}" | awk 'NR == 1')"; fi
   [ -z "$bad" ] || lc__pbad "$bad"
   PLAN_REPO=$(sed -n 's/^repo=//p' "$dst/plan.tsv" | head -n 1)
   PLAN_HOST=$(sed -n 's/^host=//p' "$dst/plan.tsv" | head -n 1)
   PLAN_CATHASH=$(sed -n 's/^catalog_hash=//p' "$dst/plan.tsv" | head -n 1)
   PLAN_REPHASH=$(sed -n 's/^report_hash=//p' "$dst/plan.tsv" | head -n 1)
-  awk 'NR > 7' "$dst/plan.tsv" > "$WORK/plan.rows.tsv"
-  awk -F'\t' '$5 == "create" { print $1 }' "$WORK/plan.rows.tsv" > "$WORK/plan.create.ids"
+  awk 'NR > 7' "$dst/plan.tsv" > "$WORK/plan.rows.tsv" || lc__pbad validator
+  awk -F'\t' '$5 == "create" { print $1 }' "$WORK/plan.rows.tsv" > "$WORK/plan.create.ids" || lc__pbad validator
   PLAN_CREATE_N=$(grep -c . "$WORK/plan.create.ids")
   n=$(find "$real/issues" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
   [ "$n" = "$PLAN_CREATE_N" ] || lc__pbad body-files
@@ -454,11 +475,11 @@ lc_issues_partition() {
       else if (++made <= ENVIRON["CAPN"] + 0) a = "create"
       else a = "capped"
       print id, $5, dom, cls, a, $6, $7, $8, $9, ((id in lnum) ? lnum[id] : "-") }' \
-    "$WORK/accepted.ids" "$WORK/live.items" "$WORK/gaps.tsv" > "$WORK/part.tsv"
+    "$WORK/accepted.ids" "$WORK/live.items" "$WORK/gaps.tsv" > "$WORK/part.tsv" || lc_abort plan-invalid 2 "detail=validator"
 }
 
 lc_issues_preview() {
-  local pb="$WORK/pb" plandir="" parent n_create n_exists n_closed n_accepted n_excluded n_capped remain
+  local pb="$WORK/pb" plandir="" parent n_create n_exists n_closed n_accepted n_excluded n_capped
   local id sev dom cls act title ev clos rem num c_crit c_high c_med c_low created
   [ -f "$TARGET/$REPORT_REL" ] || { lc__fmt report_missing_fix; lc_abort report-missing 2 "detail=no-report"; }
   if ! lc_issues_preflight; then
@@ -473,7 +494,8 @@ lc_issues_preview() {
   lc_issues_live
   lc_live_tables
   lc_issues_partition
-  bad=$(RE_ID="$ISSUES_RE_ID" RE_TITLE="$ISSUES_RE_TITLE" awk -F'\t' '$1 !~ ENVIRON["RE_ID"] || $6 !~ ENVIRON["RE_TITLE"] || length($6) > 120 || $6 ~ /GH-[0-9]/ { print $1; exit }' "$WORK/part.tsv")
+  bad=$(RE_ID="$ISSUES_RE_ID" RE_TITLE="$ISSUES_RE_TITLE" awk -F'\t' '$1 !~ ENVIRON["RE_ID"] || $6 !~ ENVIRON["RE_TITLE"] || length($6) > 120 || $6 ~ /GH-[0-9]/ { print $1; exit }' "$WORK/part.tsv") \
+    || lc_abort plan-invalid 2 "detail=validator"
   [ -z "$bad" ] || lc_abort plan-invalid 2 "detail=catalog-title"
   n_create=$(awk -F'\t' '$5 == "create"' "$WORK/part.tsv" | grep -c .)
   n_exists=$(awk -F'\t' '$5 == "exists"' "$WORK/part.tsv" | grep -c .)
@@ -502,7 +524,7 @@ lc_issues_preview() {
   for id in lc:launch-check lc:epic; do printf '%s\n%s\n' "$id" "$(lc__label_desc "$id")" >> "$WORK/blob"; done
   lc_emit_checked "$WORK/blob" "" 1
 
-  if [ "${DRY:-0}" = 1 ]; then plandir="-"
+  if [ "${LC_DRY:-0}" = 1 ]; then plandir="-"
   else
     parent=${ISSUES_PLAN_OUT:-${TMPDIR:-/tmp}}
     ( umask 077; mkdir -p "$parent" ) || lc_abort write-failed 2 "detail=plan-out"
@@ -516,7 +538,9 @@ lc_issues_preview() {
   [ "$ISSUES_FORK" != true ] || lc__fmt issues_fork_warn
   [ "$ISSUES_VIS" = PRIVATE ] || lc__fmt issues_public_warn
   if [ "$EPIC_CANDIDATES" -gt 1 ]; then lc__fmt issues_epic_ambiguous_warn
-  elif [ "$EPIC_CANDIDATES" = 1 ] && [ "$(cut -f3 "$WORK/live.epics")" = closed ]; then lc__fmt issues_epic_closed_warn; fi
+  elif [ "$EPIC_CANDIDATES" = 1 ] && [ "$(cut -f3 "$WORK/live.epics")" = closed ]; then lc__fmt issues_epic_closed_warn
+  elif [ "$EPIC_CANDIDATES" = 1 ] && lc_gh_read api user --jq '.login' \
+    && [ "$(cut -f4 "$WORK/live.epics")" != "$(awk 'NR == 1 { print; exit }' "$WORK/gh.out")" ]; then lc__fmt issues_epic_author_warn; fi
   n=$(cat "$WORK/live.ignored")
   [ "$n" = 0 ] || lc__fmt issues_ignored "$n" "$(head -n 10 "$WORK/live.ign.nums" | sed 's/^/#/' | paste -s -d, -)"
   [ ! -s "$WORK/live.ign.epic" ] || lc__fmt issues_epic_ambiguous_warn
@@ -524,14 +548,12 @@ lc_issues_preview() {
     lc__fmt issues_ignored_conflict_warn
   fi
   lc__fmt issues_counts "$n_create" "$n_exists" "$n_closed" "$n_accepted" "$n_excluded" "$n_capped"
-  c_crit=0; c_high=0; c_med=0; c_low=0
   c_crit=$(awk -F'\t' '$5 == "create" && $2 == "critical"' "$WORK/part.tsv" | grep -c .)
   c_high=$(awk -F'\t' '$5 == "create" && $2 == "high"' "$WORK/part.tsv" | grep -c .)
   c_med=$(awk -F'\t' '$5 == "create" && $2 == "medium"' "$WORK/part.tsv" | grep -c .)
   c_low=$(awk -F'\t' '$5 == "create" && $2 == "low"' "$WORK/part.tsv" | grep -c .)
   lc__fmt issues_by_severity "$c_crit" "$c_high" "$c_med" "$c_low"
-  remain=$n_capped
-  lc__fmt issues_cap_rule "$remain"
+  lc__fmt issues_cap_rule "$ISSUES_CAP" "$n_capped"
   # Informational lines: a filed issue whose gap is resolved, and one the customer closed while the gap is still open.
   F_CUR="$WORK/cur.ids" F_LIVE="$WORK/live.items" awk -F'\t' '
     FILENAME == ENVIRON["F_CUR"] { cur[$1] = 1; next }
@@ -547,7 +569,8 @@ lc_issues_preview() {
       [ "$act" = create ] || continue
       lc__say "$id | $sev | $title | $ev"
     done < "$WORK/part.tsv"
-    if [ "${DRY:-0}" = 1 ]; then lc__fmt dry_run_note
+    lc__fmt issues_labels_line "$(lc__labels_for "$WORK/part.tsv")"
+    if [ "${LC_DRY:-0}" = 1 ]; then lc__fmt dry_run_note
     else
       lc__fmt issues_create_hdr
       lc__create_cmd "$plandir" "$n_create"
@@ -634,6 +657,13 @@ lc__on_signal() { # <exit code>
   exit "$1"
 }
 
+# lc__record_failed: the record of what a run created (created.tsv) could not be written. The issue exists and is found again by its
+# marker, so the summary and the resume command are printed before the run stops.
+lc__record_failed() {
+  lc__resume_block create record
+  lc_abort write-failed 2 "detail=created-tsv"
+}
+
 # lc__parse_pair: the "number<TAB>database id" line a create printed, into NEW_NUM and NEW_ID.
 lc__parse_pair() {
   local line
@@ -665,7 +695,7 @@ lc__epic_section() {
     l == "<!-- launch-check:begin -->" { s = 1; next }
     l == "<!-- launch-check:end -->" { s = 0; next }
     s && l ~ /^- \[[xX]\] #[0-9]+/ { t = l; sub(/^- \[[xX]\] #/, "", t); sub(/[^0-9].*$/, "", t); print t }' "$old" > "$WORK/ticked.nums"
-  lc__fmt epic_counts "$CNT_CREATED" "$CNT_SKIPPED" "${FAILED_N:-0}" "$ISSUES_FALLBACK" > "$out"
+  lc__fmt epic_counts "$CNT_CREATED" "$CNT_SKIPPED" "$([ "${FAILED_IDS:--}" = - ] && echo 0 || echo 1)" "$ISSUES_FALLBACK" > "$out"
   if [ "$ISSUES_FALLBACK" = task-list ]; then
     # Items that exist now: the live open ones named by the plan, plus what this run made.
     F_ROWS="$WORK/plan.rows.tsv" F_LIVE="$WORK/live.items" F_MADE="$WORK/made.tsv" awk -F'\t' -v OFS='\t' '
@@ -699,7 +729,7 @@ lc__epic_update() {
 
 lc_issues_create() {
   local id sev dom cls act title ev clos rem num want lbl made_epic=0 k
-  CNT_CREATED=0; CNT_LINKED=0; CNT_SKIPPED=0; FAILED_IDS="-"; FAILED_N=0; ISSUES_FALLBACK=none; EPIC_REF="-"; EPIC_NUM=""; EPIC_STATE=skipped
+  CNT_CREATED=0; CNT_LINKED=0; CNT_SKIPPED=0; FAILED_IDS="-"; ISSUES_FALLBACK=none; EPIC_REF="-"; EPIC_NUM=""; EPIC_STATE=skipped
   mkdir -p "$WORK/out"; : > "$WORK/made.tsv"
   lc_plan_load "$ISSUES_PLAN_ARG" 1
   trap 'lc__on_signal 130' INT; trap 'lc__on_signal 143' TERM; trap 'lc__on_signal 129' HUP
@@ -712,6 +742,12 @@ lc_issues_create() {
   lc_issues_preflight || lc_abort issues-unavailable 2 "detail=$ISSUES_REASON"
   lc__same_slug "$ISSUES_RESOLVED" "$PLAN_REPO" || lc_abort plan-repo-mismatch 2 "detail=resolved-repo-differs resolved=$ISSUES_RESOLVED"
   lc_issues_origin_check
+  # An exists or capped row carries no body file, so nothing else ties it to this catalog: it must name a catalog check that is a gap now.
+  F_CAT="$WORK/cat.ids" F_GAPS="$WORK/gaps.tsv" awk -F'\t' '
+    FILENAME == ENVIRON["F_CAT"] { c[$1] = 1; next }
+    FILENAME == ENVIRON["F_GAPS"] { g[$2] = 1; next }
+    ($5 == "capped" || $5 == "exists") && (!($1 in c) || !($1 in g)) { bad = 1 }
+    END { exit bad }' "$WORK/cat.ids" "$WORK/gaps.tsv" "$WORK/plan.rows.tsv" || lc__pbad row-id
   if [ "$ISSUES_VIS" != PRIVATE ] && [ "$ISSUES_CONFIRM_PUBLIC" != 1 ]; then
     lc__fmt confirm_public_fix; lc_abort confirm-public-required 2 "visibility=$ISSUES_VIS"
   fi
@@ -733,12 +769,10 @@ lc_issues_create() {
   cmp -s "$WORK/regen/epic.md" "$ISSUES_PLAN_DIR/epic.md" || lc_abort plan-invalid 2 "detail=epic-mismatch"
 
   # Authored bytes are scanned bytes: one blob in send order, before the first write.
-  want="lc:launch-check lc:epic"
+  want=$(lc__labels_for "$WORK/plan.rows.tsv")
   while IFS=$'\t' read -r id sev dom cls act title; do
     [ "$act" = create ] || continue
     { printf '%s\n' "$title"; cat "$ISSUES_PLAN_DIR/issues/$id.md"; } >> "$WORK/blob"
-    case " $want " in *" lc:severity-$sev "*) ;; *) want="$want lc:severity-$sev" ;; esac
-    case " $want " in *" lc:domain-$dom "*) ;; *) want="$want lc:domain-$dom" ;; esac
   done < "$WORK/plan.rows.tsv"
   { lc_epic_title; cat "$ISSUES_PLAN_DIR/epic.md"; } >> "$WORK/blob"
   for lbl in $want; do printf '%s\n%s\n' "$lbl" "$(lc__label_desc "$lbl")" >> "$WORK/blob"; done
@@ -754,7 +788,7 @@ lc_issues_create() {
     EPIC_NUM=$(cut -f1 "$WORK/live.epics"); EPIC_REF="#$EPIC_NUM"
     if [ "$(cut -f3 "$WORK/live.epics")" = closed ]; then lc__fmt epic_closed_fix; lc_abort epic-closed 2 "detail=epic-closed"; fi
     lc_gh_read api user --jq '.login' || lc__incomplete lookup "$LC_GH_KIND"
-    [ "$(cut -f4 "$WORK/live.epics")" = "$(awk 'NR == 1 { print; exit }' "$WORK/gh.out")" ] || lc_abort plan-invalid 2 "detail=epic-author"
+    [ "$(cut -f4 "$WORK/live.epics")" = "$(awk 'NR == 1 { print; exit }' "$WORK/gh.out")" ] || { lc__fmt epic_author_fix; lc_abort plan-invalid 2 "detail=epic-author"; }
   fi
 
   if [ "${LC_DRY:-0}" = 1 ]; then
@@ -786,7 +820,7 @@ lc_issues_create() {
         -f 'labels[]=lc:launch-check' -f 'labels[]=lc:epic' --jq '[.number, .id] | @tsv' || lc__incomplete epic "$LC_GH_KIND"
       lc__parse_pair || lc__incomplete epic failed
       EPIC_NUM=$NEW_NUM; EPIC_REF="#$EPIC_NUM"; made_epic=1
-      printf 'EPIC\t%s\thttps://%s/%s/issues/%s\n' "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv"
+      printf 'EPIC\t%s\thttps://%s/%s/issues/%s\n' "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv" || lc__record_failed
       lc_issues_live
       lc_live_tables
       lc__live_gate
@@ -806,7 +840,7 @@ lc_issues_create() {
       fi
     fi
   fi
-  if [ -n "$EPIC_NUM" ] && [ "$ISSUES_FALLBACK" = none ]; then
+  if [ "$ISSUES_FALLBACK" = none ] && [ -n "$EPIC_NUM" ]; then
     F_ROWS="$WORK/plan.rows.tsv" F_LIVE="$WORK/live.items" F_KIDS="$WORK/children" awk -F'\t' -v OFS='\t' '
       FILENAME == ENVIRON["F_ROWS"] { if ($5 == "create" || $5 == "exists") want[$1] = 1; next }
       FILENAME == ENVIRON["F_KIDS"] { kid[$1] = 1; next }
@@ -824,14 +858,14 @@ lc_issues_create() {
     if grep -q "^$id$LC_TAB" "$WORK/live.items"; then CNT_SKIPPED=$((CNT_SKIPPED + 1)); continue; fi
     if ! lc_gh_write api -X POST "repos/$ISSUES_REPO/issues" -f "title=$title" -F "body=@$ISSUES_PLAN_DIR/issues/$id.md" \
       -f 'labels[]=lc:launch-check' -f "labels[]=lc:severity-$sev" -f "labels[]=lc:domain-$dom" --jq '[.number, .id] | @tsv'; then
-      FAILED_IDS=$id; FAILED_N=1; lc__incomplete create "$LC_GH_KIND"
+      FAILED_IDS=$id; lc__incomplete create "$LC_GH_KIND"
     fi
-    if ! lc__parse_pair; then FAILED_IDS=$id; FAILED_N=1; lc__incomplete create failed; fi
-    printf '%s\t%s\thttps://%s/%s/issues/%s\n' "$id" "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv"
-    printf '%s\t%s\n' "$id" "$NEW_NUM" >> "$WORK/made.tsv"
+    if ! lc__parse_pair; then FAILED_IDS=$id; lc__incomplete create failed; fi
+    printf '%s\t%s\thttps://%s/%s/issues/%s\n' "$id" "$NEW_NUM" "$ISSUES_HOST" "$ISSUES_REPO" "$NEW_NUM" >> "$ISSUES_ORIG_PLAN_DIR/created.tsv" || lc__record_failed
+    printf '%s\t%s\n' "$id" "$NEW_NUM" >> "$WORK/made.tsv" || lc__record_failed
     CNT_CREATED=$((CNT_CREATED + 1))
     lc__say "created: #$NEW_NUM $id"
-    if [ -n "$EPIC_NUM" ] && [ "$ISSUES_FALLBACK" = none ]; then lc__link "$NEW_ID" "$NEW_NUM" "$id"; fi
+    if [ "$ISSUES_FALLBACK" = none ]; then lc__link "$NEW_ID" "$NEW_NUM" "$id"; fi
   done < "$WORK/plan.rows.tsv"
 
   lc__epic_update

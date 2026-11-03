@@ -64,9 +64,9 @@ http_fail() { # http_fail <code> <message> [extra stderr line]
 }
 env_json() { # names of the hostile variables that are set, with their values (never a token)
   local v out='{}'
-  for v in GH_REPO GH_HOST GH_ENTERPRISE_TOKEN GH_DEBUG GH_CONFIG_DIR HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy; do
+  for v in GH_REPO GH_HOST GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_DEBUG DEBUG GH_CONFIG_DIR GH_PATH GH_FORCE_TTY SSL_CERT_FILE SSL_CERT_DIR HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
     if [ -n "${!v+x}" ]; then
-      case "$v" in GH_ENTERPRISE_TOKEN) out=$(jq -nc --argjson o "$out" --arg k "$v" '$o + {($k): "(set)"}') ;;
+      case "$v" in GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN) out=$(jq -nc --argjson o "$out" --arg k "$v" '$o + {($k): "(set)"}') ;;
         *) out=$(jq -nc --argjson o "$out" --arg k "$v" --arg val "${!v}" '$o + {($k): $val}') ;; esac
     fi
   done
@@ -77,9 +77,9 @@ record() { # record <class> <method> <path> <explicit 0|1> [extra-json-object]
   CUR_SEQ=$seq
   jq -nc --argjson seq "$seq" --arg class "$1" --arg method "$2" --arg path "$3" --argjson explicit "$4" \
     --argjson fields "${FIELDS:-[]}" --arg jq "${JQEXPR:-}" --argjson paginate "${PAGINATE:-0}" --arg hostname "${HOSTNAME_FLAG:-}" \
-    --argjson env "$(env_json)" --arg cwd "$PWD" --argjson token "$([ -n "${GH_TOKEN:-}" ] && echo true || echo false)" \
+    --argjson env "$(env_json)" --arg cwd "$PWD" --arg stdin "$(readlink "/proc/$$/fd/0" 2>/dev/null || echo unknown)" --argjson token "$([ -n "${GH_TOKEN:-}" ] && echo true || echo false)" \
     --argjson extra "${5:-{\}}" \
-    '{seq:$seq,class:$class,method:$method,path:$path,explicit_method:($explicit==1),fields:$fields,jq:$jq,paginate:($paginate==1),hostname:$hostname,env:$env,cwd:$cwd,token_present:$token} + $extra' >> "$S/calls.log"
+    '{seq:$seq,class:$class,method:$method,path:$path,explicit_method:($explicit==1),fields:$fields,jq:$jq,paginate:($paginate==1),hostname:$hostname,env:$env,cwd:$cwd,stdin:$stdin,token_present:$token} + $extra' >> "$S/calls.log"
 }
 jq_out() { # jq_out <json> : apply --jq (real jq -r) or print compact JSON
   if [ -n "${JQEXPR:-}" ]; then printf '%s' "$1" | jq -r "$JQEXPR" || exit 1; else printf '%s' "$1" | jq -c .; fi

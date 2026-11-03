@@ -61,6 +61,8 @@ bad_j "unknown id" 'JDG-NOPE\tgap\thigh\tCI-03\n'
 bad_j "non-judged id" 'CI-01\tgap\thigh\tCI-03\n'
 bad_j "severity outside the enum" 'JDG-AUTH\tgap\tcritical\tCI-03\n'
 bad_j "evidence id absent from the facts" 'JDG-AUTH\tgap\thigh\tZZ-99\n'
+bad_j "evidence names the facts header line, which is not a check" 'JDG-AUTH\tgap\thigh\t# stack=node\n'
+bad_j "evidence names a judged item, which is not a deterministic fact" 'JDG-AUTH\tgap\thigh\tJDG-ARCH\n'
 bad_j "status outside the enum" 'JDG-AUTH\tmaybe\thigh\tCI-03\n'
 
 # verify-report negatives and the committed fixture.

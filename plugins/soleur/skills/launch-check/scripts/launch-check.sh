@@ -12,7 +12,7 @@
 # Exit codes: 0 ok (a preview in an unusable environment prints a report-only marker and also exits 0) ·
 #   1 redaction hit (render, issues) / invalid report (verify-report) · 2 usage, preflight, scanner, input, write failure.
 # Every abort prints one SOLEUR_LAUNCH_CHECK_ABORT marker; this tool's only sink is the caller's tool result.
-# Headless runs (CI set, or LAUNCH_CHECK_HEADLESS=1) may scan, render --dry-run and issues --preview/--check-plan, but never
+# Headless runs (CI set, or LAUNCH_CHECK_HEADLESS=1, true or yes) may scan, render --dry-run and issues --preview/--check-plan, but never
 # overwrite the report and never run issues --create.
 #
 # issues --preview      --target R --facts F [--judged J] [--plan-out D] [--exclude-domain X]... [--exclude-class X]... [--repo S] [--host H] [--dry-run]

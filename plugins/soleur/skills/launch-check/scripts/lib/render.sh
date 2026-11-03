@@ -52,7 +52,7 @@ lc_clean_facts() {
 lc_validate_judged() {
   local out
   out=$(awk -F'\t' -v cat="$CAT" -v facts="$FACTS" '
-    FILENAME == cat   { if ($4 == "judged") j[$1] = 1; next }
+    FILENAME == cat   { if ($4 == "judged") j[$1] = 1; else if ($1 != "") c[$1] = 1; next }
     FILENAME == facts { f[$1] = 1; next }
     /^#/ || /^$/ { next }
     { bad = ""
@@ -63,7 +63,7 @@ lc_validate_judged() {
       else if ($2 == "gap" && $3 != "high" && $3 != "medium" && $3 != "low") bad = "severity"
       else if ($2 != "gap" && $3 != "-") bad = "severity-must-be-dash-unless-gap"
       else if ($2 == "gap" && $4 == "-") bad = "evidence-required"
-      else if ($4 != "-") { k = split($4, ev, ","); for (i = 1; i <= k; i++) if (!(ev[i] in f)) bad = "evidence-id" }
+      else if ($4 != "-") { k = split($4, ev, ","); for (i = 1; i <= k; i++) if (!(ev[i] in c) || !(ev[i] in f)) bad = "evidence-id" }
       seen[$1] = 1
       if (bad != "") { print "line " FNR ": " bad; exit 1 } }' "$CAT" "$FACTS" "$1") || lc_abort judged-schema 2 "$out"
 }

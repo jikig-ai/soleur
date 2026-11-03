@@ -135,7 +135,9 @@ check "preview: a fork names the resolved owner/name and the fork flag" bash -c 
 newcase; stub_reset other/thing private; only_first "$R" 3; prev
 check "preview: a resolved slug that differs from origin's aborts repo-unresolved unless --repo is passed" abort_is 2 repo-unresolved
 prev --repo other/thing
-check "preview: --repo <slug> accepts the explicit target" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+check "preview: --repo <slug> acknowledges the repository gh resolved when it differs from origin (it does not choose the target)" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+prev --repo acme/demo
+check "preview: --repo does not retarget: naming origin's slug while gh resolved another repository aborts repo-unresolved detail=repo-flag-differs" bash -c 'grep -q "detail=repo-flag-differs" "$1"' _ "$OUT"; check "preview: ... with the marker and rc 2" abort_is 2 repo-unresolved
 
 # preflight failures: report-only on preview (exit 0, no plan), issues-unavailable on create
 pre_case() { # pre_case <label> <cause> <setup-fn>
@@ -202,6 +204,11 @@ calls_reset; with LAUNCH_CHECK_HEADLESS=1 -- create; canary_cases=$((canary_case
 check "G1.3: LAUNCH_CHECK_HEADLESS=1 -> zero calls of any kind" bash -c '[ "$1" = 0 ]' _ "$(n_calls)"
 check "G1.3: LAUNCH_CHECK_HEADLESS=1 -> headless-write-refused, rc 2" abort_is 2 headless-write-refused
 check "G1.3: both headless cases ran (canary-count floor: dropping a case fails here)" test "$canary_cases" -ge 2
+for hv in true TRUE Yes; do
+  calls_reset; with LAUNCH_CHECK_HEADLESS=$hv -- create
+  check "G1.3: LAUNCH_CHECK_HEADLESS=$hv -> zero calls and headless-write-refused (1, true and yes in any case all mean unattended)" bash -c '[ "$1" = 0 ]' _ "$(n_calls)"
+  check "G1.3: ... LAUNCH_CHECK_HEADLESS=$hv aborts headless-write-refused (rc 2)" abort_is 2 headless-write-refused
+done
 calls_reset; with CI=1 -- runi g1h --preview --target "$R" --facts "$FACTS" --judged "$JUD" --plan-out "$SCRATCH/po-ci" --dry-run
 check "G1.3: preview --dry-run is allowed headless (like render --dry-run)" bash -c 'grep -qE "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN|mode=report-only" "$1"' _ "$OUT"
 
@@ -224,6 +231,17 @@ probe "$SKILL" - "LC_DRY=1" lc_gh_write api -X POST repos/acme/demo/labels -f na
 check "G1.4: lc_gh_write called directly under LC_DRY=1 returns 0 and reaches nothing (the function exists)" bash -c '[ "$1" = 0 ] && [ "$2" = 0 ]' _ "$PRC" "$(n_calls)"
 probe "$SKILL" - "X=1" lc_gh_write api -X POST repos/acme/demo/labels -f name=lc:probe -f color=ededed
 check "G1.4 twin: the same compliant call with neither switch reaches the stub exactly once" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$PRC" "$(n_writes)"
+# lc_is_headless itself: CI non-empty, or LAUNCH_CHECK_HEADLESS 1, true or yes in any case; nothing else, and no TTY test
+for hv in 1 true TRUE True yes YES Yes; do
+  probe "$SKILL" - "LAUNCH_CHECK_HEADLESS=$hv" lc_is_headless
+  check "lc_is_headless: LAUNCH_CHECK_HEADLESS=$hv is unattended" test "$PRC" = 0
+done
+for hv in 0 false no off ""; do
+  probe "$SKILL" - "LAUNCH_CHECK_HEADLESS=$hv" lc_is_headless
+  check "lc_is_headless: LAUNCH_CHECK_HEADLESS='$hv' is not unattended (rc 1, the function exists)" test "$PRC" = 1
+done
+probe "$SKILL" - "CI=false" lc_is_headless
+check "lc_is_headless: any non-empty CI (even false) is unattended" test "$PRC" = 0
 shape_with() { # shape_with <env-assignment> <desc> <args...>: a call outside the four allowlisted shapes (EPIC_NUM=101 unless the row says otherwise)
   local e=$1 d=$2; shift 2; calls_reset; probe "$SKILL" - "$e" lc_gh_write "$@"
   check "G1.7: $d -> write-shape-refused, rc 2, nothing recorded and nothing refused by the stub" bash -c 'grep -q "reason=write-shape-refused" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ] && [ ! -s "$4" ]' _ "$SCRATCH/probe.out" "$PRC" "$(n_calls)" "$ST/refused.log"
@@ -304,14 +322,26 @@ conf nocount --confirm-repo acme/demo
 check "G1.10: a missing --confirm-count makes zero calls" bash -c '[ "$1" = 0 ]' _ "$(n_calls)"; check "G1.10: a missing --confirm-count aborts usage and names the confirm flags" bash -c 'grep -qi "confirm" "$1"' _ "$OUT"; check "G1.10: ... with the usage marker (missing --confirm-count)" abort_is 2 usage
 prev_create() { prev; create; }
 newcase; only_first "$R" 3; calls_reset
-with GH_HOST=evil.example GH_REPO=other/repo GH_DEBUG=api HTTPS_PROXY=http://proxy.invalid:3128 GH_CONFIG_DIR="$SCRATCH/cfg" -- prev_create
+with GH_HOST=evil.example GH_REPO=other/repo GH_DEBUG=api DEBUG=1 HTTPS_PROXY=http://proxy.invalid:3128 HTTP_PROXY=http://proxy.invalid:3128 ALL_PROXY=http://proxy.invalid:3128 NO_PROXY=x http_proxy=http://proxy.invalid:3128 https_proxy=http://proxy.invalid:3128 all_proxy=http://proxy.invalid:3128 no_proxy=x GH_CONFIG_DIR="$SCRATCH/cfg" GH_ENTERPRISE_TOKEN=tok GITHUB_ENTERPRISE_TOKEN=tok SSL_CERT_FILE=/nonexistent/ca SSL_CERT_DIR=/nonexistent GH_FORCE_TTY=1 GH_PATH=/nonexistent -- prev_create
 check "G1.9: the run completed against the stub (anti-vacuous: calls and writes were recorded)" bash -c '[ "$1" -gt 3 ] && [ "$2" -gt 0 ]' _ "$(n_calls)" "$(n_writes)"
-check "G1.9: no recorded call carries GH_HOST, GH_REPO, GH_DEBUG, GH_CONFIG_DIR or a proxy variable (and there are recorded calls)" bash -c '[ "$1" -gt 0 ] && [ "$2" = 0 ]' _ "$(n_calls)" "$(cj '[.[]|select(.env != {})]|length')"
+check "G1.9: every variable the code unsets (GH_REPO, GH_DEBUG, DEBUG, GH_CONFIG_DIR, GH_PATH, GH_FORCE_TTY, SSL_CERT_*, both enterprise tokens, every proxy spelling) is absent from every recorded call, and GH_HOST is the target host, never the inherited one" bash -c '[ "$1" -gt 0 ] && [ "$2" = 0 ]' _ "$(n_calls)" "$(cj '[.[]|select(.env != {GH_HOST:"github.com"})]|length')"
+check "G1.9: no recorded call reads the caller's stdin (it is /dev/null; the check is skipped where /proc is absent)" bash -c '[ ! -r /proc/self/fd/0 ] || [ "$(jq -sr "[.[]|select(.stdin != \"/dev/null\")]|length" "$1")" = 0 ]' _ "$ST/calls.log"
 check "G1.9: after the slug is resolved no call runs with the customer repository as its working directory" bash -c '[ -s "$3" ] && [ "$(jq -sr --arg r "$1" "[.[]|select(.class!=\"repo\" and .class!=\"auth\")|select(.cwd|startswith(\$r))]|length" "$3")" = 0 ]' _ "$R" x "$ST/calls.log"
 newcase; only_first "$R" 3; prev; [ -d "$PLAN" ] && sed 's/^host=.*/host=ghe.example/' "$PLAN/plan.tsv" > "$PLAN/p.new" && mv "$PLAN/p.new" "$PLAN/plan.tsv"; calls_reset; create
 check "G1.9: a plan for a non-github.com host is refused without --host (rc 2, an ABORT marker naming the host, zero writes)" bash -c '[ "$1" = 2 ] && [ "$2" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ABORT" "$3" && grep -qi "host" "$3"' _ "$RC" "$(n_writes)" "$OUT"
-calls_reset; create --host ghe.example
-check "G1.9: --host ghe.example makes the same plan runnable and the host reaches a call (hostname flag or GH_HOST)" bash -c '[ "$(jq -sr "[.[]|select(.hostname==\"ghe.example\" or .env.GH_HOST==\"ghe.example\")]|length>0" "$1" 2>/dev/null)" = true ]' _ "$ST/calls.log"
+gitq "$R" remote set-url origin https://ghe.example/acme/demo.git
+calls_reset; with GITHUB_ENTERPRISE_TOKEN=tok -- create --host ghe.example
+check "G1.9: --host ghe.example makes the same plan runnable (rc 0, writes recorded)" bash -c '[ "$1" = 0 ] && [ "$2" -gt 0 ]' _ "$RC" "$(n_writes)"
+check "G1.9: on a non-github default host EVERY recorded call carries GH_HOST=ghe.example, and the enterprise token that host needs is passed through" bash -c '[ "$(jq -sr "[.[]|select(.env.GH_HOST!=\"ghe.example\")]|length" "$1")" = 0 ] && [ "$(jq -sr "[.[]|select(.env.GITHUB_ENTERPRISE_TOKEN==\"(set)\")]|length>0" "$1")" = true ]' _ "$ST/calls.log"
+# the origin remote must be on the target host
+newcase; only_first "$R" 3; gitq "$R" remote set-url origin https://gitlab.example/acme/demo.git; prev
+check "origin host: a remote on another host than the target aborts repo-unresolved detail=host-differs (the recovery names --host)" bash -c 'grep -q "detail=host-differs" "$1" && grep -q -- "--host" "$1"' _ "$OUT"; check "origin host: ... with the marker and rc 2" abort_is 2 repo-unresolved
+prev --repo acme/demo
+check "origin host: --repo does not waive the host check" bash -c 'grep -q "detail=host-differs" "$1"' _ "$OUT"
+prev --host gitlab.example
+check "origin host: naming that host makes the same preview proceed" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
+newcase; only_first "$R" 3; gitq "$R" remote set-url origin git@github.com:acme/demo.git; prev
+check "origin host: an scp-style remote on the target host is accepted" bash -c '[ "$1" = 0 ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES_PLAN" "$2"' _ "$RC" "$OUT"
 
 # ---------------------------------------------------------------- 6. Guard 2: authored bytes are scanned bytes
 check "sandbox: the pristine copy parses and has the seams injected" bash -c 'bash -n "$1" && grep -q LC_TEST_NOGATE "$1"' _ "$SB0"
@@ -434,6 +464,53 @@ check "G2.11: a plan passed through a path alias (a symlinked parent) is accepte
 rm -f "$ALIAS"
 newcase; only_first "$R" 3; ln -sfn "$GP" "$SCRATCH/plan-link"; PLAN="$SCRATCH/plan-link"; calls_reset; CCOUNT=3 create; unset CCOUNT
 check "G2.11: a plan directory that is itself a symlink is plan-invalid with zero writes" bash -c 'grep -q "reason=plan-invalid" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"
+# ---------------------------------------------------------------- validators that die are not "valid"
+SHIM="$SCRATCH/awkshim"; mkdir -p "$SHIM"
+printf '#!/usr/bin/env bash\nif [ -n "${AWK_DIE:-}" ]; then case "$*" in *"$AWK_DIE"*) exit 2 ;; esac; fi\nexec "%s" "$@"\n' "$(command -v awk)" > "$SHIM/awk"; chmod +x "$SHIM/awk"
+calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='function fail' -- runi chkdie --check-plan --plan "$SAMPLE"
+check "validator death: --check-plan with a plan validator that dies is plan-invalid detail=validator (rc 2), never PLAN_OK" bash -c '! grep -q "PLAN_OK" "$1" && grep -q "reason=plan-invalid detail=validator" "$1" && [ "$2" = 2 ]' _ "$OUT" "$RC"
+newcase; only_first "$R" 3; with PATH="$SHIM:$PATH" AWK_DIE='ENVIRON["RE_ID"]' -- prev
+check "validator death: a preview whose catalog-title check dies aborts plan-invalid detail=validator and writes no plan" bash -c 'grep -q "reason=plan-invalid detail=validator" "$1" && [ -z "$(ls -A "$2" 2>/dev/null)" ]' _ "$OUT" "$SCRATCH/po$N"
+newcase; only_first "$R" 3; with PATH="$SHIM:$PATH" AWK_DIE='lnum[$1]' -- prev
+check "validator death: a preview whose partition dies aborts plan-invalid detail=validator (not an empty plan that reads as nothing to file)" bash -c 'grep -q "reason=plan-invalid detail=validator" "$1" && ! grep -q "Nothing to file" "$1"' _ "$OUT"
+newcase; only_first "$R" 3; prev; calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='function fail' -- create
+check "validator death: create with a plan validator that dies is plan-invalid detail=validator with zero gh calls" bash -c 'grep -q "reason=plan-invalid detail=validator" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_calls)"
+calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='first[n]' -- create
+check "validator death: create whose live-table derivation dies stops issues-incomplete phase=lookup with zero writes (not 'nothing is filed yet')" bash -c 'grep -q "phase=lookup" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"; check "validator death: ... marker and rc" abort_is 2 issues-incomplete
+# the record of what a run created must be writable
+newcase; only_first "$R" 3; prev; mkdir "$PLAN/created.tsv"; calls_reset; create
+check "created.tsv: a record that cannot be appended aborts write-failed (rc 2) with the resume command, never a silent success" bash -c 'grep -q "detail=created-tsv" "$1" && grep -q -- "--create" "$1"' _ "$OUT"; check "created.tsv: ... marker and rc" abort_is 2 write-failed
+
+# ---------------------------------------------------------------- the cap, and rows that carry no body file
+bigplan() { # bigplan <n>: the sample plan with n create rows (mode 700), prints its path
+  local n=$1 d="$SCRATCH/bp.$1" i id
+  cp -R "$SAMPLE" "$d"; chmod 700 "$d" "$d/issues"; sed -n 1,7p "$SAMPLE/plan.tsv" > "$d/plan.tsv"; rm -f "$d/issues/CI-01.md"
+  for i in $(seq 1 "$n"); do
+    id=$(printf 'CI-%02d' "$i")
+    printf '%s\thigh\ttests-ci\treadiness\tcreate\tCI workflow present\n' "$id" >> "$d/plan.tsv"
+    sed "s/gap=CI-01/gap=$id/" "$SAMPLE/issues/CI-01.md" > "$d/issues/$id.md"
+  done
+  printf '%s' "$d"
+}
+BP30=$(bigplan 30); BP31=$(bigplan 31)
+calls_reset; runi cap30 --check-plan --plan "$BP30"
+check "cap: --check-plan accepts a plan with exactly 30 create rows" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_PLAN_OK .*create=30" "$1"' _ "$OUT"
+runi cap31 --check-plan --plan "$BP31"
+check "cap: --check-plan refuses 31 create rows (plan-invalid detail=cap)" bash -c 'grep -q "reason=plan-invalid detail=cap" "$1" && [ "$2" = 2 ]' _ "$OUT" "$RC"
+newcase; only_first "$R" 3; calls_reset; PLAN="$BP31" CCOUNT=31 CREPO=acme-fixture/launch-demo create; unset CCOUNT CREPO
+check "cap: an actual create with 31 create rows is refused at plan load (plan-invalid detail=cap, zero gh calls)" bash -c 'grep -q "reason=plan-invalid detail=cap" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_calls)"
+newcase; only_first "$R" 3; calls_reset; PLAN="$BP30" CCOUNT=30 CREPO=acme-fixture/launch-demo create; unset CCOUNT CREPO
+check "cap: an actual create with 30 create rows gets past plan load (it stops later, at the repository check)" bash -c 'grep -q "reason=plan-repo-mismatch" "$1"' _ "$OUT"
+cap_row() { printf '%s\thigh\tsecurity\treadiness\t%s\tSome title\n' "$2" "$1" >> "$3/plan.tsv"; }
+p_capunk() { cap_row capped ZZ-99 "$1"; }
+p_exunk() { cap_row exists ZZ-98 "$1"; }
+p_exnotgap() { cap_row exists JDG-AUTH "$1"; }
+for m in capunk exunk exnotgap; do
+  calls_reset; planmut "$m" "p_$m"
+  check "plan rows ($m): a capped or exists row naming an id that is not a catalog gap is plan-invalid with zero writes (rc 2)" bash -c 'grep -q "^SOLEUR_LAUNCH_CHECK_ABORT reason=plan-invalid" "$1" && [ "$2" = 2 ] && [ "$3" = 0 ]' _ "$OUT" "$RC" "$(n_writes)"
+  SEEN_REASONS="$SEEN_REASONS plan-invalid"
+done
+
 # ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
 check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 162
+finish 230

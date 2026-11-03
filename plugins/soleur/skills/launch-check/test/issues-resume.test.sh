@@ -86,6 +86,17 @@ full_case 3; stub_reset acme/demo private; seed 521 open someone-else lc:launch-
 prev; calls_reset; create
 check "G3.12: an epic authored by another login writes nothing and names epic-author" bash -c '[ "$1" = 0 ] && grep -q "epic-author" "$2"' _ "$(n_writes)" "$OUT"
 check "G3.12: ... and aborts plan-invalid (rc 2)" abort_is 2 plan-invalid
+check "G3.12: the abort carries its own recovery text (remove the lc:epic label or run as its author; do not preview again)" bash -c 'grep -qi "lc:epic" "$1" && grep -qi "created" "$1" && grep -qi "do not preview again" "$1"' _ "$OUT"
+full_case 3; stub_reset acme/demo private; seed 522 open someone-else lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
+prev
+check "G3.12: the PREVIEW already warns that the epic was created by another account" bash -c 'grep -qi "another account" "$1"' _ "$OUT"
+full_case 3; stub_reset acme/demo private; seed 523 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
+prev
+check "G3.12: ... and says nothing of the kind when the epic is the signed-in account's own" bash -c '! grep -qi "another account" "$1"' _ "$OUT"
+# an enterprise-managed login holds an underscore (jdoe_acme): it must be read as the author, not as "-"
+full_case 3; stub_reset acme/demo private; seed 524 open jdoe_acme lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"
+with GH_STUB_LOGIN=jdoe_acme -- prev; calls_reset; with GH_STUB_LOGIN=jdoe_acme -- create
+check "G3.12: an epic authored by jdoe_acme and a run as jdoe_acme proceed (rc 0, one epic, no second epic filed)" bash -c '[ "$1" = 0 ] && [ "$2" = 1 ]' _ "$RC" "$(epics_n)"
 for st in 403 404 410 422; do
   full_case 4; calls_reset; with GH_STUB_SUBISSUE=$st -- create
   check "G3.9 (UNVERIFIED-STUB-ONLY $st): the first failed link latches the run to the task list: one link call, rc 0, fallback=task-list" bash -c '[ "$1" = 1 ] && [ "$2" = 0 ] && [ "$(kv "$3" SOLEUR_LAUNCH_CHECK_ISSUES fallback)" = task-list ]' _ "$(n_post POST 'sub_issues$')" "$RC" "$OUT"
@@ -109,7 +120,7 @@ sigrun() { # sigrun <TERM|HUP>: start create against a stub whose item create sl
   ( exec env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_NAMESPACE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
       GH_STUB_SLEEP=2 bash "${LCS:-$LC}" issues --create --target "$R" --facts "$FACTS" --judged "$JUD" --plan "$PLAN" --confirm-repo acme/demo --confirm-count "$(plan_n)" ) > "$SCRATCH/sig.$1.out" 2>&1 &
   local pid=$! i
-  for i in $(seq 1 150); do [ "$(n_post POST 'repos/acme/demo/issues$')" -ge 2 ] && break; sleep 0.1; done
+  for i in $(seq 1 600); do [ "$(n_post POST 'repos/acme/demo/issues$')" -ge 2 ] && break; sleep 0.1; done
   kill -s "$1" "$pid"; wait "$pid"; RC=$?; OUT="$SCRATCH/sig.$1.out"
 }
 for sg in TERM HUP; do
@@ -164,6 +175,11 @@ check "G2: every printed line of a failed create passes lc_scrub (no tab or carr
 full_case 3; TMPD="$SCRATCH/tmpd"; mkdir -p "$TMPD"; with TMPDIR="$TMPD" -- create
 check "no lc-work or lc-gate temp file is left behind after a create (only the plan directory survives)" bash -c '[ "$1" = 0 ] && [ -z "$(ls -A "$2")" ]' _ "$RC" "$TMPD"
 
+# the preview names the labels the create will ensure, and the set it prints is the set the create then holds
+full_case 7; PVOUT="$OUT"; calls_reset; create
+check "labels: the preview prints 'Labels ensured if absent' and the create consent text mentions the absent labels" bash -c 'grep -q "^Labels ensured if absent" "$1" && grep -q "create the absent labels" "$1"' _ "$PVOUT"
+check "labels: the set the preview printed equals the set of labels the stub holds after the create (all were absent)" bash -c 'printed=$(sed -n "s/^Labels ensured if absent (.*): \(.*\)\.\$/\1/p" "$1" | tr " " "\n" | sort | tr "\n" " "); have=$(jq -r ".[].name" "$2/labels.json" | sort | tr "\n" " "); [ -n "$printed" ] && [ "$printed" = "$have" ] && [ "$(wc -w <<<"$printed")" -ge 4 ]' _ "$PVOUT" "$ST"
+
 # ---------------------------------------------------------------- 8. Guard 4: epic edits are confined to the marked section
 custom_epic() { # customer text before and after the markers, using the words begin and end without the marker syntax
   tracker_edit '(.[] | select(.labels|map(.name)|index("lc:epic")) | .body) |= ("CUSTOMER-TOP begin and end are just words here\n" + . + "\nCUSTOMER-BOTTOM\n")'
@@ -215,4 +231,4 @@ LCS="$SB0"
 
 # ---------------------------------------------------------------- 9. the exit-code table: every fail_loud reason this half owns was exercised by a row above
 check "every fail_loud abort reason owned by this half (resume and epic) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in confirm-public-required epic-closed epic-ambiguous issue-ambiguous issues-incomplete; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 65
+finish 103
