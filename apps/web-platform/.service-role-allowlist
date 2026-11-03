@@ -405,7 +405,9 @@ apps/web-platform/server/inngest/functions/cron-approval-expiry.ts
 
 # 2026-10-23 (#8211 PR-B2) — cron-git-data-erasure-redrive.ts re-drives the git-data pending-erasure
 # ledger. No user JWT is in scope (scheduled/manual), and the ledger tables have no client-reachable
-# grant: every access is a service_role-only SECURITY DEFINER RPC (migration 182: claim / resolve /
-# record / oldest-age). Same cron posture as cron-supabase-disk-io; it holds no per-tenant data
-# beyond the workspace ids the RPCs return, which it never logs.
+# grant: every access is a service_role-only SECURITY DEFINER RPC (migration 182), exactly five of them:
+# claim_git_data_erasure_pending, resolve_git_data_erasure_pending, record_git_data_erasure_pending,
+# git_data_erasure_owner_gone and git_data_erasure_pending_ages. Same posture as cron-approval-expiry
+# (service-only RPCs that write, no user in scope); it holds no per-tenant data beyond the workspace ids
+# the RPCs return, which it never logs.
 apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts

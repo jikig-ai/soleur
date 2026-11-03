@@ -85,7 +85,8 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold, 
     **Since PR #9096 (#5914, host-key step 6):** the resolver throws on an absent pin whatever the
     flag says, and a dispatch from `main` reads `TOFU_ARM absent`, which satisfies the reminder. The
     other conditions stand: the pin present in `prd`, #8572 paging, and #8211's per-id re-erasure
-    path (the flip must not happen before it exists, rehearsal flip excepted per the run sheet's Art. 17 rule; see host-key step 5, "Requests after the
+    path, which is built (PR #10905: the ledger and `cron-git-data-erasure-redrive`); the open precondition is its paging rule and monitor
+    routing, #10914 (the flip must not happen before that is applied, rehearsal flip excepted per the run sheet's Art. 17 rule; see host-key step 5, "Requests after the
     window").
     **Since #8572:** the paging condition is met once its PR has merged **and** both of its runs
     are green: `apply-sentry-infra.yml` (it creates the `git-data-host-key-pin-fault` rule and adds
@@ -98,7 +99,7 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold, 
     `sentry_alert live fidelity: PASS`. Before the flip only its boot arm can fire, so "no `pin_fault` event" never
     counts as healthy: a network attacker can hold every dial before the host-key check, which
     stays unclassified, so the flip check needs positive replication evidence. #8211's per-id
-    re-erasure path stays a **hard** precondition beside it.
+    re-erasure path is built (PR #10905); its paging rule and the routing of its Sentry monitor (#10914) stay a **hard** precondition beside it.
   - [x] **An ssh client in the web-platform image** (PR #9096): the startup line reads
     `git_data_ssh_client=present` on the deployed build
     (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep git_data_ssh_client=`).
@@ -203,7 +204,14 @@ which the Sentry alert `git-data-erasure-redrive-escalation` emails (a fleet-wid
 emailed earlier by `git-data-erasure-redrive-no-progress`; #10914). Those two rules are a hard precondition of the real flip:
 they count only once `apply-sentry-infra.yml` has applied them and `scripts/sentry-alert-live-fidelity.sh` passes against the live
 org. They cannot see a dead cron (no event, no page): routing the cron's Sentry monitor into `cron_monitor_failure` is the
-second PR of the Sentry README's two-PR rule and is also a precondition. Unmeasured
+second PR of the Sentry README's two-PR rule and is also a precondition. 
+Reading it
+without SSH: liveness is the `scheduled-git-data-erasure-redrive` monitor's check-ins (a run that did not complete its
+bookkeeping checks in `?status=error`), and the every-run info event (`op:git-data-erasure-redrive`, message "git-data erasure
+re-drive run complete", with `byStatus`, which names the host's refusal reason, such as `unconfigured:pin_absent`) is emitted only
+on a run that claimed a row or found one pending. Stuck rows show as `reason:no_erasure_progress` (the host refusals' scrubbed details and exit codes ride its extra) and `reason:live_owner_aged`; the age tiers as `escalation:20d|28d`. To seed ids swept
+from Sentry, fire the manual event with the `soleur:trigger-cron` skill (`POST /api/internal/trigger-cron`) carrying `data.ids` and
+`data.requested_at`. Unmeasured
 residuals, for the Art. 30 entry: the manual event's `data.ids` are persisted in Inngest's event store and run
 state (the cron's own steps keep ids inside the step and return counts only), and deleted ledger rows may
 persist in Supabase backups. The Art. 12(3) one-month clock runs from the request,
@@ -389,7 +397,7 @@ from that account's own session. An agent cannot drive any of these steps and do
   `art17-workspace-tree-erasure-incomplete` rule; the cascade continues) and is released only when the rollback swap replaces the
   container (storage released, not overwritten, and its absence is not observed); a `removeGitDataRepo` call inside a freeze span
   is refused and logged as an Art. 17 event. The rehearsal flip may run with the
-  per-id re-erasure path unbuilt ONLY while the built session-refusal control holds, shown by the control's per-host reporter line
+  per-id re-erasure path's paging (#10914) still open ONLY while the built session-refusal control holds, shown by the control's per-host reporter line
   (`new_sessions_paused=1` in the quiet-window build's current draft; the control fails open on an unreadable flag, so the flag alone
   proves nothing) on both hosts before R1 and again immediately before R4. An owner acceptance does not substitute for the control on
   this limb, and without it the rehearsal does not start. Record every refused erasure in the window (Sentry

@@ -11,7 +11,8 @@ vi.hoisted(() => {
 });
 
 const mockRpc = vi.fn();
-vi.mock("@/lib/supabase/service", () => ({ createServiceClient: () => ({ rpc: mockRpc }) }));
+const mockCreateClient = vi.fn();
+vi.mock("@/lib/supabase/service", () => ({ createServiceClient: () => mockCreateClient() }));
 
 const mockRemove = vi.fn();
 vi.mock("@/server/git-data-replication", () => ({
@@ -88,9 +89,10 @@ function installRpc() {
       }
       case "git_data_erasure_owner_gone":
         return { data: !liveOwners.has(args!.p_workspace_id as string), error: null };
-      case "resolve_git_data_erasure_pending":
-        ledger.delete(args!.p_workspace_id as string);
-        return { data: "lt_1h", error: null };
+      case "resolve_git_data_erasure_pending": {
+        const existed = ledger.delete(args!.p_workspace_id as string);
+        return { data: existed ? "lt_1h" : null, error: null }; // NULL = no row existed (real RPC contract)
+      }
       case "record_git_data_erasure_pending": {
         const id = args!.p_workspace_id as string;
         const prev = ledger.get(id);
@@ -109,7 +111,7 @@ const calledIds = (name: string) => rpcCalls(name).map((c) => (c[1] as { p_works
 const reports = () => (reportSilentFallback as ReturnType<typeof vi.fn>).mock.calls;
 const warns = () => (warnSilentFallback as ReturnType<typeof vi.fn>).mock.calls;
 
-beforeEach(() => {
+function resetWorld() {
   vi.clearAllMocks();
   stepNames.length = 0;
   ledger = new Map();
@@ -117,11 +119,39 @@ beforeEach(() => {
   oldest = null;
   oldestLive = null;
   failRpc = {};
+  mockCreateClient.mockImplementation(() => ({ rpc: mockRpc }));
   installRpc();
   mockRemove.mockResolvedValue({ status: "erased" });
   _resetProcessMemosForTest();
-});
+}
+beforeEach(resetWorld);
 afterEach(() => vi.useRealTimers());
+
+/**
+ * Inngest re-invokes the handler from the top after EVERY new step and answers already-completed steps
+ * from memo (JSON round-tripped, callback NOT re-run). This harness does the same, so a closure counter
+ * mutated inside a step callback (invisible to the run-once fake) shows up as a wrong result.
+ */
+class NewStepRan extends Error {}
+async function runReplaying(event?: { name?: string; data?: Record<string, unknown> }) {
+  const memo = new Map<string, string>();
+  for (let pass = 0; pass < 500; pass += 1) {
+    const replayStep = {
+      run: async <T>(name: string, cb: () => Promise<T>): Promise<T> => {
+        if (memo.has(name)) return JSON.parse(memo.get(name)!) as T;
+        const out = await cb();
+        memo.set(name, JSON.stringify(out ?? null));
+        throw new NewStepRan();
+      },
+    };
+    try {
+      return await cronGitDataErasureRedriveHandler({ event, step: replayStep, logger });
+    } catch (err) {
+      if (!(err instanceof NewStepRan)) throw err;
+    }
+  }
+  throw new Error("replay did not converge");
+}
 
 describe("claim", () => {
   it("claims ONE row per step with a backoff of at least 60 s, at most 25 rows per run", async () => {
@@ -152,11 +182,12 @@ describe("claim", () => {
     expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG }));
   });
 
-  it("a claim RPC error is reported, drives nothing and turns the heartbeat red", async () => {
+  it("a claim RPC error is attempted and reported exactly ONCE (the loop stops), drives nothing and turns the heartbeat red", async () => {
     failRpc.claim_git_data_erasure_pending = { message: "db down" };
     await run();
     expect(mockRemove).not.toHaveBeenCalled();
-    expect(reports().some((c) => (c[1] as { op: string }).op === REDRIVE_OP)).toBe(true);
+    expect(rpcCalls("claim_git_data_erasure_pending")).toHaveLength(1); // a `continue` would hammer a down DB 25x per tick
+    expect(reports().filter((c) => (c[1] as { op: string }).op === REDRIVE_OP)).toHaveLength(1);
     expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
   });
 });
@@ -327,23 +358,9 @@ describe("per-row re-drive", () => {
   });
 });
 
-describe("malformed ids", () => {
-  it("a non-UUID id from the ledger is quarantined: never passed to the wrapper, never recorded or resolved, reported once", async () => {
-    ledger.set("not-a-uuid; rm -rf /", { id: "not-a-uuid; rm -rf /", attempts: 0, stamped: false, outcome: "refused" });
-    seedLedger(A);
-    await run();
-    ledger.forEach((r) => (r.stamped = false));
-    await run();
-    expect(mockRemove.mock.calls.every((c) => c[0] === A)).toBe(true);
-    expect(calledIds("resolve_git_data_erasure_pending").every((id) => id === A)).toBe(true);
-    expect(calledIds("record_git_data_erasure_pending")).not.toContain("not-a-uuid; rm -rf /");
-    expect(calledIds("git_data_erasure_owner_gone")).not.toContain("not-a-uuid; rm -rf /");
-    expect(ledger.has("not-a-uuid; rm -rf /")).toBe(true);
-    const quarantine = reports().filter((c) => (c[1] as { tags?: { quarantine?: string } }).tags?.quarantine === "malformed_id");
-    expect(quarantine).toHaveLength(1);
-    expect(JSON.stringify(quarantine)).not.toContain("rm -rf");
-  });
-});
+// There is deliberately no "malformed claimed id" case: git_data_erasure_pending.workspace_id is a uuid
+// PRIMARY KEY and the claim RPC RETURNS TABLE (workspace_id uuid, ...), so Postgres cannot hand back a
+// non-UUID (the branch that used to guard it was unreachable and was removed).
 
 describe("manual event seeding", () => {
   const SEED_AT = "2026-10-01T00:00:00Z";
@@ -381,18 +398,50 @@ describe("manual event seeding", () => {
     expect(rpcCalls("record_git_data_erasure_pending")).toHaveLength(0);
     expect(ledger.size).toBe(0);
     expect(out.seeded).toBe(0);
-    expect(reports().filter((c) => (c[1] as { tags?: { stage?: string } }).tags?.stage === "seed")).toHaveLength(2);
+    const seedReports = reports().filter((c) => (c[1] as { tags?: { stage?: string } }).tags?.stage === "seed");
+    expect(seedReports).toHaveLength(2);
+    expect(seedReports[0][0]).toBeNull(); // null err: an Error would lose its tags to the pino-mirror dedupe (#8629)
+    expect(seedReports[0][1]).toMatchObject({ feature: "cron-git-data-erasure-redrive", op: REDRIVE_OP, extra: { cause: expect.stringContaining("db down") } });
+    expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+    expect(out.ok).toBe(false);
+  });
+
+  it("a service-client SETUP failure during a seed is reported (stage=seed), turns the run red, and the claim loop still runs", async () => {
+    seedLedger(A);
+    mockCreateClient.mockImplementationOnce(() => {
+      throw new Error("service env missing");
+    });
+    const out = await run(ev({ ids: [B], requested_at: SEED_AT }));
+    expect(reports().filter((c) => (c[1] as { tags?: { stage?: string } }).tags?.stage === "seed")).toHaveLength(1);
+    expect(out).toMatchObject({ ok: false, seeded: 0, claimed: 1, erased: 1 });
     expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
   });
 
+  it("a row the claim returns as 'seeded' is NOT refreshed with the host outcome (seed provenance for owner_gone is kept)", async () => {
+    seedLedger(A, B);
+    ledger.get(A)!.outcome = "seeded";
+    mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+    const out = await run();
+    expect(out).toMatchObject({ claimed: 2, pending: 2 });
+    expect(calledIds("record_git_data_erasure_pending")).toEqual([B]); // A keeps 'seeded'
+    expect(ledger.get(A)!.outcome).toBe("seeded");
+    expect(ledger.get(B)!.outcome).toBe("refused");
+    expect(rpcCalls("resolve_git_data_erasure_pending")).toHaveLength(0);
+  });
+
   it("requested_at must be a STRICT ISO instant between 2020-01-01 and now ('1', 'Jan 1 2026', a bare date and a 2019 time are rejected)", async () => {
-    for (const bad of ["1", "2026", "Jan 1 2026", "2026-10-01", "2026-10-01 00:00:00", "2019-12-31T23:59:59Z"]) {
+    for (const bad of [
+      "1", "2026", "Jan 1 2026", "2026-10-01", "2026-10-01 00:00:00", "2019-12-31T23:59:59Z",
+      // impossible dates that Date.parse rolls FORWARD (and so understates the Art. 12(3) age)
+      "2026-02-31T00:00:00Z", "2026-04-31T10:00:00Z", "2025-02-29T00:00:00Z", "2026-10-01T24:00:00Z",
+      "2026-10-01T00:60:00Z", "2026-10-01T00:00:60Z", "2026-10-01T00:00:00+24:00", "2026-13-01T00:00:00Z",
+    ]) {
       mockRpc.mockClear();
       const out = await run(ev({ ids: [A], requested_at: bad }));
       expect(rpcCalls("record_git_data_erasure_pending"), bad).toHaveLength(0);
       expect(out.rejectedIds, bad).toBeGreaterThan(0);
     }
-    for (const ok of ["2020-01-01T00:00:00Z", "2026-10-01T00:00:00.123Z", "2026-10-01T02:00:00+02:00"]) {
+    for (const ok of ["2020-01-01T00:00:00Z", "2026-10-01T00:00:00.123Z", "2026-10-01T02:00:00+02:00", "2024-02-29T12:00:00Z"]) {
       mockRpc.mockClear();
       const out = await run(ev({ ids: [A], requested_at: ok }));
       expect(out.seeded, ok).toBe(1);
@@ -464,13 +513,19 @@ describe("age gauge and escalation (owner-gone rows only)", () => {
     expect(escalations()).toHaveLength(0);
   });
 
-  it("an empty ledger gauges 0 and does not escalate or warn", async () => {
-    await run();
-    expect(infoSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({
-      extra: expect.objectContaining({ oldestPendingAgeSeconds: 0, oldestLiveOwnerAgeSeconds: 0 }),
-    }));
+  it("an idle run (nothing claimed, empty ledger) emits NO info event, does not escalate or warn, and still heartbeats green", async () => {
+    const out = await run();
+    expect(infoSilentFallback).not.toHaveBeenCalled(); // 96 identical info events a day otherwise
     expect(escalations()).toHaveLength(0);
     expect(liveWarns()).toHaveLength(0);
+    expect(out).toMatchObject({ ok: true, oldestPendingAgeSeconds: 0 });
+    expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+  });
+
+  it("a run that claimed rows emits the info event even when the ages are 0", async () => {
+    seedLedger(A);
+    await run();
+    expect(infoSilentFallback).toHaveBeenCalledTimes(1);
   });
 
   it("the age RPC is the owner-split one (the unsplit gauge would page about a live user's row)", async () => {
@@ -549,6 +604,25 @@ describe("age gauge and escalation (owner-gone rows only)", () => {
     expect(count()).toBe(2);
   });
 
+  it("the live warn and the owner-gone escalation are throttled INDEPENDENTLY: both fire in the same run", async () => {
+    oldest = 25 * DAY;
+    oldestLive = 5 * DAY;
+    await run();
+    expect(escalations()).toHaveLength(1);
+    expect(liveWarns()).toHaveLength(1);
+  });
+
+  it("the 20d and 28d tiers are throttled independently: 21 days then 29 days inside one hour raise both", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-23T00:00:00Z"));
+    oldest = 21 * DAY;
+    await run();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    oldest = 29 * DAY;
+    await run();
+    expect(escalations().map((c) => (c[1] as { tags: { escalation: string } }).tags.escalation)).toEqual(["20d", "28d"]);
+  });
+
   it("a stuck row is never purged: nothing resolves it without an erased outcome", async () => {
     oldest = 40 * DAY;
     seedLedger(A);
@@ -563,6 +637,17 @@ describe("age gauge and escalation (owner-gone rows only)", () => {
     await run();
     expect(reports().some((c) => (c[1] as { tags?: { stage?: string } }).tags?.stage === "age-gauge")).toBe(true);
     expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+  });
+
+  it("an age-gauge failure does NOT suppress the fleet warns (owner_still_exists, no_erasure_progress)", async () => {
+    failRpc.git_data_erasure_pending_ages = { message: "db down" };
+    seedLedger(A, B);
+    liveOwners.add(A);
+    mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+    await run();
+    const reasons = warns().map((c) => (c[1] as { tags?: { reason?: string } }).tags?.reason);
+    expect(reasons).toContain("owner_still_exists");
+    expect(reasons).toContain("no_erasure_progress");
   });
 
   it("a clean run warns about nothing", async () => {
@@ -603,6 +688,226 @@ describe("idempotence / double-run", () => {
   });
 });
 
+describe("run result (run-log ok/errorSummary) and Sentry stage tags", () => {
+  const stageReports = (stage: string) =>
+    reports().filter((c) => (c[1] as { tags?: { stage?: string } }).tags?.stage === stage);
+
+  // [failing rpc, stage tag, setup]
+  const failures: Array<[string, string, () => void]> = [
+    ["claim_git_data_erasure_pending", "claim", () => {}],
+    ["git_data_erasure_owner_gone", "owner-check", () => seedLedger(A)],
+    ["resolve_git_data_erasure_pending", "resolve", () => seedLedger(A)],
+    [
+      "record_git_data_erasure_pending",
+      "record",
+      () => {
+        seedLedger(A);
+        mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+      },
+    ],
+    ["git_data_erasure_pending_ages", "age-gauge", () => {}],
+  ];
+
+  it.each(failures)(
+    "a failed %s returns ok:false with the stage in errorSummary, and the stage event carries its tags (null err + cause in extra)",
+    async (rpcName, stage, setup) => {
+      setup();
+      failRpc[rpcName] = { message: "db down" };
+      const out = await run();
+      expect(out.ok).toBe(false);
+      expect(out.errorSummary).toContain(stage);
+      expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+      const r = stageReports(stage);
+      expect(r).toHaveLength(1);
+      expect(r[0][0]).toBeNull(); // an Error here would be deduplicated against the pino mirror, losing every tag (#8629)
+      expect(r[0][1]).toMatchObject({
+        feature: "cron-git-data-erasure-redrive",
+        op: REDRIVE_OP,
+        tags: { stage },
+        extra: { fn: "cron-git-data-erasure-redrive", cause: expect.stringContaining("db down") },
+      });
+      expect(typeof (r[0][1] as { message: string }).message).toBe("string");
+    },
+  );
+
+  it.each(failures)("a THROWN rejection from %s (socket hang up) is contained: no throw, stage reported, ok:false", async (rpcName, stage, setup) => {
+    setup();
+    const base = mockRpc.getMockImplementation()!;
+    mockRpc.mockImplementation(async (name: string, args?: Record<string, unknown>) => {
+      if (name === rpcName) throw new Error("socket hang up");
+      return base(name, args);
+    });
+    const out = await run();
+    expect(out.ok).toBe(false);
+    expect(out.errorSummary).toContain(stage);
+    expect(stageReports(stage)).toHaveLength(1);
+    expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+  });
+
+  it("a normal run, and a run where the host refuses, return ok:true with no errorSummary (a refusal is the ledger's normal state)", async () => {
+    seedLedger(A);
+    const normal = await run();
+    expect(normal.ok).toBe(true);
+    expect(normal).not.toHaveProperty("errorSummary");
+    seedLedger(B);
+    mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+    const refused = await run();
+    expect(refused).toMatchObject({ ok: true, pending: 1 });
+    expect(refused).not.toHaveProperty("errorSummary");
+    expect(postSentryHeartbeat).toHaveBeenLastCalledWith(expect.objectContaining({ ok: true }));
+  });
+
+  it("errorSummary names stages only (never an id or a row value)", async () => {
+    seedLedger(A);
+    failRpc.resolve_git_data_erasure_pending = { message: `boom for ${A}` };
+    const out = await run();
+    expect(out.errorSummary).toBe("failed stages: resolve");
+    expect(out.errorSummary).not.toContain(A);
+  });
+});
+
+describe("resolve outcomes", () => {
+  it("a resolve failure is NOT 'driven': no no_erasure_progress warn, and byStatus does not claim 'erased'", async () => {
+    seedLedger(A);
+    failRpc.resolve_git_data_erasure_pending = { message: "db down" };
+    const out = await run();
+    expect(out).toMatchObject({ claimed: 1, erased: 0, pending: 1, ok: false });
+    expect(warns().some((c) => (c[1] as { tags?: { reason?: string } }).tags?.reason === "no_erasure_progress")).toBe(false);
+    expect(infoSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({
+      extra: expect.objectContaining({ driven: 0, byStatus: { resolve_failed: 1 } }),
+    }));
+  });
+
+  it("a NULL resolve (the row was already resolved by a racing run) is still an erasure, with a distinct byStatus key and no failure", async () => {
+    seedLedger(A);
+    const base = mockRpc.getMockImplementation()!;
+    mockRpc.mockImplementation(async (name: string, args?: Record<string, unknown>) =>
+      name === "resolve_git_data_erasure_pending" ? { data: null, error: null } : base(name, args),
+    );
+    const out = await run();
+    expect(out).toMatchObject({ claimed: 1, erased: 1, ok: true });
+    expect(infoSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({
+      extra: expect.objectContaining({ byStatus: { already_resolved: 1 } }),
+    }));
+  });
+});
+
+describe("host refusal reason survives into the events", () => {
+  const noProgress = () =>
+    warns().filter((c) => (c[1] as { tags?: { reason?: string } }).tags?.reason === "no_erasure_progress");
+
+  it.each([
+    ["remove_key_absent: GIT_REMOVE_SSH_PRIVATE_KEY is absent", "unconfigured:remove_key_absent"],
+    ["pin_absent: GIT_DATA_SSH_HOST_KEY is unset", "unconfigured:pin_absent"],
+    ["pin_invalid: bad base64", "unconfigured:pin_invalid"],
+    ["ssh_client_absent: spawn ssh ENOENT, nothing dialed", "unconfigured:ssh_client_absent"],
+    ["something unforeseen", "unconfigured:other"],
+  ])("unconfigured (%s) is keyed %s in byStatus; only the reason word is shipped", async (detail, key) => {
+    seedLedger(A);
+    mockRemove.mockResolvedValue({ status: "unconfigured", detail });
+    await run();
+    const w = noProgress();
+    expect(w).toHaveLength(1);
+    const extra = (w[0][1] as { extra: { byStatus: Record<string, number>; hostDetails: string[] } }).extra;
+    expect(extra.byStatus).toEqual({ [key]: 1 });
+    expect(extra.hostDetails).toEqual([]); // the free text after the reason word is not guaranteed scrubbed
+    expect(JSON.stringify(w)).not.toContain(detail);
+  });
+
+  it("refused rows ship up to 3 DISTINCT id-scrubbed host details and their exit codes", async () => {
+    const ids = [A, B, C, "11111111-1111-4111-8111-111111111111"];
+    seedLedger(...ids);
+    const codes: Record<string, number> = { [A]: 3, [B]: 3, [C]: 1 };
+    mockRemove.mockImplementation(async (id: string) => ({
+      status: "refused",
+      exitCode: codes[id] ?? 7,
+      detail: id === C ? "store not mounted" : `dir ${id} frozen`,
+    }));
+    await run();
+    const w = noProgress();
+    expect(w).toHaveLength(1);
+    const extra = (w[0][1] as { extra: { hostDetails: string[]; exitCodes: number[]; driven: number } }).extra;
+    expect(extra.driven).toBe(4);
+    expect(extra.hostDetails).toEqual(["dir WORKSPACE_ID_REDACTED frozen", "store not mounted"]);
+    expect(extra.exitCodes).toEqual([3, 1, 7]);
+    for (const id of ids) expect(JSON.stringify(w)).not.toContain(id);
+  });
+
+  it("unauthorized / unreachable details are shipped (scrubbed) too", async () => {
+    seedLedger(A);
+    mockRemove.mockResolvedValue({ status: "unauthorized", detail: "Permission denied (publickey)" });
+    await run();
+    const extra = (noProgress()[0][1] as { extra: { hostDetails: string[]; exitCodes: number[] } }).extra;
+    expect(extra.hostDetails).toEqual(["Permission denied (publickey)"]);
+    expect(extra.exitCodes).toEqual([]);
+  });
+});
+
+describe("no_erasure_progress is throttled like the other tiers", () => {
+  it("raises at most once per hour per process, not on every 15-minute run", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-23T00:00:00Z"));
+    seedLedger(A);
+    mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+    const count = () =>
+      warns().filter((c) => (c[1] as { tags?: { reason?: string } }).tags?.reason === "no_erasure_progress").length;
+    for (let i = 0; i < 4; i += 1) {
+      ledger.forEach((r) => (r.stamped = false)); // the claim backoff elapsed
+      await run();
+      vi.advanceTimersByTime(15 * 60 * 1000);
+    }
+    expect(count()).toBe(1);
+    vi.setSystemTime(new Date(Date.parse("2026-10-23T00:00:00Z") + ESCALATION_REPEAT_MS));
+    ledger.forEach((r) => (r.stamped = false));
+    await run();
+    expect(count()).toBe(2);
+  });
+});
+
+describe("replay (Inngest re-enters the handler after every step and answers finished steps from memo)", () => {
+  const scenarios: Array<[string, () => void, { name: string; data: Record<string, unknown> } | undefined]> = [
+    ["happy path (all erased)", () => seedLedger(A, B), undefined],
+    [
+      "mixed outcomes (erased, refused, thrown, live owner, aged)",
+      () => {
+        seedLedger(A, B, C, "11111111-1111-4111-8111-111111111111");
+        liveOwners.add("11111111-1111-4111-8111-111111111111");
+        oldest = 21 * DAY;
+        oldestLive = 4 * DAY;
+        mockRemove.mockImplementation(async (id: string) => {
+          if (id === B) return { status: "refused", exitCode: 3, detail: "frozen" };
+          if (id === C) throw new Error("boom");
+          return { status: "erased" };
+        });
+      },
+      undefined,
+    ],
+    [
+      "manual seed (gone + live ids)",
+      () => {
+        liveOwners.add(B);
+        mockRemove.mockResolvedValue({ status: "refused", exitCode: 1, detail: "x" });
+      },
+      { name: "cron/git-data-erasure-redrive.manual-trigger", data: { ids: [A, B], requested_at: "2026-10-01T00:00:00Z" } },
+    ],
+  ];
+
+  it.each(scenarios)("%s: the replayed result equals the run-once result and each id is driven once", async (_n, setup, event) => {
+    setup();
+    const once = await run(event);
+    const onceRemoves = mockRemove.mock.calls.length;
+    const onceClaims = rpcCalls("claim_git_data_erasure_pending").length;
+
+    resetWorld();
+    setup();
+    const replayed = await runReplaying(event);
+    expect(replayed).toEqual(once);
+    expect(mockRemove.mock.calls.length).toBe(onceRemoves);
+    expect(rpcCalls("claim_git_data_erasure_pending").length).toBe(onceClaims);
+    expect(postSentryHeartbeat).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("registration", () => {
   it("is a ~15-minute cron with the derived manual-trigger event, serialised", () => {
     expect(cronGitDataErasureRedrive).toBeDefined();
@@ -613,6 +918,17 @@ describe("registration", () => {
     expect(src).toContain('{ cron: "*/15 * * * *" }');
     expect(src).toContain('{ event: "cron/git-data-erasure-redrive.manual-trigger" }');
     expect(src).toMatch(/\{ scope: "fn", limit: 1 \}/);
+  });
+
+  it("runs on a DEDICATED account lane keyed on its own function id, never the shared cron-platform lane", () => {
+    const src = readFileSync(
+      path.join(__dirname, "../../../server/inngest/functions/cron-git-data-erasure-redrive.ts"),
+      "utf8",
+    );
+    // claude-eval holds "cron-platform" for 50-70 minutes: sharing it would delay a 15-minute cron past its
+    // 30-minute Sentry check-in margin (cron-approval-expiry and cron-bot-pr-reaper opt out for the same reason).
+    expect(src).toContain(`{ scope: "account", key: '"cron-git-data-erasure-redrive"', limit: 1 }`);
+    expect(src).not.toMatch(/scope: "account", key: '"cron-platform"'/);
   });
 
   it("names the Sentry alert that routes the escalation, and never claims a hard-stop page of its own", () => {

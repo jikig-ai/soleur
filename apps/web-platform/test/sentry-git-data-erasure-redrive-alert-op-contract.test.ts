@@ -109,7 +109,7 @@ describe("git-data erasure re-drive alert op contract", () => {
   });
 
   it("the per-run info event carries no escalation or reason tag, so neither rule can match it", () => {
-    const m = handler.match(/infoSilentFallback\(null, \{[\s\S]*?\n\s{4}\}\);/);
+    const m = handler.match(/infoSilentFallback\(null, \{[\s\S]*?\n\s*\}\);/);
     expect(m).toBeTruthy();
     expect(m![0]).not.toMatch(/\btags:/);
   });
