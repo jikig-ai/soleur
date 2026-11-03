@@ -1,0 +1,8 @@
+# Decision Challenges — feat-one-shot-11810-gitignore-verdict-edges
+
+| Item | Class | Ruling |
+|---|---|---|
+| Scope of #11810: `.gitignore` edges for grep-q-pipe-guard only (`^.gitignore` + 21 `glob:<top-dir>/**.gitignore`), delete its 10 stale accept rows; no lint-ratchet edges; no remedies (a)/(b)/(c); no `glob:**.gitignore` | technical | Ruled by CTO agent, 2026-11-03: implement exactly the grep-q edges and the 10-row deletion; lint-ratchet's ignore-sensitive calls are unreachable on this repo (`classify_user` SOLEUR early return), and the ~442-pair blocker does not reproduce (`code_pats_of` admits only `CODE_EXT` extensions) — issue comment `issuecomment-6597435507`. Reproduced in-session: baseline `accepted=234 stale=0` → post-edit `accepted=233 stale=0`, byte-identical otherwise. |
+| Research/domain-leader/advisor agent fan-out vs inline execution | technical | Assumed default (no Task spawn tool in this Devin session): repo research, learnings sweep, functional-overlap check, spec-flow analysis and the advisor consult were executed inline in this process; the change is trivially mechanical (two data files, CTO-ruled) per the advisor-skip clause. |
+| `brand_survival_threshold` tier | technical | Assumed `none`: internal CI-selection metadata for one hook suite; no user-facing surface or data; the merge_group full battery bounds the failure to a red check. |
+| Deferred item: extend th6 census to `.gitignore` tails so a NEW top-level dir's `.gitignore` is not silently uncovered | technical | Assumed deferred per the ruling's residual clause — the array's own comment already records the identical residual for the #11648 enumeration; no tracking issue created (ruling accepts the residual as-is). |
