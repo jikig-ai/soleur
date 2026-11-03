@@ -382,10 +382,9 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // host, allowed/denied, best-effort counts and timestamps: no user_id,
   // session, IP or path. Collection is off for every external workspace until an
   // operator enables it, so no external subject has rows yet; PR2 (#9545) lets
-  // current members READ the aggregate through get_egress_audit_summary (the
-  // card hint) and, since #11238, get_egress_audit_window_summary (the page,
-  // over a 24-hour, 7-day or 30-day window; no table grant, no policy); this
-  // export decision is re-confirmed for PR2, pending CLO.
+  // current members READ the aggregate through get_egress_audit_summary (no
+  // table grant, no policy); this export decision is re-confirmed for PR2,
+  // pending CLO.
   //
   // EXCLUSION for PR1, not a permanent ruling: for a solo workspace
   // (workspace id = user id) these rows are arguably Art. 15 data. Until
