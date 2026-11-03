@@ -123,7 +123,13 @@ sigrun() { # sigrun <TERM|HUP>: start create against a stub whose item create sl
   for i in $(seq 1 600); do [ "$(n_post POST 'repos/acme/demo/issues$')" -ge 2 ] && break; sleep 0.1; done
   kill -s "$1" "$pid"; wait "$pid"; RC=$?; OUT="$SCRATCH/sig.$1.out"
 }
+# A shell that inherited SIGHUP as ignored (a run under nohup) can neither trap it nor be hung up: that is the environment, not the tool.
+hup_ignored() { local m; m=$(awk '/^SigIgn:/ {print $2}' /proc/$$/status 2>/dev/null); [ -n "$m" ] && [ $((16#$m & 1)) -ne 0 ]; }
 for sg in TERM HUP; do
+  if [ "$sg" = HUP ] && hup_ignored; then
+    for _ in 1 2 3; do check "signal (HUP): not applicable here, this run inherited SIGHUP as ignored (nohup); the TERM rows cover the handler" true; done
+    continue
+  fi
   full_case 4; calls_reset; sigrun $sg; want=143; [ "$sg" = HUP ] && want=129
   check "signal ($sg): exit code $want, the summary says phase=interrupted and the exact resume command is printed" bash -c '[ "$1" = "$2" ] && grep -q "^SOLEUR_LAUNCH_CHECK_ISSUES .*phase=interrupted" "$3" && grep -q -- "--create" "$3" && grep -q -- "--plan" "$3" && grep -q "reason=issues-incomplete phase=interrupted" "$3"' _ "$RC" "$want" "$OUT"
   check "signal ($sg): the interrupted run had written (anti-vacuous: at least the epic and one item exist)" test "$(n_writes)" -ge 2
@@ -178,7 +184,7 @@ check "no lc-work or lc-gate temp file is left behind after a create (only the p
 # the preview names the labels the create will ensure, and the set it prints is the set the create then holds
 full_case 7; PVOUT="$OUT"; calls_reset; create
 check "labels: the preview prints 'Labels ensured if absent' and the create consent text mentions the absent labels" bash -c 'grep -q "^Labels ensured if absent" "$1" && grep -q "create the absent labels" "$1"' _ "$PVOUT"
-check "labels: the set the preview printed equals the set of labels the stub holds after the create (all were absent)" bash -c 'printed=$(sed -n "s/^Labels ensured if absent (.*): \(.*\)\.\$/\1/p" "$1" | tr " " "\n" | sort | tr "\n" " "); have=$(jq -r ".[].name" "$2/labels.json" | sort | tr "\n" " "); [ -n "$printed" ] && [ "$printed" = "$have" ] && [ "$(wc -w <<<"$printed")" -ge 4 ]' _ "$PVOUT" "$ST"
+check "labels: the create succeeded (rc 0, all 7 items, so every label an issue carries existed) and the set the preview printed equals the set the stub holds after it (all were absent)" bash -c 'printed=$(sed -n "s/^Labels ensured if absent (.*): \(.*\)\.\$/\1/p" "$1" | tr " " "\n" | sort | tr "\n" " "); have=$(jq -r ".[].name" "$2/labels.json" | sort | tr "\n" " "); [ -n "$printed" ] && [ "$printed" = "$have" ] && [ "$(wc -w <<<"$printed")" -ge 4 ] && [ "$3" = 0 ] && [ "$4" = 7 ] && [ "$(jq -r "[.[].labels[].name]|unique|length" "$2/issues.json")" -le "$(wc -w <<<"$printed")" ]' _ "$PVOUT" "$ST" "$RC" "$(items_n)"
 
 # ---------------------------------------------------------------- 8. Guard 4: epic edits are confined to the marked section
 custom_epic() { # customer text before and after the markers, using the words begin and end without the marker syntax

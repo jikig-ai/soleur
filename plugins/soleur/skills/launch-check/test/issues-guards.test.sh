@@ -479,7 +479,10 @@ calls_reset; with PATH="$SHIM:$PATH" AWK_DIE='first[n]' -- create
 check "validator death: create whose live-table derivation dies stops issues-incomplete phase=lookup with zero writes (not 'nothing is filed yet')" bash -c 'grep -q "phase=lookup" "$1" && [ "$2" = 0 ]' _ "$OUT" "$(n_writes)"; check "validator death: ... marker and rc" abort_is 2 issues-incomplete
 # the record of what a run created must be writable
 newcase; only_first "$R" 3; prev; mkdir "$PLAN/created.tsv"; calls_reset; create
-check "created.tsv: a record that cannot be appended aborts write-failed (rc 2) with the resume command, never a silent success" bash -c 'grep -q "detail=created-tsv" "$1" && grep -q -- "--create" "$1"' _ "$OUT"; check "created.tsv: ... marker and rc" abort_is 2 write-failed
+check "created.tsv: a record that cannot be appended aborts write-failed (rc 2) with the resume command at once (only the epic was filed), never a silent success" bash -c 'grep -q "detail=created-tsv" "$1" && grep -q -- "--create" "$1" && [ "$2" = 1 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "created.tsv: ... marker and rc" abort_is 2 write-failed
+# with the epic already filed, the first record is an item's: that append is checked too
+newcase; only_first "$R" 3; seed 531 open stub-user lc:launch-check,lc:epic "$(cat "$SAMPLE/epic.md")"; prev; mkdir "$PLAN/created.tsv"; calls_reset; create
+check "created.tsv: with the epic already filed, an item's record that cannot be appended aborts write-failed after the first create (rc 2)" bash -c 'grep -q "detail=created-tsv" "$1" && [ "$2" = 1 ]' _ "$OUT" "$(n_post POST 'repos/acme/demo/issues$')"; check "created.tsv: ... item record marker and rc" abort_is 2 write-failed
 
 # ---------------------------------------------------------------- the cap, and rows that carry no body file
 bigplan() { # bigplan <n>: the sample plan with n create rows (mode 700), prints its path
@@ -513,4 +516,4 @@ done
 
 # ---------------------------------------------------------------- the exit-code table (this half's reasons; the other half checks its own)
 check "every fail_loud abort reason owned by this half (preview, plan and guard rows) was exercised by a marker-and-exit-code row" bash -c 'miss=""; for r in headless-write-refused report-missing report-stale plan-missing plan-invalid plan-repo-mismatch redaction-hit issues-unavailable write-shape-refused; do case " $1 " in *" $r "*) ;; *) miss="$miss $r" ;; esac; done; [ -z "$miss" ]' _ "$SEEN_REASONS"
-finish 230
+finish 232
