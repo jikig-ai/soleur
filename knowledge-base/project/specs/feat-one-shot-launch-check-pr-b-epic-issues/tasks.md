@@ -6,10 +6,10 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 0 — Failing tests and fixtures first (RED)
 
-- 0.1 Write `plugins/soleur/skills/launch-check/test/gh-stub.sh`: stateful fake `gh`; real-flag whitelist, unknown flag exits 64; real `gh: ... (HTTP nnn)` stderr lines; records inside the matched dispatch branch only; read-without-`-X GET` logged as a violation; failure injection env (`GH_STUB_AUTH`, `FAIL_AFTER`, `KILL_AFTER_CREATE`, `SUBISSUE`, `PER_PAGE`, `EDIT_EPIC_BETWEEN`, `CRLF`)
+- 0.1 Write `plugins/soleur/skills/launch-check/test/gh-stub.sh`: stateful fake `gh` with a stub-contract header (verified vs `UNVERIFIED-STUB-ONLY` shapes), a transport-error interruption mode, no basename of any real `gh` pipe producer named; real-flag whitelist, unknown flag exits 64; real `gh: ... (HTTP nnn)` stderr lines; records inside the matched dispatch branch only; read-without-`-X GET` logged as a violation; failure injection env (`GH_STUB_AUTH`, `FAIL_AFTER`, `KILL_AFTER_CREATE`, `SUBISSUE`, `PER_PAGE`, `EDIT_EPIC_BETWEEN`, `CRLF`)
 - 0.2 Write `test/issues.test.sh` (sources `lib.sh` unchanged): Test Scenarios, recorder canary, instrument self-test, exact assertion floor, small sandbox-copy mutation battery
 - 0.3 Commit `test/fixtures/plan-sample/` (`plan.tsv`, `epic.md`, `issues/CI-01.md`), synthesized
-- 0.4 Extend `test/wording.test.sh` (lint `issues.sh` and the template; no sentence-length prose literal; no `${...//...}` in `issues.sh`)
+- 0.4 Extend `test/wording.test.sh` (lint `issues.sh` and the template; no sentence-length prose literal; no `${...//...}` in `issues.sh` only) and add the autolink-shape lint over `checks.tsv`, `phrases.txt`, `issue-body.template` and rendered bodies
 - 0.5 Capture `render --dry-run` output for `fx_minimal`, `fx_healthy`, `fx_python` as the before-image for Phase 1
 
 ## Phase 1 — Refactors
@@ -29,13 +29,13 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 3 — `--create`
 
-- 3.1 Plan validation in place (closed vocabularies, symlink/size/file-set checks, one own marker per body, repo binding, `--check-plan` stop, `plan-missing`)
-- 3.2 Live visibility gate with `--confirm-public`; report-hash and "create rows still open" re-check
+- 3.1 Plan trust chain: `--confirm-repo`/`--confirm-count`; lstat owner/mode/symlink checks; `cp -R` into `$WORK`; closed-vocabulary validation; regenerate every body from catalog+facts+ids and `cmp` (`--create` takes `--target --facts --judged --plan`); repo binding; `--check-plan` stop; `plan-missing`
+- 3.2 Live visibility gate (PUBLIC, UNKNOWN, internal need `--confirm-public`); resolved slug vs `origin` (`--repo`); github.com-only host (`--host`); `gh` environment scrub and neutral cwd; report-hash and "create rows still open" re-check
 - 3.3 Scan blob and each sent file before the first write
-- 3.4 Re-list live; epic handling (`epic-closed`, `epic-ambiguous`, second re-list after epic creation); absent labels only (422 `already_exists` is success)
+- 3.4 Re-list live (a failed or malformed listing aborts `issues-incomplete phase=lookup`); epic handling (`epic-closed`, `epic-ambiguous`, epic author check, second re-list after epic creation); absent labels only (422 `already_exists` is success)
 - 3.5 Item loop in severity order: REST create, link with `-F sub_issue_id`, whole-run task-list latch on first failed link, stop at first failed write, orphan re-link
 - 3.6 Epic section: GET just before splice, `lc_epic_splice` (CRLF tolerant, damaged markers stop the edit), section scan in a subshell, PATCH only if changed
-- 3.7 Summary marker `SOLEUR_LAUNCH_CHECK_ISSUES`, failed ids, rate-limit hint, `issues-incomplete`, exit codes
+- 3.7 Summary marker `SOLEUR_LAUNCH_CHECK_ISSUES` with `plan=` and `phase=`, failed ids, rate-limit hint, resume command, `created.tsv`, `issues-incomplete`, exit codes; closed `detail=` tokens, no raw `gh` stderr printed
 
 ## Phase 4 — CLI wiring
 
@@ -46,6 +46,8 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 - 5.1 `SKILL.md`: replace "Planned" and the no-`gh` rule; preview/ask/create flow, decline path, lost-session recovery, public and fork questions, abort reasons; no `description:` edit
 - 5.2 ADR-314 dated amendment (decisions 6 and 7, Art. 28(3) posture note, markers unmirrored, one alternatives row); status stays `adopting`
 - 5.3 `model.c4`: second `plugin -> github` edge (customer's own `gh` token), rewrite `launchcheck` description; `bash scripts/regenerate-c4-model.sh`
+- 5.3b Comment-only block in `apps/web-platform/server/git-lock-marker-telemetry.ts` (unmirrored `ISSUES` markers, hosted run dark); `redact-gate.sh` runs its scans from the scratch directory (+ `.gitleaksignore` test)
+- 5.3c `SKILL.md` Undo paragraph; decline deletes the plan directory
 - 5.4 Suite assertion: no `skills/*/scripts/*.sh` emits `SOLEUR_LAUNCH_CHECK_ISSUES*` or `_PLAN_OK`
 
 ## Phase 6 — Ratchets and registry rows
