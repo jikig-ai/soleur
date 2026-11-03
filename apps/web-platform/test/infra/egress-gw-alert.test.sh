@@ -355,12 +355,35 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
 [ "$n_run" -eq 1 ] \
   && ok "G4: this guard's run line is registered in infra-validation.yml exactly once" \
   || no "G4: run line count is $n_run, want 1 — the suite is unregistered or double-registered"
+# Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP", a GUARD-fragment
+# prefix) or a shell-injection env reaches the step with no literal present — GUARD covers
+# EGW_GUARD_* and every sibling's *_GUARD_* axis; MUT_/_SKIP cover MUT_SKIP at either split.
 seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'EGW_GUARD_' >/dev/null && seam_bad="$seam_bad EGW_GUARD_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
+  printf '%s\n' "$IV_CODE" | grep -nF "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+done
 [ -z "$seam_bad" ] \
-  && ok "G4: no EGW_GUARD_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  && ok "G4: no muting/shell-injection env fragment (MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS) reaches the workflow's executable text" \
   || no "G4: workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+# The only DYNAMIC channel is a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside
+# the enclosing job. The slice is DERIVED from the pinned run line — back to the nearest
+# `^  <job-id>:` header, forward to the next or EOF — never a hardcoded job name, and it must
+# carry the run line or the ban below would pass vacuously on a misslice.
+IV_JOB="$(awk -v run="$REG_RUN" '
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { if (inside) exit; n = 0 }
+  { buf[++n] = $0 }
+  index($0, run) { inside = 1 }
+  END { if (inside) for (i = 1; i <= n; i++) print buf[i] }' <<< "$IV_CODE")"
+{ [ -n "$IV_JOB" ] && grep -qFx "$REG_RUN" <<< "$IV_JOB"; } \
+  && ok "G4: the enclosing-job slice is non-empty and carries the pinned run line (the env-write ban cannot pass vacuously)" \
+  || no "G4: the enclosing-job slice is empty or lost the pinned run line — a missliced job-scope ban would grade green"
+job_bad=""
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_ENV' >/dev/null && job_bad="$job_bad GITHUB_ENV"
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_PATH' >/dev/null && job_bad="$job_bad GITHUB_PATH"
+printf '%s\n' "$IV_JOB" | grep -nF 'defaults:' >/dev/null && job_bad="$job_bad defaults:"
+[ -n "$IV_JOB" ] && [ -z "$job_bad" ] \
+  && ok "G4: no GITHUB_ENV/GITHUB_PATH write or defaults: sits inside the enclosing job (the only dynamic env channel)" \
+  || no "G4: job-scope seam violated:${job_bad:- empty-slice} — a runtime env write inside the job can carry a composed name past the literal seam"
 
 echo ""
 echo "=== egress-gw-alert guard: $pass passed, $fail failed ==="
@@ -386,8 +409,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -447,9 +469,13 @@ PY
   }
 
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" src copy rc=0
+    case "$which" in
+      TF)  src="$TF";  copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -460,7 +486,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    EGW_GUARD_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -588,6 +614,30 @@ s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
 assert s.count(old) == 1
 s = s.replace(old, old + "        env:\n          EGW_GUARD_TF: /dev/null\n")' \
     "workflow seam"
+  mutate_red "a runtime-composed MUT_SKIP name reaches the workflow (no literal present)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
+    "workflow seam"
+  mutate_red "a GUARD-fragmented env name reaches the workflow's executable text" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          FOO_GUARD_X: /dev/null\n")' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection env reaches the workflow" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        env:\n          BASH_ENV: /tmp/x\n")' \
+    "workflow seam"
+  mutate_red "a GITHUB_ENV write inside the suite's own job (the only dynamic env channel)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")' \
+    "job-scope seam violated"
+  mutate_green "the same GITHUB_ENV write lands in the plan: job (another job's writes are out of scope)" IV \
+    'old = "  plan:\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"FOO=1\" >> \"$GITHUB_ENV\"\n")'
   mutate_red "the suite's own run line is dropped from the workflow" IV \
     'old = "        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh\n"
 assert s.count(old) == 1
@@ -607,9 +657,9 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "a comment-only edit to the tf" \
+  mutate_green "a comment-only edit to the tf" TF \
     's = s + "\n# control comment\n"'
-  mutate_green "whitespace reflow of the deny heredoc" \
+  mutate_green "whitespace reflow of the deny heredoc" TF \
     'i = s.index("  egress_gw_deny_spike_sql = <<\x2dSQL"); j = s.index(SQLEND, i)
 blk = s[i:j]
 old = "\n      AND position("
@@ -621,8 +671,10 @@ s = s[:i] + blk.replace(old, " AND\n          position(") + s[j:]'
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
-PRESENCE_ROWS=54
-MUT_ROWS=29
+# Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
+# row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
+PRESENCE_ROWS=56
+MUT_ROWS=34
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
