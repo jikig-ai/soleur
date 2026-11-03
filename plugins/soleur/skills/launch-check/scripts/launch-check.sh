@@ -57,7 +57,7 @@ preflight_plugin() {
 # val <flag> <remaining-argc>: a flag with no value is a usage error (exit 2), not an unbound-variable crash (exit 1).
 val() { [ "$2" -ge 2 ] || lc_abort usage 2 "$1 needs a value"; }
 
-is_headless() { [ -n "${CI:-}" ] || [ "${LAUNCH_CHECK_HEADLESS:-}" = 1 ]; }
+is_headless() { lc_is_headless; }
 
 need_repo() {
   [ -n "${TARGET:-}" ] || lc_abort usage 2 "--target is required"
@@ -121,12 +121,7 @@ cmd_render() {
   fi
   need_repo; preflight_plugin; lc_preflight_scanners
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/lc-work.XXXXXX") || lc_abort scanner-failed 2 "mktemp failed"
-  # scan records the stack in the facts header; only an older or hand-made facts file needs the repository walked again.
-  STACK=$(awk -F= '/^# stack=/ {print $2; exit}' "$FACTS")
-  if [ -z "$STACK" ]; then lc_walk "$TARGET" "$WORK/files"; STACK=$(lc_stack "$WORK/files"); fi
-  CAT="$WORK/catalog.tsv"; lc_build_catalog "$CAT"
-  lc_clean_facts
-  [ -z "$JUDGED" ] || lc_validate_judged "$JUDGED"
+  lc_prepare_inputs
   lc_render
   if [ "$DRY" = 1 ]; then
     lc_emit_checked "$WORK/report.md" "" 1

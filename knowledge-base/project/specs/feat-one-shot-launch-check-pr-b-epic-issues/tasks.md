@@ -14,10 +14,10 @@ Lane: cross-domain (parent spec lane carried; this branch has no spec.md, so fai
 
 ## Phase 1 — Refactors
 
-- 1.1 `common.sh`: `lc_is_headless`; `launch-check.sh` `is_headless()` delegates
-- 1.2 `render.sh`: add `lc_prepare_inputs` (catalog, `lc_clean_facts`, `lc_validate_judged`) used by `cmd_render` and `cmd_issues`
-- 1.3 `render.sh`: extract `lc_compute_gaps`; hand `prev`, `has_prev`, `judged_in`, `gaps.tsv`, `open.ids`, `accepted.ids` back to `lc_render`; bash 3.2 safe
-- 1.4 Diff the three fixtures' dry-run output against the before-image (byte-identical); run `render`, `identity`, `wording` suites
+- [x] 1.1 `common.sh`: `lc_is_headless`; `launch-check.sh` `is_headless()` delegates
+- [x] 1.2 `render.sh`: add `lc_prepare_inputs` (catalog, `lc_clean_facts`, `lc_validate_judged`) used by `cmd_render` and `cmd_issues`
+- [x] 1.3 `render.sh`: extract `lc_compute_gaps`; hand `prev`, `has_prev`, `judged_in`, `gaps.tsv`, `open.ids`, `accepted.ids` back to `lc_render`; bash 3.2 safe
+- [x] 1.4 Diff the three fixtures' dry-run output against the before-image (byte-identical); run `render`, `identity`, `wording` suites
 
 ## Phase 2 — `issues.sh`: wrappers, preflight, live lookup, preview
 
