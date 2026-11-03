@@ -472,7 +472,8 @@ describe("no build-time network font fetch", () => {
         ...ASSET,
       });
       try {
-        const weakened = /fonts\.googleapis\.com|fonts\.gstatic\.com/;
+        const weakened =
+          /^https?:\/\/fonts\.googleapis\.com$|^https?:\/\/fonts\.gstatic\.com$/;
         expect(() =>
           sweep(root, enumerateWalk, { ...FIXTURE_OPTS, pattern: weakened }),
         ).not.toThrow();
