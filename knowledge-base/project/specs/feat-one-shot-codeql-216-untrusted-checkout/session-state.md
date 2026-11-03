@@ -18,3 +18,10 @@ None.
 - soleur:one-shot (this pipeline), soleur:plan, soleur:deepen-plan — inline (no Skill/Task tool at this depth)
 - `lint-guard-contract.py` — PASS (2 guard entries)
 - collision checks: gh issue view 216, PR probes (open/merged anchors), worktree noun probe, overlap preflight — all clear
+
+## Review Phase
+- Status: complete — sequential-fallback inline seats (security / structural-enumeration / code-quality), 0 findings, no code-review issues filed
+- `deploy-arm.test.sh` pin updated: its keying-line assertion tracked the old ref literal — now asserts `ref: ${{ steps.gate.outputs.deploy_sha }}` ordering (79/79)
+
+## QA Phase
+- Status: skipped — no browser/API Test Scenarios; the plan's scenarios are the executed suites above
