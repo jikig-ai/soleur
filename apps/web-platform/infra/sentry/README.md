@@ -340,12 +340,16 @@ Two rules in `issue-alerts.tf` email the cron's Art. 17 signals: `git-data-erasu
 (`feature=cron-git-data-erasure-redrive` AND `escalation` in `20d,28d`, `frequency_minutes = 360`) and
 `git-data-erasure-redrive-no-progress` (`reason=no_erasure_progress`, `frequency_minutes = 720`). Both bind the project
 issue stream, whose detector already exists, so the rules and their `alert-reference.json` entries land in ONE PR. What
-they cannot cover is a dead cron (no event, no page): that is the cron monitor's job, and its detector id does not exist
+they cannot cover is a dead OR FAILING cron (a dead cron emits no event; a heartbeat `?status=error` and the stage-failure ERROR
+events match neither rule): that is the cron monitor's job, and its detector id does not exist
 until `sentry_cron_monitor.scheduled_git_data_erasure_redrive` has been applied, so routing it is the second PR of the rule
 above: move `scheduled_git_data_erasure_redrive` from `cron_monitor_alert_unrouted` into
 `sentry_alert.cron_monitor_failure.monitor_ids`, regenerate `alert-reference.json` from the `plan_pr` artifact, and do it
 only after the monitor's first measured check-in. The rules are not live until `apply-sentry-infra.yml` has applied them;
 the issue closes on `scripts/sentry-alert-live-fidelity.sh` PASS against the live org plus a forced test event.
+`sentry-alert-live-fidelity.sh` compares rule config only and fires nothing; the owner-gated no-SSH procedure that proves
+delivery (one synthetic event, the rule's `lastTriggered`, a named human confirming the email) is in the git-data runbook
+(`knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`, "Proving delivery with a forced event").
 
 ## Audit
 

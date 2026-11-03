@@ -938,7 +938,9 @@ describe("registration", () => {
     );
     expect(src).not.toMatch(/hard-stop page/i);
     expect(src).not.toMatch(/NO PAGING RULE/);
-    expect(src).toContain("git_data_erasure_redrive_escalation");
-    expect(src).toContain("#10914");
+    // Positive anchors are asserted on the code with comments removed, so a header comment cannot satisfy them
+    // (the static tier message is what actually reaches Sentry).
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+    expect(code).toContain("routed by the git-data-erasure-redrive-escalation Sentry alert once applied, #10914");
   });
 });
