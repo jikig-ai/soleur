@@ -610,7 +610,7 @@ kk_pre_state() {
   done
   if [[ "$nu" != 0 ]]; then kr_refuse copy_unreadable "a copy of the key could not be read value-silently (cause class: ${cls}); nothing was written"; return 1; fi
   if [[ "$np" != 0 && "$na" != 0 ]]; then
-    kr_refuse partial_absent_state "some copies of the key are present and some absent (an external deletion or an interrupted earlier apply). URGENT, not auto-repaired: do not restart anything. A rotate refuses identically while the copies are mixed: recreate the missing copy in Doppler (or accept the mixed state), then rotate"
+    KR_SCRUB_CAP=420 kr_refuse partial_absent_state "some copies of the key are present and some absent (an external deletion or an interrupted earlier apply). URGENT, not auto-repaired: do not restart anything. A rotate refuses identically while the copies are mixed: recreate the missing copy in Doppler (or accept the mixed state), then rotate; nothing was written"
     return 1
   fi
   KK_ABSENT_ALL=false
@@ -623,7 +623,7 @@ kk_want() {
   local base absent="{}" repl i p c nm addr tgt=false
   # a key whose phase-B rows are flag `target` updates its copies in place, so a bare create of its random_id (a lost state entry)
   # is recoverable although the copies are present
-  kr_gate_rows B "$1" | cut -d'|' -f4 | grep -qx target && tgt=true
+  grep -qx target <<<"$(kr_gate_rows B "$1" | cut -d'|' -f4)" && tgt=true
   base="$(jq -cs 'add' <(kr_gate_want A "$1") <(kr_gate_want B "$1"))" || return 1
   repl="$( { kr_gate_replaces A "$1"; kr_gate_replaces B "$1"; } | sed -e 's/^-replace=//' | jq -R -cs 'split("\n") | map(select(length > 0))')"
   for i in "${!KK_CP[@]}"; do
@@ -772,7 +772,7 @@ kk_rotate_would_refuse() {
   elif ! kk_stale_test; then tok="$KR_CHECK_TOKEN"
   elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"
   fi
-  kr_token_known "$tok" || tok=internal_error
+  [[ "$tok" == none ]] || kr_token_known "$tok" || tok=internal_error
   printf '%s' "$tok"
 }
 
