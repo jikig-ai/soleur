@@ -283,7 +283,7 @@
 "external"
 ],
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "title": "Cloudflare",
 "kind": "system",
@@ -448,7 +448,7 @@
 "external"
 ],
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "title": "Anchore Grype (public release + vulnerability DB)",
 "kind": "system",
@@ -777,7 +777,7 @@
 },
 "technology": "Markdown SKILL.md",
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "title": "Skills",
 "kind": "container",
@@ -1042,6 +1042,19 @@
 "title": "verification-scaffold skill",
 "kind": "component",
 "id": "platform.plugin.verificationscaffold"
+},
+"platform.plugin.launchcheck": {
+"notation": "Component",
+"style": {
+"shape": "component"
+},
+"technology": "Readiness Gap Analyzer",
+"description": {
+"txt": "Read-only analysis of a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. Writes only that report, through one redaction-checked chokepoint; no network, no telemetry (ADR-314)"
+},
+"title": "launch-check skill",
+"kind": "component",
+"id": "platform.plugin.launchcheck"
 },
 "platform.plugin.snapshotGuard": {
 "notation": "Component",
@@ -2641,8 +2654,8 @@
 "id": "a2e091"
 },
 "zw4k7r": {
-"title": "image-cve-scan.yml (W3, epic #9601, ADVISORY — nothing in the release or deploy path depends on it) downloads the pinned Grype release tarball (SHA256-literal verify) and lets the scanner fetch its vulnerability DB from grype.anchore.io over TLS",
-"technology": "HTTPS (release tarball + vulnerability DB)",
+"title": "image-cve-scan.yml (W3, epic #9601, ADVISORY — nothing in the release or deploy path depends on it) downloads the pinned Grype release tarball (SHA256-literal verify) and fetches the vulnerability DB listing and archive from grype.anchore.io over TLS, requiring the archive sha256 to equal the listing checksum (integrity pin, auto-update off; slice 2a); the report-only verdict workflow does the same",
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)",
 "source": {
 "model": "github"
 },
@@ -2652,7 +2665,7 @@
 "id": "zw4k7r"
 },
 "17q15nn": {
-"title": "image-cve-scan.yml pulls the DEPLOYED image by its :<sha> tag (packages: read, the job GITHUB_TOKEN; scanner registry source, no container runtime) to scan it — distinct from the publish and restore edges. Whether the job token can read the private package is verified by the first post-merge dispatch, not assumed",
+"title": "image-cve-scan.yml, and the report-only verdict workflow (image-cve-verdict.yml, slice 2a), pull the DEPLOYED image by its :<sha> tag (packages: read, the job GITHUB_TOKEN; scanner registry source, no container runtime) to scan it — distinct from the publish and restore edges. Whether the job token can read the private package is verified by the first post-merge dispatch, not assumed",
 "technology": "OCI registry pull (GITHUB_TOKEN)",
 "source": {
 "model": "github"
@@ -2663,7 +2676,7 @@
 "id": "17q15nn"
 },
 "zs2c58": {
-"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image",
+"title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image; the report-only verdict workflow (image-cve-verdict.yml, slice 2a) reads /health the same way after a completed non-push release-workflow run (the sha it scans is the one /health serves, never the event's head sha)",
 "technology": "HTTPS GET /health",
 "source": {
 "model": "github"
@@ -2685,7 +2698,7 @@
 "id": "11ved1y"
 },
 "6z4z0p": {
-"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public)",
+"title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public); the v2 marker also carries the whole gating set's per-type and per-family group counts, and the report-only verdict workflow ships one SOLEUR_IMAGE_CVE_VERDICT row per completed non-push release-workflow run (a row does not imply a deploy; report-only, no job waits on it)",
 "technology": "HTTPS (Logs ingest, bearer token)",
 "source": {
 "model": "github"
@@ -4252,7 +4265,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -4510,7 +4523,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -8751,7 +8764,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 6313,
@@ -8795,7 +8808,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "pkkgzf",
@@ -10653,7 +10666,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -10883,7 +10896,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -14773,7 +14786,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 9049,
@@ -14817,7 +14830,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "1dmg01n",
@@ -17745,7 +17758,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -18119,7 +18132,7 @@
 "size": "md"
 },
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "tags": [],
 "notation": "Container",
@@ -18389,7 +18402,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -24758,7 +24771,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 13501,
@@ -24802,7 +24815,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "y5ykmz",
@@ -35419,7 +35432,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -35604,7 +35617,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -36740,7 +36753,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 3729,
@@ -36784,7 +36797,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 },
 {
 "id": "pkkgzf",
@@ -37702,7 +37715,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -40330,7 +40343,7 @@
 "size": "md"
 },
 "description": {
-"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB, so a poisoned or stale DB is a trust boundary: the scan's DB-age check and its known-vulnerable canary are the only defences, and an unmeasured scan exits non-zero rather than reading clean."
+"txt": "The PUBLIC upstream surface of the Grype vulnerability scanner used by image-cve-scan.yml (W3, epic #9601): the pinned release tarball on github.com/anchore/grype (verified against a SHA256 literal in the workflow, the secret-scan.yml gitleaks pattern) and the vulnerability DB served from grype.anchore.io. The binary pin does NOT pin the DB (it changes daily); since slice 2a the scan verifies the downloaded archive against the checksum in the listing it fetched from the same host and imports it with auto-update off, recording the DB checksum, schema and build time per row. That is integrity and auditability, NOT authenticity (listing and archive share one origin), so a poisoned or stale DB remains a trust boundary: the DB-age check and the known-vulnerable canary stay as defences, and an unmeasured scan exits non-zero rather than reading clean."
 },
 "tags": [
 "external"
@@ -40354,7 +40367,7 @@
 "id": "1kknpsa",
 "source": "github",
 "target": "anchoreGrype",
-"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and lets the ",
+"label": "image-cve-scan.yml (W3, epic #9601, \nADVISORY — nothing in the release or \ndeploy path depends on it) downloads the \npinned Grype release tarball \n(SHA256-literal verify) and fetches the ",
 "points": [
 [
 177,
@@ -40386,7 +40399,7 @@
 "color": "gray",
 "line": "dashed",
 "head": "normal",
-"technology": "HTTPS (release tarball + vulnerability DB)"
+"technology": "HTTPS (release tarball + vulnerability DB listing and archive)"
 }
 ]
 },
@@ -43805,7 +43818,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -47769,7 +47782,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -51939,7 +51952,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"
@@ -54800,7 +54813,7 @@
 "size": "md"
 },
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "tags": [],
 "notation": "Container",
@@ -55309,7 +55322,7 @@
 "size": "md"
 },
 "description": {
-"txt": "105 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+"txt": "106 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
 },
 "tags": [],
 "notation": "Container",
@@ -60599,6 +60612,116 @@
 }
 ]
 },
+"__platform_plugin_launchcheck": {
+"_stage": "layouted",
+"_type": "element",
+"id": "__platform_plugin_launchcheck",
+"viewOf": "platform.plugin.launchcheck",
+"title": "Auto / launch-check skill",
+"description": null,
+"autoLayout": {
+"direction": "TB"
+},
+"notation": {
+"nodes": [
+{
+"title": "Component",
+"shape": "component",
+"color": "primary",
+"kinds": [
+"component"
+]
+},
+{
+"title": "System",
+"shape": "rectangle",
+"color": "primary",
+"kinds": [
+"system"
+]
+}
+]
+},
+"hash": "",
+"bounds": {
+"x": 0,
+"y": 0,
+"width": 448,
+"height": 281
+},
+"nodes": [
+{
+"id": "platform.plugin",
+"parent": null,
+"level": 0,
+"children": [
+"platform.plugin.launchcheck"
+],
+"inEdges": [],
+"outEdges": [],
+"title": "Soleur Plugin",
+"modelRef": "platform.plugin",
+"shape": "rectangle",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping AND, since #8400, branch deletion: `cleanup-merged` keys its lease check on the BRANCH rather than on a worktree path, so a merged branch whose worktree was already removed is now held by a live lease instead of reaching `git push origin --delete` and `git branch -D`. The narrower wording was falsified by that change, in the same way and at the same time as the script's own fail-closed banner. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user. Since ADR-254 (#8880) it also ships a user-machine WRITE surface: `scripts/emit-decision.sh` appends field-allowlisted decision records to the project-local `.soleur/decisions.jsonl` (NO-ECHO metadata only, `.soleur/.gitignore` self-guard, ~5 MB rotation, tester-owned, no egress — the aggregate reaches Jikigai only when a tester runs `alpha-metrics.sh` and pastes it at checkpoint). Since ADR-264 it also ships the staged, agent-runnable operator-script contract (`scripts/lib/operator-script.sh`: --list, --stage, --stage --apply --plan-digest, exit 75) and the PreToolUse hook `hooks/operator-stage-approval.sh` registered in `hooks/hooks.json`, which reaches a founder's install and is loaded by web Concierge too (the web runtime opts it out until the web approval adapter lands). A further write surface lands with #9403 (ADR-268): `scripts/pipeline-tally.sh` mutates per-branch work-unit counters under `<git-common>/soleur-session-state/counters/` (key=value, flock-serialized, units only — never dollars) and `hooks/stop-hook.sh` READS the ledger's `capped` key as a hard-cap floor; the ledger is repo-local machine state with no egress, and ship renders its counts into the public PR body as a `## Pipeline Tally` section. Since ADR-250 Amendment 2 (#9677) `cleanup-merged` can also, on explicit opt-in, delete expired entries from the plugin's own scratch-quarantine directory under /tmp and /var/tmp (`SOLEUR_QUARANTINE_DRAIN=1`, a terminal delete on the user's machine scoped to that directory) and prune old Docker build cache and dangling images (`SOLEUR_DOCKER_PRUNE`, dry-run first, never volumes or containers); both print stdout markers (on a user's machine they stay there; the web platform's telemetry mirror forwards them like every other SOLEUR_* marker). Since ADR-277 (#9601, W2) it also ships a second PreToolUse hook, `hooks/destructive-command-guard.sh` (with the Perl lexer `hooks/lib/shell-argv.pl`), that asks or denies before a destructive terraform/tofu, default-branch force-push or recursive delete of `/` or home reaches a customer's shell; it sends nothing and writes nothing, and hosted web sessions opt it out through SOLEUR_DISABLE_DESTRUCTIVE_GUARD (server-side scheduled agents keep it active), so it protects customer-machine users, not hosted founders (hosted sessions ask separately, through a must-ask lane in canUseTool for common forms of a default-branch force-push or delete, terraform destroy and a gh delete, ADR-284; the lane does not recognise every spelling). Since ADR-290 Amendment 1 (#10331, slice 2) it also ships a user-repository surface: `plugins/soleur/scripts/lint-ratchet.py` user mode inspects any git repository it is run in (it reads root and tracked nested ruff configs and the baseline path, with no install and no ruff run unless a tracked ruff config AND a baseline file are present), and on an opted-in repository or an explicit --update executes a sha256-pinned ruff wheel it downloads once into a per-user 0700 cache outside the repository (PyPI over TLS, deliberately not modelled as an element); it writes `.lint-ratchet/ruff.baseline.txt` only on an explicit --update; it sends nothing to Soleur; the hosted image has no python3, so the call is a skip there."
+},
+"tags": [],
+"notation": "System",
+"kind": "system",
+"depth": 1,
+"navigateTo": "components",
+"x": 8,
+"y": 8,
+"width": 432,
+"height": 265,
+"labelBBox": {
+"x": 6,
+"y": 0,
+"width": 94,
+"height": 15
+}
+},
+{
+"id": "platform.plugin.launchcheck",
+"parent": "platform.plugin",
+"level": 1,
+"children": [],
+"inEdges": [],
+"outEdges": [],
+"title": "launch-check skill",
+"modelRef": "platform.plugin.launchcheck",
+"shape": "component",
+"color": "primary",
+"style": {
+"opacity": 15,
+"size": "md"
+},
+"description": {
+"txt": "Read-only analysis of a customer's existing repository on their own machine: deterministic readiness checks, a baseline derived from the verification-scaffold guard manifest, and one living report under knowledge-base/engineering/readiness/. Writes only that report, through one redaction-checked chokepoint; no network, no telemetry (ADR-314)"
+},
+"tags": [],
+"notation": "Component",
+"technology": "Readiness Gap Analyzer",
+"kind": "component",
+"x": 40,
+"y": 61,
+"width": 367,
+"height": 180,
+"labelBBox": {
+"x": 38,
+"y": 17,
+"width": 291,
+"height": 140
+}
+}
+],
+"edges": []
+},
 "__platform_plugin_snapshotGuard": {
 "_stage": "layouted",
 "_type": "element",
@@ -63108,7 +63231,7 @@
 "size": "md"
 },
 "description": {
-"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner."
+"txt": "DNS, CDN, R2 storage, zero-trust tunnel — and, from #7640/ADR-194, the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. Since #11181/PR #11766 it also carries the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)): cloudflare_load_balancer.app overlays the retained A record (fallback for a disabled LB), default+fallback pool web_1 {web-1@1 serving, web-2@0 drained until the #6027 window flip}, health monitor http/:80 /health (the Flexible-SSL edge path; the https/:443 create shape probed a port with no listener and reported every origin down under the self-fallback), origin_steering random, plus a load_balancing_health_alert notification policy. Updates ride cf-lb-overlay.yml ga-monitor-fix/ga-pool-update arms — never the routine apply."
 },
 "tags": [
 "external"

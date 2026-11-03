@@ -952,13 +952,17 @@ web2-standby-soak-6459|BETTERSTACK_API_TOKEN|uptime\.betterstack\.com|1|bs_up'
 #   fixed-tmp    must still name the fixed path (RED the day the fixed /tmp write is gone)
 #   gh-chained   must still call gh issue/pr/api (the second curl is only reachable through a gh model)
 #   bs-chained   must still chain into the named script (a second credentialed tool)
+#   env-gated    runs under env -i and must refuse with zero calls + a TRANSIENT marker while still
+#                naming its arg as the required-secret gate set (RED the day the credentialed legs
+#                are reachable without the env, or the gate set changes)
 STATIC_MANIFEST='phase3-ga-soak-5274|placeholder|<POST_CUTOVER_UTC>|exits TRANSIENT on the literal START placeholder before any curl; a hermetic run can never reach its credentialed call
 sentry-checkins-3859|fixed-tmp|/tmp/ck.json|writes the fixed path /tmp/ck.json, which a hermetic row must not touch
 sync-health-residual-5689|fixed-tmp|/tmp/sh5689.json|writes the fixed path /tmp/sh5689.json, which a hermetic row must not touch
 cron-machinery-soak-9272|gh-chained|gh|its second and third credentialed curls (-D header file, paging) are reachable only through a gh issue/pr/api model; the fail-closed gh stub makes it exit TRANSIENT after the first call
 zot-soak-6122|gh-chained|gh|its credentialed curl sits behind START-anchor and blocker arms that call gh pr/issue view; unreachable under a fail-closed gh stub
 workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model
-egress-enforce-probe-11361|gh-chained|gh|its second credentialed read (the post-merge birth evidence) is a gh api workflow-runs query, reachable only through a gh model the fail-closed gh stub does not provide'
+egress-enforce-probe-11361|gh-chained|gh|its second credentialed read (the post-merge birth evidence) is a gh api workflow-runs query, reachable only through a gh model the fail-closed gh stub does not provide
+ga-lb-pool-soak-6027|env-gated|CF_API_TOKEN CF_ACCOUNT_ID|its CF and Better Stack credentialed curls sit behind required-secret and deploy-anchor gates; under env -i it exits TRANSIENT (rc 3) before any call — no hermetic path reaches the bearer'
 
 # DELEGATED: name | owning test (extended in place by the conversion; not re-modelled here).
 DELEGATED_MANIFEST='post-deploy-incident-soak|scripts/followthroughs/post-deploy-incident-soak.test.sh
@@ -1132,6 +1136,16 @@ while IFS='|' read -r s_name s_kind s_arg s_why; do
     bs-chained)
       if grep -qF -- "$s_arg" < <(grep -vE '^[[:space:]]*#' "$s_script"); then row "static-only $s_name: still chained into $s_arg -- $s_why" ok
       else row "static-only $s_name: still chained into $s_arg" fail "the chain is gone: the probe is now hermetically reachable; move it to the dynamic manifest"; fi ;;
+    env-gated)
+      # The credentialed legs sit behind required-secret (and deploy-anchor) gates that fire BEFORE
+      # any curl; under env -i the probe refuses with zero calls and a TRANSIENT marker. The arg pins
+      # the literal gate set (`for v in $s_arg`); a probe that ever reaches the shim or exits 0 is
+      # hermetically reachable and must move to the dynamic manifest.
+      run_probe "$s_name-S" "$s_script"
+      count_calls "$RUN_ROW"
+      if grep -qF -- "$s_arg" "$s_script" && [[ "$EV_CALLS" -eq 0 && "$RUN_RC" -ne 0 && ! -e "$RUN_ROW/shim/unexpected" && ! -e "$RUN_ROW/shim/unmodelled" ]] && grep -q 'TRANSIENT' "$RUN_ROW/stderr"; then
+        row "static-only $s_name: still unreachable (env gate $s_arg, rc $RUN_RC, zero calls) -- $s_why" ok
+      else row "static-only $s_name: still unreachable (env gate $s_arg, zero calls)" fail "rc=$RUN_RC calls=$EV_CALLS: the probe is now hermetically reachable; move it to the dynamic manifest"; fi ;;
     *) row "static-only $s_name: known kind" fail "unknown kind '$s_kind'" ;;
   esac
 done <<< "$STATIC_MANIFEST"
