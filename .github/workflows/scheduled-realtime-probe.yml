@@ -40,10 +40,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Exact patch version, not the floating '22': this job holds Doppler dev
-          # credentials, and a runner-cached 22.x can predate the CVE-2026-111497
+          # Exact patch version, not the floating '22': this job's behaviour depends on
+          # the Node version (the NODE_OPTIONS flag below) and it holds Doppler dev
+          # credentials, and a runner-cached 22.x may predate the CVE-2026-111497
           # fix (22.23.4); the former EOL 21.7.3 pin was vulnerable too. Move this
-          # together with the apps/web-platform/Dockerfile base-image digest.
+          # together with apps/web-platform/.nvmrc and the Dockerfile base-image digest
+          # (the guard test pins it equal to .nvmrc).
           # The probe needs Node WITHOUT a global WebSocket; Node 22 ships one, so
           # the probe step sets NODE_OPTIONS=--no-experimental-websocket to
           # reproduce that condition and fails closed if it ever stops holding.
@@ -140,9 +142,8 @@ jobs:
           if [[ -z "$fail_mode" ]]; then
             ws_type=$(env -u DOPPLER_TOKEN node -p 'typeof WebSocket' 2>/dev/null) || ws_type=""
             if [[ "$ws_type" != "undefined" ]]; then
-              ws_type_safe=$(strip_log_injection "$(printf '%s' "$ws_type" | tr '\n' ' ' | head -c 200)")
               record_failure "probe_contract_drift" \
-                "NODE_OPTIONS no longer removes the global WebSocket (typeof WebSocket=${ws_type_safe:-unavailable}); check NODE_OPTIONS and the Node version. The probe would exercise the native path, not the polyfill path."
+                "NODE_OPTIONS no longer removes the global WebSocket (typeof WebSocket=${ws_type:-unavailable}); check NODE_OPTIONS and the Node version. The probe would exercise the native path, not the polyfill path."
             fi
           fi
 
