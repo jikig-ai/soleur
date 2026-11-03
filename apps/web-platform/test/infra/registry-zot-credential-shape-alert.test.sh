@@ -249,12 +249,75 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
   && ok "this suite's run line is registered in infra-validation.yml exactly once" \
   || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
 
+# Two layers over IV_CODE (the comment-stripped executable view). (1) FRAGMENTS: YAML env:
+# names are static text, so a MUT_SKIP or *_GUARD_* name — literal or composed from quoted
+# halves ("MUT_""SKIP") — always carries a visible fragment; BASH_ENV/SHELLOPTS/BASHOPTS
+# are the shell-injection names that could smuggle a computed one.
 seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'REGCREDSHAPE_' >/dev/null && seam_bad="$seam_bad REGCREDSHAPE_-literal"
-printf '%s\n' "$IV_CODE" | grep -nE 'MUT_SKIP' >/dev/null && seam_bad="$seam_bad MUT_SKIP-literal"
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS' 'REGCREDSHAPE_'; do
+  printf '%s\n' "$IV_CODE" | grep -nF "$_frag" >/dev/null && seam_bad="$seam_bad $_frag"
+done
 [ -z "$seam_bad" ] \
-  && ok "no REGCREDSHAPE_/MUT_SKIP literal reaches the workflow's executable text (env muting is barred)" \
+  && ok "no env-name fragment (MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS, REGCREDSHAPE_) reaches the workflow's executable text (literal or composed muting is barred)" \
   || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
+
+# (2) JOB SCOPE: the job block enclosing THIS suite's run line — walked back from the run
+# line to its nearest `^  <name>:` header and forward to the next (derived, never a
+# hardcoded job name) — is the only place a $GITHUB_ENV/$GITHUB_PATH write or a defaults:
+# could reach the suite's step at runtime (env: keys are static, caught by the fragments).
+# The slice is proven non-empty AND containing the run line, so a missliced IV_JOB can
+# never pass the ban vacuously.
+IV_JOB="$(awk -v run="$REG_RUN" '
+  { l[NR] = $0 }
+  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { ish[NR] = 1; hdr = NR }
+  index($0, run) { hit = 1; jh = hdr }
+  END {
+    if (!hit) exit
+    for (i = jh; i <= NR; i++) {
+      if (i != jh && ish[i]) break
+      print l[i]
+    }
+  }' <<< "$IV_CODE")"
+job_bad=""
+[ -n "$IV_JOB" ] || job_bad=" empty-IV_JOB"
+[ "$(printf '%s\n' "$IV_JOB" | grep -cFx "$REG_RUN")" -eq 1 ] || job_bad="$job_bad run-line-outside-slice"
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_ENV' >/dev/null && job_bad="$job_bad GITHUB_ENV"
+printf '%s\n' "$IV_JOB" | grep -nF 'GITHUB_PATH' >/dev/null && job_bad="$job_bad GITHUB_PATH"
+printf '%s\n' "$IV_JOB" | grep -nF 'defaults:' >/dev/null && job_bad="$job_bad defaults:"
+[ -z "$job_bad" ] \
+  && ok "the job enclosing this suite's step writes no \$GITHUB_ENV/\$GITHUB_PATH and carries no defaults: (the runtime-composition channel is barred)" \
+  || no "job-scope seam violated:$job_bad — the job containing this suite's step can smuggle a computed env name"
+
+# Step-shape pins (ghcr-blocked-alert port): the step that runs this suite must stay
+# unconditional and blocking — no step-level if:/continue-on-error:, the job's if: is the
+# one dedup literal exactly once, and no continue-on-error: in the job header.
+IV_STEP="$(awk -v run="$REG_RUN" '
+  { l[NR] = $0 }
+  /^      - / { stp[NR] = 1; st = NR }
+  index($0, run) { hit = 1; ss = st }
+  END {
+    if (!hit) exit
+    for (i = ss; i <= NR; i++) {
+      if (i != ss && stp[i]) break
+      print l[i]
+    }
+  }' <<< "$IV_JOB")"
+IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
+if [ "$(printf '%s\n' "$IV_STEP" | grep -cFx "$REG_RUN")" -eq 1 ] \
+   && ! grep -qE '^        (if|continue-on-error):' <<< "$IV_STEP" \
+   && [ "$(printf '%s\n' "$IV_HDR" | grep -cxF "    if: needs.detect-changes.outputs.pr_duplicate != 'true'")" -eq 1 ] \
+   && ! grep -qE '^    continue-on-error:' <<< "$IV_HDR"; then
+  ok "deploy-script-tests-fixed runs this guard in an unconditional, blocking step (no step if:/continue-on-error:, the job if: is the dedup literal, no job continue-on-error:)"
+else
+  no "infra-validation.yml no longer wires this guard: the step missing/conditional/non-blocking, or its job conditional/non-blocking"
+fi
+
+echo ""
+echo "=== registry-zot-credential-shape-alert guard: $pass passed, $fail failed ==="
+if [ "$fail" -gt 0 ]; then
+  printf 'FAILED: %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi
 
 # ── Mutation rows: each must make the rows above RED (must-PASS rows stay GREEN) ─────────────
 if [ -z "${MUT_SKIP:-}" ]; then
@@ -270,8 +333,7 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -324,9 +386,16 @@ PY
   }
 
   mutate_green() {
-    local label="$1" prog="$2" copy rc=0
-    copy="$MUT_DIR/betterstack-logs-alerts.tf"
-    cp "$TF" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
+    local label="$1" which="$2" prog="$3" copy rc=0 src
+    case "$which" in
+      TF) src="$TF"; copy="$MUT_DIR/betterstack-logs-alerts.tf" ;;
+      WF) src="$WF"; copy="$MUT_DIR/apply-web-platform-infra.yml" ;;
+      CI) src="$CI"; copy="$MUT_DIR/cloud-init-registry.yml" ;;
+      IV) src="$IV"; copy="$MUT_DIR/infra-validation.yml" ;;
+      RB) src="$RB"; copy="$MUT_DIR/runbook.md" ;;
+      *) printf '[FATAL] mutate_green: unknown target %s\n' "$which" >&2; exit 2 ;;
+    esac
+    cp "$src" "$copy" || { printf '[FATAL] mutate_green: cp failed\n' >&2; exit 2; }
     python3 - "$copy" <<PY || { no "must-PASS '$label' did not land (anchor drifted)"; return 0; }
 import sys
 p = sys.argv[1]
@@ -337,7 +406,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    REGCREDSHAPE_TF="$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "REGCREDSHAPE_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -445,6 +514,42 @@ s = s.replace(old, old + "        env:\n          REGCREDSHAPE_TF: /dev/null\n")
 assert s.count(old) == 1
 s = s.replace(old, "")' \
     "unregistered or double-registered"
+  mutate_red "a composed MUT_ / _SKIP env name reaches the workflow through an in-job GITHUB_ENV write" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        run: echo \"MUT_\"\"SKIP=1\" >> \"\x24GITHUB_ENV\"\n")' \
+    "workflow seam"
+  mutate_red "a GUARD-fragment env name is planted on the suite's step" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          FOO_GUARD_X: /dev/null\n" + old)' \
+    "workflow seam"
+  mutate_red "a BASH_ENV shell-injection name is planted inside the job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env:\n          BASH_ENV: /tmp/x\n" + old)' \
+    "workflow seam"
+  mutate_red "a benign GITHUB_ENV write lands inside the suite's own job" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "        run: echo \"SEAM_PROBE=1\" >> \"\x24GITHUB_ENV\"\n")' \
+    "job-scope seam"
+  mutate_red "the suite's step gains an if: (a conditional step can be skipped green)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' \
+    "no longer wires this guard"
+  mutate_red "the suite's step becomes non-blocking (continue-on-error:)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        continue-on-error: true\n" + old)' \
+    "no longer wires this guard"
+  mutate_red "the suite's job header gains continue-on-error:" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-zot-credential-shape-alert.test.sh\n"
+assert s.count(old) == 1
+j = s.rindex("    steps:\n", 0, s.index(old))
+s = s[:j] + "    continue-on-error: true\n" + s[j:]' \
+    "no longer wires this guard"
 
   # ── Scorer negative control ────────────────────────────────────────────────────────────────
   mutate_red "scorer control: value-drop reds a different row than the named fragment" TF \
@@ -455,15 +560,24 @@ s = s.replace(old, "")' \
   mutate_floor_red "assertion floor trips when PRESENCE_ROWS is bumped one past the real count"
 
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
-  mutate_green "whitespace reflow of the heredoc" \
+  # Over-breadth control: a $GITHUB_ENV write is legitimate in ANOTHER job — the job-scope
+  # ban binds only the slice enclosing THIS suite's run line (the plan: job carries real
+  # writes today).
+  mutate_green "a GITHUB_ENV write lands in the plan: job (outside this suite's enclosing job)" IV \
+    'old = "          } >> \"\x24GITHUB_ENV\"\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "          echo \"CROSS_JOB_PROBE=1\" >> \"\x24GITHUB_ENV\"\n")'
+  mutate_green "whitespace reflow of the heredoc" TF \
     'old = "\n        OR match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[\\\\s\x27)"
 assert s.count(old) == 1
 s = s.replace(old, " OR\n          match(JSONExtractString(raw, \x27message\x27), \x27Authorization:\\\\[\\\\s\x27)")'
 fi
 
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
-PRESENCE_ROWS=32
-MUT_ROWS=21
+# Self-reference (accepted residual, #11899 item 8): PRESENCE_ROWS/MUT_ROWS are written only
+# in THIS file — a row deletion paired with a decrement stays green+FIRES; review covers it.
+PRESENCE_ROWS=34
+MUT_ROWS=29
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
