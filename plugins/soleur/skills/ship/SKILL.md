@@ -931,8 +931,6 @@ SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 
 **Why:** #5325 — the 2026-06-15 outbound-email go-live added a second Resend sending domain, forcing a Resend free→Pro upgrade ($20/mo), but the cost reached the ledger only after the operator noticed it missing. The COO gate's advisory recommendation did not block merge; this gate moves recurring-vendor-cost capture from honor-system to a mechanical block-before-ready, with an explicit operator-driven-billing branch for upgrades no API can self-apply.
 
-**Commit-author identity (hook-enforced at this same boundary).** `.claude/hooks/cla-signed-author-gate.sh` denies `gh pr ready`/`gh pr merge` when any unique author/committer email on `origin/main..HEAD` falls outside the CLA-sanctioned set (session `git config user.email`, a cla.yml-allowlisted or cla-signatures login's `<id>+<login>` noreply, or a pinned allowlisted email — `devin-ai-integration[bot]` is in neither roster and denies even as the configured `user.email`). Prevention is upstream authoring discipline — never `-c user.*` over a configured identity; recovery is the `filter-branch --env-filter` rewrite + `--force-with-lease` the deny message prints (#12027, #7218, `wg-cla-signed-author-before-merge`).
-
 ### gdpr-gate `compliance/critical` Auto-Label Gate
 
 **Trigger:** PR diff matches `^plugins/soleur/skills/gdpr-gate/` OR the referenced plan/spec file declares `brand_survival_threshold: single-user incident`.
