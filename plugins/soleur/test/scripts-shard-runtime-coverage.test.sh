@@ -198,11 +198,11 @@ assert_fixture_dir "$FIX_DIR"
 mkdir -p "$FIX_DIR/users" "$FIX_DIR/empty" "$FIX_DIR/commentonly"
 printf '#!/usr/bin/env bash\nlikec4 --version\n' >"$FIX_DIR/users/uses-likec4.test.sh"
 printf '#!/usr/bin/env bash\n# likec4 --version is only discussed here\nx=1 # likec4 render\n' >"$FIX_DIR/commentonly/discusses-likec4.test.sh"
-GOOD_BLOCK=$'  test-scripts:\n    steps:\n      - name: Install likec4 CLI (pinned)\n        run: npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n      - run: bash scripts/test-all.sh\n'
+GOOD_BLOCK=$'  test-scripts:\n    steps:\n      - name: Install likec4 CLI (pinned)\n        run: npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts\n      - run: bash scripts/test-all.sh\n'
 REMOVED_BLOCK=$'  test-scripts:\n    steps:\n      - run: bash scripts/test-all.sh\n'
-COMMENT_BLOCK=$'  test-scripts:\n    steps:\n      # Install likec4 CLI: npm install -g likec4@1.50.0 --before=2026-09-28 (keep decision)\n      - run: bash scripts/test-all.sh\n'
-TRAILING_BLOCK=$'  test-scripts:\n    steps:\n      - run: bash scripts/test-all.sh  # npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts\n'
-RENAMED_BLOCK=$'  test-scripts:\n    steps:\n      - name: Warm the renderer cache\n        run: npm install -g likec4@1.50.0 --before=2026-09-28\n'
+COMMENT_BLOCK=$'  test-scripts:\n    steps:\n      # Install likec4 CLI: npm install -g likec4@1.60.0 --before=2026-10-16 (keep decision)\n      - run: bash scripts/test-all.sh\n'
+TRAILING_BLOCK=$'  test-scripts:\n    steps:\n      - run: bash scripts/test-all.sh  # npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts\n'
+RENAMED_BLOCK=$'  test-scripts:\n    steps:\n      - name: Warm the renderer cache\n        run: npm install -g likec4@1.60.0 --before=2026-10-16\n'
 
 row() {  # <want> <label> <block> <users_dir> <required>
   local want="$1" label="$2" block="$3" users_dir="$4" required="$5" rc=0

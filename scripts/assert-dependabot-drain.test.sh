@@ -91,7 +91,8 @@ web = [("nanoid", 3), ("js-yaml", 3), ("hono", 4), ("@hono/node-server", 2),
        ("ip-address", 10), ("fast-uri", 3), ("undici", 7),
        ("brace-expansion", 1), ("@opentelemetry/propagator-jaeger", 2),
        ("@sentry/nextjs", 10), ("body-parser", 2), ("zod", 4),
-       ("next", 16), ("minimatch", 11), ("glob", 14), ("@vitest/mocker", 4)]
+       ("next", 16), ("minimatch", 11), ("glob", 14), ("@vitest/mocker", 4),
+       ("browserslist", 4), ("postcss", 8), ("postcss-selector-parser", 7)]
 w = pkgs(web)
 # js-yaml and brace-expansion carry two more major lines each, nested so the paths differ.
 w["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
@@ -212,7 +213,7 @@ fi
 # per the cross-file-drift convention (work/SKILL.md): the first version used `head -1`,
 # and a shadowing `MIN_ROWS = 0` added later inside main() was reported "[ok] MIN_ROWS is
 # 19" while the effective floor was 0.
-for spec in "MIN_ROWS:41" "MIN_RESOLVED:38" "MIN_LOCKS:5"; do
+for spec in "MIN_ROWS:44" "MIN_RESOLVED:41" "MIN_LOCKS:5"; do
   name="${spec%%:*}"; floor="${spec##*:}"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *${name} = [0-9]+" "$GUARD" || true)"
@@ -238,7 +239,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.1.3" "@sentry/nextjs:10:10.75.2" "body-parser:2:2.4.0" "zod:4:4.6.6" "next:16:16.4.1" "hono:4:4.13.11" "ip-address:10:10.7.4" "fast-uri:3:3.1.9" "minimatch:11:11.0.1" "glob:14:14.0.2" "@vitest/mocker:4:4.1.12"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.1.3" "@sentry/nextjs:10:10.75.2" "body-parser:2:2.4.0" "zod:4:4.6.6" "next:16:16.4.1" "hono:4:4.13.11" "ip-address:10:10.7.4" "fast-uri:3:3.1.9" "minimatch:11:11.0.1" "glob:14:14.0.2" "@vitest/mocker:4:4.1.12" "browserslist:4:4.28.7" "postcss:8:8.5.23" "postcss-selector-parser:7:7.1.6"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"
@@ -312,7 +313,7 @@ sys.stdout.write(s.replace(
     chr(34) + "chalk" + chr(34) + ", 4, " + chr(34) + "4.999.0" + chr(34), 1))
 '
 
-mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 41" '
+mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 44" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(
@@ -447,7 +448,7 @@ build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2;
 # the fixture's resolved count and this arm reds -- restoring the per-row mirror
 # guarantee the header contract states. ---
 asserted=$((asserted + 1))
-if run_mutant "$SANDBOX/pristine.py" && grep -qF "41 rows evaluated, 41 resolved" "$SANDBOX/last.out"; then
+if run_mutant "$SANDBOX/pristine.py" && grep -qF "44 rows evaluated, 44 resolved" "$SANDBOX/last.out"; then
   pass "fixture mirror: all 41 REQUIRED rows evaluate AND resolve in the fixture (an unmirrored table addition prints '42 evaluated, 41 resolved' and reds here)"
 else
   fail "control did not report '41 rows evaluated, 41 resolved' -- a REQUIRED row has no fixture entry or the summary text drifted"
@@ -561,7 +562,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=47
+MIN_ASSERTIONS=50
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
