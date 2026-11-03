@@ -159,6 +159,37 @@ None. (Plan, tasks and spec artifacts already exist under `knowledge-base/projec
 - [ ] AC10: PR body uses `Ref #9927` and contains no `Closes`/`Fixes` for it.
 - [ ] AC11 (CPO conditions): the ADR addendum carries the plain residual-risk paragraph, links #9927 item 1b as the dated owner decision, and `git diff origin/main` shows no added line calling the check "protected" or "guarded" in the ADR, the two legal records or the PR body.
 
+## Observability
+
+This change adds no runtime code; its signal is the CI check itself. A red Guard 1 turns the required `test` context red on the pull request.
+
+```yaml
+liveness_signal:
+  what: the test-scripts leg of the required test check runs the Guard 1 registration on every pull request that reaches it
+  cadence: every pull request and merge-queue run
+  alert_target: the required test check on the pull request (blocks merge)
+  configured_in: scripts/test-all.sh (run_suite registration), .github/workflows/ci.yml (test-scripts job, test aggregator needs)
+error_reporting:
+  destination: the failing test-scripts shard log and the required test check status on the pull request
+  fail_loud: true
+failure_modes:
+  - mode: registration deleted, stubbed or wrapped
+    detection: G2f pin in plugins/soleur/test/terraform-target-parity.test.ts (test-bun leg) goes red
+    alert_route: required test check
+  - mode: Guard 1 itself goes red
+    detection: test-scripts shard fails
+    alert_route: required test check
+  - mode: test-scripts leg dropped from the test aggregator
+    detection: G2f ci.yml wiring pin goes red
+    alert_route: required test check
+logs:
+  where: GitHub Actions job logs for the test-scripts and test-bun legs
+  retention: GitHub Actions default
+discoverability_test:
+  command: grep -c inngest-luks-sole-copy.test.sh scripts/test-all.sh
+  expected_output: "1"
+```
+
 ## Domain Review
 
 **Domains relevant:** Engineering, Legal
