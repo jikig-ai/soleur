@@ -52,6 +52,7 @@ before claiming a class is closed.
 11. **A `cd ..` in a compound command moved the cwd and made relative greps miss** — Recovery: re-ran from the worktree root. Prevention: use absolute or root-relative paths in multi-file greps.
 12. **I edited migration 183's `COMMENT` text after CI had already applied the earlier body to the dev ledger; `tenant-integration` failed on ledger parity ("dev applied this unmerged migration at blob c172ae38…")** — Recovery: restored the applied blob byte-for-byte, no database write; the wording fix is dropped. Prevention: a migration CI has applied to dev is as immutable as a merged one, so from the first push of a branch put any later change in a NEW migration (or leave it); check `git hash-object` against the ledger blob before touching it.
 13. **A `markdown-lint` MD038 hit (code span ending in a space) in my ADR amendment reached CI** — Recovery: reworded; full sweep clean. Prevention: run `bash scripts/markdown-lint.sh --repo-sweep` before the first push of any branch that edits markdown.
+14. **A comment-only edit to `dsar-export-allowlist.ts` failed the required `enforce` check (legal-doc lockstep: any edit to a DSAR surface file needs four legal documents in the same PR)** — Recovery: reverted the file to main; recorded a superseding note in the archived plan. Prevention: before touching a file in the DSAR surface list, grep `.github/workflows/pr-quality-guards.yml` for the surface regex; a cosmetic comment is not worth a lockstep gate.
 
 ## Tags
 
