@@ -453,7 +453,9 @@ describe("resolveBin — the shim is followed to a HOME-independent launcher", (
       writeFileSync(join(shimDir, "not-exec-9f3a1c"), "#!/bin/sh\n");
       expect(resolveBin("not-exec-9f3a1c")).toBeUndefined();
     } finally {
-      process.env.PATH = savedPath;
+      // `process.env.X = undefined` would assign the literal string "undefined".
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
       rmSync(d, { recursive: true, force: true });
     }
   });
