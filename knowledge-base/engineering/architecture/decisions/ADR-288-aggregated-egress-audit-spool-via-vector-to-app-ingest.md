@@ -245,7 +245,7 @@ amendment holds for both functions: membership check first, jti denylist second,
 `workspace_id = p_workspace_id` predicate on every read; `EXECUTE` for `authenticated` only; no member `SELECT` policy and no table grant.
 
 - **Window.** Derived after the two authz checks and the `p_decision` check, through a `CASE` map to a literal interval (never cast from
-  caller text, no `ELSE`), so `NULL` and any unknown value raise SQLSTATE `22023` with a message that starts with `egress audit: `.
+  caller text, no `ELSE`), so `NULL` and any unknown value raise SQLSTATE `22023` with a message that starts with the `egress audit:` prefix (the constant `RPC_DENIAL_PREFIX`, which ends in one space).
   Bounded above by `now()`; the `last_seen` predicate decides inclusion. The 15-minute `bucket_start` slack stays a scan aid, so a
   bucket that began before the window start but whose `last_seen` falls inside it is counted whole: the view says "about the last N".
 - **Retention is unchanged.** A shorter window is a narrower read of the same stored rows; the purge still keys on `last_seen` at 30 days.
