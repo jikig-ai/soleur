@@ -3,7 +3,7 @@
 Canonical wording and rules for the plain-words card a CLI session shows when a step needs the founder's own answer. The
 record formats stay in [standing-delegation.md](./standing-delegation.md); this file owns only how the question is put and
 what the session does with each answer. Design source: `knowledge-base/product/design/approvals/founder-approval-cards.pen`,
-frame 18. Spec: `knowledge-base/project/specs/feat-founder-approval-cards/spec.md` (FR1, FR2, FR6).
+frame 18. Spec: `knowledge-base/project/specs/archive/20261104-000420-feat-founder-approval-cards/spec.md` (FR1, FR2, FR6).
 
 ## 1. The shape of the card
 
