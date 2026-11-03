@@ -27,7 +27,9 @@ SUT="$HERE/inngest-cli-apply-window-7463.sh"
 
 [[ -f "$SUT" ]] || { echo "FATAL: SUT not found at $SUT" >&2; exit 1; }
 [[ -x "$SUT" ]] || { echo "FATAL: SUT not executable at $SUT" >&2; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required" >&2; exit 1; }
+# jq must resolve on the ARM's PATH (env -i below), not merely this suite's —
+# a jq living at /opt/homebrew/bin passes a plain command -v then fails every arm.
+env -i PATH="/usr/local/bin:/usr/bin:/bin" jq --version >/dev/null 2>&1 || { echo "FATAL: jq is required on the arm PATH" >&2; exit 1; }
 
 fails=0; total=0
 pass() { total=$((total + 1)); printf '  PASS: %s\n' "$1"; }
@@ -86,10 +88,14 @@ if [[ "$#" -eq 4 && "$1" == api && "$3" == --jq ]]; then
   case "$2" in
     repos/jikig-ai/soleur/pulls/9201)
       answer_jq pr.json "$4" ;;
+  esac
+fi
+if [[ "$#" -eq 2 && "$1" == api ]]; then
+  case "$2" in
     "repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml/runs?event=workflow_dispatch&branch=main&per_page=15")
-      answer_jq runs.json "$4" ;;
+      answer runs.json ;;
     "repos/jikig-ai/soleur/actions/workflows/scheduled-inngest-health.yml/runs?branch=main&per_page=10")
-      answer_jq health.json "$4" ;;
+      answer health.json ;;
   esac
 fi
 printf 'BADARGV %s\n' "$*" >> "$FX/calls"
@@ -109,8 +115,9 @@ new_fx() {
   printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$d/runs.json"
   printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$d/health.json"
 }
-# add_run <fx> <databaseId> <created_at> [conclusion] — append a dispatch run; call order is
-# newest-first, matching the API's ordering contract.
+# add_run <fx> <databaseId> <created_at> [conclusion] — append a dispatch run. Call order
+# IS the wire order — the API serves newest-first, so each arm decides its own recency
+# by the order it calls this helper (not by created_at sorting).
 add_run() {
   local d="$1"; assert_fixture_dir "$d"
   jq --argjson id "$2" --arg c "$3" --arg k "${4:-null}" \
@@ -194,16 +201,19 @@ expect "merged, zero dispatches -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "noruns" "$fx" "NOT-YET: no post-merge apply dispatches on main"
 
 fx="$WORK/fx-runsfail"; new_fx runsfail; : > "$fx/runs.json.fail"
-expect "run list read fails -> NOT YET (empty read == no dispatches)" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect "run list read fails -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "runsfail" "$fx" "CANNOT-ESTABLISH: apply dispatch list read failed"
 
-# A run carrying a successful replace job but created AT or BEFORE the merge second. The
-# probe's --jq applies the strict `>` filter — either leaking through is a PASS on
-# possibly-pre-merge evidence.
+fx="$WORK/fx-runsjunk"; new_fx runsjunk; printf 'not json' > "$fx/runs.json"
+expect "run list not JSON -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "runsjunk" "$fx" "CANNOT-ESTABLISH: apply dispatch list unreadable"
+
+# Runs created AT or BEFORE the merge second — the probe's own jq applies the strict `>`
+# filter on the fixture's raw list; either leaking through is a PASS on possibly-pre-merge
+# evidence.
 fx="$WORK/fx-atmerge"; new_fx atmerge
 add_run "$fx" 90 "$MERGED"; add_run "$fx" 89 "2026-09-30T09:00:00Z"
-for r in 90 89; do add_job "$fx" "$r" inngest_host_replace success; done
-add_health "$fx" 95 "$T3" success
-expect "replace run AT/before merge second is not evidence -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect "runs AT/before merge second filtered out -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 echo "== per-run jobs reads (#9782)"
 # Every enumerated run's jobs read fails -> CANNOT-ESTABLISH, never NOT-YET. Two runs so
@@ -250,6 +260,21 @@ add_job "$fx" 231 inngest_host_replace success
 add_health "$fx" 296 "$T3" success
 expect "one failed jobs read does not poison the verdict -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
+# Malformed page streams: the two-step capture counts a gh-success/jq-fail read
+# the same as a transport failure — all-broken is still rc 3.
+fx="$WORK/fx-jobsjunk"; new_fx jobsjunk
+add_run "$fx" 205 "$T1"; add_run "$fx" 206 "$T2"
+jobs_raw "$fx" 205 'garbage not json'
+jobs_raw "$fx" 206 'also garbage'
+expect "malformed jobs payloads are counted reads -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+# A `.jobs` that is an OBJECT, not an array: iterating it by value would emit a
+# phantom job — it must be a counted fault (rc 3), never phantom evidence.
+fx="$WORK/fx-jobsobject"; new_fx jobsobject
+add_run "$fx" 207 "$T1"
+jobs_raw "$fx" 207 '{"total_count":1,"jobs":{"a":{"name":"inngest_host_replace","conclusion":"success","status":"completed"}}}'
+expect "non-array .jobs is a counted fault, not phantom evidence -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
 # A dispatch for a different apply_target: jobs exist, none replace-named.
 fx="$WORK/fx-othertarget"; new_fx othertarget
 add_run "$fx" 240 "$T1"
@@ -267,6 +292,12 @@ add_health "$fx" 297 "$T3" success
 expect "replace job on page 2 still counts -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 echo "== verdict"
+fx="$WORK/fx-inflightreplace"; new_fx inflightreplace
+add_run "$fx" 245 "$T1"
+add_job "$fx" 245 inngest_host_replace null
+expect "replace job still in flight -> NOT YET (never a false FAIL)" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "inflightreplace" "$fx" "still in flight"
+
 fx="$WORK/fx-pass"; new_fx pass
 add_run "$fx" 260 "$T1"
 add_job "$fx" 260 inngest_host_replace success
@@ -315,6 +346,22 @@ add_job "$fx" 289 inngest_host_replace success
 add_health "$fx" 290 "$T3" failure
 expect "post-replace health failed -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "healthfail" "$fx" "FAIL: post-replace health run 290 concluded 'failure'"
+
+# Two post-dating health runs — the probe reads the NEWEST (first line). An
+# implementation reading the oldest would PASS on the stale green.
+fx="$WORK/fx-twohealth"; new_fx twohealth
+add_run "$fx" 292 "$T1"
+add_job "$fx" 292 inngest_host_replace success
+add_health "$fx" 293 "$T3" failure
+add_health "$fx" 294 "$T2" success
+expect "newest post-dating health failed (oldest green is stale) -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+fx="$WORK/fx-healthreadfail"; new_fx healthreadfail
+add_run "$fx" 296 "$T1"
+add_job "$fx" 296 inngest_host_replace success
+: > "$fx/health.json.fail"
+expect "health list read fails -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "healthreadfail" "$fx" "CANNOT-ESTABLISH: health run list read failed"
 
 printf 'inngest-cli-apply-window-7463.test.sh: %s passed, %s failed\n' "$((total - fails))" "$fails"
 [[ "$fails" -eq 0 ]]
