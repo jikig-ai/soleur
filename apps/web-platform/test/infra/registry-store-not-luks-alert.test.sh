@@ -280,12 +280,8 @@ grep -qxF '              -target=logtail_exploration.registry_store_not_luks \' 
 
 # ── Workflow seam — registered, unconditionally blocking, and no env axis may reach it ───────
 # The run line pins byte-exact (exactly once) so a rename/moved step cannot silently unregister
-# the suite; and no env-composition FRAGMENT may appear in the workflow's executable text — the
-# literal `MUT_SKIP`/`REGSTORE_` greps are subsumed by the fragment set
-# {MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS, BASHOPTS} (kept alongside, since REGSTORE_ carries
-# no GUARD infix), which also bars runtime-composed names ("MUT_""SKIP", any *_GUARD_* prefix)
-# and the shell-injection env names a smuggler would use. Whole-line comments are stripped;
-# an inline ` # MUT_SKIP` still reds — deliberate over-caution.
+# the suite; whole-line comments are stripped before the executable text is graded (an inline
+# ` # MUT_SKIP` still reds — deliberate over-caution).
 REG_RUN='        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh'
 IV_CODE="$(awk '!/^[[:space:]]*#/' "$IV")"
 n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
@@ -293,67 +289,92 @@ n_run="$(printf '%s\n' "$IV_CODE" | grep -cFx "$REG_RUN")"
   && ok "this suite's run line is registered in infra-validation.yml exactly once" \
   || no "run line count is $n_run, want 1 — the suite is unregistered or double-registered"
 
-seam_bad=""
-printf '%s\n' "$IV_CODE" | grep -nE 'REGSTORE_' >/dev/null && seam_bad="$seam_bad REGSTORE_-literal"
-for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS'; do
-  printf '%s\n' "$IV_CODE" | grep -nF -- "$_frag" >/dev/null && seam_bad="$seam_bad ${_frag}-fragment"
+# A CI-dead guard must not pass. The step: ONLY the keys name + run — a `shell:`/`env:`/`with:`/
+# `if:`/`continue-on-error:` (or any unrecognised line shape) flags, with if:/continue-on-error:
+# read at BOTH `        ` and `      - ` positions. The HOSTING JOB is derived from the step's
+# position (the last `jobs:`-level header above the run line — a quoted id or a trailing-comment
+# header included), never named here, and is read WHOLE (header, steps, anything after them: YAML
+# key order is free): `continue-on-error` must appear NOWHERE in it (post-steps included), its
+# `if:` must be the one known literal (total == 1), `needs:`/`runs-on:` the known literals, and
+# its own keys the known set {name needs if runs-on permissions timeout-minutes steps} — no
+# `defaults`/`env`/`container`/`strategy`/`services` … . The workflow itself carries no top-level
+# `defaults:` and no env-composition FRAGMENT — {MUT_, _SKIP, GUARD, BASH_ENV, SHELLOPTS,
+# BASHOPTS, REGSTORE_} — so literal, runtime-composed ("MUT_""SKIP"), *_GUARD_*-prefixed and
+# shell-injection env muting are all barred (REGSTORE_ stays a literal fragment: it carries no
+# GUARD infix); and no GITHUB_ENV/GITHUB_PATH/defaults: inside the hosting job. The verdict must
+# also REACH the aggregator (a job needing the host, under if: always(), reading its result and
+# carrying its entries slot), so dropping the leg is not a quiet way to make this guard CI-dead.
+# Every violation accrues to the composite verdict below — slice-validity folds in, so no ban
+# can pass vacuously on an empty or missed slice.
+# hdr LINE -> the job id when LINE is a `jobs:`-level key header (`  id:`, `  "id":`, `  id: # note`), else "".
+AWK_HDR='function hdr(l,   n) { if (l ~ /^  [\047"]?[A-Za-z0-9_-]+[\047"]?:[ \t]*(#.*)?$/) { n = l; sub(/^  [\047"]?/, "", n); sub(/[\047"]?:.*$/, "", n); return n } return "" }'
+STEP_BLOCK="$(awk -v r="$REG_RUN" "$AWK_HDR"'
+  function flush() { if (blk != "" && index(blk, r "\n") > 0) printf "%s", blk; blk = "" }
+  /^      - / || hdr($0) != "" { flush() }
+  { if ($0 !~ /^[[:space:]]*#/) blk = blk $0 "\n" }
+  END { flush() }' "$IV")"
+HOST_JOB="$(awk -v r="$REG_RUN" "$AWK_HDR"'{ h = hdr($0); if (h != "") j = h } $0 == r { print j; exit }' "$IV")"
+JOB_BLOCK=""
+[ -n "$HOST_JOB" ] && JOB_BLOCK="$(awk -v j="$HOST_JOB" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f && !/^[[:space:]]*#/ { print }' "$IV")"
+JOB_IF="$(awk '/^    if:/ { print }' <<<"$JOB_BLOCK")"
+JOB_NEEDS="$(awk '/^    needs:/ { print }' <<<"$JOB_BLOCK")"
+JOB_RUNS_ON="$(awk '/^    runs-on:/ { print }' <<<"$JOB_BLOCK")"
+# Key allowlists: the step is `- name:` + `run:`; the job is the known set. Anything else (or an
+# unrecognised line shape) is listed by name — env:/shell:/with:/if:/continue-on-error: included.
+STEP_BAD="$(awk -v allow=" name run " 'NF == 0 { next } { k = "?" }
+  /^      - [A-Za-z_-]+:/ { k = $0; sub(/^      - /, "", k); sub(/:.*/, "", k) }
+  /^        [A-Za-z_-]+:/ { k = $0; sub(/^        /, "", k); sub(/:.*/, "", k) }
+  index(allow, " " k " ") == 0 { print k }' <<<"$STEP_BLOCK")"
+JOB_BAD="$(awk -v allow=" name needs if runs-on permissions timeout-minutes steps " '/^    [A-Za-z_-]+:/ { k = $0; sub(/^    /, "", k); sub(/:.*/, "", k); if (index(allow, " " k " ") == 0) print k }' <<<"$JOB_BLOCK")"
+WF_BAD=""
+[[ $'\n'"$IV_CODE" == *$'\ndefaults:'* ]] && WF_BAD="$WF_BAD top-level-defaults"
+# Fragments, not literals (#11899): a runtime-composed name ("MUT_""SKIP", a GUARD-fragment
+# prefix) or a shell-injection env (BASH_ENV/SHELLOPTS/BASHOPTS) reaches the step with no
+# literal present — MUT_/_SKIP cover MUT_SKIP at either split, GUARD covers every *_GUARD_*
+# axis; REGSTORE_ stays listed explicitly (its prefix carries no GUARD fragment).
+_seam_frag=""
+for _frag in 'MUT_' '_SKIP' 'GUARD' 'BASH_ENV' 'SHELLOPTS' 'BASHOPTS' 'REGSTORE_'; do
+  printf '%s\n' "$IV_CODE" | grep -nF -- "$_frag" >/dev/null && _seam_frag="$_seam_frag ${_frag}-fragment"
 done
-[ -z "$seam_bad" ] \
-  && ok "no REGSTORE_ literal or env-composition fragment reaches the workflow's executable text (literal, composed or injected env muting is barred)" \
-  || no "workflow seam violated:$seam_bad — a guard env axis is reachable from infra-validation.yml"
-
-# Enclosing-job slice: the job block containing the pinned run line — walk back to the nearest
-# `^  <job-id>:` header, forward to the next or EOF. Derived from the run line (never a hardcoded
-# job name) and asserted non-empty AND containing the run line, so the env-write ban below can
-# never pass vacuously on an empty or missliced region.
-IV_JOB="$(awk -v run="$REG_RUN" '
-  { L[NR] = $0 }
-  $0 == run { here = NR }
-  /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { hdr[++nh] = NR }
-  END {
-    if (!here) exit 0
-    lo = 0; hi = NR + 1
-    for (i = 1; i <= nh; i++) {
-      if (hdr[i] < here) { lo = hdr[i] } else { hi = hdr[i]; break }
-    }
-    if (lo) for (i = lo; i < hi; i++) print L[i]
-  }
-' <<< "$IV_CODE")"
-if [ -n "$IV_JOB" ] && [ "$(grep -cxF "$REG_RUN" <<< "$IV_JOB")" -eq 1 ]; then
-  ok "the enclosing job block holds this suite's run line (the env-write ban below is never vacuous)"
+[ -n "$_seam_frag" ] && WF_BAD="$WF_BAD suite-seam-in-workflow:$_seam_frag"
+# The only DYNAMIC channel: a $GITHUB_ENV/$GITHUB_PATH write or a job-local defaults: inside the
+# hosting job. An empty JOB_BLOCK reds the composite below via job-slice-empty AND the slice-
+# validity conjuncts, so the ban cannot pass vacuously.
+if [ -z "$JOB_BLOCK" ]; then
+  WF_BAD="$WF_BAD job-slice-empty"
 else
-  no "the enclosing job slice is empty or misses the run line — the env-write ban below would pass vacuously"
+  _job_seam=""
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'GITHUB_ENV' >/dev/null && _job_seam="$_job_seam GITHUB_ENV"
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'GITHUB_PATH' >/dev/null && _job_seam="$_job_seam GITHUB_PATH"
+  printf '%s\n' "$JOB_BLOCK" | grep -nF 'defaults:' >/dev/null && _job_seam="$_job_seam defaults:"
+  [ -n "$_job_seam" ] && WF_BAD="$WF_BAD job-scope-env-write:$_job_seam"
 fi
-job_bad=""
-printf '%s\n' "$IV_JOB" | grep -nE 'GITHUB_(ENV|PATH)' >/dev/null && job_bad="$job_bad GITHUB_ENV/GITHUB_PATH"
-printf '%s\n' "$IV_JOB" | grep -nE '^[[:space:]]*defaults:' >/dev/null && job_bad="$job_bad defaults:"
-[ -z "$job_bad" ] \
-  && ok "no \$GITHUB_ENV/\$GITHUB_PATH write or defaults: inside the enclosing job (the only runtime env-composition channel is barred)" \
-  || no "enclosing-job seam violated:$job_bad — a composed env name could reach this suite's step"
-
-# Step-shape pins — the step block and job header enclosing the run line: no `if:` or
-# `continue-on-error:` at step indent inside IV_STEP; the job's `if:` is the one known literal
-# exactly once; no `continue-on-error:` in IV_HDR (the job header before `steps:`).
-IV_STEP="$(awk -v run="$REG_RUN" '
-  { L[NR] = $0 }
-  $0 == run { here = NR }
-  END {
-    if (!here) exit 0
-    lo = 0; hi = NR + 1
-    for (i = here; i >= 1; i--) { if (L[i] ~ /^      - /) { lo = i; break } }
-    for (i = here + 1; i <= NR; i++) { if (L[i] ~ /^      - / || L[i] ~ /^    [^ ]/) { hi = i; break } }
-    if (lo) for (i = lo; i < hi; i++) print L[i]
-  }
-' <<< "$IV_JOB")"
-IV_HDR="$(awk '/^    steps:$/{exit} {print}' <<< "$IV_JOB")"
-if [ -n "$IV_STEP" ] \
-   && [ "$(grep -cxF "$REG_RUN" <<< "$IV_STEP")" -eq 1 ] \
-   && ! grep -qE '^        (if|continue-on-error):' <<< "$IV_STEP" \
-   && [ "$(grep -cxF "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" <<< "$IV_HDR")" -eq 1 ] \
-   && ! grep -qE '^    continue-on-error:' <<< "$IV_HDR"; then
-  ok "the suite's step is unconditional and blocking (no step if:/continue-on-error:, the job's dedup if: is the one literal, no job continue-on-error:)"
+# The aggregator: every job (other than the host) whose `needs:` names the host; one of them must
+# run under if: always() AND read needs.<host>.result AND carry "<host>:$" in its entries array.
+AGG_CANDS="$(awk -v host="$HOST_JOB" "$AWK_HDR"'
+  function emit(l,   n, t, i) { sub(/[ \t]#.*$/, "", l); gsub(/[\[\],"\047]/, " ", l); n = split(l, t, /[ \t]+/); for (i = 1; i <= n; i++) if (t[i] == host && job != host) print job }
+  /^[[:space:]]*#/ { next }
+  { h = hdr($0); if (h != "") { job = h; innd = 0; next } }
+  job == "" { next }
+  /^    needs:/ { innd = 1; l = $0; sub(/^    needs:/, "", l); emit(l); next }
+  innd && /^      -/ { l = $0; sub(/^      -/, "", l); emit(l); next }
+  /^    [A-Za-z_-]+:/ { innd = 0 }' <<<"$IV_CODE")"
+AGG_OK=0; AGG_NAMES=""
+if [ -n "$HOST_JOB" ]; then
+  while IFS= read -r _agg; do
+    [ -n "$_agg" ] || continue
+    AGG_NAMES="$AGG_NAMES $_agg"
+    _agg_block="$(awk -v j="$_agg" "$AWK_HDR"'{ h = hdr($0) } h != "" && h == j { f = 1; print; next } f && h != "" { exit } f { print }' <<<"$IV_CODE")"
+    if [[ $'\n'"$_agg_block" == *$'\n    if: always()'* ]] && [[ "$_agg_block" == *"needs.${HOST_JOB}.result"* ]] && [[ "$_agg_block" == *"\"${HOST_JOB}:\$"* ]]; then AGG_OK=1; fi
+  done <<<"$AGG_CANDS"
+fi
+if [ -n "$STEP_BLOCK" ] && [[ "$STEP_BLOCK" != *continue-on-error* ]] && ! [[ "$STEP_BLOCK" =~ $'\n'[[:space:]]+if: ]] && ! [[ "$STEP_BLOCK" =~ ^[[:space:]]*-[[:space:]]+if: ]] \
+   && [ -z "$STEP_BAD" ] && [ -n "$HOST_JOB" ] && [ -n "$JOB_BLOCK" ] && [[ "$JOB_BLOCK" != *continue-on-error* ]] && [ -z "$JOB_BAD" ] && [ -z "$WF_BAD" ] \
+   && [ "$JOB_IF" = "    if: needs.detect-changes.outputs.pr_duplicate != 'true'" ] \
+   && [ "$JOB_NEEDS" = "    needs: detect-changes" ] && [ "$JOB_RUNS_ON" = "    runs-on: ubuntu-24.04" ] && [ "$AGG_OK" -eq 1 ]; then
+  ok "the registered step has only name+run keys (no continue-on-error / if: / shell / env / ...), its hosting job '$HOST_JOB' (derived from the step's position) has the one known if:, needs and runs-on, the known key set and no continue-on-error anywhere, the workflow carries no top-level defaults: or suite-seam fragment, and the verdict reaches the aggregator ('${AGG_NAMES# }': if: always(), the leg's result, its entries slot): it cannot be skipped, non-blocking, redirected or dropped"
 else
-  no "the suite's step or job is conditional or non-blocking — an if: or continue-on-error: would mute or weaken this suite in CI"
+  no "infra-validation.yml: the registered step or its hosting job '$HOST_JOB' is conditional, non-blocking, redirected or unaggregated (step keys beyond name/run: '${STEP_BAD//$'\n'/ }'; job keys beyond the known set: '${JOB_BAD//$'\n'/ }'; workflow:${WF_BAD:- none}; aggregator ok=$AGG_OK; continue-on-error anywhere in the job; an if:/needs/runs-on other than the known literals), or could not be located"
 fi
 
 echo ""
@@ -378,8 +399,10 @@ if [ -z "${MUT_SKIP:-}" ]; then
     sed 's/^/    /' "$MUT_DIR/control.log" >&2; exit 2
   fi
 
-  PRELUDE='Q = chr(39)
-def edit(s, anchor, old, new, end="\n}\n"):
+  # No python-side Q/DQ aliases: every program below interpolates the shell-level "$Q"
+  # (JSONExtractString(raw, \x27message\x27)) or writes \x27 directly — a python Q = chr(39)
+  # here was dead text in the program namespace.
+  PRELUDE='def edit(s, anchor, old, new, end="\n}\n"):
     i = s.index(anchor)
     j = s.index(end, i)
     region = s[i:j]
@@ -503,7 +526,7 @@ s = s[:i] + "  # registry_store_not_luks_sql = <<\x2dSQL\n" + s[i:]' \
     's = edit(s, SQLLOC, "GROUP BY time", "GROUP BY time OR 1=1", SQLEND)' \
     "drifted from the pinned"
   mutate_red "a doubled-dollar escape literal appears inside the heredoc" TF \
-    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* $$escaped */", SQLEND)' \
+    's = edit(s, SQLLOC, "count(*) AS value", "count(*) AS value /* \x24\x24escaped */", SQLEND)' \
     "drifted from the pinned"
   mutate_red "the live predicate local is gutted to a placeholder while the resource keeps its name" TF \
     's = edit(s, SQLLOC, "SELECT {{time}} AS time, count(*) AS value", "SELECT 1", SQLEND)' \
@@ -570,12 +593,12 @@ s = s.replace(SQLLOC, "registry_store_not_luks_sql_v2 = <<\x2dSQL")' \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        env:\n          MUT_SKIP: \"1\"\n" + old)' \
-    "workflow seam"
-  mutate_red "a REGSTORE_ literal reaches the workflow's executable text" IV \
+    "suite-seam-in-workflow"
+  mutate_red "a REGSTORE_ literal reaches the workflow's executable text (its own listed fragment)" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, old + "        env:\n          REGSTORE_TF: /dev/null\n")' \
-    "workflow seam"
+    "suite-seam-in-workflow"
   mutate_red "the suite's own run line is dropped from the workflow" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
@@ -585,39 +608,70 @@ s = s.replace(old, "")' \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, old + "      - run: echo \"MUT_\"\"SKIP=1\" >> \"$GITHUB_ENV\"\n")' \
-    "workflow seam"
+    "suite-seam-in-workflow"
   mutate_red "a foreign-prefix *_GUARD_* env reaches the workflow's executable text" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        env:\n          FOO_GUARD_X: /dev/null\n" + old)' \
-    "workflow seam"
+    "suite-seam-in-workflow"
   mutate_red "a BASH_ENV shell-injection env reaches the workflow's executable text" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        env:\n          BASH_ENV: /tmp/x\n" + old)' \
-    "workflow seam"
+    "suite-seam-in-workflow"
   mutate_red "a \$GITHUB_ENV write lands inside the suite's own job" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, old + "      - run: echo \"POISON=1\" >> \"$GITHUB_ENV\"\n")' \
-    "enclosing-job seam"
+    "job-scope-env-write"
+  mutate_red "a top-level defaults: is added to the workflow (the file-wide ban is keyed on column 0)" IV \
+    'old = "\nenv:\n  TERRAFORM_VERSION"
+assert s.count(old) == 1
+s = s.replace(old, "\ndefaults:\n  run:\n    shell: /bin/true {0}\nenv:\n  TERRAFORM_VERSION")' \
+    "top-level-defaults"
 
-  # ── Step-shape rows: an if:/continue-on-error: on the step or job would mute this suite ──────
+  # ── Step/job-shape rows: an if:/continue-on-error: or a foreign key on the step or job would
+  # mute this suite — read at BOTH `        ` and `      - ` positions across the WHOLE job block.
   mutate_red "the suite's step becomes conditional (if: at step indent)" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        if: false\n" + old)' \
-    "conditional or non-blocking"
+    "name/run: 'if'"
+  mutate_red "the suite's step opens with a dash-line if: (the step body never runs)" IV \
+    'old = "      - name: Run registry store-not-LUKS alert drift guard (#8408)\n"
+assert s.count(old) == 1
+s = s.replace(old, "      - if: false\n        name: Run registry store-not-LUKS alert drift guard (#8408)\n")' \
+    "name/run: 'if'"
   mutate_red "the suite's step becomes non-blocking (continue-on-error: at step indent)" IV \
     'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "        continue-on-error: true\n" + old)' \
-    "conditional or non-blocking"
+    "name/run: 'continue-on-error'"
+  mutate_red "the suite's step gets an env: key (only name+run are legal on a step)" IV \
+    'old = "        run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        env: {NEUTRAL: \"1\"}\n" + old)' \
+    "name/run: 'env'"
   mutate_red "the suite's job becomes non-blocking (continue-on-error: on the job)" IV \
     'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n"
 assert s.count(old) == 1
 s = s.replace(old, old + "    continue-on-error: true\n")' \
-    "conditional or non-blocking"
+    "known set: 'continue-on-error'"
+  mutate_red "a continue-on-error: is placed AFTER the job's steps (key order is free in YAML)" IV \
+    'old = "\n  deploy-script-tests-done:\n"
+assert s.count(old) == 1
+s = s.replace(old, "\n    continue-on-error: true\n\n  deploy-script-tests-done:\n")' \
+    "known set: 'continue-on-error'"
+  mutate_red "the suite's job gets a job-level env: key (outside the known key set)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    env: {NEUTRAL: \"1\"}\n")' \
+    "known set: 'env'"
+  mutate_red "a second, differing job-level if: is appended (the job's if: must be the one literal)" IV \
+    'old = "  deploy-script-tests-fixed:\n    needs: detect-changes\n    if: needs.detect-changes.outputs.pr_duplicate != \x27true\x27\n    runs-on: ubuntu-24.04\n"
+assert s.count(old) == 1
+s = s.replace(old, old + "    if: github.event_name == \x27push\x27\n")' \
+    "an if:/needs/runs-on other than the known literals"
 
   # ── Scorer negative control — a mutant that reds a row other than the named one must grade
   # WRONG (never RED), or the fragment check is decoration.
@@ -649,10 +703,10 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 # PRESENCE_ROWS is exactly the count of rows an inner (MUT_SKIP) run asserts; the outer run adds
 # one row per mutation. The instrument control is what catches a floor drifting past the rows.
-# SELF-REFERENCE CAVEAT (#11899 item 8, document-and-keep): a decrement WITH a row deletion stays
-# green+FIRES; PROMOTED_FILES pins floor deletion, review covers decrement-with-deletion drift.
-PRESENCE_ROWS=35
-MUT_ROWS=31
+# Self-reference (accepted residual, #11899 item 8): a row-count decrement landing alongside a
+# row deletion stays green — PRESENCE_ROWS/MUT_ROWS are declared here and read only below.
+PRESENCE_ROWS=32
+MUT_ROWS=37
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))
