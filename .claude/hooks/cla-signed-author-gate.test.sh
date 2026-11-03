@@ -82,17 +82,101 @@ make_branch() {
 
 make_payload() { jq -nc --arg c "$1" --arg x "$2" '{tool_input:{command:$x},cwd:$c}'; }
 run_hook() { printf '%s' "$2" | INCIDENTS_REPO_ROOT="$1" "$HOOK" 2>/dev/null; }
+# Masks global/system git config so `git config --get user.email` inside the
+# hook reads ONLY the fixture repo's local config — required for the
+# unset-config arms, which otherwise inherit the developer's global identity.
+run_hook_noglobal() { printf '%s' "$2" | GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null INCIDENTS_REPO_ROOT="$1" "$HOOK" 2>/dev/null; }
 
+# make_repo <tmp> — bare origin + work repo on `main` with a base commit
+# pushed. Echoes "<work> <inc>". Roster artifacts and branch commits are
+# provisioned per-arm by the helpers below so each fixture carries only what
+# it exercises.
+make_repo() {
+  local tmp="$1"
+  local work="$tmp/work" origin="$tmp/origin.git" inc="$tmp/inc"
+  assert_fixture_dir "$tmp"
+  mkdir -p "$work" "$inc"
+  git init -q --bare "$origin"
+  init_git_repo "$work"
+  echo base > "$work/file.txt"; git -C "$work" add file.txt; git -C "$work" commit -q -m init
+  git -C "$work" remote add origin "$origin"; git -C "$work" push -q origin main
+  echo "$work $inc"
+}
+
+# push_cla_yml <work> — commit a fixture .github/workflows/cla.yml ON main and
+# push, so `git show origin/main:.github/workflows/cla.yml` resolves. The
+# allowlist carries soleur-ai[bot] (and NOT Elvalio — that login resolves via
+# signatures only). The word "allowlist" also appears in the comment block to
+# pin the anchored-parse edge case (`^[[:space:]]+allowlist:`).
+push_cla_yml() {
+  local work="$1"
+  mkdir -p "$work/.github/workflows"
+  cat > "$work/.github/workflows/cla.yml" <<'EOF'
+name: cla
+on: [pull_request_target]
+jobs:
+  cla:
+    steps:
+      # The allowlist below is login-keyed; the word allowlist also appears
+      # in this comment block — a non-anchored parse would read this line.
+      - uses: contributor-assistant/github-action@v2
+        with:
+          allowlist: "dependabot[bot],github-actions[bot],deruelle,soleur-ai[bot],soleur-infra[bot]"
+EOF
+  git -C "$work" add .github/workflows/cla.yml
+  git -C "$work" commit -q -m "add cla.yml"
+  git -C "$work" push -q origin main
+}
+
+# push_cla_signatures <work> — push a cla-signatures branch carrying
+# signatures/cla.json so `git show origin/cla-signatures:signatures/cla.json`
+# resolves (signedContributors: Elvalio + deruelle).
+push_cla_signatures() {
+  local work="$1"
+  git -C "$work" checkout -q -b cla-signatures
+  mkdir -p "$work/signatures"
+  cat > "$work/signatures/cla.json" <<'EOF'
+{"signedContributors":[{"name":"Elvalio","id":92384917},{"name":"deruelle","id":54279}]}
+EOF
+  git -C "$work" add signatures/cla.json
+  git -C "$work" commit -q -m "signatures"
+  git -C "$work" push -q origin cla-signatures
+  git -C "$work" checkout -q main
+}
+
+# commit_branch <work> <branch> <spec>... — cut <branch> off main and apply
+# one commit per spec "author_email[,committer_email]". An omitted committer
+# part leaves git's configured identity as committer.
+commit_branch() {
+  local work="$1" branch="$2" spec ae ce
+  shift 2
+  git -C "$work" checkout -q -b "$branch"
+  for spec in "$@"; do
+    ae="${spec%%,*}"
+    ce="${spec#*,}"; [[ "$ce" == "$spec" ]] && ce=""
+    echo "$ae" >> "$work/feat.txt"; git -C "$work" add feat.txt
+    # NB: no quotes inside ${ce:+...} — they would survive literally in the
+    # env value (emails carry no spaces, so bare expansion is safe here).
+    env GIT_AUTHOR_NAME="A" GIT_AUTHOR_EMAIL="$ae" \
+      ${ce:+GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=$ce} \
+      git -C "$work" commit -q -m "work by $ae"
+  done
+}
+
+# $5 (optional) = a literal substring the deny payload MUST name — used by the
+# subset-check arms to prove the deny identifies the offending email, not just
+# that some deny fired.
 assert_deny() {
-  local name="$1" inc="$2" out="$3" rc="$4"
-  local decision jsonl rule
+  local name="$1" inc="$2" out="$3" rc="$4" expect="${5-}"
+  local decision jsonl rule named=0
   decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
   jsonl="$inc/.claude/.rule-incidents.jsonl"
   rule=$([[ -f "$jsonl" ]] && jq -r '.rule_id' < "$jsonl" | head -1 || echo "")
-  if [[ "$rc" -eq 0 && "$decision" == "deny" && "$rule" == "wg-cla-signed-author-before-merge" ]]; then
+  if [[ -n "$expect" ]] && ! printf '%s' "$out" | grep -qF -- "$expect"; then named=1; fi
+  if [[ "$rc" -eq 0 && "$decision" == "deny" && "$rule" == "wg-cla-signed-author-before-merge" && "$named" -eq 0 ]]; then
     echo "PASS: $name"; PASS=$((PASS+1))
   else
-    echo "FAIL: $name (rc=$rc decision=$decision rule=$rule)"; FAIL=$((FAIL+1))
+    echo "FAIL: $name (rc=$rc decision=$decision rule=$rule named=$named)"; FAIL=$((FAIL+1))
   fi
   TOTAL=$((TOTAL+1))
 }
@@ -152,7 +236,125 @@ t6() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch
   out=$(run_hook "$inc" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')"); rc=$?
   assert_pass "T6 commit-body gh pr merge does not fire (#5192)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
-t1; t1b; t2; t3; t4; t5; t6
+# ==========================================================================
+# Stage-2 subset-check arms (#12027, #7218). Fixture emails:
+#   SIGNED_CFG   — session-configured identity (init_git_repo default below)
+#   WRONG        — real-but-wrong `-c user.email` class (#12027: jean@jikig.ai
+#                  over configured jean.deruelle@jikigai.com)
+#   PINNED       — the pinned CLA-allowlisted human email (SANCTIONED_EMAILS)
+#   BOT_ALLOW    — allowlisted-bot noreply (soleur-ai[bot], login in cla.yml)
+#   SIGNED_LOGIN — signed contributor noreply (Elvalio, in cla.json only)
+#   DEVIN        — devin-ai-integration[bot] noreply (NEITHER roster; DENIED)
+# ==========================================================================
+
+# T7 (#12027): config supplies the CLA-signed identity; commits authored by a
+# real-but-wrong email → DENY naming the wrong email.
+t7() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  git -C "$work" config user.email jean.deruelle@jikigai.com
+  push_cla_yml "$work"
+  commit_branch "$work" feat-c "jean@jikig.ai"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T7 wrong-identity -c email denies (#12027)" "$inc" "$out" "$rc" "jean@jikig.ai"; rm -rf "$t"; }
+
+# T8 (#7218): unsigned non-noreply identity unconfigured anywhere → DENY.
+t8() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"; push_cla_signatures "$work"
+  commit_branch "$work" feat-ops "ops@jikigai.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr merge 1 --squash')"); rc=$?
+  assert_deny "T8 unsigned non-noreply email denies (#7218)" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
+
+# T9: allowlisted-bot noreply author + configured committer → PASS.
+t9() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-bot "273333864+soleur-ai[bot]@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T9 allowlisted-bot noreply passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T10: signed-contributor noreply (login in cla.json signatures, NOT in the
+# allowlist) → PASS.
+t10() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_signatures "$work"
+  commit_branch "$work" feat-sig "92384917+Elvalio@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T10 signed-login noreply passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T11: devin-bot noreply — in NEITHER roster (measured cla-check fail, PR
+# #11690) → DENY even with both rosters present.
+t11() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"; push_cla_signatures "$work"
+  commit_branch "$work" feat-devin "158243242+devin-ai-integration[bot]@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T11 devin-bot noreply denies" "$inc" "$out" "$rc" "devin-ai-integration[bot]"; rm -rf "$t"; }
+
+# T12: explicit-exclusion precedence — the devin-bot email AS the session's
+# `git config user.email` still denies (deny overrides admit).
+t12() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  git -C "$work" config user.email "158243242+devin-ai-integration[bot]@users.noreply.github.com"
+  push_cla_yml "$work"; push_cla_signatures "$work"
+  commit_branch "$work" feat-dcfg "158243242+devin-ai-integration[bot]@users.noreply.github.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T12 devin-bot as config user.email still denies" "$inc" "$out" "$rc" "devin-ai-integration[bot]"; rm -rf "$t"; }
+
+# T13: committer-only offender — sanctioned author, unsanctioned COMMITTER →
+# DENY (%ce coverage; the rule says authored AND committed).
+t13() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-cmt "test@test.local,ops@jikigai.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T13 committer-only offender denies" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
+
+# T14: mixed authors — compliant FIRST commit, unsanctioned SECOND → DENY
+# naming the second offender (no stop-at-first-member).
+t14() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  push_cla_yml "$work"
+  commit_branch "$work" feat-mix "test@test.local" "ops@jikigai.com"
+  out=$(run_hook "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_deny "T14 mixed authors denies (second member)" "$inc" "$out" "$rc" "ops@jikigai.com"; rm -rf "$t"; }
+
+# T15: unset config + pinned human email — the sanctioned `-c` override path
+# for unset-config sessions → PASS.
+t15() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  git -C "$work" config --unset user.email
+  push_cla_yml "$work"
+  commit_branch "$work" feat-pin "jean.deruelle@jikigai.com,jean.deruelle@jikigai.com"
+  out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T15 unset-config + pinned human email passes" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+# T16: all sanctioned sources absent — no cla.yml at origin/main, no
+# cla-signatures ref, config unset; a would-be offender on the branch → PASS
+# (fail-open: the property is "enforce when evaluable", not "deny by absence").
+t16() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo "$t")
+  git -C "$work" config --unset user.email
+  commit_branch "$work" feat-open "ops@jikigai.com,ops@jikigai.com"
+  out=$(run_hook_noglobal "$inc" "$(make_payload "$work" 'gh pr ready')"); rc=$?
+  assert_pass "T16 all-sources-absent fail-opens" "$inc" "$out" "$rc"; rm -rf "$t"; }
+
+t1; t1b; t2; t3; t4; t5; t6; t7; t8; t9; t10; t11; t12; t13; t14; t15; t16
+
+# === Instrument self-test ===
+# Drives BOTH assert helpers through their pass AND fail branches on
+# fabricated payloads and refuses to continue unless every counter moved —
+# otherwise a disarmed instrument (e.g. a deleted JSON parse inside
+# assert_deny) summarizes green over arms it never measured (ADR-193 shape).
+# Probe rows are folded back out of the counters afterwards so the printed
+# tally reflects only real arms.
+_p=$PASS _f=$FAIL _t=$TOTAL
+_st=$(mktemp -d -p "$SUITE_TMP"); mkdir -p "$_st/incd/.claude" "$_st/incp/.claude"
+printf '%s\n' '{"rule_id":"wg-cla-signed-author-before-merge","event_type":"deny"}' \
+  > "$_st/incd/.claude/.rule-incidents.jsonl"
+_deny='{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"probe"}}'
+assert_deny "self-test: deny instrument parses deny payload" "$_st/incd" "$_deny" 0   # PASS+1
+assert_deny "self-test: deny instrument rejects non-deny" "$_st/incd" "" 0            # FAIL+1
+assert_pass "self-test: pass instrument accepts clean run" "$_st/incp" "" 0           # PASS+1
+assert_pass "self-test: pass instrument rejects deny payload" "$_st/incp" "$_deny" 0  # FAIL+1
+if (( PASS != _p + 2 || FAIL != _f + 2 )); then
+  printf '[FATAL] instrument self-test: an assert helper did not move counters (PASS %d->%d, FAIL %d->%d)\n' \
+    "$_p" "$PASS" "$_f" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_p; FAIL=$_f; TOTAL=$_t
+rm -rf "$_st"
+
 echo "----"
 echo "$PASS/$TOTAL passed"
 [[ "$FAIL" -eq 0 ]] || exit 1
