@@ -300,7 +300,11 @@ jobs:
             --head "$branch" \
             --title "chore(cla-evidence): RFC 3161 timestamp ${YYYY_MM}" \
             --body-file out/pr-body.txt
-          gh pr merge "$branch" --squash --auto
+          # Direct merge, not --auto: cla-signatures has no required checks,
+          # so GitHub refuses enablePullRequestAutoMerge on the always-clean
+          # PR ("Pull request is in clean status") — the shape that failed
+          # every monthly run since Aug 2026 (#11946). No checks to wait on.
+          gh pr merge "$branch" --squash
 
       # Kieran F9: persistent-failure escalation. On any failure, file or
       # update a tracking issue. If an issue for this month already exists
