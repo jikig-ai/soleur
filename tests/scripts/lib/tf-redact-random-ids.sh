@@ -11,21 +11,24 @@
 # runner), and the fix cannot be a -target change (a targeted plan refreshes the dependency).
 #
 # WHAT. On a line naming a random_* address: `[id=...]` -> `[id=<redacted>]` and `id = "..."` ->
-# `id = "<redacted>"`. Inside a plan block opened by ANY plan comment line that names a random_* address
-# followed by a space (`will be destroyed/replaced/created`, `is tainted, so must be replaced`,
-# `(deposed object ...) will be destroyed`, `has changed`; do not enumerate verbs) and closed by the
-# existing `    }` (modify/destroy/drift diffs print the attributes un-redacted, and random_id's
-# b64_*/hex/dec are NOT sensitive):
-# every quoted value of an id/b64_std/b64_url/hex/dec/result/base64/b64 attribute, both sides of
-# `->`. The address, the surrounding text and the line count are kept; other resources' ids
-# (hetzner `[id=12345]`) are untouched. Input is `-no-color` output (no ANSI handling).
+# `id = "<redacted>"`. Inside a plan block opened by a plan comment line (`# ...`) that names a random_* address
+# at a word boundary, followed by whitespace or end of line (the text after the address is never matched, so no
+# verb is enumerated: created/updated/destroyed/replaced, `is tainted, so must be replaced`,
+# `(deposed object ...) will be destroyed`, `has changed`; the bare `# random_id.k:` of `terraform show` too) and
+# closed by the first `    }` (or a column-0 `}`): every quoted value of an
+# id/b64_std/b64_url/hex/dec/result/base64/b64 attribute, both sides of `->`. Those attributes are NOT sensitive
+# to Terraform (hex and b64_* ARE the key bytes: inngest.tf derives the live keys from random_id.*.hex), so the
+# plan prints them in clear. The address, the surrounding text and the line count are kept; other resources' ids
+# (hetzner `[id=12345]`) are untouched. Input is `-no-color` output; CSI colour sequences are stripped first.
+# FAIL-SAFE DIRECTION: a block that never closes (closer at another indent, truncated log) stays open to the end
+# of input, so a LATER `id = "..."` line is redacted too (over-redaction), never the other way round.
 #
 # CONTRACT. A pure filter: it never changes a producer's exit status; callers read
 # `${PIPESTATUS[0]}` (or run under pipefail) exactly as for any `cmd | filter`.
 #
 # Sourced by EVERY workflow step that runs terraform plan/apply/refresh/destroy on a root that
 # declares a key-bearing random_* (apply-web-platform-infra.yml, apply-deploy-pipeline-fix.yml,
-# scheduled-terraform-drift.yml, infra-validation.yml, inngest-provision-rehearsal.yml);
+# scheduled-terraform-drift.yml, infra-validation.yml, inngest-provision-rehearsal.yml, cf-lb-overlay.yml);
 # exercised by tests/scripts/test-tf-redact-random-ids.sh and swept over all workflows by
 # plugins/soleur/test/terraform-target-parity.test.ts (a step on a root with none may skip it).
 
@@ -40,7 +43,7 @@ tf_redact_random_ids() {
       s/\[id=[^]]*\]/[id=<redacted>]/g
       s/(\<id[[:space:]]+=[[:space:]]+)"[^"]*"/\1"<redacted>"/g
     }' \
-    -e '/^[[:space:]]*# .*random_(id|password|string|uuid|bytes)\.[^[:space:]]+ /,/^    \}/{
+    -e '/^[[:space:]]*# ((.*[^[:alnum:]_])?)random_(id|password|string|uuid|bytes)\.[^[:space:]]+([[:space:]]|$)/,/^( {4})?\}/{
       /^[^"]*[[:space:]](id|b64_std|b64_url|hex|dec|result|base64|b64)[[:space:]]+=/s/"[^"]*"/"<redacted>"/g
     }'
 }

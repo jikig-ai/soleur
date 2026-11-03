@@ -11,10 +11,10 @@ SUITE_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
 source "$SUITE_DIR/lib/tf-redact-random-ids.sh"
 
-PASSES=0 FAILS=0
+PASSES=0 FAILS=0 CHECKS=0
 pass() { PASSES=$((PASSES + 1)); printf '[ok] %s\n' "$1"; }
 fail() { FAILS=$((FAILS + 1)); printf '[FAIL] %s\n' "$1"; }
-check() { if [ "$2" = "0" ]; then pass "$1"; else fail "$1"; fi; }
+check() { CHECKS=$((CHECKS + 1)); if [ "$2" = "0" ]; then pass "$1"; else fail "$1"; fi; }
 
 K22='Synth-Fixture_0000000a'
 K43="${K22}${K22}"; K43="${K43:0:43}"
@@ -165,7 +165,7 @@ mkblock() {
 
 # shape_row <LABEL> <header> <mode>
 shape_row() {
-  local label="$1" raw out
+  local label="$1" raw out fails_before="$FAILS"
   raw="$(mkblock "$2" "$3")"
   leaks "$raw" && contains "$raw" "$([ "$3" = plus ] && printf %s "$NEW_HEX" || printf %s "$OLD_HEX")"; check "$label: detector flags the raw block (live positive control)" "$?"
   out="$(tf_redact_random_ids <<<"$raw")"
@@ -188,6 +188,9 @@ shape_row() {
   contains "$out" '        id        = "12345"'; check "$label: the next resource's id line is NOT redacted (block ends at its closer)" "$?"
   contains "$out" 'Plan: 1 to add, 1 to change, 1 to destroy.'; check "$label: Plan summary kept" "$?"
   [ "$(nlines "$out")" = "$(nlines "$raw")" ]; check "$label: line count preserved" "$?"
+  # ONE anchored verdict per shape: a consumer that greps `^[ok] .*<label>` can no longer be satisfied by a shape whose
+  # redaction rows failed (the old lib still prints six [ok] lines for every new label).
+  [ "$FAILS" = "$fails_before" ]; check "$label: verdict - every row of this shape passed" "$?"
 }
 
 shape_row tainted-must-be-replaced   'random_id.k is tainted, so must be replaced' pair
@@ -197,6 +200,9 @@ shape_row created                    'random_id.k will be created' plus
 shape_row deposed-will-be-destroyed  'random_id.k (deposed object abc12345) will be destroyed' null
 shape_row drift-has-changed          'random_id.k has changed' pair
 shape_row module-tainted             'module.m.random_password.k is tainted, so must be replaced' pair
+shape_row indexed-for-each           'random_id.k["a b"] is tainted, so must be replaced' pair
+shape_row indexed-count              'random_id.k[0] has changed' pair
+shape_row module-for-each-deposed    'module.m["x y"].random_id.k (deposed object abc12345) will be destroyed' null
 
 # --- regression: widening the block-start must not reach other resources or change the shape of the log ------------------
 HZ="hcloud_server.web: Refreshing state... [id=12345]
@@ -253,5 +259,96 @@ contains "$LOUT" '  on main.tf line 7, in resource "hcloud_volume" "v":'; check 
 contains "$LOUT" ' This line mentions random_id.k and stays readable.'; check "stuck-state later diagnostic: prose naming a random_* address readable" "$?"
 [ "$(nlines "$LOUT")" = "$(nlines "$LATER")" ]; check "stuck-state later diagnostic: line count preserved" "$?"
 
+# --- every member of both literal sets is its own window: type x attribute table (all 5 types, all 8 attributes) ----------
+# A value of 50+ chars (a real 32-byte key renders 43 b64 chars / 64 hex chars), distinct per attribute, so dropping ANY one
+# alternation member (e.g. `result|base64|b64`, `string|uuid|bytes`) reddens exactly its rows. The raw block is proven live first.
+for t in id password string uuid bytes; do
+  for a in id b64_std b64_url hex dec result base64 b64; do
+    vo="SynthOld_${a}_$(printf '0%.0s' {1..50})"; vn="SynthNew_${a}_$(printf '1%.0s' {1..50})"
+    raw="$(printf '  # random_%s.m will be updated in-place\n  ~ resource "random_%s" "m" {\n      ~ %-10s = "%s" -> "%s"\n        byte_length = 16\n    }\n\n  # hcloud_volume.v will be updated in-place\n  ~ resource "hcloud_volume" "v" {\n        id        = "12345"\n    }\n' "$t" "$t" "$a" "$vo" "$vn")"
+    out="$(tf_redact_random_ids <<<"$raw")"
+    contains "$raw" "$vo"; check "member-$t-$a: raw block carries the value (live positive control)" "$?"
+    absent "$out" "$vo" && absent "$out" "$vn"; check "member-$t-$a: old and new value redacted" "$?"
+    contains "$out" '        id        = "12345"' && contains "$out" 'byte_length = 16'; check "member-$t-$a: block ends at its closer, non-secret attribute kept" "$?"
+  done
+done
+
+# --- the closer is the RESOURCE closer: a nested block closing at another indent must not end the range early ------------
+NEST="  # random_id.k will be updated in-place
+  ~ resource \"random_id\" \"k\" {
+      ~ keepers     = {
+          ~ \"rot\" = \"a\" -> \"b\"
+        }
+      ~ hex         = \"$OLD_HEX\" -> \"$NEW_HEX\"
+      ~ id          = \"$K22\" -> \"$N22\"
+    }
+  # hcloud_volume.v will be updated in-place
+  ~ resource \"hcloud_volume\" \"v\" {
+        id        = \"12345\"
+    }"
+NOUT="$(tf_redact_random_ids <<<"$NEST")"
+leaks "$NEST" && contains "$NEST" "$OLD_HEX"; check "nested block: detector flags the raw block (live positive control)" "$?"
+absent "$NOUT" "$OLD_HEX" && absent "$NOUT" "$NEW_HEX" && clean "$NOUT"; check "nested block: secrets AFTER a nested closer are still redacted" "$?"
+contains "$NOUT" '"rot" = "a" -> "b"'; check "nested block: a non-secret keepers entry is kept" "$?"
+contains "$NOUT" '        id        = "12345"'; check "nested block: the next resource's id line is NOT redacted" "$?"
+
+# --- header edge shapes ----------------------------------------------------------------------------------------------
+# `terraform show` / `state show` print `# random_id.k:` (bare address, colon) with a column-0 resource body and closer.
+SHOWIN="# random_id.k:
+resource \"random_id\" \"k\" {
+    b64_std     = \"$K22\"
+    hex         = \"$OLD_HEX\"
+    id          = \"$K22\"
+}
+# hcloud_volume.v:
+resource \"hcloud_volume\" \"v\" {
+    id          = \"12345\"
+}"
+SHOWOUT="$(tf_redact_random_ids <<<"$SHOWIN")"
+leaks "$SHOWIN"; check "show-shape: detector flags the raw block (live positive control)" "$?"
+clean "$SHOWOUT" && absent "$SHOWOUT" "$OLD_HEX"; check "show-shape: bare '# random_id.k:' block is redacted" "$?"
+contains "$SHOWOUT" '    id          = "12345"'; check "show-shape: the next resource's id line is NOT redacted" "$?"
+BARE="$(printf '  # random_id.k\n  ~ resource "random_id" "k" {\n      ~ hex = "%s" -> "%s"\n    }\n' "$OLD_HEX" "$NEW_HEX" | tf_redact_random_ids)"
+absent "$BARE" "$OLD_HEX" && absent "$BARE" "$NEW_HEX"; check "bare-address header (nothing after the address) is redacted" "$?"
+
+# The block-start is word-boundary-led: a non-random address that merely CONTAINS `random_id.` opens nothing.
+LB="  # hcloud_server.my_random_id.x will be replaced
+  -/+ resource \"hcloud_server\" \"web\" {
+      ~ id          = \"12345\" -> \"67890\"
+    }"
+[ "$(tf_redact_random_ids <<<"$LB")" = "$LB" ]; check "left boundary: '# ..my_random_id.x ...' does not open a block (byte-identical)" "$?"
+
+# A Refreshing/Creating LINE naming the address (no leading `# `) opens no plan block: the per-line rule redacts its [id=] and the
+# next resource's id attribute stays readable.
+RF="random_id.k: Refreshing state... [id=$K22]
+  # hcloud_server.web will be updated in-place
+  ~ resource \"hcloud_server\" \"web\" {
+      ~ id          = \"12345\" -> \"67890\"
+    }"
+RFOUT="$(tf_redact_random_ids <<<"$RF")"
+absent "$RFOUT" "$K22" && contains "$RFOUT" '~ id          = "12345" -> "67890"'; check "comment anchor: a non-comment line naming the address opens no block (next id readable)" "$?"
+
+# Real replace shape: the new side is `(known after apply)`, unquoted.
+KA="$(printf '  # random_id.k is tainted, so must be replaced\n-/+ resource "random_id" "k" {\n      ~ b64_std     = "%s" -> (known after apply)\n    }\n' "$K22" | tf_redact_random_ids)"
+absent "$KA" "$K22" && contains "$KA" '"<redacted>" -> (known after apply)'; check "replace shape: old value redacted, '(known after apply)' kept" "$?"
+
+# Two values on ONE line: every substitution is global.
+TWO="random_id.a: replaced [id=$K22] by random_id.b [id=$K43]
+random_id.a  id = \"$K22\" -> id = \"$N22\""
+TWOOUT="$(tf_redact_random_ids <<<"$TWO")"
+absent "$TWOOUT" "$K22" && absent "$TWOOUT" "$K43" && absent "$TWOOUT" "$N22"; check "two values on one line: both [id=] and both id = \"\" occurrences redacted" "$?"
+
+# Fail-safe direction of an unterminated block (documented in the lib header): a LATER id attribute line is over-redacted.
+UNTERM2="$UNTERM
+  ~ resource \"hcloud_server\" \"web\" {
+      ~ id          = \"12345\" -> \"67890\""
+UT2OUT="$(tf_redact_random_ids <<<"$UNTERM2")"
+contains "$UT2OUT" '~ id          = "<redacted>" -> "<redacted>"'; check "stuck-state unterminated block: a later id attribute line is over-redacted (fail-safe direction, documented)" "$?"
+
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
-[ "$FAILS" -eq 0 ] && [ "$PASSES" -ge 25 ] || exit 1
+# Gate. Conservation first, WITHOUT routing through pass()/fail() (neutering either must not disarm it): every check()
+# lands in exactly one bucket. MIN_ASSERTIONS is a FLOOR (never -eq), raised deliberately with the suite.
+MIN_ASSERTIONS=313
+if [ "$((PASSES + FAILS))" -ne "$CHECKS" ]; then printf 'FATAL: assertion conservation broken: passes+fails=%s checks=%s\n' "$((PASSES + FAILS))" "$CHECKS" >&2; exit 1; fi
+if [ "$CHECKS" -lt "$MIN_ASSERTIONS" ]; then printf 'FATAL: only %s assertions ran, floor is %s\n' "$CHECKS" "$MIN_ASSERTIONS" >&2; exit 1; fi
+[ "$FAILS" -eq 0 ] || exit 1
