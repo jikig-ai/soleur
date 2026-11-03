@@ -158,7 +158,7 @@ permissions:
 env:
   GITLEAKS_VERSION: "8.24.2"
   GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
-  LIKEC4_VERSION: "1.50.0"
+  LIKEC4_VERSION: "1.60.0"
   TERRAFORM_VERSION: "1.10.5"
 
 jobs:
@@ -196,7 +196,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts   # literals, not env: see TOOLCHAIN PINS
+          npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts   # literals, not env: see TOOLCHAIN PINS
           likec4 --version
 
       - name: Install bubblewrap (C4 render sandbox) and socat (SDK sandbox startup check)
@@ -378,7 +378,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+          npm install -g likec4@1.60.0 --before=2026-10-16 --ignore-scripts
           likec4 --version
 
       - name: Setup Bun

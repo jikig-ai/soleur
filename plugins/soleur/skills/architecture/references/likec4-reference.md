@@ -109,14 +109,14 @@ includes.
 ## Validate
 
 ```bash
-npx -y likec4@1.50.0 validate --no-use-dot .                 # parse + check references
+npx -y likec4@1.60.0 validate --no-use-dot .                 # parse + check references
 _c4_out=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
-npx -y likec4@1.50.0 export json --no-use-dot -o "$_c4_out" .  # element/relation/view counts
+npx -y likec4@1.60.0 export json --no-use-dot -o "$_c4_out" .  # element/relation/view counts
 # ... read the counts from "$_c4_out" (jq) — then `rm -f "$_c4_out"; rmdir "$(dirname "$_c4_out")"`; an
 # anonymous `"$(mktemp)"` path can never be found again, so name it (#10017)
 ```
 
-Pin the version every writer pins (`likec4@1.50.0`, the `LIKEC4_VERSION` constant) and always pass
+Pin the version every writer pins (`likec4@1.60.0`, the `LIKEC4_VERSION` constant) and always pass
 `--no-use-dot`: inside a container likec4 defaults to the graphviz `dot` binary, which produces a
 different layout than the server's wasm render — or, without graphviz, a zero-view model.
 
