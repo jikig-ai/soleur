@@ -424,6 +424,12 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "SOLEUR_GIT_REPO_READY",
       "SOLEUR_WORKTREE_LEASE_LIB_OK",
       "SOLEUR_WORKTREE_REAP_CAPABILITY",
+      // launch-check (PR #11867): once-per-run summaries read locally by the agent that ran the
+      // scan/render/verify (counts, a repo-relative report path, a finding count). No failure
+      // direction: a failed run prints SOLEUR_LAUNCH_CHECK_ABORT or _REPORT_INVALID instead.
+      "SOLEUR_LAUNCH_CHECK_RUN",
+      "SOLEUR_LAUNCH_CHECK_WRITE",
+      "SOLEUR_LAUNCH_CHECK_REPORT_OK",
     ]);
     for (const name of unique) {
       if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;

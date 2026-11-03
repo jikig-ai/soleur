@@ -59,6 +59,15 @@ name: code-quality follow-ups watch
 # check is `gh workflow list` plus a `dry_run` dispatch, then confirming the first Monday's
 # scheduled run (`gh run list --event schedule`) did not skip the jobs.
 #
+# RED RUN: a red triggers-11177 job whose log shows `::error::the commit stream does not match the first-parent
+# list ... cannot establish trigger 2` (the script exits 3 and posts nothing). Re-run the job once: a transient
+# failure clears on the next run. If it fails identically, a commit in the trigger-2 window touches
+# a tracked path named like a commit header (a control character plus 40 hex digits). That state does not clear by
+# renaming or deleting the path: the window is anchored at the tracker's creation date and never slides, and the
+# log pass lists a renamed or deleted path again. Also, trigger 1 is held on every run (nothing posts while trigger 2
+# cannot be established). The only exits are closing #11177 once its retirement criteria are met (see RETIREMENT
+# below) or fixing the parser (NUL-safe trigger-2 log stream, tracked in #11864). Never edit or forge a sentinel to get past it.
+#
 # RETIREMENT: when #9730, #10515 and #11177 are all closed, delete every site below in one PR
 # (or one tracker's job, script and suite when only that tracker closes):
 #   - .github/workflows/code-quality-followups-watch.yml (this file)
@@ -72,6 +81,9 @@ name: code-quality follow-ups watch
 #     scripts/ci-pr-affected-audit.accept.tsv (the replay ratchet fails on a stale accept row)
 #   - NOTE: scripts/watch-code-quality-reeval-9730.test.sh carries the ONE static forbidden-verb
 #     census; when that suite is deleted, move the census to the next surviving suite.
+#   - when the 11177 script is deleted, also delete the census allowlist keyed on its file name (the plumbing
+#     verbs), the probe_census_as rows and the 11177 mutation copies in scripts/watch-code-quality-reeval-9730.test.sh;
+#     if the replay ratchet forces an accept-row change, update the "(6 for 10515, 5 for 11177)" counts above in the same edit.
 #   - (leave the pointer comments on the trackers: they are harmless and a PR cannot delete them)
 #
 # To test manually without posting:

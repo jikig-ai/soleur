@@ -14,6 +14,18 @@ brand_survival_threshold: single-user incident
 > carries the UTC date of signing; if signing happens on another day, rename the file to that date before
 > filing. Counts and roles only: no names, no email addresses, no token values.
 
+> **Superseded 2026-11-02 (CLO and CTO rulings; ruled in session, recorded in
+> `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md`, section 9, and in the A5/A6/A7 rows of
+> `knowledge-base/engineering/operations/runbooks/inngest-server.md`), as to how this record is signed. The history below is left as written.**
+> "Owner-signed" (line "What this record is"), "Signed by the owner (human, not an agent)" (Signature block), "An in-session instruction transcribed
+> by an agent is not the owner's signature" (CLO review of 2026-10-31) and "Post `S6-A6-DONE`" (After signing) no longer describe the only route.
+> The owner's knowledge sentence ("I know of no other access") is still ONLY the owner's own words: an agent never drafts it, so the "Statement
+> (to be adopted by the owner)" below is evidence-framing text, not a sentence the owner adopts by agreeing. The owner gives that sentence once in
+> session; an agent posts the record under a provenance block that quotes it verbatim ("Posted by ... on the owner's instruction given in session at ...
+> Owner's words, verbatim: ... Agent-drafted text: yes/no. Not typed by the owner into this thread"), then posts `S6-A6-RELAYED:` (never `S6-A6-DONE:`)
+> on #10136; the owner may still type `S6-A6-DONE:` themselves. The CLO still attests separately, and an agent-posted record that claims human
+> typing is void.
+
 ## What this record is
 
 The A6 row of the post-merge production-envelope table in `knowledge-base/engineering/operations/runbooks/inngest-server.md`
