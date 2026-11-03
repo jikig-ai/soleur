@@ -412,10 +412,10 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
+scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
-scripts/followthroughs/inngest-trace-retention-5150	1222	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured

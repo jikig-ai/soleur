@@ -6026,10 +6026,11 @@ if want_scripts; then
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the only
   # signal on the soak's replication evidence, so a vacuous MARKERS_PRESENT must redden CI.
   run_suite "scripts/git-data-replication-signal-11704" bash scripts/followthroughs/git-data-replication-signal.test.sh
-  # #5150: exit-code harness for the Inngest trace-retention close probe. Registered EXPLICITLY
-  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the
-  # sweeper closes #5150, so a PASS on a webhook echo or on an empty read must redden CI.
-  run_suite "scripts/followthroughs/inngest-trace-retention-5150" bash scripts/followthroughs/inngest-trace-retention-5150.test.sh
+  # #9782: exit-code harness for the Inngest CLI apply-window probe — pins that a uniformly
+  # failing per-run jobs read is CANNOT-ESTABLISH (rc 3), never the swallowed jq crash that
+  # read as skip-forever NOT-YET. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS).
+  run_suite "scripts/followthroughs/inngest-cli-apply-window-7463" bash scripts/followthroughs/inngest-cli-apply-window-7463.test.sh
   # #10390 (WS3): exit-code harness for the generic post-deploy alert-channel soak — zero new
   # Better Stack incidents AND zero new ci/ issues in [deploy_ts, +Nh], TRANSIENT on read failure.
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code

@@ -71,12 +71,22 @@ fi
 
 replace_run_id=""
 replace_at=""
+jobq_total=0
+jobq_failed=0
 while IFS=$'\t' read -r rid created _concl; do
   [[ -n "$rid" ]] || continue
   # --paginate | jq -rs: a target job on page 2 would read as "absent" and the
   # probe would report NOT-YET forever — the never-PASS class (#9245 sweep).
-  jobs="$(gh api --paginate "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null \
-    | jq -rs '[.[].jobs[] | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' || true)"
+  # Two-step capture (#9782): inside `$(cmd | jq … || true)` a failed `gh` is
+  # indistinguishable from zero jobs — `jq -rs` on empty stdin prints `[]` rc 0 —
+  # so transport failures are counted only when the gh call stands alone. The
+  # `.jobs? // []` guard parses an absent/null `.jobs` payload as "no replace job
+  # in this run" instead of crashing jq on `.[].jobs[]`.
+  jobq_total=$((jobq_total + 1))
+  raw="$(gh api --paginate "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null)" \
+    || { jobq_failed=$((jobq_failed + 1)); continue; }
+  jobs="$(jq -rs '[.[].jobs? // [] | .[] | select(.name | test("inngest.host.replace"; "i")) | .conclusion][]' <<<"$raw")" \
+    || { jobq_failed=$((jobq_failed + 1)); continue; }
   [[ -n "$jobs" ]] || continue   # this dispatch was a different apply_target
   replace_run_id="$rid"; replace_at="$created"
   if grep -qx 'success' <<<"$jobs"; then
@@ -89,6 +99,10 @@ while IFS=$'\t' read -r rid created _concl; do
 done <<< "$runs"
 
 if [[ -z "$replace_run_id" ]]; then
+  if (( jobq_total > 0 && jobq_failed == jobq_total )); then
+    echo "CANNOT-ESTABLISH: all $jobq_total per-run job queries failed" >&2
+    exit 3
+  fi
   echo "NOT-YET: post-merge dispatches exist but none reached an inngest_host_replace job" >&2
   exit 2
 fi
