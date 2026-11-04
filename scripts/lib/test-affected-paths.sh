@@ -1211,6 +1211,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
+  # #12001: terraform-target-parity.test.ts asserts workflow run-steps contain dispatch-web-redeploy/track.sh — a rename reds the suite; the file's name-state feeds the verdict. Also executed via KR_TRACK at scripts/inngest-key-rotate.sh:1126.
+  ".github/actions/dispatch-web-redeploy/track.sh"
   # #11766: terraform-target-parity.test.ts readFileSync-parses the cf-lb-overlay workflow (arm↔gate -target/ordering pins).
   ".claude/hooks/prod-write-defer-gate.test.sh"  # plugins/soleur/test/invocation-axis.test.ts:48
   ".github/workflows/apply-web-platform-infra.yml"  # plugins/soleur/scripts/delegation-verify.test.sh:386
@@ -1306,6 +1308,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   # #11294: terraform-target-parity.test.ts SOURCES scripts/key-rotate.sh and the sibling it sources to read their gate tables (Guard 5).
   "scripts/inngest-key-rotate.sh"
   "scripts/key-rotate.sh"
+  # #12001: sole-copy-drift-check.test.sh copies (:724) and cmp-s-asserts (:1533) the committed file — a real read.
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/git-data-boot-signal-poll.sh"
   "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/git-data-store-dirty-scan.sh"
