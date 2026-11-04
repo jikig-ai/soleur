@@ -143,6 +143,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	3
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	6
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	1
 plugins/soleur/skills/launch-check/test/render.test.sh	1
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	1

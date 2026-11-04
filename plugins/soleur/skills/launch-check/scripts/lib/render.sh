@@ -52,7 +52,7 @@ lc_clean_facts() {
 lc_validate_judged() {
   local out
   out=$(awk -F'\t' -v cat="$CAT" -v facts="$FACTS" '
-    FILENAME == cat   { if ($4 == "judged") j[$1] = 1; next }
+    FILENAME == cat   { if ($4 == "judged") j[$1] = 1; else if ($1 != "") c[$1] = 1; next }
     FILENAME == facts { f[$1] = 1; next }
     /^#/ || /^$/ { next }
     { bad = ""
@@ -63,7 +63,7 @@ lc_validate_judged() {
       else if ($2 == "gap" && $3 != "high" && $3 != "medium" && $3 != "low") bad = "severity"
       else if ($2 != "gap" && $3 != "-") bad = "severity-must-be-dash-unless-gap"
       else if ($2 == "gap" && $4 == "-") bad = "evidence-required"
-      else if ($4 != "-") { k = split($4, ev, ","); for (i = 1; i <= k; i++) if (!(ev[i] in f)) bad = "evidence-id" }
+      else if ($4 != "-") { k = split($4, ev, ","); for (i = 1; i <= k; i++) if (!(ev[i] in c) || !(ev[i] in f)) bad = "evidence-id" }
       seen[$1] = 1
       if (bad != "") { print "line " FNR ": " bad; exit 1 } }' "$CAT" "$FACTS" "$1") || lc_abort judged-schema 2 "$out"
 }
@@ -90,16 +90,28 @@ lc_prev_state() {
   [ "$rc" -eq 0 ] || lc_abort prev-report-invalid 2 "no state block in $REPORT_REL (restore it from git, or delete the file to start fresh)"
 }
 
-lc_render() {
-  local rep="$WORK/report.md" prev="$WORK/prev.tsv" gaps="$WORK/gaps.tsv" judged_in="$WORK/judged.in"
-  local has_prev=0 has_judged=0 prev_hash prev_schema cat_hash today catalog_changed=0
-  [ -n "${JUDGED:-}" ] && has_judged=1
-  if [ "$has_judged" = 1 ]; then cp "$JUDGED" "$judged_in"; else : > "$judged_in"; fi
+# lc_prepare_inputs: everything that must happen to the caller's inputs before a report or an issue plan is derived from them.
+# Contract: TARGET, WORK, FACTS, JUDGED (may be empty) are set; sets STACK and CAT, and points FACTS at the sanitized copy.
+# Both render and the issue writer go through here, so a raw facts file can never reach a body.
+lc_prepare_inputs() {
+  # scan records the stack in the facts header; only an older or hand-made facts file needs the repository walked again.
+  STACK=$(awk -F= '/^# stack=/ {print $2; exit}' "$FACTS")
+  if [ -z "$STACK" ]; then lc_walk "$TARGET" "$WORK/files"; STACK=$(lc_stack "$WORK/files"); fi
+  CAT="$WORK/catalog.tsv"; lc_build_catalog "$CAT"
+  lc_clean_facts
+  [ -z "${JUDGED:-}" ] || lc_validate_judged "$JUDGED"
+}
+
+# lc_compute_gaps: the one partition of findings into open and accepted, shared by render and the issue writer so the report
+# and the issues cannot disagree. Needs lc_prepare_inputs first. Writes into $WORK: judged.in (a copy of the judged file, empty
+# when there is none), prev.tsv and prev.tsv.bad (the previous report's state lines), gaps.tsv (rank, id, domain, class, severity,
+# title, evidence, closing command, remedy; critical first, then by id), prev.accepted.ids, cur.ids, open.ids, accepted.ids,
+# prev.ids, cat.ids and new.ids. Whether a previous report existed is `[ -f "$TARGET/$REPORT_REL" ]`.
+lc_compute_gaps() {
+  local prev="$WORK/prev.tsv" gaps="$WORK/gaps.tsv" judged_in="$WORK/judged.in" has_prev=0
+  if [ -n "${JUDGED:-}" ]; then cp "$JUDGED" "$judged_in"; else : > "$judged_in"; fi
   lc_prev_state "$TARGET/$REPORT_REL" "$prev"
   [ -f "$TARGET/$REPORT_REL" ] && has_prev=1
-  cat_hash=$(git hash-object --stdin < "$CAT")
-  today=$(date -u +%F)
-
   # Open gaps (deterministic facts + judged), sorted critical -> low then id.
   awk -F'\t' -v OFS='\t' -v cat="$CAT" -v facts="$FACTS" -v judged="$judged_in" '
     function rank(s) { return s == "critical" ? 1 : s == "high" ? 2 : s == "medium" ? 3 : 4 }
@@ -116,6 +128,15 @@ lc_render() {
   cut -f1 "$prev" | sort > "$WORK/prev.ids"
   cut -f1 "$CAT" | sort > "$WORK/cat.ids"
   if [ "$has_prev" = 1 ]; then comm -23 "$WORK/open.ids" "$WORK/prev.ids" > "$WORK/new.ids"; else : > "$WORK/new.ids"; fi
+}
+
+lc_render() {
+  local rep="$WORK/report.md" prev="$WORK/prev.tsv" gaps="$WORK/gaps.tsv" judged_in="$WORK/judged.in"
+  local has_prev=0 prev_hash prev_schema cat_hash today catalog_changed=0
+  lc_compute_gaps
+  [ -f "$TARGET/$REPORT_REL" ] && has_prev=1
+  cat_hash=$(git hash-object --stdin < "$CAT")
+  today=$(date -u +%F)
   # Positive evidence that a check ran clean: a deterministic fact with status ok, or a judged line saying ok/na.
   awk -F'\t' '$2 == "ok" {print $1}' "$FACTS" | sort -u > "$WORK/ok.ids"
   awk -F'\t' '!/^#/ && ($2 == "ok" || $2 == "na") {print $1}' "$judged_in" | sort -u > "$WORK/judged.settled.ids"

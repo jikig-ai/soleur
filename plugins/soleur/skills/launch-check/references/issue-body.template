@@ -1,0 +1,13 @@
+<!-- launch-check:gap={{ID}} -->
+
+{{BANNER}}
+
+**Severity:** {{SEVERITY}}. **Domain:** {{DOMAIN}}. **Check:** {{ID}}.
+
+**Finding:** {{TITLE}}
+
+**Evidence:** `{{EVIDENCE}}`
+
+**Fix:** {{REMEDY}}{{COMMAND}}
+
+If this does not apply to your repository, close the issue rather than removing its label.

@@ -141,6 +141,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	407	measured
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	6665	measured
 plugins/soleur/skills/launch-check/test/baseline.test.sh	6400	measured
 plugins/soleur/skills/launch-check/test/identity.test.sh	10200	measured
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	95000	measured
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	211000	measured
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	3200	measured
 plugins/soleur/skills/launch-check/test/render.test.sh	31700	measured
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	200	measured

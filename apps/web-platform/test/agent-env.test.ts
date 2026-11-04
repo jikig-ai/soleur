@@ -56,6 +56,8 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   // Plugin PreToolUse hook `destructive-command-guard.sh` (ADR-093/ADR-277): switched off for hosted sessions by decision D8 (the hosted
   // `ask` path is unmeasured; see the comment at the override in agent-env.ts for what actually gates hosted Bash).
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
+  // launch-check refuses to file issues or write its report when unattended; a hosted session is unattended (ADR-314).
+  LAUNCH_CHECK_HEADLESS: "1",
 };
 
 describe("buildAgentEnv", () => {
@@ -142,6 +144,14 @@ describe("buildAgentEnv", () => {
     const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
     expect(apiKeyEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
     expect(oauthEnv.SOLEUR_DISABLE_DESTRUCTIVE_GUARD).toBe("1");
+  });
+
+  test("launch-check is told the hosted session is unattended for both schemes, and an ambient 0 loses", () => {
+    vi.stubEnv("LAUNCH_CHECK_HEADLESS", "0");
+    const apiKeyEnv = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+    const oauthEnv = buildAgentEnv({ value: "oauth-test", scheme: "oauth_token" });
+    expect(apiKeyEnv.LAUNCH_CHECK_HEADLESS).toBe("1");
+    expect(oauthEnv.LAUNCH_CHECK_HEADLESS).toBe("1");
   });
 
   test("omits allowlisted vars not present in process.env", () => {
