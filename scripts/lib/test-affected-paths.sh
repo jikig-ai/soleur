@@ -1155,6 +1155,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
 # are mined from the repo paths each suite file names, so a diff to a subject
 # selects its guard.
 # ---------------------------------------------------------------------------
+# tests/hooks/emissions — the suite walks plugins/soleur/test/components.test.ts, which reads
+# AGENTS.rules.md via readFileSync (components.test.ts:609/719/745).
+AFFECTED_TESTS_HOOKS_EMISSIONS_PATHS=(
+  "AGENTS.rules.md"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/hooks/test_hook_emissions.sh"
+)
+
 # tests/hooks/incidents — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_HOOKS_INCIDENTS_PATHS=(
