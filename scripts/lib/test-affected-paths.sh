@@ -440,6 +440,7 @@ AFFECTED_CLAUDE_HOOKS_SHIP_KB_ARCHIVE_GATE_TEST_SH_PATHS=(
   ".claude/hooks/ship-kb-archive-gate.test.sh"
   ".claude/settings.json"  # .claude/hooks/ship-kb-archive-gate.test.sh:1291
   ".devin/config.json"  # .claude/hooks/ship-kb-archive-gate.test.sh:1309
+  "glob:.claude/hooks/pre-merge-rebase*.sh"  # real read; anchor churn 13 commits/90d
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_CLAUDE_HOOKS_SHIP_UNPUSHED_COMMITS_GATE_TEST_SH_PATHS=(
@@ -561,6 +562,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_IMAGE_MIRROR_PUBLISH_TEST_SH_PATHS=(
   "plugins/soleur/test/zot-image-mirror-publish.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_SCRIPTS_COMPOUND_PROMOTE_PATHS=(
+  "glob:scripts/learning-retrieval-bench*.sh"  # real read; exact-file spelling would reveal 13 accept rows; anchor churn 9 commits/90d
+  "scripts/compound-promote.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CI_PUSH_DEDUPE_SOAK_9512_PATHS=(
   ".github/workflows/ci.yml"  # scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh:78
   ".github/workflows/web-platform-release.yml"  # plugins/soleur/scripts/merge-effect-class.test.sh:253
@@ -568,6 +574,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CI_PUSH_DEDUPE_SOAK_9512_PATHS=(
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_SCRIPTS_FOLLOWTHROUGH_VARQ_BAN_PATHS=(
+  "glob:scripts/sweep-followthroughs*.sh"  # real read; anchor churn 11 commits/90d
   "scripts/betterstack-query.sh"  # scripts/lint-followthrough-varq-ban.test.sh:441
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
   "scripts/lint-followthrough-varq-ban.test.sh"
@@ -849,6 +856,13 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   "apps/web-platform/test/repo-wide-containment.test.ts"  # ./.soleur/cache/affected-derive/v1/52ba60b3a082161ddc283b38b0451a720cd16ac2.rec:9
   "apps/web-platform/test/global-setup-git-tripwire.ts"  # scripts/lib/test-affected-paths.sh:2698
   "apps/web-platform/scripts/vitest-related.sh"  # scripts/lib/test-affected-paths.sh:785
+  "glob:scripts/test-all-affected.test*.sh"  # real read; exact-file spelling would reveal 72 accept rows; anchor churn 41 commits/90d
+  "glob:scripts/lint-orphan-test-suites.test*.sh"  # real read; exact-file spelling would reveal 13 accept rows; anchor churn 16 commits/90d
+  "glob:scripts/lint-orphan-test-suites*.sh"  # real read; anchor churn 24 commits/90d
+  "glob:scripts/guard-vacuity-floor.test*.sh"  # real read; anchor churn 122 commits/90d
+  "glob:scripts/battery-tag-authorship.test*.sh"  # real read; exact-file spelling would reveal 19 accept rows
+  "glob:scripts/battery-tag-authorship-mutations.test*.sh"  # real read; exact-file spelling would reveal 15 accept rows
+  "glob:apps/web-platform/infra/run-registered-suites*.sh"  # real read; exact-file spelling would reveal 22 accept rows; anchor churn 31 commits/90d
   "knowledge-base/"
   "scripts/test-affected-kb-consumers.test.sh"
   "scripts/suite-exit-class-parity.test.sh"  # scripts/lib/test-affected-paths.sh:2870
@@ -1049,6 +1063,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
+  "glob:apps/web-platform/test/plugin-root-anchoring.test*.ts"  # real read; exact-file spelling would reveal 13 accept rows; anchor churn 11 commits/90d
   "knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md"  # plugins/soleur/skills/incident/test/redact-sentinel.test.sh:26
   "plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
   "plugins/soleur/skills/incident/scripts/redact-engine.py"
@@ -1267,6 +1282,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "apps/web-platform/test/broker-mechanism-spike.test.ts"
+  "glob:tests/scripts/test-infra-privileged-tier-census*.sh"  # real read; exact-file spelling would reveal 50 accept rows; anchor churn 26 commits/90d
+  "glob:apps/web-platform/lib/types*.ts"  # real read; anchor churn 9 commits/90d
   "knowledge-base/engineering/architecture/decisions/"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
@@ -1492,6 +1509,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
+  "glob:scripts/followthroughs/git-data-rung2-evidence-capture*.sh"  # real read; anchor churn 12 commits/90d
   "knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md"  # tests/scripts/test-git-data-rung2-evidence-capture.sh:1220
   ".github/workflows/git-data-rung2-rehearsal.yml"  # tests/scripts/test-git-data-rung2-evidence-capture.sh:269
   "plugins/soleur/test/lib/git-fixture-env.sh"
@@ -1894,6 +1912,8 @@ AFFECTED_SCRIPTS_LEARNING_RETRIEVAL_BENCH_PATHS=(
 AFFECTED_SCRIPTS_CI_PUSH_DEDUPE_PATHS=(
   ".github/workflows/ci.yml"
   ".github/workflows/web-platform-release.yml"
+  "glob:plugins/soleur/test/ci-test-aggregator-diagnosis.test*.sh"  # real read; anchor churn 9 commits/90d
+  "glob:plugins/soleur/test/ci-e2e-skip-anchors.test*.sh"  # real read; exact-file spelling would reveal 15 accept rows
   "scripts/ci-pr-selection.sh"
   "scripts/ci-push-dedupe.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
@@ -3031,6 +3051,9 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   ".github/scripts/validate-infra-templates.sh"
   ".github/scripts/vinngest-digest-freshness.sh"
   "apps/web-platform/test/global-setup-git-tripwire.ts"
+  "glob:scripts/review-reminder-liveness.test*.sh"  # real read; exact-file spelling would reveal 32 accept rows
+  "glob:scripts/lint-agents-rule-budget.test*.sh"  # real read; exact-file spelling would reveal 52 accept rows
+  "glob:.claude/hooks/security_reminder_hook.test*.sh"  # real read; exact-file spelling would reveal 13 accept rows
   "plugins/soleur/scripts/lib/tmp-classify.sh"
   "plugins/soleur/test/lib/git-tripwire.ts"
   "plugins/soleur/test/lib/scratch-session.ts"
@@ -3203,6 +3226,8 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 # The exemption-ledger bijection greps the forge lib verbatim for the ledgered command (#10921).
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
   ".github/scripts/test/run-all.sh"
+  "glob:apps/web-platform/infra/run-registered-suites*.sh"  # real read; exact-file spelling would reveal 23 accept rows; anchor churn 31 commits/90d
+  "glob:.github/scripts/test/test-vinngest-digest-freshness*.sh"  # real read; exact-file spelling would reveal 14 accept rows
   "knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md"  # scripts/battery-tag-authorship.test.sh:733
   "plugins/soleur/scripts/lib/session-state.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
@@ -3508,6 +3533,7 @@ AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
 # plugins/soleur/test/fanout-suite-scope — drives a sandbox recorder over test-all.sh's
 # registration corpus; subject is the runner itself.
 AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
+  "glob:plugins/soleur/scripts/grok-pre-push-gate*.sh"  # real read; exact-file spelling would reveal 21 accept rows
   "lefthook.yml"  # plugins/soleur/test/fanout-suite-scope.test.sh:559
   "scripts/test-all.sh"
   "scripts/lib/"
@@ -3560,6 +3586,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_TOTALITY_TEST_SH_PATHS=(
 # manifest it reads, and the preflight skill whose contract it pins. Self-only derivation would
 # classify unclassified and leak it into every local run.
 AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
+  "glob:plugins/soleur/scripts/grok-pre-push-gate*.sh"  # real read; exact-file spelling would reveal 18 accept rows
   "plugins/soleur/scripts/affected-tests.sh"  # plugins/soleur/scripts/affected-tests.test.sh:5
   "plugins/soleur/skills/preflight/references/check-13-founder-check.md"  # plugins/soleur/test/preflight-check10-suite-integrity.test.sh:586
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
@@ -3688,6 +3715,9 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "apps/web-platform/infra/ci-deploy.sh"
   ".github/workflows/apply-web-platform-infra.yml"
   "apps/web-platform/infra/infra-config-gate.sh"
+  "glob:scripts/followthroughs/zot-soak-6122*.sh"  # real read; anchor churn 10 commits/90d
+  "glob:scripts/followthroughs/git-data-rung2-evidence-capture*.sh"  # real read; anchor churn 12 commits/90d
+  "glob:scripts/cutover-inngest*.sh"  # real read; exact-file spelling would reveal 16 accept rows; anchor churn 31 commits/90d
   "knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md"
   "apps/web-platform/infra/zot-image-oci-archive.sh"
   "scripts/betterstack-assert-absence.sh"
@@ -3824,6 +3854,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
 # producer edits).
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
   "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
+  "glob:apps/web-platform/infra/run-registered-suites*.sh"  # real read; exact-file spelling would reveal 22 accept rows; anchor churn 31 commits/90d
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -3919,6 +3950,7 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_PIPELINE_TALLY_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_SCRIPTS_PRECOMMIT_GUARD_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "glob:.claude/hooks/guardrails*.sh"  # real read; anchor churn 13 commits/90d
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_SCRIPTS_RUN_IN_PID_NAMESPACE_TEST_SH_PATHS=(
@@ -3939,6 +3971,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   ".claude/hooks/lib/technical-fork-cues.sh"
   ".claude/hooks/pre-closing-technical-fork-gate.sh"
   ".claude/hooks/pre-closing-technical-fork-gate.test.sh"
+  "glob:.claude/hooks/guardrails*.sh"  # real read; anchor churn 13 commits/90d
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BRAND_WORKSHOP_PEN_COMMIT_AFTER_SAVE_TEST_SH_PATHS=(
@@ -4025,6 +4058,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_RALPH_LOOP_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_REQUIRED_CHECKS_CANONICAL_PARITY_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "glob:.claude/hooks/git-commit-secret-scan*.sh"  # real read; exact-file spelling would reveal 13 accept rows
   "scripts/ci-required-ruleset-canonical-required-status-checks.json"  # plugins/soleur/test/required-checks-canonical-parity.test.sh:65
   "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # plugins/soleur/test/required-checks-canonical-parity.test.sh:74
   ".github/workflows/secret-scan.yml"  # plugins/soleur/test/required-checks-canonical-parity.test.sh:67
@@ -4201,6 +4235,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_LINT_SQUASH_CI_DIRECTIVES_TEST_SH_PATHS=(
   "scripts/lint-bot-synthetic-statuses.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_REQUIRED_CHECKS_MERGE_GROUP_COVERAGE_TEST_SH_PATHS=(
+  "glob:tests/scripts/test-audit-ruleset-bypass*.sh"  # real read; exact-file spelling would reveal 24 accept rows
   "scripts/ci-required-ruleset-canonical-required-status-checks.json"  # plugins/soleur/test/required-checks-merge-group-coverage.test.sh:76
   "scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"  # plugins/soleur/test/required-checks-merge-group-coverage.test.sh:77
   "infra/github/ruleset-ci-required.tf"  # plugins/soleur/test/required-checks-merge-group-coverage.test.sh:79
@@ -4214,6 +4249,7 @@ AFFECTED_SCRIPTS_CONTENT_PUBLISHER_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_SCRIPTS_GIT_DATA_REBOOT_EVIDENCE_LANDED_8210_PATHS=(
+  "glob:tests/scripts/lib/git-data-birth-readiness-gate*.sh"  # real read; anchor churn 15 commits/90d
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -4250,6 +4286,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_HOST_BIRTH_GATE_PATHS=(
 AFFECTED_TESTS_SCRIPTS_INNGEST_HOST_DARK_GATE_PATHS=(
   ".github/workflows/apply-web-platform-infra.yml"  # tests/scripts/test-inngest-host-dark-gate.sh:310
   "apps/web-platform/infra/inngest-bootstrap.sh"
+  "glob:scripts/cutover-inngest*.sh"  # real read; exact-file spelling would reveal 23 accept rows; anchor churn 31 commits/90d
   "scripts/lib/inngest-probe-row.sh"  # tests/scripts/test-inngest-host-dark-gate.sh:39
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
