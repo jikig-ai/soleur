@@ -16,6 +16,24 @@ requires_cpo_signoff: true
 
 PR body uses `Ref #12026`, never `Closes`: the issue closes only after the post-merge evidence in Phase 4 shows Bun >= 1.4.4 in the shipped binaries.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04 (UTC)
+**Method (bounded, stated plainly):** the plan was already reviewed by a five-seat eng panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), the CTO (F1-F4 rulings) and the CPO (sign-off approved). Deepen therefore ran the mechanical halt gates and live verification of every cited fact rather than a fresh 40-agent fan-out, which would have re-read the same four files.
+**Gates run:** 4.6 User-Brand Impact (present, `single-user incident`) pass; 4.7 Observability (new block: `jq` is on the probe allowlist, no `ssh `, command is sub-second, `expected_output` is the literal `2.1.311`) pass; 4.8 PAT-shaped variables (no hit) pass; 4.9 UI wireframe (no UI surface) skipped; 4.10 Encryption Posture (no new store or connection) skipped; 4.11 Guard Contract (`scripts/lint-guard-contract.py` green, 2 entries; Assembly names chokepoints, not member lists) pass; 4.12 Scope Check (exactly one unfenced section, every row mapped or justified) pass; 4.13 Task Design (no new autonomous-task surface) skipped.
+**Verified live:** `semver:patch` label exists; every cited issue/PR state matches (#12026 open, #12009 merged, #10453 closed as implemented, #8643/#9724/#10115/#10455/#10549 open); the two rule ids cited resolve (`cq-cite-content-anchor-not-line-number` active, `wg-architecture-decision-is-a-plan-deliverable` migrated); ADR-075/079/116/272/278 files exist; `ci-deploy.sh` prints "report-only canary; deploy NOT rolled back"; `web-platform-release.yml` has `workflow_dispatch`; `audit-models.sh` has `sdk_carveout_re()` feeding `EXCLUDE_RE`; `model-launch-review/SKILL.md` documents `SDK_PATH_CARVEOUT`; the Dockerfile stage is named `cli-tools`; `sandbox-startup-classifier.test.ts` pins `minStrings: 17` and the `["observe sendmsg failed"]` equality; `origin/main` moved by five commits (#12078, #12029, #12002, #11949, #12063) with no overlap with any planned file and still carries the 0.3.284 / 2.1.293 pins.
+
+### Key Improvements
+1. Phase 1 proof is now time-boxed (ruling due 2026-11-09), has an owner for a red result and a stated interim exposure path.
+2. A rollback path (revert PR plus `workflow_dispatch` redeploy) replaces the overstated "deploy gate": canary and smoke are report-only.
+3. The proof is repeated on the committed tree (2.13) and the global-install tree is probed pre-merge via `docker build --target cli-tools`.
+4. The F5 swap, the ADR-075/278 version lines and the classifier test anchors are complete, with deletions enumerated so `grep -rn SDK_PATH_CARVEOUT plugins/` is a checkable AC.
+
+### New Considerations Discovered
+- The issue's own acceptance probe prints the bare fragment `Bun v` and can never report a version; the corrected regex is the contract everywhere.
+- SDK and CLI collapse to one byte-identical binary at this pair, so one measurement serves both packages, but the Guard still scans both so they can diverge again.
+- Three ~294 MB copies ship in the image; no size gate exists, so the delta is reported.
+
 ## Overview
 
 Move the pinned `@anthropic-ai/claude-code` (2.1.293) and `@anthropic-ai/claude-agent-sdk` (0.3.284) to the exact pair **2.1.311 / 0.3.311**, whose native `claude` binaries embed Bun 1.4.4, so the Brotli-decoder flaw (CVE-2026-111497) no longer sits in the process that decodes `Content-Encoding: br` responses. The Node-side half shipped in #12009 and is not redone here.
