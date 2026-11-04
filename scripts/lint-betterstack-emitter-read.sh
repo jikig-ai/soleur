@@ -182,6 +182,7 @@ declare -A ALLOW=(
   ["scripts/followthroughs/workspaces-luks-soak-6604.sh"]="residual: --grep 'luks-monitor' + 'OK:' substring count on raw output (:96-110); emitter conversion is the caller-side disposition under #8875"
   ["scripts/followthroughs/zot-login-gate-names-failure-6497.sh"]="residual: --grep ZOT_GATE/PRELUDE rows graded by unanchored substring patterns on raw (:92-105); emitter conversion is the caller-side disposition under #8875"
   ["scripts/followthroughs/zot-restart-plateau-6288.sh"]="residual: --grep SOLEUR_ZOT_DISK rows pass through zot_trusted_region (sort + free-text-tail strip) with NO envelope anchor; emitter conversion is the caller-side disposition under #8875"
+  ["scripts/ci-pr-affected-audit.accept.tsv"]="a data file of suite/path/anchor/ordinal rows (the affected-index accept table): its reason column quotes invocation-shaped lines of betterstack-query.sh as cited anchors — the TSV invokes nothing"
 )
 
 # Test seam: a tab-separated `path<TAB>reason` file REPLACES the embedded map so fixture

@@ -1458,6 +1458,13 @@ unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 # scripts/test-all-group-affected.test.sh Part C.
 export -n TEST_GROUP
 
+# #12013: the pool width is a carrier too. affected-tests.sh (and an operator) request it through
+# SOLEUR_TEST_JOBS; this runner reads it once in _pj_resolve_run_mode (a SHELL variable read, which
+# `export -n` does not disturb) and no suite it spawns has any use for it. Left exported, a suite
+# that runs a nested test-all.sh would inherit a pool request meant for its parent — the
+# #11939 class, for a different variable. Pinned by scripts/test-all-parallel-scheduler.test.sh A8.
+export -n SOLEUR_TEST_JOBS
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -2147,8 +2154,9 @@ _pj_resolve_run_mode() {
   _pj_mode=0
   local want="${_JOBS_REQ:-${SOLEUR_TEST_JOBS:-}}"
   # THE DEFAULT. Unset resolves to serial — the explicit, measured choice:
-  # parallel ships opt-in while the #7376 interference diagnosis is open, and
-  # flipping the default is gated on it (see the plan + runbook). No banner:
+  # parallel ships opt-in (the #7376 interference diagnosis closed 2026-10-20; the
+  # default stays serial until flipping it is decided separately — see the runbook
+  # and the ADR-242 #12013 amendment). No banner:
   # a default must not read as a degraded arm.
   [[ -z "$want" ]] && return 0
   # Validation binds everywhere the knob is read — even enumerate/print paths —
@@ -2212,6 +2220,26 @@ _pj_resolve_run_mode() {
   printf '[parallel] mode engaged — width=%s (nproc=%s, avail_mem_mb=%s, per_suite_mb=%s, cap=%s). SOLEUR_TEST_JOBS=1 or --jobs=1 forces serial.\n' \
     "$width" "$nproc_v" "$mem_mb" "$_PJ_MEM_PER_SUITE_MB" "$_PJ_HARD_CAP" >&2
   return 0
+}
+
+_pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writer for all three reap sites.
+  # The drain replays [ok]/[FAIL]/[KILLED] in registration order, so this stderr line is the only
+  # thing a poller sees while the pool runs. It carries the suite's wall time and, for a non-zero rc,
+  # a marker saying it is NOT the verdict: the drain's text is authoritative (ADR-177 — a 128+n rc is
+  # unresolved, and a real-git suite can go red only under load). The text is deliberately not
+  # `[FAIL]`/`[ok]`/`[KILLED]`: those prefixes are parsed by monitors and by battery-refusal-wait.sh.
+  local j="$1" rc="${_pj_rc[$1]:-}" ms="" note="" s="${_pj_start[$1]:-}" e="${_pj_end[$1]:-}"
+  # Same integer arithmetic as run_suite's elapsed_ms (10# defeats octal on a leading zero; the *.*
+  # guard skips bash<5, where EPOCHREALTIME is unset, rather than overflowing).
+  if [[ "$s" == *.* && "$e" == *.* ]]; then
+    ms=$(( ( (${e%.*} * 1000000 + 10#${e#*.}) - (${s%.*} * 1000000 + 10#${s#*.}) ) / 1000 ))
+  fi
+  if [[ "$rc" =~ ^[0-9]+$ ]] && (( rc >= 128 )); then
+    note=" — signal-shaped, unresolved until drain"
+  elif [[ "$rc" != 0 ]]; then
+    note=" — provisional, verdict at drain"
+  fi
+  printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]//[[:cntrl:]]/?}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
 }
 
 _pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.
@@ -2283,7 +2311,7 @@ _pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeab
       local _np=() _p
       for _p in "${_pj_live_pids[@]}"; do [[ "$_p" != "${_pj_pid[j]}" ]] && _np+=("$_p"); done
       if ((${#_np[@]})); then _pj_live_pids=("${_np[@]}"); else _pj_live_pids=(); fi
-      printf '[run] %s done (rc=%s)\n' "${_pj_label[j]}" "${_pj_rc[j]}" >&2
+      _pj_fmt_done "$j"
       found=1
     done
     (( found == 1 )) && return 0
@@ -2312,7 +2340,7 @@ _pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeab
   local np=() p
   for p in "${_pj_live_pids[@]}"; do [[ "$p" != "$rp" ]] && np+=("$p"); done
   if ((${#np[@]})); then _pj_live_pids=("${np[@]}"); else _pj_live_pids=(); fi
-  printf '[run] %s done (rc=%s)\n' "${_pj_label[j]}" "$rc" >&2
+  _pj_fmt_done "$j"
   _pj_fill
   return 0
 }
@@ -2401,7 +2429,7 @@ _pj_drain() {
           _pj_tmpdelta[j]=unattributed
           _pj_state[j]=done
           _pj_live_n=$(( _pj_live_n - 1 ))
-          printf '[run] %s done (rc=%s)\n' "${_pj_label[j]}" "${_pj_rc[j]}" >&2
+          _pj_fmt_done "$j"
         fi
       done
     done

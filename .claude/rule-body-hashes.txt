@@ -54,7 +54,7 @@ e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-mergi
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
 eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur
 3b7446c9b1e6ac3e7b919d01642326fcd5bcc3546a14aa416461345fed9e98c8  wg-block-pr-ready-on-undeferred-operator-steps
-bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-author-before-merge
+aaad98d1e8c82661ed2cea5b7eecdf94311150522a4bede7429df37f664ecb74  wg-cla-signed-author-before-merge
 0c66ba0b8543f78224a5e8c3725bd7be5916846c6df4e05942b899e76c66d987  wg-dark-launch-deploy-gates
 68c64543014fb769a3512988e5c17a11ee309dc509b3e60a997ffc95dde06fb7  wg-defer-only-after-inline-triage
 0be82735a6032bcc450f6c182a5d1878ea4ac290ec8090a51c48324cf83139db  wg-end-of-work-emit-resume-prompt

@@ -19,3 +19,13 @@ lc_scrub() { printf '%s' "$1" | tr '\t\n\r' '   '; }
 # A production run never lets an inherited variable (a repo-controlled shell profile, direnv, an `env` block
 # in project settings) swap out the scanner, the redaction sentinel or the guard manifest.
 lc_seam() { local v="${!1:-}"; if [ "${LAUNCH_CHECK_TEST:-}" = 1 ] && [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi; }
+
+# lc_is_headless: an unattended run (CI set to anything, or LAUNCH_CHECK_HEADLESS=1, true or yes in any case). Used by the render guard and by the issue
+# writer's own write wrapper, so the refusal does not depend on the caller having checked.
+lc_is_headless() {
+  local h
+  [ -z "${CI:-}" ] || return 0
+  h=$(printf '%s' "${LAUNCH_CHECK_HEADLESS:-}" | tr '[:upper:]' '[:lower:]')
+  case "$h" in 1|true|yes) return 0 ;; esac
+  return 1
+}

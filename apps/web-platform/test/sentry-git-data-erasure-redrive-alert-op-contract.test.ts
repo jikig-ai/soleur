@@ -260,13 +260,13 @@ describe("git-data erasure re-drive alert op contract", () => {
     }
   });
 
-  // TEMPORARY TOMBSTONE: this case pins the state between PR 1 and PR 2 of the README's two-PR rule. When PR 2 moves
-  // scheduled_git_data_erasure_redrive into cron_monitor_failure.monitor_ids, INVERT it (assert the monitor IS routed
-  // and absent from cron_monitor_alert_unrouted) or delete it; it is not a permanent invariant.
-  it("the cron monitor stays declared-unrouted until the second PR (a not-yet-existing monitor id cannot be in monitor_ids)", () => {
+  // PR 2 of the README's two-PR rule (#10914): the monitor exists (30 consecutive `ok` check-ins measured 2026-11-03),
+  // so it is routed into cron_monitor_failure.monitor_ids and is no longer declared-unrouted.
+  it("the cron monitor is routed into cron_monitor_failure and is no longer declared-unrouted", () => {
     const routed = cronAlertsTf.match(/monitor_ids\s*=\s*\[([\s\S]*?)\]/)?.[1] ?? "";
-    expect(routed).not.toContain("scheduled_git_data_erasure_redrive");
-    expect(cronAlertsTf).toMatch(/scheduled_git_data_erasure_redrive\s*=\s*"[^"]*\(#10914\)"/);
+    expect(routed).toContain("sentry_cron_monitor.scheduled_git_data_erasure_redrive.id");
+    const unrouted = cronAlertsTf.match(/cron_monitor_alert_unrouted\s*=\s*\{([\s\S]*?)\n\s*\}\n/)?.[1] ?? "";
+    expect(unrouted).not.toMatch(/^\s*scheduled_git_data_erasure_redrive\s*=/m);
     expect(reference["cron-monitor-failure"].detectorIds.length).toBeGreaterThan(0);
   });
 
