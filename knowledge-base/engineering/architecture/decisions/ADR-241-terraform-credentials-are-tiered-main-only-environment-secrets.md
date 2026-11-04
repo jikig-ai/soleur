@@ -1148,7 +1148,7 @@ Appended; no status or earlier entry is edited.
 
 Appended; no status or earlier entry is edited.
 
-- **Rotations.** The Hetzner read/write token and `CF_API_TOKEN_R2` were rotated on 2026-11-04 (old values dead, probes and canaries in the record at https://github.com/jikig-ai/soleur/issues/8209#issuecomment-6638708947). The read/write R2 state pair (`TF_STATE_AWS_*`) is the bucket-scoped token `r2-tf-state-rw-20261022`, minted 2026-10-22 and accepted by the owner as the rotation; it has no old value left to probe.
+- **Rotations.** The Hetzner read/write token and `CF_API_TOKEN_R2` were rotated on 2026-11-04 (old values dead, probes and canaries in [the #8209 rotation record](https://github.com/jikig-ai/soleur/issues/8209#issuecomment-6638708947)). The read/write R2 state pair (`TF_STATE_AWS_*`) is the bucket-scoped token `r2-tf-state-rw-20261022`, minted 2026-10-22 and accepted by the owner as the rotation; it has no old value left to probe.
 - **The orphan repo secret is gone.** `CF_TUNNEL_TOKEN` (repo-level Actions secret, no consumer in `.github`, `scripts` or `apps`, no environment copy) was deleted on 2026-11-04, ahead of the "final G1 step" the 2026-10-15 entry named, because nothing consumes it. The Doppler `prd_terraform` copy of the same name was not touched.
 - **R2 as a rule.** Residual R2 above (web-platform state is Tier-A readable and holds other Terraform-minted secrets) is restated as a rule for new resources in ADR-319, so it stops growing. `tls_private_key.ci_ssh` (G1b, #10582) remains the known instance.
 
