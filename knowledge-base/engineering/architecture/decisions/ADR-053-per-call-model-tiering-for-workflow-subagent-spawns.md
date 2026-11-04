@@ -448,3 +448,7 @@ call is attributed to whichever key the CLI lists first. No code change.
 - The review layer (never pinned) remains the quality safety net for the execution layer — the brand-survival invariant at `single-user incident` threshold.
 - The allowlist test converts the prose never-downgrade policy into a CI-blocking gate.
 - Decision 4 makes future re-tiering a spend question first: the 2026-10-09 addendum applies it and moves nothing.
+
+## Addendum — 2026-11-04 (#12026): the SDK-path carve-out is retired
+
+The "SDK-path carve-out" above is retired: the SDK pin is now `@anthropic-ai/claude-agent-sdk` 0.3.311 (>= the 0.3.293 trigger), whose bundled CLI knows `claude-haiku-5-5`. `sandbox-canary.mjs` and `plugin-root-sandbox-propagation-probe.mjs` (and the other SDK-path probes and real-SDK test drivers) now use the Haiku 5.5 id, and `SDK_PATH_CARVEOUT` is deleted from the model-launch-review audit, so `--detect` scans those paths like any other. The re-evaluation trigger "when the SDK pin reaches 0.3.293" has fired. Test-side ids are outside the audit's `/test/` exclusion, so they are kept on 5.5 by hand; #8643 tracks the remaining coverage boundary (the tier-file harvest does not read SDK-path literals).

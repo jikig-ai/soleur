@@ -507,6 +507,11 @@ describe("sandbox-vendored-argv-tail: trailing flags in spawn-tail normalization
     expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "--disable-userns"]))).toMatch(/UNSETENV_SHAPE/);
     expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "bad name"]))).toMatch(/UNSETENV_SHAPE/);
   });
+  it("a mount placed right after `--disable-userns` is still a different tail (the flag swallows nothing)", () => {
+    expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns", "--tmpfs", "/proc"])).not.toEqual(
+      normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns"]),
+    );
+  });
   it("a tail that gained an extra mount after `--unsetenv` is still a different tail", () => {
     expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--tmpfs", "/proc"])).not.toEqual(normalizeSpawnTail([...head, "--unsetenv", "A"]));
   });
@@ -541,7 +546,7 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
     );
   });
 
-  it("the fixture's own tail has the expected shape (--dev first, one --bind /proc /proc last)", () => {
+  it("the fixture's own tail has the expected shape (--dev first, one --bind /proc /proc, then only --unsetenv and the optional --disable-userns)", () => {
     const t = fixtureTail();
     expect(t.slice(0, 4)).toEqual(["--dev", "/dev", "--unshare-pid", "--unshare-user"]);
     // The mask is still the LAST mount; the only things after it are the env unset and (when bubblewrap supports it) the userns hardening.

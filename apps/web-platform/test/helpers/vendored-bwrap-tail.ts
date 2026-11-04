@@ -291,13 +291,7 @@ export function builderTailTokens(tail: BuilderTail, branch: "proc" | "bind"): s
 // ---------------------------------------------------------------------------------------------
 // Cap segment + spawn-tail normalization.
 
-/**
- * Collapses the cap segment (the run of `--cap-drop` / `--cap-add` pairs right after `--unshare-user`)
- * to one marker token, AFTER checking it. The SDK returns `--cap-drop ALL` only, or adds
- * `--cap-add CAP_SETFCAP` when root with setfcap, so the two recorded shapes must compare equal; a
- * normalization that ignored the segment would let `--cap-add CAP_SYS_ADMIN` through, so anything
- * that is not exactly {one `--cap-drop ALL`, zero or more `--cap-add CAP_SETFCAP`} is `CAP_BARRIER`.
- */
+/** Normalizes a spawn or builder tail for comparison: cap segment first, then the trailing flags. */
 export function normalizeSpawnTail(tokens: readonly string[]): string[] {
   return normalizeTrailingFlags(normalizeCapSegment(tokens));
 }
@@ -307,7 +301,10 @@ export function normalizeSpawnTail(tokens: readonly string[]): string[] {
  * and a literal in a spawn, so both sides collapse to one marker AFTER checking it is a plausible env var name (an
  * `--unsetenv` with no operand, or one that swallowed a flag, is `UNSETENV_SHAPE`). `--disable-userns` is host-conditional
  * (see EXPECTED_TAIL_CALLS), so it is dropped from BOTH sides before comparison; its presence and position in the builder
- * are pinned by `EXPECTED_TAIL_CALLS` (a bwrap flag that only hardens: dropping it from a comparison cannot hide a mount).
+ * are pinned by `EXPECTED_TAIL_CALLS`. Dropping it hides a MOUNT from nothing (whatever follows it is still compared), but it
+ * does hide the flag itself: the builder emits it only when no seccomp helper is used, enableWeakerNestedSandbox is off and
+ * bwrap lists it, which our production config never reaches, and on the production bwrap 0.8.0 it is the flag recorded as
+ * breaking. The production-config live spawn therefore asserts its ABSENCE separately (sandbox-proc-mask-runtime.test.ts).
  */
 function normalizeTrailingFlags(tokens: readonly string[]): string[] {
   const out: string[] = [];
@@ -328,6 +325,13 @@ function normalizeTrailingFlags(tokens: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * Collapses the cap segment (the run of `--cap-drop` / `--cap-add` pairs right after `--unshare-user`)
+ * to one marker token, AFTER checking it. The SDK returns `--cap-drop ALL` only, or adds
+ * `--cap-add CAP_SETFCAP` when root with setfcap, so the two recorded shapes must compare equal; a
+ * normalization that ignored the segment would let `--cap-add CAP_SYS_ADMIN` through, so anything
+ * that is not exactly {one `--cap-drop ALL`, zero or more `--cap-add CAP_SETFCAP`} is `CAP_BARRIER`.
+ */
 function normalizeCapSegment(tokens: readonly string[]): string[] {
   if (tokens.includes(CAP_SEGMENT)) return [...tokens];
   const u = tokens.indexOf("--unshare-user");
@@ -564,7 +568,7 @@ export function assertHelperSelection(
       lines.push(`HELPER_SELECTION ${k} want ${pins[k]} got ${counts[k]} (${JSON.stringify(HELPER_SELECTION_NEEDLES[k])})`);
     }
   }
-  // At least one hit per mapping anchor (a tripwire, not a census: the count of a short key is not stable across minifier runs).
+  // At least one hit per mapping anchor (a tripwire, not a census: the key also appears in the settings schema, destructures and the managed-policy list, so its count moves with unrelated edits; measured 12 and 4 hits at 2.1.311).
   const mappingKeys = Object.keys(SETTINGS_MAPPING_NEEDLES);
   if (mappingKeys.length === 0) lines.push("HELPER_SELECTION settingsMapping has no anchors (a tripwire over zero needles cannot fire)");
   for (const k of mappingKeys) {
@@ -622,7 +626,7 @@ export const HELPER_NON_STEP_LINES: readonly string[] = [
   "observe sendmsg failed",
   // Added by claude-code 2.1.311 / SDK 0.3.311: a non-fatal warning (the seccomp filter alone still blocks namespace creation),
   // printed by the init before the tenant command, with a `(%s)` errno slot in the middle and NO `: <errno>` suffix, so the
-  // classifier's `^apply-seccomp: <step>: Operation not permitted$` can never match it.
+  // classifier's exact-step allowlist does not contain it, so `^apply-seccomp: <step>: Operation not permitted$` never classifies it.
   "could not set user.max_user_namespaces (%s); the seccomp filter alone keeps the command from making namespaces",
 ];
 

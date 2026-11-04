@@ -368,7 +368,7 @@ describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", ()
     for (const x of HELPER_NON_STEP_LINES) expect(HELPER_STEPS).not.toContain(x);
   });
 
-  it("the max_user_namespaces warning is never classified, even with an EPERM-shaped tail (it has no `: <errno>` suffix to match)", () => {
+  it("the max_user_namespaces warning is never classified, even with an EPERM-shaped tail (it is not in the exact-step allowlist)", () => {
     const warn = HELPER_NON_STEP_LINES[1];
     expect(classifyBashSandboxFailure(`apply-seccomp: ${warn}`, null)).toBeNull();
     expect(classifyBashSandboxFailure(`apply-seccomp: ${warn}: Operation not permitted`, null)).toBeNull();

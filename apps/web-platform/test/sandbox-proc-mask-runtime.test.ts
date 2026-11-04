@@ -123,7 +123,7 @@ describe.skipIf(!SANDBOX_OK)("the vendored sandbox spawn reaches our bwrap shim 
       prompt: "probe",
       options: {
         abortController: controller,
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-5-5",
         maxTurns: 3,
         permissionMode: "default",
         cwd: own,
@@ -190,6 +190,10 @@ describe.skipIf(!SANDBOX_OK)("the vendored sandbox spawn reaches our bwrap shim 
     for (const tail of setupTails) {
       expect(tail, "TAIL_DRIFT: a setup spawn has no --dev before the -- boundary").not.toBeNull();
       assertTailMatchesFixture(tail as string[], fixture, "live spawn");
+      // normalizeSpawnTail drops `--disable-userns` from both sides, so a spawn that carries it would compare equal. Under the
+      // production config (enableWeakerNestedSandbox: true) the builder never emits it, and on the production bwrap 0.8.0 it is the
+      // flag recorded as breaking (server/c4-render.ts): assert its absence here instead of letting the normalizer hide it.
+      expect(tail, "USERNS_FLAG: a production-config spawn carries --disable-userns").not.toContain("--disable-userns");
     }
   }, 180_000);
 });

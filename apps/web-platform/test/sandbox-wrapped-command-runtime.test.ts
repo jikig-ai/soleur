@@ -102,7 +102,7 @@ async function runBash(opts: {
     prompt: opts.prompt ?? "run it",
     options: {
       abortController: controller,
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-haiku-5-5",
       maxTurns: 3,
       permissionMode: "default",
       cwd: opts.cwd,
@@ -367,7 +367,7 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
       `ns=0; for sp in ${probeSockets.map((x) => `'${x}'`).join(" ")}; do ns=$((ns+1)); [ -e "$sp" ] && echo SOCK_VISIBLE=$sp; done; echo SOCK_CHECKED=$ns`,
       // Which of the CLI's other persisted files B can read at all (names only, ids collapsed): the residual surface the content
       // markers above cannot see (session metadata, keys, shell snapshots, account state). No depth cap; files, sockets and symlinks.
-      `echo HOME_READABLE=$(find "$HOME/.claude" "$HOME/.claude.json" \\( -type f -o -type s -o -type l \\) -readable 2>/dev/null | sed "s|$HOME/||; s|sessions/[0-9]*\\.[0-9a-f]\\{64\\}\\.key|sessions/<pid>.<hash>.key|; s|sessions/[0-9]*\\.json|sessions/<pid>.json|; s|snapshot-bash-[0-9]*-[a-z0-9]*\\.sh|snapshot-bash-<ts>-<id>.sh|; s|backup\\.[0-9]*|backup.<ts>|; s|plugins/store/cc-plugin-\\(.*\\)_builtin-[0-9a-f]*\\.json|plugins/store/cc-plugin-<name>_builtin-<hash>.json|" | sort -u | tr '\\n' ,)`,
+      `echo HOME_READABLE=$(find "$HOME/.claude" "$HOME/.claude.json" \\( -type f -o -type s -o -type l \\) -readable 2>/dev/null | sed "s|$HOME/||; s|sessions/[0-9]*\\.[0-9a-f]\\{64\\}\\.key|sessions/<pid>.<hash>.key|; s|sessions/[0-9]*\\.json|sessions/<pid>.json|; s|snapshot-bash-[0-9]*-[a-z0-9]*\\.sh|snapshot-bash-<ts>-<id>.sh|; s|backup\\.[0-9]*|backup.<ts>|; s|\\(plugins/store/cc-plugin-.*_builtin-\\)[0-9a-f]*\\.json|\\1<hash>.json|" | sort -u | tr '\\n' ,)`,
       `echo SESSION_TMP_ROOT_ENTRIES=$(ls -A ${AGENT_SESSION_TMP_ROOT} 2>/dev/null | grep -c .)`,
       `lc=$(printf '%s' "$needle" | sed 's/%3D/=/g')`,
       `for s in $([ -n "$hits" ] && echo ${dir}/*.sock); do [ -S "$s" ] || continue; b=$(basename "$s")`,
@@ -609,14 +609,17 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         ".claude/sessions/<pid>.json",
         ".claude/shell-snapshots/snapshot-bash-<ts>-<id>.sh",
       ];
-      // `plugins/store/cc-plugin-<name>_builtin-<hash>.json` (claude-code 2.1.311 / SDK 0.3.311, reviewed 2026-11-04): a 92-byte
-      // usage-telemetry queue entry, `{"usage-rows-queued": "<uuid> <feature label> ok"}`: a random UUID and a fixed label, no
-      // credential, prompt or tool output. Optional (written when the builtin plugin first reports), and its directory is
-      // content-scanned below like the other readable CLI state. ADR-075 addendum 2026-11-04 records the review.
+      // `plugins/store/cc-plugin-agents-md_builtin-<hash>.json` (claude-code 2.1.311 / SDK 0.3.311, reviewed 2026-11-04): a 92-byte
+      // usage-telemetry queue entry, `{"usage-rows-queued": "<cli session id> <instruction-file kind> ok"}`. The session id is the
+      // same value already readable in sessions/<pid>.json (a transcript is tmpfs-masked, so the id alone resumes nothing), the
+      // kind label reflects how the writing tenant's workspace lays out CLAUDE.md / AGENTS.md, and the key is HOME-wide (last
+      // writer wins). No credential, prompt or tool output. The pin keeps the REVIEWED plugin name, so a new builtin plugin
+      // store file reds the unlisted-readable-file assertion and gets its own review. Optional (written when the plugin first
+      // reports); its directory is content-scanned below. ADR-075 addendum 2026-11-04 records the review.
       const OPTIONAL_HOME_STATE = [
         ".claude/.last-cleanup",
         ".claude/backups/.claude.json.backup.<ts>",
-        ".claude/plugins/store/cc-plugin-<name>_builtin-<hash>.json",
+        ".claude/plugins/store/cc-plugin-agents-md_builtin-<hash>.json",
       ];
       const readable = [...new Set((/^HOME_READABLE=(.*)$/m.exec(out)?.[1] ?? "").split(",").filter(Boolean))].sort();
       expect.soft(REQUIRED_HOME_STATE.filter((r) => !readable.includes(r)), "a required CLI state file is no longer readable: the pin is stale or the probe is blind").toEqual([]);

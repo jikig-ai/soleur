@@ -792,8 +792,9 @@ export const CANARY_BRIDGE_SPAWN_PLACEHOLDER = "${CANARY_BRIDGE_SPAWN}";
 // the bridge-spawn dir, so without a placeholder the host_path census throws.
 export const CANARY_TRANSCRIPTS_PLACEHOLDER = "${CANARY_TRANSCRIPTS}";
 // #12026: claude-code 2.1.311 / SDK 0.3.311 covers `$HOME/.claude/seed-admin` (the private git directories of cloud-session
-// uploads, "managed by Claude Code") with a `--tmpfs` in its captured per-command argv. It is HOME-derived like the two dirs above
-// (`join(homedir(), ".claude", "seed-admin")`, no env override), so without a placeholder the host_path census throws.
+// uploads, "managed by Claude Code") with a `--tmpfs` in its captured per-command argv. Unlike the two dirs above (HOME-only), the
+// bundle derives it from the CLI config dir (default `$HOME/.claude`; `CLAUDE_CONFIG_DIR` would move it, and neither the canary
+// nor production sets it), so without a placeholder the host_path census throws.
 export const CANARY_SEED_ADMIN_PLACEHOLDER = "${CANARY_SEED_ADMIN}";
 
 // bwrap option arities for the projection parser. `null` = classify as a
@@ -1552,8 +1553,8 @@ const CAPTURE_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 120_000; // per attempt; end-to-end ceiling N×this.
 // Cheapest model that reliably issues one Bash tool call. Verified against the
 // claude-api reference at implementation time (#5913); moved to the Haiku 5.5 id ($0.10/$0.50
-// per MTok up to 100K prompt tokens) in the 0.3.311 bump (#12026), the first SDK pin whose
-// bundle knows it. The turn OUTPUT is irrelevant — the shim execs
+// per MTok up to 100K prompt tokens) in the 0.3.311 bump (#12026); the SDK bundle has known it
+// since 0.3.293. The turn OUTPUT is irrelevant — the shim execs
 // nothing; the SDK need only build+spawn bwrap once. Disclosed per-SDK-bump-PR
 // API cost: one short Haiku turn, creds-gated, never on routine deploys.
 const CAPTURE_MODEL = "claude-haiku-5-5";
@@ -1679,7 +1680,7 @@ export async function doCapture({
   const bridgeSpawnRoot = join(homedir(), ".claude", "bridge-spawn");
   // #10445: buildAgentSandboxConfig denies `$HOME/.claude/projects` (session transcripts) for every session.
   const transcriptsRoot = join(homedir(), ".claude", "projects");
-  // #12026: the bundled CLI (2.1.311+) covers `$HOME/.claude/seed-admin` with a --tmpfs; same HOME-derived, no-realpath expression.
+  // #12026: the bundled CLI (2.1.311+) covers the config-dir `seed-admin` (default `$HOME/.claude/seed-admin`) with a --tmpfs; same no-realpath expression.
   const seedAdminRoot = join(homedir(), ".claude", "seed-admin");
 
   try {

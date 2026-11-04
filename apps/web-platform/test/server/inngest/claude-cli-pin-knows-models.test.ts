@@ -710,3 +710,12 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
     );
   },
 );
+
+// CI's setup-bun reads `.bun-version` at 24 sites (#12009). It is the same CVE floor for the toolchain Bun, and it was the one
+// member of the set that no test bounded (review of #12073: `echo 1.4.3 > .bun-version` stayed green).
+describe("CI toolchain Bun floor (#12026)", () => {
+  it(".bun-version is a plain x.y.z at or above the embedded-runtime floor", () => {
+    const v = readFileSync(join(APP_ROOT, "..", "..", ".bun-version"), "utf8").trim();
+    expect(compareSemver(v, BUN_FLOOR.join(".")), `.bun-version ${v} is below ${BUN_FLOOR.join(".")}`).toBeGreaterThanOrEqual(0);
+  });
+});

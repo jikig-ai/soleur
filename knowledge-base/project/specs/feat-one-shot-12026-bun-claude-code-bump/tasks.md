@@ -32,7 +32,7 @@ Branch: `feat-one-shot-12026-bun-claude-code-bump` | Draft PR 12073 | PR body us
 - 2.6 Guard 1: embedded-Bun floor test in `claude-cli-pin-knows-models.test.ts` (bounded scan, semver compare, bare `Bun v` positive control, floor of 2 binaries checked, minimum over all occurrences).
 - 2.7 F5 (own commit just before the pin commit): Haiku 4.5 to 5.5 in `sandbox-credential-deny-runtime.test.ts`, `broker-mechanism-spike.test.ts`, `scripts/sandbox-canary.mjs` (`CAPTURE_MODEL`), `scripts/plugin-root-sandbox-propagation-probe.mjs`; delete `SDK_PATH_CARVEOUT`, `sdk_carveout_re()` and the `EXCLUDE_RE` term in `audit-models.sh`; delete every test referencing `SDK_CARVEOUT_PATHS`/`sdkKnowsHaiku55`/`pkgSdkPin` in `model-launch-review.test.ts`; update `model-launch-review/SKILL.md`; `grep -rn SDK_PATH_CARVEOUT plugins/` must return nothing.
 - 2.8 `agent-auth-cli-contract.test.ts` runs in the 1.3 baseline; edit only if red.
-- 2.9 Regenerate `infra/sandbox-canary-argv.json` via `SANDBOX_CANARY_MODE=capture bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` (Doppler dev key, read-only; never hand-edit).
+- 2.9 Regenerate `infra/sandbox-canary-argv.json` via `SANDBOX_CANARY_MODE=capture bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` (Doppler config `ci` key only, never `prd`, no xtrace; CTO F13; never hand-edit).
 - 2.10 Commit with a `sdk-bump-verified:` trailer stating validated and not-validated items, written only after Phase 1 is green, capture succeeded and 2.13 passed; keep it on the lockfile-bearing commit and verify the squash message keeps it.
 - 2.11 Short ADR-079 addendum dated 2026-11-04, ADR-075 pointer (reshaped settings mapping), ADR-278 "Measured against" version to 0.3.311; run `plugins/soleur/test/c4-count-parity.test.sh`.
 - 2.13 Re-run the 1.4 runtime suites + docker arm on the branch head; `docker build --target cli-tools` and run the corrected Bun probe on its global `claude`; then finalize the trailer. Guard 1 test: timeout >= 60 s, `shouldSkipRealBinaryRows` gate, absent binary reds `BINARY_MISSING`.
@@ -41,7 +41,7 @@ Branch: `feat-one-shot-12026-bun-claude-code-bump` | Draft PR 12073 | PR body us
 ## Phase 3 - PR, CI gate, PR 10926 note
 
 - 3.1 Push; check the real exit code (no `| tail`). Mark PR ready only after Phase 1 evidence + Phase 2 complete. PR body: `Ref #12026`, baseline, CI scope, corrected probe old/new, sha256, evidence table, `## Changelog`; `semver:patch`.
-- 3.2 Gate = CI required `test` check plus `lockfile-sync`/`sdk-bump-sandbox-gate`, `sandbox-canary-capture-gate`, `infra-validation`. Never push to a queued PR; dequeue via the GraphQL `dequeuePullRequest` mutation first.
+- 3.2 Gate = CI required `test` check plus `lockfile-sync`/`sdk-bump-sandbox-gate`. `sandbox-canary-capture-gate` and `infra-validation` (the AppArmor half of the masked-/proc proof) are NOT required checks: read both runs on the pushed head, record the run ids, and mark ready/arm auto-merge only when both are green. Never push to a queued PR; dequeue via the GraphQL `dequeuePullRequest` mutation first.
 - 3.2b CI-red loop: fixture mismatch in the capture gate means re-capture in the CI image path, never a hand edit; after any rebase re-run `npx npm@11 install --package-lock-only` and the fixture byte-diff before re-queuing.
 - 3.3 One flag comment on PR 10926 (stale `Setup Bun` without `bun-version-file`; keep main's `npm-publish.yml` on rebase). No branch change.
 

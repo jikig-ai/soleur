@@ -487,8 +487,8 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
     const options: Record<string, unknown> = {
       abortController: controller,
       // Haiku 5.5 (same ground as sandbox-credential-deny-runtime.test.ts): this drives the REAL
-      // Agent SDK query(), whose bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.311,
-      // the first pin whose bundle knows the id.
+      // Agent SDK query(), whose bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.311
+      // (the bundle has known the id since 0.3.293).
       model: "claude-haiku-5-5",
       maxTurns: 3,
       permissionMode: "default",
