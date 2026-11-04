@@ -127,7 +127,7 @@ jobs:
             --color BFD4F2 2>/dev/null || true
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "$LABEL" --state open \
-            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+            --json number --jq '.[0].number // empty' 2>/dev/null) || { echo "::error::cron-artifact-stale: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"
@@ -148,6 +148,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # dedupe: benign — || true inside on a close-path read: a failed lookup yields empty RECOVERED and the stale issue stays open, asserting staleness.
           RECOVERED=$(gh issue list --repo "$GH_REPO" --label ci/cron-artifact-stale \
             --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [[ -n "$RECOVERED" ]]; then

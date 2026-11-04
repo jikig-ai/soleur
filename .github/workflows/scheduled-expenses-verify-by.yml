@@ -119,7 +119,7 @@ jobs:
             --limit 100 \
             --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" \
-            | head -1)
+            | head -1) || { echo "::error::expenses-verify-by: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             {
@@ -186,6 +186,7 @@ jobs:
           # gate self-resolves (no operator gaze required, hr-no-dashboard-eyeball).
           TITLE="expenses: unverified estimate past verify_by"
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          # dedupe: benign — close-path read: a gh fault aborts the step leaving the expiry issue open — the alarm persists, never silent.
           EXISTING=$(gh issue list --label "expenses-verify-by" --state open \
             --limit 100 --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)

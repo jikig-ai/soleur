@@ -213,7 +213,7 @@ jobs:
           # under some token contexts, which would file a fresh duplicate daily.
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::sentry-alert-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"
@@ -369,7 +369,7 @@ jobs:
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::sentry-alert-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"
@@ -414,6 +414,7 @@ jobs:
           set -euo pipefail
           TITLE="$UNAVAILABLE_TITLE"
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the unavailable issue open; the next reached-verdict run retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
             --limit 100 --json number,title \
             --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
@@ -439,6 +440,7 @@ jobs:
           set -euo pipefail
           TITLE="$DRIFT_TITLE"
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the drift issue open; the next clean run retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
             --limit 100 --json number,title \
             --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")

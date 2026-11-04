@@ -82,7 +82,7 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml model-drift detection (#5100)._"
           } > "$RUNNER_TEMP/model-drift-body.md"
-          EXISTING="$(gh issue list --label model-drift --state open --json number --jq '.[0].number // empty')"
+          EXISTING=$(gh issue list --label model-drift --state open --json number --jq '.[0].number // empty') || { echo "::error::model-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/model-drift-body.md"
             echo "Updated existing model-drift issue #$EXISTING."
@@ -357,7 +357,7 @@ jobs:
           else
             _ISSUE_TITLE="image-pin-drift: the git-data rehearsal base image pin needs attention"
           fi
-          EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
+          EXISTING=$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty') || { echo "::error::zot-pin-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
             echo "Updated existing zot-pin-drift issue #$EXISTING."
@@ -455,7 +455,7 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml image-pin drift detection (#9534)._"
           } > "$RUNNER_TEMP/egress-gw-drift-body.md"
-          EXISTING="$(gh issue list --label egress-gw-pin-drift --state open --json number --jq '.[0].number // empty')"
+          EXISTING=$(gh issue list --label egress-gw-pin-drift --state open --json number --jq '.[0].number // empty') || { echo "::error::egress-gw-pin-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/egress-gw-drift-body.md"
             echo "Updated existing egress-gw-pin-drift issue #$EXISTING."
@@ -655,7 +655,7 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml inngest-CLI-pin drift detection (#7463)._"
           } > "$RUNNER_TEMP/inngest-pin-drift-body.md"
-          EXISTING="$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty')"
+          EXISTING=$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty') || { echo "::error::inngest-pin-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [ -n "$EXISTING" ]; then
             # Oldest labeled issue is canonical; re-assert the digest label — a stripped
             # `action-required` would otherwise drop it from the weekly digest while
@@ -864,7 +864,7 @@ jobs:
             echo
             echo "_Filed automatically by rule-audit.yml cloudflared-pin drift detection (eMudhra remediation)._"
           } > "$RUNNER_TEMP/cloudflared-pin-drift-body.md"
-          EXISTING="$(gh issue list --label cloudflared-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty')"
+          EXISTING=$(gh issue list --label cloudflared-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty') || { echo "::error::cloudflared-pin-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [ -n "$EXISTING" ]; then
             # Oldest labeled issue is canonical; re-assert the digest label — a stripped
             # `action-required` would otherwise drop it from the weekly digest while

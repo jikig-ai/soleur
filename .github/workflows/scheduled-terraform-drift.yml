@@ -740,6 +740,7 @@ jobs:
           # design reads empty as "file one", so every transient fault added a permanent
           # duplicate. The condition is standing, so declining to act costs at most 12h.
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list declines to create a possible duplicate; the standing condition re-files within 12h.
           EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
             fail_channel "token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Coverage '${COVERAGE}' (${COVERAGE_RATIO}) reached no issue channel this run."
@@ -997,6 +998,7 @@ jobs:
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
           echo "channel_failed=false" >> "$GITHUB_OUTPUT"
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list leaves the coverage issue open and flags channel_failed for the fallback email.
           N=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
             # A NAMED SLUG AND THE FLAG, matching this step's own close-failure branch below and
@@ -1130,7 +1132,7 @@ jobs:
           } > "${RUNNER_TEMP}/token-drift-issue.md"
 
           EXISTING=$(gh issue list --label "$LABEL" --state open --limit 100 \
-            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || { echo "::error::ci-ssh-dead: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             # Re-assert the labels before commenting. If `action-required` is ever stripped
@@ -1222,7 +1224,7 @@ jobs:
             --limit 100 \
             --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" \
-            | head -1)
+            | head -1) || { echo "::error::infra-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             {
@@ -1624,7 +1626,7 @@ jobs:
           OPEN_ISSUES=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
             --limit 100 \
             --json number,title \
-            --jq ".[] | select(.title == \"${TITLE}\") | .number")
+            --jq ".[] | select(.title == \"${TITLE}\") | .number") || { echo "::error::heartbeat-reconcile: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; OPEN_ISSUES=""; }
           EXISTING="${OPEN_ISSUES%%$'\n'*}"
 
           if [[ -n "$EXISTING" ]]; then
@@ -1730,6 +1732,7 @@ jobs:
           TITLE="infra: Better Stack heartbeat live-reconcile mismatch"
           # Bare assignment from a command substitution: a failed lookup fails the step (the Sentry
           # check-in reads this step's outcome) instead of reading as "no open issue".
+          # dedupe: fail-closed — deliberate bare capture: a failed lookup fails the step (the Sentry check-in reads this step's outcome) instead of reading as "no open issue".
           OPEN_ISSUES=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
             --limit 100 \
             --json number,title \
@@ -2759,9 +2762,9 @@ jobs:
         run: |
           set -euo pipefail
           # Idempotent: one open issue for this class, not one per scheduled run.
-          existing="$(gh issue list --label infra-drift --state open \
+          existing=$(gh issue list --label infra-drift --state open \
                         --search "orphaned rung-2 rehearsal in:title" \
-                        --json number --jq '.[0].number // empty')"
+                        --json number --jq '.[0].number // empty') || { echo "::error::rung2-rehearsal-orphan: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
           {
             echo "The Hetzner API reports server(s) matching the rung-2 rehearsal prefix that"
             echo "no Terraform state owns. Each is a **paying** box running the git transport"
@@ -2868,6 +2871,7 @@ jobs:
           }
 
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list declines to create a possible duplicate of the rung-2 sweep issue.
           EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
             --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
           if (( LIST_RC != 0 )); then
@@ -3231,9 +3235,9 @@ jobs:
         run: |
           set -euo pipefail
           # Idempotent: one open issue for this class, not one per scheduled run.
-          existing="$(gh issue list --label infra-drift --state open \
+          existing=$(gh issue list --label infra-drift --state open \
                         --search "orphaned inngest rehearsal in:title" \
-                        --json number --jq '.[0].number // empty')"
+                        --json number --jq '.[0].number // empty') || { echo "::error::inngest-rehearsal-orphan: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
           {
             echo "The Hetzner API reports resource(s) matching the inngest-provision rehearsal"
             echo "label that no Terraform state owns. A surviving rehearsal box is a **paying**"
