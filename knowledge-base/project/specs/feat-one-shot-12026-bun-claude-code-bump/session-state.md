@@ -45,3 +45,9 @@ Ledger: raw finding -> canonical defect -> reporting seats -> disposition. Fix c
 | P3 simplicity trims, canary wiring mutants, G2 plugins/store scan control, resume-role sentence in User-Brand Impact, scheduled-marketplace-drift 2.1.228 (pre-existing), image +133 MB, watchdog busy-wait | simplicity, test-design, user-impact, perf, git-history | declined or tracker; no behavior change |
 
 Relay to the user: the agent-native seat made one unintended live model call via the ambient CLI login; the AppArmor half of the masked-/proc proof is covered only by CI `infra-validation` (not a required check).
+
+### Review outcome (2026-11-04)
+- Panel 13/13 at 491b587f68 (92 raw findings, 1 P1); fix rounds: 998ba4c6f2, 6b883f687d, dd8a8992d9, 50b58e6009, then inline 371fce5b83, a9653ed782, and the mount-table pin + probe commits; 7 targeted seats in round 1 + 1 verifier (coverage `partial-by-ruling`); semgrep inline 0 findings; coverage consult leads verified (tsc rc 0; helper not entered under our config; ADR-284 addendum added).
+- Trailers: `Reviewed-By-Soleur` (211a2d16f6, full 13/13), `Reviewed-Fix-Round` (9767aa2727). Evidence comment: issuecomment-6639549417.
+- Code-simplicity gate: A DISSENT (fixed inline: mount-table census 3/9/15/2, mutation-verified), B DISSENT (comment only, helper never entered under our config), C CONCUR -> filed #12102 (dependency trigger #12026, follow-through probe `scripts/followthroughs/ci-claude-cli-pins-bun-12073.sh`).
+- Remaining: QA, compound, ship (sync BEHIND PR with main, read infra-validation + sandbox-canary-capture-gate runs on the pushed head, prd web_egress recount, Ref #12026, semver:patch, mark ready), postmerge Phase 4 (binary probe on all three shipped binaries; close #12026 only then).
