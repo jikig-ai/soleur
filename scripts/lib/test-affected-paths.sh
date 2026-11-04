@@ -853,9 +853,9 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   ".github/workflows/apply-deploy-pipeline-fix.yml"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:24
   ".github/actions/cf-tunnel-ssh-bridge/action.yml"  # plugins/soleur/scripts/admin-merge-ready.test.sh:345
   "apps/web-platform/vitest.config.ts"  # plugins/soleur/scripts/affected-tests.test.sh:1627
-  "apps/web-platform/test/repo-wide-containment.test.ts"  # ./.soleur/cache/affected-derive/v1/52ba60b3a082161ddc283b38b0451a720cd16ac2.rec:9
-  "apps/web-platform/test/global-setup-git-tripwire.ts"  # scripts/lib/test-affected-paths.sh:2698
-  "apps/web-platform/scripts/vitest-related.sh"  # scripts/lib/test-affected-paths.sh:785
+  "apps/web-platform/test/repo-wide-containment.test.ts"  # AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS
+  "apps/web-platform/test/global-setup-git-tripwire.ts"  # scripts/lib/test-affected-paths.sh:3022
+  "apps/web-platform/scripts/vitest-related.sh"  # scripts/lib/test-affected-paths.sh:1026
   "glob:scripts/test-all-affected.test*.sh"  # real read; exact-file spelling would reveal 72 accept rows; anchor churn 41 commits/90d
   "glob:scripts/lint-orphan-test-suites.test*.sh"  # real read; exact-file spelling would reveal 13 accept rows; anchor churn 16 commits/90d
   "glob:scripts/lint-orphan-test-suites*.sh"  # real read; anchor churn 24 commits/90d
@@ -865,9 +865,9 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   "glob:apps/web-platform/infra/run-registered-suites*.sh"  # real read; exact-file spelling would reveal 22 accept rows; anchor churn 31 commits/90d
   "knowledge-base/"
   "scripts/test-affected-kb-consumers.test.sh"
-  "scripts/suite-exit-class-parity.test.sh"  # scripts/lib/test-affected-paths.sh:2870
-  "scripts/registry-restore-from-ghcr.sh"  # scripts/lib/test-affected-paths.sh:1332
-  "scripts/registry-pull-path-health.sh"  # ./.soleur/cache/affected-derive/v1/6f9bce56f9de5dbb20661f8a1c729b747d1980b4.rec:230
+  "scripts/suite-exit-class-parity.test.sh"  # scripts/lib/test-affected-paths.sh:3211
+  "scripts/registry-restore-from-ghcr.sh"  # scripts/lib/test-affected-paths.sh:1622
+  "scripts/registry-pull-path-health.sh"  # AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS
   "scripts/suite-shard-legs.tsv"  # plugins/soleur/test/main-health-monitor-workflow.test.sh:763
   "scripts/test-affected-kb-consumers.baseline.txt"
   "scripts/test-all.sh"
@@ -878,12 +878,12 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   "plugins/soleur/test/c4-from-components.test.sh"  # plugins/soleur/test/scripts-shard-runtime-coverage.test.sh:10
   "plugins/soleur/scripts/generate-c4-from-components.ts"  # plugins/soleur/test/c4-canonical.test.ts:8
   "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/test-registry-restore-from-ghcr.sh"  # ./.soleur/cache/affected-derive/v1/524dbff72bdb10524d78db667eafccd73d3a127e.rec:6
-  "tests/scripts/test-registry-pull-path-health.sh"  # ./.soleur/cache/affected-derive/v1/f1709ea8ec1062cd6942ea800ee0b913dea3e5c6.rec:6
+  "tests/scripts/test-registry-restore-from-ghcr.sh"  # AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS
+  "tests/scripts/test-registry-pull-path-health.sh"  # AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS
   "tests/scripts/test-registry-gate-mutation-battery.sh"  # ./scripts/lib/test-relevance-paths.sh:118:# Source of truth
-  "tests/scripts/test-plan-gate-preamble.sh"  # ./.soleur/cache/affected-derive/v1/6fa443b9a02fa281e7c15b4b504c96ba11dd9b2a.rec:6
-  "tests/scripts/lib/restore-engine-header.sh"  # scripts/lib/test-affected-paths.sh:1448
-  "scripts/zot-mirror-diagnosis.sh"  # scripts/lib/test-affected-paths.sh:3846
+  "tests/scripts/test-plan-gate-preamble.sh"  # AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS
+  "tests/scripts/lib/restore-engine-header.sh"  # scripts/lib/test-affected-paths.sh:1740
+  "scripts/zot-mirror-diagnosis.sh"  # scripts/lib/test-affected-paths.sh:4273
 )
 # scripts/test-affected-derive (#9307) -- the derive in the runner and its bench
 # (scripts/affected-prepass-bench.sh: run it with --base <rev> after ANY change to the derive; exit 0 is
@@ -1843,7 +1843,7 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
   "apps/web-platform/infra/sentry/alert-reference.json"  # ./.soleur/cache/affected-derive/v1/4fe57c35c9cb362c1f15237b0357f0501fbae54b.rec:80:probe
   "apps/web-platform/infra/sentry/vendor-default-workflows.json"  # ./.soleur/cache/affected-derive/v1/4fe57c35c9cb362c1f15237b0357f0501fbae54b.rec:219
   "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
-  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"  # ./.soleur/cache/affected-derive/v1/4fe57c35c9cb362c1f15237b0357f0501fbae54b.rec:107
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"  # AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -3727,7 +3727,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/ensure-doppler.sh"
   "scripts/followthroughs/anthropic-admin-key-6297.sh"
   "scripts/followthroughs/anthropic-double-bill-8611.sh"
-  "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # ./.soleur/cache/affected-derive/v1/47a7bdf8087edb6ec074d849070616eae7b4d26d.rec:55
+  "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/cert-reissue-markers-6698.sh"
   "scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh"
   "scripts/followthroughs/compound-promote-draft-edit-10552.sh"
@@ -3738,18 +3738,18 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-private-nic-8539.sh"  # ./scripts/followthroughs/inngest-provision-unit-8562.sh:4
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
-  "scripts/followthroughs/inngest-soak-6178.sh"  # ./.soleur/cache/affected-derive/v1/ee513bc97f359234e7fa7cba02bf64cca797fe4e.rec:37
+  "scripts/followthroughs/inngest-soak-6178.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
   "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
   "scripts/followthroughs/private-nic-converged-6415.sh"
-  "scripts/followthroughs/registry-luks-live-8386.sh"  # scripts/lib/test-affected-paths.sh:2546
-  "scripts/followthroughs/registry-htpasswd-stdin-10119.sh"  # ./.soleur/cache/affected-derive/v1/bfe0280ee9aaba2c11865f7c4d64cb81e5ed396a.rec:8
+  "scripts/followthroughs/registry-luks-live-8386.sh"  # scripts/lib/test-affected-paths.sh:2849
+  "scripts/followthroughs/registry-htpasswd-stdin-10119.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/registry-clientip-alert-7530.sh"  # plugins/soleur/test/preflight-discoverability-test.test.ts:2960
   "scripts/followthroughs/run-report-exit-first-contact-8076.sh"
-  "scripts/followthroughs/send-failed-alert-probe-8097.sh"  # ./.soleur/cache/affected-derive/v1/d3e2b98799b347e7d93e2b72c8d5f618075086fc.rec:8
+  "scripts/followthroughs/send-failed-alert-probe-8097.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/ship-merge-mergebase-verdict-8151.sh"
   "scripts/followthroughs/web2-standby-soak-6459.sh"
   "scripts/followthroughs/workspaces-luks-soak-6604.sh"  # ./scripts/sweep-followthroughs.test.sh:489:# (see workspaces-luks-soak-6604.sh
@@ -3776,7 +3776,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/test-all.sh"
   "scripts/zot-disk-sample.sh"
   "scripts/zot-inventory-assert-marker.sh"
-  "scripts/followthroughs/git-data-rehearsal-evidence.sh"  # ./.soleur/cache/affected-derive/v1/6ff30ef0fd67e43b92ab83a6e082a91be034bf44.rec:8
+  "scripts/followthroughs/git-data-rehearsal-evidence.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/git-data-replication-signal.sh"
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/betterstack-sources.sh"
@@ -4293,7 +4293,7 @@ AFFECTED_TESTS_SCRIPTS_INNGEST_HOST_DARK_GATE_PATHS=(
 AFFECTED_TESTS_SCRIPTS_LINT_RULE_IDS_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-ids.py"
-  "scripts/retired-rule-ids.txt"  # scripts/lib/test-affected-paths.sh:1357
+  "scripts/retired-rule-ids.txt"  # scripts/lib/test-affected-paths.sh:697
 )
 AFFECTED_TESTS_SCRIPTS_REGISTRY_PULL_PATH_HEALTH_PATHS=(
   "apps/web-platform/infra/cloud-init.yml"  # tests/scripts/test-registry-pull-path-health.sh:415
