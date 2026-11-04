@@ -9,6 +9,56 @@ closes: [8780, 9659, 10078]
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04
+**Sections enhanced:** halt-gate verification across the whole plan
+(Phases 4.5–4.13 all evaluated; Guard Contract resolved mechanically via
+`scripts/lint-guard-contract.py` — 3 entries, green)
+**Research agents used:** none — inline sequential-fallback execution (no
+Task-spawn capability in the planning subagent); every prescribed seat
+was run by the orchestrator against `origin/main` and cited sources.
+
+### Key Improvements
+
+1. **Gate verification (all PASS, none fired a halt):** User-Brand Impact
+   (`none` + sensitive-path scope-out reason present); Observability (5
+   fields, `python3`-allowlisted probe, literal `unclassified: 0`
+   expectation); PAT sweep clean; Encryption Posture (named attestation,
+   concrete `does_not_defend`, no exception needed); Guard Contract lint
+   green; Scope Check exactly one unfenced section, all asks mapped,
+   inferred rows justified; UI-wireframe / network-outage / downtime /
+   task-design triggers evaluated and skipped (no UI files, no SSH
+   provisioners in the changed resources, no downtime-inducing operation,
+   no new autonomous task).
+2. **Verify-the-negative pass (Phase 4.45, inline):** the plan's negative
+   claims were re-grepped — `build:` job carries no `environment:` (~:68;
+   the `:1066` binding is `bump-cloud-init-pin`), `inngest-config-signing`
+   has no `deployment_branch_policy` (the .tf shown verbatim), 76/18
+   census counts are measured not estimated, `web-bash-synthetic.service:22`
+   is genuinely unprefixed. No contradiction found.
+3. **Precedent-diff (Phase 4.4):** all three mechanisms are
+   sibling-precedent-bound, not novel — the env/policy HCL shape mirrors
+   `infra-privileged-environment.tf:32-58`, the SKIP-VS-FAIL contract
+   mirrors PR #10073's diff verbatim-shape, the `|| { ::error:: }`
+   dedupe handler mirrors `scheduled-inngest-health.yml` in-tree. The
+   marker-lint is the one novel element; its Guard Contract names the
+   vacuity and adjacency mutation rows.
+
+### New Considerations Discovered
+
+- The `REVIEWERS_RATCHET`/DP-11 F8 disjunction already licenses the new
+  reviewer-less `release-publish` environment — the plan's explicit
+  population pin (`expect(names).toContain("release_publish")`-style)
+  keeps deletion loud.
+- `version-bump-and-release.yml` is a second `reusable-release.yml`
+  caller — the chokepoint placement covers it free; recorded so its
+  admission is a decision, not an accident.
+- Registration learning (2026-11-01): a new floor-bearing suite is three
+  write sites — `test-all.sh`, `suite-durations.tsv`,
+  `suite-shard-legs.tsv`, plus the `PROMOTED_FILES` check; encoded in
+  AC-B3/tasks 2.5.
+
 ## Overview
 
 Epic #10390 bucket-4 batch of three open chores, all internal CI/infra
