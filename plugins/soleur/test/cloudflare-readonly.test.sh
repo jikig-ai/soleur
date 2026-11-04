@@ -657,6 +657,7 @@ grp_env() {
   # jq and date are children too. A planted $HOME/.jq that redefines a builtin runs inside jq with whatever environment
   # jq was given; with the token in it, the canary below prints the token. The wrapper runs jq under `env -i`.
   assert_fixture_dir "$HOMEDIR"
+  assert_fixture_dir "$WORK"
   printf 'def test(re): ($ENV.%s | debug | true);\n' CF_API_TOKEN_ZONE_SETTINGS > "$HOMEDIR/.jq"
   /usr/bin/env HOME="$HOMEDIR" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" /usr/bin/jq -nc '"a" | test("a")' > "$WORK/jqctl.txt" 2>&1
   t "env[jq] control: the planted .jq canary DOES print the token when jq inherits the environment (the probe is live)" has_file "$WORK/jqctl.txt" "$TOK_Z"
@@ -947,7 +948,7 @@ grp_shape() {
 # =============================================================================================
 make_variant() { # <name> <sed expression> : sets SUTX to a changed copy of the sandbox wrapper; fails when nothing changed
   local v="$WORK/var.$1.sh"
-  assert_fixture_dir "$WORK"
+  assert_fixture_dir "$v"
   sed "$2" "$SUTC" > "$v"
   chmod +x "$v"
   if cmp -s "$SUTC" "$v"; then return 1; fi
@@ -1060,6 +1061,7 @@ edit_once() {
     return 1
   fi
   new="${src/"$from"/"$to"}"
+  assert_fixture_dir "$dst"
   printf '%s\n' "$new" > "$dst"
   if cmp -s "$file" "$dst"; then vno "mutate[$label]: the edit did not change the file"; return 1; fi
   if ! bash -n "$dst"; then vno "mutate[$label]: the mutant does not parse - the edit is broken, not caught"; return 1; fi
