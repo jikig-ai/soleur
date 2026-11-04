@@ -21,6 +21,8 @@
 set -uo pipefail
 
 TESTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A suite-mutation child runs a COPY of this file from scratch; it names the real test dir here (inner children only).
+if [[ -n "${CF_RO_TEST_INNER:-}" && -n "${CF_RO_TESTDIR:-}" ]]; then TESTDIR="$CF_RO_TESTDIR"; fi
 REPO_ROOT="$(cd "$TESTDIR/../../.." && pwd)"
 SELF="$TESTDIR/$(basename "${BASH_SOURCE[0]}")"
 PROD="$TESTDIR/../scripts/cloudflare-readonly.sh"
@@ -97,8 +99,11 @@ ZONE="0123456789abcdef0123456789abcdef"
 ACCT="fedcba9876543210fedcba9876543210"
 ZONE_ALT="aaaaaaaabbbbbbbbccccccccdddddddd"
 BASE_URL="https://api.cloudflare.com/client/v4"
+HOMEDIR="$WORK/home"
+assert_fixture_dir "$HOMEDIR"
+mkdir -p "$HOMEDIR" || { echo "FATAL: mkdir failed" >&2; exit 2; }
 BASE_ENV=(
-  "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform"
+  "HOME=$HOMEDIR" "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform"
   "CF_ZONE_ID=$ZONE" "CF_ACCOUNT_ID=$ACCT"
   "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" "CF_API_TOKEN_RULESETS=$TOK_R" "CF_API_TOKEN_AUDIT=$TOK_A"
 )
@@ -109,11 +114,33 @@ SUBS=(ssl-mode config-entrypoint pagerules-ssl change-history)
 # --- the stub curl (path rewritten into the sandbox copy of the wrapper) ---
 cat > "$STUB/curl" <<'STUB_EOF'
 #!/bin/bash
+# Records argv FIRST (NUL-separated), then validates it against the CLOSED set of flags the wrapper is modeled to
+# send. Anything else is logged to refusal.log and refused with exit 64. stdin is read and logged ONLY when the
+# argv carries `--config -`.
 D="${0%/*}"
 printf "called\n" >> "$D/calls.log"
 ARGLOG="$D/argv.bin"
 for a in "$@"; do printf "%s\0" "$a" >> "$ARGLOG"; done
-while IFS= read -r l || [[ -n "$l" ]]; do printf "%s\n" "$l" >> "$D/stdin.log"; done
+refuse() { printf "%s\n" "$1" >> "$D/refusal.log"; exit 64; }
+args=("$@"); n=$#; i=0; cfg=0
+while ((i < n)); do
+  a="${args[$i]}"
+  case "$a" in
+    --disable | -sS) : ;;
+    --noproxy) i=$((i + 1)); [[ "${args[$i]-}" == '*' ]] || refuse "noproxy-arg" ;;
+    -X) i=$((i + 1)); [[ "${args[$i]-}" == GET ]] || refuse "-X-arg" ;;
+    --max-time) i=$((i + 1)); [[ "${args[$i]-}" =~ ^[0-9]+$ ]] || refuse "max-time-arg" ;;
+    --max-redirs) i=$((i + 1)); [[ "${args[$i]-}" == 0 ]] || refuse "max-redirs-arg" ;;
+    -w) i=$((i + 1)); [[ "${args[$i]-}" == $'\n%{http_code}' ]] || refuse "-w-arg" ;;
+    --config) i=$((i + 1)); [[ "${args[$i]-}" == '-' ]] || refuse "config-arg"; cfg=1 ;;
+    https://*) ((i == n - 1)) || refuse "url-not-last" ;;
+    *) refuse "flag:$a" ;;
+  esac
+  i=$((i + 1))
+done
+if ((cfg == 1)); then
+  while IFS= read -r l || [[ -n "$l" ]]; do printf "%s\n" "$l" >> "$D/stdin.log"; done
+fi
 export -p > "$D/env.log"
 status=$(<"$D/status"); body=$(<"$D/body"); ce=$(<"$D/curl_exit")
 if [[ -s "$D/stderr" ]]; then printf "%s\n" "$(<"$D/stderr")" >&2; fi
@@ -147,7 +174,7 @@ fixture() { # status body [curl_exit] [stderr-text]
   printf '%s' "$2" > "$STUB/body"
   printf '%s' "${3:-0}" > "$STUB/curl_exit"
   printf '%s' "${4:-}" > "$STUB/stderr"
-  rm -f "${STUB:?}/calls.log" "${STUB:?}/argv.bin" "${STUB:?}/stdin.log" "${STUB:?}/env.log"
+  rm -f "${STUB:?}/calls.log" "${STUB:?}/argv.bin" "${STUB:?}/stdin.log" "${STUB:?}/env.log" "${STUB:?}/refusal.log"
 }
 RUNFLAGS=()
 OUT="" ERR="" RC=0 L1=""
@@ -156,7 +183,7 @@ run() { # run [NAME=value ...] -- args...
   local -a ev=()
   while [[ $# -gt 0 && "$1" != "--" ]]; do ev+=("$1"); shift; done
   shift
-  OUT=$(/usr/bin/env -i PATH=/usr/bin:/bin ${ev[@]+"${ev[@]}"} "$BASH" ${RUNFLAGS[@]+"${RUNFLAGS[@]}"} "$SUTC" "$@" 2>"$WORK/err.txt" </dev/null)
+  OUT=$(/usr/bin/env -i PATH=/usr/bin:/bin ${ev[@]+"${ev[@]}"} "$BASH" ${RUNFLAGS[@]+"${RUNFLAGS[@]}"} "${SUTX:-$SUTC}" "$@" 2>"$WORK/err.txt" </dev/null)
   RC=$?
   ERR=$(<"$WORK/err.txt")
   { printf '%s\n' "$OUT"; printf '%s\n' "$ERR"; } > "$WORK/comb.txt"
@@ -259,9 +286,25 @@ array_names() {
   line="${line%)}"
   printf '%s\n' $line
 }
-case_labels() {
-  awk '/^case "\$SUB" in/{f=1;next} /^esac/{f=0} f' "$1" | grep -Eo '^  [a-z][a-z-]*\)' | tr -d ' )'
+# Tolerant: any leading whitespace, optional single/double quotes, `a|b)` alternations; the default arm `*` is dropped.
+LABEL_RE="^[[:space:]]*[\"']?[^[:space:]|)(;\"']+[\"']?([|][\"']?[^[:space:]|)(;\"']+[\"']?)*\\)"
+dispatcher_block() {
+  awk '/^[[:space:]]*case "\$SUB" in/{f=1;next} /^[[:space:]]*esac/{f=0} f' "$1"
 }
+case_labels() {
+  dispatcher_block "$1" | grep -Eo "$LABEL_RE" | tr -d " \t)\"'" | tr '|' '\n' | grep -vx '\*'
+}
+case_arm_count() { # number of `;;` arm terminators inside the dispatcher block
+  dispatcher_block "$1" | grep -o ';;' | wc -l
+}
+cf_get_sites() { grep -cE '(^|[^[:alnum:]_])cf_get[[:space:]]+[^[:space:]()]' "$1"; }
+cf_get_args() { grep -oE '(^|[^[:alnum:]_])cf_get[[:space:]]+"[^"]+"' "$1" | sed -E 's/^[^c]*cf_get[[:space:]]+//' | sort; }
+curl_assigns() { grep -cE '(^|[^[:alnum:]_])CURL[[:space:]]*\+?=' "$1"; }
+# jq / date census: every invocation line (outside the -x preflight tests) must run behind an empty environment.
+tool_lines() { grep -E '/usr/bin/(jq|date)' "$1" | grep -vE '\[ -x '; }
+tool_unwrapped() { tool_lines "$1" | grep -vE '/usr/bin/env -i /usr/bin/(jq|date)'; }
+xtrace_names() { grep -oE '\$\{[A-Z_]+:\+x\}' "$1" | sed -E 's/^\$\{([A-Z_]+):\+x\}$/\1/' | sort -u; }
+tokvar_names() { grep -oE 'TOKVAR=CF_[A-Z_]+' "$1" | sed 's/^TOKVAR=//' | sort -u; }
 sorted_join() { printf '%s\n' "$@" | sort | tr '\n' ' '; }
 
 grp_source() {
@@ -313,11 +356,65 @@ grp_source() {
   t "list: --list exits 0" eq "$RC" 0
   t "list: --list names no Doppler project/config and calls no curl" bash -c '! grep -Eqi "doppler|prd" "$1"' _ "$WORK/comb.txt"
   t "list: --list never invoked curl" eq "$(ncalls)" 0
+
+  # --- censuses: the request set, the curl binding, the child environments (each paired with a control fixture) ---
+  assert_fixture_dir "$WORK"
+  t "census: dispatcher arm terminators == 5 (four arms plus the refusing default)" eq "$(case_arm_count "$STRIPPED")" 5
+  printf '%s\n' 'case "$SUB" in' "   \"raw\"|'purge') x ;;" $'\tzap) y ;;' '  *) z ;;' 'esac' > "$WORK/cl.txt"
+  t "census control: the tolerant label extractor sees tab, 3-space, quoted and alternation arms" eq "$(case_labels "$WORK/cl.txt" | sort | tr '\n' ' ')" "purge raw zap "
+  t "census control: the arm counter sees every terminator" eq "$(case_arm_count "$WORK/cl.txt")" 3
+  t "census: exactly four cf_get call sites outside the function" eq "$(cf_get_sites "$STRIPPED")" 4
+  local want_tpl
+  want_tpl=$(printf '%s\n' \
+    '"$BASE/accounts/$CF_ACCOUNT_ID/logs/audit?since=$since&before=$now&limit=$LIMIT&direction=desc"' \
+    '"$BASE/zones/$CF_ZONE_ID/pagerules?status=active"' \
+    '"$BASE/zones/$CF_ZONE_ID/rulesets/phases/http_config_settings/entrypoint"' \
+    '"$BASE/zones/$CF_ZONE_ID/settings/ssl"' | sort | tr '\n' ' ')
+  t "census: the four cf_get URL templates are exactly the fixed four" eq "$(cf_get_args "$STRIPPED" | tr '\n' ' ')" "$want_tpl"
+  printf '%s\n' 'cf_get() { x; }' '  cf_get "a"' 'y; cf_get "b"' > "$WORK/g2.txt"
+  t "census control: the function definition is not a call site; two calls count 2" eq "$(cf_get_sites "$WORK/g2.txt")" 2
+  t "census: CURL is assigned exactly once" eq "$(curl_assigns "$STRIPPED")" 1
+  t "census: that one assignment is the column-0 literal" eq "$(grep -cx 'CURL=/usr/bin/curl' "$STRIPPED")" 1
+  tn "census: CURL is never exported, declared, read into or printf -v'd" src_has '(export|declare|typeset|readonly|local)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?CURL|printf[[:space:]]+-v[[:space:]]+CURL|read[^;]*[[:space:]]CURL'
+  printf '%s\n' '  [ -n "${X:-}" ] && CURL=$X' > "$WORK/cu1.txt"
+  printf '%s\n' 'export CURL=/x' > "$WORK/cu2.txt"
+  t "census control: an indented conditional override counts 1" eq "$(curl_assigns "$WORK/cu1.txt")" 1
+  t "census control: an exported form counts 1" eq "$(curl_assigns "$WORK/cu2.txt")" 1
+  t "census: anchor - jq runs in exactly 2 places and date in exactly 2, each behind env -i" bash -c '[[ "$(grep -c "/usr/bin/env -i /usr/bin/jq " "$1")" == 2 && "$(grep -c "/usr/bin/env -i /usr/bin/date " "$1")" == 2 ]]' _ "$STRIPPED"
+  t "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i (empty HOME, empty \$ENV)" eq "$(tool_unwrapped "$STRIPPED" | wc -l)" 0
+  tn "census: no bare jq or date command" src_has '(^|[^[:alnum:]_/.-])(jq|date)[[:space:]]+-'
+  printf '%s\n' 'x=$(/usr/bin/jq -c a)' > "$WORK/tw1.txt"
+  printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c a)' '[ -x /usr/bin/jq ] || exit 1' > "$WORK/tw0.txt"
+  t "census control: an unwrapped jq line is counted" eq "$(tool_unwrapped "$WORK/tw1.txt" | wc -l)" 1
+  t "census control: a wrapped jq line and the -x preflight are not counted" eq "$(tool_unwrapped "$WORK/tw0.txt" | wc -l)" 0
+  tn "census: no token, zone or account variable on any jq/date line" bash -c 'grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"' _ "$STRIPPED"
+  printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c --arg t "$TOK" a)' > "$WORK/tk1.txt"
+  tn "census control: a token variable on a jq line is detected" bash -c '! { grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"; }' _ "$WORK/tk1.txt"
+  tn "source: no export of the token" src_has '(^|[;[:space:]])(export|declare[[:space:]]+-[A-Za-z]*x)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?TOK'
+  tn "source: no /dev/shm" src_has '/dev/shm'
+  tn "source: no tee" src_has '(^|[^[:alnum:]_-])tee([^[:alnum:]_-]|$)'
+  tn "source: no exec file-descriptor redirection" src_has '(^|[;[:space:]])exec[[:space:]]+[0-9]*[<>]'
+  tn "source: no jq --arg / --args / --rawfile / --slurpfile / --jsonargs" src_has '[[:space:]]--(arg|args|rawfile|slurpfile|jsonargs)([[:space:]]|$)'
+  tn "source: no NAME=value prefix on an env child" src_has '/usr/bin/env[[:space:]]+([A-Z_]+=|-[A-Za-z]*[[:space:]]+[A-Z_]+=)'
+  t "source: the xtrace refusal list names exactly the dispatcher TOKVAR names plus CF_API_TOKEN" eq "$(xtrace_names "$STRIPPED" | tr '\n' ' ')" "$({ tokvar_names "$STRIPPED"; echo CF_API_TOKEN; } | sort -u | tr '\n' ' ')"
+  t "source: anchor - the dispatcher binds exactly three token variables" eq "$(tokvar_names "$STRIPPED" | wc -l)" 3
+  t "source: LIMIT is assigned once as 50" eq "$(grep -cE '^LIMIT=50$' "$STRIPPED")" 1
+  t "source: the literal 50 appears exactly once (the LIMIT assignment)" eq "$(grep -cw '50' "$STRIPPED")" 1
+  t "source: the truncated test reads the same LIMIT via --argjson" src_has 'argjson limit "\$LIMIT"'
+  t "source: the audit URL template uses \$LIMIT" src_has 'limit=\$LIMIT&direction=desc'
 }
 
 # =============================================================================================
 # Group: wire (what actually reaches curl)
 # =============================================================================================
+# The wrapper's curl argv is a CLOSED vector: these ten tokens in this order, then the URL. A deny-list of known-bad
+# flags cannot see a duplicated -X, a glued -XPOST, --connect-to, -k or --config /dev/null; full equality does.
+EXP=(--disable --noproxy '*' -X GET -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config -)
+argv_equal() { # ARGV == EXP + one trailing URL element
+  local n=${#ARGV[@]} m=${#EXP[@]} i
+  [[ "$n" == "$((m + 1))" ]] || return 1
+  for ((i = 0; i < m; i++)); do [[ "${ARGV[$i]}" == "${EXP[$i]}" ]] || return 1; done
+}
 check_wire() { # $1 = subcommand
   local sub="$1" tok url a i got_x=0 got_redir=0 bad=0 tokleak=0 n
   tok=$(tok_of "$sub")
@@ -329,6 +426,8 @@ check_wire() { # $1 = subcommand
   WIRE_ROWS=$((WIRE_ROWS + 1))
   t "wire[$sub]: recorded argv is non-empty (anti-vacuity floor)" test "${#ARGV[@]}" -gt 0
   t "wire[$sub]: argv[1] is --disable" eq "${ARGV[0]:-}" "--disable"
+  t "wire[$sub]: recorded argv equals the closed vector (full equality, URL last)" argv_equal
+  t "wire[$sub]: the stub refused no flag (refusal log absent or empty)" test ! -s "$STUB/refusal.log"
   for ((i = 0; i < ${#ARGV[@]}; i++)); do
     a="${ARGV[$i]}"
     if [[ "$a" == "-X" && "${ARGV[$((i + 1))]:-}" == "GET" ]]; then got_x=1; fi
@@ -373,6 +472,17 @@ check_wire() { # $1 = subcommand
 }
 grp_wire() {
   local s
+  # closed-vector controls: the equality check itself is live
+  local -a keep=("${ARGV[@]}")
+  ARGV=("${EXP[@]}" "https://x")
+  t "wire control: the exact vector plus a URL is accepted" argv_equal
+  ARGV=(--disable --noproxy '*' -X GET -X GET -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "https://x")
+  tn "wire control: a duplicated -X is rejected" argv_equal
+  ARGV=(--disable --noproxy '*' -XPOST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "https://x")
+  tn "wire control: a glued -XPOST is rejected" argv_equal
+  ARGV=("${EXP[@]}")
+  tn "wire control: a vector with no URL is rejected" argv_equal
+  ARGV=("${keep[@]}")
   for s in "${SUBS[@]}"; do check_wire "$s"; done
   # must-pass non-canonical: a different zone id is substituted into the URL
   fixture 200 "$SSL_OK"
@@ -439,6 +549,36 @@ grp_refuse() {
   run "${ENVX[@]}" "CF_ACCOUNT_ID=XYZ" -- change-history
   t "refuse: non-hex CF_ACCOUNT_ID -> exit 64" eq "$RC" 64
   t "refuse: non-hex CF_ACCOUNT_ID -> curl never called" eq "$(ncalls)" 0
+  # --- the Doppler hint: an UNSET source names the one way to run it; a wrong value does not echo anything back ---
+  run "CF_ZONE_ID=$ZONE" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" -- ssl-mode
+  t "refuse: unset DOPPLER_* -> the message carries the fixed run-under hint" contains "$ERR" "run under: doppler run -p soleur -c prd_terraform --"
+  run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=dev" "CF_ZONE_ID=$ZONE" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" -- ssl-mode
+  tn "refuse: a wrong DOPPLER_CONFIG value is not echoed back" contains "$ERR" "dev"
+
+  # --- id shapes: the value is spliced into a URL path, so every near-miss is refused before any request ---
+  local idv idlabel idvar idcmd
+  for idvar in CF_ZONE_ID CF_ACCOUNT_ID; do
+    if [[ "$idvar" == CF_ZONE_ID ]]; then idcmd=ssl-mode; else idcmd=change-history; fi
+    for idlabel in "path-dot-dot:${ZONE}/.." "query:${ZONE}?q" "fragment:${ZONE}#" "hex31:${ZONE:0:31}" "hex33:${ZONE}0" "uppercase:${ZONE^^}" "trailing-newline:${ZONE}"$'\n' "slash:${ZONE}/x"; do
+      idv="${idlabel#*:}"
+      fixture 200 "$(ok_body "$idcmd")"
+      mkenv "$idvar"
+      run "${ENVX[@]}" "$idvar=$idv" -- "$idcmd"
+      REFUSE_ROWS=$((REFUSE_ROWS + 1))
+      t "refuse: $idvar ${idlabel%%:*} -> exit 64" eq "$RC" 64
+      t "refuse: $idvar ${idlabel%%:*} -> curl never called" eq "$(ncalls)" 0
+      tn "refuse: $idvar ${idlabel%%:*} -> no ok verdict" contains "$OUT" " ok"
+    done
+  done
+
+  # --- unknown-subcommand fuzz: whatever the name, exit 64 and curl is never invoked ---
+  local fz
+  for fz in api.cloudflare.com evil.example purge delete raw Ssl-Mode SSL-MODE '"ssl-mode"' "'ssl-mode'" 'ssl-mode;id' '$(id)' 'ssl-mode|raw' '*' 'ssl-*' '[s]sl-mode' '?sl-mode' 'ssl-mode ' ' ssl-mode' $'ssl-mode\n' 'ssl_mode' 'zones' '--' '-' '-h' 'help' 'status'; do
+    fixture 200 "$SSL_OK"
+    run "${BASE_ENV[@]}" -- "$fz"
+    REFUSE_ROWS=$((REFUSE_ROWS + 1))
+    t "refuse fuzz: name $(printf '%q' "$fz") -> exit 64 and curl never called" bash -c '[[ "$1" == 64 && "$2" == 0 ]]' _ "$RC" "$(ncalls)"
+  done
   t "refuse floor: at least 60 refusal rows were exercised (zero checked is RED)" test "$((REFUSE_ROWS * 3))" -ge 60
 }
 
@@ -514,6 +654,23 @@ grp_env() {
     tn "env[$s]: curl child sees no planted non-TLS canary" grep -q 'PLANTED_CANARY' "$STUB/env.log"
     tn "env[$s]: curl child sees no DOPPLER_* variable" grep -q 'DOPPLER_' "$STUB/env.log"
   done
+  # jq and date are children too. A planted $HOME/.jq that redefines a builtin runs inside jq with whatever environment
+  # jq was given; with the token in it, the canary below prints the token. The wrapper runs jq under `env -i`.
+  assert_fixture_dir "$HOMEDIR"
+  printf 'def test(re): ($ENV.%s | debug | true);\n' CF_API_TOKEN_ZONE_SETTINGS > "$HOMEDIR/.jq"
+  /usr/bin/env HOME="$HOMEDIR" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" /usr/bin/jq -nc '"a" | test("a")' > "$WORK/jqctl.txt" 2>&1
+  t "env[jq] control: the planted .jq canary DOES print the token when jq inherits the environment (the probe is live)" has_file "$WORK/jqctl.txt" "$TOK_Z"
+  /usr/bin/env -i HOME="$HOMEDIR" /usr/bin/jq -nc '"a" | test("a")' > "$WORK/jqctl2.txt" 2>&1
+  tn "env[jq] control: the same canary prints nothing under env -i" has_file "$WORK/jqctl2.txt" "$TOK_Z"
+  for s in "${SUBS[@]}"; do
+    printf 'def test(re): ($ENV.%s | debug | true);\n' "$(tokvar_of "$s")" > "$HOMEDIR/.jq"
+    fixture 200 "$(ok_body "$s")"
+    run "${BASE_ENV[@]}" -- "$s"
+    t "env[jq/$s]: with a planted \$HOME/.jq the run is still ok" eq "$L1" "cloudflare-readonly: $s ok"
+    t "env[jq/$s]: a planted \$HOME/.jq redefining test leaks no token to stdout or stderr" leak_scan "$WORK/comb.txt"
+    t "env[jq/$s]: the output is exactly the two-line ok contract" eq "$(printf '%s\n' "$OUT" | wc -l)" 2
+  done
+  rm -f "$HOMEDIR/.jq"
 }
 
 # =============================================================================================
@@ -558,6 +715,7 @@ status_cells() { # $1 = subcommand
     fi
     if [[ "$L1" == "cloudflare-readonly: $s "* ]]; then EXERCISED=$((EXERCISED + 1)); fi
     t "status[$s/$name]: curl called exactly once (no retry, no second token)" eq "$(ncalls)" 1
+    t "status[$s/$name]: the stub refused no flag" test ! -s "$STUB/refusal.log"
     t "leak[$s/$name]: stdout+stderr carry no token, canary, actor, IP or Bearer" leak_scan "$WORK/comb.txt"
     t "leak[$s/$name]: argv log carries no token or Authorization" bash -c '! grep -qaF -e "$2" -e "$3" -e "$4" -e Authorization "$1"' _ "$STUB/argv.bin" "$TOK_Z" "$TOK_R" "$TOK_A"
     if [[ "$name" == 403 || "$name" == 401 ]]; then
@@ -601,6 +759,17 @@ grp_xtrace() {
   run "DOPPLER_PROJECT=soleur" -- --list
   RUNFLAGS=()
   t "xtrace: anchor - --list under -x with NO token set is not refused" eq "$RC" 0
+  # every bound variable ALONE (the case-glob list is a union; a variable missing from it only shows when it is the only one set)
+  local xv
+  for xv in CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_AUDIT CF_API_TOKEN; do
+    fixture 200 "$SSL_OK"
+    RUNFLAGS=(-x)
+    run "$xv=$TOK_BARE" -- ssl-mode
+    RUNFLAGS=()
+    t "xtrace[$xv alone]: exit 78" eq "$RC" 78
+    t "xtrace[$xv alone]: no token in the trace output" leak_scan "$WORK/comb.txt"
+    t "xtrace[$xv alone]: curl never called" eq "$(ncalls)" 0
+  done
 }
 
 # =============================================================================================
@@ -610,75 +779,221 @@ json2() { printf '%s' "${OUT#*$'\n'}"; }
 jqe() { # jqe <jq filter> : exit status of jq -e on the projection
   json2 | jq -e "$1" > /dev/null
 }
+PROJ_ROWS=0
+# pr <subcommand> <body>: one projection run. The proj group floor counts THESE runs (not t/ok, which the floor backstops).
+pr() {
+  PROJ_ROWS=$((PROJ_ROWS + 1))
+  fixture 200 "$2"
+  run "${BASE_ENV[@]}" -- "$1"
+}
+# hostile <subcommand> <field label> <body> <jq assertion>: a canary-bearing value in ONE projected field is sanitized, never echoed.
+hostile() {
+  pr "$1" "$3"
+  t "proj[$1]: hostile $2 is sanitized in the output" jqe "$4"
+  t "proj[$1]: hostile $2 leaves no canary, token or vendor text anywhere" leak_scan "$WORK/comb.txt"
+}
+entry_body() { # id version last_updated ref ssl : each a JSON literal
+  jq -nc --argjson id "$1" --argjson ver "$2" --argjson lu "$3" --argjson ref "$4" --argjson ssl "$5" \
+    '{success:true,result:{id:$id,version:$ver,last_updated:$lu,rules:[{ref:$ref,enabled:true,action_parameters:{ssl:$ssl},expression:"x"}]}}'
+}
+ENTRY_VALID_ARGS=('"e1"' '"1"' '"2026-10-01T12:00:00Z"' '"r1"' '"flexible"')
+# entry_with <index 0-4> <json literal>: the valid entry body with one field replaced
+entry_with() {
+  local -a a=("${ENTRY_VALID_ARGS[@]}")
+  a[$1]="$2"
+  entry_body "${a[@]}"
+}
+page_body() { # id status ssl pattern : each a JSON literal
+  jq -nc --argjson id "$1" --argjson st "$2" --argjson ssl "$3" --argjson pat "$4" \
+    '{success:true,result:[{id:$id,status:$st,targets:[{target:"url",constraint:{operator:"matches",value:$pat}}],actions:[{id:"ssl",value:$ssl}]}]}'
+}
 grp_proj() {
   # ssl-mode
-  fixture 200 "$SSL_OK"
-  run "${BASE_ENV[@]}" -- ssl-mode
+  pr ssl-mode "$SSL_OK"
   t "proj[ssl-mode]: id/value/modified_on projected" jqe '.subcommand=="ssl-mode" and .id=="ssl" and .value=="strict" and .modified_on=="2026-10-01T12:00:00.000000Z"'
-  fixture 200 '{"success":true,"result":{"id":"ssl","value":"weird","modified_on":"2026-10-01T12:00:00Z"}}'
-  run "${BASE_ENV[@]}" -- ssl-mode
+  pr ssl-mode '{"success":true,"result":{"id":"ssl","value":"weird","modified_on":"2026-10-01T12:00:00Z"}}'
   t "proj[ssl-mode]: an unknown value prints as other" jqe '.value=="other"'
-  fixture 200 "$(jq -nc '{success:true,result:{id:"ssl",value:"strict\nevil",modified_on:"2026-10-01T12:00:00Z"}}')"
-  run "${BASE_ENV[@]}" -- ssl-mode
+  pr ssl-mode "$(jq -nc '{success:true,result:{id:"ssl",value:"strict\nevil",modified_on:"2026-10-01T12:00:00Z"}}')"
   t "proj[ssl-mode]: a value with an embedded newline prints as other (anchored regex)" jqe '.value=="other"'
-  fixture 200 '{"success":true,"result":{"value":"full"}}'
-  run "${BASE_ENV[@]}" -- ssl-mode
+  pr ssl-mode '{"success":true,"result":{"value":"full"}}'
   t "proj[ssl-mode]: a missing result.id prints as invalid" jqe '.value=="full" and .id=="invalid"'
-  fixture 200 '{"success":true,"errors":[]}'
-  run "${BASE_ENV[@]}" -- ssl-mode
-  t "proj[ssl-mode]: a body without result is bad-response" eq "$L1" "cloudflare-readonly: ssl-mode unverified - bad-response (jq exit 1)"
+  pr ssl-mode '{"success":true,"errors":[]}'
+  t "proj[ssl-mode]: a body without result is bad-response (shape), not a jq failure" eq "$L1" "cloudflare-readonly: ssl-mode unverified - bad-response (shape)"
 
   # config-entrypoint
-  fixture 200 "$ENTRY_OK"
-  run "${BASE_ENV[@]}" -- config-entrypoint
+  pr config-entrypoint "$ENTRY_OK"
   t "proj[config-entrypoint]: ok" eq "$L1" "cloudflare-readonly: config-entrypoint ok"
-  t "proj[config-entrypoint]: header fields and rule_count 3" jqe '.id=="entryid123" and .version=="7" and .last_updated=="2026-10-01T12:00:00.000000Z" and .rule_count==3'
+  t "proj[config-entrypoint]: header fields, rule_count 3, enabled_ssl_rules 2" jqe '.id=="entryid123" and .version=="7" and .last_updated=="2026-10-01T12:00:00.000000Z" and .rule_count==3 and .enabled_ssl_rules==2'
   t "proj[config-entrypoint]: rules in entrypoint order" jqe '[.rules[].ref]==["aaa111","dcb85b75bc3c4f4aa2a8c13a080bf854","ccc333"]'
   t "proj[config-entrypoint]: adopted rule enabled, ssl flexible, both hosts true" jqe '.rules[1].enabled==true and .rules[1].ssl=="flexible" and .rules[1].mentions_app_host==true and .rules[1].mentions_lb_staging_host==true'
   t "proj[config-entrypoint]: app.soleur.ai.evil does not set mentions_app_host" jqe '.rules[2].mentions_app_host==false and .rules[2].mentions_lb_staging_host==false'
   t "proj[config-entrypoint]: disabled rule keeps enabled false" jqe '.rules[0].enabled==false and .rules[0].ssl=="strict"'
+  t "proj[config-entrypoint]: only the allowed keys at the top" jqe '(keys|sort)==["enabled_ssl_rules","id","last_updated","rule_count","rules","subcommand","version"]'
   t "proj[config-entrypoint]: only the allowed keys per rule" jqe 'all(.rules[]; (keys|sort)==["enabled","mentions_app_host","mentions_lb_staging_host","ref","ssl"])'
   t "proj[config-entrypoint]: no expression or description text in any output" leak_scan "$WORK/comb.txt"
-  fixture 200 '{"success":true,"result":{"id":"e1","rules":[]}}'
-  run "${BASE_ENV[@]}" -- config-entrypoint
-  t "proj[config-entrypoint]: version absent prints null, empty rules count 0" jqe '.version==null and .rule_count==0 and .rules==[]'
-  fixture 200 '{"success":true,"result":{"id":"e1","last_updated":"2026-10-01T12:00:00Z"}}'
-  run "${BASE_ENV[@]}" -- config-entrypoint
+  pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":[]}}'
+  t "proj[config-entrypoint]: version absent prints null, empty rules count 0, enabled_ssl_rules 0" jqe '.version==null and .rule_count==0 and .enabled_ssl_rules==0 and .rules==[]'
+  pr config-entrypoint '{"success":true,"result":{"id":"e1","last_updated":"2026-10-01T12:00:00Z"}}'
   t "proj[config-entrypoint]: rules omitted -> rule_count 0 and ok" jqe '.rule_count==0'
-  fixture 200 '{"success":true,"result":{"id":"e1","rules":[{"ref":"$(touch pwn);x","enabled":true,"action_parameters":{"ssl":"evil\u001b[31m"},"expression":"x"}]}}'
-  run "${BASE_ENV[@]}" -- config-entrypoint
+  pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":[{"ref":"$(touch pwn);x","enabled":true,"action_parameters":{"ssl":"evil\u001b[31m"},"expression":"x"}]}}'
   t "proj[config-entrypoint]: a ref with shell metacharacters prints as invalid" jqe '.rules[0].ref=="invalid"'
   t "proj[config-entrypoint]: an unknown ssl value prints as other" jqe '.rules[0].ssl=="other"'
-  fixture 200 '{"success":true,"result":{"id":"e1","rules":"nope"}}'
-  run "${BASE_ENV[@]}" -- config-entrypoint
+  pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":"nope"}}'
   t "proj[config-entrypoint]: rules of the wrong type is bad-response" contains "$L1" "unverified - bad-response"
 
   # pagerules-ssl
-  fixture 200 "$PAGE_OK"
-  run "${BASE_ENV[@]}" -- pagerules-ssl
+  pr pagerules-ssl "$PAGE_OK"
   t "proj[pagerules-ssl]: counts" jqe '.active_rule_count==2 and .ssl_rule_count==1 and (.ssl_rules|length)==1'
   t "proj[pagerules-ssl]: ssl rule projected, matches_app_host true" jqe '.ssl_rules[0]=={id:"pr1",status:"active",target_count:1,ssl:"flexible",matches_app_host:true}'
   t "proj[pagerules-ssl]: URL patterns never printed" leak_scan "$WORK/comb.txt"
-  fixture 200 '{"success":true,"result":[]}'
-  run "${BASE_ENV[@]}" -- pagerules-ssl
+  pr pagerules-ssl '{"success":true,"result":[]}'
   t "proj[pagerules-ssl]: an empty list is ok with zero counts" jqe '.active_rule_count==0 and .ssl_rule_count==0 and .ssl_rules==[]'
 
   # change-history
-  fixture 200 "$(audit_body 3)"
-  run "${BASE_ENV[@]}" -- change-history
+  pr change-history "$(audit_body 3)"
   t "proj[change-history]: counts by action and resource type" jqe '.rows==3 and .by_action_type=={"token_create":2,"zone.ruleset_update":1} and .by_resource_type=={"token":3}'
   t "proj[change-history]: oldest/newest from action.time, not truncated" jqe '.oldest_time=="2026-11-01T10:00:00Z" and .newest_time=="2026-11-03T10:00:00Z" and .truncated==false'
   t "proj[change-history]: no actor, IP or raw row" leak_scan "$WORK/comb.txt"
-  fixture 200 "$(audit_body 50)"
-  run "${BASE_ENV[@]}" -- change-history
+  pr change-history "$(audit_body 50)"
   t "proj[change-history]: 50 rows -> truncated true" jqe '.rows==50 and .truncated==true'
-  fixture 200 "$(jq -nc '{success:true,result:[{action:{type:"Bad Type!",time:"yesterday"},resource:{type:"x y"}}]}')"
-  run "${BASE_ENV[@]}" -- change-history
+  pr change-history "$(jq -nc '{success:true,result:[{action:{type:"Bad Type!",time:"yesterday"},resource:{type:"x y"}}]}')"
   t "proj[change-history]: group keys and times are checked (invalid)" jqe '.by_action_type=={"invalid":1} and .by_resource_type=={"invalid":1} and .oldest_time==null'
-  fixture 200 '{"success":true,"result":[]}'
-  run "${BASE_ENV[@]}" -- change-history
+  pr change-history '{"success":true,"result":[]}'
   t "proj[change-history]: no rows is ok with rows 0" jqe '.rows==0 and .truncated==false'
+
+  # --- Records inputs (W2): the verdict rests on counts, not on the literal-substring host booleans ---
+  local ADOPTED='{"ref":"dcb85b75bc3c4f4aa2a8c13a080bf854","enabled":true,"action_parameters":{"ssl":"flexible"},"expression":"(http.host in {\"app.soleur.ai\" \"lb-staging.soleur.ai\"})"}'
+  entry_rules() { printf '{"success":true,"result":{"id":"e1","rules":[%s]}}' "$1"; }
+  pr config-entrypoint "$(entry_rules "$ADOPTED")"
+  t "records[B]: the adopted rule alone -> enabled_ssl_rules 1, rule_count 1" jqe '.enabled_ssl_rules==1 and .rule_count==1'
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"wild1","enabled":true,"action_parameters":{"ssl":"off"},"expression":"ends_with(http.host, \".soleur.ai\") EXPR_CANARY_W"}')"
+  t "records[B]: a wildcard ends_with SSL override -> enabled_ssl_rules 2 although it names neither host" jqe '.enabled_ssl_rules==2 and .rules[1].ssl=="off" and .rules[1].mentions_app_host==false and .rules[1].mentions_lb_staging_host==false'
+  t "records[B]: the wildcard rule's expression text is never printed" leak_scan "$WORK/comb.txt"
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"wild2","enabled":true,"action_parameters":{"ssl":"off"},"expression":"true"}')"
+  t "records[B]: an expression of literally true with ssl off -> enabled_ssl_rules 2" jqe '.enabled_ssl_rules==2 and .rules[1].mentions_app_host==false'
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"noenabled","action_parameters":{"ssl":"full"},"expression":"(http.host eq \"x.example\")"}')"
+  t "records[B]: a rule that omits enabled counts as enabled (!= false) -> enabled_ssl_rules 2, enabled true" jqe '.enabled_ssl_rules==2 and .rules[1].enabled==true'
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"offrule","enabled":false,"action_parameters":{"ssl":"off"},"expression":"true"}')"
+  t "records[B]: a disabled ssl rule is not counted -> enabled_ssl_rules 1, enabled false" jqe '.enabled_ssl_rules==1 and .rules[1].enabled==false'
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"nossl","enabled":true,"action_parameters":{"cache":true},"expression":"true"}')"
+  t "records[B]: an enabled rule with no ssl is not counted -> enabled_ssl_rules 1" jqe '.enabled_ssl_rules==1 and .rules[1].ssl==null'
+  pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"near","enabled":true,"action_parameters":{"ssl":"off"},"expression":"(http.host eq \"lb-staging.soleur.ai.evil\")"}')"
+  t "records[B]: a lb-staging.soleur.ai.evil near-miss does not set the host figure but still counts as an ssl rule" jqe '.enabled_ssl_rules==2 and .rules[1].mentions_lb_staging_host==false and .rules[1].mentions_app_host==false'
+  pr pagerules-ssl "$(page_body '"w1"' '"active"' '"off"' '"*soleur.ai/*"')"
+  t "records[C]: a wildcard *soleur.ai/* SSL page rule -> ssl_rule_count 1 although matches_app_host is false" jqe '.ssl_rule_count==1 and .ssl_rules[0].matches_app_host==false and .ssl_rules[0].ssl=="off"'
+  t "records[C]: the wildcard pattern text is never printed" leak_scan "$WORK/comb.txt"
+  pr pagerules-ssl '{"success":true,"result":[{"id":"two1","status":"active","targets":[{"target":"url","constraint":{"operator":"matches","value":"*other.example/*"}},{"target":"url","constraint":{"operator":"matches","value":"*app.soleur.ai/*"}}],"actions":[{"id":"ssl","value":"full"}]}]}'
+  t "records[C]: a two-target rule where only the SECOND matches -> any(), matches_app_host true, target_count 2" jqe '.ssl_rules[0].matches_app_host==true and .ssl_rules[0].target_count==2'
+  pr pagerules-ssl '{"success":true,"result":[{"id":"two2","status":"active","targets":[{"target":"url","constraint":{"operator":"matches","value":"*app.soleur.ai/*"}},{"target":"url","constraint":{"operator":"matches","value":"*other.example/*"}}],"actions":[{"id":"ssl","value":"full"}]}]}'
+  t "records[C]: a two-target rule where only the FIRST matches -> any(), matches_app_host true" jqe '.ssl_rules[0].matches_app_host==true and .ssl_rules[0].target_count==2'
+  pr pagerules-ssl '{"success":true,"result":[{"id":"two3","status":"active","targets":[{"target":"url","constraint":{"operator":"matches","value":"*lb-staging.soleur.ai.evil/*"}},{"target":"url","constraint":{"operator":"matches","value":"*other.example/*"}}],"actions":[{"id":"ssl","value":"off"}]}]}'
+  t "records[C]: a lb-staging.soleur.ai.evil near-miss target is an ssl rule (count 1), host figure false" jqe '.ssl_rule_count==1 and .ssl_rules[0].matches_app_host==false'
+
+  # --- timestamps: Z-suffixed RFC 3339 only, so string min/max ordering is sound ---
+  pr change-history '{"success":true,"result":[{"action":{"type":"a","time":"2026-11-01T10:00:00Z"},"resource":{"type":"t"}},{"action":{"type":"a","time":"2026-11-01T10:00:00.5Z"},"resource":{"type":"t"}},{"action":{"type":"a","time":"2026-11-01T09:59:59.999Z"},"resource":{"type":"t"}}]}'
+  t "proj[change-history]: newest_time orders a fractional second after the whole second (fraction-aware key)" jqe '.newest_time=="2026-11-01T10:00:00.5Z" and .oldest_time=="2026-11-01T09:59:59.999Z"'
+  pr change-history '{"success":true,"result":[{"action":{"type":"a","time":"2026-11-01T10:00:00+01:00"},"resource":{"type":"t"}}]}'
+  t "proj[change-history]: an offset-form time is not a Z timestamp and is excluded" jqe '.oldest_time==null and .newest_time==null'
+  pr ssl-mode '{"success":true,"result":{"id":"ssl","value":"strict","modified_on":"2026-10-01T12:00:00+01:00"}}'
+  t "proj[ssl-mode]: an offset-form modified_on prints invalid" jqe '.modified_on=="invalid"'
+
+  # --- hostile canary-bearing values in EACH projected field ---
+  hostile ssl-mode id '{"success":true,"result":{"id":"DESC_CANARY id!","value":"strict","modified_on":"2026-10-01T12:00:00Z"}}' '.id=="invalid" and .value=="strict"'
+  hostile ssl-mode value '{"success":true,"result":{"id":"ssl","value":"PATTERN_CANARY","modified_on":"2026-10-01T12:00:00Z"}}' '.value=="other"'
+  hostile ssl-mode modified_on '{"success":true,"result":{"id":"ssl","value":"strict","modified_on":"EXPR_CANARY_ts"}}' '.modified_on=="invalid"'
+  hostile config-entrypoint entry-id "$(entry_with 0 '"DESC_CANARY id"')" '.id=="invalid" and .version=="1"'
+  hostile config-entrypoint version "$(entry_with 1 '"EXPR_CANARY_v"')" '.version=="invalid"'
+  hostile config-entrypoint version-too-long "$(entry_with 1 '12345678901')" '.version=="invalid"'
+  hostile config-entrypoint last_updated "$(entry_with 2 '"EXPR_CANARY_lu"')" '.last_updated=="invalid"'
+  hostile config-entrypoint rule-ref "$(entry_with 3 '"PATTERN_CANARY ref"')" '.rules[0].ref=="invalid"'
+  hostile config-entrypoint rule-ssl "$(entry_with 4 '"PATTERN_CANARY"')" '.rules[0].ssl=="other"'
+  pr config-entrypoint "$(entry_with 1 '7')"
+  t "proj[config-entrypoint]: a numeric version prints as its decimal string" jqe '.version=="7"'
+  hostile pagerules-ssl rule-id "$(page_body '"PATTERN_CANARY id"' '"active"' '"flexible"' '"x"')" '.ssl_rules[0].id=="invalid"'
+  hostile pagerules-ssl status "$(page_body '"p1"' '"PATTERN_CANARY"' '"flexible"' '"x"')" '.ssl_rules[0].status=="other"'
+  hostile pagerules-ssl ssl "$(page_body '"p1"' '"active"' '"PATTERN_CANARY"' '"x"')" '.ssl_rules[0].ssl=="other"'
+  hostile change-history action-type '{"success":true,"result":[{"action":{"type":"ACTOR_CANARY","time":"2026-11-01T10:00:00Z"},"resource":{"type":"token"}}]}' '.by_action_type=={"invalid":1} and .by_resource_type=={"token":1}'
+  hostile change-history resource-type '{"success":true,"result":[{"action":{"type":"token_create","time":"2026-11-01T10:00:00Z"},"resource":{"type":"EXPR_CANARY_rt"}}]}' '.by_resource_type=={"invalid":1} and .by_action_type=={"token_create":1}'
+  hostile change-history action-time '{"success":true,"result":[{"action":{"type":"a","time":"EXPR_CANARY_t"},"resource":{"type":"t"}}]}' '.oldest_time==null and .newest_time==null'
 }
+
+# =============================================================================================
+# Group: shape (the three bad-response reasons are distinct and value-free)
+# =============================================================================================
+grp_shape() {
+  local s
+  for s in "${SUBS[@]}"; do
+    fixture 200 '{"success":true,"result":null}'
+    run "${BASE_ENV[@]}" -- "$s"
+    t "shape[$s]: a well-formed body of the wrong shape -> bad-response (shape), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response (shape)|14"
+    fixture 200 ''
+    run "${BASE_ENV[@]}" -- "$s"
+    t "shape[$s]: an empty body -> bad-response (shape), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response (shape)|14"
+    fixture 200 "<html>$CANARY_BODY"
+    run "${BASE_ENV[@]}" -- "$s"
+    t "shape[$s]: unparseable JSON -> bad-response (jq exit <n>) for a real non-zero jq exit, exit 14" bash -c '[[ "$1|$2" =~ ^cloudflare-readonly:\ $3\ unverified\ -\ bad-response\ \(jq\ exit\ [1-9][0-9]*\)\|14$ ]]' _ "$L1" "$RC" "$s"
+    t "shape[$s]: the unparseable body is not echoed" leak_scan "$WORK/comb.txt"
+    fixture 200 "\"$CANARY_BODY\""
+    run "${BASE_ENV[@]}" -- "$s"
+    t "shape[$s]: a JSON string body -> a real jq failure keeps (jq exit <n>)" bash -c '[[ "$1|$2" =~ ^cloudflare-readonly:\ $3\ unverified\ -\ bad-response\ \(jq\ exit\ [1-9][0-9]*\)\|14$ ]]' _ "$L1" "$RC" "$s"
+    fixture abc "$(ok_body "$s")"
+    run "${BASE_ENV[@]}" -- "$s"
+    t "shape[$s]: a non-numeric status stays plain bad-response" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response|14"
+  done
+}
+
+# =============================================================================================
+# Group: tools (preflight of /usr/bin/jq and /usr/bin/date; the date failure message names only what was measured)
+# =============================================================================================
+make_variant() { # <name> <sed expression> : sets SUTX to a changed copy of the sandbox wrapper; fails when nothing changed
+  local v="$WORK/var.$1.sh"
+  assert_fixture_dir "$WORK"
+  sed "$2" "$SUTC" > "$v"
+  chmod +x "$v"
+  if cmp -s "$SUTC" "$v"; then return 1; fi
+  SUTX="$v"
+}
+grp_tools() {
+  local s
+  assert_fixture_dir "$STUB"
+  if make_variant nojq 's|/usr/bin/jq|/nonexistent/jq|g'; then
+    for s in "${SUBS[@]}"; do
+      fixture 200 "$(ok_body "$s")"
+      run "${BASE_ENV[@]}" -- "$s"
+      t "tools[$s]: no jq -> unverified - no-tool (jq), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - no-tool (jq)|14"
+      t "tools[$s]: no jq -> curl never called (the preflight runs before any request)" eq "$(ncalls)" 0
+    done
+  else
+    vno "tools: the no-jq variant could not be built (no /usr/bin/jq in the wrapper)"
+  fi
+  if make_variant nodate 's|/usr/bin/date|/nonexistent/date|g'; then
+    fixture 200 "$(ok_body change-history)"
+    run "${BASE_ENV[@]}" -- change-history
+    t "tools[change-history]: no date -> unverified - no-tool (date), exit 14" eq "$L1|$RC" "cloudflare-readonly: change-history unverified - no-tool (date)|14"
+    t "tools[change-history]: no date -> curl never called" eq "$(ncalls)" 0
+    fixture 200 "$SSL_OK"
+    run "${BASE_ENV[@]}" -- ssl-mode
+    t "tools[ssl-mode]: no date is irrelevant to a subcommand that never calls date" eq "$L1" "cloudflare-readonly: ssl-mode ok"
+  else
+    vno "tools: the no-date variant could not be built (no /usr/bin/date in the wrapper)"
+  fi
+  printf '#!/bin/bash\necho garbage\n' > "$STUB/fakedate_all"
+  printf '#!/bin/bash\nif [[ " $* " == *" -d "* ]]; then echo garbage; else exec /usr/bin/date "$@"; fi\n' > "$STUB/fakedate_rel"
+  chmod +x "$STUB/fakedate_all" "$STUB/fakedate_rel"
+  local fd
+  for fd in fakedate_all fakedate_rel; do
+    if make_variant "$fd" "s|/usr/bin/env -i /usr/bin/date|/usr/bin/env -i $STUB/$fd|g"; then
+      fixture 200 "$(ok_body change-history)"
+      run "${BASE_ENV[@]}" -- change-history
+      t "tools[$fd]: a date that yields no valid stamp -> exit 64, curl never called" eq "$RC|$(ncalls)" "64|0"
+      t "tools[$fd]: the message names only what was measured" eq "$ERR" "cloudflare-readonly: refused: date produced no valid UTC stamp"
+    else
+      vno "tools: the $fd variant could not be built"
+    fi
+  done
+  SUTX=""
+}
+
 
 # =============================================================================================
 # Run the groups
@@ -686,12 +1001,28 @@ grp_proj() {
 if [[ "$SANDBOX_OK" != 1 ]]; then
   vno "sandbox: the CURL=/usr/bin/curl rewrite did not match exactly once - nothing can be exercised"
 fi
-for g in source wire refuse token env status xtrace proj; do
+# selftest is the no() negative control's child: it runs ONLY when asked for by name, never under `all`.
+grp_selftest() {
+  printf 'SCRATCH=%s\n' "$WORK"
+  vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
+}
+PROJ_FLOOR=46
+for g in source wire refuse token env status xtrace proj shape tools selftest; do
+  if [[ "$g" == selftest ]]; then
+    [[ "$SELECT" == selftest ]] || continue
+  fi
   if want "$g"; then
     if [[ "$SANDBOX_OK" != 1 && "$g" != source ]]; then continue; fi
     "grp_$g"
   fi
 done
+# The proj floor sits OUTSIDE the group loop and reports with printf+exit: a loop that no longer runs proj cannot
+# also skip the check that proves it ran, and the counter is bumped by pr(), not by the t/ok path the floor backstops.
+if want proj && [[ "$SANDBOX_OK" == 1 ]] && [[ "$PROJ_ROWS" -lt "$PROJ_FLOOR" ]]; then
+  printf 'FAIL - proj floor: %s projection runs executed, need at least %s (the proj group did not run)\n' "$PROJ_ROWS" "$PROJ_FLOOR"
+  printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$((fail + 1))" "$asserted"
+  exit 1
+fi
 
 # =============================================================================================
 # Group: wirefloor harness row + mutation battery (never in the inner child)
@@ -699,6 +1030,9 @@ done
 mut_n=0
 MUT_CAUGHT=0
 MUT_TOTAL=0
+MUT_MAXFAIL=45
+CONTROL_BAD=0
+LAUNCH_SUITE="$SELF"
 PEND_KIND=() PEND_LABEL=() PEND_EXPECT=() PEND_DIR=()
 MAXJOBS=8
 # launch <kind> <label> <expect> <dir> <groups> [NAME=value...]: start the child suite in the background.
@@ -707,56 +1041,136 @@ launch() {
   shift 5
   assert_fixture_dir "$d"
   while [[ "$(jobs -rp | wc -l)" -ge "$MAXJOBS" ]]; do wait -n; done
-  ( /usr/bin/env CF_RO_TEST_INNER=1 "CF_RO_SUT=$d/cf.sh" "CF_RO_GROUPS=$groups" "$@" bash "$SELF" > "$d/out" 2>&1; printf '%s' "$?" > "$d/rc" ) &
+  ( /usr/bin/env CF_RO_TEST_INNER=1 "CF_RO_TESTDIR=$TESTDIR" "CF_RO_SUT=$d/cf.sh" "CF_RO_GROUPS=$groups" "$@" bash "$LAUNCH_SUITE" > "$d/out" 2>&1; printf '%s' "$?" > "$d/rc" ) &
   PEND_KIND+=("$kind")
   PEND_LABEL+=("$label")
   PEND_EXPECT+=("$expect")
   PEND_DIR+=("$d")
 }
+# edit_once <file> <from> <to> <label>: apply ONE literal edit to a copy of the file. Returns 1 (after a failing row) unless the
+# anchor matched exactly once, the result differs from the original, and `bash -n` accepts it.
+edit_once() {
+  local file="$1" from="$2" to="$3" label="$4" dst="$5"
+  local src new tmp cnt
+  src=$(<"$file")
+  tmp="${src//"$from"/}"
+  cnt=$(((${#src} - ${#tmp}) / ${#from}))
+  if [[ "$cnt" != 1 ]]; then
+    vno "mutate[$label]: anchor matched $cnt times, need exactly 1 - the row measured nothing"
+    return 1
+  fi
+  new="${src/"$from"/"$to"}"
+  printf '%s\n' "$new" > "$dst"
+  if cmp -s "$file" "$dst"; then vno "mutate[$label]: the edit did not change the file"; return 1; fi
+  if ! bash -n "$dst"; then vno "mutate[$label]: the mutant does not parse - the edit is broken, not caught"; return 1; fi
+  return 0
+}
 mutate() { # mutate <label> <expected-failing-row-substring> <groups> <from> <to>
   local label="$1" expect="$2" groups="$3" from="$4" to="$5"
-  local d src new tmp cnt
+  local d
   mut_n=$((mut_n + 1))
   MUT_TOTAL=$((MUT_TOTAL + 1))
   d="$WORK/mut.$mut_n"
   assert_fixture_dir "$d"
   mkdir -p "$d"
   cp "$PROD" "$d/cf.sh"
-  src=$(<"$PROD")
-  tmp="${src//"$from"/}"
-  cnt=$(((${#src} - ${#tmp}) / ${#from}))
-  if [[ "$cnt" != 1 ]]; then
-    vno "mutate[$label]: anchor matched $cnt times, need exactly 1 - the row measured nothing"
-    return
-  fi
-  new="${src/"$from"/"$to"}"
-  assert_fixture_dir "$d"
-  printf '%s\n' "$new" > "$d/cf.sh"
-  if cmp -s "$PROD" "$d/cf.sh"; then vno "mutate[$label]: the edit did not change the file"; return; fi
-  if ! bash -n "$d/cf.sh"; then vno "mutate[$label]: the mutant does not parse - the edit is broken, not caught"; return; fi
+  edit_once "$PROD" "$from" "$to" "$label" "$d/cf.sh" || return
+  LAUNCH_SUITE="$SELF"
   launch mut "$label" "$expect" "$d" "$groups"
+}
+# mutate_suite: the same, applied to a copy of THIS file (a guard in the suite itself). The wrapper stays pristine.
+mutate_suite() { # mutate_suite <kind> <label> <expect> <groups> <from> <to>
+  local kind="$1" label="$2" expect="$3" groups="$4" from="$5" to="$6"
+  local d
+  mut_n=$((mut_n + 1))
+  MUT_TOTAL=$((MUT_TOTAL + 1))
+  d="$WORK/mut.$mut_n"
+  assert_fixture_dir "$d"
+  mkdir -p "$d"
+  cp "$PROD" "$d/cf.sh"
+  cp "$SELF" "$d/suite.sh"
+  edit_once "$SELF" "$from" "$to" "$label" "$d/suite.sh" || return
+  LAUNCH_SUITE="$d/suite.sh"
+  launch "$kind" "$label" "$expect" "$d" "$groups"
+  LAUNCH_SUITE="$SELF"
 }
 # collect: wait for every child, then judge each in launch order.
 collect() {
-  local i kind label expect d irc
+  local i kind label expect d irc nfail sp
   wait
   for ((i = 0; i < ${#PEND_DIR[@]}; i++)); do
     kind="${PEND_KIND[$i]}" label="${PEND_LABEL[$i]}" expect="${PEND_EXPECT[$i]}" d="${PEND_DIR[$i]}"
     assert_fixture_dir "$d"
+    if [[ ! -s "$d/rc" ]]; then
+      vno "$label: the child left no exit status (crashed or killed) - no verdict"
+      if [[ "$kind" == pass ]]; then CONTROL_BAD=1; fi
+      continue
+    fi
     irc=$(<"$d/rc")
     grep -F 'FAIL - ' "$d/out" > "$d/failed" || true
+    nfail=$(sort -u "$d/failed" | wc -l)
+    sp=$(sed -n 's/^SCRATCH=//p' "$d/out" | head -n 1)
     case "$kind" in
-      pass) t "$label" eq "$irc" 0 ;;
+      pass)
+        t "$label" eq "$irc" 0
+        if [[ "$irc" != 0 ]]; then CONTROL_BAD=1; fi
+        ;;
       blind) t "$label" bash -c '[[ "$1" != 0 ]] && grep -qF "$3" "$2"' _ "$irc" "$d/failed" "$expect" ;;
-      mut)
-        if [[ "$irc" == 0 ]]; then
-          vno "mutate[$label]: the mutant passed the suite (NOT caught)"
-        elif grep -qF -- "$expect" "$d/failed"; then
-          MUT_CAUGHT=$((MUT_CAUGHT + 1))
-          vok "mutate[$label]: caught by row containing '$expect'"
-        else
-          vno "mutate[$label]: reddened, but not by the named row '$expect'"
+      negctl)
+        # the no() negative control: a child with a deliberately failing assertion exits non-zero AND its scratch dir is gone
+        t "$label: exits non-zero with the FAIL line" bash -c '[[ "$1" != 0 ]] && grep -qF "$3" "$2"' _ "$irc" "$d/failed" "$expect"
+        t "$label: its scratch directory was removed by the trap" bash -c '[[ -n "$1" && ! -e "$1" ]]' _ "$sp"
+        ;;
+      *)
+        if [[ "$CONTROL_BAD" == 1 ]]; then
+          vno "mutate[$label]: the pristine controls are not green - this verdict is void"
+          continue
         fi
+        if ! grep -qF ' passed, ' "$d/out"; then
+          vno "mutate[$label]: the child never reached its accounting line (a crash, not a catch)"
+          continue
+        fi
+        case "$kind" in
+          mut)
+            if [[ "$irc" == 0 ]]; then
+              vno "mutate[$label]: the mutant passed the suite (NOT caught)"
+            elif ! grep -qF -- "$expect" "$d/failed"; then
+              vno "mutate[$label]: reddened, but not by the named row '$expect'"
+            elif [[ "$nfail" -gt "$MUT_MAXFAIL" ]]; then
+              vno "mutate[$label]: $nfail distinct rows failed (bound $MUT_MAXFAIL) - a wholesale break, not a targeted catch"
+            else
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: caught by row containing '$expect' ($nfail distinct failing rows)"
+            fi
+            ;;
+          invert)
+            # a mutated suite whose negative control would go RED: the child exits 0 although it printed the deliberate FAIL
+            if [[ "$irc" == 0 ]] && grep -qF -- "$expect" "$d/failed"; then
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: caught - the failing child exited 0, so the negative control reds"
+            else
+              vno "mutate[$label]: the mutated suite still exits non-zero on a failing assertion (NOT caught)"
+            fi
+            ;;
+          negscratch)
+            if [[ -n "$sp" && -e "$sp" ]]; then
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: caught - the scratch directory survived, so the scratch control reds"
+              case "$sp" in "$REPO_ROOT"/.cf-readonly-test.?*) rm -rf -- "${sp:?}" ;; esac
+            else
+              vno "mutate[$label]: the scratch directory was still removed (NOT caught)"
+            fi
+            ;;
+          suitemut)
+            # a mutated suite: judged exactly like a wrapper mutant, but the named row is a row of the suite itself
+            if [[ "$irc" != 0 ]] && grep -qF -- "$expect" "$d/failed" && [[ "$nfail" -le "$MUT_MAXFAIL" ]]; then
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: caught by row containing '$expect' ($nfail distinct failing rows)"
+            else
+              vno "mutate[$label]: the mutated suite was not caught by '$expect' (rc $irc, $nfail failing rows)"
+            fi
+            ;;
+        esac
         ;;
     esac
   done
