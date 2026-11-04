@@ -31,6 +31,7 @@ sentence):
 | Never edited | `updated_at` equals `created_at`; an edit is a revocation, the operator re-records instead | `edited` |
 | Quote | under the line `Operator instruction, verbatim`, a blockquote (lines starting `>`) of at least 40 bytes, not counting the two `Question shown:` / `Operator answer:` labels: the EXACT question shown plus the operator's answer, so a bare "Yes" is never the whole quote | `no-quote`, `quote-too-short` |
 | Confirmation | exactly one `**Confirmation:**` line whose text starts with the word `Yes` (the option label or the free-text reply, as the calling skill received it); a No, a maybe or any other answer is never a delegation | `no-confirmation` |
+| Method | optional: at most one `**Method:**` line whose value is exactly `tty-ack` (the operator typed the answer in a terminal session); it is a label for how the answer was given and never selects a lighter check, so a record with it and one without it get the same verdict, and any other value (including `web-session`, which only the web app's own record can carry) is refused. Any line that claims a method (indented, quoted, bulleted, numbered, a heading, in any letter case, or with the colon inside or outside the bold) is counted, so a second claim or a differently written one is refused too; text a renderer hides (an HTML comment) is not a claim | `method-unknown` |
 | Scope | numbered items, each an act class; an item that names an exact command embeds it in backticks and names the command's target in words (section 2, scope binding) | `no-scope-item` |
 | Excluded | exactly one `**Excluded (still operator-only):**` paragraph, equal to the fixed sentence in section 5 after whitespace is normalised | `excluded-incomplete` |
 | Expiry | exactly one `**Expiry:**` line with an ISO date no later than the comment's creation date plus 30 days, not in the past; the epic closing also ends it | `expiry-missing`, `expiry-too-long`, `expired`, `epic-closed` |
@@ -87,7 +88,7 @@ question and received a `Yes` answer. The CTO agent never runs `render` and neve
 verifier says about an earlier one. The calling skill never hand-writes the record either. It writes the question it showed
 (with the Scope items and the expiry date filled in), the operator's answer and the Scope items to files, runs
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh" render --epic <N> --question-file <f> --answer-file <f>
---scope-file <f> --expiry <ISO date>`, posts the output with `gh issue comment <N> --body-file`, and reads the comment
+--scope-file <f> --expiry <ISO date> [--method tty-ack]`, posts the output with `gh issue comment <N> --body-file`, and reads the comment
 straight back through `delegation-verify.sh verify`. `render` refuses an answer that does not start with `Yes`, an answer
 longer than 600 characters (the answer is published word for word on the issue) and an answer or question that looks like a
 password or key. A record that does not verify is deleted and the epic stays on today's behaviour.
@@ -280,6 +281,8 @@ I will only come back to you for money, what is in or out of scope, how it looks
 
 Yes writes the record (section 1). No keeps today's behaviour: ask once, naming the action, at each operator-class step.
 
+How a terminal session puts this question (typed answers, no default, what to say at a step that needs the browser) is in [approval-card.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/approval-card.md). When the operator typed the answer in a terminal session, the calling skill passes `--method tty-ack` to `render`.
+
 ### Stall sentences
 
 One plain sentence in the session for every stall, in addition to any issue filed.
@@ -350,6 +353,7 @@ source of these sentences; other documents point here and do not restate them.
 | `no-quote` | Your standing approval does not show your own words, so I have not used it. Please confirm it again. |
 | `quote-too-short` | Your standing approval shows too little of what you actually said to prove what you agreed, so I have not used it. Please confirm it again. |
 | `no-confirmation` | Your standing approval does not show a clear Yes from you, so I have not used it. Please confirm it again. |
+| `method-unknown` | Your standing approval names a way of answering that I do not recognise, so I have not used it. Please confirm it again. |
 | `no-scope-item` | Your standing approval does not list what I may do, or does not list the step I am about to take, so I have not done it. |
 | `excluded-incomplete` | Your standing approval does not carry the exact list of things I may never do for you, so I have not used it. Please confirm it again. |
 | `expiry-missing` | Your standing approval has no valid end date, so I have not used it. Please confirm it again. |

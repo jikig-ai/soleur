@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1251
-# generated-at=2026-11-03T20:31:14Z
+# default-weight-ms=1239
+# generated-at=2026-11-04T02:27:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -167,6 +167,7 @@ plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	7
+plugins/soleur/test/approval-card-wording.test.sh	6
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1
@@ -414,10 +415,10 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	5
 scripts/followthroughs/discord-blog-webhook-fallback	4
 scripts/followthroughs/dispatch-recovery-sweeper-11211	3
 scripts/followthroughs/inngest-bs-token-restage-7596	3
+scripts/followthroughs/inngest-cli-apply-window-7463	3
 scripts/followthroughs/inngest-hostmetrics-trim-11602	7
 scripts/followthroughs/inngest-luks-keeper-dark-11265	6
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
-scripts/followthroughs/inngest-trace-retention-5150	1
 scripts/followthroughs/parked-green-synthesis-11362	4
 scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4

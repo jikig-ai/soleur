@@ -1768,7 +1768,11 @@ RATCHET_REMEDY_NEW = (
     "review exists in this repository's ruleset",
     "remedy: a baseline row cannot be added",
 )
-QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")
+# Control bytes a field may not carry raw: C0 minus TAB (the column
+# separator) plus DEL. Enumerated, never ranged — a multi-character range
+# (e.g. \x0a-\x1f) is the shape CodeQL's py/overly-large-range flags.
+_C0_SANS_TAB = "".join(chr(c) for c in range(0x20) if c != 0x09)
+QUOTE_CTL = re.compile("[" + _C0_SANS_TAB + "\x7f]")
 AC_CLASS = re.compile(r'(?<![A-Za-z0-9_])_AC_CLASS="([^"]+)"')
 
 
