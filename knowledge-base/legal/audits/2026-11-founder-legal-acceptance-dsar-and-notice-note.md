@@ -29,7 +29,7 @@ Scope: tables `legal_acceptance` and `legal_reauth_event` (migration 184). Data 
 
 - *Account still exists.* Request is sent from the email address on the account. Jikigai reads the founder's rows through the database owner role by user id and sends them, including `requested_edit` and the time and choice of each decision. Statutory clock and handling: `knowledge-base/legal/statutory-response-catalog.md#dsar`. The founder can also see their own `legal_acceptance` rows in the product once PR-C is live (the row-level policy allows it); the email route is the fallback and the route for `legal_reauth_event`, which the founder cannot read.
 - *Account already deleted.* The row carries only a uuid. Jikigai cannot assume that a requester is the person behind it. The requester is asked to give the user id or other facts that tie the request to the account (for example, the date of the decision and the text concerned); Jikigai matches against the `text_hash` and `created_at` and confirms identity with additional information under Art. 12(6). If matching is not possible, Jikigai says so in reply and relies on Art. 11. Whether this is adequate is a counsel question (item 17(d)).
-- *Content of the copy.* The row fields in the Art. 30 register (c) list, without the checksum (it is an internal integrity value; supplied if asked).
+- *Content of the copy.* The `legal_acceptance` row fields in the Art. 30 register (c) list, without the checksum (it is an internal integrity value; supplied if asked), plus any `legal_reauth_event` rows still held for the user (the same list, less the code, which is never stored).
 
 ## (b) Erasure-reply wording block (proposed)
 
@@ -39,17 +39,17 @@ To be used in the reply to an account-deletion or Art. 17 request from a founder
 >
 > We have deleted your account and the data linked to it, with one exception. When you accepted, declined or asked for changes to a legal text, we recorded that decision. That record stays after your account is gone.
 >
-> **What is kept.** For each decision: an identifier of your account (a random number; it does not contain your name or email address), the name and version of the text, a fingerprint of the exact text, your choice, the time, and, if you asked for changes, the note you wrote (up to 1000 characters). [If the answer concerns the sign-in code table: short-lived records of the email code requests are kept for [period]; they contain no code.]
+> **What is kept.** For each decision: an identifier of your account (a random number; it does not contain your name or email address), the name and version of the text, a fingerprint of the exact text, your choice, the time, an identifier of the sign-in session you decided in, when you confirmed the emailed code (if you accepted), a checksum of the record, and, if you asked for changes, the note you wrote (up to 1000 characters). [If the answer concerns the sign-in code table: short-lived records of the email code requests are kept for [period]; they contain no code.]
 >
 > **Why.** We need to be able to show later what was decided on which text, in case a legal claim arises. This is a legitimate interest of ours (Article 6(1)(f) GDPR) and the law allows keeping data needed for legal claims even after an erasure request (Article 17(3)(e) GDPR). Because the identifier is not anonymous (someone who holds other records of ours could link it to you), we treat it as personal data.
 >
 > **For how long.** [Period to be confirmed by counsel. Proposed: for as long as the text is in force, plus 5 years, and no more than 10 years in total.]
 >
-> **Who can see it.** Access is limited to the database administrator role and to the Jikigai service that checks whether a decision was made before a legal step goes ahead (it reads the status, not your note); it is not shown to anyone else.
+> **Who can see it.** Access is limited to the database administrator role and, once it is switched on, to the Jikigai service that checks whether a decision was made before a legal step goes ahead (it reads the status, not your note); it is not shown to anyone else.
 >
 > **Your rights.** You can object to this processing on grounds relating to your situation (Article 21 GDPR); we will tell you our decision. You can ask us what we hold (Article 15 GDPR) by writing to legal@jikigai.com. You can also complain to the CNIL (Commission Nationale de l'Informatique et des Libertés, <https://www.cnil.fr>) or to your own data protection authority.
 
-Notes for the person answering: do not describe the identifier as anonymous; do not say the record is deleted; do not quote the retention figure until counsel has decided it; if the founder wrote a note, say that it is part of what is kept.
+Notes for the person answering: do not describe the identifier as anonymous; do not say the record is deleted; do not quote the retention figure until counsel has decided it; if the founder wrote a note, say that it is part of what is kept; the block says "with one exception" about this record, so reconcile it with any other data Jikigai keeps for that account (for example records kept under a legal obligation, per the Privacy Policy) before sending.
 
 ## (c) Notice for the Request changes field (exact text, proposed)
 
@@ -58,6 +58,16 @@ Shown directly above or below the text box, before the founder types. Plain word
 > **Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept even if you later delete your account.**
 
 Constraints the screen (PR-C) must match: counter or hard stop at 1000 characters; the stored note is trimmed; the field is empty-not-allowed for Request changes and absent for Yes and No (migration checks); the notice is visible without scrolling or clicking.
+
+## (c-2) Card-level notice (proposed)
+
+The Request changes notice in (c) covers one field. Art. 13 information is also owed at the point the decision is made, for every choice, and the LIA (Balancing iii) relies on the founder being told what is kept before deciding. Proposed wording, shown on the card above the choices:
+
+> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for [period to be confirmed by counsel]. You can ask what we hold or object by writing to legal@jikigai.com, and you can complain to the CNIL.**
+
+Not approved for display until counsel has decided the retention period. Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
+
+---
 
 ## (d) Are Privacy Policy, Data Protection Disclosure and GDPR Policy updates owed in this PR?
 

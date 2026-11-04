@@ -39,7 +39,7 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 ## 2. What is NOT attested
 
 - **That any property holds in production.** Nothing was measured on a running system for this record. The behaviour tests in the PR are the engineering evidence; they are not an attestation of legal sufficiency.
-- **That the checksum is an external anchor.** It is not. A holder of database-owner or `service_role` access could rewrite a row and its checksum, and the check would still pass. The external anchor is deferred and not built.
+- **That the checksum is an external anchor.** It is not. A holder of database-owner access could rewrite a row and its checksum, and the check would still pass (`service_role` holds no table privilege and cannot; a holder of the service key can stamp an intent as confirmed but still needs a founder web-session token to record). The external anchor is deferred and not built.
 - **That the record would be accepted as evidence** by any court, counterparty or authority. No view is taken on evidential weight or on formal validity of an acceptance given in this way.
 - **That the retention period is lawful.** The life of the instrument plus 5 years, cap 10 years, is an unconfirmed proposal. No deletion path exists to apply it.
 - **That keeping the row after erasure is lawful** under Art. 17(3)(e) and Art. 6(1)(f). Proposed basis only.
@@ -52,13 +52,13 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 
 ## 3. Residuals carried
 
-1. Checksum is not an anchor; database-owner and `service_role` holders can rewrite a row and its hash.
+1. Checksum is not an anchor; a database-owner holder can rewrite a row and its hash (a `service_role` holder cannot, but can stamp an intent as confirmed).
 2. A holder of production credentials can mint a founder session.
 3. Pseudonymous uuid is linkable through other stores until they age out.
 4. The note can carry personal data and cannot be removed alone on erasure.
 5. Intent and challenge rows are kept past their 30-minute life (purged after 30 days, when the next challenge is requested) and past erasure.
 6. Database backup retention is unmeasured.
-7. After erasure, access is limited to the database owner role by policy, not by a technical bar.
+7. After erasure, access is limited to the database owner role (plus the read-only check function, which never returns the note) by policy, not by a technical bar.
 
 ## 4. Open counsel items
 
@@ -78,7 +78,7 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 - [ ] The LIA exists (done by the file named above) and its balancing outcome is accepted.
 - [ ] ADR-319 exists and its three stated properties, its residual-risk list and its Decision text agree with the nine design properties above; any difference is corrected here, not in the ADR alone.
 - [ ] The `DSAR_TABLE_EXCLUSIONS` entry for both tables is in the code.
-- [ ] The notice text for the Request changes field is in the screen (PR-C), word for word from the DSAR and notice note.
+- [ ] The notice text for the Request changes field and the card-level notice (parts (c) and (c-2) of the DSAR and notice note) are in the screen (PR-C), word for word.
 - [ ] The erasure reply wording is available to whoever answers an erasure request.
 
 ## 6. Counsel sign-off
@@ -94,6 +94,8 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 | Signature | |
 
 *Left blank deliberately. No reviewer and no date are recorded by the drafter.*
+
+*The in-repo v1 CLO-agent review of this record and its sibling artifacts is `knowledge-base/legal/audits/2026-11-counsel-review-12011.md`. It is not external counsel and does not fill this block.*
 
 ---
 

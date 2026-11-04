@@ -43,7 +43,7 @@ Forces:
   secret holder cannot forge.
 - **Option E: a signed file in the repository.** Rejected. The key would be reachable by the process the record exists to constrain.
 - **Option F: an unkeyed hash chain now.** Rejected. A service-role holder can recompute an unkeyed chain end to end. A per-row checksum is kept; a chain and an external
-  anchor are deferred (no issue tracks them yet; this record and the plan are the place they are deferred).
+  anchor are deferred (tracked in #12080; this record and the plan are where the positions are documented).
 - **Option G: a request table the agent fills (`request_legal_acceptance`).** Rejected by the CTO ruling of 2026-11-03: a text can only be requested from a committed
   registry file, so there is no request row to forge.
 - **Option H: let any signed-in founder token record Decline or Request changes with no server step.** Rejected by the CTO ruling of 2026-11-04 (review of this PR): the
