@@ -353,7 +353,7 @@ residuals are unchanged.
     address output-borne injection, so the output constraints above still apply.
   - Legal and security review before it merges, including the DPIA addendum 12.6 re-screen (t6, t7) with C1 to C7 re-confirmed; the
     wording of any changed member disclosure (C6) is prepared and reviewed by the CLO and signed off by the human operator at
-    flag-on, with the publication-order check in #11237 (DPIA addendum 13.4). The absence test,
+    flag-on, with the pre-flip publication-order check (DPIA addendum 13.4). The absence test,
     its expected sets and this amendment are updated in the same PR.
 - **Re-evaluation triggers (first to occur).** The CTO ruling holder re-evaluates, with the CLO for any DPIA re-screen point, and the
   human operator signs off any resulting amendment; the output is a dated amendment here or a closed #11258. No automated prompt
