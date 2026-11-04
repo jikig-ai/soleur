@@ -223,7 +223,7 @@ _cfg_email="${_cfg_email//[[:space:]]/}"
 _allowlist_logins=""
 _cla_yml=$(git -C "$WORK_DIR" show "origin/main:.github/workflows/cla.yml" 2>/dev/null || true)
 if [[ -n "$_cla_yml" ]]; then
-  _al_line=$(printf '%s\n' "$_cla_yml" | grep -m1 -E '^[[:space:]]+allowlist:[[:space:]]*"' || true)
+  _al_line=$(grep -m1 -E '^[[:space:]]+allowlist:[[:space:]]*"' <<<"$_cla_yml" || true)
   if [[ -n "$_al_line" ]]; then
     _al_val="${_al_line#*\"}"; _al_val="${_al_val%%\"*}"
     _allowlist_logins=$(printf '%s' "$_al_val" | tr ',' '\n' \

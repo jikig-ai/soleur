@@ -175,7 +175,7 @@ assert_deny() {
   decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
   jsonl="$inc/.claude/.rule-incidents.jsonl"
   rule=$([[ -f "$jsonl" ]] && jq -r '.rule_id' < "$jsonl" | head -1 || echo "")
-  if [[ -n "$expect" ]] && ! printf '%s' "$out" | grep -qF -- "$expect"; then named=1; fi
+  if [[ -n "$expect" ]] && ! grep -qF -- "$expect" <<<"$out"; then named=1; fi
   if [[ "$rc" -eq 0 && "$decision" == "deny" && "$rule" == "wg-cla-signed-author-before-merge" && "$named" -eq 0 ]]; then
     echo "PASS: $name"; PASS=$((PASS+1))
   else
@@ -371,10 +371,10 @@ t20() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_repo 
   assert_deny "T20 injected-payload email denies" "$inc" "$out" "$rc" 'x$(echo INJECTED)@bad.example'
   local reason fixline ok=1
   reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
-  printf '%s' "$reason" | grep -qF 'manual rewrite required for' || ok=0
+  grep -qF 'manual rewrite required for' <<<"$reason" || ok=0
   fixline=$(printf '%s' "$reason" | grep 'for e in' || true)
-  printf '%s' "$fixline" | grep -qF 'INJECTED' && ok=0
-  printf '%s' "$fixline" | grep -qF 'ops@jikigai.com' || ok=0
+  grep -qF 'INJECTED' <<<"$fixline" && ok=0
+  grep -qF 'ops@jikigai.com' <<<"$fixline" || ok=0
   if [[ "$ok" -eq 1 ]]; then echo "PASS: T20b payload excluded from executable remedy"; PASS=$((PASS+1));
   else echo "FAIL: T20b payload reached executable remedy args (fixline: $fixline)"; FAIL=$((FAIL+1)); fi
   TOTAL=$((TOTAL+1)); rm -rf "$t"; }
@@ -418,14 +418,14 @@ t24() { local doc="$SCRIPT_DIR/../../plugins/soleur/devin/INSTRUCTIONS.md" ca e 
   # SANCTIONED_EMAILS literals must appear verbatim in the section.
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
-    printf '%s' "$ca" | grep -qF -- "$e" \
+    grep -qF -- "$e" <<<"$ca" \
       || { printf '  drift: sanctioned literal %s absent from INSTRUCTIONS.md commit-author section\n' "$e" >&2; bad=1; }
   done < <(awk '/^SANCTIONED_EMAILS="/,/"$/' "$HOOK" | grep -oE '[^"[:space:]]+@[^"[:space:]]+')
   # DENIED_EMAILS identities are documented by login — assert the login form.
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
     login="${e%@users.noreply.github.com}"; login="${login#*+}"
-    printf '%s' "$ca" | grep -qF -- "$login" \
+    grep -qF -- "$login" <<<"$ca" \
       || { printf '  drift: denied-bot login %s absent from INSTRUCTIONS.md commit-author section\n' "$login" >&2; bad=1; }
   done < <(awk '/^DENIED_EMAILS="/,/"$/' "$HOOK" | grep -oE '[^"[:space:]]+@users\.noreply\.github\.com')
   if [[ "$bad" -eq 0 ]]; then echo "PASS: T24 hook-pinned literals match INSTRUCTIONS.md"; PASS=$((PASS+1));
