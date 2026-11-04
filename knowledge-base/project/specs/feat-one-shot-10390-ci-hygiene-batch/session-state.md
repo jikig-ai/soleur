@@ -42,6 +42,12 @@
 - Operator step named: #10136 zot accepted-risk record needs owner in-session confirmation (A7 mechanism); issue does not auto-close on merge.
 - #9294/PR #10928 remains the live race — untouched.
 
+## D/E/F Implementation Dispatch (2026-11-05)
+- Operator EXPAND directive committed in e3640d2136: plan closes: 11 issues; D (#8525 #8013 #8080 #8839 #9943), E (#10136), F (#9074 #8624). #9294/#10928 deferred (live race). #10382/#10290 remain reserved.
+- Two impl agents spawned background: cbc0e47c (Workstream D: inngest-bootstrap.sh data_luks/schema-9/RestartSec=300, dark-gate+schema pins, followthrough 8525, cron-agent-spawn-stale-settle + registrations, git-data-cutover D5 liveness predicate, expenses.md, runbook) and 1791f0ca (E+F: ledger row rewrites + zot accepted-risk record + #10136 comment; PA-13/PA-14 register corrections, DPD+privacy canonical+mirror edits, legal-doc-shas re-pin, compliance-posture).
+- Fix-round seats pending: ae452868 a976c5a5 81338752 f342350e 64daf179 5336bde6 297472e3 (perf 25db85ef done verified=4 new=0).
+- After: seat synthesis -> verifier pass -> trailers+evidence -> D/E/F review round -> qa -> compound -> ship. Operator step pending: #10136 zot accepted-risk owner confirmation.
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
