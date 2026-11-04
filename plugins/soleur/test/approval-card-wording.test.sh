@@ -86,7 +86,7 @@ echo "=== Assurance wording stays out of the card ==="
 assert_eq "0" "$(grep -ciE 'verified|reviewed|legally binding|audit-ready|compliant|proven|certified|guaranteed' "$CARD")" "approval-card.md carries none of the barred assurance words"
 
 echo "=== The card is reachable from the delegation reference ==="
-assert_eq "1" "$(grep -cF '(./approval-card.md)' "$SD")" "standing-delegation.md links approval-card.md exactly once"
+assert_eq "1" "$(grep -cF '(${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/approval-card.md)' "$SD")" "standing-delegation.md links approval-card.md exactly once, through the loader token (a CWD-relative link fails the plugin-root anchoring test)"
 assert_contains "$(cat "$SD")" "[--method tty-ack]" "the render sentence shows the optional method flag"
 assert_contains "$(grep -E '^\| Method \|' "$SD")" "method-unknown" "the Method row names the method-unknown reason"
 assert_contains "$(grep -F '| `method-unknown` |' "$SD")" "I have not used it" "method-unknown has a plain sentence"

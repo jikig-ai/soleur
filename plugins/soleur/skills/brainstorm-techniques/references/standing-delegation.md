@@ -281,7 +281,7 @@ I will only come back to you for money, what is in or out of scope, how it looks
 
 Yes writes the record (section 1). No keeps today's behaviour: ask once, naming the action, at each operator-class step.
 
-How a terminal session puts this question (typed answers, no default, what to say at a step that needs the browser) is in [approval-card.md](./approval-card.md). When the operator typed the answer in a terminal session, the calling skill passes `--method tty-ack` to `render`.
+How a terminal session puts this question (typed answers, no default, what to say at a step that needs the browser) is in [approval-card.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/approval-card.md). When the operator typed the answer in a terminal session, the calling skill passes `--method tty-ack` to `render`.
 
 ### Stall sentences
 
