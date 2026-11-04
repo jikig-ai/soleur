@@ -218,7 +218,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
 | `min_entries_to_merge` | `1` | Merge a green candidate immediately. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation (the point of the queue) with bounded runner contention: each entry runs all 25 contexts, so three parallel builds is about 3x the jobs. Raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `75` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
+| `check_response_timeout_minutes` | `120` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). Raised again from 75 to 120 on 2026-11-03 (see "Addendum 2026-11-03"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
 
 The values equal the `.tf`, the DR skeleton and the `infra/github/README.md`
 table; the parity gate in `tests/scripts/test-audit-ruleset-bypass.sh` (successor
@@ -276,7 +276,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall-check.yml` files `merge-queue stall: PR #N` (labels
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
-past 45 minutes, below the 75-minute timeout. It ages only entries at
+past 45 minutes, below the 120-minute timeout. It ages only entries at
 `position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
@@ -594,7 +594,7 @@ order.
    fence sync pushes per merged PR (before and after the queue).
 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
-    the 30-minute window between the 45-minute threshold and the 75-minute timeout;
+    the 75-minute window between the 45-minute threshold and the 120-minute timeout;
     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
@@ -682,6 +682,27 @@ a fresh build. The stall probe threshold stays 45 minutes, so the window between
 to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
 above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
 written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
+
+### Addendum 2026-11-03 (#12030): `check_response_timeout_minutes` 75 to 120
+
+On 2026-11-03 one PR was ejected from the queue twice. The first ejection (`failed_checks`) was an unrelated 5-minute
+`actions/checkout` hang in the `tenant-integration-required` aggregator. The second (`checks_timed_out`) was runner
+starvation: the entry joined the queue at 20:09:01Z and was removed at 21:28:29Z, 79 minutes later, while its
+`merge_group` CI run was still waiting on runners. Its `test-scripts` shards queued 10-28 minutes before starting and
+the aggregate `test` job queued another 17 minutes; the aggregate began 7 seconds after the removal and went green.
+At 21:32Z the repository sat at 60 jobs running and 222 queued across 77 active runs, consistent with a 60
+concurrent-job cap that I recall for the Team plan and did not verify against the plan documentation. Passing
+`merge_group` CI runs that afternoon took 43-55 minutes, so 75 had no margin once runner wait added more than about 20
+minutes.
+
+Decision: raise the value to 120 in the same Terraform root as a stopgap; the operator asked for it in session on
+2026-11-03. This is not sized by the "longest observed success plus about 15 minutes" rule of the 2026-10-11 addendum,
+because the longest observation (79 minutes) is a removal, not a success. Cost of the choice: a hung entry now holds the
+queue up to 45 minutes longer than at 75, and the entry behind it is rebuilt after the ejection. The stall probe
+threshold stays 45 minutes, so the window between threshold and timeout widens from 30 to 75 minutes. The Parameters
+row, the "Stall probe" section and canary item 10 state the new value; dated records above are left as written. The
+demand side (the concurrency cap, per-run job fan-out, cancelled-run waste, `merge_group` rebuilds) is tracked in #12030
+and may make a smaller value correct again. The live value is verified after the apply.
 
 ### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
 
@@ -1021,7 +1042,7 @@ caveat (member lookups correlate by `headSha`/`createdAt` when the
 stays 75: the clock is per-candidate-build, not per-queue-dwell — a member's
 candidate build is dispatched at its position like a singleton's, and the
 measured bound (p95 44.1, longest success 60.5, canary item 5) is unchanged by
-grouping. Recorded keep-75 justification; if the canary shows the ejection
+grouping. Recorded keep-75 justification (the value later moved to 120, see "Addendum 2026-11-03"); if the canary shows the ejection
 clock counting from enqueue rather than build dispatch, re-derive before any
 further raise.
 

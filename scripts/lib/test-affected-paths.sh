@@ -545,6 +545,8 @@ AFFECTED_CLAUDE_HOOKS_POST_DISPATCH_WATCH_GATE_TEST_SH_PATHS=(
 AFFECTED_CLAUDE_HOOKS_PRE_MERGE_REBASE_TEST_SH_PATHS=(
   ".claude/hooks/pre-merge-rebase.sh"
   ".claude/hooks/pre-merge-rebase.test.sh"
+  # sourced by .claude/hooks/lib/incidents.sh:34-38 when present (boundary-regex provider)
+  "plugins/soleur/scripts/lib/wrapper-boundary.sh"
   "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -960,6 +962,10 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/inngest-key-rotate.yml"
   # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
   ".github/workflows/key-rotate.yml"
+  # terraform-target-parity.test.ts readFileSync's ci.yml for the G2f registration pin (#9927, ADR-282).
+  ".github/workflows/ci.yml"
+  # dockerfile-copy-dockerignore-parity.test.ts readFileSync's the real ignore file beside the real Dockerfile.
+  "apps/web-platform/.dockerignore"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -968,7 +974,13 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
+  # heartbeat-reprovision-parity.test.ts existsSync/readFileSync's it through checkFeeders' evidence file (timer feeder).
+  "apps/web-platform/infra/cloud-init-registry.yml"
+  # terraform-target-parity.test.ts readFileSync's it for the doppler_secret/betteruptime address census.
+  "apps/web-platform/infra/git-data.tf"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
+  # terraform-target-parity.test.ts's G2f verdict consumes its existsSync result (the registration pin checks the suite file exists).
+  "apps/web-platform/infra/inngest-luks-sole-copy.test.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
   "apps/web-platform/infra/inngest-bootstrap.sh"
@@ -1280,6 +1292,23 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
 # DISCOVERED (every tracked scripts/followthroughs probe holding a credentialed curl, run under a PATH-shim
 # curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
 AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
+  # S7: the stage cp's each listed doc's REAL content into the fixture tree before scanning it —
+  # an edit to any of them changes what the assertions run against.
+  "plugins/soleur/agents/engineering/infra/infra-security.md"
+  "plugins/soleur/agents/engineering/review/deployment-verification-agent.md"
+  "plugins/soleur/skills/cf-token-scope/references/widen-playbook.md"
+  "plugins/soleur/skills/flag-delete/SKILL.md"
+  "plugins/soleur/skills/flag-list/SKILL.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md"
+  "plugins/soleur/skills/preflight/SKILL.md"
+  "plugins/soleur/skills/reproduce-bug/SKILL.md"
+  "plugins/soleur/skills/skill-creator/references/api-security.md"
+  "plugins/soleur/skills/trigger-cron/SKILL.md"
+  # The static Api-Key census greps the real file (cwd is $REPO_ROOT).
+  "plugins/soleur/skills/flag-bootstrap/SETUP.md"
+  # S5 Guard 1: the census ceiling table is read for the row-identity comparison.
+  "scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv"
   "scripts/followthroughs/"
   # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
   # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
@@ -1517,10 +1546,14 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
   "tests/scripts/test-sentry-ac17-derived-counts.sh"
 )
 
-# tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
-# repo paths its suite file names.
+# tests/scripts/sentry-alert-drift-workflow — the W7 row runs the REAL probe (scripts/sentry-alert-live-
+# fidelity.sh) with only the auth/org/rules envs stubbed, so the probe reads the REAL reference, vendor-
+# defaults and frozen-capture files through its default seams.
 AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
+  "apps/web-platform/infra/sentry/alert-reference.json"
+  "apps/web-platform/infra/sentry/vendor-default-workflows.json"
   "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -1638,6 +1671,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
 # walk is sandbox-only (synthetic repos + fixture trees); the real subject is the resolver SUT
 # and the render arm it stubs, so the scan is scoped and the edges are honest.
 AFFECTED_PLUGINS_SOLEUR_SCRIPTS_RESOLVE_REGENERABLE_CONFLICTS_TEST_SH_PATHS=(
+  # AC9 git-greps the real corpus for repo-relative invocations of the resolver/renderer.
+  "AGENTS.rules.md"
   "plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
   "plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh"
   "plugins/soleur/scripts/render-c4-model.sh"
@@ -3347,7 +3382,6 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
-  "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
@@ -3393,14 +3427,12 @@ AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
 
 # scripts/inngest-a5-a6-owner-ask-10136 — the #11218 owner-ask probe suite execs the REAL
 # trusted-verdict lib through its SUT: the probe sources $libdir/trusted-verdict.sh
-# (scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh:177), a computed path no derivation
-# channel reaches; the test header pins "the real trusted-verdict lib therefore runs
-# unmodified". Derivation reaches relayed-verdict.sh via the $REPO_ROOT cp literal (:737) but
-# the only trusted-verdict literal is the $FORCED scratch write (:739).
+# (scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh:177). trusted-verdict.sh's entry
+# was retired 2026-11-03 (#11775): the derive now walks stem-minted SUTs and tolerates the
+# `$(cd … 2>/dev/null && pwd)` prefix, so the edge is derived, not declared.
 AFFECTED_SCRIPTS_INNGEST_A5_A6_OWNER_ASK_10136_PATHS=(
   "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh"
   "scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh"
-  "scripts/lib/trusted-verdict.sh"
   "scripts/lib/relayed-verdict.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -4106,3 +4138,48 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "scripts/lint-gh-argv-arg.py"
   "scripts/lib/test-affected-paths.sh"
 )
+
+# apps/web-platform/infra/inngest-luks-sole-copy — derivation cannot reach these: the suite sources the
+# shared HCL lexer, yaml-parses the real infra-validation workflow for its pull_request.paths, and reads
+# the runbook + postmerge skill bodies for the H1b/H2 read-back parity checks.
+AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+  "plugins/soleur/skills/postmerge/SKILL.md"
+  "tests/scripts/lib/hcl-effective-text.sh"
+  "apps/web-platform/infra/inngest-luks-sole-copy.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
+# grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
+# the GIT_ var census, the required-checks fixture copy) and EXECUTE the observation-window probe under
+# a stub gh; the suite file is shared by all three labels, so all three arrays carry the same edges.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
+  "scripts/ci-draft-light.test.sh"
+  "scripts/ci-pr-affected-preactivation.sh"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/followthroughs/ratchet-observation-window-10865.sh"
+  "scripts/required-checks.txt"
+  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
+  "scripts/ci-draft-light.test.sh"
+  "scripts/ci-pr-affected-preactivation.sh"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/followthroughs/ratchet-observation-window-10865.sh"
+  "scripts/required-checks.txt"
+  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
+  "scripts/ci-draft-light.test.sh"
+  "scripts/ci-pr-affected-preactivation.sh"
+  "scripts/ci-push-dedupe.test.sh"
+  "scripts/followthroughs/ratchet-observation-window-10865.sh"
+  "scripts/required-checks.txt"
+  "plugins/soleur/test/ci-pr-affected-replay.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+

@@ -33,3 +33,5 @@ Branch-tip evidence is not merged-tree evidence for anything keyed to the conten
 
 category: workflow-issues
 module: ci-pr-affected-activation
+
+See also: `test-failures/2026-11-03-one-malformed-accept-row-reason-drops-every-exemption.md` — the same "re-verify after every rebase" rule applied to a post-rebase drain reveal, plus the accept-file failure mode where one malformed col-5 drops every exemption.

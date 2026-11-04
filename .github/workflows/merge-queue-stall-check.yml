@@ -20,7 +20,7 @@ name: Merge queue stall check
 # here — it needs Administration:Read (app token), which would defeat the
 # no-app-secrets property above. (CTO ruling, #5780.)
 #
-# TIMING (#9454): the ruleset's check_response_timeout_minutes is 75. The queue
+# TIMING (#9454): the ruleset's check_response_timeout_minutes is 120. The queue
 # ejects a candidate whose required checks have not all reported by then, and does
 # so silently (an ejected entry leaves `mergeQueue.entries`, so a later probe sees
 # nothing), so this probe must report a stuck entry BEFORE that. The threshold
@@ -45,13 +45,13 @@ name: Merge queue stall check
 # (every 10 minutes), which POSTs workflow_dispatch to this workflow; the runner
 # stays the EXECUTOR with the default GITHUB_TOKEN. The `schedule:` below is now
 # the FALLBACK clock, kept byte-identical. That function's header is the single
-# authority for the timing story: detection latency, the margin against the 75
-# minute timeout (about zero at the measured p90 runner wait), and why a
+# authority for the timing story: detection latency, the margin against the queue
+# timeout (75 minutes when written, 120 since 2026-11-03; about zero at 75 at the measured p90 runner wait), and why a
 # dispatch whose run is delayed on the runner pool is detected ONE TICK LATE —
 # since #9513 the dispatcher reads the previous run's status/conclusion through
 # the `actions:write` token it already holds and reports a red or stuck run as
 # an error-status check-in, keeping the executor secretless — so the probe
-# stays BEST-EFFORT. The 75-minute timeout may count from the merge_group build
+# stays BEST-EFFORT. The 120-minute timeout may count from the merge_group build
 # start rather than `enqueuedAt`, which would widen the real window (unverified).
 #
 # DRAIN (#9513): the "Drain stale stall issues" step self-closes open
@@ -73,7 +73,7 @@ name: Merge queue stall check
 # older than the threshold with a build that has barely begun, and the threshold itself
 # (STALL_THRESHOLD_MINUTES, 45) sits BELOW the measured merge_group CI maximum (the longest
 # success was 60.5 minutes, #9454 canary item 5). It cannot be raised past
-# that maximum without leaving only about 15 minutes under the 75-minute queue timeout, so the issue is
+# that maximum without leaving only about 15 minutes under the queue timeout as it stood when this was written (75 minutes; 120 since 2026-11-03, #12030), so the issue is
 # worded as a SUSPECTED stall: the title says so, the body says the entry may be a healthy
 # slow build, and it lists the agent-runnable triage (live queue read, the entry's
 # merge_group runs) first so the false positive is closed in one read. The position filter
@@ -121,7 +121,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      # Keep BELOW the ruleset's check_response_timeout_minutes (75, #9454) so a
+      # Keep BELOW the ruleset's check_response_timeout_minutes (120, #9454, #12030) so a
       # stuck entry is reported before the queue ejects it silently. An entry
       # pending longer than this is a SUSPECTED stall (a required check not
       # reporting on merge_group), not a proven one: a healthy slow build can reach
