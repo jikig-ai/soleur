@@ -12,6 +12,32 @@ brand_survival_threshold: none
 
 # ci: hosted-runner starvation dequeues green PRs from the merge queue (#12030)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04
+**Sections enhanced:** 6 (Research Reconciliation, Research Insights, Proposed Solution, Implementation Phases, Acceptance Criteria, Observability)
+**Agents and gates used:** `soleur:engineering:cto` (two rulings), `soleur:engineering:research:repo-research-analyst`, `soleur:engineering:research:learnings-researcher`, a sharp-edges verification pass, the `plan-review` panel (DHH, Kieran, code-simplicity), and the deepen-plan halt gates 4.5 to 4.13.
+
+### Key Improvements
+
+1. Replaced proxy acceptance checks (`git diff --stat`, a hedged lint entry point) with a deterministic comment-only proof and a stale-figure sweep that covers every "30-minute window" and "75-minute" hit, not one sentence.
+2. Anchored the ADR-270 edit to the correct one of two same-dated addendum headings, and re-worded the cap row to "re-verified" because ADR-276 already recorded the docs figure on 2026-10-07.
+3. Made the ADR-276 "no safe lever beyond S2/S3" sentence conditional on the peak-window census, and added the three levers the review found missing from the Cut List (`max_entries_to_build`, suite minutes, the 5-minute watchdog dispatch).
+
+### New Considerations Discovered
+
+- The hour-of-day evidence flipped a CTO ruling: a 2.7-day histogram favoured the current `main-health-monitor` slots and a 9-day histogram favoured 05/11/17/23 by only about 6%, so no cron change ships.
+- Delivered concurrency, not the 60-job cap, was the binding limit in the two deep-queue samples (26 and 31 jobs in flight), so the residual risk is supply-side.
+- A green PR run now reads about 330 job-min against ADR-276's about 100 (2026-10-07); the cause is unmeasured and is handed to epic #11556.
+
+### Deepen-pass verification (live, 2026-11-04)
+
+- Gates 4.6, 4.7, 4.8, 4.12: section present; threshold `none` carries the sensitive-path scope-out line; observability command (`grep -c`) is on the probe-verb allowlist, finishes well inside 15 s, and `expected_output` is the literal `1`; no PAT-shaped token; one unfenced `## Scope Check`.
+- Gates 4.9, 4.10, 4.11, 4.13, 4.4, 4.55: not triggered (no UI file, no `.tf`/migration/cloud-init file, no guard deliverable, no new autonomous task, no pattern-bound behaviour, no downtime-inducing operation).
+- Gate 4.5 (network-outage): the keyword scan matches `timeout` and `502`, but both are non-network uses (the merge-queue response timeout and a GitHub API HTTP 502 aborting the census script). There is no SSH, firewall, DNS or provisioner hypothesis, so the L3/L7 checklist does not apply; no `terraform apply` is involved.
+- Cited issues resolve and are OPEN: #12030, #8735, #7942, #9729, #10448, #11556, #12086. Labels `deferred-scope-out` and `domain/engineering` and milestone "Post-MVP / Later" exist. The plan cites no AGENTS.md rule IDs. No test pins the infra-validation "6.7 min" comment text (grep of `.github/scripts/test`, `plugins/soleur/test`, `scripts` found none).
+- `tasks.md` already carries every correction from the review pass (it was regenerated after plan-review); no further propagation is needed.
+
 ## Overview
 
 Green pull requests were removed from the merge queue because the candidate CI run waited for hosted runners past the
