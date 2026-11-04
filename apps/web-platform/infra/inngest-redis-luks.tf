@@ -165,7 +165,6 @@ resource "hcloud_volume" "inngest_redis_luks" {
   name              = "soleur-inngest-redis-store-luks"
   size              = var.inngest_redis_volume_size
   location          = var.location
-  delete_protection = true
 
   labels = {
     app = "soleur-web-platform"
