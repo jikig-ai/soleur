@@ -10,7 +10,7 @@
 - Open item carried into work: the 89 `drift-check` census hits' mechanism unresolved from repo evidence (drift plan has been command-substitution-captured since file creation; attribution likely needs `census-11294.tsv` in the operator's scratch area).
 
 ### Decisions
-- Scope is docs-only: `audit-findings-11294.md`, `rotation-census-11711.md` (27 rows / 4 TF roots: 12+10 main, 2+2 inngest-rehearsal, 0+1 rung2), `decision-challenges.md`, `tasks.md`, plus one comment each on #11294/#11711 — zero code/workflow/TF edits; all rotations/deletions recorded as `## Operator Holds`.
+- Scope is docs-only: `audit-findings-11294.md`, `rotation-census-11711.md` (27 rows / 3 TF roots: 12+10 main, 2+2 inngest-rehearsal, 0+1 rung2), `decision-challenges.md`, `tasks.md`, plus one comment each on #11294/#11711 — zero code/workflow/TF edits; all rotations/deletions recorded as `## Operator Holds`.
 - Verified: #11215 soak closed PASS 2026-11-01T18:51Z (inside the 11-12 gate); whole-state refresh prints every `random_id` `[id=]` regardless of `-target`; drift exposure sink was public `infra-drift` issue bodies/comments, not step logs; `random_password` id is literal `"none"`; `tunnel_secret` `-replace` is a live no-op (roll-forward per ADR-307 amendment).
 - Census route assumptions: dedicated pair → `inngest-key-rotate.yml keys=both` (ADR-307); retired `_prd` pair → no rotation owed, removal via #11293; `egress_audit_ingest_token` → plan-only until #11920; three keys blocked `approval_environment_missing` until #11923.
 - Housekeeping verified: `feat-one-shot-11294-redact-random-id-logs` absent from both clones' refs (parent session already deleted it — was 6499b7d022).
@@ -24,7 +24,7 @@
 - No agents spawned (unavailable in subagent); research executed inline; CTO rulings deferred as `pending - assumed` rows.
 
 ## Work Phase
-- Status: complete — audit-findings-11294.md (32-job inventory, 15 verdict rows, drift-check bounded attribution) + rotation-census-11711.md (27 rows + readiness notes + ordering) committed (98b82dd1ad after rebase/force-with-lease on init SHA).
+- Status: complete — audit-findings-11294.md (32 terraform-invoking job rows, 15 verdict rows, drift-check bounded attribution) + rotation-census-11711.md (27 rows + readiness notes + ordering) committed (98b82dd1ad after rebase/force-with-lease on init SHA).
 - Issue comments posted: #11294 comment-6640747597, #11711 comment-6640748365 (both issues remain OPEN; comments only).
 - Test Scenarios: 5/5 verified (27 rows, 0 empty routes, key-rotate options == census rows, 1 comment per issue, branch flag 0).
 - lint-ratchet: not adopted → relay, continue.

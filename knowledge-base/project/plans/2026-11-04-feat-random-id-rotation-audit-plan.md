@@ -5,7 +5,7 @@ date: 2026-11-04
 slug: feat-random-id-rotation-audit
 branch: feat-one-shot-11294-11711-rotation-audit
 issue: 11294
-domain: engineering/security
+domain: engineering
 brand_survival_threshold: aggregate pattern
 lane: cross-domain
 ---
@@ -46,7 +46,7 @@ Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 Produce three committed artifacts under `knowledge-base/project/specs/feat-one-shot-11294-11711-rotation-audit/` plus two issue comments:
 
 1. **`audit-findings-11294.md`** — the per-job audit verdict table: for each job on the `apps/web-platform/infra` root that can print Terraform output (the `apply` job, every dispatch job that streams plan/apply, `inngest_host`, `inngest_host_replace`, `web_host_replace`, `vector_redeliver`, the retired `inngest_backstop_retire`, `drift-check`, infra-validation's PR-plan leg, `inngest-provision-rehearsal` rehearse/teardown, and the two rotation workflows), one row recording: exposure mechanism (streamed step log / captured-then-posted issue body / PR comment / artifact / none), whether `[id=...]` lines for the Inngest key addresses reached a retained public log, the post-redaction coverage state, and the retention window. Ends with the residual-exposure statement (comment/body edit history, unrotated values, unscanned artifact surface) and the known gaps carried forward from the preservation record.
-2. **`rotation-census-11711.md`** — one row per `random_id`/`random_password` resource across all four Terraform roots that declare them (`apps/web-platform/infra` 12+10, `inngest-provision-rehearsal/` 2+2, `rung2-rehearsal/` 0+1), with columns: address, value class, exposed via this vector?, route (`key-rotate.yml` key name / `inngest-key-rotate.yml` keys value / roll-forward / retired), readiness state today, gating issues, and the per-secret readiness note for the owner dispatch.
+2. **`rotation-census-11711.md`** — one row per `random_id`/`random_password` resource across the three Terraform roots that declare them (`apps/web-platform/infra` 12+10, `inngest-provision-rehearsal/` 2+2, `rung2-rehearsal/` 0+1), with columns: address, value class, exposed via this vector?, route (`key-rotate.yml` key name / `inngest-key-rotate.yml` keys value / roll-forward / retired), readiness state today, gating issues, and the per-secret readiness note for the owner dispatch.
 3. **`decision-challenges.md`** — the `| Item | Class | Ruling |` rows for every technical ruling this plan could not run through the CTO agent (no Agent tool in this harness), each `pending - assumed: <default>` so work and ship can surface them.
 4. **Issue comments** on #11294 and #11711 — agent-side results summary pointing at the two artifacts and the holds. Comments only; never close, never edit bodies.
 
@@ -63,10 +63,10 @@ No product code, no workflow YAML, no Terraform, no script changes. `gh issue co
 | Sink | Public? | Mechanism | Post-redaction state |
 |---|---|---|---|
 | Actions step logs | yes (public repo) | streamed `terraform plan/apply` unfiltered pre-#11551; ANSI-stripped pre-#11674; tainted/deposed/drift plan blocks pre-#11930 | every streaming invocation now pipes `2>&1 \| tf_redact_random_ids` (`tests/scripts/lib/tf-redact-random-ids.sh`); hit-run logs deleted 2026-10-31/11-01 (686) |
-| `infra-drift` issue bodies + comments | yes | drift plan captured in `$(...)`, then `cat ${RUNNER_TEMP}/plan-output.txt` into public issue body/comment (`scheduled-terraform-drift.yml:1232,1252`) | redacted 2026-11-01 (218 comments, in-place); **edit history residual** |
-| infra-validation PR sticky comments | yes | captured plan → `marocchino/sticky-pull-request-comment` on PRs (`infra-validation.yml:1743` + post step) | 498 PR bot comments deleted 2026-11-01; sticky-comment **edit-history residual** |
+| `infra-drift` issue bodies + comments | yes | drift plan captured in `$(...)`, then `cat ${RUNNER_TEMP}/plan-output.txt` into public issue body/comment (`scheduled-terraform-drift.yml:1232,1252`) | redacted 2026-11-01 (74 bodies + 234 comments, in-place — 218 under infra-drift issues, 16 on #10835); **edit history residual** |
+| infra-validation PR sticky comments | yes | captured plan → `marocchino/sticky-pull-request-comment` on PRs (`infra-validation.yml › Post plan comment` step) | 498 PR bot comments deleted 2026-11-01; sticky-comment **edit-history residual** |
 | Ops email (drift/error) | no (private sink) | `PLAN_SNIPPET` grep of plan-output.txt into email body (`scheduled-terraform-drift.yml:1322`) | private channel; not an exposure sink |
-| Artifacts | yes (public repo artifacts) | `inngest-provision-rehearsal` evidence artifact (90d retention, `inngest-provision-rehearsal.yml:576`); suite logs (14d); continuity log | **never scanned** — the census hit HTTP 500 on the artifacts endpoint; carried as a known gap |
+| Artifacts | yes (public repo artifacts) | `inngest-provision-rehearsal` evidence artifact (90d retention, `rehearse › Upload the evidence artifact`, inngest-provision-rehearsal.yml:579); suite logs (14d); continuity log | **never scanned** — the census hit HTTP 500 on the artifacts endpoint; carried as a known gap |
 | key-rotate.yml / inngest-key-rotate.yml logs | yes | `kr_tf` sends every Terraform stream to a private file; projected plan JSON deleted | clean by construction |
 | Step summaries | yes | `$GITHUB_STEP_SUMMARY` writes | verified: only verdict/shape lines are written; no plan dump found — re-verify at work time |
 
@@ -76,8 +76,8 @@ The census recorded **89 `drift-check (apps/web-platform/infra)` job-row hits** 
 
 ### Retention windows (verified)
 
-- **Run logs:** GitHub default 90 days; for public repositories configurable only 1–90 days (docs.github.com "Configuring the retention period…"; confirmed by the census's own "oldest runs have expired logs" gap and HTTP-410 semantics). The repo endpoint does not expose the configured value; record 90-day default and the config-uncertainty.
-- **Artifacts:** per-upload `retention-days` — rehearsal evidence 90d, infra-validation suite logs 14d, registry-restore pins 7d, cf-lb continuity default.
+- **Run logs:** GitHub default 90 days; for public repositories configurable only 1–90 days (docs.github.com "Configuring the retention period…"; confirmed by the census's own "oldest runs have expired logs" gap and HTTP-410 semantics). Measured live 2026-10-29: `days: 90`, `maximum_allowed_days: 90` via the repo artifact-and-log-retention endpoint.
+- **Artifacts:** per-upload `retention-days` — rehearsal evidence 90d, infra-validation suite logs 14d, registry artifact pin 7d (`registry_pull_path_gate`), cf-lb continuity default.
 - **Issue/PR bodies and comments:** indefinite until edited/deleted; **edit history remains publicly readable** on edited-in-place items (74 bodies + 234 comments) — the unremovable residual.
 - **Census TSV:** `census-11294.tsv` (1448 rows, sha256 `6ba16467…`) lives in the operator's scratch area, uncommitted.
 
@@ -155,7 +155,7 @@ These are owner-gated acts. The plan records them; it does not schedule them.
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** The deliverables are documentation of existing workflows and routes. All technical premises verified against the repository: workflow streaming shapes, the redaction contract (`tests/scripts/lib/tf-redact-random-ids.sh`), the rotation routes (`key-rotate.yml` seven-key table, `inngest-key-rotate.yml` gate table), resource census (27 `random_*` resources across four roots), and the evidence-preservation record.
+**Assessment:** The deliverables are documentation of existing workflows and routes. All technical premises verified against the repository: workflow streaming shapes, the redaction contract (`tests/scripts/lib/tf-redact-random-ids.sh`), the rotation routes (`key-rotate.yml` seven-key table, `inngest-key-rotate.yml` gate table), resource census (27 `random_*` resources across three roots), and the evidence-preservation record.
 
 ### Legal (read-only consumption)
 
@@ -244,7 +244,7 @@ No cross-domain implications beyond these — infrastructure/tooling documentati
 Deepen-plan pass (inline — no Task/Agent spawn capability in this harness; research and review were executed as direct verification instead of a fan-out):
 
 - **Halt gates evaluated:** 4.6 User-Brand Impact — PASS (threshold `aggregate pattern`, concrete artifact/vector lines); 4.7 Observability — SKIP (pure-docs; no Files-to-Edit under code/infra paths); 4.8 PAT-shaped variable — PASS (zero hits); 4.9 UI wireframe — SKIP (no UI surface); 4.10 Encryption Posture — SKIP (no new store/connection); 4.11 Guard Contract — SKIP (no guard deliverable); 4.12 Scope Check — PASS (exactly one unfenced section; all asks `mapped`; one `inferred` item with justification; `Recommendation:` present); 4.13 Task Design — SKIP (no new autonomous-task surface); 4.4/4.45/4.5/4.55 — SKIP (no scheduled-work pattern, no SSH/provisioner apply path, no downtime-inducing operation).
-- **Sharpened during deepen:** added `## Research Insights` (Premise Validation + Property List + Cut List, previously missing); named the drift-check anomaly's three ordered hypotheses; enumerated the full 27-resource census across four Terraform roots (rehearsal roots included — the brief's "census resources" covered only the main root); recorded the artifacts-endpoint-500 known gap against the rehearsal evidence artifact's 90-day retention.
+- **Sharpened during deepen:** added `## Research Insights` (Premise Validation + Property List + Cut List, previously missing); named the drift-check anomaly's three ordered hypotheses; enumerated the full 27-resource census across three Terraform roots (rehearsal roots included — the brief's "census resources" covered only the main root); recorded the artifacts-endpoint-500 known gap against the rehearsal evidence artifact's 90-day retention.
 - **New considerations discovered:** the `inngest_backstop_retire` job is retired (3 census hits, exposure window closed by retirement + deletion); the 11-04 `mode=plan` rehearsal run `41885962147` on `inngest_manual_trigger_secret_dev` already exists — the census's first readiness row is partially exercised; CLO re-assessment trigger 2026-11-08 carried into Success Metrics.
 
 ## Decision Challenges
@@ -256,3 +256,4 @@ Recorded in full in `knowledge-base/project/specs/feat-one-shot-11294-11711-rota
 3. **`random_password` exposure verdict** — assumed: not exposed via `[id=]` (`id="none"`) or plan blocks (`result` sensitive); census marks them "not exposed via this vector", pending CTO confirmation.
 4. **drift-check 89-hit attribution** — assumed: the sink that reached the public was the `infra-drift` issue stream, not step logs; the exact line attribution is unresolved until the census TSV or git history settles it, pending.
 5. **Brand threshold `aggregate pattern`** — assumed as stated in User-Brand Impact; challengeable.
+6. **Census row count and shape** — assumed: 27 rows across the enumerated roots; carried as Item 6 in `decision-challenges.md` and ruled there with the rest.
