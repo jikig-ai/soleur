@@ -1,5 +1,8 @@
 # --- #7234: the per-config Doppler read credentials for the token-drift scan -----------------
 #
+# COUNTS BELOW ("13", "thirteen") ARE AS OF 2026-08-03 and stay as history. The live count is the
+# number of name lines in `doppler-config-inventory.txt` (16 since #11857, dated 2026-11-04).
+#
 # The twice-daily Cloudflare-token-drift scan (`.github/workflows/scheduled-terraform-drift.yml`
 # + `scripts/check-cloudflare-token-drift.sh`) reads token-shaped keys across EVERY Doppler config
 # in the `soleur` project. This file mints one config-scoped read token per config and publishes
@@ -180,15 +183,20 @@ locals {
 
 # The credentials. One per config, read-only.
 #
-# `project` is a literal because the `soleur` Doppler project is not Terraform-managed. That is
-# correct for every config in today's inventory, all of which pre-exist outside Terraform.
+# `project` is a literal because the `soleur` Doppler project is not Terraform-managed.
 #
-# ⚠️ SE-4 — `config = each.key` is a STRING, so it builds NO dependency edge, and one future config
-# IS Terraform-managed: `git-data-luks.tf` declares `doppler_config.git_data_prd`, and ADR-149 says
-# `prd_git_data` appears at git-data birth. The PR that adds that name to the inventory must ALSO
-# add `depends_on = [doppler_config.git_data_prd]` here, or the token create can be ordered before
-# the config exists and the apply fails on a race that reads as flake. This trap is restated in the
-# inventory's floor-raising block, because that is the block a floor-raiser actually reads.
+# ⚠️ SE-4 — `config = each.key` is a STRING, so it builds NO dependency edge, and three configs in
+# the inventory ARE Terraform-managed: `doppler_config.workspaces_luks_web` and
+# `doppler_config.workspaces_luks_marker` (`workspaces-luks-fresh-boot.tf`) and
+# `doppler_config.git_data_prd` (`git-data-luks.tf`). Without an edge the token create can be
+# ordered before the config exists and the apply fails on a race that reads as flake. The two
+# workspaces configs are in `depends_on` below. `git_data_prd` is DELIBERATELY NOT: it is a
+# per-merge OPERATOR_APPLIED_EXCLUSION (#9438), `git-data.tf` uses string literals precisely so the
+# per-merge closure never pulls it in, and an edge from this per-merge-targeted token would pull it
+# in — if state ever lacked it the plan would try to create it and Doppler would answer 400 "Name is
+# already in use" on every merge to main. `terraform-target-parity.test.ts` pins both halves. This
+# trap is restated in the inventory's floor-raising block, because that is the block a floor-raiser
+# actually reads.
 resource "doppler_service_token" "token_drift" {
   for_each = toset(local.token_drift_configs)
 
@@ -202,6 +210,13 @@ resource "doppler_service_token" "token_drift" {
 
   name   = "token-drift-ci-tf-${each.key}"
   access = "read"
+
+  # Ordering for the Terraform-declared configs in the inventory (#11857); see the SE-4 note above for
+  # why `doppler_config.git_data_prd` is absent. Both addresses are already per-merge -targets.
+  depends_on = [
+    doppler_config.workspaces_luks_web,
+    doppler_config.workspaces_luks_marker,
+  ]
 }
 
 # The sink. ONE repository Actions secret carrying a JSON object keyed by config name.
