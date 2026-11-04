@@ -647,6 +647,18 @@ describe("seed-admin placeholder (#12026)", () => {
   const SA = "/root/.claude/seed-admin";
   const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", SA];
 
+  it("the committed fixture carries ${CANARY_SEED_ADMIN} and every placeholder in it is substituted by the replay's six roots", () => {
+    const fixture = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[] };
+    expect(fixture.bwrapSetupArgv, "the regenerated fixture must name the seed-admin root by placeholder").toContain("${CANARY_SEED_ADMIN}");
+    const sub = substituteCanonicalArgv(fixture.bwrapSetupArgv, {
+      ws: "/r/ws", empty: "/r/empty", c4Staging: "/r/c4", bridgeSpawn: "/r/bs", transcripts: "/r/tr", seedAdmin: "/r/sa",
+    });
+    expect(hasUnsubstitutedPlaceholder(sub), "a fixture placeholder has no replay root").toBe(false);
+    expect(sub).toContain("/r/sa");
+  });
+
   it("maps the seed-admin root to ${CANARY_SEED_ADMIN} and adds it to prepDirs", () => {
     const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv(RAW, { wsRoot: WS, seedAdminRoot: SA });
     expect(bwrapSetupArgv).toContain(CANARY_SEED_ADMIN_PLACEHOLDER);

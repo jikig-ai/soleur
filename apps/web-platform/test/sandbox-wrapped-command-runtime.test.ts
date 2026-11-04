@@ -649,6 +649,14 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
           /* absent */
         }
       }
+      // Wiring, not content: when B reads a plugin store file, the scan set must contain that directory, or dropping "plugins/store"
+      // from the list above would leave this scan green while reading nothing there (mutation survivor in the #12073 review).
+      if (readable.some((r) => r.startsWith(".claude/plugins/store/"))) {
+        expect.soft(
+          readableHostFiles.some((f) => f.includes("/.claude/plugins/store/")),
+          "B reads a plugins/store file but the forbidden-marker scan set does not include that directory",
+        ).toBe(true);
+      }
       const forbidden = [needle!, DECOY_KEY, DECOY_KEY.slice(-12), promptNeedle, toolNeedle];
       let scanned = 0;
       for (const f of readableHostFiles) {
