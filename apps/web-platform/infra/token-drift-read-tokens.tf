@@ -130,15 +130,25 @@
 # backend, same readers), which is why it is not a new risk — but it is the object an attacker with
 # state access would actually take, and reading the old paragraph you would not know it existed.
 #
-# ⚠️ BLAST RADIUS — UNCHANGED FROM ADR-164, AND STILL A WIDENING. Thirteen read credentials
-# covering the whole `soleur` project, including `prd`, which holds SUPABASE_SERVICE_ROLE_KEY
+# ⚠️ BLAST RADIUS — UNCHANGED FROM ADR-164, AND STILL A WIDENING. Sixteen read credentials (13 as
+# of ADR-164, 16 since #11857) covering the whole `soleur` project, including `prd`, which holds SUPABASE_SERVICE_ROLE_KEY
 # (bypass-RLS read of all user data), the Terraform GitHub App private key (which yields an
 # installation token that can rewrite every repository Actions secret, INCLUDING this one),
 # GHCR_MINTER_DOPPLER_TOKEN (a read/write Doppler credential, destroyed by #8714 task 5.4),
 # PROXY_TLS_KEY and three git
 # transport SSH keys. That reach was disclosed and accepted at #7159; what changes here is that it
 # becomes REAL, where today's live reach is one config. A leaked `DOPPLER_TOKEN_DRIFT_MAP` or a
-# leaked R2 access key yields all thirteen at once.
+# leaked R2 access key yields all sixteen at once.
+#   The three configs added by #11857 are `prd` BRANCH configs, so each token also reads the whole `prd`
+#   root. `prd_git_data` adds GIT_DATA_LUKS_KEY (the git-data volume passphrase) and BETTERSTACK_LOGS_TOKEN;
+#   `prd_workspaces_luks_web` adds the web-class WORKSPACES_LUKS_KEY, WORKSPACES_HEADER_BUCKET and
+#   WORKSPACES_HEADER_R2_ENDPOINT and, once minted, the bucket-scoped escrow pair
+#   WORKSPACES_HEADER_R2_ACCESS_KEY_ID / WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY, which sit in the same
+#   config as the passphrase and weaken "a passphrase alone does not open a volume without the header".
+#   `prd_workspaces_luks_marker` has no unique secret (it is created empty) but reads the full `prd` root,
+#   so a leak of that token is as serious as a leak of the `prd` token.
+#   REVOKING A TOKEN STOPS FUTURE READS; IT CANNOT UN-READ A PASSPHRASE. If a LUKS value leaks, the
+#   remedy is a header re-key or a volume cutover, not token deletion.
 #   What actually TRANSITS the runner is narrower than what is reachable: values only for
 #   `CF_API_TOKEN*` and the `*_ACCESS_TOKEN_ID/_SECRET` pair, though `--only-names` pulls each
 #   config's full key-NAME listing. The bypass-RLS reach is a capability, not an exercised read.
@@ -149,8 +159,10 @@
 # PUBLICATION. `DOPPLER_TOKEN_DRIFT_MAP` is a REPOSITORY-level Actions secret, not because that is
 # preferred but because the Terraform GitHub App cannot write ENVIRONMENT-scoped secrets (403; see
 # `doppler_token_inngest_arm`'s comment for the precedent). Every sibling `github_actions_secret`
-# in this root is repo-scoped for the same reason. The governing control is who can merge under
-# `.github/workflows/`, which `CODEOWNERS` pins to the operator.
+# in this root is repo-scoped for the same reason. `CODEOWNERS` pins MERGES under `.github/workflows/`
+# to the operator, but that does not gate BRANCH runs: a repository writer can push a branch workflow
+# that binds this repo-level secret and reads the whole map. That is an ACCEPTED RESIDUAL here;
+# environment-scoping the secret (as `infra-privileged` is) is the follow-up and is not done in #11857.
 #
 # APPLY PATH. Both addresses ride the DEFAULT per-merge `-target=` allow-list in
 # `apply-web-platform-infra.yml`. ONE leg covers all thirteen instances: `-target=` on a `for_each`

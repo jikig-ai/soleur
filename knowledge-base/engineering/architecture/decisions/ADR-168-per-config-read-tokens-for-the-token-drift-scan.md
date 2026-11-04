@@ -241,3 +241,18 @@ on merge.
   each merge with HTTP 400 "Name is already in use". A row in `terraform-target-parity.test.ts` pins both
   halves. Flip evidence for adding the edge later: a state listing that shows
   `doppler_config.git_data_prd` present. The body above and ADR-164 stay as point-in-time history.
+
+  **Revoking a token (read from the ratchets, 2026-11-04).** Deleting a token means removing its name
+  from the inventory (the token is a `for_each` instance), and CI makes that one coordinated change,
+  so it is not a quick edit mid-incident. In one reviewed PR: (1) name each removed config in
+  `INVENTORY_REMOVALS_ACK` in `plugins/soleur/test/token-drift-workflow-causes.test.sh`, or the F4b
+  set ratchet reds (its baseline is the merge base, so a revert PR needs the entry too); (2) lower
+  `DOPPLER_CONFIGS_FLOOR`, the run-time `< 16` re-assertion and its warning text, and
+  `RUNG2_CONFIGS_FLOOR` in `scheduled-terraform-drift.yml` to the new name count (F3 pins floor equal
+  to the inventory count; S4 pins `RUNG2_CONFIGS_FLOOR` equal to the main floor); (3) lower
+  `FLOOR_MINIMUM` in the same suite (F2 pins floor `>=` minimum) and the `configs_floor` fixtures and
+  the T6/T17/T20 expectations that carry it, or the raised assertion re-grades them; (4) the merge
+  commit message must carry `[ack-destroy]` on its own line, because the destroy guard counts the
+  planned token deletes. There is no dispatch rotation route (#7263), so a token cannot be revoked
+  from a workflow run, only by this merge and its apply. Revoking stops future reads; it cannot
+  un-read a LUKS value that already leaked, which needs a header re-key or a volume cutover.
