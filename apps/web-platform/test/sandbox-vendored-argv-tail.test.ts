@@ -31,6 +31,8 @@ import {
   assertHelperSelection,
   scanHelperSelection,
   assertLiteralCensus,
+  assertMountTable,
+  type MountTablePins,
   assertTailMatchesFixture,
   BRIDGE_PINS,
   assertBridgeStructure,
@@ -76,6 +78,9 @@ const MEASURED_SHAPE: LiteralPins = {
   capAddTotal: 1,
   hookAnchors: 2,
 };
+// Mount-table raw literal counts (all callers in the binary), measured 2026-11-04 on both packages: the per-command builder's prefix is an
+// opaque spread the tail parser cannot read, so these counts are what makes a new mount site there a reviewed re-pin.
+const MEASURED_MOUNT_TABLE: MountTablePins = { tmpfs: 3, bind: 9, roBind: 15, devBind: 2 };
 const PINS: Record<"claude-agent-sdk" | "claude-code", LiteralPins & { measuredVersion: string }> = {
   "claude-agent-sdk": { measuredVersion: "0.3.311", ...MEASURED_SHAPE },
   "claude-code": { measuredVersion: "2.1.311", ...MEASURED_SHAPE },
@@ -297,6 +302,23 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
     );
     expect(msg).toMatch(/PROC_SITE_COUNT/);
     expect(msg).toMatch(/hook/i);
+  });
+
+  it("the mount-table census counts each flag exactly and an extra or missing site reds MOUNT_TABLE_COUNT naming it", () => {
+    const text = (n: Record<keyof MountTablePins, number>) =>
+      Buffer.from(
+        `${FILLER}${'"--tmpfs",'.repeat(n.tmpfs)}${'"--bind",'.repeat(n.bind)}${'"--ro-bind",'.repeat(n.roBind)}${'"--dev-bind",'.repeat(n.devBind)}${FILLER}`,
+        "latin1",
+      );
+    const census = (n: MountTablePins) => scanLiterals(bufferSource(text(n)));
+    expect(census(MEASURED_MOUNT_TABLE).mountTable).toEqual(MEASURED_MOUNT_TABLE);
+    expect(failureOf(() => assertMountTable(census(MEASURED_MOUNT_TABLE), MEASURED_MOUNT_TABLE, "x", "synthetic"))).toBe("");
+    for (const key of ["tmpfs", "bind", "roBind", "devBind"] as const) {
+      const more = { ...MEASURED_MOUNT_TABLE, [key]: MEASURED_MOUNT_TABLE[key] + 1 };
+      const fewer = { ...MEASURED_MOUNT_TABLE, [key]: MEASURED_MOUNT_TABLE[key] - 1 };
+      expect(failureOf(() => assertMountTable(census(more), MEASURED_MOUNT_TABLE, "x", "synthetic")), `${key}+1`).toMatch(/MOUNT_TABLE_COUNT want \d+ got \d+/);
+      expect(failureOf(() => assertMountTable(census(fewer), MEASURED_MOUNT_TABLE, "x", "synthetic")), `${key}-1`).toMatch(/MOUNT_TABLE_COUNT/);
+    }
   });
 
   it("a second `\"--bind\",\"/proc\",\"/proc\"` site reds PROC_SITE_COUNT", () => {
@@ -620,6 +642,10 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
           assertLiteralCensus(scanned.census, pins, `${pkg}@${scanned.version}`, `measured on ${pins.measuredVersion}`),
         );
         expect(msg).toBe("");
+      });
+
+      it("the mount-table literal counts (--tmpfs, --bind, --ro-bind, --dev-bind) equal the measured pin (the pre-`--dev` table the tail parser cannot read)", () => {
+        expect(failureOf(() => assertMountTable(scanned.census, MEASURED_MOUNT_TABLE, `${pkg}@${scanned.version}`, `measured on ${pins.measuredVersion}`))).toBe("");
       });
 
       it("the unix-socket helper selection (skip/apply/missing lines exact, settings-mapping anchors >= 1) equals the measured pin (#10445)", () => {

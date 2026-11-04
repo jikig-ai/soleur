@@ -423,8 +423,23 @@ export interface LiteralPins {
 
 export interface LiteralCensus {
   counts: LiteralPins;
+  /** Mount-table literal counts (see MOUNT_TABLE_NEEDLES), read in the same pass. */
+  mountTable: MountTablePins;
   offsets: Record<string, number[]>;
 }
+
+/**
+ * The pre-`--dev` mount table is built by code the tail parser never reads (an opaque spread), so a new `--tmpfs` / `--bind` /
+ * `--ro-bind` / `--dev-bind` site added there passes every tail pin. These raw literal counts (all callers in the binary, the hook
+ * sandbox and the capability probes included) make such an addition a reviewed re-pin instead of a silent one. Measured, not derived.
+ */
+export const MOUNT_TABLE_NEEDLES = {
+  tmpfs: '"--tmpfs"',
+  bind: '"--bind"',
+  roBind: '"--ro-bind"',
+  devBind: '"--dev-bind"',
+} as const;
+export type MountTablePins = Record<keyof typeof MOUNT_TABLE_NEEDLES, number>;
 
 const CENSUS_NEEDLES = {
   procSites: '"--proc","/proc"',
@@ -441,6 +456,7 @@ const CENSUS_NEEDLES = {
 export function scanLiterals(src: ByteSource, opts: ScanOptions = {}): LiteralCensus {
   const needles: Record<string, Buffer> = {};
   for (const [k, v] of Object.entries(CENSUS_NEEDLES)) needles[k] = Buffer.from(v, "latin1");
+  for (const [k, v] of Object.entries(MOUNT_TABLE_NEEDLES)) needles[`mount:${k}`] = Buffer.from(v, "latin1");
   const offsets = scanNeedles(src, needles, opts);
   const hook = Buffer.from(CENSUS_NEEDLES.hookAnchors, "latin1");
   let hookProcSites = 0;
@@ -462,8 +478,27 @@ export function scanLiterals(src: ByteSource, opts: ScanOptions = {}): LiteralCe
       capAddTotal: c("capAddTotal"),
       hookAnchors: c("hookAnchors"),
     },
+    mountTable: {
+      tmpfs: offsets["mount:tmpfs"].length,
+      bind: offsets["mount:bind"].length,
+      roBind: offsets["mount:roBind"].length,
+      devBind: offsets["mount:devBind"].length,
+    },
     offsets,
   };
+}
+
+/** Throws MOUNT_TABLE_COUNT naming every mount flag whose literal count moved from the pin. */
+export function assertMountTable(census: LiteralCensus, pins: MountTablePins, label: string, context: string): void {
+  const lines = (Object.keys(MOUNT_TABLE_NEEDLES) as (keyof MountTablePins)[])
+    .filter((k) => census.mountTable[k] !== pins[k])
+    .map((k) => `MOUNT_TABLE_COUNT want ${pins[k]} got ${census.mountTable[k]} (${MOUNT_TABLE_NEEDLES[k]} literals)`);
+  if (lines.length === 0) return;
+  throw new Error(
+    `[${label}] (${context}) ${lines.join("; ")}. A mount flag count moved in the vendored binary: inspect the new site ` +
+      "(`/usr/bin/grep -abo -F '<needle>' apps/web-platform/node_modules/@anthropic-ai/{claude-agent-sdk,claude-code}-linux-x64/claude` prints each offset) and decide whether it mounts anything a tenant can read " +
+      "before re-pinning MEASURED_MOUNT_TABLE in apps/web-platform/test/sandbox-vendored-argv-tail.test.ts; a re-pin is a security decision, not a way to turn this green.",
+  );
 }
 
 /** Throws one error listing every deviation, each line starting with its failure code. */

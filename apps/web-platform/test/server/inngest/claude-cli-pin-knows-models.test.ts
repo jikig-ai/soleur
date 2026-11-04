@@ -597,7 +597,8 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
 // Everything above proves the PACKAGE version, and a package version says nothing about the runtime inside the binary: the
 // claude-code 2.1.293 / agent-sdk 0.3.284 binaries embed Bun 1.4.3, whose Brotli decoder is the CVE. The Dockerfile's
 // global install tree is not reached here (its pin is asserted equal to package.json above and the shipped copy is read from
-// the released image after merge); this reads the `npm ci` tree both runtime paths use. The floor is a constant in
+// the released image after merge). The same pin equality stands in for `bin/claude.exe` (a postinstall copy of the exact-pinned platform
+// package this reads) and for the arm64 / musl variants, which are not shipped to the server (a deliberate scope limit, #12073 review); this reads the `npm ci` tree both runtime paths use. The floor is a constant in
 // test/helpers/vendored-bwrap-tail.ts, so one diff could lower it and move the pins together: it proves consistency with the stated floor, not integrity
 // of the floor, and the sdk-bump attestation plus this header are what a reviewer sees in that diff.
 //

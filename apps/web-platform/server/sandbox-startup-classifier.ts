@@ -213,6 +213,9 @@ const HELPER_USERNS_STEP = "unshare(CLONE_NEWUSER)";
  * call site is by its name, the PRE-COMMAND decision does not depend on it.) A fourth new string, "could not set
  * user.max_user_namespaces (%s); ...", is a non-fatal warning that is not in the exact-step allowlist (and has no
  * `: <errno>` suffix), so `classifyBashSandboxFailure` returns null for it (the regex alone would match it with an errno tail appended); it is listed as a non-step line in test/helpers/vendored-bwrap-tail.ts, not here.
+ * A warning line followed by a fatal helper line is two lines and so intentionally unclassified (the notice needs ONE line). The helper is never entered
+ * under our production config (`allowAllUnixSockets: true`, pinned by agent-runner-helpers.test.ts), so no such two-line output can occur or be measured;
+ * revisit this only if that pin changes.
  * Flip `execvp` out of this list only if a measured argv shows the helper execs the tenant argv directly.
  */
 export const HELPER_STEPS_PRE_COMMAND: readonly string[] = [
