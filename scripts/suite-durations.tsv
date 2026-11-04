@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-03T13:07:56Z
+# generated-at=2026-11-03T20:31:14Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -76,6 +76,7 @@ apps/cla-evidence/scripts/sentinel-pr.test.sh	25	measured
 apps/cla-evidence/scripts/timestamp.test.sh	72	measured
 apps/cla-evidence/scripts/upload-bypass.test.sh	1091	measured
 apps/cla-evidence/scripts/upload-evidence.test.sh	1135	measured
+apps/web-platform/infra/inngest-luks-sole-copy	1251	floor
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	469	measured
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	338	measured
 apps/web-platform/scripts/dev-ledger-parity.test.sh	43159	measured
@@ -166,6 +167,7 @@ plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1222	floor
 plugins/soleur/test/_base-notice-frontmatter.test.sh	7093	measured
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	10959	measured
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	1222	floor
+plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor
@@ -413,10 +415,10 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
+scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
-scripts/followthroughs/inngest-trace-retention-5150	1222	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured

@@ -1101,3 +1101,32 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
     });
   });
 });
+
+// CodeQL alert #280 (js/http-to-file-access): `deriveDiff` wrote `base`/`after`
+// into the scratch dir with no total-byte bound at the sink. `readEditTarget`
+// caps the real base at EDIT_TARGET_MAX_BYTES and `newLinesCause` bounds the
+// insert, but the assembled text reaching `writeFile` had no explicit cap.
+describe("deriveDiff — assembled scratch write is byte-bounded (CodeQL alert 280)", () => {
+  it("a base+insert over DERIVE_FILE_MAX_BYTES refuses as too-large BEFORE any scratch write", async () => {
+    // A crafted base larger than the read path's own cap: the sink-side bound
+    // must hold however `base` was produced, not only via readEditTarget.
+    const base = "x\n".repeat(EDIT_TARGET_MAX_BYTES); // 240,000 bytes > cap
+    const r = await buildAdditiveEditDiff({
+      targetPath: SKILL_ALPHA,
+      base,
+      edit: { insert_after_line: "", new_lines: ["- note"] },
+    });
+    expect(r).toMatchObject({ ok: false, reason: "edit-derive-failed", cause: "too-large" });
+  });
+
+  it("the maximal in-bound assembly still derives (must-PASS against the same cap)", async () => {
+    const base = await baseOf(SKILL_EXACT); // exactly EDIT_TARGET_MAX_BYTES
+    const lines = Array.from({ length: 20 }, () => "b".repeat(SKILL_EDIT_LINE_MAX_CHARS));
+    const r = await buildAdditiveEditDiff({
+      targetPath: SKILL_EXACT,
+      base,
+      edit: { insert_after_line: "", new_lines: lines },
+    });
+    expect(r.ok).toBe(true);
+  });
+});

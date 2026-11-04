@@ -974,6 +974,15 @@ export const AGENTS_EDIT_LINE_MAX_CHARS = 600;
  * maximum: 20 full lines pass this validator and are then refused `diff-size-exceeded` by name.
  */
 export const SKILL_EDIT_LINE_MAX_CHARS = 1000;
+/**
+ * Ceiling on the assembled `after` text `deriveDiff` writes to its scratch
+ * dir: base (<= EDIT_TARGET_MAX_BYTES on the real read path) + the insert
+ * (<= EDIT_NEW_LINES_MAX lines x SKILL_EDIT_LINE_MAX_CHARS, the wider of the
+ * two per-target caps) + slack for separators and the trailing LF. Enforced at
+ * the write sink so the bound holds however `base` was produced.
+ */
+export const DERIVE_FILE_MAX_BYTES =
+  EDIT_TARGET_MAX_BYTES + EDIT_NEW_LINES_MAX * SKILL_EDIT_LINE_MAX_CHARS + 1024;
 /** The soft target the prompt asks for; the hard cap of the target is what is enforced. */
 export const EDIT_LINE_TARGET_CHARS = 500;
 
@@ -1205,6 +1214,16 @@ async function deriveDiff(
     return { failure: cause };
   };
   if (!base.endsWith("\n") || base.includes("\r")) return fail("bad-base");
+  // Bound the assembled text HERE, at the write sink — not by trusting the
+  // upstream caps (`readEditTarget`'s EDIT_TARGET_MAX_BYTES, `newLinesCause`'s
+  // count/line limits) to compose correctly. `after` is always >= base, so
+  // one bound on the assembled bytes covers both scratch writes (CodeQL
+  // js/http-to-file-access alert #280).
+  const assembledBytes =
+    Buffer.byteLength(base, "utf8") +
+    newLines.reduce((n, l) => n + Buffer.byteLength(l, "utf8") + 1, 0) +
+    1;
+  if (assembledBytes > DERIVE_FILE_MAX_BYTES) return fail("too-large");
   let dir: string | null = null;
   try {
     dir = await mkdtemp(join(tmpdir(), "compound-edit-"));

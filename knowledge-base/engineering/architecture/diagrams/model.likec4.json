@@ -1778,6 +1778,17 @@
 "id": "1l1gtz1pvduj9",
 "title": "Asks app-help questions via the support bubble — routed to the scope-reduced support persona (ADR-113)"
 },
+"1mdu5fywiy7vj": {
+"technology": "HTTPS",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "platform.infra.supabase"
+},
+"id": "1mdu5fywiy7vj",
+"title": "Auth and data. Includes the member egress-audit read path (#9545 PR2, ADR-288 amendment 2026-10-26): the server-rendered Scope Grants audit page calls the get_egress_audit_window_summary RPC and the card hint calls the get_egress_audit_summary RPC, through the signed-in member's cookie client over workspace_egress_audit_rollup. Authenticated workspace members only (membership and jti-denylist checks in the function body); no member SELECT policy, no table grant, no HTTP route; best-effort minimum counts over a 24-hour, 7-day or 30-day window (default 30 days)"
+},
 "1minwcllbkdht": {
 "technology": "HTTPS (Hetzner Cloud API)",
 "source": {
@@ -2159,17 +2170,6 @@
 },
 "id": "297phgcjd6fne",
 "title": "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above"
-},
-"29r9qkv96wtut": {
-"technology": "HTTP (same-host loopback), bearer",
-"source": {
-"model": "platform.infra.hetzner"
-},
-"target": {
-"model": "platform.webapp"
-},
-"id": "29r9qkv96wtut",
-"title": "Vector on the web host posts closed 15-minute egress-audit buckets (workspace, host, allowed/denied, best-effort counts; no IP, user or path) to POST /api/internal/egress-audit-ingest -- loopback Host only, forwarded requests rejected, bearer token compared in constant time (current + previous for rotation). The route evaluates the egress-audit-collection flag per organisation and writes through ingest_egress_audit_rollup; members read it only through the get_egress_audit_summary RPC (no member read policy; ADR-288 amendment 2026-10-26)."
 },
 "29yesvgqp9dka": {
 "source": {
@@ -3048,6 +3048,17 @@
 "id": "3vjk6lb4xxxij",
 "title": "Reads plans, writes code"
 },
+"49bm6xfs96vo": {
+"technology": "HTTP (same-host loopback), bearer",
+"source": {
+"model": "platform.infra.hetzner"
+},
+"target": {
+"model": "platform.webapp"
+},
+"id": "49bm6xfs96vo",
+"title": "Vector on the web host posts closed 15-minute egress-audit buckets (workspace, host, allowed/denied, best-effort counts; no IP, user or path) to POST /api/internal/egress-audit-ingest -- loopback Host only, forwarded requests rejected, bearer token compared in constant time (current + previous for rotation). The route evaluates the egress-audit-collection flag per organisation and writes through ingest_egress_audit_rollup; members read it only through the get_egress_audit_window_summary RPC (page) and the get_egress_audit_summary RPC (card hint) (no member read policy; ADR-288 amendment 2026-10-26)."
+},
 "4v59hychoe17": {
 "technology": "File I/O",
 "source": {
@@ -3498,17 +3509,6 @@
 },
 "id": "xk2aw9ze5kta",
 "title": "Stores every user's checked-out repository. Mounted at /mnt/data and bind-mounted into the app container as /workspaces (cloud-init.yml). The app container is the SOLE writer, which is what makes a container stop a sufficient freeze for the ADR-119 cutover — though `docker stop` defaults to a 10s grace then SIGKILL, so the cutover uses -t 120 plus interrupted-write asserts: a truncated file is otherwise rsynced and certified correct. Since #9123 the mount is owned by PID 1 through fstab (/dev/mapper/workspaces … defaults,nofail) after a boot-time Doppler-keyed luksOpen by workspaces-luks-reopen.service, and the ADR-119 §(e) gate is armed on web-1: docker.service.d carries RequiresMountsFor=/mnt/data + After=workspaces-luks-reopen.service and the covered root-disk /mnt/data inode is chattr +i, so nothing can write the bare root-disk dir while the mapper is absent"
-},
-"y4enho76k4vb": {
-"technology": "HTTPS",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "platform.infra.supabase"
-},
-"id": "y4enho76k4vb",
-"title": "Auth and data. Includes the member egress-audit read path (#9545 PR2, ADR-288 amendment 2026-10-26): the server-rendered Scope Grants audit page and card call the get_egress_audit_summary RPC through the signed-in member's cookie client over workspace_egress_audit_rollup. Authenticated workspace members only (membership and jti-denylist checks in the function body); no member SELECT policy, no table grant, no HTTP route; best-effort minimum counts over a fixed 30-day window"
 },
 "yc17druk97p9": {
 "technology": "Webhook",
@@ -11571,7 +11571,7 @@
 "id": "pbtbfp",
 "source": "platform.webapp",
 "target": "platform.infra.supabase",
-"label": "Auth and data. Includes the member \negress-audit read path (#9545 PR2, \nADR-288 amendment 2026-10-26): the \nserver-rendered Scope Grants audit page \nand card call the ",
+"label": "Auth and data. Includes the member \negress-audit read path (#9545 PR2, \nADR-288 amendment 2026-10-26): the \nserver-rendered Scope Grants audit page \ncalls the ",
 "points": [
 [
 1866,
@@ -11646,10 +11646,10 @@
 },
 "parent": "platform",
 "relations": [
+"1mdu5fywiy7vj",
 "24xuohm5gdv38",
 "3jdeou1f8ri15",
-"up6o3t6hh4oe",
-"y4enho76k4vb"
+"up6o3t6hh4oe"
 ],
 "color": "gray",
 "line": "dashed",
@@ -28034,7 +28034,7 @@
 },
 "parent": null,
 "relations": [
-"29r9qkv96wtut"
+"49bm6xfs96vo"
 ],
 "color": "gray",
 "line": "dashed",

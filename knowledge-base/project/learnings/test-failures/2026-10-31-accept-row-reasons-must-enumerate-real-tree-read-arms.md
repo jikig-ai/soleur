@@ -30,3 +30,5 @@ An accept row exempts a *boundary line*, but its reason is judged against the su
 
 - Session: one-shot on #11694 (PR #11734), 2026-10-31. Security-sentinel flagged the false "never reads" claim (P2); the first fix enumerated only the LIVE arm and the fix round flagged the missed FLOOR arm (P2 residual). Both pre-existing stale `luks-keeper` reasons were corrected in the same pass.
 - `lint-betterstack-emitter-read.test.sh:335` (FLOOR, `EMITTER_READ_MIN_POP=100000`) and `:347` (LIVE) are the only no-arg real-tree runs; the floor verdict fires at guard `:365`, after the candidate walk reads every probe at `:275`/`:283`.
+
+See also: `2026-11-03-one-malformed-accept-row-reason-drops-every-exemption.md` — the reason column's other failure axis: the `false-positive: ` *prefix* is load-bearing; without it `load_accept` rejects the whole file and every exemption drops.
