@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-03T21:42:40Z
+# generated-at=2026-11-04T01:34:49Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -76,6 +76,7 @@ apps/cla-evidence/scripts/sentinel-pr.test.sh	25	measured
 apps/cla-evidence/scripts/timestamp.test.sh	72	measured
 apps/cla-evidence/scripts/upload-bypass.test.sh	1091	measured
 apps/cla-evidence/scripts/upload-evidence.test.sh	1135	measured
+apps/web-platform/infra/inngest-luks-sole-copy	1251	floor
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	469	measured
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	338	measured
 apps/web-platform/scripts/dev-ledger-parity.test.sh	43159	measured

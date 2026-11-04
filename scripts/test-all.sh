@@ -6721,6 +6721,10 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # Sole-copy LUKS Guard 1 (#9927 item 10, ADR-282): registered HERE so a red Guard 1 blocks merge through the required `test` context
+  # (test-scripts). Also covered by the infra runner glob (deploy-script-tests), hence its DOUBLE_COVERED_ACK entry in
+  # scripts/lint-orphan-test-suites.sh; the G2f pin in plugins/soleur/test/terraform-target-parity.test.ts (test-bun leg) keeps this line from being dropped.
+  run_suite "apps/web-platform/infra/inngest-luks-sole-copy" bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
   # #11294: the random_* id redaction filter that keeps a random_id's key bytes out of every public terraform log, issue and comment.

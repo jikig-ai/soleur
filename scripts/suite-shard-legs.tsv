@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-03T21:42:40Z
+# generated-at=2026-11-04T01:34:49Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -78,6 +78,7 @@ apps/cla-evidence/scripts/sentinel-pr.test.sh	5
 apps/cla-evidence/scripts/timestamp.test.sh	3
 apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	7
+apps/web-platform/infra/inngest-luks-sole-copy	3
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
 apps/web-platform/scripts/dev-ledger-parity.test.sh	1
@@ -165,7 +166,7 @@ plugins/soleur/skills/verification-scaffold/test/generator.test.sh	1
 plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
-plugins/soleur/test/affected-tests-pool-default.test.sh	3
+plugins/soleur/test/affected-tests-pool-default.test.sh	6
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	7
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
