@@ -148,10 +148,19 @@ if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+p
   exit 0
 fi
 
+# assert_fixture_dir <path> — same name/shape as the test corpus's helper so
+# the fixture-relative scanner (#7708) correlates it with the git -C sites
+# below. Semantics differ deliberately: this hook fails OPEN (exit 0) so a
+# malformed payload never blocks the boundary command.
+assert_fixture_dir() {
+  case "${1-}" in
+    ""|*/../*|*/..|/|//|/.|/proc/*|/sys/*|/dev/*) exit 0 ;;
+    /*) [[ -d "$1" ]] || exit 0 ;;
+    *) exit 0 ;;
+  esac
+}
 # Validate WORK_DIR: absolute + existing dir (CWE-88 arg-injection defense).
-if [[ "$WORK_DIR" != /* ]] || [[ ! -d "$WORK_DIR" ]]; then
-  exit 0
-fi
+assert_fixture_dir "$WORK_DIR"
 if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]]; then
   exit 0
 fi
