@@ -1542,10 +1542,14 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
   "tests/scripts/test-sentry-ac17-derived-counts.sh"
 )
 
-# tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
-# repo paths its suite file names.
+# tests/scripts/sentry-alert-drift-workflow — the W7 row runs the REAL probe (scripts/sentry-alert-live-
+# fidelity.sh) with only the auth/org/rules envs stubbed, so the probe reads the REAL reference, vendor-
+# defaults and frozen-capture files through its default seams.
 AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
+  "apps/web-platform/infra/sentry/alert-reference.json"
+  "apps/web-platform/infra/sentry/vendor-default-workflows.json"
   "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -4176,13 +4180,3 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# tests/scripts/sentry-alert-drift-workflow — the W7 row runs the REAL probe (scripts/sentry-alert-live-
-# fidelity.sh) with only the auth/org/rules envs stubbed, so the probe reads the REAL reference, vendor-
-# defaults and frozen-capture files through its default seams.
-AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
-  "apps/web-platform/infra/sentry/alert-reference.json"
-  "apps/web-platform/infra/sentry/vendor-default-workflows.json"
-  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
-  "tests/scripts/test-sentry-alert-drift-workflow.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
