@@ -89,6 +89,7 @@ The CI DSAR lockstep gate (`pr-quality-guards.yml`) requires the three public do
 ## Conditions
 
 Before ship (conditions of this discharge): discharged — the three follow-ups are tracked in one issue, #12080.
+
 1. Filed: #12080 covers the end-of-retention deletion path including note redaction, the external anchor, and deletion of `legal_reauth_event` rows on erasure.
 
 Before the table receives its first real row (enabling gate, not the merge):

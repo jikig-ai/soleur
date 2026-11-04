@@ -47,7 +47,7 @@ To be used in the reply to an account-deletion or Art. 17 request from a founder
 >
 > **Who can see it.** Access is limited to the database administrator role and, once it is switched on, to the Jikigai service that checks whether a decision was made before a legal step goes ahead (it reads the status, not your note); it is not shown to anyone else.
 >
-> **Your rights.** You can object to this processing on grounds relating to your situation (Article 21 GDPR); we will tell you our decision. You can ask us what we hold (Article 15 GDPR) by writing to legal@jikigai.com. You can also complain to the CNIL (Commission Nationale de l'Informatique et des Libertés, <https://www.cnil.fr>) or to your own data protection authority.
+> **Your rights.** You can object to this processing on grounds relating to your situation (Article 21 GDPR); we will tell you our decision. You can ask us what we hold (Article 15 GDPR) by writing to <legal@jikigai.com>. You can also complain to the CNIL (Commission Nationale de l'Informatique et des Libertés, <https://www.cnil.fr>) or to your own data protection authority.
 
 Notes for the person answering: do not describe the identifier as anonymous; do not say the record is deleted; do not quote the retention figure until counsel has decided it; if the founder wrote a note, say that it is part of what is kept; the block says "with one exception" about this record, so reconcile it with any other data Jikigai keeps for that account (for example records kept under a legal obligation, per the Privacy Policy) before sending.
 
@@ -63,7 +63,7 @@ Constraints the screen (PR-C) must match: counter or hard stop at 1000 character
 
 The Request changes notice in (c) covers one field. Art. 13 information is also owed at the point the decision is made, for every choice, and the LIA (Balancing iii) relies on the founder being told what is kept before deciding. Proposed wording, shown on the card above the choices:
 
-> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for [period to be confirmed by counsel]. You can ask what we hold or object by writing to legal@jikigai.com, and you can complain to the CNIL.**
+> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for [period to be confirmed by counsel]. You can ask what we hold or object by writing to <legal@jikigai.com>, and you can complain to the CNIL.**
 
 Not approved for display until counsel has decided the retention period. Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
 
