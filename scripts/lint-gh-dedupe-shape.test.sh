@@ -672,6 +672,27 @@ else
   fail "G21b a quoted site with escaped quotes + || arm stays handled" "absent from advisory" "$(printf '%s' "$_geout" | tr '\n' ' ')"
 fi
 
+# G22 -- a vacuous `||` inside a CONDITION is still silent collapse:
+# `if X=$(gh…) || true; then` is always-then — the condition limb must not
+# rescue a vacuous arm. `if X=$(gh…) || exit 1; then` binds and stays green.
+r="$(mkfix condvac)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          if X=$(gh issue list --state open) || true; then echo ok; fi
+          if W=$(gh issue list --state closed) || exit 1; then echo ok; fi
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G22 a vacuous || arm inside a condition FIRES" "$r" 9
+assert_not_named "G22b a binding || arm inside a condition does NOT fire" "$r" 10
+assert_fires "G22 control: the bad line FIRES" "$r" 11
+
 # --- the gate's own scope ---------------------------------------------------
 
 # H1 -- a root with no .github/workflows is a USAGE error (rc=2), never a pass.
@@ -750,7 +771,7 @@ fi
 # channel).
 ADVISORY_CEILING=13
 adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
-if [[ "${adv_n:-0}" -le "$ADVISORY_CEILING" ]]; then
+if [[ -n "$adv_n" && "$adv_n" -le "$ADVISORY_CEILING" ]]; then
   pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
 else
   fail "H6 live quoted-advisory count <= $ADVISORY_CEILING" "<=$ADVISORY_CEILING" "$adv_n"

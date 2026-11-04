@@ -290,9 +290,19 @@ def _subst_end(text: str, dollar_idx: int) -> int:
     return -1
 
 
-def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
-    """Whether the capture's rc is bound by a NON-VACUOUS `||` handler that
-    ADJOINS the `$(…)` — token-presence anywhere on the line is not binding.
+def _or_status(text: str, idx: int, initial_quote: str = None) -> str:
+    """Classify the `||` situation adjoining the `$(…)`: 'bound' (a
+    non-vacuous handler adjoins), 'vacuous' (a `||` adjoins but its first
+    element silently discharges — `true`/`:`/bare `IDENT=`), or 'none'
+    (no adjacent `||` — the capture stands alone).
+
+    A vacuous `||` is silent collapse in EVERY context, including inside a
+    condition: `if X=$(gh…) || true; then` is always-then — the fault is
+    eaten by the condition itself, the same defect class as `|| true` on a
+    plain line. Callers treat 'vacuous' as unclassified even when the site
+    sits in a condition list.
+
+    Token-presence anywhere on the line is not binding.
 
     `X=$(gh …); [ -n "$X" ] || exit 0` contains a `||` that binds the `[ ]`
     while the capture still aborts the step — the `||` must be the first
@@ -338,7 +348,7 @@ def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
             i += 1
             continue
         if ch == "|" and i + 1 < n and text[i + 1] == "|":
-            return not _vacuous_first(text[i + 2:])
+            return "vacuous" if _vacuous_first(text[i + 2:]) else "bound"
         if ch == ")":
             i += 1
             continue
@@ -348,8 +358,8 @@ def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
         if m:
             i = m.end()
             continue
-        return False
-    return False
+        return "none"
+    return "none"
 
 
 # A redirect token: optional fd digit(s), a direction char, optional `&`,
@@ -373,6 +383,9 @@ def _vacuous_first(arm: str) -> bool:
 
 _VACUOUS_WORD_RE = re.compile(
     r"(?:true|:|[A-Za-z_][A-Za-z0-9_]*=(?:\"\"|\'\'|))$")
+# `|| { :; }`-style blocks whose interior is all no-ops are unmodelled — they
+# classify 'bound' (a `{` first token is a disposition shape); a deliberate
+# exotic arm carries a `# dedupe:` marker, same as every unmodelled shape.
 
 
 def _sites_in_line(ltext: str):
@@ -507,9 +520,10 @@ def scan_file(path: str, rel: str):
         for kind, ident, col, end in _sites_in_line(stripped):
             prefix = stripped[:col]
             tail = stripped[end:]
-            handled = _in_condition(prefix) \
-                or _has_or_outside(
-                    tail, 0, initial_quote='"' if kind == "quoted" else None)
+            or_status = _or_status(
+                tail, 0, initial_quote='"' if kind == "quoted" else None)
+            handled = or_status == "bound" or (
+                _in_condition(prefix) and or_status != "vacuous")
             if kind == "census":
                 if handled:
                     verdict = "handled"

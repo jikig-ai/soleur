@@ -633,7 +633,7 @@ runcmd:
   - systemctl enable --now bwrap-userns-sysctl.service
 
   # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 5 web-host probes (#6438/#6548, #10455 b). The baked
-  # web-probe-envwrite.sh writes the 5 /etc/default/web-<probe> EnvironmentFiles (per-host token +
+  # web-probe-envwrite.sh writes the 5 probe EnvironmentFiles (per-host token +
   # EXPECTED_IP + endpoints) that the SSH remote-exec provisioners write only on web-1 — WITHOUT
   # these a fresh cattle host's probe units fail to start (missing EnvironmentFile). Token is passed
   # as an env var (same root-only exposure class as the webhook-deploy printf above; the read-scoped
