@@ -15,11 +15,11 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 
 ## PR-B — Database record, text registry, ADR, C4, legal documents (dark; starts after the spike passes and PR-A merges)
 
-- [ ] 5.1 Failing tests first: `migration-184-legal-acceptance.test.ts` (static shape) and behavioural tests for every Guard 3 mutation row
-- [ ] 5.2 `184_legal_acceptance.sql`, `.down.sql` (refuses while rows exist), `verify/184_legal_acceptance.sql`
-- [ ] 5.3 Text registry `server/legal-acceptance/texts/` and `canonical.ts`; shared hash fixture asserted in bash and vitest
-- [ ] 5.4 Art. 30 activity, LIA, attestation record, compliance-posture row, DSAR exclusions, note-field notice; run `soleur:gdpr-gate`
-- [ ] 5.5 ADR-318 (re-verify ordinal), ADR-309 pointer, read all three `.c4` files, C4 edits, run C4 tests
+- [x] 5.1 Failing tests first: `migration-184-legal-acceptance.test.ts` (static shape) and behavioural tests for every Guard 3 mutation row
+- [x] 5.2 `184_legal_acceptance.sql`, `.down.sql` (refuses while rows exist), `verify/184_legal_acceptance.sql`
+- [x] 5.3 Text registry `server/legal-acceptance/texts/` and `canonical.ts`; shared hash fixture asserted in bash and vitest
+- [x] 5.4 Art. 30 activity, LIA, attestation record, compliance-posture row, DSAR exclusions, note-field notice; run `soleur:gdpr-gate`
+- [x] 5.5 ADR-318 (re-verify ordinal), ADR-309 pointer, read all three `.c4` files, C4 edits, run C4 tests
 
 ## PR-C — Web screens and in-place check (behind `approval-queue`)
 

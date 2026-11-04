@@ -30,6 +30,12 @@ END $$;
 -- 1. legal_acceptance (the record)
 -- =====================================================================
 
+-- LAWFUL_BASIS: legitimate_interests (Art. 6(1)(f)); kept after erasure under Art. 17(3)(e). LIA:
+-- knowledge-base/legal/legitimate-interest-assessments/2026-11-founder-legal-acceptance-lia.md; Art. 30 entry PA-40.
+-- RETENTION: proposed life of the instrument plus 5 years, capped at 10 (UNCONFIRMED by counsel). No sweep is built and
+-- the guard refuses deletion; the deletion path at the end of the period is an open engineering follow-up (PA-40, item 17).
+-- DSAR: excluded from the self-serve export (DSAR_TABLE_EXCLUSIONS); requested_edit is free text capped at 1000 characters
+-- and the UI shows a no-personal-data notice.
 CREATE TABLE IF NOT EXISTS public.legal_acceptance (
   id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   founder_id     uuid        NOT NULL,
@@ -61,6 +67,9 @@ COMMENT ON TABLE public.legal_acceptance IS
 -- 2. legal_reauth_event (single-use email-code challenge)
 -- =====================================================================
 
+-- LAWFUL_BASIS: legitimate_interests (Art. 6(1)(f)), same LIA and PA-40 as legal_acceptance.
+-- RETENTION: expires after 5 minutes; rows older than 30 days are deleted when the next challenge is issued (engineering
+-- value, not an approved legal number); not deleted on erasure (PA-40, item 17(f)).
 CREATE TABLE IF NOT EXISTS public.legal_reauth_event (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id       uuid        NOT NULL,
