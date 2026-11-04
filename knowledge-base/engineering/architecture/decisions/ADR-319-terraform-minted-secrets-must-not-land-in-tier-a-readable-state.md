@@ -21,7 +21,7 @@ The git-data root key already shows the alternative: its state moved to `soleur-
 
 ## Consequences
 
-- A new resource of that kind needs an operator-mint step or a privileged-bucket root. That is more setup than `terraform apply`, and it is the intended cost.
+- A new resource of that kind is provisioned before the merge that needs it (ADR-065) or lives in a privileged-bucket root. That is more setup than a plain Terraform resource, and it is the intended cost.
 - R2 in ADR-241 stays accepted for what already sits in that state; this ADR stops it from growing.
 - Rotating a secret that sits in readable state does not repair the exposure by itself: the next apply writes the new value to the same readable state. The rotation has to come with the move out.
 - Status is `proposed` because decision 4's gate does not exist and #10582 is open. It becomes `adopting` when a gate is filed and wired, and `accepted` when `tls_private_key.ci_ssh` has left Tier-A-readable state.
