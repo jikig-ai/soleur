@@ -26,6 +26,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 GATE="${AFFECTED_GATE_OVERRIDE:-$REPO_ROOT/plugins/soleur/scripts/affected-tests.sh}"
 [[ -f "$GATE" ]] || { echo "FATAL: gate not found: $GATE"; exit 2; }
+# shellcheck source=lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"   # arms the git-location tripwire and gives git_fixture_env (one list, one builder)
 
 PASSES=0; FAILS=0
 pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
@@ -85,6 +87,7 @@ exit "${STUB_RC:-0}"
 STUB
   fi
   chmod +x "$d/scripts/test-all.sh" || return 1
+  git_fixture_env "$d" || return 1
   git -C "$d" init -q -b main || return 1
   git -C "$d" -c user.email=t@example.invalid -c user.name=t add -A || return 1
   git -C "$d" -c user.email=t@example.invalid -c user.name=t commit -q -m fixture || return 1
