@@ -15,8 +15,12 @@
 #                                               knowledge-base/project/specs/<branch>/, or under
 #                                               specs/archive/<date>-<slug>/ when archived early;
 #                                               an absent artifact is `[PASS] no decision-challenges artifact`
-#   technical-ruling-gate.sh --pr-body <file>   check a PR body for an unscoped owner-decision label
-#                                               or a surviving `pending - assumed` placeholder
+#   technical-ruling-gate.sh --pr-body <file>   check a PR body for an unscoped owner-decision label,
+#                                               a surviving `pending - assumed` placeholder, or an
+#                                               unscoped owner list (below)
+#   technical-ruling-gate.sh --report <file>    the same check on any closing report, status or resume
+#                                               message written to a file (an alias of --pr-body; run it
+#                                               before a body or closing is written without /ship)
 #
 # Exit codes:
 #   0  every examined row passes (`[PASS]` on stdout). An artifact with NO table is `[WARN]` + exit 0
@@ -37,9 +41,18 @@
 # a leading pipe, inside a blockquote or inside a list item are not recognised (residual: the stray-row
 # check above catches a `technical` row there).
 #
+# Owner lists (--pr-body and --report only): a section whose heading asks something of the owner ("Needs you",
+# "Owner review items", "Decisions for you", a bold-only line of the same words; OWNER_HEAD_RE) lasts until the next
+# heading of the same or a higher level (sub-headings stay inside). Every list item in it must carry
+# `(operator: <category>)` on its first line (`owner-list-untagged`), must not hand the owner an agent's step such as
+# a CPO/CTO/CLO sign-off (`agent-owned-step`, AGENT_STEP_RE) and must not carry a `Ruled by CTO|CLO agent` cell
+# (`owner-list-ruled`: a ruling is the agent's, not an item left to the owner). Fenced lines and inline `code spans`
+# are ignored; an unclosed fence is exit 2. Residual: a list inside a table or a blockquote, and a setext heading,
+# are not recognised. The check is of FORM, as everything here is.
+#
 # Reasons (the suite asserts each): bad-class, bad-category, unruled-technical, bad-ruling-shape,
-# owner-label-unscoped, delegation-invalid, delegation-unverifiable, receipt-missing, receipt-mismatch,
-# receipt-unreadable.
+# owner-label-unscoped, owner-list-untagged, agent-owned-step, owner-list-ruled, delegation-invalid,
+# delegation-unverifiable, receipt-missing, receipt-mismatch, receipt-unreadable.
 #
 # Delegation arm (ADR-289, hr-menu-option-ack-not-prod-write-auth): a row whose Class is exactly
 # `operator (production-mutating)` and whose Ruling is
@@ -83,6 +96,8 @@ shopt -s nocasematch
 
 CATEGORIES="money scope priority schedule irreversible production-mutating legal-risk brand"
 CATS_RE="${CATEGORIES// /|}"
+OWNER_HEAD_RE='^(needs[ ]+(you|your)|owner[ -]+(review|decision|item|side|question)s?|(open|pending)[ ]+owner|decisions?[ ]+for[ ]+you|your[ ]+calls?|questions?[ ]+for[ ]+you|waiting[ ]+(on|for)[ ]+you|for[ ]+the[ ]+owner|what[ ]+i[ ]+need[ ]+from[ ]+you)'
+AGENT_STEP_RE='(cpo|cto|clo|cmo|coo|cfo)[ -]+(sign-?off|review|approval)|sign-?off (by|from) (the )?(cpo|cto|clo)'
 LABEL_RE='owner[ \t-]+(decision|ruling)s?[ \t]+((is|are)[ \t]+)?(needed|required)|decision[ \t]+needed[ \t]+from[ \t]+the[ \t]+owner|needs?[ \t]+(the[ \t]+)?owner[ \t]+(decision|ruling)'
 RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
 PENDING_RE='pending[ \t]*[^a-z0-9 \t]+[ \t]*assumed'
@@ -188,6 +203,53 @@ check_labels() { # <file> <display-path>; prints [FAIL] lines, returns the count
       n=$((n + 1))
     fi
   done < <(unfenced_match "$file" "$LABEL_RE")
+  (( n > 255 )) && n=255
+  return "$n"
+}
+
+# owner_list_scan <file>: `<line>\t<reason>` per finding in an owner-list section (see the header), `@UNCLOSED`
+# when a fence is still open at end of file. mawk-safe: no {m,n} intervals. Fence handling is the same CommonMark
+# rule as unfenced_match, under its own names so the fence mutants of that scanner stay scoped to it.
+owner_list_scan() {
+  awk -v headre="$OWNER_HEAD_RE" -v agentre="$AGENT_STEP_RE" -v cats="$CATS_RE" '
+    function fence_toggle(   tok, ch, len) {
+      tok = $0; sub(/^ +/, "", tok)
+      match(tok, /^(`+|~+)/); ch = substr(tok, 1, 1); len = RLENGTH
+      if (!f) { if (ch == "`" && substr(tok, len + 1) ~ /`/) return; f = 1; fch = ch; flen = len; return }
+      if (ch == fch && len >= flen && tok ~ /^(`+|~+)[ \t]*$/) f = 0
+    }
+    { sub(/\r$/, ""); if (NR == 1) sub(/^\357\273\277/, "") }
+    /^ ? ? ?(```+|~~~+)/ { fence_toggle(); next } # mut:owner-list-fence
+    f { next }
+    { raw = tolower($0); t = raw; gsub(/`[^`]*`/, "", t) } # mut:owner-list-code
+    raw ~ /^ ? ? ?#+[ \t]/ || raw ~ /^\*\*[^*]+\*\*:?[ \t]*$/ { # mut:owner-list-bold
+      h = raw; lvl = 9
+      if (h ~ /^ ? ? ?#/) { sub(/^ +/, "", h); lvl = match(h, /[^#]/) - 1; sub(/^#+/, "", h) }
+      gsub(/[*`:]/, "", h); sub(/[ \t]+#+[ \t]*$/, "", h); gsub(/[ \t]+/, " ", h); sub(/^ /, "", h)
+      sub(/^[0-9]+[.)] /, "", h); sub(/^[^a-z0-9]+/, "", h)
+      if (insec && lvl > slvl) next # mut:owner-list-sub
+      insec = 0 # mut:owner-list-close
+      if (h ~ headre) { insec = 1; slvl = lvl }
+      next
+    }
+    insec && t ~ /^[ \t]*([-*]|[0-9]+[.)])[ \t]+/ {
+      tagged = (t ~ ("\\(operator: (" cats ")\\)"))
+      if (!tagged) print NR "\towner-list-untagged" # mut:owner-list
+      if (tagged && t ~ agentre) print NR "\tagent-owned-step" # mut:owner-list-agent
+      if (t ~ /ruled by (cto|clo) agent/) print NR "\towner-list-ruled" # mut:owner-list-ruled
+    }
+    END { if (f) print "@UNCLOSED" }
+  ' "$1"
+}
+
+check_owner_lists() { # <file> <display-path>; prints [FAIL] lines, returns the count (capped: a status wraps at 256)
+  local file="$1" shown="$2" n=0 ln reason
+  while IFS=$'\t' read -r ln reason; do
+    [[ -n "$ln" ]] || continue
+    if [[ "$ln" == "@UNCLOSED" ]]; then UNCLOSED_SEEN=1; continue; fi
+    printf '[FAIL] %s:%s: %s - tag it (operator: <category>), or route it to the CTO/CPO (technical-ruling-delegation.md), or move it under Model Dissents\n' "$shown" "$ln" "$reason" >&2
+    n=$((n + 1))
+  done < <(owner_list_scan "$file")
   (( n > 255 )) && n=255
   return "$n"
 }
@@ -391,8 +453,8 @@ fi
 
 mode="${1:-}"
 case "$mode" in
-  --pr-body)
-    f="${2:-}"; [[ -n "$f" ]] || die2 "usage: --pr-body <file>"
+  --pr-body|--report) # mut:owner-list-alias
+    f="${2:-}"; [[ -n "$f" ]] || die2 "usage: $mode <file>"
     [[ -f "$f" && -r "$f" ]] || die2 "$f: not a readable regular file"
     if ! { [[ -s "$f" ]] && grep -q '[^[:space:]]' "$f"; }; then
       die2 "$f: the PR body is EMPTY (the fetch that wrote it most likely failed); nothing was examined"
@@ -400,9 +462,10 @@ case "$mode" in
     fails=0
     check_pending "$f" "$f"; fails=$((fails + $?))
     check_labels "$f" "$f"; fails=$((fails + $?))
+    check_owner_lists "$f" "$f"; fails=$((fails + $?)) # mut:owner-list-call
     (( UNCLOSED_SEEN )) && die2 "$f: a code fence in the PR body is never closed, so the rest of it was not examined (close it)"
     if (( fails > 0 )); then exit 1; fi
-    printf '[PASS] %s: no unscoped owner-decision label and no pending placeholder\n' "$f"
+    printf '[PASS] %s: no unscoped owner-decision label, no unscoped owner list and no pending placeholder\n' "$f"
     exit 0 ;;
   --branch)
     branch="${TRG_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null)}"
@@ -437,7 +500,7 @@ case "$mode" in
     case "${matches[0]}" in */archive/*) SHAPE_ONLY=1; printf '[NOTE] archived artifact: delegation rows are checked for shape only and are NOT verified (no network)\n' >&2 ;; esac
     check_artifact "${matches[0]}" "${matches[0]}"; exit $? ;;
   ""|-h|--help)
-    die2 "usage: $(basename "$0") <path> | --branch | --pr-body <file>" ;;
+    die2 "usage: $(basename "$0") <path> | --branch | --pr-body <file> | --report <file>" ;;
   -*) die2 "unknown option: $mode" ;;
   *)
     check_artifact "$mode" "$mode"; exit $? ;;
