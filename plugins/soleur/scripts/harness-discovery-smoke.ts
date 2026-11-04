@@ -37,7 +37,9 @@
 import { execFileSync, spawn, spawnSync } from "child_process";
 import { randomBytes } from "crypto";
 import {
+  accessSync,
   closeSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -46,6 +48,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "fs";
 import { tmpdir } from "os";
@@ -600,16 +603,33 @@ export const SKILL_SETTLE_TIMEOUT_MS = 120_000;
  * `opencode` on PATH is almost always a version-manager shim, and a shim resolves its
  * install through `$HOME` — which this arm redirects for hermeticity, and which makes the
  * shim try to REINSTALL (measured: the run hangs, then dies with `Disk quota exceeded`).
- * `readlink -f` follows the shim chain to the real launcher, which needs no HOME at all.
+ * `realpathSync` follows the shim chain to the real launcher, which needs no HOME at all.
+ *
+ * The walk is pure Node, not `bash -c 'command -v …; readlink -f …'`: the inline-script
+ * form made `run()`'s shared `execFileSync` an indirect shell execution, so every
+ * absolute-path argv element at every `run()` call site was a CodeQL sink
+ * (js/shell-command-injection-from-environment, alert 279). `command -v` semantics that
+ * matter are kept — the entry must be a regular executable file, the first PATH hit
+ * wins, absent → `undefined`. Empty PATH entries are SKIPPED rather than resolved
+ * CWD-relative: a `.` hit is never the installed launcher this function exists to find.
  */
 export function resolveBin(bin: string): string | undefined {
-  const r = run(
-    "bash",
-    ["-c", 'p=$(command -v "$1") || exit 1; r=$(readlink -f "$p" 2>/dev/null) || r="$p"; [ -n "$r" ] || r="$p"; printf "%s" "$r"', "bash", bin],
-    { PATH: process.env.PATH ?? "" },
-  );
-  const out = r.out.trim();
-  return r.ok && out !== "" ? out : undefined;
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir === "") continue;
+    const candidate = join(dir, bin);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+    } catch {
+      continue;
+    }
+    try {
+      return realpathSync(candidate);
+    } catch {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 /**
