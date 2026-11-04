@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-03T20:31:14Z
+# generated-at=2026-11-04T01:33:45Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -300,6 +300,7 @@ plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor
 plugins/soleur/test/schedule-skill-once.test.sh	96	measured
 plugins/soleur/test/schedule-task-design.test.sh	1222	floor
+plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	1251	floor
 plugins/soleur/test/scripts-shard-manifest.test.sh	608	measured
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	3708	measured
 plugins/soleur/test/scripts-shard-totality.test.sh	10812	measured
