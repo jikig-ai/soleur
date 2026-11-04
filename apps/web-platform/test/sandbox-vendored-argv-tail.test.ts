@@ -507,10 +507,12 @@ describe("sandbox-vendored-argv-tail: trailing flags in spawn-tail normalization
     expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "--disable-userns"]))).toMatch(/UNSETENV_SHAPE/);
     expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "bad name"]))).toMatch(/UNSETENV_SHAPE/);
   });
-  it("a mount placed right after `--disable-userns` is still a different tail (the flag swallows nothing)", () => {
-    expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns", "--tmpfs", "/proc"])).not.toEqual(
-      normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns"]),
-    );
+  it("a mount placed right after `--disable-userns` is still a different tail (the flag swallows nothing, whatever the mount's arity)", () => {
+    for (const mount of [["--tmpfs", "/proc"], ["--bind", "/proc", "/proc"], ["--ro-bind", "/a", "/b"]]) {
+      expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns", ...mount]), mount.join(" ")).not.toEqual(
+        normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns"]),
+      );
+    }
   });
   it("a tail that gained an extra mount after `--unsetenv` is still a different tail", () => {
     expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--tmpfs", "/proc"])).not.toEqual(normalizeSpawnTail([...head, "--unsetenv", "A"]));

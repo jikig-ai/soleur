@@ -524,7 +524,7 @@ export const HELPER_SELECTION_NEEDLES: Readonly<Record<string, string>> = Object
 /**
  * The settings -> builder mapping. The pre-0.3.311 optional-chain source form (`sandbox?.network?.allowAllUnixSockets`)
  * is gone from the bundle: the knob is now read through a settings resolver that can also drop it under a managed policy
- * (`network.allowAllUnixSockets` in the managed-only key list). A minified identifier or an optional chain is NOT a stable
+ * (`network.allowAllUnixSockets` in the policy-controlled key list). A minified identifier or an optional chain is NOT a stable
  * anchor, so these are content anchors only: the property key as written in the settings schema / config literals, and
  * the dotted setting path the managed-policy key list names. DRIFT TRIPWIRE ONLY, never the proof: that
  * `network.allowAllUnixSockets: true` still skips the `apply-seccomp` wrapper under OUR config is shown by the

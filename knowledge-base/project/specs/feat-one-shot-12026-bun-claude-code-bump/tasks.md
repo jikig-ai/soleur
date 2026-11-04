@@ -41,7 +41,7 @@ Branch: `feat-one-shot-12026-bun-claude-code-bump` | Draft PR 12073 | PR body us
 ## Phase 3 - PR, CI gate, PR 10926 note
 
 - 3.1 Push; check the real exit code (no `| tail`). Mark PR ready only after Phase 1 evidence + Phase 2 complete. PR body: `Ref #12026`, baseline, CI scope, corrected probe old/new, sha256, evidence table, `## Changelog`; `semver:patch`.
-- 3.2 Gate = CI required `test` check plus `lockfile-sync`/`sdk-bump-sandbox-gate`. `sandbox-canary-capture-gate` and `infra-validation` (the AppArmor half of the masked-/proc proof) are NOT required checks: read both runs on the pushed head, record the run ids, and mark ready/arm auto-merge only when both are green. Never push to a queued PR; dequeue via the GraphQL `dequeuePullRequest` mutation first.
+- 3.2 Gate = CI required `test` check plus `lockfile-sync`/`sdk-bump-sandbox-gate`. `sandbox-canary-capture-gate` and `infra-validation` (the AppArmor half of the masked-/proc proof) are NOT required checks: read both runs on the pushed head, record the run ids, and mark ready/arm auto-merge only when both ran and passed (the capture gate must have run the in-image `--verify` and reported no drift, not the `sdk-bump-verified:` ack fallback). Never push to a queued PR; dequeue via the GraphQL `dequeuePullRequest` mutation first.
 - 3.2b CI-red loop: fixture mismatch in the capture gate means re-capture in the CI image path, never a hand edit; after any rebase re-run `npx npm@11 install --package-lock-only` and the fixture byte-diff before re-queuing.
 - 3.3 One flag comment on PR 10926 (stale `Setup Bun` without `bun-version-file`; keep main's `npm-publish.yml` on rebase). No branch change.
 

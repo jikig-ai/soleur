@@ -610,10 +610,10 @@ describe.skipIf(!SANDBOX_OK)("G2: a second tenant's Bash cannot use a sibling se
         ".claude/shell-snapshots/snapshot-bash-<ts>-<id>.sh",
       ];
       // `plugins/store/cc-plugin-agents-md_builtin-<hash>.json` (claude-code 2.1.311 / SDK 0.3.311, reviewed 2026-11-04): a 92-byte
-      // usage-telemetry queue entry, `{"usage-rows-queued": "<cli session id> <instruction-file kind> ok"}`. The session id is the
+      // usage-telemetry queue entry, `{"usage-rows-queued": "<cli session id> <instructionFiles setting> <kind>"}` (static read of the bundle). The session id is the
       // same value already readable in sessions/<pid>.json (a transcript is tmpfs-masked, so the id alone resumes nothing), the
-      // kind label reflects how the writing tenant's workspace lays out CLAUDE.md / AGENTS.md, and the key is HOME-wide (last
-      // writer wins). No credential, prompt or tool output. The pin keeps the REVIEWED plugin name, so a new builtin plugin
+      // middle token is a CLI setting, only the trailing kind reflects how the writing tenant's workspace lays out CLAUDE.md /
+      // AGENTS.md, and the key is HOME-wide (last writer wins). No credential, prompt or tool output. The pin keeps the REVIEWED plugin name, so a new builtin plugin
       // store file reds the unlisted-readable-file assertion and gets its own review. Optional (written when the plugin first
       // reports); its directory is content-scanned below. ADR-075 addendum 2026-11-04 records the review.
       const OPTIONAL_HOME_STATE = [

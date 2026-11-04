@@ -788,13 +788,13 @@ export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
 export const CANARY_BRIDGE_SPAWN_PLACEHOLDER = "${CANARY_BRIDGE_SPAWN}";
 // #10445: the shared-HOME session-transcript dir (`$HOME/.claude/projects`),
 // which buildAgentSandboxConfig adds to denyRead for every session (a sibling's
-// proxy credential printed by `env` can land in a transcript). HOME-based like
-// the bridge-spawn dir, so without a placeholder the host_path census throws.
+// proxy credential printed by `env` can land in a transcript). Derived from the CLI
+// config dir (default `$HOME/.claude`), so without a placeholder the host_path census throws.
 export const CANARY_TRANSCRIPTS_PLACEHOLDER = "${CANARY_TRANSCRIPTS}";
 // #12026: claude-code 2.1.311 / SDK 0.3.311 covers `$HOME/.claude/seed-admin` (the private git directories of cloud-session
-// uploads, "managed by Claude Code") with a `--tmpfs` in its captured per-command argv. Unlike the two dirs above (HOME-only), the
-// bundle derives it from the CLI config dir (default `$HOME/.claude`; `CLAUDE_CONFIG_DIR` would move it, and neither the canary
-// nor production sets it), so without a placeholder the host_path census throws.
+// uploads, "managed by Claude Code") with a `--tmpfs` in its captured per-command argv. Like the transcripts dir above, and unlike
+// bridge-spawn (HOME-only), the bundle derives it from the CLI config dir (default `$HOME/.claude`; `CLAUDE_CONFIG_DIR` would move it;
+// the app's sessions and the canary never set it, only the runtime probe sets it for its own scratch child), so without a placeholder the host_path census throws.
 export const CANARY_SEED_ADMIN_PLACEHOLDER = "${CANARY_SEED_ADMIN}";
 
 // bwrap option arities for the projection parser. `null` = classify as a

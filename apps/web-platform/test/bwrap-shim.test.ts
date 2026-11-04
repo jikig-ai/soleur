@@ -1328,7 +1328,7 @@ describe("bwrap PATH shim (#8752)", () => {
     const r = root();
     // infra/sandbox-canary-argv.json is the byte-pinned capture the fixture
     // gate diffs against; its setup stream is the exact shape the shim must
-    // neutralize (124 tokens, tmpfs /proc at 20, tail bind at 122-124).
+    // neutralize (a setup stream whose shape, not token indexes, is what the shim must neutralize: a tmpfs /proc early, the tail bind dropped).
     const fixture = JSON.parse(
       readFileSync(join(APP_ROOT, "infra/sandbox-canary-argv.json"), "utf8"),
     ) as { bwrapSetupArgv: string[]; argv: string[] };
@@ -1337,7 +1337,9 @@ describe("bwrap PATH shim (#8752)", () => {
         .replaceAll("${CANARY_WS}", r.root)
         .replaceAll("${CANARY_EMPTY}", r.root)
         .replaceAll("${CANARY_C4_STAGING}", r.root)
-        .replaceAll("${CANARY_BRIDGE_SPAWN}", r.root),
+        .replaceAll("${CANARY_BRIDGE_SPAWN}", r.root)
+        .replaceAll("${CANARY_TRANSCRIPTS}", r.root)
+        .replaceAll("${CANARY_SEED_ADMIN}", r.root),
     );
     try {
       const res = spawnSync(SHIM, [...setup, "--", "/usr/bin/true"], {

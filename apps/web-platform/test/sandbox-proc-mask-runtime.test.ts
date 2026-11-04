@@ -192,7 +192,7 @@ describe.skipIf(!SANDBOX_OK)("the vendored sandbox spawn reaches our bwrap shim 
       assertTailMatchesFixture(tail as string[], fixture, "live spawn");
       // normalizeSpawnTail drops `--disable-userns` from both sides, so a spawn that carries it would compare equal. Under the
       // production config (enableWeakerNestedSandbox: true) the builder never emits it, and on the production bwrap 0.8.0 it is the
-      // flag recorded as breaking (server/c4-render.ts): assert its absence here instead of letting the normalizer hide it.
+      // flag recorded as breaking (server/c4-render.ts): assert its absence here instead of letting the normalizer hide it. The binding property is the config pin (enableWeakerNestedSandbox: true); this assertion only has teeth on hosts whose bwrap lists the flag.
       expect(tail, "USERNS_FLAG: a production-config spawn carries --disable-userns").not.toContain("--disable-userns");
     }
   }, 180_000);

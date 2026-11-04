@@ -487,7 +487,7 @@ recorded 2026-10-19 with an `LD_PRELOAD` interposer around the helper (not recal
 /proc/self/uid_map`, `write /proc/self/gid_map`, `unshare(CLONE_NEWPID|CLONE_NEWNS) after userns`, `fork` (the PID-namespace
 init), then in the init `prctl(PR_SET_DUMPABLE)`, `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`,
 `fork(worker)`; the worker then runs `prctl(PR_SET_NO_NEW_PRIVS)`, `prctl(PR_SET_SECCOMP)`, `execvp`; both waiting
-processes print `waitpid` AFTER the tenant command ran. All 16 are classified (`helper_userns_eperm` for the userns step,
+processes print `waitpid` AFTER the tenant command ran. All 16 (at 0.3.284) are classified (`helper_userns_eperm` for the userns step,
 `helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The pre-command steps (15 at 0.3.284, 18 at 0.3.311; see the 2026-11-04 note below)
 (`HELPER_STEPS_PRE_COMMAND`: everything above up to and including `execvp`) can trigger the tenant notice; only `waitpid`
 (`HELPER_STEPS_POST_COMMAND`), which prints after the command ran, never does. (CTO ruling 2026-10-19: widened from the 11 steps
@@ -501,7 +501,7 @@ bump that adds a step surfaces in CI rather than as an unclassified line.
 > (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
 > run on 2026-11-04 shows all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
 > pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
-> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record.
+> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
 
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution

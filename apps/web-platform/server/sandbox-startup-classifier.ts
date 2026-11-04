@@ -186,7 +186,7 @@ const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 // The SDK's command-side `apply-seccomp` helper (#10445) prints its own `apply-seccomp: <step>: <errno>` line with no
 // bwrap token. Matched as the WHOLE line against an EXACT-step allowlist (no charset): a line that must match end to
 // end carries no tenant-chosen tail, so the emitted `matchedLine` is a fixed string a forged line cannot extend.
-// Only EPERM counts; EACCES / EINVAL helper failures stay unclassified (a deliberate scope limit; #10455 records the EPERM classes this covers).
+// Only EPERM counts; EACCES / EINVAL helper failures stay unclassified (a recorded residual, #10455).
 //
 // The step list is MEASURED, not recalled: the 19 `apply-seccomp: <step>` literals of the helper embedded in the
 // vendored `claude` binary (claude-agent-sdk 0.3.311, the same binary as claude-code 2.1.311), read from its string pool,
@@ -208,11 +208,11 @@ const HELPER_USERNS_STEP = "unshare(CLONE_NEWUSER)";
  * 0.3.311 added three prctl steps (2026-11-04, interposer on the real helper, argv0 `apply-seccomp` entered through
  * /proc/self/fd/3): the OUTER waiting process applies `prctl(PR_SET_NO_NEW_PRIVS, stub)` and `prctl(PR_SET_SECCOMP, stub)` to
  * itself right after the `fork` of the init, and the worker applies a second filter (`prctl(PR_SET_SECCOMP, namespaces)`)
- * next to the existing one. All three occur before the `execvp` of the tenant command and none after it, so all three are
- * pre-command. (The interposer sees libc calls, not which literal each failing call prints; the attribution of a literal to a
+ * next to the existing one. All three occur in the helper before the tenant `execvp` and none after it (per-process libc call order; the two outer-process steps run concurrently with the init, so their order relative to the command's output is not measured), so all three are
+ * classified pre-command. (The interposer sees libc calls, not which literal each failing call prints; the attribution of a literal to a
  * call site is by its name, the PRE-COMMAND decision does not depend on it.) A fourth new string, "could not set
  * user.max_user_namespaces (%s); ...", is a non-fatal warning that is not in the exact-step allowlist (and has no
- * `: <errno>` suffix), so BASH_APPLY_SECCOMP_LINE never classifies it; it is listed as a non-step line in test/helpers/vendored-bwrap-tail.ts, not here.
+ * `: <errno>` suffix), so `classifyBashSandboxFailure` returns null for it (the regex alone would match it with an errno tail appended); it is listed as a non-step line in test/helpers/vendored-bwrap-tail.ts, not here.
  * Flip `execvp` out of this list only if a measured argv shows the helper execs the tenant argv directly.
  */
 export const HELPER_STEPS_PRE_COMMAND: readonly string[] = [
