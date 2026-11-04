@@ -27,3 +27,8 @@ None. (The plan-commit was initially blocked by the precommit guard for bundling
 - Learning correction appended (field-name arm addendum).
 - Suites: workflow-run-deploy-invariants 82/82 (mutation battery 5/5 killed), deploy-arm 79/79, resolve-target-decision 64/64; YAML parse OK; residual-zero sweep clean (remaining `deploy_sha` hits are prose rationale only).
 - RED->GREEN confirmed: amended P4 failed against the pre-rename workflow, passed after.
+
+## Ship Phase (resume note)
+- PR #12088 readied + auto-merge armed via merge queue at HEAD aab2e1a1de; semver:patch; body cites "CodeQL alert #332".
+- Pending: poll `gh pr view 12088 --json state` → MERGED; then `gh api repos/jikig-ai/soleur/code-scanning/alerts/332 --jq .state` expect `fixed`; release-workflow green; cleanup-merged.
+- If PR-ref CodeQL still flags untrusted-checkout: escalate plan-B restructure (see archived plan Alternatives).
