@@ -1,5 +1,6 @@
 # Stage 1: Install all dependencies (cached when package files unchanged)
-FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS deps
+# node:22-slim @ Node 22.23.4 (CVE-2026-111497 fix); digest rotation tracked in #7288
+FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -51,7 +52,7 @@ RUN ./node_modules/.bin/esbuild server/resolve-sandbox-selector-cli.ts --bundle 
 # that also needs apt, the rolling cli.github.com repo and the Playwright CDN. `runner` is
 # FROM this stage, so the move alone changes no layer; editing an install line re-keys that layer and
 # everything after it once. Tested for structure in test/c4-likec4-version-pin.test.ts.
-FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS cli-tools
+FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS cli-tools
 
 # Install Claude Code CLI (needed by Agent SDK)
 # KEEP IN SYNC with the `@anthropic-ai/claude-code` pin in package.json: the
@@ -63,6 +64,8 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # install is the fallback path. Since #8603
 # test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
 # pins agree and that the installed bundle knows every tier model id.
+# CVE-2026-111497: this CLI's native binary embeds Bun 1.4.3 (vulnerable) until the CLI/SDK pair
+# bump tracked in #12026 lands; the Node digest bump above does not cover it.
 # No `--before` on this line: the tree is the package plus its exact-pinned platform
 # packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
 RUN npm install -g @anthropic-ai/claude-code@2.1.293

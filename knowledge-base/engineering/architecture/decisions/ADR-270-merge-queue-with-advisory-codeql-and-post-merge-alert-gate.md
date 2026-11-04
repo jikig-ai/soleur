@@ -1124,3 +1124,7 @@ action (owners were notified on #11688); its only failing check is the
 advisory `affected-index-ratchet` (the drift this PR files). #11739 and
 #11734 re-armed and landed: mergedAt 03:24Z (squash `4393472919`) and 03:44Z
 (squash `0e8a6ebb02`).
+
+## Addendum 2026-11-03: follower detection-only contract partially superseded by ADR-318
+
+The 2026-10-23 addendum records the apply-delivery-gap follower as "detection only — applies nothing, dispatches nothing". ADR-318 adds a bounded redrive arm: a `redrive` job holding `actions: write` may re-dispatch `apply-deploy-pipeline-fix.yml --ref main` when every deploy-fix gap row is `evicted-before-start` and nothing is in flight. `cancelled-mid-run` stays human-only; the `infra` key stays manual. The `follow` job and this ADR's merge-queue/advisory-gate decisions are unchanged.

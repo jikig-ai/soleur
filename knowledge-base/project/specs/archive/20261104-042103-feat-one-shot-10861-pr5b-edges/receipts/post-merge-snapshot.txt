@@ -1,0 +1,4 @@
+PR5a post-merge snapshot (Ref #10861) — measured on merged main 8cd725340d, worktree feat-one-shot-10861-pr5b-edges
+audit:  SOLEUR_PR_AFFECTED_AUDIT suites=725 always_on=116 audited=609 unaudited=0 gap_suites=101 gap_refs=360 accepted=1401 stale=0 refs=4058 files_read=1205
+ratchet: SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=360 baseline=239
+delta vs PR5a head (345): +15 live refs from merges that landed in the window (#12003 flags, #11990 egress-audit window, #12032 queue-timeout, #12035 TOCTOU). Drift pairs classify at work time per tasks.md task 0.2.

@@ -1,0 +1,12 @@
+<!-- launch-check:epic -->
+
+> **How to read this report.** It lists gaps identified by an automated scan of the files in this repository and by a short AI-assisted review of four areas. It is not a security review, a penetration test, legal advice, or an attestation of any standard. A gap that is not listed was not identified in the files read; that is not assurance that none exists. Findings can be wrong. The scan covers the last commit, not git history: a secret removed from the current tree may still be live in history, so rotate it. Keep this file in a private repository: it lists weaknesses that have not been fixed yet.
+
+# Launch-check gaps
+
+This issue tracks the gaps found by a launch-check run on this repository. Each gap is its own sub-issue.
+
+<!-- launch-check:begin -->
+<!-- launch-check:end -->
+
+Add your own notes anywhere outside the marked section; a re-run leaves them as they are.

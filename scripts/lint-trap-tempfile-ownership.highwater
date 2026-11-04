@@ -1,4 +1,11 @@
-35  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+36  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 35 -> 36 (2026-11-03, #11910 / PR #11949): plugins/soleur/skills/launch-check/scripts/lib/issues.sh joins the
+# population. `issues --preview` saves the plan directory with `mktemp -d` and that directory IS the
+# deliverable: `issues --create --plan <dir>` reads it later, and a resumed run reads created.tsv from it, so an
+# owning `trap ... EXIT` would delete the customer's saved plan before it can be confirmed. The file is also
+# SOURCED by launch-check.sh, where an EXIT trap would replace the caller's. The site is annotated
+# `lint-trap-ownership: ok` with that reason; the customer removes the directory with the printed guarded
+# discard command, and the allocation is one directory per preview, under the customer's TMPDIR.
 # 36 -> 35 (2026-10-20, #7376): --census measured 35 on this branch; the
 # ratchet-down note in the CI failure named the accept. No new entrant.
 

@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1251
-# generated-at=2026-11-04T01:34:49Z
+# default-weight-ms=1261
+# generated-at=2026-11-04T17:06:10Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -141,6 +141,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	407	measured
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	6665	measured
 plugins/soleur/skills/launch-check/test/baseline.test.sh	6400	measured
 plugins/soleur/skills/launch-check/test/identity.test.sh	10200	measured
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	95000	measured
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	211000	measured
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	3200	measured
 plugins/soleur/skills/launch-check/test/render.test.sh	31700	measured
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	200	measured
@@ -164,7 +166,7 @@ plugins/soleur/skills/verification-scaffold/test/generator.test.sh	1222	floor
 plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1222	floor
 plugins/soleur/test/_base-notice-frontmatter.test.sh	7093	measured
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	10959	measured
-plugins/soleur/test/affected-tests-pool-default.test.sh	1251	floor
+plugins/soleur/test/affected-tests-pool-default.test.sh	1261	floor
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	1222	floor
 plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
@@ -301,6 +303,7 @@ plugins/soleur/test/roadmap-reconcile.test.sh	6496	measured
 plugins/soleur/test/rtk-grammar-parity.test.sh	1222	floor
 plugins/soleur/test/schedule-skill-once.test.sh	96	measured
 plugins/soleur/test/schedule-task-design.test.sh	1222	floor
+plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	1251	floor
 plugins/soleur/test/scripts-shard-manifest.test.sh	608	measured
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	3708	measured
 plugins/soleur/test/scripts-shard-totality.test.sh	10812	measured
