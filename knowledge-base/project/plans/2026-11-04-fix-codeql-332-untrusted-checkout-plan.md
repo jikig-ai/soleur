@@ -403,6 +403,9 @@ logs:
 discoverability_test:
   command: "bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
   expected_output: "workflow-run-deploy-invariants.test.sh"
+  # Suite-shaped but inside the 15s cap — measured 9.4s wall-clock locally
+  # (2026-11-04, 82 rows); the smallest command that prints the signal this
+  # change owns is this suite itself.
 ```
 
 ## Encryption Posture
@@ -565,6 +568,55 @@ learning file.
 - **`resolving deploy target` echo is wr-arm-only:** known and unchanged —
   the dispatch arm relies on the primary `[command]` key today, which this
   diff preserves (the plan-B restructure is what would have broken it).
+
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04
+**Sections enhanced:** Observability (cap-argued probe), Guard Contract (lint-resolved)
+**Review passes:** sequential-fallback — no spawn tool; halt gates 4.6–4.13
+executed mechanically; negative-claim and post-edit self-audit sweeps run
+inline.
+
+### Key Improvements (deepen-plan)
+
+- **Measured the suite-shaped `discoverability_test.command`:** the
+  `test/`-path reject regex flags it, but the suite completes in 9.4s
+  wall-clock (< 15s Check-10 cap, 82 rows) — argued down with the measurement
+  rather than silently waived; the probe is the smallest command that prints
+  the signal this change owns.
+- **Verified-the-negative sweep:** every negative claim in the plan was
+  grep-proven — "no taint path into `steps.gate.outputs.*`" (FlowSteps.qll
+  `envToOutputStoreStep`/`commandToOutputStoreStep` can't see the `emit`
+  indirection; `untrusted_event_properties.yml` doesn't list
+  `workflow_run.head_sha`), "no other `deploy_sha` consumer" (grep over
+  non-archive files), "no `sec:` tracker" (three `gh issue list` shapes),
+  "no open-PR collision" (`prs=none`; PR #12064's diff is a far-field
+  comment).
+- **Post-edit self-audit:** the renamed symbol's full consumer set
+  (emit ×3, `ref:`, P4 pins, deploy-arm `_ref` pin, comments, learning) is
+  enumerated in Files to Edit — no downstream reference escapes the rewrite.
+- **All deepen halt gates pass:** 4.6 User-Brand Impact (`none` + sensitive-
+  path scope-out), 4.7 Observability (5 fields, allowlisted verb, literal
+  expected_output, measured runtime), 4.8 PAT (zero), 4.9 `.pen` (non-UI),
+  4.10 Encryption (no store/connection), 4.11 Guard Contract (`lint-guard-contract.py`
+  green, assembly is structural — chokepoint + identifier census), 4.12
+  Scope Check (one unfenced section, all rows mapped/descoped-with-reason),
+  4.13 Task Design (no new autonomous surface).
+
+### New Considerations Discovered
+
+- The `emit()` indirection is scanner-load-bearing, not just style: a literal
+  `echo "x=$VAR" >> $GITHUB_OUTPUT` would make the env→output flow modeled
+  and could re-flag any renamed output — pinned by P4's `gate_ok` substring
+  assertion plus the comment warning.
+- `deploy_target` was verified against all five heuristic tokens
+  (`head|sha|commit|branch|ref`) programmatically, in both the bare
+  identifier and the full `${{ steps.gate.outputs.deploy_target }}`
+  expression — the exact check the prior deepen-pass ran against the wrong
+  regex set.
+- Known residual recorded in Technical Considerations:
+  `needs.resolve-target.outputs.head_sha` is heuristic-matching and unflagged
+  only because every consumer job is privileged — a deliberate non-goal.
 
 ## Alternative Approaches Considered
 
