@@ -109,7 +109,7 @@ run_step NODE_OPTIONS="$STEP_NODE_OPTIONS"
   && pass "G1: control (step env applied) -> green, exactly 5 probe invocations" \
   || fail "G1: rc=$RC mode='$(mode)' runs=$(cat "$TMP/counter")"
 run_step NODE_OPTIONS=
-[[ "$(mode)" == "probe_contract_drift" ]] && detail | grep -q 'NODE_OPTIONS no longer removes' \
+[[ "$(mode)" == "probe_contract_drift" ]] && grep -q 'NODE_OPTIONS no longer removes' < <(detail) \
   && pass "G2: NODE_OPTIONS removed -> the precondition guard names the drift" \
   || fail "G2: mode='$(mode)'"
 run_step NODE_OPTIONS= STUB_POLYFILL_SKIP_ITER=0
@@ -120,7 +120,7 @@ PROBE_RUNS="$(cat "$TMP/counter")"; PROBE_RUNS="${PROBE_RUNS:-0}"
 G4_OK=1
 for k in 1 2 3 4 5; do
   run_step NODE_OPTIONS="$STEP_NODE_OPTIONS" STUB_POLYFILL_SKIP_ITER="$k"
-  [[ "$(mode)" == "probe_contract_drift" ]] && detail | grep -q "Run $k/5" && detail | grep -q "no 'polyfill: applied'" \
+  [[ "$(mode)" == "probe_contract_drift" ]] && grep -q "Run $k/5" < <(detail) && grep -q "no 'polyfill: applied'" < <(detail) \
     && [[ "$(cat "$TMP/counter")" == "$k" ]] \
     || { G4_OK=0; echo "    G4 iteration $k: mode='$(mode)' detail='$(detail)'"; }
 done
@@ -132,7 +132,7 @@ run_step NODE_OPTIONS="--no-experimental-websocket --max-old-space-size=512"
   && pass "G5: a non-canonical NODE_OPTIONS that still removes the global stays green (5/5)" \
   || fail "G5: rc=$RC mode='$(mode)'"
 run_step NODE_OPTIONS="$STEP_NODE_OPTIONS" STUB_NODE_REJECT=1
-[[ "$RC" -eq 0 && "$(mode)" == "probe_contract_drift" ]] && detail | grep -q 'unavailable' \
+[[ "$RC" -eq 0 && "$(mode)" == "probe_contract_drift" ]] && grep -q 'unavailable' < <(detail) \
   && pass "G6: node rejecting the option -> drift recorded and the output still written (no step abort)" \
   || fail "G6: rc=$RC mode='$(mode)'"
 
