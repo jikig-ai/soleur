@@ -1537,11 +1537,12 @@ const EXIT_CAPTURE_MECH_FAIL = 4;
 const CAPTURE_ATTEMPTS = 3;
 const ATTEMPT_TIMEOUT_MS = 120_000; // per attempt; end-to-end ceiling N×this.
 // Cheapest model that reliably issues one Bash tool call. Verified against the
-// claude-api reference at implementation time (#5913): claude-haiku-4-5,
-// $1/$5 per MTok, 200K ctx. The turn OUTPUT is irrelevant — the shim execs
+// claude-api reference at implementation time (#5913); moved to the Haiku 5.5 id ($0.10/$0.50
+// per MTok up to 100K prompt tokens) in the 0.3.311 bump (#12026), the first SDK pin whose
+// bundle knows it. The turn OUTPUT is irrelevant — the shim execs
 // nothing; the SDK need only build+spawn bwrap once. Disclosed per-SDK-bump-PR
 // API cost: one short Haiku turn, creds-gated, never on routine deploys.
-const CAPTURE_MODEL = "claude-haiku-4-5";
+const CAPTURE_MODEL = "claude-haiku-5-5";
 // A maximally-directive no-op so the model acts instead of reasoning.
 const CAPTURE_PROMPT =
   "Run the Bash command `true` exactly once and then stop. Do not explain, do not run anything else.";

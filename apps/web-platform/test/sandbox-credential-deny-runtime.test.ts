@@ -130,7 +130,7 @@ describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real
         // bundle does not know claude-haiku-5-5 (the first SDK release that does is
         // 0.3.293). Retires with the SDK bump; audit-models.sh carves out the two
         // scripts on the same ground and model-launch-review.test.ts expires it.
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-5-5",
         maxTurns: 3,
         permissionMode: "default",
         cwd: own,

@@ -489,7 +489,7 @@ describe.skipIf(!SANDBOX_OK)("broker mechanism spike: real sandbox probes (#9543
       // Haiku 4.5 on purpose (same ground as sandbox-credential-deny-runtime.test.ts): this drives the
       // REAL Agent SDK query(), whose bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.284
       // and does not know claude-haiku-5-5; plugins/soleur/test/model-launch-review.test.ts expires it.
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-haiku-5-5",
       maxTurns: 3,
       permissionMode: "default",
       cwd: own,

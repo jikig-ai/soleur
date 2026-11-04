@@ -32,12 +32,11 @@ if [[ -z "$ROOT" ]]; then
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 fi
 ROOT="${ROOT%/}"   # normalize: trailing slash breaks rel() prefix-strip
-# A newline in ROOT would split the SDK-carve-out pattern built from it below: grep -E then
-# fails ("Unmatched (") and every `grep -vE "$EXCLUDE_RE" || true` swallows the error, so
-# --detect would print a clean verdict over a scan that excluded nothing. Refuse it up front.
+# A newline in ROOT would split the newline-delimited file lists this script builds from it
+# (the scan hits and every rel() path), so a path could be read back as two. Refuse it up front.
 case "$ROOT" in
   *$'\n'*)
-    echo "audit-models: refusing a --root containing a newline (it would corrupt the exclusion pattern)" >&2
+    echo "audit-models: refusing a --root containing a newline (it would split the file lists)" >&2
     exit 64
     ;;
 esac
@@ -135,35 +134,7 @@ DELETION_GUARD=20   # abort --fix if any file would lose more than this many lin
 # generator that reads the TS registry (eval-harness/scripts/gen-models.sh), and
 # a blind sed here would make the generator no longer the sole writer — exactly
 # the second-SSOT the generator's own header promises does not exist.
-# SDK-PATH CARVE-OUT (Haiku 5.5 launch, 2026-10-08; #8643). These two scripts drive the
-# Agent SDK `query()`, whose model resolution lives in the SDK's BUNDLED CLI — pinned at
-# @anthropic-ai/claude-agent-sdk 0.3.284, which does not know `claude-haiku-5-5` (an
-# unknown id silently halves max_tokens, #6934). Auto-fixing them to the new id would
-# break two paid scripts, and leaving them selectable would make `--detect` exit 10
-# forever. They stay on `claude-haiku-4-5` until the SDK pin reaches 0.3.293, the first
-# release whose bundle carries the id. EXACT paths, never a directory: widening this to
-# apps/web-platform/scripts/ would hide a genuinely stale sibling. The exemption is per FILE
-# (every stale id, not only Haiku): these scripts run on the SDK-bundled CLI. It is SELF-EXPIRING:
-# model-launch-review.test.ts fails once the SDK pin reaches 0.3.293 and says to delete
-# this array and swap the two scripts.
-SDK_PATH_CARVEOUT=(
-  "apps/web-platform/scripts/sandbox-canary.mjs"
-  "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs"
-)
-sdk_carveout_re() {
-  # ANCHORED at both ends: `^<root>/<path>$`. The left anchor matters because candidate
-  # paths are absolute under $ROOT, so an unanchored `/apps/…/x.mjs$` also exempts the same
-  # relative path nested under another prefix (vendor/…, .worktrees/…). $ROOT is escaped so
-  # a root containing regex metacharacters cannot alter the pattern.
-  local p out="" root_re
-  root_re="$(printf '%s' "$ROOT" | sed 's/[][\\.*^$+?(){}|]/\\&/g')"
-  for p in "${SDK_PATH_CARVEOUT[@]}"; do
-    p="${p//./\\.}"
-    out="${out:+$out|}^${root_re}/${p}\$"
-  done
-  printf '%s' "$out"
-}
-EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|\.generated\.|/model-launch-review/|'"$(sdk_carveout_re)"')'
+EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive/|knowledge-base/|/community/|\.test\.|\.spec\.|\.generated\.|/model-launch-review/)'
 
 # Collect config-class files containing any auto-fixable stale ID.
 # Returns 2 (and prints to stderr) if the scan itself failed. That distinction
