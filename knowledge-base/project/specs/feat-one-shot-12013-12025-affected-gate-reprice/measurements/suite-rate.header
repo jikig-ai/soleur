@@ -1,0 +1,1 @@
+SOLEUR_PR_AFFECTED_SUITE_RATE base=8cc167c2e327157dce2c9fc9f089bd45dbd050f0 window=100 lib_sha=e1cf919485f86d5c70be1f90332fe0502ed2ada8 date=2026-11-04T20:06:55Z units=100 attributable=74 runner_changed=25 not_evaluable=0 empty=1 suites=731 spot_check=5 spot_compared=3655 caveat=current-edges-applied-to-older-diffs;survivors-only

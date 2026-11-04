@@ -1,0 +1,3 @@
+suite-rate run: elapsed=406s rc=0 derive_cache=warm(v1 present in this worktree)
+ 21:00:09 up  2:59,  1 user,  load average: 8.00, 7.33, 7.55
+runners: 6
