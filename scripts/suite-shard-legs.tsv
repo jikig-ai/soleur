@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1251
-# generated-at=2026-11-04T01:34:49Z
+# default-weight-ms=1239
+# generated-at=2026-11-04T05:53:40Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -168,6 +168,7 @@ plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/affected-tests-pool-default.test.sh	6
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	7
+plugins/soleur/test/approval-card-wording.test.sh	6
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1
