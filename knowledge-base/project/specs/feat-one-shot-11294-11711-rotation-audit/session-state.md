@@ -24,7 +24,12 @@
 - No agents spawned (unavailable in subagent); research executed inline; CTO rulings deferred as `pending - assumed` rows.
 
 ## Work Phase
-- Status: complete — audit-findings-11294.md (32 terraform-invoking job rows, 15 verdict rows, drift-check bounded attribution) + rotation-census-11711.md (27 rows + readiness notes + ordering) committed (98b82dd1ad after rebase/force-with-lease on init SHA).
+- Status: complete — audit-findings-11294.md (30-row job inventory, 15 verdict rows, drift-check bounded attribution) + rotation-census-11711.md (27 rows + readiness notes + ordering) committed (98b82dd1ad after rebase/force-with-lease on init SHA).
 - Issue comments posted: #11294 comment-6640747597, #11711 comment-6640748365 (both issues remain OPEN; comments only).
 - Test Scenarios: 5/5 verified (27 rows, 0 empty routes, key-rotate options == census rows, 1 comment per issue, branch flag 0).
 - lint-ratchet: not adopted → relay, continue.
+
+## Review Phase
+- Status: complete. 4-seat non-code panel on PANEL_SHA ab08c2d2b4 — security clean; findings all doc-internal consistency (P1-class: "four roots" contradiction across 3 seats; P2-class: fabricated step anchor, stale endpoint claim, leg-name drift, unreconciled count semantics, missing TSV provenance; cosmetic: anchors, checkboxes, domain frontmatter).
+- Fix commits b02cb363d0 + ae00eda693; targeted fix round (4 mapped seats) over ab08c2d2b4..b02cb363d0: all RESOLVED, two NEW minor (per-workflow first-dispatch dates → fixed in ae00eda693; "32 job rows" wording → fixed here).
+- QA: plan Test Scenarios verified at work phase (5/5); no UI/runtime surface — QA skips gracefully.
