@@ -458,6 +458,119 @@ else
   fail "G10b a ||-handled quoted site is absent from the advisory" "no advisory row for :9:" "$(printf '%s' "$_qhout" | tr '\n' ' ')"
 fi
 
+# G11 -- `|| true` OUTSIDE the substitution is the same silent collapse the
+# inside form is: the arm discharges the fault with no disposition. Review
+# P1: the predicate must reject vacuous arms, not just token-presence.
+r="$(mkfix ortrue)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          EXISTING=$(gh issue list --state open) || true
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G11 control: the bad second line FIRES" "$r" 10
+assert_fires "G11b an adjoining || true arm FIRES (vacuous handler)" "$r" 9
+
+# G12 -- a `||` that is NOT adjacent binds a later command, not the capture:
+# `X=$(gh…); [ -n "$X" ] || exit 0` still aborts at the `$(`.
+r="$(mkfix orbound)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          X=$(gh issue list --state open); [ -n "$X" ] || exit 0
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G12 control: the bad second line FIRES" "$r" 10
+assert_fires "G12b a ||-arm bound to a later command FIRES (adjacency)" "$r" 9
+
+# G13 -- `if COND; then V=$(gh…); fi` puts the capture in the THEN body where
+# `set -e` still aborts; only `if V=$(gh…)` is the exempt condition command.
+r="$(mkfix ifbody)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          if [ -n "$X" ]; then V=$(gh issue list --state open); fi
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G13 control: the bad second line FIRES" "$r" 10
+assert_fires "G13b a capture inside an if-BODY FIRES (not the condition)" "$r" 9
+
+# G14 -- `# dedupe: <bogus-bucket>` is NOT a disposition marker: the
+# vocabulary is fail-closed|benign only; a typo must not silently satisfy.
+r="$(mkfix bogusmarker)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          # dedupe: fine because reasons
+          EXISTING=$(gh issue list --state open)
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G14 control: the bad second line FIRES" "$r" 11
+assert_fires "G14b a bogus dedupe bucket FIRES (typed vocabulary)" "$r" 10
+
+# G15 -- a `# dedupe:` shape inside a quoted STRING is data, not a marker:
+# the `#` must open a real comment.
+r="$(mkfix echoedg)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "# dedupe: benign keep going"
+          EXISTING=$(gh issue list --state open)
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G15 control: the bad second line FIRES" "$r" 11
+assert_fires "G15b an echoed dedupe string FIRES (real comment req)" "$r" 10
+
+# G16 -- `|| VAR=""` alone discards the fault silently; `|| rc=$?` CAPTURES
+# it and binds — the asymmetry between discarding and storing the rc.
+r="$(mkfix vacuousassign)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          EXISTING=$(gh issue list --state open) || EXISTING=""
+          list_rc=0
+          OPEN=$(gh issue list --state closed) || list_rc=$?
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G16 a bare ||-VAR-empty arm FIRES (discards the fault)" "$r" 9
+assert_not_named "G16b an ||-rc-capture arm does NOT fire" "$r" 11
+
 # --- the gate's own scope ---------------------------------------------------
 
 # H1 -- a root with no .github/workflows is a USAGE error (rc=2), never a pass.
@@ -527,6 +640,19 @@ if [[ "${site_n:-0}" -ge 70 ]]; then
   pass "H5 live census reaches >=70 sites (got ${site_n:-0})"
 else
   fail "H5 live census reaches >=70 sites" ">=70" "${site_n:-<unparsed>}"
+fi
+
+# H6 -- the quoted-twin advisory class is CAPPED: it is data not a gate, but
+# uncapped growth is the same silent re-grow the census class reds — a new
+# quoted capture must earn a disposition, a marker, or a deliberate ceiling
+# bump in this file (architecture/pattern seats: unmeasured re-growth
+# channel).
+ADVISORY_CEILING=19
+adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
+if [[ "${adv_n:-0}" -le "$ADVISORY_CEILING" ]]; then
+  pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
+else
+  fail "H6 live quoted-advisory count <= $ADVISORY_CEILING" "<=$ADVISORY_CEILING" "$adv_n"
 fi
 
 # --- verdict ----------------------------------------------------------------

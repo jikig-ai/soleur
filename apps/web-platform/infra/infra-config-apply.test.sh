@@ -1689,6 +1689,12 @@ test_webhook_envfile_unconditioned() {
   assert_eq "repo webhook.service carries zero ConditionPathExists= directives" "0" "$n_cond"
   n_marker=$(grep -cF 'DELIBERATELY UNCONDITIONED' "$unit" || true)
   assert_eq "repo webhook.service carries the DELIBERATELY UNCONDITIONED comment" "1" "$n_marker"
+  # The designed-loud rationale must name a RECEIVER for the crash-loop signal —
+  # the §12b conditioned units each pin their detectors (web_probe_envwrite fatal
+  # emit + per-unit beat); a marker without a named detector tells the debugging
+  # agent "loud" but not "heard by whom". Any one of the pinned tokens counts.
+  grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' "$unit" \
+    || fail "repo webhook.service designed-loud comment names no detector (want webhook_bound / github_webhook_failures / soleur-boot-emit)"
   # The write_files twin is the copy a fresh host actually boots — a skip would land
   # THERE first, on the boot ordering where the env file is most plausibly absent.
   local twin n_twin_cond n_twin_marker
@@ -1697,6 +1703,8 @@ test_webhook_envfile_unconditioned() {
   assert_eq "cloud-init webhook.service twin carries zero ConditionPathExists= directives" "0" "$n_twin_cond"
   n_twin_marker=$(printf '%s\n' "$twin" | grep -cF 'DELIBERATELY UNCONDITIONED' || true)
   assert_eq "cloud-init webhook.service twin carries the designed-loud comment" "1" "$n_twin_marker"
+  printf '%s\n' "$twin" | grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' \
+    || fail "cloud-init webhook.service twin names no detector token for the crash-loop signal"
 }
 
 test_daemon_reload_grant_lockstep() {

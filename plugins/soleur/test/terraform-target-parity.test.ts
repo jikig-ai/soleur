@@ -4266,6 +4266,21 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     "web_platform_infra_apply",
   ]);
 
+  // (#8780 review) The mirror ratchet: environments that are reviewer-less BY
+  // DESIGN. REVIEWERS_RATCHET only ratchets the keep-reviewers direction —
+  // nothing stopped a well-meaning `reviewers { users = [54279] }` being added
+  // to `release_publish` or `infra_privileged`, which silently DEADLOCKS every
+  // unattended publish/apply the environment exists to admit (the auto-mint
+  // dispatches, the push-arm releases run with no human in the loop). The
+  // admission gate on these envs is the exactly-{main} policy, and adding a
+  // reviewer does not strengthen it — it converts a batch pipeline into a
+  // prompt nobody is hired to answer. Same shape as the ratchet above: named
+  // members must be IN the population, or a rename drops the guard.
+  const REVIEWER_LESS_RATCHET = new Set([
+    "infra_privileged",
+    "release_publish",
+  ]);
+
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
     const header =
       /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
@@ -4326,6 +4341,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     ).toBeGreaterThan(0);
 
     const seenRatchet = new Set<string>();
+    const seenLessRatchet = new Set<string>();
     for (const env of envs) {
       const ids = env.users
         .split(",")
@@ -4341,6 +4357,19 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
             `Removing its reviewers converts a human authorization into an auto-approve (DP-11 F8; #6730).`,
         ).toBeGreaterThan(0);
         continue;
+      }
+
+      if (REVIEWER_LESS_RATCHET.has(env.name)) {
+        seenLessRatchet.add(env.name);
+        expect(
+          ids.length,
+          `github_repository_environment.${env.name} is in REVIEWER_LESS_RATCHET and gained a reviewers.users ` +
+            `list of ${ids.length}. These environments admit UNATTENDED jobs — a required reviewer does not ` +
+            `strengthen the gate, it deadlocks every publish/apply that runs with no human present ` +
+            `(ADR-241 D2; #8780). Remove the reviewers block.`,
+        ).toBe(0);
+        // No `continue`: the branch-policy limb below is their ONLY gate and
+        // must still be proven intact.
       }
 
       // A reviewer-less environment relies entirely on the branch policy, so the policy
@@ -4376,6 +4405,14 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
           `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
       ).toBe(true);
     }
+    for (const name of REVIEWER_LESS_RATCHET) {
+      expect(
+        seenLessRatchet.has(name),
+        `REVIEWER_LESS_RATCHET names ${name}, but no github_repository_environment by that name was found ` +
+          `in the infra root. Either it was renamed (update the ratchet and confirm the new name still ` +
+          `carries NO reviewers) or it was deleted. An unmatched ratchet entry is an unenforced one.`,
+      ).toBe(true);
+    }
   });
 
   // (#8780) Asserted, not merely permitted: the DP-11 disjunction ALLOWS a ratchet
@@ -4385,6 +4422,33 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
   // Its admission half is pinned here. `release_publish` is reviewer-less, so the
   // exactly-{main} set IS its only gate — a missing env, a dropped `main` policy, or a
   // second wider policy all take it out of the set.
+  // (#8780 review) `release_publish` is an ADMISSION gate, not a credential
+  // carrier — the tf header's "Do NOT attach a github_actions_environment_secret"
+  // was prose-only until this pin. A secret or variable bound to it re-widens the
+  // boundary the design keeps narrow (every `environment: release-publish` job
+  // inherits it), and nothing else goes red: the -target allow-list does not stop
+  // a sibling PR adding resource + target in one diff.
+  test("no environment secret or variable is bound to release_publish", () => {
+    const offenders: string[] = [];
+    const re =
+      /resource\s+"github_actions_environment_(?:secret|variable)"\s+"([A-Za-z0-9_]+)"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(stripped)) !== null) {
+        if (/release_publish\b/.test(m[2])) offenders.push(m[1]);
+      }
+    }
+    expect(
+      offenders,
+      `environment secret/variable resources bound to release_publish: ${JSON.stringify(offenders)} — ` +
+        `release_publish is reviewer-less and secrets-free by design (ADR-241 D2). A bound secret widens ` +
+        `the admission gate into a credential carrier and the environment's only remaining protection ` +
+        `is the branch policy — binding GITHUB_TOKEN-scoped publish jobs to it was the deliberate narrowness.`,
+    ).toEqual([]);
+  });
+
   test("inngest_config_signing and release_publish are each in the exactly-{main} policy set (#8780)", () => {
     expect(
       mainOnlyPolicyEnvs.has("inngest_config_signing"),

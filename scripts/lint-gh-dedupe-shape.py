@@ -44,30 +44,37 @@ is outside the class by construction, not by exemption.
 THE QUOTED TWIN. `IDENT="$(gh …)"` IS abort-capable (the assignment still takes
 the substitution's rc) and is the same defect, but it is deliberately outside
 this ratchet's census: the #9659 enumeration and the fail-closed/benign
-markers predate it, and ~26 quoted sites live in files outside the issue's
-scope. They are measured, never hidden: every run prints an ADVISORY list of
-quoted captures that carry no disposition (it is data, not a gate — the
-normalized shape deliberately stays unquoted so every normalized site REMAINS
-inside the ratchet).
+markers predate it, and the quoted class (~26 sites, files outside the
+issue's scope) carries only partial dispositions. They are measured, never
+hidden: every run prints an ADVISORY list of quoted captures carrying no
+per-line disposition (it is data, not a gate — the normalized shape
+deliberately stays unquoted so every normalized site REMAINS ratcheted).
 
 SCAN MODEL (per file)
 ---------------------
 1. Physical lines are joined on trailing `\\` continuations into logical
-   lines; the site line reported is the physical line carrying `IDENT=$(`.
+   lines; the site line reported is the logical line's first physical line.
 2. `#` comments are stripped quote-aware (same convention as
    lint-gh-argv-arg.py) before site/handling analysis — a `=$(gh` shape
    inside a comment is data. `# dedupe:` markers are detected on the RAW
    physical lines (they ARE comments by design).
 3. Heredoc bodies are skipped entirely — `<<'EOF' … EOF` content is stdin
    data, never executed argv.
-4. Each `$(` is located quote-aware. A site is a `$(` whose interior command
+4. Each `$(` is located quote-aware. Grammar edges are loud, not silently
+   misread: a `$(` spanning physical lines without a backslash join, a
+   `${x:-a||b}` parameter expansion, and `${`/`(` nested frames are
+   unmodelable — a construct the linter cannot resolve stays UNCLASSIFIED
+   (finding), which is the direction #9659 requires. A site is a `$(` whose
+   interior command
    begins `gh (issue|pr) (list|search)`. It is a CENSUS site when `IDENT=`
    abuts the `$(` unquoted; a QUOTED site when `IDENT="` abuts it (or the
    `$(` sits inside a double-quoted assignment value).
-5. A site is CLASSIFIED when the logical line binds its failure: the capture
-   is in an `if`/`elif`/`while`/`until`/`!` condition context (set -e exempt
-   by POSIX), or a `||` appears outside the `$(…)` span on the same logical
-   line. Otherwise it is classified only by a `# dedupe:` marker on the
+5. A site is CLASSIFIED when the logical line binds its failure: the capture's assignment IS the
+   condition command — `if`/`elif`/`while`/`until` immediately preceding
+   `IDENT=$(` (set -e exempt by POSIX; a `then`/`;`-bound body re-arms the
+   abort), or a NON-VACUOUS `||` ADJOINING the `$(…)` span on the same
+   logical line (`|| true`/`|| :`/bare `VAR=""` are silent collapses, not
+   dispositions — the same defect as the inside-substitution `|| true`). Otherwise it is classified only by a `# dedupe:` marker on the
    site's own line or within 2 physical lines above it.
 
 DIRECTION OF ERROR: unclassified sites are findings (the class cannot
@@ -85,22 +92,37 @@ import os
 import re
 import sys
 
-# `gh` noun + verb that constitute the dedupe-read class.
+# `gh` noun + verb that constitute the dedupe-read class. The bound is
+# DELIBERATE (tracked residual): `gh api` issues-GETs, `gh issue|pr view`
+# existence probes, quoted-capture twins, and composite action.yml run blocks
+# are adjacent read surfaces outside #9659's enumeration — a follow-up issue
+# names them; they are not silently missed.
 GH_DEDUPE_HEAD = re.compile(r"^\s*gh\s+(issue|pr)\s+(list|search)\b")
 
 # A `IDENT=` token abutting a `$(` or a `"` (the census class, and the quoted
 # twin's assignment detection). The `=` must sit at a word boundary — `x=$(`
 # inside a larger word is not an assignment.
-ASSIGN_TAIL = re.compile(r"(?:^|[\s;|&({!])([A-Za-z_][A-Za-z0-9_]*)=$")
+ASSIGN_TAIL = re.compile(r"(?:^|[\s;|&({!])([A-Za-z_][A-Za-z0-9_]*)\+?=$")
 
 # Condition-context keywords: in `if`/`elif`/`while`/`until` the command's rc
 # drives the branch, so the capture is set -e exempt and its failure is bound.
-CONDITION_RE = re.compile(r"(?:^|[\s;|&({])(?:if|elif|while|until)\b")
+# The keyword must IMMEDIATELY precede the assignment — `if IDENT=$(…)` is
+# set -e exempt because the capture IS the condition command; `if [ -n "$X" ];
+# then V=$(gh …); fi` puts the site in the THEN body where it still aborts
+# (the `then`/`;` boundary ends the condition context). `if ! IDENT=$(…)` is
+# still the condition command (the `!` negates but the rc still drives the
+# branch — the normalized fail-open shape), while a BARE `! V=$(gh…)` with no
+# condition keyword suppresses the abort entirely — a silent collapse, not a
+# bound read, and it stays unclassified.
+CONDITION_RE = re.compile(
+    r"(?:^|[\s;|&({])(?:if|elif|while|until)\s+!?\s*"
+    r"[A-Za-z_][A-Za-z0-9_]*\+?=$")
 
-MARKER_RE = re.compile(r"#\s*dedupe:\s*\S")
+# Typed dispositions only — `# dedupe: <anything>` is NOT a marker. The
+# vocabulary is the two buckets this lint's docstring defines; a bogus bucket
+# (`# dedupe: fine`, `# dedupe: bening`) silently classifies nothing.
+MARKER_RE = re.compile(r"#\s*dedupe:\s*(?:benign|fail-closed)\b")
 
-SHELL_KEYWORDS = {"if", "then", "elif", "else", "while", "until", "do",
-                  "done", "for", "in", "time", "{", "}", "!", "select"}
 
 
 def _find_heredocs(line: str):
@@ -259,12 +281,24 @@ def _subst_end(text: str, dollar_idx: int) -> int:
 
 
 def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
-    """Whether an unquoted `||` appears in text starting at idx.
+    """Whether the capture's rc is bound by a NON-VACUOUS `||` handler that
+    ADJOINS the `$(…)` — token-presence anywhere on the line is not binding.
+
+    `X=$(gh …); [ -n "$X" ] || exit 0` contains a `||` that binds the `[ ]`
+    while the capture still aborts the step — the `||` must be the first
+    command operator after `)` (modulo whitespace and the quoted site's
+    closing `"`). Anything else — `;`, `|`, `&&`, `&` — means the capture
+    stands alone.
+
+    A vacuous handler is still the silent collapse the census exists to red:
+    `|| true` / `|| :` discharge the rc with no disposition — identical to
+    the inside-substitution `$(… || true)` the docstring rejects — and
+    `|| VAR=""` alone discards the fault. `|| rc=$?`-style captures, echoes,
+    `::error::` blocks, and `exit` arms all carry a disposition and bind.
 
     initial_quote is the quote context the scan STARTS in: the tail of a
     `IDENT="$(gh …)"` site begins with the `"` that CLOSES the assignment's
-    quote — seeding `"` lets that char toggle dq off instead of on, which is
-    the difference between finding `||` in `)" || { … }` and missing it.
+    quote — seeding `"` lets that char toggle dq off instead of on.
     """
     i = idx
     n = len(text)
@@ -276,17 +310,24 @@ def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
                 q = None
             i += 1
             continue
-        if ch in "'\"":
-            q = ch
-            i += 1
-            continue
         if ch == "\\" and i + 1 < n:
             i += 2
             continue
+        if ch.isspace():
+            i += 1
+            continue
         if ch == "|" and i + 1 < n and text[i + 1] == "|":
-            return True
-        i += 1
+            return _VACUOUS_ARM.match(text[i + 2:]) is None
+        return False
     return False
+
+
+# A `||` arm that discharges the fault silently: `true`/`:` no-ops, or a bare
+# emptying assignment (`VAR=""` — the rc dies with the capture). An arm that
+# stores `$?` (`rc=$?`, `list_rc=$?`) or does anything else is a disposition.
+_VACUOUS_ARM = re.compile(
+    r"\s*(?:true|:|[A-Za-z_][A-Za-z0-9_]*=(?:\"\"|\'\'))\s*"
+    r"[;|&]?\s*(?:#.*)?$")
 
 
 def _sites_in_line(ltext: str):
@@ -363,10 +404,14 @@ def _sites_in_line(ltext: str):
 
 
 def _has_marker(raw_lines, lineno_1based: int) -> bool:
-    """`# dedupe:` on the site's own physical line or within 2 lines above."""
+    """Typed `# dedupe:` marker on the site's own physical line or within 2
+    lines above — and the `#` must open a REAL comment, not sit inside a
+    quoted string (an echoed `"# dedupe:"` is data, not a disposition)."""
     lo = max(0, lineno_1based - 3)
     for k in range(lo, lineno_1based):
-        if MARKER_RE.search(raw_lines[k]):
+        line = raw_lines[k]
+        m = MARKER_RE.search(line)
+        if m and m.start() >= len(_strip_comment(line).rstrip()):
             return True
     return False
 
@@ -415,7 +460,7 @@ def scan_file(path: str, rel: str):
 
         for kind, ident, col, end in _sites_in_line(stripped):
             prefix = stripped[:col]
-            tail = stripped[end:] if end != -1 else ""
+            tail = stripped[end:]
             handled = bool(CONDITION_RE.search(prefix)) \
                 or _has_or_outside(
                     tail, 0, initial_quote='"' if kind == "quoted" else None)
@@ -438,8 +483,15 @@ def collect(root: str):
     wf_dir = os.path.join(root, ".github", "workflows")
     if os.path.isdir(wf_dir):
         for name in sorted(os.listdir(wf_dir)):
-            if name.endswith((".yml", ".yaml")):
-                targets.append(os.path.join(wf_dir, name))
+            if not name.endswith((".yml", ".yaml")):
+                continue
+            t = os.path.join(wf_dir, name)
+            if os.path.islink(t):
+                print("dedupe-shape: advisory: symlink skipped: "
+                      f"{t} — the census covers tracked workflow files, "
+                      "not linked content")
+                continue
+            targets.append(t)
     return targets
 
 
@@ -484,7 +536,8 @@ def main() -> int:
     for rel, lineno, ident, _ in findings:
         print(f"{rel}:{lineno}: {ident}=$(gh …) — unclassified dedupe "
               "capture: no condition context, no || handler on the logical "
-              "line, no '# dedupe:' marker within 2 lines")
+              "line, no '# dedupe: fail-closed|benign <reason>' marker on "
+              "this line or within 2 lines above it")
 
     if not args.quiet:
         print(f"dedupe-shape: scanned {len(targets)} workflow(s), "
@@ -495,10 +548,12 @@ def main() -> int:
     # Advisory census — the quoted `IDENT="$(` twin class. Data, never a gate:
     # the sites are outside #9659's enumerated scope, and the normalized shape
     # stays unquoted precisely so every normalized site REMAINS ratcheted.
-    if advisory:
+    if advisory and not args.quiet:
         print(f"dedupe-shape: advisory: {len(advisory)} quoted-capture site(s) "
-              "outside the =$( census class carry no disposition (residual "
-              "beyond #9659's scope — informational, not a finding):")
+              "outside the =$( census class carry no PER-LINE disposition "
+              "(residual beyond #9659's scope; step-level `set +e`/`rc` "
+              "handlers outside this model's view may still bind them — "
+              "informational, not a finding):")
         for rel, lineno, ident in advisory:
             print(f"  advisory: {rel}:{lineno}: {ident}=\"$(gh …)\"")
 

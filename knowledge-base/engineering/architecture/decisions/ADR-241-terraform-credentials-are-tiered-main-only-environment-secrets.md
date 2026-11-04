@@ -1168,7 +1168,8 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
   dispatch executes the *selected ref's* workflow bytes, so a YAML-side ref check is
   self-disarming; D2's deployment-branch policy — evaluated by GitHub before the job starts,
   against the run's ref — is the only control outside that blast radius, and it is now applied
-  to all three via `environment:` declarations.
+  to all three via `environment:` declarations. (Amended at review: the POLICY is outside the
+  ref's bytes, but the `environment:` BINDING is inside them — residual (3) below.)
 - **The admission-gate environment class.** `release-publish`
   (`apps/web-platform/infra/release-publish-environment.tf`) is a fifth
   `github_repository_environment` in the web-platform root — reviewer-less by design (the
@@ -1193,6 +1194,19 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
   unprotected state self-heals at apply; the live read-back of both environments'
   `deployment-branch-policies` is the post-merge verification. (2) R1 stands for the new
   surface exactly as for the old: these policies are rewritable by the actor R1 names.
+  (3) The binding-voluntary residual (recorded 2026-11-04 at review): the `environment:`
+  declaration lives in the dispatched ref's own bytes, so a ref that omits it — a stale
+  branch cut before this merge, or a deliberately edited one — skips the admission check
+  entirely. Because `release-publish` is secrets-free, no credential lever forces the
+  declaration (contrast `infra-privileged`, where stripping it forfeits the Tier-B token).
+  What the gate durably closes is therefore the UNMODIFIED non-main dispatch — #8780's
+  defect class — and it narrows the reachable set from anyone with `actions:write` to
+  anyone who can land bytes on `main`, the same bound apply-web-platform-infra.yml states
+  for `infra-privileged`. For signed artifacts the durable main-binding is the cosign
+  identity regexp (`reusable-release.yml@refs/heads/main`); the UNSIGNED surface —
+  `contents:write` tag/release creation and `packages:write` GHCR tag mutation via
+  GITHUB_TOKEN — gets no such check and is the open residual. A server-side tag/ruleset
+  control is the shape that would close it; it is not built here.
 - Plan: `knowledge-base/project/plans/2026-11-04-chore-ci-infra-hygiene-batch-plan.md`.
   Ref #8780, epic #10390.
 

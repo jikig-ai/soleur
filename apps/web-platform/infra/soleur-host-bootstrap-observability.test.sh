@@ -1056,6 +1056,14 @@ if printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -F 'DELIBERATELY UNCONDITIONED'; then
 else
   no "AC22: web vector.service lost the designed-loud comment (must name why no ConditionPathExists)"
 fi
+# The designed-loud claim needs a named receiver — "loud" without "heard by whom"
+# is an inference the debugging agent must make. Vector's comment must name its
+# detector (Better Stack / betteruptime), mirroring §12b's detector pinning.
+if printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -E 'Better Stack|betterstack|betteruptime'; then
+  ok "AC22: web vector.service designed-loud comment names its detector (Better Stack)"
+else
+  no "AC22: web vector.service designed-loud comment names no detector — 'loud' needs a receiver"
+fi
 # (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
 if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then
   ok "AC22: bootstrap renders @@HOST_NAME@@ → \${SOLEUR_HOST_NAME:-\$(hostname)} at staging"

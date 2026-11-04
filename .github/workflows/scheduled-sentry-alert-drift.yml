@@ -369,7 +369,7 @@ jobs:
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::sentry-alert-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::sentry-alert-drift-unavailable: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"

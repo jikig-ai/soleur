@@ -21,9 +21,18 @@
 # reviewer deadlocks them by design — the same reasoning `infra-privileged` carries in
 # infra-privileged-environment.tf (ADR-241 D2). The protection that matters is the branch policy
 # below: GitHub evaluates it BEFORE the job starts, against the run's ref, so a `workflow_dispatch`
-# of any publish workflow from a non-`main` ref is refused before a step runs — a property the
-# dispatched ref's own workflow bytes cannot weaken, because the check never executes them. A
-# YAML-side dispatch-ref guard was considered and cut for exactly that reason: a hostile dispatch
+# of any publish workflow from a non-`main` ref carrying these bytes is refused before a step runs.
+#
+# THE BOUND, STATED HONESTLY. The policy is server-side, but the `environment:` BINDING lives in
+# the dispatched ref's own bytes: a hostile or stale ref that omits the declaration skips the
+# check entirely, and a secrets-free environment offers no credential lever forcing the binding —
+# unlike `infra-privileged`, where dropping the declaration forfeits the Tier-B token. What this
+# gate durably closes is #8780's defect class — the UNMODIFIED non-main dispatch — and it narrows
+# the reachable set from anyone with actions:write to anyone who can land bytes on main (the same
+# residual apply-web-platform-infra.yml states for infra-privileged). For SIGNED artifacts the
+# durable main-binding is the cosign identity regexp (`reusable-release.yml@refs/heads/main`);
+# the UNSIGNED surface — tag/release creation and GHCR tags via GITHUB_TOKEN — is the open
+# residual, R1's class. A YAML-side dispatch-ref guard was considered and cut: a hostile dispatch
 # runs the branch's YAML, so a check inside it is self-disarming.
 #
 # WHY IT MUST EXIST BEFORE ANY JOB REFERENCES IT.

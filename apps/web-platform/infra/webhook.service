@@ -26,8 +26,13 @@ StartLimitIntervalSec=0
 # ordering. A skipped Type=simple service never re-evaluates the condition, so a transient
 # fault would become a permanently dead deploy channel with no self-heal — strictly worse
 # than the RestartSec=5 crash-loop, which IS the designed signal (and the reason
-# StartLimitIntervalSec=0 above must keep it firing). Do not add a condition here without
-# a written rationale.
+# StartLimitIntervalSec=0 above must keep it firing). THE SIGNAL'S RECEIVERS:
+# `soleur-wait-ready port 9000 webhook_bound` is the boot-time detector — a dead
+# listener fails the :9000 bind gate and the host's boot/deploy run goes red;
+# betteruptime_monitor.github_webhook_failures (alerts-github-webhook.tf) pages on
+# sustained 4xx/5xx at /api/webhooks/github; and Vector ships the unit's restart
+# journal rows to Better Stack logs, where the crash-loop shape itself is the
+# queryable signal. Do not add a condition here without a written rationale.
 
 [Service]
 Type=simple

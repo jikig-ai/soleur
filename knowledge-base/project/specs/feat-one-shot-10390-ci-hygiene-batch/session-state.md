@@ -26,7 +26,7 @@
 - Tier B fan-out: 3 agents (A=#8780, B=#9659, C=#10078) — all returned, output integrated as 3 per-workstream commits (5bde809d40, 5edf1e698f, b9914bd6d2).
 - Lead integration fix: lint-gh-dedupe-shape-live registered in ALWAYS_ON_SUITES + always-on-justifications.tsv (orphan lint clean 810/0).
 - Verification: parity 362/362, infra-config-apply 266/266, bootstrap-obs 135/135, fresh-boot-parity 225/225, lint battery 33/33, live lint unclassified:0, systemd-analyze clean, orphan lint clean.
-- Open residual for follow-up issue: ~18 quoted `IDENT="$(` captures outside the 19-file fence (advisory lines) + `scheduled-marketplace-drift`/`scheduled-prod-version-drift`/`scheduled-supabase-watchdog` sites.
+- Open residual for follow-up issue: quoted `IDENT="$(` captures outside the 19-file fence (advisory class, H6-capped at 19) + extended read surfaces — FILED as #12092.
 
 ## Resume State (pre-review)
 - Pipeline: one-shot. Phase done: work (3 commits pushed, head 9efd37b380 pre-review). Next: soleur:review -> fix findings -> qa -> compound -> ship -> postmerge.

@@ -85,7 +85,11 @@ jobs:
     # secrets-free, main-only environment (release-publish-environment.tf): GitHub
     # evaluates its deployment-branch policy BEFORE this job starts, so a
     # workflow_dispatch of a caller from a non-`main` ref is refused before any
-    # publish step runs — a check the dispatched ref's own YAML cannot weaken.
+    # publish step runs. The bound is narrower than "cannot weaken": this
+    # `environment:` line lives in the dispatched ref's own bytes, so a ref that
+    # omits it skips the check — the durable closure is the UNMODIFIED non-main
+    # dispatch (#8780's class), and the signed-artifact path stays main-pinned by
+    # the cosign identity regexp; the unsigned tag/release surface is residual R1.
     # Placed HERE, in the called workflow, not on the caller's `uses:` job (which
     # cannot set `environment:`), so it covers BOTH callers —
     # `web-platform-release.yml` and `version-bump-and-release.yml` — at one
