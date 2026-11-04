@@ -703,6 +703,7 @@ threshold stays 45 minutes, so the window between threshold and timeout widens f
 row, the "Stall probe" section and canary item 10 state the new value; dated records above are left as written. The
 demand side (the concurrency cap, per-run job fan-out, cancelled-run waste, `merge_group` rebuilds) is tracked in #12030
 and may make a smaller value correct again. The live value is verified after the apply.
+Re-verified 2026-11-04: Team = 60 concurrent jobs on standard runners (<https://docs.github.com/en/actions/reference/limits>); the "recall, not verified" wording above is history.
 
 ### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
 

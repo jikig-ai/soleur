@@ -707,6 +707,11 @@ jobs:
     # leg's suite sum — at -P4 the realized wall clock lands lower.
     # 15 min = ~2.2x the measured worst leg — the same convention the old 1.4x serial
     # ceiling used, held against a MEASURED leg rather than a projected whole.
+    # Re-measured 2026-11-04 over the 10 most recent green pull_request runs (40 legs,
+    # jobs API): worst leg 14.0 min, p95 13.4 min, median 10.1 min, so the 15-minute
+    # ceiling is now ~1.07x the worst leg (was ~2.2x at 6.7 min; the suite set has
+    # grown since). p95 is above the 12-minute raise-to-20 trigger; the raise is
+    # tracked in #12091 and ships on its own, not in the #12030 comment-only change.
     # Per-suite stalls are bounded INSIDE the leg by the runner's `timeout` wrapper
     # (default 360 s; the nine override entries in the runner's bound map carry the
     # step-level `timeout-minutes` forward plus headroom for the two ~200 s suites
