@@ -132,7 +132,7 @@ No architectural decision is made or changed — the audit and census document e
 ### Phase 4 — Final consistency pass
 
 1. Re-verify every issue/PR number cited in the artifacts still resolves (`gh issue view`/`gh pr view` states recorded above).
-2. Confirm `git status` shows only the four files under `knowledge-base/project/{plans,specs}/`.
+2. Confirm `git status` shows only files under `knowledge-base/project/{plans,specs}/`.
 3. Confirm no artifact contains a `signkey-`, `b64`, 43-char base64url, or 64-hex value — self-check grep before commit.
 
 ## Operator Holds
