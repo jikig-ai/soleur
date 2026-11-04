@@ -86,8 +86,8 @@ Release facts: dist-tags `stable` 2.1.311, `latest` 2.1.318 / 0.3.318. 2.1.311 a
 
 ### Institutional learnings applied
 
-- Post-mortem 2026-07-01 (concierge bwrap seccomp, SDK 0.2.85 to 0.3.197): a bump split `unshare` and the canary stayed green while every tenant's Bash failed; re-validate against the real invocation, not a synthetic probe.
-- Learning 2026-10-18 (allowAllUnixSockets removes the per-command AF_UNIX block; canary replays only the setup argv and stays green during an outage): ask what the skipped wrapper was bounding; the wrapped-command arm is the instrument, the fixture is not.
+- PIR 2026-07-01 (concierge bwrap seccomp, SDK 0.2.85 to 0.3.197): a bump split `unshare` and the canary stayed green while every tenant's Bash failed; re-validate against the real invocation, not a synthetic probe.
+- Learning 2026-10-18 (allowAllUnixSockets removes the per-command AF_UNIX block; canary replays only the setup argv and stays green while hosted Bash is broken): ask what the skipped wrapper was bounding; the wrapped-command arm is the instrument, the fixture is not.
 - Learning 2026-11-03 (base-image CVE bump is a pin census): this issue is its recorded follow-up; run the sandbox suites before committing to a bump.
 - Learning 2026-09-29 (detached precommit watchdog and sdk-bump attestation): the `sdk-bump-verified:` trailer is an attestation; write what was not validated; long batteries need `SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 setsid nohup`.
 - Learning 2026-10-09 (model launch): `claude-cli-pin-knows-models.test.ts` scans a ~200 MB binary and needs an explicit timeout; a bundle that does not know an id silently halves `max_tokens`.
@@ -99,7 +99,7 @@ Release facts: dist-tags `stable` 2.1.311, `latest` 2.1.318 / 0.3.318. 2.1.311 a
 1. P1: the installed `claude`/`sdk` linux-x64 binaries embed Bun >= 1.4.4 (the CVE fix).
 2. P2: a tenant's sandboxed Bash cannot read the Anthropic credentials (credential-deny).
 3. P3: a tenant's sandbox keeps a masked `/proc` (no host/sibling pid visibility) — the tail still ends in the mask.
-4. P4: a tenant's sandboxed Bash cannot reach a sibling session's AF_UNIX proxy sockets or persisted CLI content, and hosted Bash still starts (no `apply-seccomp: unshare(CLONE_NEWUSER)` EPERM outage).
+4. P4: a tenant's sandboxed Bash cannot reach a sibling session's AF_UNIX proxy sockets or persisted CLI content, and hosted Bash still starts (no `apply-seccomp: unshare(CLONE_NEWUSER)` EPERM failure).
 5. P5: the committed canary fixture equals the real builder's tail for the new SDK; the pin tables, Dockerfile, package.json and lockfile agree on one pair.
 6. P6: no pin moves before P2-P4 are proved against the new binary through the real SDK path.
 
@@ -115,7 +115,7 @@ Release facts: dist-tags `stable` 2.1.311, `latest` 2.1.318 / 0.3.318. 2.1.311 a
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** every hosted Concierge/agent Bash call failing with EPERM (the 2026-10-06 / 2026-07-01 outage shape), or a workspace session that cannot start; a founder's agent session silently unable to run commands.
+- **If this lands broken, the user experiences:** every hosted Concierge/agent Bash call failing with EPERM (the 2026-10-06 / 2026-07-01 failure shape), or a workspace session that cannot start; a founder's agent session silently unable to run commands.
 - **If this leaks, the user's data/workflow is exposed via:** a silently changed builder that stops skipping/applying the `apply-seccomp` wrapper or re-exposes `/proc`, letting one tenant's Bash reach a sibling session's proxy sockets, persisted CLI output or credentials; or an unfixed embedded Bun decoding a hostile `br` response on the shared host (the claude process runs outside the Bash sandbox with the session's credentials).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one cross-tenant read of another founder's workspace content is a brand-ending event for a product whose pitch is isolated agent workspaces, so aggregate-pattern is too lax; CPO sign-off is required before `soleur:work` (see Domain Review).
@@ -467,4 +467,4 @@ None; the addendum lands with the bump.
 - Issue #12026; PR 12073 (draft); #12009 (Node half); PR 10926 (stale npm-publish PR); #8643, #10549, #10115, #9724 (related sandbox work).
 - ADR-079 (faithful canary, SDK-bump guard, addenda to 2026-10-23); ADR-075 addendum 2026-10-16 (`allowAllUnixSockets`); ADR-272 (credential deny); ADR-278 (open-web egress); ADR-116 (content-anchored citations).
 - `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh`, `apps/web-platform/scripts/sandbox-canary-verify-in-image.sh`, `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`.
-- Learnings: 2026-11-03-base-image-cve-bump-is-a-pin-census-not-a-digest-edit; 2026-10-18 allowAllUnixSockets canary-green-over-outage; 2026-09-29 sdk-bump attestation; 2026-10-09 model-launch pin; post-mortem 2026-07-01 concierge bwrap seccomp.
+- Learnings: 2026-11-03-base-image-cve-bump-is-a-pin-census-not-a-digest-edit; 2026-10-18 allowAllUnixSockets the canary-stays-green-while-Bash-is-broken learning; 2026-09-29 sdk-bump attestation; 2026-10-09 model-launch pin; PIR 2026-07-01 concierge bwrap seccomp.
