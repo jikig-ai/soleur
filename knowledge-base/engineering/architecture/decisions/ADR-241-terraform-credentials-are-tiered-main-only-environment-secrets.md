@@ -1144,6 +1144,14 @@ Appended; no status or earlier entry is edited.
 - **The missed deadline, stated plainly.** The 2026-10-23 entry scoped this read as "delete when op=backup is re-plumbed" ahead of O10, and O10 landed first. For the window between O10 and this change the op refused — the bare name was already absent from `prd_terraform`, so the read returned empty and the arm failed closed before any request, exactly the backstop the ratchet's header describes. The retrospective: the fail-closed shape held, but the sequencing was inverted from the plan's intent — credential re-plumbing should precede eviction, not trail it. The cost was one dead op for the window and this amendment; the post-merge dispatch is operator-run and restores the op.
 - **Where it is pinned.** The op-set parity (`environment:` == arm-token ops ∪ Tier-B loader ops, with `backup ∉ arm-token`), the loader step's gating and inputs, and the arm's refusal/mask/request order are pinned by `apps/web-platform/infra/cutover-inngest-workflow.test.sh`. In the census, `env_arms` reads `==`/`!=` predicate operands as comparisons (never environment names) and an empty `||` arm as "no environment" — safe only because every ungated fallback path is separately banned (G1g prd_terraform reads, G1h state writes, and a new G1j clause: `|| ''` combined with a `doppler-token-legacy` input is red).
 
+### 2026-11-04 (#8209): the three remaining rotations are recorded, the orphan repo secret is deleted, and residual R2 becomes a rule
+
+Appended; no status or earlier entry is edited.
+
+- **Rotations.** The Hetzner read/write token and `CF_API_TOKEN_R2` were rotated on 2026-11-04 (old values dead, probes and canaries in the record at https://github.com/jikig-ai/soleur/issues/8209#issuecomment-6638708947). The read/write R2 state pair (`TF_STATE_AWS_*`) is the bucket-scoped token `r2-tf-state-rw-20261022`, minted 2026-10-22 and accepted by the owner as the rotation; it has no old value left to probe.
+- **The orphan repo secret is gone.** `CF_TUNNEL_TOKEN` (repo-level Actions secret, no consumer in `.github`, `scripts` or `apps`, no environment copy) was deleted on 2026-11-04, ahead of the "final G1 step" the 2026-10-15 entry named, because nothing consumes it. The Doppler `prd_terraform` copy of the same name was not touched.
+- **R2 as a rule.** Residual R2 above (web-platform state is Tier-A readable and holds other Terraform-minted secrets) is restated as a rule for new resources in ADR-319, so it stops growing. `tls_private_key.ci_ssh` (G1b, #10582) remains the known instance.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
