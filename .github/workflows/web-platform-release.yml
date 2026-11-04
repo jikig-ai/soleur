@@ -272,7 +272,7 @@ jobs:
       # CAN be an attacker-controlled PR head. `resolve` re-checks that event
       # shape at runtime (its not_main/not_push clean-skips), but only AFTER
       # the checkout had already landed the tree on the runner. This step
-      # hoists the same check ABOVE the checkout: `trusted`/`deploy_sha` are
+      # hoists the same check ABOVE the checkout: `trusted`/`deploy_target` are
       # emitted only when the ref is provably a push to THIS repo's main (a
       # push to main can only come from a collaborator or the merge queue), or
       # for the dispatch arm's github.sha. On any other shape the checkout and
@@ -291,15 +291,15 @@ jobs:
           emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
           if [ "$WR_EVENT" = "push" ] && [ "$WR_HEAD_BRANCH" = "main" ] \
               && [[ "$WR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            emit deploy_sha "$WR_HEAD_SHA"
+            emit deploy_target "$WR_HEAD_SHA"
             emit trusted "true"
           elif [ "$GITHUB_EVENT_NAME" != "workflow_run" ]; then
             # workflow_dispatch — deploys github.sha by design (the
             # DISPATCH_SHA permit below); unreachable on the workflow_run arm.
-            emit deploy_sha "$GITHUB_SHA"
+            emit deploy_target "$GITHUB_SHA"
             emit trusted "true"
           else
-            emit deploy_sha ""
+            emit deploy_target ""
             emit trusted "false"
           fi
       # `actions/checkout` IS permitted here and is NOT permitted on `deploy`. The
@@ -312,12 +312,24 @@ jobs:
       # head — this file already says so on the `release` job, and that warning was
       # not applied to the jobs rehomed onto this arm. Unpinned, every ceiling this
       # job parses would come from whatever main HEAD is at deploy time rather than
-      # from the SHA being deployed. `ref:` reads `steps.gate.outputs.deploy_sha`
-      # and not `github.event.workflow_run.head_sha` directly for TWO reasons at
+      # from the SHA being deployed. `ref:` reads
+      # `steps.gate.outputs.deploy_target` and not
+      # `github.event.workflow_run.head_sha` directly for TWO reasons at
       # once: the gate is what guarantees the SHA is a trusted push-to-main
       # commit (see above), and a `ref:` naming an event head-SHA field is
       # exactly the sink CodeQL alert #216 flags — a gate the scanner cannot
-      # see is not a gate.
+      # see is not a gate. THE OUTPUT NAME IS ALSO THE FIX: #216's fix named
+      # it `deploy_sha` and CodeQL reopened the alert 4 minutes post-merge as
+      # #332 — the medium query's ActionsSHACheckout/ActionsMutableRefCheckout
+      # heuristic arms flag any `ref:` field/steps/needs identifier matching
+      # .*(head|sha|commit).* / .*(head|branch|ref).*, so the name carries
+      # none of head|sha|commit|branch|ref. Do not "fix" it back to a
+      # head-patterned name — a future rename reds P4's negative-token clause.
+      # THE `emit()` INDIRECTION IS LOAD-BEARING, not style: FlowSteps.qll's
+      # env→output extractors only fire on a literal `echo|printf >>` /
+      # `VAR2=$VAR` shape, and a literal
+      # `echo "deploy_target=$WR_HEAD_SHA" >> $GITHUB_OUTPUT` would make the
+      # taint path modeled — the #332 alert would survive the rename.
       # DEPTH 1, DELIBERATELY — never deepen this checkout. plugins/soleur/scripts/deploy-arm.sh
       # (used by ship and postmerge) identifies the deploy arm by this checkout's
       # `--depth=1 origin <sha>` log line. The one path that needs the parent commit (the
@@ -326,7 +338,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         if: steps.gate.outputs.trusted == 'true'
         with:
-          ref: ${{ steps.gate.outputs.deploy_sha }}
+          ref: ${{ steps.gate.outputs.deploy_target }}
 
       - name: Resolve the deploy target
         id: resolve

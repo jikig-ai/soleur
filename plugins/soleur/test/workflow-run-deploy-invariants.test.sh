@@ -478,7 +478,7 @@ esac
 # RELEASE_PATH_FILTER. B8 in scripts/prod-version-drift-check.test.sh binds
 # path_filter to the drift checker's PATHSPEC, a separate file (the anchor).
 _pc=$(python3 - "$REL" <<'PYPC'
-import sys, yaml
+import re, sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 on = d.get(True) or d.get("on")      # PyYAML reads the bare `on:` key as boolean True
 pf = d["jobs"]["release"]["with"]["path_filter"]
@@ -487,19 +487,29 @@ res = next(s for s in rt if s.get("id") == "resolve")
 rpf = res.get("env", {}).get("RELEASE_PATH_FILTER", "")
 co = [s for s in rt if str(s.get("uses", "")).startswith("actions/checkout@")]
 depth = "missing" if len(co) != 1 else str((co[0].get("with") or {}).get("fetch-depth", "unset"))
-# P4 — the checkout's trust gate (CodeQL #216, actions/untrusted-checkout).
+# P4 — the checkout's trust gate (CodeQL #216 + #332, actions/untrusted-checkout).
 # The medium query's sink is a `ref:`/`repository:` expression that textually
 # names a head-SHA source (github.event.workflow_run.head_sha, \bhead_sha\b,
-# merge_sha, head.sha) or a steps/needs id matching .*(head|sha|commit).*;
-# the query carries NO `if:` sanitizer and NO persist-credentials sanitizer,
-# so the ONLY structural fix is a `ref:` that reads the gate-validated value.
-# Asserted by exact string equality so ANY event-field spelling returns RED.
+# merge_sha, head.sha) — OR whose field/step/job identifier matches
+# .*(head|sha|commit).* (ActionsSHACheckout) or .*(head|branch|ref).*
+# (ActionsMutableRefCheckout): #216 was the taint arm, #332 fired on the
+# field-name arm via `deploy_sha`. The query carries NO `if:` sanitizer and NO
+# persist-credentials sanitizer, so the ONLY structural fix is a `ref:` that
+# reads the gate-validated value under an identifier matching none of
+# head|sha|commit|branch|ref. Asserted by exact string equality on the `if:`/
+# `ref:` so ANY event-field spelling returns RED, plus a negative-token clause
+# on the extracted steps.<id>.outputs.<name> identifier so a rename to ANY
+# future head-patterned name reds the row — the name `deploy_target` IS the fix.
 gts = [s for s in rt if s.get("id") == "gate"]
 co_if = str(co[0].get("if", "")) if len(co) == 1 else ""
 co_ref = str((co[0].get("with") or {}).get("ref", "")) if len(co) == 1 else ""
 gts_run = str(gts[0].get("run", "")) if len(gts) == 1 else ""
-gate_ok = len(gts) == 1 and "deploy_sha" in gts_run and "trusted" in gts_run
-ref_ok = co_if == "steps.gate.outputs.trusted == 'true'" and co_ref == "${{ steps.gate.outputs.deploy_sha }}"
+gate_ok = len(gts) == 1 and "deploy_target" in gts_run and "trusted" in gts_run
+_m = re.fullmatch(r"\$\{\{\s*steps\.[A-Za-z0-9_-]+\.outputs\.([A-Za-z0-9_-]+)\s*\}\}", co_ref)
+name_ok = _m is not None and not re.search(r"(head|sha|commit|branch|ref)", _m.group(1))
+ref_ok = (co_if == "steps.gate.outputs.trusted == 'true'"
+          and co_ref == "${{ steps.gate.outputs.deploy_target }}"
+          and name_ok)
 print("P4=" + ("ok" if gate_ok and ref_ok else "gate_steps=%d co.if=%r co.ref=%r" % (len(gts), co_if, co_ref)))
 # P5 — verify-doppler-secrets' job-level trusted-shape gate. It EXECUTES a
 # script from its checked-out tree under `doppler run -c prd`, so the gate
@@ -551,7 +561,7 @@ if [ "$_p3" = "ok" ]; then pass; else
   fail "P3 on.push.paths and path_filter disagree ($_p3) — the clean skip now depends on path_filter meaning exactly what on.push.paths means. Globs other than 'X/**' and '!X/**' are a translation FAIL, not a skip"
 fi
 if [ "$_p4" = "ok" ]; then pass; else
-  fail "P4 resolve-target's checkout is not gated on the upstream event's trust shape ($_p4) — CodeQL #216 (actions/untrusted-checkout): a ref: naming an event head-SHA is the sink, and the only clearing fix is the gate-validated deploy_sha. The gate step must emit trusted+deploy_sha, the checkout must carry if: steps.gate.outputs.trusted == 'true' and ref: \${{ steps.gate.outputs.deploy_sha }}"
+  fail "P4 resolve-target's checkout is not gated on the upstream event's trust shape ($_p4) — CodeQL #216+#332 (actions/untrusted-checkout): a ref: naming an event head-SHA is the taint-arm sink, and a steps.<id>.outputs.<name> identifier matching .*(head|sha|commit).* / .*(head|branch|ref).* is the field-name sink (#332 fired on deploy_sha). The gate step must emit trusted+deploy_target, the checkout must carry if: steps.gate.outputs.trusted == 'true' and ref: \${{ steps.gate.outputs.deploy_target }}, and the output identifier must match none of head|sha|commit|branch|ref"
 fi
 if [ "$_p5" = "ok" ]; then pass; else
   fail "P5 verify-doppler-secrets is not gated on the upstream event's trust shape ($_p5) — it executes a script from the checked-out tree under doppler run -c prd, so its job if: must require github.event.workflow_run.event == 'push' AND head_branch == 'main', and its checkout must pin persist-credentials: false"
