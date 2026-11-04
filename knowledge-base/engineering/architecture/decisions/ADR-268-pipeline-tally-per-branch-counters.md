@@ -142,3 +142,28 @@ misattribution; refusing default-branch ledgers outright (UNKNOWN) turns every
 post-merge shell on `main` into an UNKNOWN verdict; a per-session key would
 remove the shared ledger entirely and is left for a design change if `main`
 reads keep mattering.
+
+## Amendment — 2026-11-03 (#11775)
+
+The tally gains a fifth dimension, `ci_wall_s`: measured CI wall-clock seconds,
+summed over the driven runs whose timing was readable. It carries full
+dimension parity — `incr`/`gate`/caps/`warned_*`/`capped` vocabulary,
+`init --max-ci-wall-s` (plus the `--max-ci_wall_s` underscore alias), and the
+`ci-wall-s` hyphen alias everywhere a dim is taken.
+
+The `tally:` line and the `Pipeline-Tally:` machine line each gain the dim as a
+fifth `dim=N` field, appended after `agent_rounds`:
+`Pipeline-Tally: seats=N; ci_cycles=N; fix_rounds=N; agent_rounds=N;
+ci_wall_s=W`. `W` is the count when positive and the explicit absent marker
+`unmeasured` at count 0 — never `ci_wall_s=0`, which would fabricate a measured
+zero for a run that posted nothing. The ledger stores 0 either way; only the
+render translates it, and the marker is per-dimension absence, distinct from
+`SOLEUR_TALLY_ABSENT` (whole-ledger absent) and from `tally: 0 — no counted
+operations` (all five counts 0, which subsumes it). Callers post measured
+timing (`gh run view <id> --json startedAt,updatedAt` delta, or the per-job
+`started_at→completed_at` span on the head-SHA run a push produced) and skip
+the `incr` entirely when timing is unreadable, so the count is a floor:
+cycles whose timing never resolved contribute nothing. Format-preserving
+append for consumers — one more `;`-separated field on the machine line, and
+old ledgers lacking `ci_wall_s` keys read the dim as 0 (the absent marker)
+until the first write upgrades the schema in place.

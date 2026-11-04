@@ -1183,6 +1183,248 @@ else
   fail "Rg6: got '${_rg6:0:200}'"
 fi
 
+# ---- SUT-walk + the `$(cd … redirect … && pwd)` arm (Guard 1: the stem-minted-SUT derive fix) ----
+# Two gaps pinned by learning 2026-11-02-stem-minted-suts-are-never-walked-by-the-derive: (a) the
+# closure BFS seeded only `_suite_file`, so a stem-minted SUT's edge was minted but the SUT itself
+# was never walked — its source/invocation/$VAR/path tokens derived nothing; (b) the probe idiom
+# `source "$(cd "<dir>" 2>/dev/null && pwd)/x.sh"` defeated the D1 arm (a redirect between the cd
+# target and `&& pwd` was not tolerated), so the greedy fallback collapsed the substitution to the
+# file's own dir and the real edge was lost.
+FXS="$TESTROOT/fx-sut"
+mkdir -p "$FXS/lib" "$FXS/cases" "$FXS/app/deep"
+# (a) the canonical pair — the SUT's literal source line is only minted once the SUT is WALKED
+printf 'source lib/x-lib.sh\n' > "$FXS/cases/sut.sh"
+printf 'echo guarded\n' > "$FXS/cases/sut.test.sh"
+: > "$FXS/lib/x-lib.sh"
+# (c) two stem candidates — pair.sh AND pair.py both mint an edge, so both must be walked
+printf 'source lib/p1.sh\n' > "$FXS/cases/pair.sh"
+printf 'import lib.p2\n' > "$FXS/cases/pair.py"
+printf 'echo guarded\n' > "$FXS/cases/pair.test.sh"
+: > "$FXS/lib/p1.sh"; : > "$FXS/lib/p2.py"
+# (d) transitivity — a SUT's own source closure must re-enqueue exactly like the suite file's
+printf 'source lib/chain-mid.sh\n' > "$FXS/cases/chain.sh"
+printf 'source lib/chain-leaf.sh\n' > "$FXS/lib/chain-mid.sh"
+: > "$FXS/lib/chain-leaf.sh"
+printf 'echo guarded\n' > "$FXS/cases/chain.test.sh"
+# (e) absent SUT — no candidate mints an edge, so nothing seeds: a no-op, never an error
+printf 'echo plain\n' > "$FXS/cases/ghost.test.sh"
+# the learning's exact composition: a walked SUT whose source line carries the redirect idiom —
+# the assignment carries the real file's `|| libdir=""` fallback tail verbatim (the greedy var-map
+# capture holds it, so the resolved operand arrives as `$(cd …)" || libdir="/x`), and the SUT
+# sources through it twice like the probe does
+printf 'libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)" || libdir=""\nsource "$libdir/x-lib.sh"\nsource "$libdir/p1.sh"\n' > "$FXS/cases/endtoend.sh"
+printf 'echo guarded\n' > "$FXS/cases/endtoend.test.sh"
+# (b) the `$(cd "<dir>" <redirect> && pwd[ -P])` spelling matrix — every tolerated spelling resolves
+# to the cd target (here the fixture root, two levels up), so $REPO_ROOT/lib/x-lib.sh is an edge.
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)"\nbash "$REPO_ROOT/lib/x-lib.sh"\n' > "$FXS/app/deep/cd-devnull.sh"
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>&1 && pwd)"\nbash "$REPO_ROOT/lib/x-lib.sh"\n' > "$FXS/app/deep/cd-stderr.sh"
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"\nbash "$REPO_ROOT/lib/x-lib.sh"\n' > "$FXS/app/deep/cd-devnull-p.sh"
+printf 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>&1 && pwd -P)"\nbash "$REPO_ROOT/lib/x-lib.sh"\n' > "$FXS/app/deep/cd-stderr-p.sh"
+# a redirect spelling the arm does NOT cover takes the greedy fallback identically — the
+# substitution collapses to the file's own dir, so $R/helper.sh names app/deep/helper.sh,
+# never app/helper.sh (the path the cd target would have named).
+printf 'R="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 3>/dev/null && pwd)"\nbash "$R/helper.sh"\n' > "$FXS/app/deep/cd-nonmatch.sh"
+# an unresolvable cd target keeps the greedy fallback too (D1 may only widen)
+printf 'T="$(cd "$(mktemp -d)" 2>/dev/null && pwd)"\nbash "$T/helper.sh"\n' > "$FXS/app/deep/cd-unresolv.sh"
+: > "$FXS/app/deep/helper.sh"; : > "$FXS/app/helper.sh"
+assert_fixture_dir "$FXS"
+sut_edges() { # sut_edges <derive argv words> -> the sorted edge set, space-joined
+  SUT_ARGV="$1" derive_run "$FXS" 'eval "set -- $SUT_ARGV"; _affected_derive lbl "$@"; printf "%s" "$(printf "%s\n" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} | LC_ALL=C sort | tr "\n" " ")"' 2>&1
+}
+sut_file_edges() { # sut_file_edges <file> -> sorted edge set for a single _affected_file_edges walk
+  SUT_F="$1" derive_run "$FXS" '_affected_reset_edges; _affected_file_edges "$SUT_F"; printf "%s" "$(printf "%s\n" ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} | LC_ALL=C sort | tr "\n" " ")"' 2>&1
+}
+
+# (a) stem-minted SUT walk — the fixture of record. Pre-fix the edge set held the suite file and
+# the pre-minted SUT edge and NOTHING the SUT reads.
+cases=$((cases + 1))
+_sut1="$(sut_edges 'bash cases/sut.test.sh')"
+if [[ "$_sut1" == "^cases/sut.sh ^cases/sut.test.sh ^lib/x-lib.sh " ]]; then
+  pass "SUT1: a stem-minted SUT is a walk root — its literal source line mints ^lib/x-lib.sh"
+else
+  fail "SUT1: edges '${_sut1:0:200}' (want exactly '^cases/sut.sh ^cases/sut.test.sh ^lib/x-lib.sh')"
+fi
+
+# (c) two stem candidates both walked — the second member's extraction runs too
+cases=$((cases + 1))
+_sut2="$(sut_edges 'bash cases/pair.test.sh')"
+if [[ "$_sut2" == "^cases/pair.py ^cases/pair.sh ^cases/pair.test.sh ^lib/p1.sh ^lib/p2.py " ]]; then
+  pass "SUT2: two stem candidates mint two seeds — pair.sh's source AND pair.py's import both land"
+else
+  fail "SUT2: edges '${_sut2:0:200}' (want '^cases/pair.py ^cases/pair.sh ^cases/pair.test.sh ^lib/p1.sh ^lib/p2.py')"
+fi
+
+# (d) SUT->SUT transitivity — the SUT's minted edges re-enqueue like any walked file's
+cases=$((cases + 1))
+_sut3="$(sut_edges 'bash cases/chain.test.sh')"
+if [[ "$_sut3" == "^cases/chain.sh ^cases/chain.test.sh ^lib/chain-leaf.sh ^lib/chain-mid.sh " ]]; then
+  pass "SUT3: a SUT's source closure is transitive — lib/chain-mid.sh's own source mints ^lib/chain-leaf.sh"
+else
+  fail "SUT3: edges '${_sut3:0:200}' (want '^cases/chain.sh ^cases/chain.test.sh ^lib/chain-leaf.sh ^lib/chain-mid.sh')"
+fi
+
+# (e) absent SUT — PASS-adjacent (Guard-1 row 5): no stem edge exists, no walk launches, no error.
+cases=$((cases + 1))
+_sut4="$(sut_edges 'bash cases/ghost.test.sh')"
+if [[ "$_sut4" == "^cases/ghost.test.sh " ]]; then
+  pass "SUT4: an absent SUT is a no-op — the seeding is existence-gated (no error, no edges)"
+else
+  fail "SUT4: edges '${_sut4:0:160}' (want exactly '^cases/ghost.test.sh')"
+fi
+
+# (f) declared u derived dedup — PASS (Guard-1 row 6): an edge the declaration now also derives
+# stays a single entry through the classify union, and the class stays edge:declared.
+cases=$((cases + 1))
+_sut5="$(derive_run "$FXS" 'TEST_GROUP=all; AFFECTED_LBL_PATHS=("lib/x-lib.sh"); _affected_classify lbl bash cases/sut.test.sh; printf "%s|%s" "$_AC_CLASS" "$(printf "%s\n" "${_AC_EDGES[@]}" | grep -cF "^lib/x-lib.sh")"' 2>&1)"
+if [[ "$_sut5" == "edge:declared|1" ]]; then
+  pass "SUT5: a derived edge that is also declared dedups via _AC_ESET (one entry, edge:declared kept)"
+else
+  fail "SUT5: got '${_sut5:0:160}' (want 'edge:declared|1')"
+fi
+
+# Print mode is untouched — the _PRINT_AFFECTED early-out still returns on the stem edges alone
+# (the seeded closure is execution-mode work the receipt never needs).
+cases=$((cases + 1))
+_sut6="$(derive_run "$FXS" '_PRINT_AFFECTED=1; _affected_derive lbl bash cases/sut.test.sh; printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ " $_sut6 " == *" ^cases/sut.sh "* && "$_sut6" != *"x-lib"* ]]; then
+  pass "SUT6: print mode still early-outs on the stem edges — the seeded closure stays execution-mode only"
+else
+  fail "SUT6: print-mode edges '${_sut6:0:160}' (want stem edges, no closure)"
+fi
+
+# (b) the redirect spelling matrix — every tolerated spelling resolves to the cd target
+for _sp in cd-devnull cd-stderr cd-devnull-p cd-stderr-p; do
+  cases=$((cases + 1))
+  _cdx="$(sut_file_edges "app/deep/${_sp}.sh")"
+  if [[ " $_cdx " == *" ^lib/x-lib.sh "* ]]; then
+    pass "SUT-cd[$_sp]: the redirect spelling resolves to the cd target (^lib/x-lib.sh minted)"
+  else
+    fail "SUT-cd[$_sp]: edges '${_cdx:0:160}' (want ^lib/x-lib.sh)"
+  fi
+done
+
+# a redirect spelling outside the arm falls back identically — the greedy collapse to the file's
+# own directory mints app/deep/helper.sh, never the cd-target path app/helper.sh
+cases=$((cases + 1))
+_cdx="$(sut_file_edges app/deep/cd-nonmatch.sh)"
+if [[ " $_cdx " == *" ^app/deep/helper.sh "* && " $_cdx " != *" ^app/helper.sh "* ]]; then
+  pass "SUT-cd: a 3>/dev/null spelling keeps the greedy fallback (^app/deep/helper.sh, never ^app/helper.sh)"
+else
+  fail "SUT-cd nonmatch: edges '${_cdx:0:160}' (want ^app/deep/helper.sh and no ^app/helper.sh)"
+fi
+
+# an unresolvable cd target (`$(cd "$(cmd)" …)`) keeps the greedy fallback — widen-only as before
+cases=$((cases + 1))
+_cdx="$(sut_file_edges app/deep/cd-unresolv.sh)"
+if [[ " $_cdx " == *" ^app/deep/helper.sh "* && " $_cdx " != *" ^app/helper.sh "* ]]; then
+  pass "SUT-cd: an unresolvable cd target keeps the greedy fallback (^app/deep/helper.sh)"
+else
+  fail "SUT-cd unresolvable: edges '${_cdx:0:160}' (want ^app/deep/helper.sh and no ^app/helper.sh)"
+fi
+
+# the learning's exact composition — a walked SUT whose `X="$(cd …)" || X=""` fallback assignment
+# sources through the redirect idiom mints BOTH file edges only with all three fixes (walk,
+# redirect tolerance, and the `" || X="` residue strip). Pre-strip the resolved operand
+# `$(cd …)" || libdir="/x` collapsed to the dir and the row read `^lib/` alone.
+cases=$((cases + 1))
+_sut7="$(sut_edges 'bash cases/endtoend.test.sh')"
+if [[ " $_sut7 " == *" ^lib/x-lib.sh "* && " $_sut7 " == *" ^lib/p1.sh "* && " $_sut7 " == *" ^cases/endtoend.sh "* ]]; then
+  pass "SUT7: the learning's case — SUT walked AND its \"\$(cd … 2>/dev/null && pwd)\" ||-fallback sources resolved (^lib/x-lib.sh + ^lib/p1.sh)"
+else
+  fail "SUT7: edges '${_sut7:0:200}' (want ^cases/endtoend.sh + ^lib/x-lib.sh + ^lib/p1.sh)"
+fi
+
+# ---- Guard-1 mutation battery — one rewritten site per arm, driven through DERIVE_BLOCK --------
+# Each arm greps its anchor for an exactly-once count FIRST (a drifted anchor is a FAIL, never a
+# vacuous pass), then the rewrite's behavior proves the mechanism the row pins. Rows 5 and 6 of
+# the matrix are the PASS-adjacent/PASS fixtures above (SUT4 absent-SUT, SUT5 declared u derived).
+mut_block() { # mut_block <out> — rewrites DERIVE_SRC by the PY program on stdin
+  python3 - "$DERIVE_SRC" "$1"
+}
+
+# M1 (Guard-1 row 1): remove the SUT seeding from the BFS frontier — the canonical pair loses the
+# lib edge the walk is what mints.
+cases=$((cases + 1))
+_m1_old='_queue+=("$_sf")'
+_m1_n="$(grep -cF "$_m1_old" "$DERIVE_SRC" || true)"
+mut_block "$TESTROOT/derive-m1.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = '_queue+=("$_sf")'
+assert s.count(old) == 1, f"seed-enqueue anchor drifted ({s.count(old)})"
+# `:` (not a comment) — a `#` inside the case arm would eat the `;;` and break the parse.
+open(sys.argv[2], "w").write(s.replace(old, ':'))
+PY
+_m1="$(DERIVE_BLOCK="$TESTROOT/derive-m1.sh" sut_edges 'bash cases/sut.test.sh')"
+if [[ "$_m1_n" == "1" ]] && ! cmp -s "$DERIVE_SRC" "$TESTROOT/derive-m1.sh" \
+   && [[ "$_m1" == "^cases/sut.sh ^cases/sut.test.sh " && "$_sut1" == *"x-lib.sh"* ]]; then
+  pass "G1-M1: removing the stem-seeded frontier drops the SUT's walked edges (^lib/x-lib.sh lost)"
+else
+  fail "G1-M1: anchor=$_m1_n mutant edges '${_m1:0:160}' (fixed: '${_sut1:0:160}')"
+fi
+
+# M2 (Guard-1 row 2): seed the frontier but stop after the FIRST member — the two-candidate
+# fixture must mint only the first SUT's edges.
+cases=$((cases + 1))
+_m2_old='*) _sset+="$_sf$_snl"; _queue+=("$_sf") ;;'
+_m2_n="$(grep -cF "$_m2_old" "$DERIVE_SRC" || true)"
+mut_block "$TESTROOT/derive-m2.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = '*) _sset+="$_sf$_snl"; _queue+=("$_sf") ;;'
+assert s.count(old) == 1, f"seed-case anchor drifted ({s.count(old)})"
+open(sys.argv[2], "w").write(s.replace(old, '*) _sset+="$_sf$_snl"; _queue+=("$_sf"); break ;;'))
+PY
+_m2="$(DERIVE_BLOCK="$TESTROOT/derive-m2.sh" sut_edges 'bash cases/pair.test.sh')"
+if [[ "$_m2_n" == "1" ]] && ! cmp -s "$DERIVE_SRC" "$TESTROOT/derive-m2.sh" \
+   && [[ " $_m2 " == *" ^lib/p1.sh "* && " $_m2 " != *" ^lib/p2.py "* && " $_sut2 " == *"p2.py"* ]]; then
+  pass "G1-M2: seeding only the first stem candidate drops the second SUT's extraction (^lib/p2.py lost)"
+else
+  fail "G1-M2: anchor=$_m2_n mutant edges '${_m2:0:160}' (fixed: '${_sut2:0:160}')"
+fi
+
+# M3 (Guard-1 row 3): narrow the $(cd) arm to require 2>/dev/null verbatim — a 2>&1 spelling slips
+# back to the greedy fallback and the precise edge is lost.
+cases=$((cases + 1))
+_m3_old='([[:space:]]+2[>](/dev/null|&1))?'
+_m3_n="$(grep -cF "$_m3_old" "$DERIVE_SRC" || true)"
+mut_block "$TESTROOT/derive-m3.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = r'([[:space:]]+2[>](/dev/null|&1))?'
+assert s.count(old) == 1, f"redirect-arm anchor drifted ({s.count(old)})"
+open(sys.argv[2], "w").write(s.replace(old, r'[[:space:]]+2[>]/dev/null'))
+PY
+_m3="$(DERIVE_BLOCK="$TESTROOT/derive-m3.sh" sut_file_edges 'app/deep/cd-stderr.sh')"
+if [[ "$_m3_n" == "1" ]] && ! cmp -s "$DERIVE_SRC" "$TESTROOT/derive-m3.sh" \
+   && [[ " $_m3 " != *" ^lib/x-lib.sh "* ]]; then
+  pass "G1-M3: an arm requiring 2>/dev/null verbatim loses the 2>&1 spelling's edge (^lib/x-lib.sh lost)"
+else
+  fail "G1-M3: anchor=$_m3_n mutant edges '${_m3:0:160}' (want no ^lib/x-lib.sh)"
+fi
+
+# M4 (Guard-1 row 4): reorder the walk so minted edges are never scanned (the snapshot taken AFTER
+# the extraction) — the SUT's own closure loses the transitive edge.
+cases=$((cases + 1))
+_m4_old='        local _pre_n=${#_AC_EDGES[@]}
+        _affected_file_edges "$_f"'
+_m4_n="$(grep -cF 'local _pre_n=${#_AC_EDGES[@]}' "$DERIVE_SRC" || true)"
+mut_block "$TESTROOT/derive-m4.sh" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+old = '        local _pre_n=${#_AC_EDGES[@]}\n        _affected_file_edges "$_f"'
+assert s.count(old) == 1, f"walk-order anchor drifted ({s.count(old)})"
+new = '        _affected_file_edges "$_f"\n        local _pre_n=${#_AC_EDGES[@]}'
+open(sys.argv[2], "w").write(s.replace(old, new))
+PY
+_m4="$(DERIVE_BLOCK="$TESTROOT/derive-m4.sh" sut_edges 'bash cases/chain.test.sh')"
+if [[ "$_m4_n" == "1" ]] && ! cmp -s "$DERIVE_SRC" "$TESTROOT/derive-m4.sh" \
+   && [[ " $_m4 " == *" ^lib/chain-mid.sh "* && " $_m4 " != *" ^lib/chain-leaf.sh "* && " $_sut3 " == *"chain-leaf"* ]]; then
+  pass "G1-M4: a walk that never re-enqueues minted edges loses the transitive ^lib/chain-leaf.sh"
+else
+  fail "G1-M4: anchor=$_m4_n mutant edges '${_m4:0:160}' (fixed: '${_sut3:0:160}')"
+fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then

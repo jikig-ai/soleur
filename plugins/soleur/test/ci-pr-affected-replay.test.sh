@@ -3215,13 +3215,13 @@ row_ow_notmerged() { ow_variant ow_u_notmerged; [[ "$RC" -eq 2 ]] && grep -q '^N
 row_ow_no_token() { ow_case; ow_write; RC=0; OWOUT="$(env -u GH_TOKEN PATH="$BIN:$PATH" bash "$OW_SCRIPT" 2>&1)" || RC=$?; OW_RCS+=("$RC"); [[ "$RC" -eq 3 ]] && grep -q 'GH_TOKEN is not set' <<<"$OWOUT"; }
 row_ow_api_failure() { ow_case; ow_write; fx_err "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"; ow_probe; rm -f "$GHFIX/ERR_$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX")"; [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"; }
 row_ow_few_prs() { ow_variant ow_u_few; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: only 2 distinct green pull_request PR' <<<"$OWOUT"; }
-row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 241s is over 240 s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)' <<<"$OWOUT"; }
-row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 286s is over 285 s (PROVISIONAL ceiling; ceiling re-rule owed' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
+row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 241s is over 240 s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)' <<<"$OWOUT"; }
+row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 286s is over 285 s (ruled ceiling; a confirmed breach is a CI cost regression' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
 row_ow_edge_pass() {   # a p95 of exactly 240 s and a maximum of exactly 285 s are AT the ceilings, so they pass
   ow_variant ow_u_p95_240; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 240 s' <<<"$OWOUT" || return 1
   ow_variant ow_u_max_285; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 285 s' <<<"$OWOUT"
 }
-row_ow_30day_ceiling() { OW_NOW="$(date -u -d 2031-03-05T00:00:00Z +%s)"; ow_variant ow_u_slow; OW_NOW=""; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: the 30-day trigger has passed and (d) is the only unmet criterion' <<<"$OWOUT"; }
+row_ow_30day_ceiling() { OW_NOW="$(date -u -d 2031-03-05T00:00:00Z +%s)"; ow_variant ow_u_slow; OW_NOW=""; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: the 30-day trigger has passed and (d) is the only unmet criterion: the ceilings are ruled (2026-11-03) and a breach now is a CI cost regression for the budget owner, not a re-rule' <<<"$OWOUT"; }
 row_ow_exit1() { ow_variant ow_u_exit1; [[ "$RC" -eq 2 ]] && grep -q 'no green pull_request unit is from a PR touching scripts' <<<"$OWOUT" && ! grep -q 'restarted' <<<"$OWOUT"; }   # a genuine drift is not green and restarts nothing
 row_ow_bot_exit1() { ow_variant ow_u_botexit1; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: no bot PR in the window yet' <<<"$OWOUT" && ! grep -q 'restarted\|bot PR unit was red' <<<"$OWOUT"; }   # nor does one on a bot PR
 row_ow_defect() { ow_variant ow_u_defect; [[ "$RC" -eq 2 ]] && grep -q 'window restarted at 2031-02-02T07:00:00Z' <<<"$OWOUT" && grep -q 'only 0 distinct green' <<<"$OWOUT"; }
@@ -3250,8 +3250,8 @@ row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] && grep
   ow_case; ow_write; : > "$GHFIX/ERR422_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe; [[ "$RC" -eq 3 ]]; }   # an HTTP 422 on the baseline is a failed read, never "absent at the tip"
 row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$OW_SCRIPT" 2>&1)" || RC=$?; [[ "$RC" -eq 78 ]]; }
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
-row_ow_static() {   # the header states the exit contract and the provisional ceilings; no jq program splices a shell variable; the oracle list is the SUT's
-  grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are PROVISIONAL' "$OW_SCRIPT" && grep -q '^P95_MAX=240 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=285 ' "$OW_SCRIPT" || return 1
+row_ow_static() {   # the header states the exit contract and the ruled ceilings; no jq program splices a shell variable; the oracle list is the SUT's
+  grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are RULED' "$OW_SCRIPT" && grep -q '^P95_MAX=240 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=285 ' "$OW_SCRIPT" || return 1
   grep -q '^DRAIN_SENTINEL=11226 ' "$OW_SCRIPT" && grep -q '^TIMEOUT_WALL=290$' "$OW_SCRIPT" && [[ "$(sed -n 's/^MAX_MAX=\([0-9]*\) .*/\1/p' "$OW_SCRIPT")" -lt "$(sed -n 's/^TIMEOUT_WALL=\([0-9]*\)$/\1/p' "$OW_SCRIPT")" ]] || return 1   # the sentinel PR is pinned, and the max ceiling stays under the timeout class
   grep -q 'SOAK_FACTS_BUDGET_S:-180' "$OW_SCRIPT" && ! grep -qF '${#PR_EXCLUDED' "$OW_SCRIPT" && grep -q '1,000-result' "$OW_SCRIPT" && ! grep -qE 'evidence latches|oldest runs never change|names no PR' "$OW_SCRIPT" || return 1
   ! grep -qF "\"'\"\$merged_at\"'\"" "$OW_SCRIPT" && grep -qF -- '--arg m "$merged_at"' "$OW_SCRIPT" || return 1
@@ -3695,7 +3695,7 @@ chk "window probe: PR3a not merged is NOT YET (exit 2)" row_ow_notmerged
 chk "window probe: a missing GH_TOKEN is CANNOT ESTABLISH (exit 3), never a pass" row_ow_no_token
 chk "window probe: a failed API read is CANNOT ESTABLISH (exit 3)" row_ow_api_failure
 chk "window probe: two distinct PRs are NOT YET (exit 2)" row_ow_few_prs
-chk "window probe: a p95 one second over 240 s is NOT YET and says the ceiling is provisional and owed a re-rule" row_ow_slow
+chk "window probe: a p95 one second over 240 s is NOT YET and says the ceiling is ruled and a breach is a budget-owner cost regression" row_ow_slow
 chk "window probe: a maximum one second over 285 s fails by itself, though the p95 is under 240 s" row_ow_max
 chk "window probe: a p95 of exactly 240 s and a maximum of exactly 285 s are at the ceilings and pass" row_ow_edge_pass
 chk "window probe: at 30 days with the wall ceilings the only unmet criterion the probe says so" row_ow_30day_ceiling
@@ -3725,7 +3725,7 @@ chk "window probe: a moved line, a shrink and a baseline absent at the tip are n
 chk "window probe: a baseline absent at the merge commit, or a failed read of it, is CANNOT ESTABLISH (exit 3)" row_ow_baseline_reads
 chk "window probe: it refuses to run under xtrace with GH_TOKEN set (exit 78)" row_ow_xtrace
 chk "window probe: it only reads (every request hit a fixture; none missed)" row_ow_read_only
-chk "window probe: the header states the exit contract and the provisional ceilings, merged_at goes to jq by --arg, and the oracle list is the SUT's" row_ow_static
+chk "window probe: the header states the exit contract and the ruled ceilings, merged_at goes to jq by --arg, and the oracle list is the SUT's" row_ow_static
 chk "window probe: no stub scenario of this section returned exit 1 (exit 1 is not used)" row_ow_never_one
 chk "window probe: a files page over the 128 KiB argv limit (patch bodies) is read, and a patch text that names an oracle path decides nothing" row_ow_big_patch
 chk "window probe: three full big pages (the 300-file sentinel path) exclude the PR as oracle-touching without an error" row_ow_big_long
@@ -3796,8 +3796,8 @@ OW_COMM=comm
 ow_mutate baseline-growth-ignored "added=\"\$($OW_COMM -13 \"\$WORK/bl.merge.s\" \"\$WORK/bl.tip.s\")\"" 'added=""' row_ow_baseline_grew
 ow_mutate baseline-absent-at-merge-tolerated '[ "$rc" -ne 4 ] || fail_api "the baseline is absent at the PR3a merge commit"' ':' row_ow_baseline_reads
 ow_mutate thirty-day-note-dropped 'if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then' 'if false; then' row_ow_30day_ceiling
-ow_mutate ceiling-owed-note-dropped '(PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)"); nwall=$((nwall + 1)); }
-  (( max <= MAX_MAX ))' '(PROVISIONAL ceiling)"); nwall=$((nwall + 1)); }
+ow_mutate ceiling-regression-note-dropped '(ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
+  (( max <= MAX_MAX ))' '(ruled ceiling)"); nwall=$((nwall + 1)); }
   (( max <= MAX_MAX ))' row_ow_slow
 ow_mutate merged-at-spliced 'jq -r --arg m "$merged_at" --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > $m)' 'jq -r --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > "'"'"'"$merged_at"'"'"'")' row_ow_static
 ow_mutate args-accumulator $'files="$(printf \'%s\\n%s\\n\' "$files" "$proj" | jq -s -c \'add\' 2>/dev/null)" || fail_api "pull $n files (parse)"' $'files="$(jq -c -n --argjson a "$files" --argjson b "$page_files" \'$a + $b\' 2>/dev/null)" || fail_api "pull $n files (parse)"' row_ow_big_patch

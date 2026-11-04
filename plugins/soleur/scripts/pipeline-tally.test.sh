@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Tests for plugins/soleur/scripts/pipeline-tally.sh — the per-branch pipeline
-# activity ledger (seats / ci_cycles / fix_rounds / agent_rounds), its
+# activity ledger (seats / ci_cycles / fix_rounds / agent_rounds / ci_wall_s), its
 # warn-then-STOP budget gate, and its fail-open UNKNOWN surface.
 #
 # Written from the BINDING CONTRACT, not the implementation (the SUT is built
@@ -189,7 +189,9 @@ assert_eq "0" "$(cf_get "$C2" seats)" "seats initialized to 0"
 assert_eq "0" "$(cf_get "$C2" ci_cycles)" "ci_cycles initialized to 0"
 assert_eq "0" "$(cf_get "$C2" fix_rounds)" "fix_rounds initialized to 0"
 assert_eq "0" "$(cf_get "$C2" agent_rounds)" "agent_rounds initialized to 0"
+assert_eq "0" "$(cf_get "$C2" ci_wall_s)" "ci_wall_s initialized to 0"
 assert_eq "0" "$(cf_get "$C2" cap_seats)" "cap_seats initialized to 0 (unset)"
+assert_eq "0" "$(cf_get "$C2" cap_ci_wall_s)" "cap_ci_wall_s initialized to 0 (unset)"
 assert_eq "" "$(cf_get "$C2" capped)" "capped starts empty"
 assert_eq "" "$(cf_get "$C2" started_at)" "no started_at key — staleness is mtime-keyed"
 assert_eq "" "$(cf_get "$C2" run_id)" "no run_id key — dropped from the ledger schema"
@@ -205,12 +207,12 @@ assert_not_contains "$OUT" "UNKNOWN" "incr on a live ledger does not print UNKNO
 run_tally "$R3" "$S3" incr ci_cycles 2
 assert_rc0 "incr ci_cycles 2 exits 0"
 run_tally "$R3" "$S3" show
-assert_eq "tally: seats=3 ci_cycles=2 fix_rounds=0 agent_rounds=0" "$OUT" \
-  "show prints the contract's exact tally line"
+assert_eq "tally: seats=3 ci_cycles=2 fix_rounds=0 agent_rounds=0 ci_wall_s=unmeasured" "$OUT" \
+  "show prints the contract's exact tally line (unmeasured ci_wall_s at count 0)"
 echo ""
 
-# --- Test 4: incr default n=1, n>1, the ci-cycles alias, all four dims --------
-echo "Test 4: incr defaults n=1, accepts n>1, aliases ci-cycles"
+# --- Test 4: incr default n=1, n>1, the hyphen aliases, all five dims ----------
+echo "Test 4: incr defaults n=1, accepts n>1, aliases ci-cycles and ci-wall-s"
 R4=$(new_repo r4); S4="$TMP/s4"
 run_tally "$R4" "$S4" init
 run_tally "$R4" "$S4" incr seats        # default n=1
@@ -218,9 +220,11 @@ run_tally "$R4" "$S4" incr seats 4      # n>1
 run_tally "$R4" "$S4" incr ci-cycles    # hyphenated alias -> ci_cycles
 run_tally "$R4" "$S4" incr fix_rounds 2
 run_tally "$R4" "$S4" incr agent_rounds 3
+run_tally "$R4" "$S4" incr ci_wall_s 90 # measured wall seconds -> positive render
+run_tally "$R4" "$S4" incr ci-wall-s 30 # hyphenated alias -> ci_wall_s
 run_tally "$R4" "$S4" show
-assert_eq "tally: seats=5 ci_cycles=1 fix_rounds=2 agent_rounds=3" "$OUT" \
-  "all four dims accumulate; ci-cycles alias lands on ci_cycles"
+assert_eq "tally: seats=5 ci_cycles=1 fix_rounds=2 agent_rounds=3 ci_wall_s=120" "$OUT" \
+  "all five dims accumulate; ci-wall-s alias lands on ci_wall_s"
 echo ""
 
 # --- Test 5: incr on a missing file (AC8, Guard-1 row 4) ----------------------
@@ -282,14 +286,17 @@ seats=7
 ci_cycles=0
 fix_rounds=0
 agent_rounds=0
+ci_wall_s=0
 cap_seats=5
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=0
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=seats
 run_id=seeded
 started_at=$(date +%s)
@@ -333,14 +340,17 @@ seats=9
 ci_cycles=4
 fix_rounds=0
 agent_rounds=0
+ci_wall_s=0
 cap_seats=5
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=0
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=
 EOF
 touch -d "25 hours ago" "$C9"
@@ -364,14 +374,17 @@ seats=7
 ci_cycles=0
 fix_rounds=0
 agent_rounds=0
+ci_wall_s=0
 cap_seats=0
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=0
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=
 run_id=old-schema
 started_at=$OLD_TS
@@ -455,14 +468,17 @@ seats=0
 ci_cycles=0
 fix_rounds=0
 agent_rounds=0
+ci_wall_s=0
 cap_seats=0
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=0
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=fix_rounds
 run_id=latched
 started_at=$(date +%s)
@@ -644,14 +660,17 @@ seats=13
 ci_cycles=4
 fix_rounds=1
 agent_rounds=7
+ci_wall_s=0
 cap_seats=12
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=11
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=seats
 EOF
 touch -d "25 hours ago" "$C24"
@@ -704,15 +723,18 @@ echo ""
 echo "Test 27: corrupt ledgers report unreadable/repaired, never the zero state"
 R27=$(new_repo r27); S27="$TMP/s27"; C27=$(cf_path "$S27")
 mkdir -p "$(dirname "$C27")"
-for CORRUPT in 'garbage-line' 'seats=abc' 'cap_seats=5x' 'warned_seats=zzz' 'capped=nosuchdim' 'seats=99999999999999999999'; do
+for CORRUPT in 'garbage-line' 'seats=abc' 'ci_wall_s=abc' 'cap_ci_wall_s=5x' 'cap_seats=5x' 'warned_seats=zzz' 'warned_ci_wall_s=zzz' 'capped=nosuchdim' 'seats=99999999999999999999'; do
   if [[ "$CORRUPT" == "garbage-line" ]]; then
     printf 'not a ledger\n' > "$C27"
   else
-    printf 'seats=3\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=0\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=\n' > "$C27"
+    printf 'seats=3\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=0\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=\n' > "$C27"
     case "$CORRUPT" in
       seats=abc) sed -i 's/^seats=3/seats=abc/' "$C27" ;;
+      ci_wall_s=abc) sed -i 's/^ci_wall_s=0/ci_wall_s=abc/' "$C27" ;;
+      cap_ci_wall_s=5x) sed -i 's/^cap_ci_wall_s=0/cap_ci_wall_s=5x/' "$C27" ;;
       cap_seats=5x) sed -i 's/^cap_seats=0/cap_seats=5x/' "$C27" ;;
       warned_seats=zzz) sed -i 's/^warned_seats=0/warned_seats=zzz/' "$C27" ;;
+      warned_ci_wall_s=zzz) sed -i 's/^warned_ci_wall_s=0/warned_ci_wall_s=zzz/' "$C27" ;;
       capped=nosuchdim) sed -i 's/^capped=$/capped=nosuchdim/' "$C27" ;;
       seats=99999999999999999999) sed -i 's/^seats=3/seats=99999999999999999999/' "$C27" ;;  # 20 digits — mod-2^64 wrap territory
     esac
@@ -835,14 +857,17 @@ seats=13
 ci_cycles=4
 fix_rounds=1
 agent_rounds=7
+ci_wall_s=0
 cap_seats=12
 cap_ci_cycles=0
 cap_fix_rounds=0
 cap_agent_rounds=0
+cap_ci_wall_s=0
 warned_seats=11
 warned_ci_cycles=0
 warned_fix_rounds=0
 warned_agent_rounds=0
+warned_ci_wall_s=0
 capped=seats
 EOF
 run_tally "$R31" "$S31" init --max-seats 20
@@ -854,7 +879,7 @@ assert_eq "" "$(cf_get "$C31" capped)" "capped-reset clears the latch"
 assert_eq "0" "$(cf_get "$C31" warned_seats)" "capped-reset clears warned_*"
 assert_eq "20" "$(cf_get "$C31" cap_seats)" "the raised cap is merged and kept"
 # Bare init on a capped main ledger: caps survive every reset form.
-printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=seats\n' > "$C31"
 run_tally "$R31" "$S31" init
 assert_line "$OUT" "tally-init: $SL31 continued capped=seats" "bare init on capped main -> continued capped=seats (the sticky latch holds)"
 assert_no_line "$OUT" "tally-init: $SL31 default-branch-reset" "bare init on capped main does not default-branch-reset"
@@ -863,22 +888,22 @@ assert_eq "seats" "$(cf_get "$C31" capped)" "bare init on capped main keeps the 
 assert_eq "12" "$(cf_get "$C31" cap_seats)" "bare init on capped main keeps the persisted cap"
 # A cap given that is NOT raised (equal or lower) is also an ordinary capped-reset with the counts
 # kept and the persisted cap kept (ratchet guard), so a forwarded flag cannot refund a budget.
-printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=seats\n' > "$C31"
 run_tally "$R31" "$S31" init --max-seats 5
 assert_line "$OUT" "tally-init: $SL31 capped-reset" "capped main + a LOWER cap -> capped-reset, not a budget refund"
 assert_eq "9" "$(cf_get "$C31" seats)" "a lower cap on a capped main keeps the counts"
 assert_eq "12" "$(cf_get "$C31" cap_seats)" "a lower cap on a capped main keeps the persisted cap"
 # A latch on a different dimension holds the same way.
-printf 'seats=0\nci_cycles=6\nfix_rounds=0\nagent_rounds=0\ncap_seats=0\ncap_ci_cycles=5\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=ci_cycles\n' > "$C31"
+printf 'seats=0\nci_cycles=6\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=0\ncap_ci_cycles=5\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=ci_cycles\n' > "$C31"
 run_tally "$R31" "$S31" init
 assert_line "$OUT" "tally-init: $SL31 continued capped=ci_cycles" "bare init on a main ledger capped on ci_cycles keeps that latch"
 # Idle for more than 24h, a capped main ledger stale-resets exactly like a capped feature-branch ledger.
-printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=seats\n' > "$C31"
 touch -d '3 days ago' "$C31"
 run_tally "$R31" "$S31" init
 assert_line "$OUT" "tally-init: $SL31 stale-reset" "capped + idle >24h + bare init on main -> stale-reset (as on any branch)"
 assert_eq "" "$(cf_get "$C31" capped)" "stale-reset clears the latch after 24h idle"
-printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\ncapped=seats\n' > "$C31"
+printf 'seats=9\nci_cycles=0\nfix_rounds=0\nagent_rounds=0\nci_wall_s=0\ncap_seats=12\ncap_ci_cycles=0\ncap_fix_rounds=0\ncap_agent_rounds=0\ncap_ci_wall_s=0\nwarned_seats=0\nwarned_ci_cycles=0\nwarned_fix_rounds=0\nwarned_agent_rounds=0\nwarned_ci_wall_s=0\ncapped=seats\n' > "$C31"
 # The gate still stops on that ledger: the whole point of the latch.
 run_tally "$R31" "$S31" gate seats
 assert_contains "$OUT" "STOP" "gate on a capped main ledger still returns STOP after a bare init"
@@ -950,7 +975,7 @@ assert_eq "1" "$(printf '%s\n' "$SHOW_MAIN" | grep -c '^note:')" "exactly one no
 assert_eq "$DB_NOTE" "$(printf '%s\n' "$SHOW_MAIN" | tail -1)" "the note is the LAST line of show"
 assert_not_contains "$SHOW_FEAT" "note:" "show on a feature branch has no note"
 assert_eq "$(printf '%s\n' "$SHOW_FEAT" | grep '^tally:')" "$(printf '%s\n' "$SHOW_MAIN" | grep '^tally:')" "tally: line is byte-identical to a feature ledger with the same counts"
-assert_eq "tally: seats=3 ci_cycles=0 fix_rounds=0 agent_rounds=2" "$(printf '%s\n' "$SHOW_MAIN" | sed -n 1p)" "tally: line format unchanged and first"
+assert_eq "tally: seats=3 ci_cycles=0 fix_rounds=0 agent_rounds=2 ci_wall_s=unmeasured" "$(printf '%s\n' "$SHOW_MAIN" | sed -n 1p)" "tally: line format unchanged and first"
 assert_eq "$(printf '%s\n' "$SHOW_FEAT" | grep '^cap:')" "$(printf '%s\n' "$SHOW_MAIN" | grep '^cap:')" "cap: token line is unchanged"
 # Capped main ledger: note must follow the capped: annotation line.
 C34=$(cf_path_for "$S34" main)
@@ -968,7 +993,7 @@ fi
 # The note line must match none of them, so the hook's parse of a main ledger
 # is identical with and without it.
 NOTE_LINE=$(printf '%s\n' "$OUT" | grep '^note:')
-HOOK_HITS=$(printf '%s\n' "$NOTE_LINE" | grep -oE 'capped:[a-z_]*=[0-9]*|cap:[a-z_]*=[0-9]*|^tally:.*|(seats|ci_cycles|fix_rounds|agent_rounds)=[0-9]+' || true)
+HOOK_HITS=$(printf '%s\n' "$NOTE_LINE" | grep -oE 'capped:[a-z_]*=[0-9]*|cap:[a-z_]*=[0-9]*|^tally:.*|(seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s)=[0-9]+' || true)
 assert_eq "" "$HOOK_HITS" "the note line matches none of stop-hook.sh's grep -o patterns"
 HOOK_CAPPED=$(printf '%s' "$OUT" | grep -o 'capped:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1)
 HOOK_CAP=$(printf '%s' "$OUT" | grep -o 'cap:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1)
@@ -976,9 +1001,119 @@ assert_eq "seats" "$HOOK_CAPPED" "hook's capped: extraction still yields seats w
 assert_eq "seats" "$HOOK_CAP" "hook's cap: extraction still yields seats with the note present"
 echo ""
 
+# --- Test 35: ci_wall_s — fifth-dimension parity + the unmeasured marker --------
+# #11775: ci_wall_s counts measured CI wall-clock seconds that callers post per
+# driven run (ship's per-push CI). Full dim parity — incr, the ci-wall-s alias,
+# gate WARN/STOP/capped latch, --max-ci-wall-s (+ --max-ci_wall_s), warned_*,
+# and the render surfaces. A count of 0 renders `ci_wall_s=unmeasured` on every
+# tally: line (an explicit ABSENT marker — never `ci_wall_s=0`, which would
+# fabricate a measured value); a positive count renders `ci_wall_s=N`.
+echo "Test 35: ci_wall_s — incr/gate/cap parity, hyphen alias, unmeasured marker, old schema"
+R35=$(new_repo r35); S35="$TMP/s35"; C35=$(cf_path "$S35")
+
+# Absent marker: a zero count renders `unmeasured` on every render surface —
+# never `ci_wall_s=0` (a fabricated zero masquerades as a measured run).
+run_tally "$R35" "$S35" init
+run_tally "$R35" "$S35" show
+assert_eq "tally: seats=0 ci_cycles=0 fix_rounds=0 agent_rounds=0 ci_wall_s=unmeasured" "$OUT" \
+  "count 0 renders ci_wall_s=unmeasured on show's tally: line"
+assert_not_contains "$OUT" "ci_wall_s=0" "the absent marker is never a fabricated ci_wall_s=0"
+run_tally "$R35" "$S35" incr seats
+assert_contains "$OUT" "ci_wall_s=unmeasured" "incr's tally: line renders the absent marker too"
+
+# incr + positive render + the ci-wall-s hyphen alias.
+run_tally "$R35" "$S35" incr ci_wall_s 90
+assert_contains "$OUT" "ci_wall_s=90" "incr ci_wall_s prints the positive count"
+assert_eq "90" "$(cf_get "$C35" ci_wall_s)" "ci_wall_s persisted to the ledger"
+run_tally "$R35" "$S35" incr ci-wall-s 30
+assert_eq "120" "$(cf_get "$C35" ci_wall_s)" "ci-wall-s alias lands on ci_wall_s"
+run_tally "$R35" "$S35" show
+assert_contains "$OUT" "ci_wall_s=120" "a positive count renders ci_wall_s=N"
+assert_not_contains "$OUT" "unmeasured" "a measured count drops the absent marker"
+
+# gate parity: WARN band, STOP latch, cap/warned/capped tokens.
+R35b=$(new_repo r35b); S35b="$TMP/s35b"; C35b=$(cf_path "$S35b")
+run_tally "$R35b" "$S35b" init --max-ci-wall-s 100
+assert_eq "100" "$(cf_get "$C35b" cap_ci_wall_s)" "--max-ci-wall-s persists as cap_ci_wall_s"
+run_tally "$R35b" "$S35b" init --max-ci_wall_s 120   # underscore alias raises the cap
+assert_eq "120" "$(cf_get "$C35b" cap_ci_wall_s)" "--max-ci_wall_s aliases --max-ci-wall-s"
+run_tally "$R35b" "$S35b" gate ci-wall-s
+assert_eq "OK" "$OUT" "gate on the hyphen alias -> OK under cap"
+run_tally "$R35b" "$S35b" incr ci_wall_s 96          # 96 >= ceil(120*0.8)=96: warn boundary
+run_tally "$R35b" "$S35b" gate ci_wall_s
+assert_eq "WARN" "$OUT" "count at the 80% boundary -> WARN"
+assert_eq "96" "$(cf_get "$C35b" warned_ci_wall_s)" "warned_ci_wall_s records the at-count"
+run_tally "$R35b" "$S35b" incr ci_wall_s 30          # 126 >= cap 120
+run_tally "$R35b" "$S35b" gate ci_wall_s
+assert_eq "STOP" "$OUT" "count >= cap -> STOP"
+assert_eq "ci_wall_s" "$(cf_get "$C35b" capped)" "STOP latches capped=ci_wall_s (dim vocabulary)"
+run_tally "$R35b" "$S35b" show
+assert_contains "$OUT" "capped:ci_wall_s=120" "show annotates capped:ci_wall_s=<cap>"
+run_tally "$R35b" "$S35b" gate seats
+assert_eq "STOP" "$OUT" "a ci_wall_s latch STOPs every dim's gate"
+
+# Seeded-latch arm: `capped=ci_wall_s` in the ledger is in-vocabulary, not corrupt.
+R35c=$(new_repo r35c); S35c="$TMP/s35c"; C35c=$(cf_path "$S35c")
+assert_fixture_dir "$C35c"
+mkdir -p "$(dirname "$C35c")"
+cat > "$C35c" <<EOF
+seats=0
+ci_cycles=0
+fix_rounds=0
+agent_rounds=0
+ci_wall_s=999
+cap_seats=0
+cap_ci_cycles=0
+cap_fix_rounds=0
+cap_agent_rounds=0
+cap_ci_wall_s=300
+warned_seats=0
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+warned_ci_wall_s=0
+capped=ci_wall_s
+EOF
+run_tally "$R35c" "$S35c" gate seats
+assert_eq "STOP" "$OUT" "a seeded capped=ci_wall_s latch STOPs a foreign-dim gate"
+run_tally "$R35c" "$S35c" show
+assert_contains "$OUT" "ci_wall_s=999" "a latched ledger still renders its positive count"
+assert_contains "$OUT" "cap:ci_wall_s=300" "the cap:ci_wall_s=<n> token renders"
+
+# Old-schema arm: a pre-#11775 ledger has NO ci_wall_s keys — reads default the
+# dim to 0 (absent marker), and the next write upgrades the schema in place.
+R35d=$(new_repo r35d); S35d="$TMP/s35d"; C35d=$(cf_path "$S35d")
+assert_fixture_dir "$C35d"
+mkdir -p "$(dirname "$C35d")"
+cat > "$C35d" <<EOF
+seats=3
+ci_cycles=2
+fix_rounds=0
+agent_rounds=1
+cap_seats=0
+cap_ci_cycles=0
+cap_fix_rounds=0
+cap_agent_rounds=0
+warned_seats=0
+warned_ci_cycles=0
+warned_fix_rounds=0
+warned_agent_rounds=0
+capped=
+EOF
+run_tally "$R35d" "$S35d" show
+assert_eq "tally: seats=3 ci_cycles=2 fix_rounds=0 agent_rounds=1 ci_wall_s=unmeasured" "$OUT" \
+  "old-schema ledger (no ci_wall_s key) reads as 0 -> absent marker"
+run_tally "$R35d" "$S35d" incr ci_wall_s 60
+assert_contains "$OUT" "ci_wall_s=60" "an old-schema ledger accepts the first measured incr"
+assert_eq "60" "$(cf_get "$C35d" ci_wall_s)" "the write upgrades the schema with ci_wall_s=60"
+run_tally "$R35d" "$S35d" show
+assert_eq "tally: seats=3 ci_cycles=2 fix_rounds=0 agent_rounds=1 ci_wall_s=60" "$OUT" \
+  "post-write render carries the measured count"
+echo ""
+
 # --- Summary -------------------------------------------------------------------
-# Anti-vacuity floor: 253 assertions pass on a full run (flock and orphan arms
+# Anti-vacuity floor: 288 assertions pass on a full run (flock and orphan arms
 # may each skip ~4-5 on hosts lacking flock or with a live orphan root), so the
 # floor sits 2 below that. Derive it from a green run, never from the number you
 # expected, and raise it in the same edit that adds an assertion.
-print_results 251
+print_results 286
