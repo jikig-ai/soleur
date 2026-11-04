@@ -567,6 +567,11 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CI_PUSH_DEDUPE_SOAK_9512_PATHS=(
   "scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_SCRIPTS_FOLLOWTHROUGH_VARQ_BAN_PATHS=(
+  "scripts/betterstack-query.sh"  # scripts/lint-followthrough-varq-ban.test.sh:441
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+  "scripts/lint-followthrough-varq-ban.test.sh"
+)
 AFFECTED_SCRIPTS_INFRA_DRIFT_AUTOCLOSE_PATHS=(
   ".github/workflows/apply-deploy-pipeline-fix.yml"  # scripts/infra-drift-autoclose.test.sh:24
   "scripts/infra-drift-autoclose.test.sh"
@@ -680,7 +685,10 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   ".claude/hooks/grep-rewrite.sh"
   ".claude/hooks/guardrails.sh"
   ".claude/hooks/hook-input-contract.test.sh"
+  "AGENTS.md"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/retired-rule-ids.txt"
+  "scripts/rule-metrics-aggregate.sh"  # .claude/hooks/hook-input-contract.test.sh:886
 )
 # .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
 # with one tool off PATH; its pair population is derived from the `.claude/hooks/` roots of
@@ -727,8 +735,11 @@ AFFECTED_CLAUDE_HOOKS_PRE_MERGE_REBASE_TEST_SH_PATHS=(
 AFFECTED_CLAUDE_HOOKS_RULE_INCIDENT_MARKER_CAPTURE_TEST_SH_PATHS=(
   ".claude/hooks/rule-incident-marker-capture.sh"
   ".claude/hooks/rule-incident-marker-capture.test.sh"
+  "AGENTS.md"
   "scripts/lib/test-affected-paths.sh"
   "scripts/migrated-rule-ids.txt"  # .claude/hooks/rule-incident-marker-capture.test.sh:312
+  "scripts/retired-rule-ids.txt"
+  "scripts/rule-metrics-aggregate.sh"  # .claude/hooks/rule-incident-marker-capture.test.sh:109
 )
 AFFECTED_CLAUDE_HOOKS_SKILL_CONTEXT_QUERIES_TEST_SH_PATHS=(
   ".claude/hooks/skill-context-queries.sh"
@@ -824,6 +835,7 @@ AFFECTED_TEST_CONTENT_PUBLISHER_PATHS=(
 # is declared here — a kb diff selects it like the corpus inputs do. This array is RETAINED for
 # pre-push-ratchet-lane arm 21, which pins the lane's KB_CONSUMERS_INPUTS to it; do not delete it.
 AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
+  ".github/scripts/test/run-all.sh"  # plugins/soleur/test/git-fixture-containment.test.sh:38
   "apps/web-platform/package-lock.json"  # plugins/soleur/test/pr-overlap-preflight.test.sh:828
   "apps/web-platform/infra/doppler-config-inventory.txt"  # plugins/soleur/test/token-drift-workflow-causes.test.sh:56
   "apps/web-platform/infra/cloud-init.yml"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:197
@@ -833,12 +845,31 @@ AFFECTED_SCRIPTS_TEST_AFFECTED_KB_CONSUMERS_PATHS=(
   ".github/workflows/apply-web-platform-infra.yml"  # plugins/soleur/scripts/delegation-verify.test.sh:386
   ".github/workflows/apply-deploy-pipeline-fix.yml"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:24
   ".github/actions/cf-tunnel-ssh-bridge/action.yml"  # plugins/soleur/scripts/admin-merge-ready.test.sh:345
+  "apps/web-platform/vitest.config.ts"  # plugins/soleur/scripts/affected-tests.test.sh:1627
+  "apps/web-platform/test/repo-wide-containment.test.ts"  # ./.soleur/cache/affected-derive/v1/52ba60b3a082161ddc283b38b0451a720cd16ac2.rec:9
+  "apps/web-platform/test/global-setup-git-tripwire.ts"  # scripts/lib/test-affected-paths.sh:2698
+  "apps/web-platform/scripts/vitest-related.sh"  # scripts/lib/test-affected-paths.sh:785
   "knowledge-base/"
   "scripts/test-affected-kb-consumers.test.sh"
+  "scripts/suite-exit-class-parity.test.sh"  # scripts/lib/test-affected-paths.sh:2870
+  "scripts/registry-restore-from-ghcr.sh"  # scripts/lib/test-affected-paths.sh:1332
+  "scripts/registry-pull-path-health.sh"  # ./.soleur/cache/affected-derive/v1/6f9bce56f9de5dbb20661f8a1c729b747d1980b4.rec:230
   "scripts/suite-shard-legs.tsv"  # plugins/soleur/test/main-health-monitor-workflow.test.sh:763
   "scripts/test-affected-kb-consumers.baseline.txt"
   "scripts/test-all.sh"
+  "scripts/check-cloudflare-token-drift.test.sh"  # plugins/soleur/test/gitleaks-rules.test.sh:104
+  "scripts/check-cloudflare-token-drift.sh"  # plugins/soleur/test/token-drift-workflow-causes.test.sh:55
+  "scripts/cf-tunnel-liveness-gate-mutations.test.sh"  # ./scripts/lib/test-relevance-paths.sh:136:# Source of truth
+  "plugins/soleur/test/test-helpers.sh"  # plugins/soleur/scripts/delegation-verify.test.sh:27
+  "plugins/soleur/test/c4-from-components.test.sh"  # plugins/soleur/test/scripts-shard-runtime-coverage.test.sh:10
+  "plugins/soleur/scripts/generate-c4-from-components.ts"  # plugins/soleur/test/c4-canonical.test.ts:8
   "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-registry-restore-from-ghcr.sh"  # ./.soleur/cache/affected-derive/v1/524dbff72bdb10524d78db667eafccd73d3a127e.rec:6
+  "tests/scripts/test-registry-pull-path-health.sh"  # ./.soleur/cache/affected-derive/v1/f1709ea8ec1062cd6942ea800ee0b913dea3e5c6.rec:6
+  "tests/scripts/test-registry-gate-mutation-battery.sh"  # ./scripts/lib/test-relevance-paths.sh:118:# Source of truth
+  "tests/scripts/test-plan-gate-preamble.sh"  # ./.soleur/cache/affected-derive/v1/6fa443b9a02fa281e7c15b4b504c96ba11dd9b2a.rec:6
+  "tests/scripts/lib/restore-engine-header.sh"  # scripts/lib/test-affected-paths.sh:1448
+  "scripts/zot-mirror-diagnosis.sh"  # scripts/lib/test-affected-paths.sh:3846
 )
 # scripts/test-affected-derive (#9307) -- the derive in the runner and its bench
 # (scripts/affected-prepass-bench.sh: run it with --base <rev> after ANY change to the derive; exit 0 is
@@ -1158,6 +1189,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
   # #11766: terraform-target-parity.test.ts readFileSync-parses the cf-lb-overlay workflow (arm↔gate -target/ordering pins).
+  ".claude/hooks/prod-write-defer-gate.test.sh"  # plugins/soleur/test/invocation-axis.test.ts:48
   ".github/workflows/apply-web-platform-infra.yml"  # plugins/soleur/scripts/delegation-verify.test.sh:386
   ".github/workflows/apply-deploy-pipeline-fix.yml"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:24
   ".github/actions/notify-ops-email/action.yml"  # plugins/soleur/scripts/admin-merge-ready.test.sh:345
@@ -1165,6 +1197,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".cursor-plugin/marketplace.json"  # plugins/soleur/test/worktree-manager-bare-sync.test.sh:16
   ".codex/config.toml"  # plugins/soleur/test/backstop-parity.test.ts:20
   ".claude/workflow-transitions.json"  # plugins/soleur/test/workflow-fidelity.test.ts:889
+  ".claude/hooks/ship-soak-followthrough-gate.sh"  # plugins/soleur/test/repo-hook-launchers.test.ts:37
   ".claude/settings.json"  # plugins/soleur/skills/verification-scaffold/test/generator.test.sh:8
   ".claude/hooks/opencode-dispositions.tsv"  # plugins/soleur/test/opencode-plugin.test.ts:987
   ".github/workflows/cf-lb-overlay.yml"
@@ -1221,6 +1254,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
   "apps/web-platform/infra/server.tf"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:5
   "apps/web-platform/infra/seo-rulesets.tf"  # plugins/soleur/test/redirect-tombstones.test.ts:88
+  "apps/web-platform/infra/push-infra-config.sh"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:54
   "apps/web-platform/infra/seo-bulk-redirects.tf"  # plugins/soleur/test/marketing-content-drift.test.ts:310
   "apps/web-platform/infra/modules/git-data-userdata/main.tf"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:198
   "apps/web-platform/lib/c4-canonical.mjs"
@@ -1514,6 +1548,8 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ABSENCE_CLASSIFIER_PATHS=(
 # tests/scripts/betterstack-roundtrip-latency — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
+  "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # tests/scripts/test-betterstack-roundtrip-latency.sh:2
+  "scripts/lib/betterstack-absence.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-followthrough-varq-ban.sh"
@@ -1719,6 +1755,7 @@ AFFECTED_TESTS_SCRIPTS_REGISTRY_D10_WORKFLOW_WIRING_PATHS=(
 # tests/scripts/zot-log-channel-probe — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_ZOT_LOG_CHANNEL_PROBE_PATHS=(
+  "scripts/betterstack-query.sh"  # tests/scripts/test-zot-log-channel-probe.sh:10
   "scripts/followthroughs/zot-log-channel-7440.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-followthrough-varq-ban.sh"
@@ -2900,7 +2937,11 @@ AFFECTED_TESTS_SCRIPTS_ASSERT_DEV_DOPPLER_SCOPE_WIRING_PATHS=(
 # the same shape as orphan-process-reaper-mutations above.
 AFFECTED_TESTS_SCRIPTS_NO_TOFU_SSH_MUTATION_PATHS=(
   ".github/actions/cf-tunnel-ssh-bridge/action.yml"  # tests/scripts/test-no-tofu-ssh-mutation.sh:124
+  ".github/workflows/infra-validation.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
   "apps/web-platform/infra/git-data-ownership.test.sh"
+  "apps/web-platform/infra/infra-config-gate.test.sh"  # ./scripts/guard-vacuity-floor.test.sh:2020
+  "apps/web-platform/infra/infra-config-verify.sh"
   "apps/web-platform/package.json"  # tests/scripts/test-no-tofu-ssh-mutation.sh:176
   "apps/web-platform/server/git-auth.ts"
   "package.json"  # tests/scripts/test-no-tofu-ssh-mutation.sh:176
@@ -2970,13 +3011,23 @@ AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
 # S4 PR4 (#10860): the add_leaf rows of tests/scripts/test-scratch-residue.sh, each run by run_leaf (:399); evidence in
 # pairs-decisions.tsv. A leaf test that names many other paths was held back (#10959).
 AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
+  ".claude/hooks/brand-hex-commit-gate.sh"
+  ".claude/hooks/brand-hex-commit-gate.test.sh"  # tests/scripts/test-scratch-residue.sh:203
   ".claude/hooks/cla-signed-author-gate.test.sh"
   ".claude/hooks/context-reviewed-gate.test.sh"
   ".claude/hooks/grep-rewrite.test.sh"
   ".claude/hooks/incident-sandbox-coverage.test.sh"
   ".claude/hooks/lib/freeze-lock.test.sh"
+  ".claude/hooks/lib/incidents.sh"
   ".claude/hooks/lib/test-incident-sandbox.sh"
   ".claude/hooks/pencil-collapse-guard.test.sh"
+  ".devin/config.json"
+  ".claude/settings.json"
+  ".claude/phase-surface-map.json"
+  ".github/scripts/bump-inngest-bootstrap-pin.sh"  # plugins/soleur/test/components.test.ts:1200
+  ".claude/hooks/skill-context-queries.test.sh"  # tests/scripts/test-scratch-residue.sh:211
+  ".claude/hooks/ship-unpushed-commits-gate.test.sh"  # tests/scripts/test-scratch-residue.sh:210
+  ".claude/hooks/phase-surface-hint.test.sh"  # tests/scripts/test-scratch-residue.sh:208
   ".github/scripts/validate-infra-templates.sh"
   ".github/scripts/vinngest-digest-freshness.sh"
   "apps/web-platform/test/global-setup-git-tripwire.ts"
@@ -2984,6 +3035,7 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   "plugins/soleur/test/lib/git-tripwire.ts"
   "plugins/soleur/test/lib/scratch-session.ts"
   "plugins/soleur/test/test-helpers.sh"
+  "scripts/dogfood/grok-gpu-bootstrap.test.sh"  # tests/scripts/test-scratch-residue.sh:216
   "scripts/domain-model-drift.test.sh"
   "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -3028,8 +3080,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_INPUT_CLASSIFICATION_MUTATION_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
   ".claude/hooks/hook-input-contract.test.sh"
   ".claude/hooks/lib/hook-input.sh"
+  "AGENTS.md"
   "plugins/soleur/test/hook-input-classification-mutation.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/retired-rule-ids.txt"
+  "scripts/rule-metrics-aggregate.sh"  # plugins/soleur/test/gdpr-gate.test.ts:18
 )
 
 # scripts/devin-docs-drift-check — behavioural gate for the scheduled docs-drift workflow: the check
@@ -3149,16 +3204,24 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
   ".github/scripts/test/run-all.sh"
   "knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md"  # scripts/battery-tag-authorship.test.sh:733
+  "plugins/soleur/scripts/lib/session-state.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/battery-ref-guard.test.sh"  # scripts/battery-tag-authorship.test.sh:196
   "scripts/battery-tag-authorship.test.sh"
   "scripts/battery-tag-authorship-mutations.test.sh"
+  "scripts/hooks/battery-ref-guard/reference-transaction"
   "scripts/lib/repo-write-boundary.sh"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/test-contention.sh"
   "scripts/suite-exit-class-parity.test.sh"
   "scripts/test-all.sh"
+  "scripts/lib/repo-write-boundary.test.sh"  # scripts/battery-tag-authorship.test.sh:175
   "scripts/lib/test-affected-paths.sh"
   "test/pre-merge-rebase.test.ts"
   "tests/scripts/fixtures/battery-tag-bare-fetch.sh"
   "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"
+  "tests/scripts/test-plan-gate-preamble.sh"  # scripts/battery-tag-authorship.test.sh:672
 )
 
 # scripts/test-all-fast-tier-budget (#9763) — the fast-tier budget ratchet. Its verdict reads the
@@ -3497,6 +3560,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCRIPTS_SHARD_TOTALITY_TEST_SH_PATHS=(
 # manifest it reads, and the preflight skill whose contract it pins. Self-only derivation would
 # classify unclassified and leak it into every local run.
 AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/affected-tests.sh"  # plugins/soleur/scripts/affected-tests.test.sh:5
   "plugins/soleur/skills/preflight/references/check-13-founder-check.md"  # plugins/soleur/test/preflight-check10-suite-integrity.test.sh:586
   "plugins/soleur/test/preflight-check10-suite-integrity.test.sh"
   "plugins/soleur/test/preflight-discoverability-test.test.ts"
@@ -3504,6 +3568,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
   "plugins/soleur/test/fullsuite-merge-gate.test.ts"
   "plugins/soleur/test/preflight-founder-check.test.ts"
   "plugins/soleur/test/fixtures/check10-test-manifest.txt"
+  "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js"  # plugins/soleur/test/harness-model-map.test.ts:20
   "plugins/soleur/skills/preflight/SKILL.md"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -3620,12 +3685,19 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
 # :322, :350), declared from the suite's live arm (scripts/lint-betterstack-emitter-read.test.sh:347). A followthrough script that
 # names more paths was held back (#10959). Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
+  "apps/web-platform/infra/ci-deploy.sh"
+  ".github/workflows/apply-web-platform-infra.yml"
   "apps/web-platform/infra/infra-config-gate.sh"
+  "knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md"
+  "apps/web-platform/infra/zot-image-oci-archive.sh"
   "scripts/betterstack-assert-absence.sh"
+  "scripts/check-deploy-script-parity.sh"  # scripts/lint-betterstack-emitter-read.test.sh:297
   "scripts/egress-audit-retention-check.sh"
+  "scripts/encryption-posture-ledger.json"
   "scripts/ensure-doppler.sh"
   "scripts/followthroughs/anthropic-admin-key-6297.sh"
   "scripts/followthroughs/anthropic-double-bill-8611.sh"
+  "scripts/followthroughs/betterstack-roundtrip-latency-7855.sh"  # ./.soleur/cache/affected-derive/v1/47a7bdf8087edb6ec074d849070616eae7b4d26d.rec:55
   "scripts/followthroughs/cert-reissue-markers-6698.sh"
   "scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh"
   "scripts/followthroughs/compound-promote-draft-edit-10552.sh"
@@ -3634,36 +3706,51 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/hosted-destroy-ask-window-9776.sh"
   "scripts/followthroughs/hostname-mislabel-web1-6616.sh"
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
+  "scripts/followthroughs/inngest-private-nic-8539.sh"  # ./scripts/followthroughs/inngest-provision-unit-8562.sh:4
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
+  "scripts/followthroughs/inngest-soak-6178.sh"  # ./.soleur/cache/affected-derive/v1/ee513bc97f359234e7fa7cba02bf64cca797fe4e.rec:37
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
   "scripts/followthroughs/inngest-trace-retention-5150.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
   "scripts/followthroughs/l3-probe-armed-6438.sh"
   "scripts/followthroughs/private-nic-converged-6415.sh"
+  "scripts/followthroughs/registry-luks-live-8386.sh"  # scripts/lib/test-affected-paths.sh:2546
+  "scripts/followthroughs/registry-htpasswd-stdin-10119.sh"  # ./.soleur/cache/affected-derive/v1/bfe0280ee9aaba2c11865f7c4d64cb81e5ed396a.rec:8
+  "scripts/followthroughs/registry-clientip-alert-7530.sh"  # plugins/soleur/test/preflight-discoverability-test.test.ts:2960
   "scripts/followthroughs/run-report-exit-first-contact-8076.sh"
+  "scripts/followthroughs/send-failed-alert-probe-8097.sh"  # ./.soleur/cache/affected-derive/v1/d3e2b98799b347e7d93e2b72c8d5f618075086fc.rec:8
   "scripts/followthroughs/ship-merge-mergebase-verdict-8151.sh"
   "scripts/followthroughs/web2-standby-soak-6459.sh"
+  "scripts/followthroughs/workspaces-luks-soak-6604.sh"  # ./scripts/sweep-followthroughs.test.sh:489:# (see workspaces-luks-soak-6604.sh
   "scripts/followthroughs/zot-fill-rate-7341.sh"
   "scripts/followthroughs/zot-last-err-redact-7500.sh"
+  "scripts/followthroughs/zot-log-channel-7440.sh"  # plugins/soleur/test/preflight-discoverability-test.test.ts:2371
   "scripts/followthroughs/zot-login-gate-names-failure-6497.sh"
   "scripts/followthroughs/zot-restart-plateau-6288.sh"
   "scripts/followthroughs/zot-upload-ceiling-7556.sh"
   "scripts/inngest-host-state.sh"
+  "scripts/inngest-probe-heartbeat-feeder.sh"  # scripts/lint-betterstack-emitter-read.test.sh:296
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/betterstack-absence.sh"
   "scripts/lib/bs-emitter-row.sh"
   "scripts/lib/git-data-boot-signal-poll.sh"
+  "scripts/lib/git-data-rotate-stamp.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lib/zot-telemetry-parse.sh"
   "scripts/lint-betterstack-emitter-read.sh"
   "scripts/lint-betterstack-emitter-read.test.sh"
+  "scripts/probe-inngest-524-count.sh"  # scripts/lint-betterstack-emitter-read.test.sh:303
   "scripts/registry-heartbeat-poll.sh"
+  "scripts/registry-replace-preflight.sh"  # scripts/lint-betterstack-emitter-read.test.sh:302
   "scripts/test-all.sh"
   "scripts/zot-disk-sample.sh"
   "scripts/zot-inventory-assert-marker.sh"
+  "scripts/followthroughs/git-data-rehearsal-evidence.sh"  # ./.soleur/cache/affected-derive/v1/6ff30ef0fd67e43b92ab83a6e082a91be034bf44.rec:8
   "scripts/followthroughs/git-data-replication-signal.sh"
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/betterstack-sources.sh"
+  "scripts/zot-restart-loop-alarm.sh"  # scripts/lint-betterstack-emitter-read.test.sh:298
 )
 
 # scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
@@ -4062,7 +4149,10 @@ AFFECTED_CLAUDE_HOOKS_SECURITY_REMINDER_HOOK_TEST_SH_PATHS=(
 )
 AFFECTED_APPS_CLA_EVIDENCE_TEST_CCLA_ADD_TEST_SH_PATHS=(
   "README.md"  # apps/cla-evidence/test/ccla-add.test.sh:454
+  "apps/web-platform/scripts/cla-evidence/cla-doc-path.ts"  # ./.github/workflows/cla-evidence.yml:51
   "apps/web-platform/scripts/cla-evidence/validate-roster.ts"
+  "docs/legal/individual-cla.md"
+  "docs/legal/corporate-cla.md"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_SKILLS_EVAL_HARNESS_TEST_GEN_MODELS_TEST_SH_PATHS=(
@@ -4160,6 +4250,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_HOST_BIRTH_GATE_PATHS=(
 AFFECTED_TESTS_SCRIPTS_INNGEST_HOST_DARK_GATE_PATHS=(
   ".github/workflows/apply-web-platform-infra.yml"  # tests/scripts/test-inngest-host-dark-gate.sh:310
   "apps/web-platform/infra/inngest-bootstrap.sh"
+  "scripts/lib/inngest-probe-row.sh"  # tests/scripts/test-inngest-host-dark-gate.sh:39
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_TESTS_SCRIPTS_LINT_RULE_IDS_PATHS=(
@@ -4196,11 +4287,14 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_SKILL_SECURITY_SCAN_TEST_META_DIR_REAP_TEST_SH_PA
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
   ".claude/hooks/ship-net-issue-flow-gate.sh"
+  "AGENTS.md"
   "AGENTS.rules.md"  # plugins/soleur/test/net-issue-flow.test.sh:171
   "scripts/_agents_md_sections.py"
   "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
+  "scripts/retired-rule-ids.txt"
+  "scripts/rule-metrics-aggregate.sh"  # plugins/soleur/test/net-issue-flow.test.sh:529
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_NPM_PUBLISH_OIDC_TEST_SH_PATHS=(
   ".github/workflows/npm-publish.yml"
