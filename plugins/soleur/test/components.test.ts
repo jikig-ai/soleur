@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   discoverAgents,
   discoverCommands,
@@ -751,7 +752,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     whole: (raw) => flatten(stripLive(raw)),
     rule: (raw) => flatten(stripLive(ruleLine(raw))),
   };
-  const PAIRS_FLOOR = 48; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS_FLOOR = 59; // the table's length at write time; raise it in the same edit as any added row
   const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
     [SD, "sd9", "## 9. Class R: acts needing no delegation"],
     [SD, "sd9", "Class R is not a delegation"],
@@ -780,11 +781,23 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [SD, "sd9", "forces a `Problem found` line"],
     [SD, "sd9", "is never reused as evidence for a go or a tick"],
     [SD, "sd9", "the exact parsed hostnames of items 2 and 3"],
+    // Cloudflare as a Class R vendor (Ref #10479): one GET-only wrapper, four named reads.
+    [SD, "sd9", "plugins/soleur/scripts/cloudflare-readonly.sh"],
+    [SD, "sd9", "the exact parsed `api.cloudflare.com`"],
+    [SD, "sd9", "`ssl-mode`, `config-entrypoint`, `pagerules-ssl` or `change-history`"],
+    [SD, "sd9", "the wrapper sends GET only"],
+    [SD, "sd9", "never prints a rule `expression`"],
+    [SD, "sd9", "never answered by widening a token"],
+    [SD, "sd9", "The Cloudflare MCP server and the `cf-token-scope` skill are not Class R"],
+    [SD, "sd9", "`unverified - no-credential` when `CF_API_TOKEN_AUDIT` is absent"],
+    [SD, "sd9", "`CF_API_TOKEN` is never used"],
+    [SD, "sd9", "Here `scripts/**` means the repository-root `scripts/` directory"],
     [CTO, "ctoOwn", "Class R first"],
     [CTO, "ctoOwn", 'Never hand a Class R act back with the phrase "run by the owner or a follow-up agent"'],
     [CTO, "ctoOwn", "a failed or unrun read means the act does not run"],
     [CTO, "ctoOwn", "never `Operator-reserved:` for the read itself"],
     [CTO, "ctoOwn", "only production acts stand as holds"],
+    [CTO, "ctoOwn", "${CLAUDE_PLUGIN_ROOT}/scripts/cloudflare-readonly.sh"], // plugin-root form: cto-interface-selector forbids a repo-relative plugins/soleur/ path in this section
     [CTO, "ctoOwn", "`unverified`"],
     [CTO, "ctoOwn", "`## Class R Checks`"],
     [CTO, "ctoRule", "A live read-only check is technical"],
@@ -868,15 +881,99 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     const items = sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
     const flat = (n: number) => flatten(items.find((l) => l.startsWith(`${n}. `)) ?? "");
     const REQUIRED: Record<number, string[]> = {
-      2: ["never `--latest-event`", "the `--table` and `--grep` flag forms"],
+      2: ["never `--latest-event`", "the `--table` and `--grep` flag forms", "plugins/soleur/scripts/cloudflare-readonly.sh", "the wrapper sends GET only"],
       3: ["so there is no screenshot", "including the `playwright` entry", "aggregate pages only"],
-      4: ["is never pushed under Class R", "Never push main.", "again before opening the pull request"],
+      4: [
+        "is never pushed under Class R",
+        "Never push main.",
+        "again before opening the pull request",
+        "Here `scripts/**` means the repository-root `scripts/` directory",
+      ],
       5: ["never the CLA signing sentence", "never closing or editing an issue or its body", "`priority/*`, `domain/*` and `type/*`"],
       6: ["no `prd` configuration", "one suite at a time"],
     };
     for (const [n, strs] of Object.entries(REQUIRED)) {
       for (const str of strs) expect(flat(Number(n)).includes(str), `Class R act ${n} lost "${str}"`).toBe(true);
     }
+  });
+
+  // Cloudflare closed set (Ref #10479). These are structural (set equality, sentence slices), not
+  // anchor presence: the member list drifts, the structure does not. Superset semantics hold for the
+  // PAIRS rows only; a second surviving copy of a row's text keeps that row green, so the guarantee
+  // is that at least the item-scoped REQUIRED test or one of these goes red.
+  const WRAPPER = resolve(PLUGIN_ROOT, "scripts/cloudflare-readonly.sh");
+  const CF_FOUR = ["change-history", "config-entrypoint", "pagerules-ssl", "ssl-mode"];
+  const sdItems = () => sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
+  const sdItem = (n: number) => flatten(sdItems().find((l) => l.startsWith(`${n}. `)) ?? "");
+  // Text of `s` from the first `from` to the first `to` after it ("" when either is missing).
+  const slice = (s: string, from: string, to: string): string => {
+    const i = s.indexOf(from);
+    if (i < 0) return "";
+    const j = s.indexOf(to, i + from.length);
+    return j < 0 ? "" : s.slice(i, j);
+  };
+  const backticked = (s: string): string[] => [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  // Whole-line comments removed; a trailing comment is left alone on purpose (the wrapper has none on these lines).
+  const codeOnly = (t: string) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+  test("Cloudflare subcommand parity: item 2 text, wrapper SUBCOMMANDS array, dispatcher case labels and --list are the same four", () => {
+    const names = backticked(slice(sdItem(2), "its four subcommands", ":")).sort();
+    expect(names.length, "item 2 lost the backticked subcommand names after `its four subcommands` (an empty slice must fail)").toBe(4);
+    expect(names, "item 2 subcommand list").toEqual(CF_FOUR);
+
+    const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
+    const arr = /^\s*SUBCOMMANDS=\(([^)]*)\)/m.exec(src);
+    expect(arr, "the wrapper has no SUBCOMMANDS=(...) array").not.toBeNull();
+    const arrNames = arr![1].trim().split(/\s+/).filter(Boolean).sort();
+    expect(arrNames.length, "the wrapper SUBCOMMANDS array must hold four names").toBe(4);
+    expect(arrNames, "wrapper SUBCOMMANDS array vs item 2 text").toEqual(names);
+
+    // Every one of the four is a dispatcher case label (a fifth arm is caught by the wrapper suite's unknown-endpoint rows).
+    const labels = new Set([...src.matchAll(/^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)/gm)].flatMap((m) => m[1].split("|")));
+    for (const n of names) expect(labels.has(n), `the wrapper dispatcher has no case label for "${n}"`).toBe(true);
+
+    const r = spawnSync("bash", [WRAPPER, "--list"], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf-8", timeout: 10000 });
+    expect(r.status, `--list exit (stderr: ${r.stderr})`).toBe(0);
+    expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
+  });
+
+  test("Cloudflare Credentials clause names exactly the three bound token variables, and CF_API_TOKEN is never one of them", () => {
+    const cred = paragraph(sectionRaw(readRel(SD), "## 9."), "Credentials.");
+    const clause = slice(cred, "Cloudflare reads use only the token variable bound to the subcommand", "An absent bound token makes the read `unverified`.");
+    expect(clause, "the Credentials paragraph lost the Cloudflare clause (or its closing sentence)").not.toBe("");
+    const vars = backticked(clause).filter((t) => /^CF_[A-Z_]+$/.test(t));
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort()).toEqual(["CF_API_TOKEN_AUDIT", "CF_API_TOKEN_RULESETS", "CF_API_TOKEN_ZONE_SETTINGS"]);
+    expect(clause.includes("`CF_API_TOKEN` is never used"), "the Credentials clause lost `CF_API_TOKEN` is never used").toBe(true);
+    // The first (binding) sentence lists only the three; the bare CF_API_TOKEN belongs to the prohibition after it.
+    const binding = slice(clause, "Cloudflare reads use only", ");");
+    expect(binding.includes("`CF_API_TOKEN`"), "the binding list names the bare `CF_API_TOKEN`").toBe(false);
+  });
+
+  test("item 4: the root-anchored scripts clause never widens the .github bar", () => {
+    const i4 = sdItem(4);
+    const clause = slice(i4, "Here `scripts/**` means", "trigger-block read above.");
+    expect(clause, "item 4 lost the root-anchored clause (or its closing words)").not.toBe("");
+    expect(clause.includes("`plugins/**/scripts/**`"), "the clause must name `plugins/**/scripts/**`").toBe(true);
+    expect(clause.includes(".github"), "the clause mentions .github").toBe(false);
+    // The pre-existing bar stays, whole, and `.github` appears in item 4 exactly as before: the trigger-block read and the bar.
+    expect(i4.includes("A branch whose diff touches `.github/**` or `scripts/**` is never pushed under Class R."), "item 4 lost the .github/scripts push bar").toBe(true);
+    expect((i4.match(/\.github/g) ?? []).length, "item 4 `.github` mentions changed (pre-existing: workflows path and the push bar)").toBe(2);
+  });
+
+  test("the Cloudflare clause of item 2 carries no negating word (polarity)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause (`Cloudflare through` ... `are not Class R`)").not.toBe("");
+    expect(/\b(permits?|except|unless|but)\b/.test(clause), "the Cloudflare clause carries a negating word").toBe(false);
+    for (const m of ["GET only", "never prints a rule `expression`", "never answered by widening a token"]) {
+      expect(clause.includes(m), `the Cloudflare clause lost "${m}"`).toBe(true);
+    }
+  });
+
+  test("Cloudflare slicers are live: a clause re-flowed over lines still slices, a missing anchor slices to empty", () => {
+    const flow = flatten("Cloudflare through\n  `x.sh` only, with one of its four\n subcommands `a` or `b`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.");
+    expect(slice(flow, "Cloudflare through", "are not Class R").includes("sends GET only")).toBe(true);
+    expect(backticked(slice(flow, "its four subcommands", ":"))).toEqual(["a", "b"]);
+    expect(slice(flow, "no such anchor", ":")).toBe("");
   });
 
   test("the Playwright host list is a closed set (an added host must change this test)", () => {
