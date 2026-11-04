@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1239
-# generated-at=2026-11-04T02:27:21Z
+# default-weight-ms=1261
+# generated-at=2026-11-04T17:06:10Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -143,6 +143,8 @@ plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
+plugins/soleur/skills/launch-check/test/issues-guards.test.sh	3
+plugins/soleur/skills/launch-check/test/issues-resume.test.sh	6
 plugins/soleur/skills/launch-check/test/redact-gate.test.sh	1
 plugins/soleur/skills/launch-check/test/render.test.sh	1
 plugins/soleur/skills/launch-check/test/safe-walk-parity.test.sh	1
@@ -166,6 +168,7 @@ plugins/soleur/skills/verification-scaffold/test/generator.test.sh	1
 plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
+plugins/soleur/test/affected-tests-pool-default.test.sh	5
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	7
 plugins/soleur/test/approval-card-wording.test.sh	6
 plugins/soleur/test/audit-flag-flip.test.sh	5
@@ -302,6 +305,7 @@ plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/rtk-grammar-parity.test.sh	1
 plugins/soleur/test/schedule-skill-once.test.sh	5
 plugins/soleur/test/schedule-task-design.test.sh	1
+plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	6
 plugins/soleur/test/scripts-shard-manifest.test.sh	1
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
 plugins/soleur/test/scripts-shard-totality.test.sh	7

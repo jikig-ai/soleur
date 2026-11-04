@@ -140,7 +140,6 @@ declare -A ALLOW=(
   ["apps/web-platform/infra/betterstack-logs-alerts.tf"]="SQL alert; emitter conjunct pinned by #8874 — its guard derives the needle from this lib"
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
-  ["scripts/ci-pr-affected-audit.baseline.tsv"]="a data file of suite and path pairs (the affected-index ratchet baseline): it names this lib as a pair member and selects nothing"
   ["scripts/lib/test-affected-paths.sh"]="the AFFECTED_*_PATHS declaration index — it names this lib as a feeder-read edge member and selects nothing"
 )
 

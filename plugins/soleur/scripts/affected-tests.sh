@@ -577,7 +577,15 @@ if [[ -n "$RUNNER" ]]; then
     echo "affected-tests: no CI test workflow detected — wall-clock budget not enforced; running to completion."
   fi
   rc=0
-  affected_bound bash "$RUNNER" "$_flag" || rc=$?
+  # (#12013, ADR-242 addendum) Hand the runner's parallel pool a width of 4 for a local --affected
+  # run: not --full, not under CI, not over a width the operator set (SOLEUR_TEST_JOBS=1 is the serial
+  # override), and only when the runner itself mentions the knob. The prefix scopes it to this call.
+  # Pinned by plugins/soleur/test/affected-tests-pool-default.test.sh.
+  if (( ! ARG_FULL )) && [[ -z "${CI:-}" ]] && grep -q SOLEUR_TEST_JOBS "$RUNNER"; then
+    SOLEUR_TEST_JOBS="${SOLEUR_TEST_JOBS:-4}" affected_bound bash "$RUNNER" "$_flag" || rc=$?
+  else
+    affected_bound bash "$RUNNER" "$_flag" || rc=$?
+  fi
   # A delegated verdict is eligible for the content trigger unless the operator
   # passed --full; finish() runs it only when this run passed.
   (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# The write chokepoint. Every byte that reaches the report goes through lc_emit_checked.
+# The write chokepoint. Every byte that reaches the report, and every byte the issue writer authors into a tracker (scan-only mode), goes through lc_emit_checked.
 # Requires SKILL_DIR and PLUGIN_DIR. Test seams (honoured only when LAUNCH_CHECK_TEST=1, see lc_seam):
 # LAUNCH_CHECK_REDACT_SENTINEL, LAUNCH_CHECK_GITLEAKS. Optional LC_DEST_ROOT: the write must stay inside it.
 source "$SKILL_DIR/scripts/lib/common.sh"
@@ -39,10 +39,17 @@ lc__emit_body() {
   command -v "$gl" >/dev/null 2>&1 || lc_abort scanner-missing 2 "gitleaks not found"
   scratch=$(mktemp -d "${TMPDIR:-/tmp}/lc-gate.XXXXXX") || lc_abort scanner-failed 2 "mktemp failed"
   trap 'rm -rf -- "${scratch:?}"; [ -z "$tmp" ] || rm -f -- "$tmp"' EXIT
+  # Both paths are made absolute BEFORE the scans move to the scratch directory: gitleaks reads .gitleaksignore (and the
+  # sentinel its own relative files) from the working directory, so a customer's repository or a plan directory must
+  # never be the place the scanners run from.
+  case "$scratch" in /*) ;; *) scratch="$PWD/$scratch" ;; esac
+  case "$src" in /*) ;; *) src="$PWD/$src" ;; esac
+  case "$dest" in ""|/*) ;; *) dest="$PWD/$dest" ;; esac
+  cd "$scratch" || lc_abort scanner-failed 2 "scratch directory"
   bash "$REDACT_SENTINEL" "$src" >/dev/null 2>&1 || s_rc=$?
   [ "$s_rc" -eq 1 ] && lc_abort redaction-hit 1 "layer=sentinel"
   [ "$s_rc" -eq 0 ] || lc_abort scanner-failed 2 "sentinel rc=$s_rc"
-  # The repository's own gitleaks configuration must never relax the gate.
+  # The repository's own gitleaks configuration must never relax the gate (the scans run from the scratch directory).
   env -u GITLEAKS_CONFIG -u GITLEAKS_CONFIG_TOML "$gl" detect --source "$src" --no-git --report-format json --report-path "$scratch/r.json" --redact --exit-code 1 >/dev/null 2>"$scratch/e" || g_rc=$?
   if [ "$g_rc" -eq 1 ] && grep -q '"RuleID"' "$scratch/r.json" 2>/dev/null; then lc_abort redaction-hit 1 "layer=gitleaks"; fi
   if [ "$g_rc" -ne 0 ]; then err=$(head -c 160 "$scratch/e" | tr '\n\t' '  '); lc_abort scanner-failed 2 "gitleaks rc=$g_rc: $err"; fi

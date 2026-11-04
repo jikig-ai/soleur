@@ -3137,9 +3137,8 @@ resource "sentry_alert" "art17_approval_anonymise_failed" {
 # DEAD-OR-FAILING-CRON GAP, stated so nobody reads this rule as covering it: if the cron stops, no escalation
 # event is ever emitted and this rule stays silent; a cron that runs but fails (heartbeat ?status=error, or the
 # stage-failure ERROR events) matches neither new rule either, and only the unrouted monitor issue sees it. The liveness cover is the cron's own Sentry monitor
-# (sentry_cron_monitor.scheduled_git_data_erasure_redrive), which is declared but still in
-# cron_monitor_alert_unrouted: routing it into cron_monitor_failure is PR 2 of the README's two-PR rule
-# (after #10905's apply and the monitor's first measured check-in), tracked on #10914.
+# (sentry_cron_monitor.scheduled_git_data_erasure_redrive), routed into cron_monitor_failure (PR 2 of the README's
+# two-PR rule, #10914), so a missed or failed check-in emails.
 # The tag literals are pinned against the handler by
 # apps/web-platform/test/sentry-git-data-erasure-redrive-alert-op-contract.test.ts.
 resource "sentry_alert" "git_data_erasure_redrive_escalation" {

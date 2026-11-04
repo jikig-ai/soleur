@@ -3,7 +3,7 @@ title: "Run Your AI Company on Google Antigravity Without Losing Your Business M
 type: feature-launch
 publish_date: 2026-11-04
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 pr_reference: "#10362"
 ---
 
