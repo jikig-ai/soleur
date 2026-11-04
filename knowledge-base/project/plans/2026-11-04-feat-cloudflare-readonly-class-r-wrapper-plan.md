@@ -6,7 +6,7 @@ branch: feat-one-shot-10479-cf-readonly-wrapper
 issue: 10479
 type: feat
 lane: cross-domain
-brand_survival_threshold: aggregate pattern
+brand_survival_threshold: single-user incident
 ---
 
 ## Enhancement Summary
@@ -124,8 +124,8 @@ One open scope-out names `plugins/soleur/scripts/` in its body: #11312 (monitor-
 
 - **If this lands broken, the user experiences:** the CTO agent keeps handing the owner four technical Cloudflare reads as tasks (wrapper refuses wrongly), or reports a false "flexible" / "strict" fact about the origin TLS mode that the owner then acts on; no Soleur end user sees anything directly.
 - **If this leaks, the user's workflow is exposed via:** a Terraform-scoped Cloudflare API token (zone WAF, redirects, config rules edit) printed into an agent transcript, a command line or a child process environment, which would let a transcript reader change the production edge for every Soleur customer.
-- **Brand-survival threshold:** `aggregate pattern`
-- **Threshold decision (challengeable):** the wrapper is operator-side tooling that reads only the operator's own account, prints no customer data, and has the same exposure class as the existing Sentry and Better Stack wrappers; a leak is contained by the stdin-only channel, the empty curl environment and the xtrace refusal, so it does not rise to single-user (row D7).
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (ruled by CTO agent, 2026-11-04 (review), row D7):** `single-user incident`. The wrapper reads only the operator's own account and prints no customer data, but it holds write-capable Terraform-scoped tokens, so a leak could let a transcript reader change the production edge for every Soleur customer. The leak controls (stdin-only channel, empty environment for curl, jq and date, the xtrace refusal) lower the likelihood and do not change the threshold. The CPO sign-off that this threshold requires is an OWNER item: it has not happened.
 
 Artifact / vector pairs for the review seat: (1) token printed on an error path, (2) token in argv or `ps`, (3) token inherited by the curl child from the `doppler run` export, (4) token traced under `bash -x`, (5) raw vendor body, jq / curl diagnostic or audit actor / IP echoed on a failure path, (6) a hostile `curl` earlier on PATH receiving the config channel.
 
@@ -243,6 +243,7 @@ Header states: Jikigai-internal, inert outside this repo; the dated documentatio
 1. `standing-delegation.md` section 9, via Edit: item 2 (replace the "No Cloudflare read wrapper exists" sentence), item 4 (one clause), the Credentials paragraph, the Boundary paragraph (Cloudflare added by ruling of 2026-11-04; any further vendor still needs a CTO ruling and a test row). Keep every existing REQUIRED string byte-identical (`never --latest-event`, the `--table` and `--grep` flag forms, `the exact parsed hostnames of items 2 and 3`, `Sentry reads use the read-only issue token only`, `if only a write-capable token is present the read is unverified` wording, `is never pushed under Class R`).
    - Item 2 clause: "Cloudflare through `plugins/soleur/scripts/cloudflare-readonly.sh` only, with one of its four subcommands `ssl-mode`, `config-entrypoint`, `pagerules-ssl` or `change-history`, as a status, a count or a field subset: the wrapper sends GET only, never prints a rule `expression`, a description, an actor or an IP, and a 403 is recorded as `unverified` and never answered by widening a token; its one host is the exact parsed `api.cloudflare.com`. The audit-log read is `unverified - no-credential` when `CF_API_TOKEN_AUDIT` is absent. The Cloudflare MCP server and the `cf-token-scope` skill are not Class R."
    - Item 4 clause: "Here `scripts/**` means the repository-root `scripts/` directory; `plugins/**/scripts/**` is not covered by this bar and is governed by the trigger-block read above."
+   - Review-round amendment (decision-challenges.md D9): the clause is now scoped to exactly the wrapper file and its test being "not covered by this bar", with every other `plugins/**/scripts/**` file keeping the plain reading of the bar; it is an owner-visible widening, not a clarification.
    - Credentials clause: "Cloudflare reads use only the token variable bound to the subcommand (`CF_API_TOKEN_ZONE_SETTINGS`, `CF_API_TOKEN_RULESETS` or `CF_API_TOKEN_AUDIT`); `CF_API_TOKEN` is never used and no other `CF_*` token is read; the wrapper starts curl with an empty environment. The `ssl-mode`, `config-entrypoint` and `pagerules-ssl` subcommands use Terraform-scoped tokens that are write-capable because no read-only equivalent exists, so they are the one stated exception to the read-only-token rule for Cloudflare (`CF_API_TOKEN_AUDIT` is read-only); the wrapper sends GET only. An absent bound token makes the read `unverified`."
 2. `plugins/soleur/agents/engineering/cto.md`: one sentence in "Class R first" naming the wrapper path and its four subcommands, pointing to the Records mapping in the wrapper header, and saying a 403 is recorded and never widened.
 3. ADR-289 addendum (above).
@@ -408,7 +409,7 @@ in_transit:
 ### Engineering (CTO)
 
 **Status:** reviewed
-**Assessment:** Ruled by CTO agent, 2026-11-04 (rows D1-D6, D9): add Cloudflare for four reads through one GET-only wrapper at `plugins/soleur/scripts/cloudflare-readonly.sh`; per-subcommand token binding with an empty curl environment; expression, description, actor and IP are never printed; 403 is `unverified` and recorded; the Terraform-scoped (write-capable) tokens are accepted for A/B/C only, stated plainly, with the stricter alternative recorded as dissent. Legal: no CLO spawn; audit rows are reduced to counts inside the wrapper and no actor or IP is printed or stored, so no personal-data processing is added and no canonical regulated-data surface is touched. Product / UX: no user-facing surface, so no wireframe gate and no CPO sign-off (threshold `aggregate pattern`). Operations / Finance: no spend, no new vendor account.
+**Assessment:** Ruled by CTO agent, 2026-11-04 (rows D1-D6, D9): add Cloudflare for four reads through one GET-only wrapper at `plugins/soleur/scripts/cloudflare-readonly.sh`; per-subcommand token binding with an empty curl environment; expression, description, actor and IP are never printed; 403 is `unverified` and recorded; the Terraform-scoped (write-capable) tokens are accepted for A/B/C only, stated plainly, with the stricter alternative recorded as dissent. Legal: no CLO spawn; audit rows are reduced to counts inside the wrapper and no actor or IP is printed or stored, so no personal-data processing is added and no canonical regulated-data surface is touched. Product / UX: no user-facing surface, so no wireframe gate and no CPO sign-off (threshold `single-user incident`; the CPO sign-off it requires is an owner item and has not happened). Operations / Finance: no spend, no new vendor account.
 
 ## Acceptance Criteria
 
@@ -447,7 +448,7 @@ Command-to-terminal rows (a stub `curl` whose path is rewritten into the sandbox
 
 ## Sharp Edges
 
-- A plan whose `## User-Brand Impact` section is empty, contains only filler text, or omits the threshold will fail `deepen-plan` Phase 4.6; this one declares `aggregate pattern`.
+- A plan whose `## User-Brand Impact` section is empty, contains only filler text, or omits the threshold will fail `deepen-plan` Phase 4.6; this one declares `single-user incident`.
 - **Item 4 is read by the very change that clarifies it.** The clause ships only on merge, so push eligibility rests on the literal, root-anchored glob and the CTO ruling D2/D9, not on text this PR adds. The PR body says "push eligibility does not depend on this clause" and lists the dissent. If the owner reads `scripts/**` as any-depth, the fallback is: commit locally, do not push, one plain sentence to the owner.
 - **Credential exception (D6).** `CF_API_TOKEN_RULESETS` and `CF_API_TOKEN_ZONE_SETTINGS` are write-capable; the wrapper's safety is structural (hardcoded `-X GET`, absolute curl path, fixed templates, empty curl environment, drift guard), not a scope property. Revisit if the wrapper can be driven to send a non-GET or a read-only token is minted. Dissent recorded in D6; it is the first item in the PR body.
 - **`pagerules` may be a permanent 403** if `CF_API_TOKEN_RULESETS` lacks Page Rules read (docs: Page Rules Read or Zone Read / Write). That is a valid `unverified - token-lacks-scope` result recorded as its own `Unverified:` line; the token is not widened. Whether C is required to close #10479 is the owner's and CTO's call; the CTO's own comment names a 403 as a recordable outcome.
