@@ -87,7 +87,7 @@ Three-hour overlap load by cron offset `0` to `5` (the current `main-health-moni
 
 ## 4. Lever rulings
 
-Rulings by the CTO agent, 2026-11-04 (rows in `knowledge-base/project/specs/feat-one-shot-12030-ci-runner-starvation/decision-challenges.md`).
+Rulings by the CTO agent, 2026-11-04 (rows in `knowledge-base/project/specs/archive/20261104-200335-feat-one-shot-12030-ci-runner-starvation/decision-challenges.md`).
 
 | Lever | Ruling | Measured reason |
 |---|---|---|
