@@ -1030,7 +1030,7 @@ fi
 mut_n=0
 MUT_CAUGHT=0
 MUT_TOTAL=0
-MUT_MAXFAIL=45
+MUT_MAXFAIL=60
 CONTROL_BAD=0
 LAUNCH_SUITE="$SELF"
 PEND_KIND=() PEND_LABEL=() PEND_EXPECT=() PEND_DIR=()
@@ -1065,7 +1065,9 @@ edit_once() {
   if ! bash -n "$dst"; then vno "mutate[$label]: the mutant does not parse - the edit is broken, not caught"; return 1; fi
   return 0
 }
-mutate() { # mutate <label> <expected-failing-row-substring> <groups> <from> <to>
+mutate() { MUT_KIND=mut mutate_kind "$@"; }
+MUT_KIND=mut
+mutate_kind() { # mutate_kind <label> <expected-failing-row-substring> <groups> <from> <to> (kind in MUT_KIND)
   local label="$1" expect="$2" groups="$3" from="$4" to="$5"
   local d
   mut_n=$((mut_n + 1))
@@ -1076,7 +1078,7 @@ mutate() { # mutate <label> <expected-failing-row-substring> <groups> <from> <to
   cp "$PROD" "$d/cf.sh"
   edit_once "$PROD" "$from" "$to" "$label" "$d/cf.sh" || return
   LAUNCH_SUITE="$SELF"
-  launch mut "$label" "$expect" "$d" "$groups"
+  launch "$MUT_KIND" "$label" "$expect" "$d" "$groups"
 }
 # mutate_suite: the same, applied to a copy of THIS file (a guard in the suite itself). The wrapper stays pristine.
 mutate_suite() { # mutate_suite <kind> <label> <expect> <groups> <from> <to>
@@ -1141,6 +1143,15 @@ collect() {
             else
               MUT_CAUGHT=$((MUT_CAUGHT + 1))
               vok "mutate[$label]: caught by row containing '$expect' ($nfail distinct failing rows)"
+            fi
+            ;;
+          wholesale)
+            # the bound is live: a mutant that breaks everything must EXCEED it (so a crash is never scored as a catch)
+            if [[ "$irc" != 0 && "$nfail" -gt "$MUT_MAXFAIL" ]]; then
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: a wholesale break failed $nfail distinct rows, over the bound $MUT_MAXFAIL, so it would not be scored as a catch"
+            else
+              vno "mutate[$label]: a wholesale break failed only $nfail distinct rows (rc $irc); the distinct-failure bound is not live"
             fi
             ;;
           invert)
@@ -1229,9 +1240,100 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G2.6d add a heredoc" "source: no here-string or heredoc" source 'unset SSLKEYLOGFILE' $': <<\'EOT\'\nEOT\nunset SSLKEYLOGFILE'
   mutate "G2.7 print curl merged stderr" "leak[ssl-mode/curl-fail]" status 'unverified "upstream-error (curl exit $rc)" 14' '{ printf "%s\n" "$out"; unverified "upstream-error (curl exit $rc)" 14; }'
 
+
+  # --- review round: children run under env -i (W1) ---
+  mutate "W1.1 project jq without env -i" "env[jq/ssl-mode]: a planted \$HOME/.jq redefining test leaks no token" env,source '  res=$(/usr/bin/env -i /usr/bin/jq -c' '  res=$(/usr/bin/jq -c'
+  mutate "W1.2 guard jq without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
+  mutate "W1.3 date (now) without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/date'
+  mutate "W1.4 date (since) without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  since=$(/usr/bin/env -i /usr/bin/date' '  since=$(/usr/bin/date'
+  mutate "W1.5 a bare jq command" "census: no bare jq or date command" source '  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14' $'  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14\n  jq -n 1'
+
+  # --- Records inputs (W2) ---
+  mutate "W2.1 enabled == true instead of != false" "records[B]: a rule that omits enabled counts as enabled" proj 'enabled: (.enabled != false)' 'enabled: (.enabled == true)'
+  mutate "W2.2 count rules with no ssl" "records[B]: an enabled rule with no ssl is not counted" proj 'select(.enabled and .ssl != null)' 'select(.enabled)'
+  mutate "W2.3 count disabled rules" "records[B]: a disabled ssl rule is not counted" proj 'select(.enabled and .ssl != null)' 'select(.ssl != null)'
+  mutate "W2.4 enabled_ssl_rules is just the rule count" "proj[config-entrypoint]: header fields, rule_count 3, enabled_ssl_rules 2" proj 'enabled_ssl_rules: ([$rr[] | select(.enabled and .ssl != null)] | length)' 'enabled_ssl_rules: ($rules | length)'
+
+  # --- bad-response reasons, preflight, LIMIT, Z-only, hint (W3) ---
+  mutate "W3.1 shape reported as a jq failure" "shape[ssl-mode]: a well-formed body of the wrong shape" shape '    *) bad_shape ;;' '    *) bad_jq 1 ;;'
+  mutate "W3.2 delete the jq preflight" "tools[ssl-mode]: no jq -> unverified - no-tool (jq)" tools '  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14' '  :'
+  mutate "W3.3 delete the date preflight" "tools[change-history]: no date -> unverified - no-tool (date)" tools '  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14' '  :'
+  mutate "W3.4 date message claims GNU date" "tools[fakedate_rel]: the message names only what was measured" tools '[[ ! "$since" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"' '[[ ! "$since" =~ $STAMP_RE ]]; then die 64 "refused: date does not support relative times (GNU date required)"'
+  mutate "W3.5 LIMIT drifts from 50" "wire[change-history]: URL matches the fixed audit template" wire,source $'\nLIMIT=50\n' $'\nLIMIT=40\n'
+  mutate "W3.6 truncated test hardcodes a different limit" "proj[change-history]: 50 rows -> truncated true" proj '>= $limit' '>= 51'
+  mutate "W3.7 newest_time by plain max" "newest_time orders a fractional second after the whole second" proj 'newest_time: ($times | max_by(tkey))' 'newest_time: ($times | max)'
+  mutate "W3.8 identity tkey" "newest_time orders a fractional second after the whole second" proj 'def tkey: sub("Z$"; "") | if contains(".") then . else . + ".0" end;' 'def tkey: .;'
+  mutate "W3.9 accept offset-form timestamps" "an offset-form modified_on prints invalid" proj '(\\.[0-9]+)?Z\\z' '(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})\\z'
+  mutate "W3.10 drop the run-under hint" "refuse: unset DOPPLER_* -> the message carries the fixed run-under hint" refuse 'no Doppler source set (run under: doppler run -p soleur -c prd_terraform --)' 'no Doppler source set'
+
+  # --- every projected sanitizer (W4) ---
+  mutate "W4.1 modified_on without tsn" "proj[ssl-mode]: hostile modified_on is sanitized" proj 'modified_on: ($r.modified_on | tsn)' 'modified_on: $r.modified_on'
+  mutate "W4.2 ssl-mode id without idv" "proj[ssl-mode]: hostile id is sanitized" proj 'id: ($r.id | idv), value:' 'id: $r.id, value:'
+  mutate "W4.3 ssl-mode value without enum" "proj[ssl-mode]: hostile value is sanitized" proj 'value: ($r.value | enum)' 'value: $r.value'
+  mutate "W4.4 entrypoint id without idv" "proj[config-entrypoint]: hostile entry-id is sanitized" proj 'id: ($r.id | idv), version:' 'id: $r.id, version:'
+  mutate "W4.5 version without verstr" "proj[config-entrypoint]: hostile version is sanitized" proj 'version: ($r.version | verstr)' 'version: $r.version'
+  mutate "W4.6 last_updated without tsn" "proj[config-entrypoint]: hostile last_updated is sanitized" proj 'last_updated: ($r.last_updated | tsn)' 'last_updated: $r.last_updated'
+  mutate "W4.7 rule ref without idv" "proj[config-entrypoint]: hostile rule-ref is sanitized" proj 'ref: (.ref | idv)' 'ref: .ref'
+  mutate "W4.8 rule ssl without sslv" "proj[config-entrypoint]: hostile rule-ssl is sanitized" proj 'then .ssl else null end) | sslv), mentions_app_host' 'then .ssl else null end)), mentions_app_host'
+  mutate "W4.9 verstr length unbounded" "proj[config-entrypoint]: hostile version-too-long is sanitized" proj '{1,10}' '+'
+  mutate "W4.10 pagerule id without idv" "proj[pagerules-ssl]: hostile rule-id is sanitized" proj 'id: (.id | idv), status:' 'id: .id, status:'
+  mutate "W4.11 pagerule status uncoerced" "proj[pagerules-ssl]: hostile status is sanitized" proj 'status: (.status | if . == "active" or . == "disabled" then . else "other" end)' 'status: .status'
+  mutate "W4.12 pagerule ssl without sslv" "proj[pagerules-ssl]: hostile ssl is sanitized" proj '.value][0] | sslv)' '.value][0])'
+  mutate "W4.13 action type without gk" "proj[change-history]: hostile action-type is sanitized" proj 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end) | gk)]' 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end))]'
+  mutate "W4.14 resource type without gk" "proj[change-history]: hostile resource-type is sanitized" proj 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end) | gk)]' 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end))]'
+  mutate "W4.15 audit time filter dropped" "proj[change-history]: hostile action-time is sanitized" proj 'select(type == "string" and test(rfc))' 'select(type == "string")'
+  mutate_suite suitemut "W4.16 the proj group is dropped from the run loop" "proj floor" proj "for g in source wire refuse token env status xtrace pr""oj shape tools selftest; do" "for g in source wire refuse token env status xtrace shape tools selftest; do"
+
+  # --- closed argv vector (W5) ---
+  mutate "W5.1 duplicated -X GET" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-X GET -X GET -sS'
+  mutate "W5.2 second -X POST" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-X GET -X POST -sS'
+  mutate "W5.3 glued -XPOST" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-XPOST -sS'
+  mutate "W5.4 --connect-to" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --connect-to ::evil.example:'
+  mutate "W5.5 -k" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-sS --max-time 20' '-sS -k --max-time 20'
+  mutate "W5.6 --config /dev/null" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--config - "$url"' '--config /dev/null "$url"'
+  mutate "W5.7 -K - instead of --config -" "wire[ssl-mode]: the stub refused no flag" wire '--config - "$url"' '-K - "$url"'
+  mutate "W5.8 --location-trusted" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --location-trusted'
+  mutate "W5.9 --resolve" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --resolve api.cloudflare.com:443:127.0.0.1'
+  mutate "W5.10 --form-string" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --form-string a=b'
+
+  # --- ids, xtrace per variable, dispatcher, request census, CURL census, source guards (W6) ---
+  mutate "W6.1 unanchored id regex" "refuse: CF_ZONE_ID path-dot-dot -> exit 64" refuse "ID_RE='^[0-9a-f]{32}\$'" "ID_RE='[0-9a-f]{32}'"
+  mutate "W6.2 id regex accepts uppercase" "refuse: CF_ZONE_ID uppercase -> exit 64" refuse "ID_RE='^[0-9a-f]{32}\$'" "ID_RE='^[0-9a-fA-F]{32}\$'"
+  mutate "W6.3 xtrace list drops ZONE_SETTINGS" "xtrace[CF_API_TOKEN_ZONE_SETTINGS alone]: exit 78" xtrace '${CF_API_TOKEN_ZONE_SETTINGS:+x}' ''
+  mutate "W6.4 xtrace list drops RULESETS" "xtrace[CF_API_TOKEN_RULESETS alone]: exit 78" xtrace '${CF_API_TOKEN_RULESETS:+x}' ''
+  mutate "W6.5 xtrace list drops AUDIT" "xtrace[CF_API_TOKEN_AUDIT alone]: exit 78" xtrace '${CF_API_TOKEN_AUDIT:+x}' ''
+  mutate "W6.6 xtrace list drops CF_API_TOKEN" "xtrace[CF_API_TOKEN alone]: exit 78" xtrace '${CF_API_TOKEN:+x}' ''
+  mutate "W6.7 3-space quoted fifth arm" "parity: dispatcher case labels" source '  *) die 64 "refused: unknown subcommand" ;;' $'   "raw") sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "W6.8 behavioural fifth arm (purge)" "refuse fuzz: name purge" source,refuse '  *) die 64 "refused: unknown subcommand" ;;' $'  purge) TOKVAR=CF_API_TOKEN_ZONE_SETTINGS; load_credential zone; sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "W6.9 arm smuggled on an existing line" "census: dispatcher arm terminators == 5" source 'load_credential zone; sub_ssl_mode ;;' 'load_credential zone; sub_ssl_mode ;; hostnames) sub_ssl_mode ;;'
+  mutate "W6.10 body-conditional extra request" "census: exactly four cf_get call sites" source,wire '    ok) : ;;' '    ok) cf_get "$BASE/zones/$CF_ZONE_ID/settings/ssl" ;;'
+  mutate "W6.11 a URL template tampered" "census: the four cf_get URL templates" source 'pagerules?status=active"' 'pagerules?status=all"'
+  mutate "W6.12 CURL conditional override" "census: CURL is assigned exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=/usr/bin/curl\n[ -n "${CF_CURL:-}" ] && CURL=$CF_CURL\n'
+  mutate "W6.13 CURL exported" "census: that one assignment is the column-0 literal" source $'\nCURL=/usr/bin/curl\n' $'\nexport CURL=/usr/bin/curl\n'
+  mutate "W6.14 CURL indented override" "census: CURL is assigned exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=/usr/bin/curl\n  CURL=${CF_CURL:-/usr/bin/curl}\n'
+  mutate "W6.15 export TOK" "source: no export of the token" source $'\nTOK=""\n' $'\nexport TOK=""\n'
+  mutate "W6.16 tee" "source: no tee" source 'unset SSLKEYLOGFILE' $': | tee /dev/null\nunset SSLKEYLOGFILE'
+  mutate "W6.17 /dev/shm" "source: no /dev/shm" source 'unset SSLKEYLOGFILE' $': > /dev/shm/x\nunset SSLKEYLOGFILE'
+  mutate "W6.18 exec fd redirection" "source: no exec file-descriptor redirection" source 'unset SSLKEYLOGFILE' $'exec 3>&2\nunset SSLKEYLOGFILE'
+  mutate "W6.19 jq --arg" "source: no jq --arg" source 'jq -c --argjson limit' 'jq -c --arg t x --argjson limit'
+  mutate "W6.20 env NAME=value prefix" "source: no NAME=value prefix on an env child" source '/usr/bin/env -i /usr/bin/jq -c' '/usr/bin/env -i X=1 /usr/bin/jq -c'
+  mutate "W6.21 token variable on a jq line" "census: no token, zone or account variable on any jq/date line" source '--argjson limit "$LIMIT"' '--argjson limit "$LIMIT$TOK"'
+  mutate "W6.22 xtrace list vs dispatcher TOKVAR" "source: the xtrace refusal list names exactly" source 'TOKVAR=CF_API_TOKEN_AUDIT;' 'TOKVAR=CF_API_TOKEN_AUDITX;'
+
+  # --- the harness itself (W6 h, i, j) ---
+  MUT_KIND=wholesale mutate_kind "W6.23 harness: a wholesale break exceeds the distinct-failure bound" "" all $'\nset -uo pipefail\n' $'\nexit 3\nset -uo pipefail\n'
+  d="$WORK/mut.negctl"
+  assert_fixture_dir "$d"
+  mkdir -p "$d"
+  cp "$PROD" "$d/cf.sh"
+  launch negctl "harness: the no() negative control" "deliberate failing assertion" "$d" selftest
+  mutate_suite invert "W6.24 harness: the summary no longer exits non-zero on a failure" "deliberate failing assertion" selftest 'if [[ "$fa''il" -gt 0 ]]; then exit 1; fi' 'if [[ "$fa''il" -gt 0 ]]; then :; fi'
+  mutate_suite invert "W6.25 harness: no() stops counting a failure" "deliberate failing assertion" selftest 'no() { fa''il=$((fa''il + 1)); printf' 'no() { printf'
+  mutate_suite negscratch "W6.26 harness: the cleanup trap no longer removes the scratch directory" "" selftest 'if [[ -n "${WO''RK:-}" ]]; then rm -rf -- "${WO''RK:?}"; fi' ':'
+
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 28 mutation rows ran" test "$MUT_TOTAL" -ge 28
+  t "mutation floor: at least 100 mutation rows ran" test "$MUT_TOTAL" -ge 100
 fi
 
 # --- accounting ---
