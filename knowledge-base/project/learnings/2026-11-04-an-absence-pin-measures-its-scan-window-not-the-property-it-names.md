@@ -44,6 +44,7 @@ happened to look at.
   Prevention: re-run any survivor in isolation before counting it.
 - **`git commit` hook-blocked because the shell cwd was the main checkout at evaluation time** — Recovery: cd in a separate call
   first — Prevention: start commit commands from the worktree cwd.
+- **A fixture string `"../../docs/x"` in the test made the repo-wide containment census count it as escaping the app, so required `test-webplat` went red in CI** — Recovery: changed the fixture to a single-level `../docs/x` — Prevention: the local targeted run must include `test/repo-wide-containment.test.ts` whenever a new test under `apps/web-platform/test/` contains a `../` run; a file-selected test set cannot see a repo-global census.
 - **A review seat ran `git fetch` against a no-git-write brief** — Recovery: harmless (moves a remote-tracking ref); disclosed —
   Prevention: say "no git commands that touch refs, including fetch" in seat briefs.
 

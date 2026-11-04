@@ -242,7 +242,7 @@ describe("the pin cannot read green over an empty or shrunken scan (anti-vacuity
       `import(/* webpackIgnore: true */ "./x.test")`,
       `from "@/test/helpers/x"`,
       `from "../e2e/fixtures"`,
-      `from "../../docs/x"`,
+      `from "../docs/x"`,
       `import("@/supabase/functions/x")`,
     ]) {
       expect([s, TEST_IMPORT.test(s)]).toEqual([s, true]);
