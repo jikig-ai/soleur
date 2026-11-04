@@ -355,8 +355,8 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
 Then run the affected-suite gate — the plugin entry point, wired the same in
-`soleur:work` Phase 2 and `soleur:review`. Its rc contract (0/1/4/6/7), the
-`.soleur-test-gate.json` override schema, and the per-rc actions live in
+`soleur:work` Phase 2 and `soleur:review`. Its rc contract (0/1/4/6/7),
+`.soleur-test-gate.json` override schema, per-rc actions, pool wait live in
 [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS
 repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh), so the
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the

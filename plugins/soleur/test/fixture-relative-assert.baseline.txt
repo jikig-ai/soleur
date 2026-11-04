@@ -545,7 +545,7 @@
 3	scripts/test-all-orphan-log-retention.test.sh
 7	scripts/test-all-parallel-benchmark.test.sh
 8	scripts/test-all-parallel-contention.test.sh
-9	scripts/test-all-parallel-scheduler.test.sh
+8	scripts/test-all-parallel-scheduler.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
 9	scripts/test-all.sh
 2	scripts/test-all-weight-drift.test.sh
