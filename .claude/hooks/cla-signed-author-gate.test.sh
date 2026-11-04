@@ -110,6 +110,7 @@ make_repo() {
 # pin the anchored-parse edge case (`^[[:space:]]+allowlist:`).
 push_cla_yml() {
   local work="$1"
+  assert_fixture_dir "$work"
   mkdir -p "$work/.github/workflows"
   cat > "$work/.github/workflows/cla.yml" <<'EOF'
 name: cla
@@ -133,6 +134,7 @@ EOF
 # resolves (signedContributors: Elvalio + deruelle).
 push_cla_signatures() {
   local work="$1"
+  assert_fixture_dir "$work"
   git -C "$work" checkout -q -b cla-signatures
   mkdir -p "$work/signatures"
   cat > "$work/signatures/cla.json" <<'EOF'
@@ -149,6 +151,7 @@ EOF
 # part leaves git's configured identity as committer.
 commit_branch() {
   local work="$1" branch="$2" spec ae ce
+  assert_fixture_dir "$work"
   shift 2
   git -C "$work" checkout -q -b "$branch"
   for spec in "$@"; do
