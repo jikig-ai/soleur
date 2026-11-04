@@ -236,7 +236,7 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - route: `/dashboard/settings/scope-grants/egress-audit`
 - entry: `View egress audit log` link on the Agent web access card at `/dashboard/settings/scope-grants`
 - selectors: `table` with `Host` / `Outcome` / `Requests (minimum)` / `Last seen` column headers, `nav` labelled `Filter by outcome`
-- expects: last 30 days of agent outbound hosts for the current workspace (counts are minimums, outcomes Allowed / Blocked / Other); an unavailable read renders an error state, never an empty log
+- expects: agent outbound hosts for the current workspace over the selected window (window selector: 24 hours, 7 days or 30 days; default 30 days) (counts are minimums, outcomes Allowed / Blocked / Other); an unavailable read renders an error state, never an empty log
 - auth: bot
 - gotchas: read-only; collection is off for external organisations until the #11237 gates clear, so the log may be legitimately empty; relative times only (no absolute timestamps in the DOM)
 

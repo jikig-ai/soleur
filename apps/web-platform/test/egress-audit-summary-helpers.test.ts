@@ -1,6 +1,14 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripSqlComments } from "./helpers/sql-lex";
 import {
   DECISION_FILTERS,
+  DEFAULT_TIME_WINDOW,
+  TIME_WINDOWS,
+  WINDOW_LABEL,
+  parseTimeWindow,
+  windowPhrase,
   formatAgo,
   formatAtLeast,
   isEgressAuditPayload,
@@ -102,5 +110,54 @@ describe("isEgressAuditPayload", () => {
       "an unparseable last_seen": { ...ok(), overflow: [{ decision: "other", request_count: 1, last_seen: "soon" }] },
     };
     for (const [label, body] of Object.entries(cases)) expect([label, isEgressAuditPayload(body)]).toEqual([label, false]);
+  });
+});
+
+// window-assembly: parseTimeWindow — not a regex-extracted source region: it
+// parses the ?window= URL parameter. The closure assertions below are complete
+// against TIME_WINDOWS (the allowlist the chips and the SQL CASE map share).
+describe("parseTimeWindow", () => {
+  it("accepts each of the three spellings the chips use, in chip order", () => {
+    expect([...TIME_WINDOWS]).toEqual(["24h", "7d", "30d"]);
+    for (const w of TIME_WINDOWS) expect(parseTimeWindow(w)).toBe(w);
+  });
+
+  it("the default is 30 days", () => {
+    expect(DEFAULT_TIME_WINDOW).toBe("30d");
+  });
+
+  it("falls back to the default for absent, empty, unknown, differently-cased and padded values (never a 400)", () => {
+    for (const v of [undefined, "", "bogus", "30D", " 7d", "7d ", "24H", "90d", "1h", "all"]) expect([v, parseTimeWindow(v)]).toEqual([v, "30d"]);
+  });
+
+  it("uses the first of a repeated value, and falls back only when the first is unknown", () => {
+    expect(parseTimeWindow(["7d", "24h"])).toBe("7d");
+    expect(parseTimeWindow(["24h", "bogus"])).toBe("24h");
+    expect(parseTimeWindow(["bogus", "7d"])).toBe("30d");
+    expect(parseTimeWindow([])).toBe("30d");
+  });
+});
+
+describe("WINDOW_LABEL and windowPhrase", () => {
+  it("labels all three windows", () => {
+    expect(WINDOW_LABEL).toEqual({ "24h": "24 hours", "7d": "7 days", "30d": "30 days" });
+  });
+
+  it("the phrase is hedged ('about the last N'): 15-minute buckets straddling the window start are counted whole", () => {
+    expect(windowPhrase("24h")).toBe("about the last 24 hours");
+    expect(windowPhrase("7d")).toBe("about the last 7 days");
+    expect(windowPhrase("30d")).toBe("about the last 30 days");
+  });
+});
+
+describe("TypeScript/SQL allowlist drift", () => {
+  it("the keys of the `CASE p_window` map in migration 183 equal TIME_WINDOWS (otherwise a drift surfaces only as a runtime 22023)", () => {
+    const file = path.join(__dirname, "..", "supabase", "migrations", "183_egress_audit_window_summary.sql");
+    const sql = stripSqlComments(readFileSync(file, "utf8")); // one literal-aware pass (helpers/sql-lex.ts)
+    const caseBlock = /CASE\s+p_window\b([\s\S]*?)\bEND\b/i.exec(sql);
+    expect(caseBlock, "a `CASE p_window ... END` map must exist in migration 183").not.toBeNull();
+    const keys = [...(caseBlock?.[1] ?? "").matchAll(/WHEN\s+'([^']+)'\s+THEN/gi)].map((m) => m[1]);
+    expect(keys.length).toBeGreaterThan(0);
+    expect([...keys].sort()).toEqual([...TIME_WINDOWS].sort());
   });
 });
