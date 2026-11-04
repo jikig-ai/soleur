@@ -148,19 +148,26 @@ if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+p
   exit 0
 fi
 
-# assert_fixture_dir <path> — same name/shape as the test corpus's helper so
-# the fixture-relative scanner (#7708) correlates it with the git -C sites
-# below. Semantics differ deliberately: this hook fails OPEN (exit 0) so a
-# malformed payload never blocks the boundary command.
+# Validate WORK_DIR: absolute + existing dir (CWE-88 arg-injection defense).
+# The definition is byte-equal to the canonical helper in
+# plugins/soleur/test/test-helpers.sh — the fixture-safety suites pin that
+# shape corpus-wide (fixture-dir-operand-assert "inline definition drift"
+# arm), and the relative-operand scanner (#7708) clears the git -C sites
+# below only behind an executed assert_fixture_dir statement. The `|| exit 0`
+# wrapper keeps this hook fail-OPEN: a malformed payload exits the boundary
+# command silently rather than as a hook error.
 assert_fixture_dir() {
   case "${1-}" in
-    ""|*/../*|*/..|/|//|/.|/proc/*|/sys/*|/dev/*) exit 0 ;;
-    /*) [[ -d "$1" ]] || exit 0 ;;
-    *) exit 0 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-# Validate WORK_DIR: absolute + existing dir (CWE-88 arg-injection defense).
-assert_fixture_dir "$WORK_DIR"
+assert_fixture_dir "$WORK_DIR" || exit 0
+[[ -d "$WORK_DIR" ]] || exit 0
 if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]]; then
   exit 0
 fi
