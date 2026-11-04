@@ -208,9 +208,11 @@ logs:
   retention: "Sentry default 90 days; legal_acceptance rows are retained per the Art. 30 entry"
 
 discoverability_test:
-  command: "grep -o web-acceptance plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"
-  expected_output: "web-acceptance"
+  command: "grep -o legal_acceptance_guard apps/web-platform/supabase/verify/184_legal_acceptance.sql"
+  expected_output: "legal_acceptance_guard"
 ```
+
+Amendment at PR-B ship (2026-11-04): the original probe (`grep -o web-acceptance` on `hold-gate-eval.sh`) can only pass once PR-D lands the hold evaluator, so it could not be run for PR-B and Check 10 failed on it. PR-B ships the database record and no server code, so it emits no Sentry events yet. Its runtime check is the committed `verify/184_legal_acceptance.sql` sentinel (92 rows, `bad = 0` on dev), which the `verify-migrations` job runs on deploy. The probe above confirms that sentinel still guards the write trigger. PR-D restores the original `web-acceptance` probe.
 
 ## Encryption Posture
 
