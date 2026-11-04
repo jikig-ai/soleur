@@ -1566,8 +1566,17 @@ describe.skipIf(!BWRAP_OK)("bwrap shim end-to-end with the real binary", () => {
     const payload =
       "--unshare-user\0--unshare-pid\0--unshare-net\0" +
       "--ro-bind\0/\0/\0--tmpfs\0/proc\0--bind\0/proc\0/proc\0";
-    const argsFile = join(mkdtempSync(join(tmpdir(), "shim-proc-")), "payload");
-    writeFileSync(argsFile, payload);
+    const argsDir = mkdtempSync(join(tmpdir(), "shim-proc-"));
+    const argsFile = join(argsDir, "payload");
+    // The path is accessed exactly once: the payload is written through the only
+    // open() of argsFile, and each child reads through a descriptor minted via
+    // /proc/self/fd — a fresh file description at offset 0 on the SAME inode
+    // (Node has no lseek to rewind one descriptor between two spawnSync reads).
+    // A write-then-reopen-by-path pair would leave a window where the payload
+    // could be swapped under us (CodeQL js/file-system-race).
+    const argsFd = openSync(argsFile, "w+");
+    writeFileSync(argsFd, payload);
+    const payloadFd = () => openSync(`/proc/self/fd/${argsFd}`, "r");
     try {
       // Probe (#10032): the tail bind is dropped, so the realized /proc is
       // the denyRead tmpfs — NO pid dirs at all (host, sandbox's own, or the
@@ -1575,24 +1584,37 @@ describe.skipIf(!BWRAP_OK)("bwrap shim end-to-end with the real binary", () => {
       // vendored apply-seccomp fd path is re-homed as a mount, not resolved
       // through procfs). This is the new mask discrimination.
       const probe = `for d in /proc/[0-9]*; do [ -d "$d" ] && exit 7; done; test ! -e /proc/self/environ`;
-      const throughShim = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/sh", "-c", probe], {
-        env,
-        encoding: "utf8",
-        timeout: 30_000,
-        stdio: ["ignore", "pipe", "pipe", openSync(argsFile, "r")],
-      });
+      const shimFd = payloadFd();
+      let throughShim: ReturnType<typeof spawnSync>;
+      try {
+        throughShim = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/sh", "-c", probe], {
+          env,
+          encoding: "utf8",
+          timeout: 30_000,
+          stdio: ["ignore", "pipe", "pipe", shimFd],
+        });
+      } finally {
+        closeSync(shimFd);
+      }
       expect(throughShim.status, String(throughShim.stderr)).toBe(0);
 
       // CONTROL: the same argv through the REAL binary keeps the defect —
       // the tail bind exposes real procfs (this worker's host pid is a dir).
-      const control = spawnSync(
-        "/usr/bin/bwrap",
-        ["--args", "3", "--", "/usr/bin/sh", "-c", `test -d /proc/${process.pid}`],
-        { env, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe", openSync(argsFile, "r")] },
-      );
+      const controlFd = payloadFd();
+      let control: ReturnType<typeof spawnSync>;
+      try {
+        control = spawnSync(
+          "/usr/bin/bwrap",
+          ["--args", "3", "--", "/usr/bin/sh", "-c", `test -d /proc/${process.pid}`],
+          { env, encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe", controlFd] },
+        );
+      } finally {
+        closeSync(controlFd);
+      }
       expect(control.status, `control must see host procfs (the defect): ${control.stderr}`).toBe(0);
     } finally {
-      rmSync(dirname(argsFile), { recursive: true, force: true });
+      closeSync(argsFd);
+      rmSync(argsDir, { recursive: true, force: true });
     }
   }, 60_000);
 });

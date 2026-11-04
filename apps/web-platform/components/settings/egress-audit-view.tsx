@@ -5,15 +5,20 @@ import { NavLink } from "@/components/ui/nav-link";
 import { EgressAuditRefreshButton } from "@/components/settings/egress-audit-refresh-button";
 import { EGRESS_AUDIT_HEADING_ID } from "@/components/settings/egress-audit-focus";
 import {
+  DEFAULT_TIME_WINDOW,
   EGRESS_AUDIT_PATH,
   PAGE_LIMIT,
+  TIME_WINDOWS,
+  WINDOW_LABEL,
   formatAgo,
   formatAtLeast,
   outcomeOf,
+  windowPhrase,
   type DecisionFilter,
   type EgressAuditPayload,
   type EgressAuditResult,
   type Outcome,
+  type TimeWindow,
 } from "@/lib/egress-audit/summary";
 
 // #9545 PR2 — the egress audit destination view (wireframes 07-04..07-25). Presentational: the loader's
@@ -23,7 +28,8 @@ import {
 // may be missing, it is visible to every current member including activity from before they joined, no
 // member or session is recorded, records are deleted about 30 days after they were recorded. Never the
 // words "complete", "every connection", "tamper-proof" or "sessions", and never a calendar date in a
-// retention sentence (rows expire individually; no stored date exists).
+// retention sentence (rows expire individually; no stored date exists). Window-scoped copy is derived from
+// the selected window; the retention and visibility sentences are never windowed.
 
 const BASE = EGRESS_AUDIT_PATH;
 const PRIVACY_RIGHTS_URL = "https://soleur.ai/legal/privacy-policy/#data-subject-rights";
@@ -33,7 +39,12 @@ const FILTERS: { key: DecisionFilter; label: string }[] = [
   { key: "blocked", label: "Blocked" },
   { key: "other", label: "Other" },
 ];
-const hrefFor = (f: DecisionFilter) => (f === "all" ? BASE : `${BASE}?decision=${f}`);
+// Canonical URLs: a default (`all`, `30d`) is omitted, `decision` comes before `window`. Every link keeps the
+// other control: "Show all" drops only the decision, "Show 30 days" drops only the window.
+const hrefFor = (f: DecisionFilter, w: TimeWindow) => {
+  const q = [f === "all" ? null : `decision=${f}`, w === DEFAULT_TIME_WINDOW ? null : `window=${w}`].filter(Boolean).join("&");
+  return q ? `${BASE}?${q}` : BASE;
+};
 // A workspace name is user-chosen and unbounded; clip it so the subtitle can never blow out the layout.
 const NAME_MAX = 60;
 const clipName = (n: string) => (n.length > NAME_MAX ? `${n.slice(0, NAME_MAX - 1).trimEnd()}…` : n);
@@ -120,7 +131,30 @@ function Banner() {
   );
 }
 
-function Chips({ filter }: { filter: DecisionFilter }) {
+// Selector chips share one visual treatment: the outcome chips and the window chips.
+const chipClass = (selected: boolean) =>
+  `border px-4 py-1.5 text-xs transition-colors ${
+    selected
+      ? "border-soleur-accent-gold-fg bg-soleur-bg-surface-2 font-semibold text-soleur-text-primary"
+      : "border-soleur-border-default font-medium text-soleur-text-muted hover:bg-soleur-bg-surface-2"
+  }`;
+
+function WindowChips({ filter, timeWindow }: { filter: DecisionFilter; timeWindow: TimeWindow }) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+      <span className="text-xs text-soleur-text-muted">Time window</span>
+      <nav aria-label="Time window" className="flex flex-wrap">
+        {TIME_WINDOWS.map((w) => (
+          <NavLink key={w} href={hrefFor(filter, w)} aria-current={w === timeWindow ? "page" : undefined} className={chipClass(w === timeWindow)}>
+            {WINDOW_LABEL[w]}
+          </NavLink>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function Chips({ filter, timeWindow }: { filter: DecisionFilter; timeWindow: TimeWindow }) {
   return (
     <div className="flex flex-col gap-2">
       <nav aria-label="Filter by outcome" className="flex">
@@ -129,13 +163,9 @@ function Chips({ filter }: { filter: DecisionFilter }) {
           return (
             <NavLink
               key={f.key}
-              href={hrefFor(f.key)}
+              href={hrefFor(f.key, timeWindow)}
               aria-current={selected ? "page" : undefined}
-              className={`border px-4 py-1.5 text-xs transition-colors ${
-                selected
-                  ? "border-soleur-accent-gold-fg bg-soleur-bg-surface-2 font-semibold text-soleur-text-primary"
-                  : "border-soleur-border-default font-medium text-soleur-text-muted hover:bg-soleur-bg-surface-2"
-              }`}
+              className={chipClass(selected)}
             >
               {f.label}
             </NavLink>
@@ -190,13 +220,13 @@ function Row({
   );
 }
 
-function HostTable({ data, now }: { data: EgressAuditPayload; now: number }) {
+function HostTable({ data, now, timeWindow }: { data: EgressAuditPayload; now: number; timeWindow: TimeWindow }) {
   return (
     <table
       role="table"
       className="w-full border border-soleur-border-default bg-soleur-bg-surface-1 text-left text-[13px]"
     >
-      <caption className="sr-only">Hosts your workspace's agents contacted in the last 30 days, with outcome and a minimum request count</caption>
+      <caption className="sr-only">{`Hosts your workspace's agents contacted in ${windowPhrase(timeWindow)}, with outcome and a minimum request count`}</caption>
       <thead
         role="rowgroup"
         className="hidden bg-soleur-bg-surface-2 text-[11px] font-medium uppercase tracking-wide text-soleur-text-muted md:table-header-group"
@@ -256,7 +286,7 @@ function HostTable({ data, now }: { data: EgressAuditPayload; now: number }) {
   );
 }
 
-function Header({ workspaceName }: { workspaceName: string | null }) {
+function Header({ workspaceName, timeWindow }: { workspaceName: string | null; timeWindow: TimeWindow }) {
   return (
     <>
       <NavLink href="/dashboard/settings/scope-grants" className="inline-flex w-fit items-center gap-1.5 text-xs font-medium text-soleur-accent-gold-fg">
@@ -268,7 +298,7 @@ function Header({ workspaceName }: { workspaceName: string | null }) {
           Egress audit log
         </h1>
         <p className="break-words text-sm text-soleur-text-secondary">
-          {`Sites ${workspaceName ? `${clipName(workspaceName)}'s` : "your workspace's"} agents contacted in about the last 30 days, with the outcome of each (best-effort).`}
+          {`Sites ${workspaceName ? `${clipName(workspaceName)}'s` : "your workspace's"} agents contacted in ${windowPhrase(timeWindow)}, with the outcome of each (best-effort).`}
         </p>
       </header>
     </>
@@ -307,11 +337,21 @@ function UnavailableCard() {
   );
 }
 
-export function EgressAuditView({ result, filter, now = Date.now() }: { result: EgressAuditResult; filter: DecisionFilter; now?: number }) {
+export function EgressAuditView({
+  result,
+  filter,
+  timeWindow,
+  now = Date.now(),
+}: {
+  result: EgressAuditResult;
+  filter: DecisionFilter;
+  timeWindow: TimeWindow;
+  now?: number;
+}) {
   // The settings shell already caps the content width, so no max-width here.
   const shell = (children: ReactNode, workspaceName: string | null = null) => (
     <div className="flex min-w-0 flex-col gap-5">
-      <Header workspaceName={workspaceName} />
+      <Header workspaceName={workspaceName} timeWindow={timeWindow} />
       {children}
       <Footer />
     </div>
@@ -346,7 +386,7 @@ export function EgressAuditView({ result, filter, now = Date.now() }: { result: 
         </>,
       );
     case "ready":
-      return <ReadyView result={result} filter={filter} now={now} shell={shell} />;
+      return <ReadyView result={result} filter={filter} timeWindow={timeWindow} now={now} shell={shell} />;
     default: {
       const _exhaustive: never = result;
       return _exhaustive;
@@ -359,11 +399,13 @@ type Shell = (children: ReactNode, workspaceName?: string | null) => ReactNode;
 function ReadyView({
   result,
   filter,
+  timeWindow,
   now,
   shell,
 }: {
   result: Extract<EgressAuditResult, { kind: "ready" }>;
   filter: DecisionFilter;
+  timeWindow: TimeWindow;
   now: number;
   shell: Shell;
 }) {
@@ -372,6 +414,8 @@ function ReadyView({
   const filteredLabel = FILTERS.find((f) => f.key === filter)?.label ?? "";
   const total = data.summary.request_count_min ?? 0;
   const blocked = data.summary.blocked_request_count_min ?? 0;
+  const phrase = windowPhrase(timeWindow);
+  const windowChips = <WindowChips filter={filter} timeWindow={timeWindow} />;
 
   if (hasData) {
     return shell(
@@ -393,14 +437,15 @@ function ReadyView({
                 ? `Showing the ${PAGE_LIMIT} most recent entries.`
                 : `Showing the ${PAGE_LIMIT} most recent ${filteredLabel} entries.`
             }
-            body="Older entries in this 30-day window are not listed, and counts are minimums."
+            body="Older entries in this window are not listed, and counts are minimums."
           />
         )}
         <p className="text-[13px] font-medium text-soleur-text-primary" aria-live="polite">
           {`${capitalize(formatAtLeast(total))} requests · ${formatAtLeast(blocked)} blocked${filter === "all" ? "" : " (all outcomes)"}`}
         </p>
-        <Chips filter={filter} />
-        <HostTable data={data} now={now} />
+        {windowChips}
+        <Chips filter={filter} timeWindow={timeWindow} />
+        <HostTable data={data} now={now} timeWindow={timeWindow} />
       </>,
       workspaceName,
     );
@@ -410,10 +455,11 @@ function ReadyView({
     return shell(
       <>
         <Banner />
-        <Chips filter={filter} />
+        {windowChips}
+        <Chips filter={filter} timeWindow={timeWindow} />
         <div className="flex items-center gap-3 border border-soleur-border-default bg-soleur-bg-surface-2 p-4 text-sm text-soleur-text-secondary">
-          <span>{`No ${filteredLabel} requests in the last 30 days.`}</span>
-          <NavLink href={BASE} className="font-medium text-soleur-accent-gold-fg">
+          <span>{`No ${filteredLabel} requests recorded in ${phrase}.`}</span>
+          <NavLink href={hrefFor("all", timeWindow)} className="font-medium text-soleur-accent-gold-fg">
             Show all
           </NavLink>
         </div>
@@ -445,10 +491,39 @@ function ReadyView({
     return shell(
       <>
         <Banner />
+        {windowChips}
         <StateCard
           icon={<Info className="h-6 w-6" />}
-          title="Nothing recorded in the last 30 days"
+          title={`Nothing recorded in ${phrase}`}
           body="Web access is off, so nothing new is recorded. Records are deleted about 30 days after they were recorded."
+        />
+      </>,
+      workspaceName,
+    );
+  }
+  if (timeWindow !== DEFAULT_TIME_WINDOW) {
+    // A shorter window with no rows is not a dead end: the 30-day list may have data (no second probe is made).
+    return shell(
+      <>
+        <Banner />
+        {windowChips}
+        {/* A filter reaches this state through the chips (24h/7d with a filter chosen, then no rows): without the
+            outcome chips here the only way back to "All" would be the browser's Back button. The other empty states
+            (web access off, recording off or unknown, the unfiltered 30-day empty) are not reachable through a chip
+            click, only by hand-editing ?decision=, and the window chips keep the filter, so they do not repeat this. */}
+        {filter !== "all" && <Chips filter={filter} timeWindow={timeWindow} />}
+        <StateCard
+          icon={<Info className="h-6 w-6" />}
+          title={`No requests recorded in ${phrase}`}
+          body="Nothing was recorded in this window. This list is best-effort, so this does not show that no requests were made. Requests can take some time to appear. A longer window may show more."
+          action={
+            <div className="flex items-center gap-4">
+              <EgressAuditRefreshButton label="Refresh" />
+              <NavLink href={hrefFor(filter, DEFAULT_TIME_WINDOW)} className="text-xs font-medium text-soleur-accent-gold-fg">
+                {`Show ${WINDOW_LABEL[DEFAULT_TIME_WINDOW]}`}
+              </NavLink>
+            </div>
+          }
         />
       </>,
       workspaceName,
@@ -457,6 +532,7 @@ function ReadyView({
   return shell(
     <>
       <Banner />
+      {windowChips}
       <StateCard
         icon={<Info className="h-6 w-6" />}
         title="No requests recorded yet"

@@ -69,7 +69,9 @@
 # comment that mentions change_protection.
 #
 # ANCHOR (stated, not hidden): these pins and this guard land in one diff, so one diff can weaken
-# both. THIS SUITE IS ADVISORY until it is promoted to a required check (#9927). The required-check anchor
+# both. THIS SUITE IS REQUIRED since #9927 item 10: it is registered in scripts/test-all.sh (want_scripts), so it runs in the required
+# `test` check through test-scripts, and the G2f pin in the parity test keeps that registration from being dropped (one diff can still
+# edit both: consistency, not integrity). The independent anchor for the attribute lines
 # is the G2e attribute pin in plugins/soleur/test/terraform-target-parity.test.ts (the parity test), an
 # independent re-implementation, in another language and with its own lexer, of what must not be weakenable
 # in one diff. The census (G4h / G4_PROTECTED in tests/scripts/test-infra-privileged-tier-census.sh) pins

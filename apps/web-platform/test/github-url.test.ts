@@ -1,5 +1,6 @@
 /**
- * GitHub API egress URL guard tests (CodeQL js/request-forgery, alert #234)
+ * GitHub API egress URL guard tests (CodeQL js/request-forgery, alert #234;
+ * suppression-adjacency sentinel for alert #268's codeql[...] annotation)
  *
  * Pins the contract of server/github-url.ts — every credential-bearing GitHub
  * API request must resolve to https://api.github.com and only there — plus the
@@ -338,5 +339,40 @@ describe("GitHub API egress census", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+// A standalone-line `// codeql[<query-id>]` is the only form CodeQL honors
+// (AlertSuppression.qll `covers`: commentEndLine + 1, and the comment must be
+// the first node on its line — a trailing comment on a code line or a string
+// literal carrying the token suppresses nothing).
+const CODEQL_RF_ANNOTATION = /^\s*\/\/\s*codeql\[js\/request-forgery\]\s*$/;
+
+describe("CodeQL in-source suppression sentinel", () => {
+  // A `// codeql[<query-id>]` annotation suppresses ONLY the alert on the
+  // immediately following line (AlertSuppression.qll `covers` semantics: the
+  // suppressed range is commentEndLine + 1). A formatter reflow or an
+  // interposed statement therefore silently un-suppresses the githubFetch
+  // `fetch(url,` sink and re-opens CodeQL alert #268 — pin the adjacency.
+  test("codeql[js/request-forgery] stays line-adjacent to the githubFetch sink", () => {
+    const rel = "server/github-app.ts";
+    const src = readFileSync(join(APP_ROOT, rel), "utf8");
+    const lines = src.split("\n");
+    const sinkIdxs = lines
+      .map((l, i) => (/\bawait fetch\(url\b/.test(l) ? i : -1))
+      .filter((i) => i >= 0);
+    expect(
+      sinkIdxs,
+      "exactly one `await fetch(url,` sink expected in github-app.ts",
+    ).toHaveLength(1);
+    const annotations = lines.filter((l) => CODEQL_RF_ANNOTATION.test(l));
+    expect(
+      annotations,
+      "exactly one standalone codeql[js/request-forgery] annotation line in github-app.ts",
+    ).toHaveLength(1);
+    expect(
+      lines[sinkIdxs[0] - 1],
+      "line above the githubFetch sink must be a standalone codeql[js/request-forgery] comment",
+    ).toMatch(CODEQL_RF_ANNOTATION);
   });
 });

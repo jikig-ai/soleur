@@ -24,6 +24,7 @@ vi.mock("@/server/github-api", () => ({
 import {
   stageCommittedC4Sources,
   __clearBlobCacheForTests,
+  __putBlobCacheForTests,
   gitBlobSha,
   FORBIDDEN_DETAIL,
   RATE_LIMITED_DETAIL,
@@ -404,6 +405,39 @@ describe("stageCommittedC4Sources — io failures", () => {
     rmSync(root, { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 20));
     expect(existsSync(dest)).toBe(false);
+  });
+
+  // CodeQL alert #230 (js/http-to-file-access): the fetch arm verifies sha and
+  // size before `cachePut`, but `cacheGet`/`known` hits reached `writeFile`
+  // with no verification. The sink-side assert makes the invariant
+  // arm-independent (Guard 1 in the plan).
+  it("a cache entry whose bytes do not equal the declared blob refuses BEFORE the write", async () => {
+    const gh = repo({
+      [`${D}/model.c4`]: { mode: "100644", content: SRC },
+    });
+    // Poison the blob cache under model.c4's declared sha. The cache arm skips
+    // the whole fetch path, so only the sink-side assert can catch this.
+    const sha = gitBlobSha(Buffer.from(SRC));
+    __putBlobCacheForTests(`1:o/r:${sha}`, Buffer.from("poisoned bytes\n"));
+    const res = await stage(gh);
+    expect(res).toEqual({ ok: false, reason: "io_error", detail: "stage: blob integrity mismatch" });
+    expect(stagedFiles()).not.toContain("model.c4");
+    expect(gh.blobCalls()).toBe(0);
+  });
+
+  it("the SECOND source mismatching refuses even when the first staged cleanly", async () => {
+    const gh = repo({
+      [`${D}/a.c4`]: { mode: "100644", content: SRC },
+      [`${D}/b.c4`]: { mode: "100644", content: "model { b = actor }\n" },
+    });
+    __putBlobCacheForTests(
+      `1:o/r:${gitBlobSha(Buffer.from("model { b = actor }\n"))}`,
+      Buffer.from("tampered\n"),
+    );
+    const res = await stage(gh);
+    expect(res.ok).toBe(false);
+    if (res.ok || res.reason !== "io_error") throw new Error("expected io_error refusal");
+    expect(res.detail).toBe("stage: blob integrity mismatch");
   });
 
   it("a blob response that lands AFTER the abort cannot recreate the removed stage dir (nested path)", async () => {
