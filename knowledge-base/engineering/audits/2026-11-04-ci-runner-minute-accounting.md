@@ -12,11 +12,9 @@ Source: <https://docs.github.com/en/actions/reference/limits>, fetched 2026-11-0
 gh api orgs/jikig-ai --jq '{plan: .plan.name, seats: .plan.seats}'
 ```
 
-ADR-276 Context already recorded the same Team = 60 figure on 2026-10-07; only the issue text and the ADR-270 addendum still said "not verified".
-
 ## 2. The cap was not the limiter; delivered concurrency was
 
-90 half-hourly `scheduled-actions-queue-health` samples (2026-11-02T23:30Z to 2026-11-04T17:30Z; `scripts/actions-queue-health.sh` output in the `[ci/actions-queue-health]` issue history): 88 HEALTHY, 1 SATURATED (2026-11-04T00:30Z, 38 queued, 31 in flight), 1 UNDER_ASSIGNED (2026-11-03T22:52Z, 100 queued, 26 in flight against a cap of 60, median live queued age 998 s). Only 5 of 90 samples had 55 or more jobs in flight and none reached 60; 20 of 90 had a median live queued age of 300 s or more. The issue's own snapshot (60 running, 222 queued at 2026-11-03T21:32Z) sat exactly at the cap, but the two deep-queue episodes show 26 and 31 jobs in flight, so the scheduler delivered well under the entitlement. That is a supply-side problem; demand trimming cannot fix it.
+90 `scheduled-actions-queue-health` samples (half-hourly runs plus off-slot runs such as 22:52Z, 2026-11-02T23:30Z to 2026-11-04T17:30Z; reproduce with `gh run list --workflow scheduled-actions-queue-health.yml --created '>=2026-11-02T23:00:00Z' --json databaseId,createdAt` and read each run's `SOLEUR_ACTIONS_QUEUE_HEALTH` log line, `scripts/actions-queue-health.sh`): 88 HEALTHY, 1 SATURATED (2026-11-04T00:30Z, 38 queued, 31 in flight), 1 UNDER_ASSIGNED (2026-11-03T22:52Z, 100 queued, 26 in flight against a cap of 60, median live queued age 998 s). Only 5 of 90 samples had 55 or more jobs in flight and none reached 60; 20 of 90 had a median live queued age of 300 s or more. The issue's own snapshot (60 running, 222 queued at 2026-11-03T21:32Z, outside the 90 samples) sat exactly at the cap, but the two deep-queue episodes show 26 and 31 jobs in flight, so the scheduler delivered well under the entitlement. That is a supply-side problem; demand trimming cannot fix it.
 
 ## 3. Runner-minutes per workflow
 
@@ -24,7 +22,7 @@ Reproduce any row with `scripts/ci-demand-census.sh --start <ISO> --end <ISO> --
 
 ### 3.1 Quiet-window census
 
-Window 2026-11-04T10:00Z to 16:00Z: 2,290.8 runner job-minutes, 344 runs. Note the window overlaps busy hours 10 to 15 UTC, so it is a Wednesday-midday sample, not an overnight trough.
+Window 2026-11-04T10:00Z to 16:00Z: 2,290.8 runner job-minutes, 344 runs (`bash scripts/ci-demand-census.sh --start 2026-11-04T10:00:00Z --end 2026-11-04T16:00:00Z --summary`, taken during the planning session; `BY_WORKFLOW` rows). The window overlaps busy hours 10 to 15 UTC, so it is a Wednesday-midday sample, not an overnight trough.
 
 | Workflow and event | Job-minutes | Runs |
 |---|---|---|
@@ -32,13 +30,13 @@ Window 2026-11-04T10:00Z to 16:00Z: 2,290.8 runner job-minutes, 344 runs. Note t
 | `main-health-monitor.yml` | 376.8 | 1 |
 | `ci.yml` pull_request | 283.0 | 1 |
 | `scheduled-supabase-watchdog.yml` | 169.8 | 71 |
-| `tenant-integration.yml` push | 48.5 | |
-| `ci.yml` push | 40.3 | |
-| CodeQL | 40.2 | |
+| `tenant-integration.yml` push | 48.5 | n/a (not recorded) |
+| `ci.yml` push | 40.3 | n/a (not recorded) |
+| CodeQL | 40.2 | n/a (not recorded) |
 
 ### 3.2 Peak window
 
-Window 2026-11-03T19:00Z to 22:00Z (the evening peak of the 2026-11-03 starvation episode), censused in two 90-minute halves because a single pull aborted earlier on a persistent HTTP 502; both halves completed (exit 0, 0 runs not completed), so these figures are census-grade, not sampled. Total 10,739.9 runner job-minutes (5,546.1 + 5,193.8) over 1,269 runs (506 + 763). Reproduce:
+Window 2026-11-03T19:00Z to 22:00Z (the evening peak of the 2026-11-03 starvation episode), censused in two 90-minute halves; both completed (exit 0, 0 runs not completed), so these figures are census-grade. Total 10,739.9 runner job-minutes (5,546.1 + 5,193.8) over 1,269 runs (506 + 763). Reproduce:
 
 ```bash
 bash scripts/ci-demand-census.sh --start 2026-11-03T19:00:00Z --end 2026-11-03T20:30:00Z --summary
@@ -58,14 +56,15 @@ bash scripts/ci-demand-census.sh --start 2026-11-03T20:30:00Z --end 2026-11-03T2
 | `vendor-pin-verify.yml` pull_request | 83 | 214.6 | 2.0% |
 | `apply-sentry-infra.yml` pull_request | 83 | 173.8 | 1.6% |
 | `cla-evidence.yml` pull_request_target | 85 | 150.7 | 1.4% |
+| All other workflows | 547 | 677.9 | 6.3% |
 
-`ci.yml` is 61.2% of the peak minutes and `infra-validation.yml` 4.7%; no workflow outside `ci.yml` and `infra-validation.yml` is above 15% (the next is `pr-quality-guards.yml` at 7.4%). `main-health-monitor.yml` does not fall in this window (its `0 */6 * * *` slots are 00, 06, 12 and 18 UTC). Cancelled share: from the raw job rows of the same census data, 45% of the `ci.yml` pull_request job-minutes belong to cancelled jobs (4,095 of 9,094 job-minutes by job conclusion). That ratio is not census-grade: the raw job rows sum to more minutes than the census (which excludes runnerless and skipped rows), so quote the ratio, not the absolute. It is well above the plan's 20% contradiction threshold, so the quiet-window shares hold at peak and nothing here reopens the lever rulings.
+`ci.yml` is 61.2% of the peak minutes and `infra-validation.yml` 4.7%; no workflow outside `ci.yml` and `infra-validation.yml` is above 15% (the next is `pr-quality-guards.yml` at 7.4%). `main-health-monitor.yml` does not fall in this window (its `0 */6 * * *` slots are 00, 06, 12 and 18 UTC). Cancelled share: 45% of the `ci.yml` pull_request job-minutes belong to cancelled jobs (4,095 of 9,094, by job conclusion over the raw job rows of the same census data; reproduce by summing `completed_at - started_at` for jobs whose `conclusion` is `cancelled` in `ci.yml` pull_request runs). Quote the ratio only: the raw rows over-count against the census (which excludes runnerless and skipped rows), and the 35% in 3.3 is a different, run-weighted basis; both are well above the 20% that would have contradicted the quiet-window shares. The quiet-window shares hold at peak and no lever ruling reopens.
 
 ### 3.3 Per-run cost (sampled; not census-grade)
 
 - `ci.yml` merge_group run: about 375 job-minutes; `test-scripts` (8 legs, about 34 min each) is 269 of it, `test-webplat` 37, `test-scripts-heavy` 29, `shard-totality-mutations` 13. With `max_entries_to_build = 2` two such candidates can build at once.
-- `ci.yml` pull_request run, 81 sampled runs: success 330.5 job-minutes (26 runs, median 344, about 40 jobs), failure 159.4 (20 runs), cancelled 105.1 mean and 6.2 median (35 runs). About 258 PR runs a day, 57% cancelled (396 of 698 PR runs, 2026-11-01 to 2026-11-04). Estimated CI PR demand about 43,000 job-minutes a day, of which cancelled runs about 15,000 (about 35%).
-- Number bases: the daily estimate re-weights the sample by the observed mix (258 x 0.57 x 105 = about 15,400 cancelled; the other 111 runs x about 255 = about 28,300; total about 43,700). The cancelled-run lifetime sample (60 runs, 4,884 job-minutes, mean 81) is a different draw from the 35-run cancelled mean of 105. A green sample is not the all-runs basis ADR-276 used on 2026-10-07 (about 100 job-minutes per PR run); the cause of the 330 versus 100 difference is **not measured** and is handed to epic #11556.
+- `ci.yml` pull_request run, 81 sampled runs: success 330.5 job-minutes (26 runs, median 344, about 40 jobs), failure 159.4 (20 runs), cancelled 105.1 mean and 6.2 median (35 runs). About 258 PR runs a day, 57% cancelled (396 of 698 PR runs, 2026-11-01 to 2026-11-04). Estimated CI PR demand about 43,700 job-minutes a day, of which cancelled runs about 15,400 (about 35%). Sample: the 81 most recent completed `ci.yml` pull_request runs of 2026-11-01 to 2026-11-04 (`gh run list --workflow ci.yml --event pull_request`, then each run's jobs, summing `completed_at - started_at`); sample-based, so a re-run gives nearby, not identical, figures.
+- Number bases: the daily estimate re-weights the sampled means by the observed run mix (258 runs a day, 57% cancelled at 105 job-minutes, the rest at about 255). A green sample is not the all-runs basis ADR-276 used on 2026-10-07 (about 100 job-minutes per PR run); the 330 versus 100 difference is **not measured** and is handed to epic #11556.
 - `main-health-monitor.yml`: 376.8 job-minutes per run, 16 jobs, 4 runs a day (`0 */6 * * *`), about 1,500 job-minutes a day (about 3%).
 - `infra-validation.yml` pull_request run: success 55.6 job-minutes (`deploy-script-tests` 4 legs 41.9, `deploy-script-tests-fixed` 9.2), failure 53.9, cancelled 17.4 mean; about 73 PR runs a day, 41% cancelled.
 - `tenant-integration.yml` pull_request run: success 2.2 job-minutes, cancelled 0.5 (a cheap `detect-changes` job gates the heavy suite).
@@ -73,11 +72,11 @@ bash scripts/ci-demand-census.sh --start 2026-11-03T20:30:00Z --end 2026-11-03T2
 
 ### 3.4 Cancelled pull_request run lifetime
 
-60 cancelled `ci.yml` PR runs, 4,884 job-minutes: runs ending within 5 minutes hold 2% of the cancelled minutes, within 20 minutes 6%, within 40 minutes 26%, so 74% of the cancelled waste sits in runs that lived longer than 40 minutes. A start-delay (settle or debounce) gate would therefore save almost nothing.
+60 cancelled `ci.yml` PR runs, 4,884 job-minutes (lifetime = last job `completed_at` minus run `created_at`, from `gh run list` plus the jobs API; sample-based): runs ending within 5 minutes hold 2% of the cancelled minutes, within 20 minutes 6%, within 40 minutes 26%, so 74% of the cancelled waste sits in runs that lived longer than 40 minutes. A start-delay (settle or debounce) gate would therefore save almost nothing.
 
 ### 3.5 Hour-of-day load
 
-`ci.yml` pull_request runs weighted 1 plus merge_group runs weighted 3 (a rough cost proxy: about 375 versus about 150 job-minutes), UTC hours, from the newest runs. Reproduce: `gh run list --workflow ci.yml -L <N> --json createdAt,event`, then sum the weights by `createdAt[11:13]`.
+`ci.yml` pull_request runs weighted 1 plus merge_group runs weighted 3 (a rough cost proxy; the measured per-run ratio is about 1.5, 375 versus 255 job-minutes, and the offset ranking is the same at weight 1.5: loads 1167, 1326, 1429, 1366, 1207, 1104, so offset 5 is lowest by 5.4%), UTC hours, from the newest runs. Reproduce: `gh run list --workflow ci.yml -L <N> --json createdAt,event`, then sum the weights by `createdAt[11:13]`.
 
 | Window | Hourly weighted load, h0 to h23 |
 |---|---|
@@ -105,6 +104,6 @@ Rulings by the CTO agent, 2026-11-04 (rows in `knowledge-base/project/specs/feat
 
 ## 5. Follow-ups
 
-- #12090 (`deferred-scope-out`): larger hosted runners for the `test` aggregator and tail gate jobs, and a GitHub support ticket about under-assignment. Re-evaluate when an UNDER_ASSIGNED verdict or a `checks_timed_out` removal recurs after the 2026-11-03 raise.
+- #12090 (`deferred-scope-out`): larger hosted runners for the `test` aggregator and tail gate jobs, and a GitHub support ticket about under-assignment. Re-evaluation triggers: ADR-276 amendment 2026-11-04. The support-portal attempt was blocked by a locked browser profile (tool failure, not a human gate).
 - #12091: raise `deploy-script-tests` `timeout-minutes` 15 to 20; its trigger (p95 over 12 minutes) is already met.
 - Epic #11556: PR-run-cost finding handed over (comment posted 2026-11-04).

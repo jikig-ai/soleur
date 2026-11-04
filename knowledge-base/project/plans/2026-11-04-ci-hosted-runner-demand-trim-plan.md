@@ -26,7 +26,7 @@ brand_survival_threshold: none
 
 ### New Considerations Discovered
 
-- The hour-of-day evidence flipped a CTO ruling: a 2.7-day histogram favoured the current `main-health-monitor` slots and a 9-day histogram favoured 05/11/17/23 by only about 6%, so no cron change ships.
+- The hour-of-day evidence flipped a CTO ruling: at work time both the 2.7-day and the 9-day histograms show offset 5 (05/11/17/23) lowest, by only 3.5% and 6.1%, so no cron change ships.
 - Delivered concurrency, not the 60-job cap, was the binding limit in the two deep-queue samples (26 and 31 jobs in flight), so the residual risk is supply-side.
 - A green PR run now reads about 330 job-min against ADR-276's about 100 (2026-10-07); the cause is unmeasured and is handed to epic #11556.
 
@@ -88,7 +88,7 @@ change ships the accounting, the decision record, the comment corrections, and t
 | Mechanism | Property it would buy | Disposition |
 |---|---|---|
 | Settle/debounce gate before heavy matrix | fewer wasted cancelled minutes | CUT: 74% of cancelled minutes sit in runs that lived > 40 min; runs dying within 5 min are 2% of the waste, so a start delay saves about nothing. |
-| Re-slot `main-health-monitor` cron (05/11/17/23) | avoid the evening peak | CUT: 9-day hour-of-day table shows the shift cuts exposure ~6% (1341 vs 1429); a 2.7-day table points the other way; costs a 6-file lockstep change plus a Sentry Terraform apply. |
+| Re-slot `main-health-monitor` cron (05/11/17/23) | avoid the evening peak | CUT: hour-of-day tables show the shift cuts exposure only 3.5% to 6.1% (re-derived in the audit); costs a 6-file lockstep change plus a Sentry Terraform apply. |
 | Tree-identity skip for `main-health-monitor` | fewer full runs | CUT: new proof logic on the Sentry check-in contract; the monitor is the un-gated backstop (ADR-181, ADR-262). |
 | infra-validation `paths:` tightening or draft skip | fewer infra PR runs | CUT: every `paths:` entry guards a named drift suite (#10032, #10065, #10138, #10445); no `ready_for_review` trigger exists, so a draft skip would leave no run at ready. |
 | ci.yml shard-count (K) changes | fewer job-minutes | CUT: K trades ~60 s per-leg overhead against wall clock; fewer legs lengthen the `merge_group` critical path toward the 120-minute timeout; manifest and shard-totality tests pin K. |

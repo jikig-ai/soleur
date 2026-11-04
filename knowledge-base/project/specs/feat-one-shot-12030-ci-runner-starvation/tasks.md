@@ -20,8 +20,8 @@ Plan: knowledge-base/project/plans/2026-11-04-ci-hosted-runner-demand-trim-plan.
 
 ## Phase 4: Tracking issues and hand-offs
 
-- [x] 4.1 File deferred-scope-out issue: larger runners for the test aggregator and tail gate jobs (spend; operator decision)
-- [x] 4.2 File deferred-scope-out issue: GitHub support ticket for runner under-assignment (attach 2026-11-03T22:52Z sample; include automation-status UNVERIFIED line)
+- [x] 4.1 File one bundled deferred-scope-out issue (#12090): larger runners for the test aggregator and tail gate jobs, and a GitHub support ticket for runner under-assignment (the two share one trigger; attach the 2026-11-03T22:52Z sample; include the attempted-blocked-on-tool automation line)
+- [x] 4.2 File #12091 (raise deploy-script-tests timeout-minutes 15 to 20; its trigger, p95 over 12 min, is already met); link from the audit and the ADR-276 amendment
 - [x] 4.3 Comment on epic #11556 with the PR-run-cost finding (330 vs about 100 job-min, suites over committed prices)
 - [x] 4.4 Link both issues from the audit and the ADR-276 amendment
 

@@ -16,13 +16,13 @@
  * kept byte-identical as the FALLBACK clock, but GitHub `schedule:` delivery is
  * measured degraded on this repository: the six runs between 2026-06-30 and
  * 2026-07-01 are spaced 71, 86, 100, 236 and 249 minutes apart (median about
- * 100 minutes), against a window between the 45-minute stall threshold and the
- * merge-queue check timeout. That window was 30 minutes when this was written
- * (June 2026, against the then 75-minute timeout); it has been 75 minutes
- * (45 to 120) since the 2026-11-03 raise of the ruleset timeout to 120
- * (ADR-270 addendum). A probe that can wait longer than that window for its next
- * run cannot report a stuck entry before the queue ejects it. An Inngest cron
- * fires on its own clock, so the probe
+ * 100 minutes). The window between the 45-minute stall threshold and the
+ * merge-queue check timeout (120 minutes) is 75 minutes. It was 15 minutes when
+ * this function was written (2026-10-05, timeout 60) and 30 minutes from the
+ * 2026-10-11 raise to 75, until the 2026-11-03 raise to 120 (ADR-270 addendum).
+ * A probe that can wait longer than that for its next run cannot report a stuck
+ * entry before the queue ejects it. An Inngest cron fires on its own clock, so
+ * the probe
  * should run at its requested cadence regardless of GitHub scheduling (the
  * post-merge measurement of dispatched-run spacing confirms or refutes this).
  *
@@ -31,8 +31,7 @@
  * correct. The anti-circularity corollary passes: the probe's subject is
  * GitHub's merge queue, not this host or Inngest, and the `schedule:` fallback
  * still fires through an Inngest-substrate outage, at its degraded delivery (so
- * it is a fallback, not a substitute for the stall-to-timeout window, 30 minutes
- * when written and 75 minutes since the 2026-11-03 raise). An Inngest
+ * it is a fallback, not a substitute for the stall-to-timeout window). An Inngest
  * outage is itself paged by `scheduled_inngest_health`.
  *
  * HARD NON-GOAL: this function does NOT read the queue or file issues. Those
@@ -41,21 +40,16 @@
  * for workflow_dispatch (actions:write, which also allows cancelling or
  * re-running runs; there is no dispatch-only scope).
  *
- * DETECTION LATENCY is now: stall threshold (45 minutes) + the wait for the next
+ * DETECTION LATENCY: stall threshold (45 minutes) + the wait for the next
  * 10-minute tick (0 to 10) + dispatch-to-runner-start + run time. Against the
- * 120-minute ruleset timeout (raised from 75 on 2026-11-03) the margin is 75
- * minutes minus the tick wait and the runner wait. All figures here are the
- * margin BEFORE the executor's own run time, which is capped at
- * `timeout-minutes: 10`: about 65 minutes at the worst tick phase with no runner
- * delay, about 70 minutes at the average tick phase and the measured median
- * runner wait (about 30 s), and about 45 minutes at the worst tick phase when
- * runner wait reaches the measured p90 of about 20 minutes on a congested pool
- * (ADR-248, 2026-09-24). The 2026-11-03T22:52Z under-assignment sample (median
- * live queued age 998 s, about 17 minutes) is consistent with that p90. At the
- * original 75-minute timeout the same worst-phase p90 case was about zero (that
- * is history: it was the margin until the raise). The timeout may count from the
- * `merge_group` build start rather than `enqueuedAt` (ADR-270), so these figures
- * are conservative. A dispatch that lands but whose
+ * 120-minute ruleset timeout the margin is 75 minutes minus the tick wait and
+ * the runner wait, before the executor's own run time (capped at
+ * `timeout-minutes: 10`): about 65 at the worst tick phase with no runner delay,
+ * about 70 at the average tick phase with the measured median runner wait
+ * (about 30 s), about 45 at the worst tick phase with the measured p90 runner
+ * wait of about 20 minutes on a congested pool (ADR-248, 2026-09-24). Against
+ * the 75-minute timeout in force until 2026-11-03 that last case was about zero.
+ * A dispatch that lands but whose
  * run is delayed on the runner pool IS detected by `check-previous-run`
  * (#9513): the next tick reads the previous run's status/conclusion through
  * the same `actions:write` token and posts an error check-in when the run
