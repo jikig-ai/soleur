@@ -316,7 +316,7 @@ residuals are unchanged.
   deployed configuration; and an operator-run agent holding database credentials. The compensating control for a new
   service-role importer is `apps/web-platform/scripts/service-role-allowlist-gate.sh` with the CODEOWNERS pin on
   `apps/web-platform/.service-role-allowlist`; it checks the identifiers `createServiceClient` and `getServiceClient` per file in
-  tracked `server/` and `lib/` TypeScript, so `app/` routes, hooks, scripts, clients built directly from a key, and a new table
+  tracked `server/` and `lib/` `.ts` files, so `app/` routes, hooks, scripts, clients built directly from a key, and a new table
   read in a file already on the allowlist are outside it. The pin is designed to fail first for the spellings it scans; it is not
   a proof that no surface exists.
 - **Threat model for a future surface.** An agent acting for a member would hold that member's authority, which both functions
@@ -337,7 +337,8 @@ residuals are unchanged.
   - Read-only and aggregate-only: no `source_host`, no per-request rows, only the windows the function already accepts, a small
     fixed row and byte cap. Hosts reach the model either not at all or as fenced, length-capped, grammar-checked data; the overflow
     signal is withheld from the agent or coarsened.
-  - Output carries no time finer than the date and no persisted relative age (DPIA addendum C7), or the surface returns counts only.
+  - Output carries no time finer than the date and no persisted relative age (extending DPIA addendum C7, which assumes a view that
+    persists nothing), or the surface returns counts only.
     Tool results enter the conversation transcript, which retention and erasure of the rollup do not reach, so persistence of any
     returned value beyond the 30-day horizon (C2, 12.6) is a question for the legal review, not a given.
   - Scope: the rollup has no session or member key, so per-session filtering is impossible. Cross-session visibility through an
@@ -351,7 +352,8 @@ residuals are unchanged.
     auto-approved read-only RPC tools because the record is something an injected agent could use for evasion; a review card does not
     address output-borne injection, so the output constraints above still apply.
   - Legal and security review before it merges, including the DPIA addendum 12.6 re-screen (t6, t7) with C1 to C7 re-confirmed; the
-    wording of any changed member disclosure (C6) is signed off by the operator at flag-on (DPIA addendum 13.4). The absence test,
+    wording of any changed member disclosure (C6) is prepared and reviewed by the CLO and signed off by the human operator at
+    flag-on, with the publication-order check in #11237 (DPIA addendum 13.4). The absence test,
     its expected sets and this amendment are updated in the same PR.
 - **Re-evaluation triggers (first to occur).** The CTO ruling holder re-evaluates, with the CLO for any DPIA re-screen point, and the
   human operator signs off any resulting amendment; the output is a dated amendment here or a closed #11258. No automated prompt
