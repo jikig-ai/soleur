@@ -396,16 +396,24 @@ none. That omission is deliberate, not an oversight.
 
 Cloudflare is a Class R vendor for four named reads (zone SSL mode, the config-settings ruleset entrypoint, legacy page
 rules limited to SSL actions, and a bounded change-history count), run only through the GET-only wrapper
-`plugins/soleur/scripts/cloudflare-readonly.sh` under a CTO ruling of 2026-11-04. The 2026-11-03 addendum named
-Cloudflare as a Class R account but no reader existed; this fills that stated gap. The wrapper prints a status, a count
-or a field subset, never a rule expression, description, actor or IP, and a 403 is recorded as `unverified` and never
-answered by widening a token. Placement, the root-anchored `scripts/**` clause of item 4 and the closed set of four
-subcommands live in `standing-delegation.md` section 9 and are pinned in `components.test.ts`; they are not restated.
+`plugins/soleur/scripts/cloudflare-readonly.sh` under a CTO-agent ruling of 2026-11-04 that the owner reviews on the
+draft pull request (it is not an independent gate). The 2026-11-03 addendum named Cloudflare as a Class R account but no
+reader existed; this fills that stated gap. The wrapper prints a status, a count or a field subset, never a rule
+expression, description, actor or IP, and a 403 is recorded as `unverified` and never answered by widening a token.
+Placement, the item 4 push-bar exemption and the closed set of four subcommands live in `standing-delegation.md`
+section 9 and are pinned in `components.test.ts`; they are not restated. The item 4 exemption is an owner-visible
+widening of the push bar by exactly two named files (the wrapper and its test), not a clarification of the glob.
 
 Credentials exception, stated plainly: the `ssl-mode`, `config-entrypoint` and `pagerules-ssl` subcommands read with
 `CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_RULESETS`, which are Terraform-scoped and write-capable because no
 read-only equivalent exists. That is the one exception to the read-only-token rule, accepted because the wrapper
-hardcodes GET, fixes the host and URL templates, and starts curl with an empty environment; the audit read uses a
-separate read-only `CF_API_TOKEN_AUDIT`, and `CF_API_TOKEN` is never used. The stricter alternative (refuse until a
-read-only token is minted) is recorded as dissent in the feature's decision challenges. `status: adopting` is unchanged,
-and there is no C4 change: the model still draws no agent-read edges to Cloudflare.
+hardcodes GET, fixes the host and URL templates, and starts curl, jq and date each with an empty environment. The
+exception is removable when read-only equivalents of those two tokens are minted; that is a credential change and the
+owner's. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
+where it should live is an open owner question, and until it moves `change-history` is expected to record
+`no-credential` or a refused source. `CF_API_TOKEN` is never used. Residual, not claimed fixed: BASH_ENV, exported
+BASH_FUNC_* functions, SHELLOPTS and PS4 are caller-environment channels that act in the wrapper's own bash; the caller is
+the operator's `doppler run`. The stricter alternative (refuse until a read-only token is minted) is recorded as dissent in
+the feature's decision challenges. The feature's brand-survival threshold is `single-user incident`; the CPO sign-off that
+threshold requires is an owner item and has not happened. `status: adopting` is unchanged, and there is no C4 change: the
+model still draws no agent-read edges to Cloudflare.
