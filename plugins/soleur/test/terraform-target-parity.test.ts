@@ -112,7 +112,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 349 -> 353 (#9927 item 10, +4): the G2f registration pin (live, mutation matrix, must-PASS rows) and its ci.yml wiring pin - Guard 1 stays registered in the required test-scripts leg.
 // Exact: grep -cE '^\s*test\(' = 353.
 // 353 -> 354 (#11857, +1): token_drift ordering and closure row (inventory-named doppler_config blocks vs depends_on, the per-merge -target list and the operator-applied exclusions; mutants and a must-pass fixture run through the same function). Exact: 354.
-const TEST_FLOOR = 354;
+// 354 -> 358 (#8780, +4): the publish-admission pins — the exactly-{main} membership pin for
+// inngest_config_signing + release_publish inside DP-11 F8, the two job<->environment bindings
+// (reusable-release.yml::release, build-inngest-bootstrap-image.yml::build), and the three
+// -target= presence pins for the new environment resources.
+const TEST_FLOOR = 358;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -4309,6 +4313,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
     // widened property below is vacuous for exactly the class it was widened for.
     expect(names).toContain("infra_privileged");
+    // (#8780) The reviewer-less publish-admission environment must be IN the
+    // population for the same reason: deleting release-publish-environment.tf would
+    // silently drop the reviewer-less limb's second member with the suite still green.
+    expect(names).toContain("release_publish");
     // And the policy extractor must have found something, or every environment would
     // trivially satisfy the branch-policy limb and the check would pass for the wrong
     // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
@@ -4368,6 +4376,29 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
           `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
       ).toBe(true);
     }
+  });
+
+  // (#8780) Asserted, not merely permitted: the DP-11 disjunction ALLOWS a ratchet
+  // environment to also carry a main-only policy ("a branch policy on top of them is
+  // additive"), but the loop `continue`s past every REVIEWERS_RATCHET member after
+  // checking reviewers, so nothing above ever reads `inngest_config_signing`'s policy.
+  // Its admission half is pinned here. `release_publish` is reviewer-less, so the
+  // exactly-{main} set IS its only gate — a missing env, a dropped `main` policy, or a
+  // second wider policy all take it out of the set.
+  test("inngest_config_signing and release_publish are each in the exactly-{main} policy set (#8780)", () => {
+    expect(
+      mainOnlyPolicyEnvs.has("inngest_config_signing"),
+      `inngest_config_signing is in REVIEWERS_RATCHET (reviewers stay) AND must carry an exactly-{main} ` +
+        `deployment-policy set — the additive shape #8780 added for publish admission ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("inngest_config_signing") ?? [])])}). ` +
+        `Without it a non-main dispatch of build-inngest-config-bundle.yml reaches the reviewer prompt.`,
+    ).toBe(true);
+    expect(
+      mainOnlyPolicyEnvs.has("release_publish"),
+      `release_publish is reviewer-less — its ONLY gate is an exactly-{main} deployment-policy set ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("release_publish") ?? [])])}). ` +
+        `Without it a workflow_dispatch of a publish workflow runs from any ref (#8780, ADR-241 D2).`,
+    ).toBe(true);
   });
 
   // The must-trip side of the branch-policy limb. Every deployment policy on the live
@@ -4446,6 +4477,75 @@ resource "github_repository_environment_deployment_policy" "synthetic_any" {
     // authorizing one thing and getting another.
     expect(wf).toMatch(/^permissions:\n\s{2}contents:\s*read\s*$/m);
     expect(wf).not.toMatch(/contents:\s*write/);
+  });
+});
+
+// ─── #8780: publish-admission pins. Every publish-path job in the three
+//     dispatchable workflows is bound to an environment whose deployment-policy
+//     set is exactly {main} (the DP-11 limb above asserts the policy half; these
+//     assert the job↔environment half and the apply wiring). A YAML-side
+//     dispatch-ref guard was deliberately NOT the mechanism — a dispatch runs
+//     the selected ref's bytes, so only the server-side environment policy is
+//     outside the blast radius (ADR-241 D2). ─────────────────────────────────
+describe("publish-path jobs declare a main-only admission environment (#8780)", () => {
+  test("reusable-release.yml's `release` job declares environment: release-publish", () => {
+    // The single publish chokepoint: both callers (web-platform-release.yml and
+    // version-bump-and-release.yml) reach it through `uses:`, and `environment:` is
+    // valid only HERE — a caller's `uses:` job cannot declare one, and the called
+    // job's environment is evaluated against the calling run's ref. `\s{4}` pins
+    // JOB-level indentation: a step-level `environment:` at six spaces is ignored
+    // by GitHub, so a looser anchor would certify nothing (same family as the
+    // web-platform-infra-apply pins above).
+    const wf = readFileSync(
+      resolve(REPO_ROOT, ".github/workflows/reusable-release.yml"),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "release");
+    expect(jobBlock, "release job not found in reusable-release.yml").not.toEqual(
+      "",
+    );
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("build-inngest-bootstrap-image.yml's `build` job declares environment: release-publish", () => {
+    // The bootstrap image's publish arm keeps `packages: write` + `id-token: write`
+    // — the admission gate is what keeps a non-main dispatch from exercising them.
+    // `bump-cloud-init-pin` keeps `infra-privileged` (it mints a Tier-B App token);
+    // this pin covers `build` only.
+    const wf = readFileSync(
+      resolve(
+        REPO_ROOT,
+        ".github/workflows/build-inngest-bootstrap-image.yml",
+      ),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "build");
+    expect(
+      jobBlock,
+      "build job not found in build-inngest-bootstrap-image.yml",
+    ).not.toEqual("");
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("the three new environment resources are in the -target= allow-list", () => {
+    // The targeted apply prunes any *.tf resource not in this list, so without
+    // these lines the environment and its policy are declared and never applied —
+    // and the FIRST job that references `release-publish` auto-creates it
+    // unprotected (the auto-create hazard ADR-241 D2 records). Presence, not
+    // position: extractAllTargets strips comments, so a commented-out line reds.
+    const targets = extractAllTargets(
+      readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
+    );
+    for (const addr of [
+      "github_repository_environment.release_publish",
+      "github_repository_environment_deployment_policy.release_publish_main",
+      "github_repository_environment_deployment_policy.inngest_config_signing_main",
+    ]) {
+      expect(
+        targets.has(addr),
+        `missing -target=${addr} in apply-web-platform-infra.yml's allow-list`,
+      ).toBe(true);
+    }
   });
 });
 

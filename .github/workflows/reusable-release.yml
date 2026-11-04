@@ -81,6 +81,18 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # #8780 / ADR-241 D2 — publish admission. `release-publish` is a reviewer-less,
+    # secrets-free, main-only environment (release-publish-environment.tf): GitHub
+    # evaluates its deployment-branch policy BEFORE this job starts, so a
+    # workflow_dispatch of a caller from a non-`main` ref is refused before any
+    # publish step runs — a check the dispatched ref's own YAML cannot weaken.
+    # Placed HERE, in the called workflow, not on the caller's `uses:` job (which
+    # cannot set `environment:`), so it covers BOTH callers —
+    # `web-platform-release.yml` and `version-bump-and-release.yml` — at one
+    # chokepoint. Reviewer-less by design: the publish jobs are unattended and a
+    # human gate would deadlock them; secrets-free by design so the declaration
+    # grants this job nothing it did not already hold.
+    environment: release-publish
     # Runtime ceiling (#7160). Without this the job inherits GitHub's 360-minute default.
     #
     # WHY 60. Measured over the last 60 completed `release / release` runs of

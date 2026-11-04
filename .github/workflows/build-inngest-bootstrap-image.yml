@@ -4,8 +4,10 @@ name: Build inngest-bootstrap OCI image
 run-name: Build inngest-bootstrap ${{ inputs.ref || github.ref_name }}
 
 # Triggered ONLY by workflow_dispatch (the auto-mint and the runbook dispatch from main;
-# a dispatch from another ref runs that ref's build job, but infra-privileged refuses
-# its bump job). Since #4326 (ADR-232 §8) the first
+# a dispatch from another ref runs that ref's build job, but since #8780 BOTH jobs are
+# refused at admission: `build` holds the main-only `release-publish` environment and
+# `bump-cloud-init-pin` holds `infra-privileged`, each evaluated before a step runs).
+# Since #4326 (ADR-232 §8) the first
 # publish of a tag is a DISPATCH from main: mint-inngest-bootstrap-tag.yml cuts the
 # tag and dispatches this workflow with inputs.ref=<tag>. Since #9262 there is no
 # `push: tags` trigger (ADR-232 alternative A5): the bump-cloud-init-pin job holds
@@ -67,6 +69,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # #8780 / ADR-241 D2 — publish admission. `release-publish` is a reviewer-less,
+    # secrets-free, main-only environment (release-publish-environment.tf): GitHub
+    # evaluates its deployment-branch policy BEFORE this job starts, so a dispatch
+    # from a non-`main` ref is refused before this job builds or pushes anything —
+    # the one control a dispatched ref's own bytes cannot weaken. Reviewer-less:
+    # the auto-mint dispatches are unattended; a human gate would deadlock them.
+    environment: release-publish
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       # The digest the sign step RESOLVED at GHCR — not a captured docker-push

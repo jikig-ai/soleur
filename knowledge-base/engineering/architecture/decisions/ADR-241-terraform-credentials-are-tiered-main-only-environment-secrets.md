@@ -122,7 +122,12 @@ through `.github/actions/mint-infra-app-token` and are unattended. The build's `
 was removed in the same change, because this environment's `main` policy refuses a tag-ref run.)* *(Note, 2026-10-04, #9377: it also serves one dispatched, read-only diagnostic, `web-host-escrow-diagnose.yml`, which lists Doppler secret names and changes nothing; the residual it shares with them is stated in full in the 2026-10-04 entry of the Amendment log.)* Jobs that already declare a reviewer-gated environment keep it; that
 environment then carries the same Tier-B secret and **must** have a `main` policy of its own. The
 four Tier-B environments are `infra-privileged`, `web-platform-infra-apply`, `inngest-cutover` and
-`workspaces-luks-cutover`. The last of these had **no** deployment-branch policy when measured, so a
+`workspaces-luks-cutover`. *(Note, 2026-11-04, #8780: a fifth `github_repository_environment`,
+`release-publish`, has since joined the web-platform root — an ADMISSION gate, not a Tier-B store.
+It carries no environment secret by construction, so "four Tier-B environments" stays the count of
+secret carriers; `inngest-config-signing` also gained a `main` policy in the same change, reviewers
+retained. See the 2026-11-04 Amendment log entry.)* The last of these had **no** deployment-branch
+policy when measured, so a
 branch run with reviewer approval passed; this ADR gives it one.
 
 Both halves of the policy are required and both are load-bearing: `deployment_branch_policy {
@@ -1151,6 +1156,45 @@ Appended; no status or earlier entry is edited.
 - **Rotations.** The Hetzner read/write token and `CF_API_TOKEN_R2` were rotated on 2026-11-04 (old values dead, probes and canaries in [the #8209 rotation record](https://github.com/jikig-ai/soleur/issues/8209#issuecomment-6638708947)). The read/write R2 state pair (`TF_STATE_AWS_*`) is the bucket-scoped token `r2-tf-state-rw-20261022`, minted 2026-10-22 and accepted by the owner as the rotation; it has no old value left to probe.
 - **The orphan repo secret is gone.** `CF_TUNNEL_TOKEN` (repo-level Actions secret, no consumer in `.github`, `scripts` or `apps`, no environment copy) was deleted on 2026-11-04, ahead of the "final G1 step" the 2026-10-15 entry named, because nothing consumes it. The Doppler `prd_terraform` copy of the same name was not touched.
 - **R2 as a rule.** Residual R2 above (web-platform state is Tier-A readable and holds other Terraform-minted secrets) is restated as a rule for new resources in ADR-320, so it stops growing. `tls_private_key.ci_ssh` (G1b, #10582) remains the known instance.
+
+### 2026-11-04 (#8780): the admission-gate environment class — `release-publish`, and `inngest-config-signing` gains the policy
+
+Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1 is unchanged — a `prd` repo-secret holder can still rewrite these very policies.
+
+- **What changed.** Three publish paths admitted a `workflow_dispatch` from any ref:
+  `build-inngest-config-bundle.yml` (reviewer-gated but branch-open), `reusable-release.yml`'s
+  `release` job (the publish chokepoint for both callers, `web-platform-release.yml` and
+  `version-bump-and-release.yml`), and `build-inngest-bootstrap-image.yml`'s `build` job. A
+  dispatch executes the *selected ref's* workflow bytes, so a YAML-side ref check is
+  self-disarming; D2's deployment-branch policy — evaluated by GitHub before the job starts,
+  against the run's ref — is the only control outside that blast radius, and it is now applied
+  to all three via `environment:` declarations.
+- **The admission-gate environment class.** `release-publish`
+  (`apps/web-platform/infra/release-publish-environment.tf`) is a fifth
+  `github_repository_environment` in the web-platform root — reviewer-less by design (the
+  publish jobs are unattended; a required reviewer would deadlock them, the same reasoning D2
+  records for `infra-privileged`) and carrying **no** Tier-B secret and no environment secret
+  at all. It is an admission gate, not a credential carrier: `infra-privileged` as its
+  environment was rejected, because declaring it would hand the publish jobs the broad
+  `DOPPLER_TOKEN_INFRA_PRIVILEGED` to buy an admission property a secrets-free environment buys
+  for free. The "four Tier-B environments" enumeration in D2 is annotated in place so this
+  fifth member is not misread as a fifth Tier-B store.
+- **`inngest-config-signing` gains the `main` policy, reviewers retained.** The reviewer gate
+  stays — the human ack is what that environment exists for (`REVIEWERS_RATCHET` requires it) —
+  and the branch policy is additive, the same reviewers-plus-policy shape
+  `web-platform-infra-apply` already carries.
+- **The mechanism.** `deployment_branch_policy { protected_branches = false;
+  custom_branch_policies = true }` plus a `github_repository_environment_deployment_policy`
+  with `branch_pattern = "main"` — D2's two-half construction verbatim. A non-`main` dispatch
+  of a gated workflow shows as a refused environment deployment before any step runs.
+- **Residuals, stated plainly.** (1) The auto-create window: a dispatch between merge and the
+  targeted apply could hit a not-yet-created `release-publish` and auto-create it unprotected —
+  bounded because the apply runs on merge and environments are create-or-update, so the
+  unprotected state self-heals at apply; the live read-back of both environments'
+  `deployment-branch-policies` is the post-merge verification. (2) R1 stands for the new
+  surface exactly as for the old: these policies are rewritable by the actor R1 names.
+- Plan: `knowledge-base/project/plans/2026-11-04-chore-ci-infra-hygiene-batch-plan.md`.
+  Ref #8780, epic #10390.
 
 ## References
 
