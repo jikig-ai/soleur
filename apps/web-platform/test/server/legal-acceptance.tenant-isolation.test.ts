@@ -308,11 +308,11 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
     });
   });
 
-  test("mark_verified needs a claimed attempt; issue refuses when a decision exists and caps challenges per hour", async () => {
+  test("mark_verified needs a claimed attempt; issue refuses when a decision exists and caps challenges at 3 per 15 minutes", async () => {
     await scenario(async (t, c) => {
       await issue(t, c.userA, c.sessionA);
       expect((await markVerified(t, c.userA, c.sessionA)).outcome).toBe("not_claimed");
-      for (let i = 0; i < 10; i++) await issue(t, c.userA, c.sessionA);
+      for (let i = 0; i < 2; i++) expect((await issue(t, c.userA, c.sessionA)).outcome).toBe("issued"); // 3 in total with the first
       expect((await issue(t, c.userA, c.sessionA)).outcome).toBe("rate_limited");
       await record(t, { sub: c.userB }, { choice: "decline" });
       expect((await issue(t, c.userB, randomUUID())).outcome).toBe("already_recorded");

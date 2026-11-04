@@ -199,8 +199,8 @@ CREATE TRIGGER legal_acceptance_no_truncate
 -- 6. issue_legal_reauth (service_role)
 -- =====================================================================
 -- Starts a challenge. Voids any earlier unconsumed challenge of the same user and key (a resend voids the old code).
--- Outcomes: issued | already_recorded (a decision for this text already exists) | rate_limited (more than 10
--- challenges for this user and key in the last hour).
+-- Outcomes: issued | already_recorded (a decision for this text already exists) | rate_limited (3 challenges for this
+-- user and key already in the last 15 minutes: the CTO ruling of 2026-11-03).
 
 CREATE OR REPLACE FUNCTION public.issue_legal_reauth(
   p_user_id    uuid,
@@ -233,7 +233,7 @@ BEGIN
   END IF;
 
   IF (SELECT count(*) FROM public.legal_reauth_event
-       WHERE user_id = p_user_id AND key = p_key AND created_at > now() - interval '1 hour') >= 10 THEN
+       WHERE user_id = p_user_id AND key = p_key AND created_at > now() - interval '15 minutes') >= 3 THEN
     RETURN jsonb_build_object('outcome', 'rate_limited');
   END IF;
 
