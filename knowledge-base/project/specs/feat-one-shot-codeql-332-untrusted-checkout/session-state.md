@@ -21,4 +21,9 @@ None. (The plan-commit was initially blocked by the precommit guard for bundling
 - Key facts: no `sec:` tracker exists for alert 332 (PR body cites "CodeQL alert #332"); issues 8707/8780 adjacent, out of scope; PR #12064 touches the same file at ~:1162 (non-conflicting); plan commits 421ed5faaf + 0fe060a5c3 pushed.
 
 ## Work Phase
-- Status: pending
+- Status: complete (e84e9e642c)
+- Rename applied: gate emits `deploy_target` x3, `ref:` reads `steps.gate.outputs.deploy_target`, comments updated (field-name heuristic + emit indirection load-bearing).
+- Pins: P4 amended (exact-string + negative-token clause), deploy-arm.test.sh `_ref` pin updated.
+- Learning correction appended (field-name arm addendum).
+- Suites: workflow-run-deploy-invariants 82/82 (mutation battery 5/5 killed), deploy-arm 79/79, resolve-target-decision 64/64; YAML parse OK; residual-zero sweep clean (remaining `deploy_sha` hits are prose rationale only).
+- RED->GREEN confirmed: amended P4 failed against the pre-rename workflow, passed after.

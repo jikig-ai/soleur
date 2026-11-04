@@ -293,9 +293,13 @@ jobs:
               && [[ "$WR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             emit deploy_target "$WR_HEAD_SHA"
             emit trusted "true"
-          elif [ "$GITHUB_EVENT_NAME" != "workflow_run" ]; then
-            # workflow_dispatch — deploys github.sha by design (the
-            # DISPATCH_SHA permit below); unreachable on the workflow_run arm.
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # workflow_dispatch (github.sha by design, the DISPATCH_SHA permit
+            # below) and direct push — the only trusted non-workflow_run arms.
+            # POSITIVELY keyed: a negatively-keyed `!= workflow_run` would
+            # silently trust any FUTURE trigger (schedule, merge_group,
+            # pull_request, repository_dispatch) with the same github.sha
+            # checkout. Unreachable on the workflow_run arm.
             emit deploy_target "$GITHUB_SHA"
             emit trusted "true"
           else
@@ -319,8 +323,8 @@ jobs:
       # commit (see above), and a `ref:` naming an event head-SHA field is
       # exactly the sink CodeQL alert #216 flags — a gate the scanner cannot
       # see is not a gate. THE OUTPUT NAME IS ALSO THE FIX: #216's fix named
-      # it `deploy_sha` and CodeQL reopened the alert 4 minutes post-merge as
-      # #332 — the medium query's ActionsSHACheckout/ActionsMutableRefCheckout
+      # it `deploy_sha` and CodeQL opened a NEW alert (#332) on the same site
+      # minutes post-merge — the medium query's ActionsSHACheckout/ActionsMutableRefCheckout
       # heuristic arms flag any `ref:` field/steps/needs identifier matching
       # .*(head|sha|commit).* / .*(head|branch|ref).*, so the name carries
       # none of head|sha|commit|branch|ref. Do not "fix" it back to a

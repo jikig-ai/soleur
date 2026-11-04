@@ -8,7 +8,7 @@ Branch: `feat-one-shot-codeql-332-untrusted-checkout`
 - [x] 1.1 In `jobs.resolve-target` `gate` step `run:` (lines ~294/:299/:302): change `emit deploy_sha ...` → `emit deploy_target ...` on all three emit lines (`emit trusted` lines untouched).
 - [x] 1.2 Checkout `with.ref` (line ~329): `ref: ${{ steps.gate.outputs.deploy_target }}`.
 - [x] 1.3 Update comment blocks at ~:275 and ~:311–318: replace `deploy_sha` references with `deploy_target`; state that the identifier deliberately avoids `head|sha|commit|branch|ref` (CodeQL `ActionsSHACheckout`/`ActionsMutableRefCheckout` field-name heuristics — the #332 mechanism); update the #216 comment to note #332 reopened on the field-name arm; warn that `emit` indirection must be kept (a literal `echo "x=$VAR" >> $GITHUB_OUTPUT` can become a modeled env→output flow).
-- [x] 1.4 Verify: `grep -n "deploy_sha" .github/workflows/web-platform-release.yml` returns nothing; `grep -n "deploy_target" .github/workflows/web-platform-release.yml` shows 3 emits + ref + comments.
+- [x] 1.4 Verify: `grep -n "deploy_sha" .github/workflows/web-platform-release.yml` returns only the intentional historical-rationale comment; `grep -n "deploy_target" .github/workflows/web-platform-release.yml` shows 3 emits + ref + comments.
 
 ## Phase 2 — Pin updates
 
@@ -19,7 +19,7 @@ Branch: `feat-one-shot-codeql-332-untrusted-checkout`
 ## Phase 3 — Learning correction + residual sweep
 
 - [x] 3.1 `knowledge-base/project/learnings/security-issues/2026-11-03-codeql-untrusted-checkout-medium-has-no-if-or-persist-credentials-sanitizer.md`: append a dated correction noting the heuristic tests field name / access path / inner expression too (not only the id) — `deploy_sha` re-alerted as #332 on that arm.
-- [x] 3.2 Residual-zero sweep: `grep -rn "deploy_sha" .github/ plugins/` returns nothing outside archive paths and the unrelated `ci_deploy_sha256` identifier.
+- [x] 3.2 Residual-zero sweep: `grep -rn "deploy_sha" .github/ plugins/` returns nothing outside archive paths, intentional prose references, and the unrelated `ci_deploy_sha256` identifier.
 - [x] 3.3 `python3 -c 'import yaml; yaml.safe_load(open(".github/workflows/web-platform-release.yml"))'` parses.
 
 ## Phase 4 — Verification + PR

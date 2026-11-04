@@ -328,7 +328,7 @@ fi
 # DEFAULT-BRANCH TIP. That line silently deploys a commit CI never verified,
 # while the definition count stays at 1 and the dispatch branch still mentions
 # the name, so both existing bounds hold.
-_disp_lo=$(grep -n 'EVENT_NAME" = "workflow_dispatch"' "$W/resolve.code" | head -1 | cut -d: -f1)
+_disp_lo=$(grep -n '\$EVENT_NAME" = "workflow_dispatch"' "$W/resolve.code" | head -1 | cut -d: -f1)
 _disp_hi=$(awk -v lo="${_disp_lo:-0}" 'NR>lo && /^          fi$/{print NR; exit}' "$W/resolve.code")
 if [ -n "$_disp_lo" ] && [ -n "$_disp_hi" ]; then pass; else
   fail "G3 could not locate the workflow_dispatch branch span (lo='${_disp_lo:-}' hi='${_disp_hi:-}') — the read-scope row below would be vacuous"
@@ -497,16 +497,26 @@ depth = "missing" if len(co) != 1 else str((co[0].get("with") or {}).get("fetch-
 # persist-credentials sanitizer, so the ONLY structural fix is a `ref:` that
 # reads the gate-validated value under an identifier matching none of
 # head|sha|commit|branch|ref. Asserted by exact string equality on the `if:`/
-# `ref:` so ANY event-field spelling returns RED, plus a negative-token clause
-# on the extracted steps.<id>.outputs.<name> identifier so a rename to ANY
-# future head-patterned name reds the row — the name `deploy_target` IS the fix.
+# `ref:` so ANY event-field spelling returns RED; the negative-token clause on
+# the extracted steps.<id>.outputs.<name> identifier (id AND name — the
+# heuristic tests both) is the latent guard that names the property itself —
+# if the equality is ever relaxed, only token-clean renames stay green. The
+# name `deploy_target` IS the fix.
+# `gate_ok` anchors on `^\s*emit deploy_target` — a bare substring would pass
+# a literal `echo "deploy_target=$WR_HEAD_SHA" >> $GITHUB_OUTPUT` refactor,
+# which FlowSteps.qll's envToOutputStoreStep DOES model (the `emit`
+# indirection is load-bearing, not style — #332's second precondition).
 gts = [s for s in rt if s.get("id") == "gate"]
 co_if = str(co[0].get("if", "")) if len(co) == 1 else ""
 co_ref = str((co[0].get("with") or {}).get("ref", "")) if len(co) == 1 else ""
 gts_run = str(gts[0].get("run", "")) if len(gts) == 1 else ""
-gate_ok = len(gts) == 1 and "deploy_target" in gts_run and "trusted" in gts_run
-_m = re.fullmatch(r"\$\{\{\s*steps\.[A-Za-z0-9_-]+\.outputs\.([A-Za-z0-9_-]+)\s*\}\}", co_ref)
-name_ok = _m is not None and not re.search(r"(head|sha|commit|branch|ref)", _m.group(1))
+gate_ok = (len(gts) == 1
+           and re.search(r"^\s*emit deploy_target\b", gts_run, re.M) is not None
+           and "trusted" in gts_run)
+_m = re.fullmatch(r"\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}", co_ref)
+name_ok = (_m is not None
+           and not re.search(r"(head|sha|commit|branch|ref)", _m.group(1), re.I)
+           and not re.search(r"(head|sha|commit|branch|ref)", _m.group(2), re.I))
 ref_ok = (co_if == "steps.gate.outputs.trusted == 'true'"
           and co_ref == "${{ steps.gate.outputs.deploy_target }}"
           and name_ok)
@@ -1249,7 +1259,7 @@ TOTAL=$((passes + fails))
 # + 5 resolve-step wiring (W1 outputs declared, W2 one no_release_run producer,
 #   W3 no continue-on-error/if, W4 CAUSE arms, W5 NEXT arms) = 80
 # + 2 checkout trust-gate pins (P4 resolve-target gate/if/ref shape, P5
-#   verify-doppler-secrets trusted-shape if: + persist-credentials; CodeQL #216)
+#   verify-doppler-secrets trusted-shape if: + persist-credentials; CodeQL #216+#332)
 #   = 82
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
