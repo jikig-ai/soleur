@@ -1035,6 +1035,27 @@ if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
 else
   no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
 fi
+# (4d) #10078 (CTO ruling) — vector.service stays DESIGNED-LOUD on /etc/default/webhook-deploy:
+#      the file is written unconditionally by cloud-init before first start, so absence is a
+#      real fault, and a skipped Type=simple shipper never re-evaluates the condition (no
+#      self-heal). The extraction reads the UNITEOF heredoc BODY — a grep against $BOOT alone
+#      would also see comments/tests, so the negative pin must scope to what ships in the unit.
+VEC_UNIT_BODY="$(awk '/cat > "\$UNIT" <<'"'"'UNITEOF'"'"'/,/^UNITEOF$/' "$BOOT")"
+if [ -n "$VEC_UNIT_BODY" ]; then
+  ok "AC22: the web vector.service UNITEOF heredoc body extracts"
+else
+  no "AC22: could not extract the vector.service heredoc — the (4d) arms are vacuous"
+fi
+if ! printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -E '^[[:space:]]*ConditionPathExists='; then
+  ok "AC22: web vector.service carries zero ConditionPathExists= directives (designed-loud)"
+else
+  no "AC22: web vector.service gained a ConditionPathExists= — conditioning the log shipper kills its self-heal (#10078 says keep the crash-loop signal)"
+fi
+if printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -F 'DELIBERATELY UNCONDITIONED'; then
+  ok "AC22: web vector.service carries the DELIBERATELY UNCONDITIONED comment"
+else
+  no "AC22: web vector.service lost the designed-loud comment (must name why no ConditionPathExists)"
+fi
 # (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
 if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then
   ok "AC22: bootstrap renders @@HOST_NAME@@ → \${SOLEUR_HOST_NAME:-\$(hostname)} at staging"

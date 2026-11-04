@@ -18,6 +18,16 @@ After=network.target
 # can strand it buys nothing: a genuinely crash-looping webhook is a louder, separate problem
 # than a webhook systemd refuses to start.
 StartLimitIntervalSec=0
+# DELIBERATELY UNCONDITIONED (#10078, CTO ruling): the five web probe units gained
+# ConditionPathExists= skip-vs-fail on their late-written env files; this unit stays loud.
+# /etc/default/webhook-deploy is written UNCONDITIONALLY by the same cloud-init runcmd
+# (the bare printf before `enable --now webhook`), earlier than this unit's first start —
+# an absent file is a real fault already covered by the on_err fatal trap, not benign
+# ordering. A skipped Type=simple service never re-evaluates the condition, so a transient
+# fault would become a permanently dead deploy channel with no self-heal — strictly worse
+# than the RestartSec=5 crash-loop, which IS the designed signal (and the reason
+# StartLimitIntervalSec=0 above must keep it firing). Do not add a condition here without
+# a written rationale.
 
 [Service]
 Type=simple

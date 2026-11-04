@@ -240,6 +240,10 @@ write_files:
       # #7220 AC-B2.3 — lockstep with webhook.service (parity §4b asserts the directives);
       # rationale single-sourced there.
       StartLimitIntervalSec=0
+      # DELIBERATELY UNCONDITIONED (#10078): no ConditionPathExists on
+      # /etc/default/webhook-deploy — written unconditionally before first start,
+      # so absence is a real fault and the crash-loop IS the signal.
+      # Lockstep with webhook.service (rationale single-sourced there).
 
       [Service]
       Type=simple
