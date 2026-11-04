@@ -373,33 +373,34 @@ constraints. Enforcement of CODEOWNERS review is a branch-protection setting hel
 
 ## Acceptance Criteria
 
-- [ ] AC1. ADR-288 contains exactly one `## Amendment 2026-11-04 (#11258)` heading, and under it the statements of Appendix A
+- [x] AC1. ADR-288 contains exactly one `## Amendment 2026-11-04 (#11258)` heading, and under it the statements of Appendix A
   (state, what the pin does not see, threat model, constraints, triggers, expected consumers, alternatives); status line still
   `adopting`.
-- [ ] AC2. Residual 5 carries a "Superseded in part by the 2026-11-04 amendment" marker; its original text is unchanged.
-- [ ] AC3. `apps/web-platform/test/egress-audit-agent-surface-absence.test.ts` exists, reads nothing outside `apps/web-platform`
+- [x] AC2. Residual 5 carries a "Superseded in part by the 2026-11-04 amendment" marker; its original text is unchanged.
+- [x] AC3. `apps/web-platform/test/egress-audit-agent-surface-absence.test.ts` exists, reads nothing outside `apps/web-platform`
   (so it stays in the `unit` project and `test/repo-wide-containment.test.ts` stays green without a `repo-wide-suites.ts` edit),
   and passes: `cd apps/web-platform && npx vitest run test/egress-audit-agent-surface-absence.test.ts test/repo-wide-containment.test.ts` exits 0.
-- [ ] AC4. The nine mutation rows and three harness rows of Guard 1 were each run against the committed tree and went RED/PASS as
+- [x] AC4. The nine mutation rows and three harness rows of Guard 1 were each run against the committed tree and went RED/PASS as
   stated; a summary is in the PR body. The unmutated run precedes the first mutant.
-- [ ] AC5. No added line carries the held enablement reference:
+- [x] AC5. No added line carries the held enablement reference:
   `git diff origin/main...HEAD | grep '^+' | grep -E '112[0-9]{2}' | grep -v '11258'` prints nothing (inspect any hit); the same
   holds for the plan, tasks.md, decision-challenges.md, the PR body and every commit message.
-- [ ] AC6. `git diff --name-only origin/main...HEAD` lists only the ADR, the new test, and files under
+- [x] AC6. `git diff --name-only origin/main...HEAD` lists only the ADR, the new test, and files under
   `knowledge-base/project/{plans,specs}/`; in particular not `apps/web-platform/server/dsar-export-allowlist.ts`, any migration,
   `docs/legal`, `plugins/soleur/docs`, `scripts`, `.github`. Files the pipeline itself writes (a regenerated
   `knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`, a committed run record) are expected and listed in the PR body.
-- [ ] AC7. `bash scripts/markdown-lint.sh --repo-sweep`, `python3 scripts/lint-guard-contract.py <this plan>` and
+- [x] AC7. `bash scripts/markdown-lint.sh --repo-sweep`, `python3 scripts/lint-guard-contract.py <this plan>` and
   `python3 scripts/lint-window-closure-assertion.py --allowlist scripts/lint-window-closure-assertion.allowlist.txt` exit 0.
 - [ ] AC8. PR text has `Ref #11258` and `Ref #9601` and no `Closes|Fixes|Resolves`; ends with the generation line; commit trailers as
   specified; no issue filed (net issue flow 0).
-- [ ] AC9. `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (no C4 file changed).
+- [x] AC9. `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (no C4 file changed).
 - [ ] AC10. #11258 is still open after merge, and a comment restating the three triggers was posted (no held reference).
-- [ ] AC11. Banned wording absent from added ADR lines:
+- [x] AC11. Banned wording absent from added ADR lines:
   `git diff origin/main...HEAD -- <ADR> | grep '^+' | grep -i -E 'tamper|cannot be evaded|agents cannot|no agent can|secure|guarantee|prevents'`
   prints nothing; the phrase "not a forensic or exfiltration-detection control" is present.
-- [ ] AC12. `decision-challenges.md` carries the three rows (CTO scope ruling, CTO test-design refinements, CLO wording review),
-  each in the exact `Ruled by CTO agent|CLO agent, 2026-11-04: <decision> - <rationale>` shape.
+- [x] AC12. `decision-challenges.md` carries the three rows (CTO scope ruling, CTO test-design refinements, CLO wording review),
+  each in the exact `Ruled by CTO agent|CLO agent, 2026-11-04: <decision> - <rationale>` shape. (Verified at work time: four rows, the fourth
+  being the CTO's later drop of the ADR-parity arm; all in the exact shape, and the technical-ruling gate passes.)
 
 ## Test Scenarios
 
