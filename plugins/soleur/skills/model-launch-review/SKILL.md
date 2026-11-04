@@ -216,10 +216,11 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   (`err = null`) for the no-text-block case so a silent fallback becomes visible.
 - **A carve-out for consumers that resolve models through a bundled CLI must name the pin whose
   bump retires it, and a test must expire it.** The Agent SDK scripts stayed on `claude-haiku-4-5`
-  because the pinned `claude-agent-sdk` bundle did not know the new id. The exemption in
-  `audit-models.sh` (`SDK_PATH_CARVEOUT`) lists EXACT paths (a directory would hide a genuinely
-  stale sibling) and `model-launch-review.test.ts` fails once the SDK pin reaches the first
-  release that knows the id, so the exemption cannot outlive its reason.
+  while the pinned `claude-agent-sdk` bundle did not know the new id; the exemption listed EXACT paths
+  (a directory would hide a genuinely stale sibling) and `model-launch-review.test.ts` failed once the
+  SDK pin reached the first release that knew the id. It was retired with the 0.3.311 bump (#12026): the
+  exemption, its tests and the two scripts' stale ids went in one change, so the exemption cannot outlive
+  its reason. Reintroduce the pattern the same way (exact paths, a named retiring pin, an expiring test).
 - **When the launch migration bumps the Anthropic SDK toolchain in
   `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
   `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate

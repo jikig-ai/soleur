@@ -832,7 +832,7 @@ describe("class-table drift", () => {
     if (state === ".claude/.last-cleanup") return "last_cleanup";
     const mm = /^\.claude\/([^/]+)/.exec(state);
     if (!mm) return null;
-    return { sessions: "sessions_json", "shell-snapshots": "shell_snapshots", backups: "backups" }[mm[1]] ?? null;
+    return { sessions: "sessions_json", "shell-snapshots": "shell_snapshots", backups: "backups", plugins: "other_under_claude" }[mm[1]] ?? null; // plugins/ is not in CLAUDE_KNOWN, so the production census counts it under other_under_claude (CLI 2.1.311 plugin store, #12026)
   };
 
   it("every HOME_SESSION_DIRS entry maps to a class in the table", () => {
