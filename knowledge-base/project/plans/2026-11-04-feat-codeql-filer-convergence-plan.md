@@ -329,3 +329,34 @@ The addendum ships in this PR (not deferred) — the decision is true on merge.
 - ADR-270 (file `ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md`), ADR-216, ADR-074
 - GitHub REST: code-scanning alert `state` enum `open|dismissed|fixed`; `GET /repos/{o}/{r}/commits/{ref}` branch-name resolution
 - Learnings: label-filter auto-labeler dedupe poison (2026-11-03); untrusted-checkout sanitizer (2026-11-03); orphan post-dismissal sweep (2026-04-19); anchor-read-from-object wiring guards (2026-09-15)
+
+## Enhancement Summary
+
+`soleur:deepen-plan` ran on this file 2026-11-04 (sequential-fallback: review/research fan-outs executed inline).
+
+### Gate Verdicts
+
+| Gate | Verdict |
+|---|---|
+| 4.4 Precedent-diff | PASS — checkout shape + parsed-YAML wiring suite both have sibling precedent (gate workflow, gate wiring suite) and mirror it |
+| 4.4 Scheduled-work check | N/A — no new scheduled job; an existing cron is rewired in place |
+| 4.45 Verify-the-negative + self-audit | PASS — negative claims (`zero coverage`, `no needs/workflow_run`, never touches `check-runs`/`analyses`) verified against sources; no dropped-symbol references |
+| 4.6 User-Brand Impact | PASS — section present, threshold `none`, scope-out bullet with non-empty reason |
+| 4.7 Observability | PASS — all 5 fields populated; probe verb `bash` allowlisted, no `ssh`, <15 s, `expected_output: converged` a literal |
+| 4.8 PAT-shaped variable | PASS — no PAT/TF_VAR token shapes |
+| 4.9 UI wireframe | SKIP — no UI-surface file |
+| 4.10 Encryption Posture | SKIP — no persistent store or new cross-component connection |
+| 4.11 Guard Contract | PASS — `lint-guard-contract.py` green (3 guard entries); assemblies name chokepoints, not member lists |
+| 4.12 Scope Check | PASS — exactly one unfenced section; all asks mapped; every `inferred` row justified; `Recommendation: single PR` |
+| 4.13 Task-Design | SKIP — no new autonomous-task surface (existing workflow edited) |
+
+### Key Improvements Applied at Plan-Review (pre-deepen)
+
+- Corrected the `s1` analysis: the non-paginate assertion counts call SITES, so a `fetch_page`-routed resolution read needs no count bump — the plan now pins the sanctioned `fetch_page` label set instead.
+- AC4/AC11 rewritten to match what the greps actually observe (`uses:` vs `run:` steps; `gh issue comment`/`close` do not match the pattern).
+- Kill-before-degrade sizing (`DEADLINE_SECONDS '240'` + `timeout-minutes 10`) promoted to a first-class FR + Guard 2 mutation row — a silent kill is the failure class the ruling exists to kill.
+
+### New Considerations Discovered
+
+- Gate-filed trackers become reapable by `close-orphans` under the `fixed` predicate (their bodies cite `CodeQL alert #N`) — recorded as intended synergy in Technical Considerations.
+- `close-orphans` skips degraded issues correctly by construction: `codeql-sweep-degraded`/`codeql-gate-degraded` bodies contain no `alert #N` tokens, so they fall into the SKIPPED branch and stay open until resolved.
