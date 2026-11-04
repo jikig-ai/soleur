@@ -412,7 +412,7 @@ exception is removable when read-only equivalents of those two tokens are minted
 owner's. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
 where it should live is an open owner question, and until it moves `change-history` is expected to record
 `no-credential` or a refused source. `CF_API_TOKEN` is never used. Residual, not claimed fixed: BASH_ENV, exported
-BASH_FUNC_* functions, SHELLOPTS and PS4 are caller-environment channels that act in the wrapper's own bash; the caller is
+BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup are caller-environment channels that act in the wrapper's own bash; the caller is
 the operator's `doppler run`. The stricter alternative (refuse until a read-only token is minted) is recorded as dissent in
 the feature's decision challenges. The feature's brand-survival threshold is `single-user incident`; the CPO sign-off that
 threshold requires is an owner item and has not happened. `status: adopting` is unchanged, and there is no C4 change: the

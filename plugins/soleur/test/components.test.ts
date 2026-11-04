@@ -791,7 +791,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [SD, "sd9", "The Cloudflare MCP server and the `cf-token-scope` skill are not Class R"],
     [SD, "sd9", "`unverified - no-credential` when `CF_API_TOKEN_AUDIT` is absent"],
     [SD, "sd9", "`CF_API_TOKEN` is never used"],
-    [SD, "sd9", "Here `scripts/**` means the repository-root `scripts/` directory"],
+    [SD, "sd9", "this bar does not cover exactly two paths"],
     [CTO, "ctoOwn", "Class R first"],
     [CTO, "ctoOwn", 'Never hand a Class R act back with the phrase "run by the owner or a follow-up agent"'],
     [CTO, "ctoOwn", "a failed or unrun read means the act does not run"],
@@ -897,9 +897,8 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
         "is never pushed under Class R",
         "Never push main.",
         "again before opening the pull request",
-        "Here `scripts/**` means the repository-root `scripts/` directory",
-        "are not covered by this bar and are governed by the trigger-block read above",
-        "every other `plugins/**/scripts/**` file keeps the plain reading of the bar",
+        "where `scripts/**` means any directory named `scripts` at any depth",
+        "this bar does not cover exactly two paths",
       ],
       5: ["never the CLA signing sentence", "never closing or editing an issue or its body", "`priority/*`, `domain/*` and `type/*`"],
       6: ["no `prd` configuration", "one suite at a time"],
@@ -966,35 +965,65 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     expect(bound.includes("CF_API_TOKEN"), "the wrapper binds the bare CF_API_TOKEN").toBe(false);
   });
 
-  test("Class R names exactly three vendors in the Boundary sentence: Sentry, Better Stack, Cloudflare", () => {
+  const VENDOR_SENTENCE =
+    "Class R is read-only on the operator's own vendor accounts (Sentry, Better Stack and Cloudflare, the last added by a CTO-agent ruling of 2026-11-04 that the owner reviews on the draft pull request; " +
+    "any further vendor still needs a CTO ruling and a test row)";
+
+  test("the Boundary sentence pins the vendor list whole: exactly Sentry, Better Stack, Cloudflare, a CTO-agent ruling the owner reviews, and the further-vendor gate", () => {
     const b = paragraph(sectionRaw(readRel(SD), "## 9."), "Boundary.");
     expect(b, "section 9 lost its Boundary paragraph").not.toBe("");
+    expect(slice(b, "Class R is read-only", ", and on this repository's GitHub").trim(), "the Boundary vendor sentence").toBe(VENDOR_SENTENCE);
     const head = "vendor accounts (";
     const list = slice(b, head, ", the last added");
     expect(list, "the Boundary sentence lost `vendor accounts (...)` or `, the last added`").not.toBe("");
     const vendors = list.slice(head.length).split(/,\s*|\s+and\s+/).map((v) => v.trim()).filter(Boolean).sort();
     expect(vendors, "vendors named by the Boundary sentence").toEqual(["Better Stack", "Cloudflare", "Sentry"]);
-    expect(b.includes("any further vendor still needs a CTO ruling and a test row"), "the Boundary sentence lost the further-vendor gate").toBe(true);
-    // The ruling is a CTO-agent ruling the owner reviews, never worded as an independent gate.
-    expect(b.includes("CTO-agent ruling"), "the Boundary sentence lost the CTO-agent wording").toBe(true);
   });
 
-  test("item 4: the push-bar exemption names exactly the wrapper and its test, and never widens the .github bar", () => {
+  test("item 2 introduces no read vendor beyond Sentry, Better Stack and Cloudflare (`<Vendor> through <wrapper>` phrases and wrapper paths)", () => {
+    const i2 = sdItem(2);
+    const through = [...i2.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].map((m) => `${m[1]}=${m[2]}`).sort();
+    expect(through, "`<Vendor> through <wrapper>` phrases in item 2").toEqual([
+      "Better Stack=scripts/betterstack-query.sh",
+      "Cloudflare=plugins/soleur/scripts/cloudflare-readonly.sh",
+      "Sentry=scripts/sentry-issue.sh",
+    ]);
+    const wrappers = backticked(i2).filter((t) => /^[\w./-]+\.sh$/.test(t)).sort();
+    expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+    // The vendor-through extractor is live: a fourth vendor changes the set.
+    const probe = `${i2} Datadog through \`scripts/datadog-query.sh\` only.`;
+    expect([...probe.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].length, "an added vendor must be visible").toBe(4);
+  });
+
+  // The whole push-bar sentence of item 4, by equality: ONE reading (scripts/** is any directory named scripts at any depth) with
+  // exactly two paths outside it. A backticked or unbackticked third path, or a new sentence between the bar and "Never push main.",
+  // changes the slice and goes red.
+  const ITEM4_BAR =
+    "A branch whose diff touches `.github/**` or `scripts/**` is never pushed under Class R, where `scripts/**` means any directory named `scripts` at any depth; " +
+    "this bar does not cover exactly two paths, `plugins/soleur/scripts/cloudflare-readonly.sh` and `plugins/soleur/test/cloudflare-readonly.test.sh`, which the trigger-block read above governs.";
+  const item4Bar = (i4: string) => slice(i4, "A branch whose diff touches", "Never push main.").trim();
+
+  test("item 4: the push-bar sentence is pinned whole (one reading, exactly two exempt paths), and never widens the .github bar", () => {
     const i4 = sdItem(4);
-    const clause = slice(i4, "Here `scripts/**` means", "keeps the plain reading of the bar.");
-    expect(clause, "item 4 lost the root-anchored clause (or its closing words)").not.toBe("");
-    const paths = backticked(clause).filter((t) => t.includes("/")).sort();
-    expect(paths, "paths named by the item 4 clause (exactly the wrapper and its test are exempt)").toEqual(
-      ["plugins/**/scripts/**", "plugins/soleur/scripts/cloudflare-readonly.sh", "plugins/soleur/test/cloudflare-readonly.test.sh", "scripts/", "scripts/**"].sort(),
-    );
-    expect(i4.includes("and every other `plugins/**/scripts/**` file keeps the plain reading of the bar."), "the clause no longer keeps the bar for every other plugins scripts file").toBe(true);
-    expect(clause.includes(".github"), "the clause mentions .github").toBe(false);
+    expect(item4Bar(i4), "the item 4 push-bar sentence (from `A branch whose diff touches` up to `Never push main.`)").toBe(ITEM4_BAR);
+    expect(i4.includes("Here `scripts/**` means the repository-root"), "the root-anchored phrase must be gone: item 4 has ONE reading").toBe(false);
+    expect(i4.includes("plain reading"), "the second reading (`plain reading of the bar`) must be gone").toBe(false);
     // The exempt files exist, so the clause cannot drift onto a path nothing occupies.
     expect(existsSync(WRAPPER), "the exempted wrapper is missing").toBe(true);
     expect(existsSync(resolve(PLUGIN_ROOT, "test/cloudflare-readonly.test.sh")), "the exempted wrapper test is missing").toBe(true);
-    // The pre-existing bar stays, whole, and `.github` appears in item 4 exactly as before: the trigger-block read and the bar.
-    expect(i4.includes("A branch whose diff touches `.github/**` or `scripts/**` is never pushed under Class R."), "item 4 lost the .github/scripts push bar").toBe(true);
-    expect((i4.match(/\.github/g) ?? []).length, "item 4 `.github` mentions changed (pre-existing: workflows path and the push bar)").toBe(2);
+    // `.github` appears in item 4 exactly twice: the trigger-block read and the bar.
+    expect((i4.match(/\.github/g) ?? []).length, "item 4 `.github` mentions changed (workflows path and the push bar)").toBe(2);
+  });
+
+  test("the item 4 pin is live: a third path, an unbackticked path, an extra sentence or a restored root-anchored phrase all change the slice", () => {
+    const base = `x. ${ITEM4_BAR} Never push main. y.`;
+    expect(item4Bar(base)).toBe(ITEM4_BAR);
+    for (const v of [
+      base.replace("and `plugins/soleur/test", "`plugins/soleur/scripts/other.sh`, and `plugins/soleur/test"),
+      base.replace("which the trigger-block", "and plugins/other/scripts/x.sh, which the trigger-block"),
+      base.replace(" Never push main.", " A branch touching `docs/**` is also pushed. Never push main."),
+      base.replace("is never pushed under Class R, where", "is never pushed under Class R. Here `scripts/**` means the repository-root `scripts/` directory, where"),
+    ]) expect(item4Bar(v), "a variant of the bar sentence must not equal the pinned sentence").not.toBe(ITEM4_BAR);
   });
 
   test("the Cloudflare clause of item 2 carries no negating word (polarity)", () => {
