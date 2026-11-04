@@ -408,12 +408,11 @@ Credentials exception, stated plainly: the `ssl-mode`, `config-entrypoint` and `
 `CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_RULESETS`, which are Terraform-scoped and write-capable because no
 read-only equivalent exists. That is the one exception to the read-only-token rule, accepted because the wrapper
 hardcodes GET, fixes the host and URL templates, and starts curl, jq and date each with an empty environment. The
-exception is removable when read-only equivalents of those two tokens are minted; that is a credential change and the
-owner's. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
-where it should live is an open owner question, and until it moves `change-history` is expected to record
+exception is a bridge, not a standing rule: it expires when read-only equivalents of those two tokens are minted (the credential mint tracked in #11857, which is the owner's act), and the wrapper's Cloudflare subcommands are then rebound to them. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
+moving it into the provisioned config is part of the same owner credential act, and until it moves `change-history` is expected to record
 `no-credential` or a refused source. `CF_API_TOKEN` is never used. Residual, not claimed fixed: BASH_ENV, exported
 BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup are caller-environment channels that act in the wrapper's own bash; the caller is
 the operator's `doppler run`. The stricter alternative (refuse until a read-only token is minted) is recorded as dissent in
-the feature's decision challenges. The feature's brand-survival threshold is `single-user incident`; the CPO sign-off that
-threshold requires is an owner item and has not happened. `status: adopting` is unchanged, and there is no C4 change: the
+the feature's decision challenges. The feature's brand-survival threshold is `single-user incident`; the CPO-agent sign-off that
+threshold requires was given with conditions on 2026-11-04 (recorded in the plan), and the CLO checked read E and ruled it legal-ok. `status: adopting` is unchanged, and there is no C4 change: the
 model still draws no agent-read edges to Cloudflare.
