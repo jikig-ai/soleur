@@ -1,0 +1,52 @@
+# Tasks: LUKS epic #9927 - Guard 1 red-proof, flip-token record reconciliation, Guard 1 CI wall time
+
+Plan: `knowledge-base/project/plans/2026-11-04-docs-luks-guard1-redproof-and-flip-token-record-plan.md`
+Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9927` (never `Closes`).
+
+## Phase 0 - Preflight (re-derive, never copy)
+
+- [ ] 0.1 `git fetch origin main`; record the base SHA; `gh issue view 9927 --json state` is OPEN
+- [ ] 0.2 Count recent `ci.yml` runs on main (`gh run list --workflow ci.yml --branch main -L 30`); record the real count
+- [ ] 0.3 `grep -n 'inngest-luks-sole-copy' scripts/test-all.sh scripts/suite-shard-legs.tsv`
+- [ ] 0.4 `gh variable list`: record `CI_DRAFT_LIGHT`
+- [ ] 0.5 Read every workflow `on:` block (push triggers, pull_request path filters); keep the output
+
+## Phase 1 - AC1 red-proof (separate worktree and branches; nothing committed on this branch)
+
+- [ ] 1.1 Push disposable base `redproof-luks-guard1-base-20261104` from the recorded `origin/main` SHA
+- [ ] 1.2 `git worktree add -b redproof-luks-guard1-head-20261104 .worktrees/redproof-luks-guard1-head-20261104 <SHA>`
+- [ ] 1.3 In it, delete the single `delete_protection = true` line in `apps/web-platform/infra/inngest-redis-luks.tf`; diff is 1 file, 1 deletion, no `.github/` or `scripts/` path
+- [ ] 1.4 Commit (plain `git commit` first; if the pre-commit gate refuses, record that as the local leg and use git plumbing, not `--no-verify`)
+- [ ] 1.5 Push head; `gh pr create --draft --base redproof-luks-guard1-base-20261104`, title "DO NOT MERGE: ...", body `Ref #9927`, no `Closes`
+- [ ] 1.6 `gh workflow run ci.yml --ref redproof-luks-guard1-head-20261104`; arm a Monitor watch on the run
+- [ ] 1.7 Read evidence: `test-scripts (3/8)` job URL and conclusion, failing Guard 1 case text, `test` conclusion, other shards, green 3/8 baseline on the base SHA, Guard 1 per-suite elapsed if printed
+- [ ] 1.8 If dispatch is blocked or unattributable: fallback A (ready path, then `gh pr ready --undo`); if both fail: fallback D (local mutation run, labelled "not the CI leg"; AC1 undischarged)
+- [ ] 1.9 Check `gh pr view <n> --json isDraft,baseRefName,autoMergeRequest` shows `true`, the base name, `null`
+
+## Phase 2 - INNGEST_CUTOVER_FLIP ledger (grep-derived)
+
+- [ ] 2.1 Run the four `git grep` commands from the plan; keep raw output
+- [ ] 2.2 Classify each hit: reader or writer, host or CI, token; flag arm-write consumers as "move first at item 8"
+- [ ] 2.3 Add any consumer the greps find that the brief omitted
+
+## Phase 3 - ADR-282 addendum (committed)
+
+- [ ] 3.1 Time the local Guard 1 run (`bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh`); quote command and printed summary (89 of 89 expected); note contention from sibling `test-all.sh` processes if present
+- [ ] 3.2 Append `## Addendum - 2026-11-04 (#9927 item 4 reconciliation, Guard 1 CI wall time)`: pointer to 2026-10-30/11-01/11-02 (no design copy), Hold discharged, CTO ruling F2 cited, ledger table, ordering constraint, wall-time paragraph with both sources and scopes, red-proof result paragraph
+- [ ] 3.3 Add the dated `Superseded` marker under the 2026-11-03 "recorded in a follow-up append" sentence
+- [ ] 3.4 File one tracking issue for the 1,251 ms `floor` weight of Guard 1 in `scripts/suite-durations.tsv`; link it from the addendum
+- [ ] 3.5 Run `python3 scripts/lint-infra-no-human-steps.py`, `bash plugins/soleur/test/c4-count-parity.test.sh`; confirm the diff is additions only plus the one marker
+
+## Phase 4 - Comments on #9927
+
+- [ ] 4.1 Comment A: red-proof record (PR number, base branch and SHA, head SHA, run URL, job URL, failing case, `test` conclusion, other shards, baseline, close-by statement)
+- [ ] 4.2 Comment B: the three "I checked" lines, each with its command or run id (ci.yml on main N of N, test-all.sh registration, item 8 finding)
+
+## Phase 5 - Close handoff
+
+- [ ] 5.1 Name the throwaway PR number and both branches in this branch's PR body as plain text
+- [ ] 5.2 Ship's cleanup closes the throwaway PR and deletes both branches (the owner may close earlier); re-check `isDraft` true and `autoMergeRequest` null at close
+
+## Not in this run
+
+Revoking or scoping `doppler_service_token.inngest_arm_write`; removing the G2e pin; `apply_target=inngest-host-replace`; closing #9927; the A6 owner sentence; the off-project ciphertext copy; any `.github/**` or `scripts/**` edit.
