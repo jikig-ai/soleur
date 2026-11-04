@@ -41,14 +41,20 @@
 # a leading pipe, inside a blockquote or inside a list item are not recognised (residual: the stray-row
 # check above catches a `technical` row there).
 #
-# Owner lists (--pr-body and --report only): a section whose heading asks something of the owner ("Needs you",
-# "Owner review items", "Decisions for you", a bold-only line of the same words; OWNER_HEAD_RE) lasts until the next
-# heading of the same or a higher level (sub-headings stay inside). Every list item in it must carry
-# `(operator: <category>)` on its first line (`owner-list-untagged`), must not hand the owner an agent's step such as
-# a CPO/CTO/CLO sign-off (`agent-owned-step`, AGENT_STEP_RE) and must not carry a `Ruled by CTO|CLO agent` cell
-# (`owner-list-ruled`: a ruling is the agent's, not an item left to the owner). Fenced lines and inline `code spans`
-# are ignored; an unclosed fence is exit 2. Residual: a list inside a table or a blockquote, and a setext heading,
-# are not recognised. The check is of FORM, as everything here is.
+# Owner lists (--pr-body and --report only): a section whose heading is on the CLOSED list OWNER_HEAD_RE ("Needs you",
+# "Owner review items", "Owner actions", "Action required", "For you", "Manual steps", "Blocked", "Waiting on ...", a
+# bold-only line of the same words, `-`/`_` variants, `##Needs you` without a space; a heading NOT on the list is not
+# examined) lasts until the next heading of the same or a higher level (deeper headings stay inside), a thematic break
+# (`---`), or any bold-only line (`**Test plan**`). Every list item in it (`-`, `*`, `+`, `1.`, `1)`, at any indent) must
+# carry `(operator: <category>)` on its first line, EVERY tag valid (`owner-list-untagged`; an item that starts with
+# nothing or none is a statement of no item and is skipped), must not hand the owner an agent's step: a CPO/CTO/CLO/CMO/COO/CFO
+# sign-off, approval or review within about 40 characters of the role, in either order (`agent-owned-step`,
+# AGENT_STEP_RE), and must not carry a `Ruled by CTO|CLO agent` cell (`owner-list-ruled`: a ruling is the agent's).
+# Fenced lines (fence indented at most 3 spaces, as in CommonMark; a deeper one is plain text and fails closed) and
+# inline `code spans` are ignored; an unclosed fence is exit 2, and so is an awk that fails or is missing (a lint that
+# could not run is never a pass). Residual: a list inside a table or a blockquote, and a setext heading, are not
+# recognised; a bold-only line, a `---` or a heading off the list ends a section, which is the author's to use honestly.
+# The check is of FORM, as everything here is.
 #
 # Reasons (the suite asserts each): bad-class, bad-category, unruled-technical, bad-ruling-shape,
 # owner-label-unscoped, owner-list-untagged, agent-owned-step, owner-list-ruled, delegation-invalid,
@@ -96,8 +102,12 @@ shopt -s nocasematch
 
 CATEGORIES="money scope priority schedule irreversible production-mutating legal-risk brand"
 CATS_RE="${CATEGORIES// /|}"
-OWNER_HEAD_RE='^(needs[ ]+(you|your)|owner[ -]+(review|decision|item|side|question)s?|(open|pending)[ ]+owner|decisions?[ ]+for[ ]+you|your[ ]+calls?|questions?[ ]+for[ ]+you|waiting[ ]+(on|for)[ ]+you|for[ ]+the[ ]+owner|what[ ]+i[ ]+need[ ]+from[ ]+you)'
-AGENT_STEP_RE='(cpo|cto|clo|cmo|coo|cfo)[ -]+(sign-?off|review|approval)|sign-?off (by|from) (the )?(cpo|cto|clo)'
+# OWNER_HEAD_RE is matched against the NORMALISED heading text (lowercased; markdown, colons, `-` and `_` turned into
+# single spaces; a leading number or symbol dropped). It is a CLOSED list: a heading outside it is not examined.
+OWNER_HEAD_RE='^(needs? (you|your|owner|operator|founder|human|input|decision)|owner (review|decision|item|side|question|action|step|todo|to do|task|input)s?|(open|pending) owner|decisions? (for you|needed|required)|your (calls?|decisions?|input|go|approval|review|turn|action)|questions? (for|to) (you|the owner|the operator|the founder|owner|operator|founder)|waiting (on|for)|awaiting (you|your|owner|the owner|operator|the operator|founder|human|approval)|for (you|your (review|decision|decisions|attention|approval|action|input|go)|the (owner|operator|founder)|owner|operator)|what i need from you|what you need to (do|decide)|actions? (required|needed|items?)|manual (steps?|actions?|tasks?)|operator (steps?|actions?|items?|tasks?|questions?|decisions?|review)|human (actions?|steps?|review|input|tasks?)|founder (to do|todo|actions?|steps?|items?|tasks?|decisions?|questions?)|blocked)([^a-z0-9]|$)'
+# AGENT_STEP_RE is tried at every word start on a window of 50 characters (a gap of about 40 between role and verb;
+# no {m,n} interval, which mawk lacks): a role then a verb, or a verb then a role.
+AGENT_STEP_RE='(cpo|cto|clo|cmo|coo|cfo)[^a-z][^.;]*(sign[ -]?off|approv|review)|(sign[ -]?off|approv|review)[^.;]*[^a-z](cpo|cto|clo|cmo|coo|cfo)([^a-z]|$)'
 LABEL_RE='owner[ \t-]+(decision|ruling)s?[ \t]+((is|are)[ \t]+)?(needed|required)|decision[ \t]+needed[ \t]+from[ \t]+the[ \t]+owner|needs?[ \t]+(the[ \t]+)?owner[ \t]+(decision|ruling)'
 RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
 PENDING_RE='pending[ \t]*[^a-z0-9 \t]+[ \t]*assumed'
@@ -158,7 +168,7 @@ unfenced_match() {
     f { next }
     { line = $0; gsub(/`[^`]*`/, "", line); if (tolower(line) ~ re) printf "%d\t%s\n", NR, $0 }
     END { if (f) print "@UNCLOSED" }
-  ' "$1"
+  ' < "$1"
 }
 
 # table_rows <file>: per unfenced `| Item | Class | Ruling |` header `@TABLE`, then `<line>\t<row>` per data
@@ -190,7 +200,7 @@ table_rows() {
     }
     { end_table() }
     END { end_table(); if (f) print "@UNCLOSED" }
-  ' "$1"
+  ' < "$1"
 }
 
 check_labels() { # <file> <display-path>; prints [FAIL] lines, returns the count (capped: a status wraps at 256)
@@ -216,41 +226,64 @@ owner_list_scan() {
       tok = $0; sub(/^ +/, "", tok)
       match(tok, /^(`+|~+)/); ch = substr(tok, 1, 1); len = RLENGTH
       if (!f) { if (ch == "`" && substr(tok, len + 1) ~ /`/) return; f = 1; fch = ch; flen = len; return }
-      if (ch == fch && len >= flen && tok ~ /^(`+|~+)[ \t]*$/) f = 0
+      if (ch == fch && len >= flen && tok ~ /^(`+|~+)[ \t]*$/) f = 0 # mut:owner-list-fence-close
     }
-    { sub(/\r$/, ""); if (NR == 1) sub(/^\357\273\277/, "") }
+    function agent_step(s,   i, n) {
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        if (i > 1 && substr(s, i - 1, 1) ~ /[a-z0-9]/) continue
+        if (substr(s, i, 50) ~ ("^(" agentre ")")) return 1
+      }
+      return 0
+    }
+    BEGIN { valid = "\\(operator: (" cats ")\\)" }
+    { sub(/\r$/, "") } # mut:owner-list-cr
+    NR == 1 { sub(/^\357\273\277/, "") } # mut:owner-list-bom
     /^ ? ? ?(```+|~~~+)/ { fence_toggle(); next } # mut:owner-list-fence
     f { next }
     { raw = tolower($0); t = raw; gsub(/`[^`]*`/, "", t) } # mut:owner-list-code
-    raw ~ /^ ? ? ?#+[ \t]/ || raw ~ /^\*\*[^*]+\*\*:?[ \t]*$/ { # mut:owner-list-bold
-      h = raw; lvl = 9
-      if (h ~ /^ ? ? ?#/) { sub(/^ +/, "", h); lvl = match(h, /[^#]/) - 1; sub(/^#+/, "", h) }
-      gsub(/[*`:]/, "", h); sub(/[ \t]+#+[ \t]*$/, "", h); gsub(/[ \t]+/, " ", h); sub(/^ /, "", h)
+    t ~ /^ ? ? ?-[ \t]*-[ \t]*-[- \t]*$/ || t ~ /^ ? ? ?\*[ \t]*\*[ \t]*\*[* \t]*$/ || t ~ /^ ? ? ?_[ \t]*_[ \t]*_[_ \t]*$/ { insec = 0; next } # mut:owner-list-hr
+    raw ~ /^ ? ? ?#+/ || raw ~ /^ ? ? ?\*\*[^*]+\*\*[ \t]*:?[ \t]*$/ || raw ~ /^ ? ? ?__[^_]+__[ \t]*:?[ \t]*$/ || raw ~ /^ ? ? ?\*[^* \t][^*]*\*[ \t]*:?[ \t]*$/ || raw ~ /^ ? ? ?_[^_ \t][^_]*_[ \t]*:?[ \t]*$/ { # mut:owner-list-bold
+      h = raw; lvl = 9; weak = 0
+      if (h ~ /^ ? ? ?#/) {
+        sub(/^ +/, "", h); lvl = match(h, /[^#]/) - 1; if (lvl < 1) lvl = 6
+        weak = (h ~ /^#+[^# \t]/); sub(/^#+/, "", h)
+      }
+      sub(/[ \t]+#+[ \t]*$/, "", h); gsub(/[*`:_-]/, " ", h); gsub(/[ \t]+/, " ", h); sub(/^ /, "", h)
       sub(/^[0-9]+[.)] /, "", h); sub(/^[^a-z0-9]+/, "", h)
-      if (insec && lvl > slvl) next # mut:owner-list-sub
+      if (weak) { if (h ~ headre) { insec = 1; slvl = lvl }; next } # mut:owner-list-weak
+      if (insec && lvl > slvl && lvl != 9) next # mut:owner-list-sub
       insec = 0 # mut:owner-list-close
       if (h ~ headre) { insec = 1; slvl = lvl }
       next
     }
-    insec && t ~ /^[ \t]*([-*]|[0-9]+[.)])[ \t]+/ {
-      tagged = (t ~ ("\\(operator: (" cats ")\\)"))
+    insec && t ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/ { # mut:owner-list-plus
+      s = t; sub(/^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/, "", s); gsub(/[*_]/, "", s); sub(/^[ \t]+/, "", s)
+      if (length(s) <= 60 && s ~ /^(nothing|none)([^a-z]|$)/) next # mut:owner-list-none
+      u = t; na = gsub(/\(operator:[^)]*\)/, "", u)
+      v = t; nv = gsub(valid, "", v)
+      tagged = (nv > 0 && nv == na) # mut:owner-list-alltags
       if (!tagged) print NR "\towner-list-untagged" # mut:owner-list
-      if (tagged && t ~ agentre) print NR "\tagent-owned-step" # mut:owner-list-agent
+      if (tagged && agent_step(t)) print NR "\tagent-owned-step" # mut:owner-list-agent
       if (t ~ /ruled by (cto|clo) agent/) print NR "\towner-list-ruled" # mut:owner-list-ruled
     }
     END { if (f) print "@UNCLOSED" }
-  ' "$1"
+  ' < "$1" # mut:owner-list-operand
 }
 
 check_owner_lists() { # <file> <display-path>; prints [FAIL] lines, returns the count (capped: a status wraps at 256)
-  local file="$1" shown="$2" n=0 ln reason
+  local file="$1" shown="$2" n=0 ln reason scan_rc
+  [[ -n "$work_dir" ]] || work_dir="$(mktemp -d -t trg.XXXXXXXX)" || die2 "mktemp failed"
+  owner_list_scan "$file" > "$work_dir/owner.scan"
+  scan_rc=$?
+  (( scan_rc == 0 )) || die2 "$shown: the owner-list scan failed (awk exit $scan_rc, or no awk), so the lists were not examined" # mut:owner-list-awk-status
   while IFS=$'\t' read -r ln reason; do
     [[ -n "$ln" ]] || continue
     if [[ "$ln" == "@UNCLOSED" ]]; then UNCLOSED_SEEN=1; continue; fi
     printf '[FAIL] %s:%s: %s - tag it (operator: <category>), or route it to the CTO/CPO (technical-ruling-delegation.md), or move it under Model Dissents\n' "$shown" "$ln" "$reason" >&2
     n=$((n + 1))
-  done < <(owner_list_scan "$file")
-  (( n > 255 )) && n=255
+  done < "$work_dir/owner.scan"
+  (( n > 255 )) && n=255 # mut:owner-list-cap
   return "$n"
 }
 

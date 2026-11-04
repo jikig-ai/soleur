@@ -12,7 +12,9 @@
 #   1. cases      -- one fixture per verdict, each run through BOTH --pr-body and --report: exit code, the
 #                    reason token on stderr and the exact finding count.
 #   2. lines      -- a finding names the file line of the item, not the heading.
-#   3. usage      -- --report with no file, a missing file, an empty file: exit 2, never a PASS.
+#   3. usage      -- --report with no file, a missing file, an empty file: exit 2, never a PASS; an awk that fails
+#                    or is missing is exit 2, never a pass; a file named x=1 is read as a file.
+#   3b. headings  -- one row per heading alternative and syntax variant of OWNER_HEAD_RE, plus headings that must not match.
 #   4. mutations  -- each mutant of the gate (markers `# mut:owner-list*`, mutated on a sandbox copy) must flip
 #                    a named fixture's verdict; the unmutated control runs first and is green.
 #   5. floor      -- an assertion-count floor, reported with printf and exit.
@@ -40,7 +42,7 @@ FIXTURES="$SUITE_DIR/fixtures/technical-ruling-gate"
 run() {
   local script="$1"; shift
   set +e
-  bash "$script" "$@" >"$TMP/last.out" 2>"$TMP/last.err"
+  bash "$script" "$@" >"$TMP/last.out" 2>"$TMP/last.err" </dev/null
   rc=$?
   set -e
   echo "$rc" > "$TMP/last.rc"
@@ -96,6 +98,26 @@ a bold-only heading with a colon, tagged|owner-list-bold-tagged.md|0|-|0|-
 a sub-heading stays inside the owner list|owner-list-subheading.md|1|owner-list-untagged|1|-
 a tag written only inside a code span does not count|owner-list-inline-code.md|1|owner-list-untagged|1|-
 the corrected report shape|owner-list-corrected.md|0|-|0|-
+a + bullet is a list item|owner-list-plus-bullets.md|1|owner-list-untagged|1|-
+Nothing and None bullets are no item|owner-list-nothing.md|0|-|0|-
+a long None-led item is still an item|owner-list-nothing-smuggle.md|1|owner-list-untagged|1|-
+bold-only labels close a section opened by a heading|owner-list-bold-closes.md|0|-|0|-
+a thematic break closes the section|owner-list-hr-closes.md|0|-|0|-
+every tag must be valid|owner-list-multi-tag.md|1|owner-list-untagged|1|-
+agent sign-off spellings and gaps|owner-list-agents-roles.md|1|agent-owned-step|8|owner-list-untagged
+non-roles and far gaps are not agent steps|owner-list-agents-clean.md|0|-|0|-
+nested untagged items are items|owner-list-nested.md|1|owner-list-untagged|2|-
+a bold heading with the colon outside|owner-list-colon-bold.md|1|owner-list-untagged|1|-
+a fence closed by a longer fence|owner-list-longer-fence.md|0|-|0|-
+a fence indented four spaces is text and fails closed|owner-list-indented-fence.md|1|owner-list-untagged|1|-
+a heading without the space after the hashes|owner-list-hash-nospace.md|1|owner-list-untagged|1|-
+a hash line without a space does not close the section|owner-list-hash-noclose.md|1|owner-list-untagged|1|-
+an invalid category is no tag|owner-list-bogus-category.md|1|owner-list-untagged|1|-
+a hyphenated heading|owner-list-hyphen.md|1|owner-list-untagged|1|-
+a Blocked heading|owner-list-blocked.md|1|owner-list-untagged|1|-
+a Waiting on operator heading|owner-list-waiting.md|1|owner-list-untagged|1|-
+an Action required heading|owner-list-action-required.md|1|owner-list-untagged|1|-
+a heading that only starts like an owner heading|owner-list-boundary.md|0|-|0|-
 EOF
 while IFS='|' read -r name fixture want_rc reason want_n absent; do
   [[ -n "$name" ]] || continue
@@ -152,9 +174,20 @@ assert_eq "2" "$(count_reason owner-list-untagged)" "a CRLF report is read the s
 { printf '\357\273\277'; cat "$FIXTURES/owner-list-needs-you-untagged.md"; } > "$TMP/bom.md"
 run "$GATE" --report "$TMP/bom.md"
 assert_eq "2" "$(count_reason owner-list-untagged)" "a report with a BOM is read the same way"
-{ printf '## Needs you\n\n'; awk 'BEGIN { for (i = 0; i < 300; i++) print "- untagged item " i }'; } > "$TMP/wrap.md"
-run "$GATE" --report "$TMP/wrap.md"
-assert_eq "1" "$(last_rc)" "300 untagged items is still exit 1 (the count does not wrap)"
+printf '**Needs you**\r\n\r\n- a untagged item\r\n' > "$TMP/crlf-bold.md"
+run "$GATE" --report "$TMP/crlf-bold.md"
+assert_eq "1" "$(count_reason owner-list-untagged)" "a CRLF bold-only heading is recognised (the \\r is stripped)"
+printf '## Needs you\r\n\r\n- arm it (operator: scope)\r\n' > "$TMP/crlf-tagged.md"
+run "$GATE" --report "$TMP/crlf-tagged.md"
+assert_eq "0" "$(last_rc)" "a CRLF tagged item passes"
+printf '\357\273\277## Needs you\n\n- a untagged item\n' > "$TMP/bom-first.md"
+run "$GATE" --report "$TMP/bom-first.md"
+assert_eq "1" "$(count_reason owner-list-untagged)" "a BOM in front of the owner heading on line 1 is stripped"
+for cap_n in 256 512; do
+  { printf '## Needs you\n\n'; awk -v n="$cap_n" 'BEGIN { for (i = 0; i < n; i++) print "- untagged item " i }'; } > "$TMP/n$cap_n.md"
+  run "$GATE" --report "$TMP/n$cap_n.md"
+  assert_eq "1" "$(last_rc)" "exactly $cap_n untagged items is still exit 1 (the count does not wrap to 0)"
+done
 printf '## Needs you\n\n- Arm and merge it (operator: production-mutating)\n' > "$TMP/inline.md"
 run "$GATE" --report "$TMP/inline.md"
 assert_eq "0" "$(last_rc)" "a one-item tagged list written inline passes"
@@ -184,6 +217,148 @@ run "$GATE" --report "$TMP/ws.md"
 assert_eq "2" "$(last_rc)" "--report on a whitespace-only file is exit 2"
 run "$GATE" --report "$FIXTURES"
 assert_eq "2" "$(last_rc)" "--report on a directory is exit 2"
+
+echo "=== Arm 3b: one row per OWNER_HEAD_RE alternative and per heading syntax ==="
+# Every row is written as a heading line above one untagged item and must give exit 1 with one owner-list-untagged finding.
+HEADS="$TMP/heads.txt"
+cat > "$HEADS" <<'EOF'
+## Needs you
+## Needs your decision
+## Owner review items (read these first)
+## Owner reviews
+## Owner decisions
+## Owner items
+## Owner-side
+## Owner side questions
+## Open owner items
+## Pending owner review
+## Decisions for you
+## Decision for you
+## Your calls
+## Your call
+## Questions for you
+## Question for you
+## Waiting on you
+## Waiting for you
+## For the owner
+## What I need from you
+## Owner actions
+## Owner action items
+## Owner steps
+## Owner to-do
+## Action required
+## Actions required
+## Action needed
+## For you
+## For your review
+## For your decision
+## Manual steps
+## Manual step
+## Operator steps
+## Operator actions
+## Operator items
+## Human action
+## Human actions
+## Founder to-do
+## Founder todo
+## Founder actions
+## Blocked on you
+## Blocked
+## Blocked by CI
+## Awaiting your go
+## Awaiting your approval
+## Awaiting owner
+## Needs input
+## Needs owner
+## Needs operator
+## Needs-you
+## Needs_you
+## Owner_review_items
+## Decisions needed
+## Your decision
+## What you need to do
+## Waiting on
+## Waiting for
+## Waiting on operator
+## Waiting for operator
+# Needs you
+### Needs you
+##### Needs you
+##Needs you
+## **Needs you**
+## Needs you:
+## Needs you ##
+## 3. Needs you
+## 2) Needs you
+## NEEDS YOU
+## `Needs you`
+   ## Needs you
+**Needs you**
+**Needs you:**
+**Needs you**:
+__Needs you__
+__Needs you__:
+*Needs you*
+_Needs you_
+**Owner actions**
+**Blocked**
+**Waiting on operator**
+**Action required**
+EOF
+while IFS= read -r hl; do
+  [[ -n "$hl" ]] || continue
+  printf '%s\n\n- an untagged item\n' "$hl" > "$TMP/head-row.md"
+  run "$GATE" --report "$TMP/head-row.md"
+  assert_eq "1" "$(last_rc)" "heading [$hl]: an untagged item under it is exit 1"
+  assert_eq "1" "$(count_reason owner-list-untagged)" "heading [$hl]: one owner-list-untagged finding"
+done < "$HEADS"
+NEG="$TMP/neg-heads.txt"
+cat > "$NEG" <<'EOF'
+## Summary
+## Verification
+## What the review found and fixed
+## Rulings
+## Model Dissents
+## Next steps
+## Test plan
+## Notes
+## What changed
+## For your information
+## Open questions
+## Needs review
+## Blockers
+## Owner
+## Waiting
+## Directors
+**Test plan**
+**Notes:**
+EOF
+while IFS= read -r hl; do
+  [[ -n "$hl" ]] || continue
+  printf '%s\n\n- an untagged item\n' "$hl" > "$TMP/head-row.md"
+  run "$GATE" --report "$TMP/head-row.md"
+  assert_eq "0" "$(last_rc)" "heading [$hl] is not an owner list: an untagged item under it passes"
+done < "$NEG"
+
+echo "=== Arm 3c: an awk that fails or is missing is exit 2, never a pass; a file named x=1 is a file ==="
+SHIM="$TMP/shim"; mkdir -p "$SHIM"
+printf '#!/bin/sh\nexit 2\n' > "$SHIM/awk"; chmod +x "$SHIM/awk"
+PATH="$SHIM:$PATH" run "$GATE" --report "$FIXTURES/owner-list-tagged.md"
+assert_eq "2" "$(last_rc)" "a failing awk on a compliant report is exit 2, not a PASS"
+assert_eq "0" "$(grep -cF '[PASS]' "$TMP/last.out" || true)" "a failing awk prints no PASS line"
+PATH="$SHIM:$PATH" run "$GATE" --pr-body "$FIXTURES/owner-list-review-items.md"
+assert_eq "2" "$(last_rc)" "a failing awk on an offending body is exit 2 via --pr-body too"
+NOAWK="$TMP/noawk"; mkdir -p "$NOAWK"
+for tool in bash dirname grep mktemp rm cat head tr sed cut wc date timeout; do
+  tp="$(command -v "$tool" || true)"; [[ -n "$tp" ]] && ln -s "$tp" "$NOAWK/$tool"
+done
+PATH="$NOAWK" run "$GATE" --report "$FIXTURES/owner-list-tagged.md"
+assert_eq "2" "$(last_rc)" "no awk on PATH is exit 2, not a PASS"
+mkdir -p "$TMP/opdir"; cp "$FIXTURES/owner-list-needs-you-untagged.md" "$TMP/opdir/x=1"
+cd "$TMP/opdir"
+run "$GATE" --report x=1
+cd "$SUITE_DIR"
+assert_eq "2" "$(count_reason owner-list-untagged)" "a report named x=1 is read as a file, not taken as an awk assignment"
 
 echo "=== Arm 4: mutations (control first, then one mutant per marker) ==="
 MUT="$TMP/mut"; mkdir -p "$MUT"
@@ -279,9 +454,59 @@ mutate no-call 's/^.*check_owner_lists "\$f" "\$f".*# mut:owner-list-call$/    :
 mutate no-alias 's/^  --pr-body\|--report\).*# mut:owner-list-alias$/  --pr-body) # mut:owner-list-alias/' && \
   killed no-alias "$MUT/gate.no-alias.sh" 1 --report "$FIXTURES/owner-list-review-items.md"
 
+# The new guards of the review-fix round, each proven on its own fixture.
+mutate plus 's/\(\[-\*\+\]\|/([-*]|/g' && \
+  killed plus "$MUT/gate.plus.sh" 1 --report "$FIXTURES/owner-list-plus-bullets.md"
+mutate none 's/^.*# mut:owner-list-none$/      if (0) next # mut:owner-list-none/' && \
+  killed none "$MUT/gate.none.sh" 0 --report "$FIXTURES/owner-list-nothing.md"
+mutate hr 's/^.*# mut:owner-list-hr$/    t ~ \/zz-no-hr-zz\/ { insec = 0; next } # mut:owner-list-hr/' && \
+  killed hr "$MUT/gate.hr.sh" 0 --report "$FIXTURES/owner-list-hr-closes.md"
+mutate bold-close 's/ && lvl != 9\) next # mut:owner-list-sub/) next # mut:owner-list-sub/' && \
+  killed bold-close "$MUT/gate.bold-close.sh" 0 --report "$FIXTURES/owner-list-bold-closes.md"
+mutate alltags 's/tagged = \(nv > 0 && nv == na\)/tagged = (nv > 0)/' && \
+  killed alltags "$MUT/gate.alltags.sh" 1 --report "$FIXTURES/owner-list-multi-tag.md"
+mutate cats-any 's/-v cats="\$CATS_RE"/-v cats=".+"/' && \
+  killed cats-any "$MUT/gate.cats-any.sh" 1 --report "$FIXTURES/owner-list-bogus-category.md"
+mutate cr 's/^.*# mut:owner-list-cr$/    { } # mut:owner-list-cr/' && \
+  killed cr "$MUT/gate.cr.sh" 1 --report "$TMP/crlf-bold.md"
+mutate bom 's/^.*# mut:owner-list-bom$/    NR == 1 { } # mut:owner-list-bom/' && \
+  killed bom "$MUT/gate.bom.sh" 1 --report "$TMP/bom-first.md"
+mutate cap 's/^  \(\( n > 255 \)\) && n=255 # mut:owner-list-cap$/  : # mut:owner-list-cap/' && \
+  { killed cap-256 "$MUT/gate.cap.sh" 1 --report "$TMP/n256.md"; killed cap-512 "$MUT/gate.cap.sh" 1 --report "$TMP/n512.md"; }
+mutate awk-status 's/^.*# mut:owner-list-awk-status$/  : # mut:owner-list-awk-status/' && \
+  { PATH="$SHIM:$PATH" killed awk-status "$MUT/gate.awk-status.sh" 2 --report "$FIXTURES/owner-list-tagged.md"; }
+mutate operand "s|^  ' < \"\\\$1\" # mut:owner-list-operand\$|  ' \"\$1\" # mut:owner-list-operand|" && \
+  { cd "$TMP/opdir"; killed operand "$MUT/gate.operand.sh" 1 --report x=1; cd "$SUITE_DIR"; }
+mutate fence-close 's/len >= flen && /len == flen \&\& /' && \
+  killed fence-close "$MUT/gate.fence-close.sh" 0 --report "$FIXTURES/owner-list-longer-fence.md"
+mutate agent-no-coo-cfo '/^AGENT_STEP_RE=/ s/\|coo\|cfo//g' && \
+  killed_count agent-no-coo-cfo "$MUT/gate.agent-no-coo-cfo.sh" agent-owned-step 8 --report "$FIXTURES/owner-list-agents-roles.md"
+mutate agent-no-approv '/^AGENT_STEP_RE=/ s/\|approv//g' && \
+  killed_count agent-no-approv "$MUT/gate.agent-no-approv.sh" agent-owned-step 8 --report "$FIXTURES/owner-list-agents-roles.md"
+mutate agent-hyphen-only '/^AGENT_STEP_RE=/ s/sign\[ -\]\?off/sign-?off/g' && \
+  killed_count agent-hyphen-only "$MUT/gate.agent-hyphen-only.sh" agent-owned-step 8 --report "$FIXTURES/owner-list-agents-roles.md"
+mutate agent-role-first-only '/^AGENT_STEP_RE=/ s/\|\(sign\[ -\]\?off\|approv\|review\)\[\^\.;\]\*\[\^a-z\].*$/'"'"'/' && \
+  killed_count agent-role-first-only "$MUT/gate.agent-role-first-only.sh" agent-owned-step 8 --report "$FIXTURES/owner-list-agents-roles.md"
+mutate agent-no-word-start 's/if \(i > 1 && substr\(s, i - 1, 1\) ~ \/\[a-z0-9\]\/\) continue/if (0) continue/' && \
+  killed agent-no-word-start "$MUT/gate.agent-no-word-start.sh" 0 --report "$FIXTURES/owner-list-agents-clean.md"
+mutate head-no-blocked '/^OWNER_HEAD_RE=/ s/\|blocked\)/)/' && \
+  killed head-no-blocked "$MUT/gate.head-no-blocked.sh" 1 --report "$FIXTURES/owner-list-blocked.md"
+mutate head-no-waiting '/^OWNER_HEAD_RE=/ s/waiting \(on\|for\)\|//' && \
+  killed head-no-waiting "$MUT/gate.head-no-waiting.sh" 1 --report "$FIXTURES/owner-list-waiting.md"
+mutate head-no-action '/^OWNER_HEAD_RE=/ s/actions\? \(required\|needed\|items\?\)\|//' && \
+  killed head-no-action "$MUT/gate.head-no-action.sh" 1 --report "$FIXTURES/owner-list-action-required.md"
+mutate head-no-boundary '/^OWNER_HEAD_RE=/ s/\(\[\^a-z0-9\]\|\$\)'"'"'$/'"'"'/' && \
+  killed head-no-boundary "$MUT/gate.head-no-boundary.sh" 0 --report "$FIXTURES/owner-list-boundary.md"
+mutate no-norm 's/gsub\(\/\[\*`:_-\]\/, " ", h\)/gsub(\/[*`:]\/, " ", h)/' && \
+  killed no-norm "$MUT/gate.no-norm.sh" 1 --report "$FIXTURES/owner-list-hyphen.md"
+mutate hash-space 's/raw ~ \/\^ \? \? \?#\+\/ \|\|/raw ~ \/^ ? ? ?#+[ \\t]\/ ||/' && \
+  killed hash-space "$MUT/gate.hash-space.sh" 1 --report "$FIXTURES/owner-list-hash-nospace.md"
+mutate weak 's/^.*# mut:owner-list-weak$/      if (0) next # mut:owner-list-weak/' && \
+  killed weak "$MUT/gate.weak.sh" 1 --report "$FIXTURES/owner-list-hash-noclose.md"
+
 echo "=== Arm 5: assertion-count floor ==="
 ran=$((PASS + FAIL))
-FLOOR=149
+FLOOR=511
 printf 'owner-list suite: %d assertions ran (floor %d)\n' "$ran" "$FLOOR"
 if (( ran < FLOOR )); then
   printf 'FATAL: only %d assertions ran, the floor is %d -- the dispatch was neutered or arms were skipped\n' "$ran" "$FLOOR" >&2
