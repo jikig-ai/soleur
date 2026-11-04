@@ -355,8 +355,8 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
 Then run the affected-suite gate — the plugin entry point, wired the same in
-`soleur:work` Phase 2 and `soleur:review`. Its rc contract (0/1/4/6/7), the
-`.soleur-test-gate.json` override schema, and the per-rc actions live in
+`soleur:work` Phase 2 and `soleur:review`. Its rc contract (0/1/4/6/7),
+`.soleur-test-gate.json` override schema, per-rc actions, pool wait live in
 [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS
 repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh), so the
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the
@@ -1759,7 +1759,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 **If an open PR exists:**
 
 1. Likely the earlier draft.
-2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
+2. Auto-accept the generated PR title/body in both modes.
 2.5. **Decision-challenges render (ADR-084).** Fold a non-empty `knowledge-base/project/specs/<branch>/decision-challenges.md` into the body under `## Model Dissents (informational)` by `Class` (technical rows: `### Ruled by CTO agent`, no issue; operator rows: one `action-required` + `decision-challenge` issue) per [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md); see [decision-principles.md](../brainstorm-techniques/references/decision-principles.md).
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
 
@@ -3012,7 +3012,7 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 - **Phase 2's probe decides whether compound runs.** Ask only on its interactive no-artifacts path.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **A resume prompt's gate list must cite commands verified to RESOLVE** (`wg-end-of-work-emit-resume-prompt`). Before writing `<suite> -> N/0` into a handoff, re-run the command or at minimum `git ls-files | grep -E '<name>'` it — a remembered path is not a measured one. **Why:** #6730's RESUME.md reported two suites green whose paths did not exist (wrong extension, wrong directory), so the resuming session's first two gate commands both died on "No such file or directory".
-- **Confirm the PR title and body** with the user before creating it (skip in headless mode).
+- **Never wait for the user to confirm the PR title/body or `gh pr ready`** (agent-owned); skipped draft-light tests mean proceed to ready. **Why:** #11998.
 - **CI workflow edits:** When the PR touches `.github/workflows/*.yml` or `.github/actions/**`, load [ci-workflow-authoring.md](./references/ci-workflow-authoring.md) for known-buggy idioms, heredoc/YAML indentation traps, Doppler service-token naming, `claude-code-action` pin freshness, and `jq -e` guards for JSON polling. These were migrated out of AGENTS.md — review them before pushing CI changes.
 - **Register / policy update PRs:** When the PR diff is bounded to `knowledge-base/legal/**` or `docs/legal/**` and documents controls introduced by an upstream PR (typical for follow-through register updates per Phase 7 Step 3.5), load [register-update-pr-pattern.md](./references/register-update-pr-pattern.md) before authoring the PR body. The pattern: cite by semantic identifier (function / RPC / migration anchor), not by plain-prose file path, to avoid the `Block PR body citing files not in diff` (#2905) gate firing on legitimate cross-references. Inline-backtick file references are exempt as of PR #3882's follow-up.
 - **A commit gate that diffs against `origin/main`'s TIP can red on drift that isn't yours — re-merge before treating a base-side failure as yours, and when `git merge` refuses over staged overlap (no stash in worktrees), checkpoint `git diff --cached --binary` then `git reset --hard` + merge + `git apply --3way`.** The `test-all --affected` battery reads the moving tip, so a `.tf` file added on main after your last merge reads as a resource your branch deleted (G4c, PR #8904; merge-base now, #10053). Merge commits skip the battery (`lefthook.yml` `bun-test` `skip: merge`), so ordering is merge → reapply → commit. See `knowledge-base/project/learnings/workflow-issues/2026-09-27-a-blocking-gate-diffing-against-moving-main-fails-on-drift-and-staging-then-merging-deadlocks.md`.
