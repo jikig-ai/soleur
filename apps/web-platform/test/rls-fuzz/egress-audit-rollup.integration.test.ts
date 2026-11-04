@@ -928,4 +928,219 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     expect(JSON.stringify(out)).not.toContain("b-same-bucket");
   });
 
+  // ---- #11238: get_egress_audit_window_summary (windowed member read RPC, migration 183) ----
+  // A distinct function beside get_egress_audit_summary (177). Same contract plus p_window in
+  // ('24h','7d','30d'), validated AFTER the membership, jti and decision checks. Buckets older than the
+  // ingest accepts are seeded with raw inserts as the table owner, with timestamps derived from the
+  // transaction's now() in SQL (the function reads the same transaction time). Hosts are *.example.test.
+
+  const WINDOW_INVALID = "egress audit: invalid window";
+  const SPAN_SECONDS: Record<string, number> = { "24h": 86_400, "7d": 7 * 86_400, "30d": 30 * 86_400 };
+
+  const windowed = async (
+    t: Txn,
+    ws: string,
+    win: string | null,
+    limit: number | null = 200,
+    decision: string | null = null,
+  ): Promise<Summary> => {
+    const [r] = await t<{ s: Summary }[]>`
+      select public.get_egress_audit_window_summary(${ws}::uuid, ${limit}::int, ${decision}::text, ${win}::text) as s`;
+    return r.s;
+  };
+
+  // Insert a row whose last_seen is `secondsAgo` before the transaction's now(); its bucket is the 15-minute
+  // bucket that contains last_seen. Runs as the table owner (the caller has done `reset role`).
+  const insAgo = (t: Txn, ws: string, host: string, count: number, secondsAgo: number, decision = "allowed") =>
+    t`insert into public.workspace_egress_audit_rollup
+        (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+      select ${ws}, x.bs, ${host}, ${decision}, 'web-1', ${count}, 0, x.bs, x.ls
+        from (select to_timestamp(floor(extract(epoch from y.ls) / 900) * 900) as bs, y.ls
+                from (select now() - make_interval(secs => ${secondsAgo}::int) as ls) y) x`;
+
+  // A bucket that STRADDLES the start of a window: bucket_start is at or before the window start, last_seen is
+  // 899 s into the bucket and still inside the window. (bucket_start = the 15-minute floor of the window start.)
+  // Fails the straddle precondition only if the window start sits in the last second of its 15-minute bucket.
+  const insStraddle = (t: Txn, ws: string, host: string, count: number, spanSeconds: number) =>
+    t`insert into public.workspace_egress_audit_rollup
+        (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+      select ${ws}, x.bs, ${host}, 'allowed', 'web-1', ${count}, 0, x.bs, x.bs + interval '899 seconds'
+        from (select to_timestamp(floor(extract(epoch from now() - make_interval(secs => ${spanSeconds}::int)) / 900) * 900) as bs) x`;
+
+  const seedAges = async (t: Txn): Promise<void> => {
+    await t`reset role`;
+    await insAgo(t, ctx.wsA, "h1.example.test", 2, 60 * 60);
+    await insAgo(t, ctx.wsA, "d3.example.test", 3, 3 * 86_400);
+    await insAgo(t, ctx.wsA, "d10.example.test", 5, 10 * 86_400);
+    await insAgo(t, ctx.wsA, "d29.example.test", 7, 29 * 86_400);
+    await t`set local role service_role`;
+  };
+
+  test("window inclusion: 24h returns the 60-minute row, 7d adds the 3-day row, 30d adds the 10- and 29-day rows; counts and the window span follow", async () => {
+    const out = await seededAs(ctx.userA, seedAges, async (t) => ({
+      h24: await windowed(t, ctx.wsA, "24h"),
+      d7: await windowed(t, ctx.wsA, "7d"),
+      d30: await windowed(t, ctx.wsA, "30d"),
+    }));
+    const hosts = (v: Summary) => v.rows.map((r) => r.host).sort();
+    expect(hosts(out.h24)).toEqual(["h1.example.test"]);
+    expect(hosts(out.d7)).toEqual(["d3.example.test", "h1.example.test"]);
+    expect(hosts(out.d30)).toEqual(["d10.example.test", "d29.example.test", "d3.example.test", "h1.example.test"]);
+    expect([out.h24, out.d7, out.d30].map((v) => v.summary.request_count_min)).toEqual([2, 5, 17]);
+    for (const [key, v] of [["24h", out.h24], ["7d", out.d7], ["30d", out.d30]] as const) {
+      const span = (Date.parse(v.window.end) - Date.parse(v.window.start)) / 1000;
+      expect(span, `window.end - window.start for ${key}`).toBe(SPAN_SECONDS[key]);
+    }
+  });
+
+  test("the p_limit = 0 probe respects the window: a 3-day-old row only gives a null last_request_at for 24h and a value for 7d", async () => {
+    const out = await seededAs(
+      ctx.userA,
+      async (t) => {
+        await t`reset role`;
+        await insAgo(t, ctx.wsA, "d3-only.example.test", 3, 3 * 86_400);
+        await t`set local role service_role`;
+      },
+      async (t) => ({ h24: await windowed(t, ctx.wsA, "24h", 0), d7: await windowed(t, ctx.wsA, "7d", 0) }),
+    );
+    expect(out.h24.summary.last_request_at).toBeNull();
+    expect(out.d7.summary.last_request_at).not.toBeNull();
+    expect(out.h24.rows).toEqual([]);
+  });
+
+  test("a bucket straddling the window start is counted whole (accepted behavior: the period is 'about the last N'); a future-dated bucket is excluded", async () => {
+    const out = await seededAs(
+      ctx.userA,
+      async (t) => {
+        await t`reset role`;
+        await insStraddle(t, ctx.wsA, "straddle-24h.example.test", 9, SPAN_SECONDS["24h"]);
+        await insAgo(t, ctx.wsA, "inside.example.test", 1, 60 * 60);
+        const fb = bucketAt(-15);
+        await t`insert into public.workspace_egress_audit_rollup
+                  (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+                values (${ctx.wsA}, ${fb}, 'future.example.test', 'allowed', 'web-1', 100, 0, ${fb}, ${new Date(Date.parse(fb) + 60_000).toISOString()})`;
+        await t`set local role service_role`;
+      },
+      async (t) => windowed(t, ctx.wsA, "24h"),
+    );
+    const byHost = Object.fromEntries(out.rows.map((r) => [r.host, r.request_count]));
+    expect(byHost["straddle-24h.example.test"], "the whole straddling bucket is counted").toBe(9);
+    expect(byHost["inside.example.test"]).toBe(1);
+    expect(byHost["future.example.test"], "a future-dated bucket is excluded").toBeUndefined();
+    expect(out.summary.request_count_min).toBe(10);
+  });
+
+  test("order oracle: a non-member with an invalid window gets the membership 42501; a member gets 22023 for an unknown, wrong-case, padded, empty or NULL window", async () => {
+    await expect(seededAs(ctx.userB, seedWsA, (t) => windowed(t, ctx.wsA, "bogus"))).rejects.toMatchObject({
+      code: "42501",
+      message: IN_BODY_DENIAL,
+    });
+    await expect(seededAs(ctx.userB, seedWsA, (t) => windowed(t, ctx.wsA, null))).rejects.toMatchObject({
+      code: "42501",
+      message: IN_BODY_DENIAL,
+    });
+    for (const bad of ["bogus", "30D", " 7d", "1h", "", null]) {
+      await expect(seededAs(ctx.userA, seedWsA, (t) => windowed(t, ctx.wsA, bad)), `window ${JSON.stringify(bad)}`).rejects.toMatchObject({
+        code: "22023",
+        message: WINDOW_INVALID,
+      });
+    }
+    // the decision check precedes the window check
+    await expect(seededAs(ctx.userA, seedWsA, (t) => windowed(t, ctx.wsA, "bogus", 200, "x"))).rejects.toMatchObject({
+      code: "22023",
+      message: "egress audit: invalid decision filter",
+    });
+  });
+
+  test("a member with a denied jti is refused with the jti message even when the window is invalid; an allowed jti reads", async () => {
+    const deniedJti = randomUUID();
+    const allowedJti = randomUUID();
+    const denyFor = (founder: string) => async (t: Txn) => {
+      await seedWsA(t);
+      await t`reset role`;
+      await t`insert into public.denied_jti (jti, founder_id) values (${deniedJti}, ${founder})`;
+      await t`set local role service_role`;
+    };
+    for (const win of ["30d", "bogus", null]) {
+      await expect(
+        seededAs(ctx.userA, denyFor(ctx.userA), (t) => windowed(t, ctx.wsA, win), deniedJti),
+        `denied jti, window ${JSON.stringify(win)}`,
+      ).rejects.toMatchObject({ code: "42501", message: JTI_DENIAL });
+    }
+    const ok = await seededAs(ctx.userA, denyFor(ctx.userA), (t) => windowed(t, ctx.wsA, "24h"), allowedJti);
+    expect(ok.rows).toHaveLength(3);
+  });
+
+  test("tenant boundary: with workspace B's newer data present, a member of A sees none of it for any window or branch", async () => {
+    const seedBoth = async (t: Txn) => {
+      await seedWsA(t);
+      await ingest(t, [
+        rowAt(ctx.wsB, 5, { requested_host: "b-only.example.test", decision: "denied", request_count: 1000 }),
+        rowAt(ctx.wsB, 7, { requested_host: "(other)", decision: "denied", request_count: 77 }),
+      ]);
+    };
+    const out = await seededAs(ctx.userA, seedBoth, async (t) => {
+      const r: Record<string, Summary> = {};
+      for (const win of ["24h", "7d", "30d"]) {
+        r[`${win}:all`] = await windowed(t, ctx.wsA, win);
+        r[`${win}:probe`] = await windowed(t, ctx.wsA, win, 0);
+        r[`${win}:denied`] = await windowed(t, ctx.wsA, win, 200, "denied");
+      }
+      return r;
+    });
+    for (const [key, view] of Object.entries(out)) {
+      expect(JSON.stringify(view), key).not.toContain("b-only");
+      if (key.endsWith(":all")) {
+        expect(view.summary.request_count_min, key).toBe(21);
+        expect(view.overflow, key).toEqual([]);
+      }
+    }
+  });
+
+  test("anon and service_role fail on the GRANT (engine text), not the in-body check; the grantee set is only authenticated", async () => {
+    const stmt = `select public.get_egress_audit_window_summary('${ctx.wsA}'::uuid, 200, null, '30d')`;
+    await expect(attackAsAnon(sql, (t) => t.unsafe(stmt))).rejects.toMatchObject({
+      code: "42501",
+      message: expect.stringContaining("permission denied for function"),
+    });
+    await expect(
+      rolledBackRaw(sql, async (t) => {
+        await t`set local role service_role`;
+        await t.unsafe(stmt);
+      }),
+    ).rejects.toMatchObject({ code: "42501", message: expect.stringContaining("permission denied for function") });
+    const [g] = await withTransientRetry(() => sql<{ anon: boolean; svc: boolean; auth: boolean; public_grants: number }[]>`
+      select has_function_privilege('anon', 'public.get_egress_audit_window_summary(uuid, integer, text, text)', 'EXECUTE') as anon,
+             has_function_privilege('service_role', 'public.get_egress_audit_window_summary(uuid, integer, text, text)', 'EXECUTE') as svc,
+             has_function_privilege('authenticated', 'public.get_egress_audit_window_summary(uuid, integer, text, text)', 'EXECUTE') as auth,
+             (select count(*)::int from pg_proc p, aclexplode(p.proacl) a
+               where p.oid = 'public.get_egress_audit_window_summary(uuid, integer, text, text)'::regprocedure
+                 and a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_grants`);
+    expect(g).toEqual({ anon: false, svc: false, auth: true, public_grants: 0 });
+  });
+
+  test("live parity: window_summary(..., '30d') equals get_egress_audit_summary as jsonb on the fixture, including with workspace B rows present", async () => {
+    const seedBoth = async (t: Txn) => {
+      await seedWsAWithOverflow(t);
+      await ingest(t, [
+        rowAt(ctx.wsB, 5, { requested_host: "b-only.example.test", decision: "denied", request_count: 1000 }),
+        rowAt(ctx.wsB, 30, { requested_host: "b-same-bucket.example.test", decision: "allowed", request_count: 3 }),
+      ]);
+    };
+    const out = await seededAs(ctx.userA, seedBoth, async (t) => {
+      const pairs: Record<string, [Summary, Summary]> = {};
+      for (const [limit, decision] of [[200, null], [0, null], [1, null], [200, "denied"]] as const) {
+        pairs[`limit=${limit} decision=${decision}`] = [
+          await windowed(t, ctx.wsA, "30d", limit, decision),
+          await summarize(t, ctx.wsA, limit, decision),
+        ];
+      }
+      return pairs;
+    });
+    for (const [key, [w, old]] of Object.entries(out)) {
+      expect(w, key).toEqual(old);
+      expect(JSON.stringify(w), key).not.toContain("b-only");
+    }
+  });
+
 });
