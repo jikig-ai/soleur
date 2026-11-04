@@ -46,7 +46,7 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 ## Phase 5 - Close handoff
 
 - [ ] 5.1 Put `Throwaway red-proof PR #N (base <name>, head <name>): close it and delete both branches` in this branch's PR body as plain text
-- [ ] 5.2 Final task (run as soon as 1.10 is recorded; also `git worktree remove .worktrees/redproof-luks-guard1-head-20261104`; verify `gh pr view 12109 --json state` is CLOSED before this branch's PR merges) after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
+- [ ] 5.2 Final task (run once BOTH 1.10 is recorded AND this branch's PR exists; also `git worktree remove .worktrees/redproof-luks-guard1-head-20261104`; verify `gh pr view 12109 --json state` is CLOSED before this branch's PR merges) after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
 
 ## Not in this run
 
