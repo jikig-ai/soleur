@@ -955,7 +955,8 @@
       "2321651",
       "2359391",
       "2396154",
-      "2409332"
+      "2409332",
+      "2586358"
     ],
     "enabled": true,
     "frequency": 1441,
@@ -1309,17 +1310,17 @@
         "conditions": [
           {
             "comparison": {
-              "key": "feature",
-              "match": "eq",
-              "value": "cron-git-data-erasure-redrive"
+              "key": "escalation",
+              "match": "in",
+              "value": "20d,28d"
             },
             "type": "tagged_event"
           },
           {
             "comparison": {
-              "key": "escalation",
-              "match": "in",
-              "value": "20d,28d"
+              "key": "feature",
+              "match": "eq",
+              "value": "cron-git-data-erasure-redrive"
             },
             "type": "tagged_event"
           }

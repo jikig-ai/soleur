@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# launch-check.sh: read-only production-readiness + Soleur-baseline gap analysis for a customer repository.
+# launch-check.sh: production-readiness + Soleur-baseline gap analysis for a customer repository. The analysis is read-only apart from its report.
 #
 #   scan          --target <repo> --facts <file> [--files-out <file>] [--show-secrets]
 #   render        --target <repo> --facts <file> [--judged <file>] [--dry-run]
 #   verify-report --file <report.md>
 #   report-path   (prints the report's repo-relative path)
+#   issues        --preview | --create | --check-plan  (see "issues" below)
 #
-# The analysis writes nothing but the report file. No network, no telemetry. Exit codes:
-#   0 ok · 1 redaction hit (render) / invalid report (verify-report) · 2 usage, preflight, scanner, input or write failure.
+# The analysis (scan, render, verify-report) writes nothing but the report file and uses no network. No telemetry. `issues` is the only
+# part that talks to GitHub, with the customer's own gh credentials, on github.com or the explicit --host (lib/issues.sh, ADR-314):
+# `--preview` makes read-only authenticated GETs of the customer's OWN repository and writes a mode-700 plan directory (TMPDIR or --plan-out);
+# `--create` is the only writer to the tracker: confirm-gated, from that saved plan.
+# Exit codes: 0 ok (a preview in an unusable environment prints a report-only marker and also exits 0) ·
+#   1 redaction hit (render, issues) / invalid report (verify-report) · 2 usage, preflight, scanner, input, write failure.
 # Every abort prints one SOLEUR_LAUNCH_CHECK_ABORT marker; this tool's only sink is the caller's tool result.
-# Headless runs (CI set, or LAUNCH_CHECK_HEADLESS=1) may scan and render --dry-run but never overwrite the report.
+# Headless runs (CI set, or LAUNCH_CHECK_HEADLESS=1, true or yes) may scan, render --dry-run and issues --preview/--check-plan, but never
+# overwrite the report and never run issues --create.
+#
+# issues --preview      --target R --facts F [--judged J] [--plan-out D] [--exclude-domain X]... [--exclude-class X]... [--repo S] [--host H] [--dry-run]
+# issues --create       --target R --facts F [--judged J] --plan P --confirm-repo S --confirm-count N [--confirm-public] [--repo S] [--host H] [--dry-run]
+# issues --check-plan   --plan P      (parse-only: no network, no scanner, no repository)
+# Abort reason -> exit code (issues):
+#   usage 2 · headless-write-refused 2 · report-missing 2 · report-stale 2 · plan-missing 2 · plan-invalid 2 · plan-repo-mismatch 2 ·
+#   repo-unresolved 2 · confirm-public-required 2 · epic-closed 2 · epic-ambiguous 2 · issue-ambiguous 2 · issues-unavailable 2 · write-shape-refused 2 ·
+#   issues-incomplete 2 (the run stopped part-way: re-run the printed command) · redaction-hit 1 · write-failed 2 · scanner-* 2.
+#   An interrupted --create (a signal, after at least one write was attempted) prints the summary, the resume command and an
+#   issues-incomplete phase=interrupted detail=signal marker, then exits 129 (HUP), 130 (INT) or 143 (TERM): 128 plus the signal.
 set -uo pipefail
 
 # Deterministic ordering and matching on every machine, and a repository that cannot run code through git config
@@ -35,6 +51,8 @@ source "$SKILL_DIR/scripts/lib/baseline.sh"
 source "$SKILL_DIR/scripts/lib/redact-gate.sh"
 # shellcheck source=lib/render.sh
 source "$SKILL_DIR/scripts/lib/render.sh"
+# shellcheck source=lib/issues.sh
+source "$SKILL_DIR/scripts/lib/issues.sh"
 
 WORK=""
 cleanup() { [ -n "$WORK" ] && rm -rf -- "${WORK:?}"; return 0; }
@@ -57,7 +75,7 @@ preflight_plugin() {
 # val <flag> <remaining-argc>: a flag with no value is a usage error (exit 2), not an unbound-variable crash (exit 1).
 val() { [ "$2" -ge 2 ] || lc_abort usage 2 "$1 needs a value"; }
 
-is_headless() { [ -n "${CI:-}" ] || [ "${LAUNCH_CHECK_HEADLESS:-}" = 1 ]; }
+is_headless() { lc_is_headless; }
 
 need_repo() {
   [ -n "${TARGET:-}" ] || lc_abort usage 2 "--target is required"
@@ -121,12 +139,7 @@ cmd_render() {
   fi
   need_repo; preflight_plugin; lc_preflight_scanners
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/lc-work.XXXXXX") || lc_abort scanner-failed 2 "mktemp failed"
-  # scan records the stack in the facts header; only an older or hand-made facts file needs the repository walked again.
-  STACK=$(awk -F= '/^# stack=/ {print $2; exit}' "$FACTS")
-  if [ -z "$STACK" ]; then lc_walk "$TARGET" "$WORK/files"; STACK=$(lc_stack "$WORK/files"); fi
-  CAT="$WORK/catalog.tsv"; lc_build_catalog "$CAT"
-  lc_clean_facts
-  [ -z "$JUDGED" ] || lc_validate_judged "$JUDGED"
+  lc_prepare_inputs
   lc_render
   if [ "$DRY" = 1 ]; then
     lc_emit_checked "$WORK/report.md" "" 1
@@ -158,6 +171,61 @@ cmd_verify() {
   printf 'SOLEUR_LAUNCH_CHECK_REPORT_OK findings=%s\n' "$n"
 }
 
+# shellcheck disable=SC2034  # the ISSUES_* options below are read by lib/issues.sh
+cmd_issues() {
+  local mode=""
+  TARGET=""; FACTS=""; JUDGED=""; DRY=0
+  ISSUES_PLAN_ARG=""; ISSUES_PLAN_OUT=""; ISSUES_EXCL_DOM=","; ISSUES_EXCL_CLS=","; ISSUES_CONFIRM_PUBLIC=0
+  ISSUES_CONFIRM_REPO=""; ISSUES_CONFIRM_COUNT=""; ISSUES_REPO_ARG=""; ISSUES_HOST=github.com
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --preview|--create|--check-plan) [ -z "$mode" ] || lc_abort usage 2 "choose one of --preview, --create, --check-plan"; mode=${1#--}; shift ;;
+      --target) val "$1" $#; TARGET=$2; shift 2 ;;
+      --facts) val "$1" $#; FACTS=$2; shift 2 ;;
+      --judged) val "$1" $#; JUDGED=$2; shift 2 ;;
+      --plan) val "$1" $#; ISSUES_PLAN_ARG=$2; shift 2 ;;
+      --plan-out) val "$1" $#; ISSUES_PLAN_OUT=$2; shift 2 ;;
+      --exclude-domain) val "$1" $#
+        case "$2" in security|tests-ci|tech-debt|reliability-ops) ISSUES_EXCL_DOM="$ISSUES_EXCL_DOM$2," ;; *) lc_abort usage 2 "--exclude-domain takes security, tests-ci, tech-debt or reliability-ops" ;; esac
+        shift 2 ;;
+      --exclude-class) val "$1" $#
+        case "$2" in readiness|baseline) ISSUES_EXCL_CLS="$ISSUES_EXCL_CLS$2," ;; *) lc_abort usage 2 "--exclude-class takes readiness or baseline" ;; esac
+        shift 2 ;;
+      --confirm-repo) val "$1" $#; ISSUES_CONFIRM_REPO=$2; shift 2 ;;
+      --confirm-count) val "$1" $#; ISSUES_CONFIRM_COUNT=$2; shift 2 ;;
+      --confirm-public) ISSUES_CONFIRM_PUBLIC=1; shift ;;
+      --repo) val "$1" $#; ISSUES_REPO_ARG=$2; shift 2 ;;
+      --host) val "$1" $#; ISSUES_HOST=$2; shift 2 ;;
+      --dry-run) DRY=1; shift ;;
+      *) lc_abort usage 2 "unknown issues argument: $1" ;;
+    esac
+  done
+  LC_DRY=$DRY; export LC_DRY
+  ISSUES_FACTS_ARG=$FACTS; ISSUES_JUDGED_ARG=$JUDGED
+  lc__re '^[a-z0-9][a-z0-9.-]*$' "$ISSUES_HOST" || lc_abort usage 2 "--host must be a host name"
+  [ -z "$ISSUES_REPO_ARG" ] || lc__re "$ISSUES_RE_SLUG" "$ISSUES_REPO_ARG" || lc_abort usage 2 "--repo must be owner/name"
+  case "$mode" in
+    check-plan)
+      [ -n "$ISSUES_PLAN_ARG" ] || lc_abort usage 2 "--check-plan needs --plan"
+      WORK=$(mktemp -d "${TMPDIR:-/tmp}/lc-work.XXXXXX") || lc_abort scanner-failed 2 "mktemp failed"
+      lc_issues_check_plan ;;
+    preview|create)
+      if [ "$mode" = create ]; then
+        # Refused before anything else: no repository access, no gh call of any kind.
+        if is_headless; then lc_abort headless-write-refused 2 "unattended runs (CI or LAUNCH_CHECK_HEADLESS=1) may only preview"; fi
+        [ -n "$ISSUES_PLAN_ARG" ] || lc_abort usage 2 "--create needs --plan, the directory printed by --preview"
+        [ -n "$ISSUES_CONFIRM_REPO" ] && [ -n "$ISSUES_CONFIRM_COUNT" ] || lc_abort usage 2 "--create needs --confirm-repo and --confirm-count, copied from the preview"
+        if [ ! -e "$ISSUES_PLAN_ARG" ]; then lc__fmt plan_missing_recovery; lc_abort plan-missing 2 "detail=plan-dir-gone"; fi
+      fi
+      [ -s "${FACTS:-}" ] || lc_abort usage 2 "--facts must name the file written by scan"
+      [ -z "$JUDGED" ] || [ -f "$JUDGED" ] || lc_abort usage 2 "--judged file not found"
+      need_repo; preflight_plugin; lc_preflight_scanners
+      WORK=$(mktemp -d "${TMPDIR:-/tmp}/lc-work.XXXXXX") || lc_abort scanner-failed 2 "mktemp failed"
+      if [ "$mode" = preview ]; then lc_issues_preview; else lc_issues_create; fi ;;
+    *) lc_abort usage 2 "issues needs --preview, --create or --check-plan" ;;
+  esac
+}
+
 main() {
   local sub=${1:-}
   [ $# -gt 0 ] && shift
@@ -165,8 +233,9 @@ main() {
     scan) cmd_scan "$@" ;;
     render) cmd_render "$@" ;;
     verify-report) cmd_verify "$@" ;;
+    issues) cmd_issues "$@" ;;
     report-path) printf '%s\n' "$REPORT_REL" ;;
-    *) lc_abort usage 2 "usage: launch-check.sh scan|render|verify-report|report-path [options]" ;;
+    *) lc_abort usage 2 "usage: launch-check.sh scan|render|verify-report|report-path|issues [options]" ;;
   esac
 }
 main "$@"

@@ -324,10 +324,12 @@ assert_parse "S1 plain summary parses all six fields" "122 3 1 2 514 128" \
   <(printf ' 122 pass\n 3 fail\n 1 skip\n 2 todo\n 514 expect() calls\nRan 128 tests across 1 file.\n')
 
 # S2a/S2b — REAL bytes captured from bun 1.3.11 with FORCE_COLOR=1, pasted from
-# `cat -v`. VERIFIED ALSO ON 1.3.14 and on 1.4.2, which is what CI installs
-# (`.bun-version`, consumed by setup-bun in ci.yml) — measured 2026-09-19 by
-# running the same pass/fail/skip/todo suite on both binaries under FORCE_COLOR=1
-# and diffing `cat -v`: byte-identical apart from the elapsed-time suffix. Same
+# `cat -v`. VERIFIED ALSO ON 1.3.14, 1.4.2 and 1.4.4, which is what CI installs
+# (`.bun-version`, consumed by setup-bun in ci.yml). 1.4.2 was measured 2026-09-19 by
+# running the same pass/fail/skip/todo suite on 1.3.14 and 1.4.2 under FORCE_COLOR=1
+# and diffing `cat -v`: byte-identical apart from the elapsed-time suffix. 1.4.4 was
+# re-checked 2026-11-03 by reading `cat -v` of the same shapes (same ESC placement, dim
+# `0 fail` line and terminator), not by a byte diff against 1.4.2. Same
 # counter shapes, same value-dependent colour placement, same
 # `Ran N tests across M file.` terminator, and the parse returns all six fields
 # on each. That terminator is now load-bearing (it bounds the trusted region), so

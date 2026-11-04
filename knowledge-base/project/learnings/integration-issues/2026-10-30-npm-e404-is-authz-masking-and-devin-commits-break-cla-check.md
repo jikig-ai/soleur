@@ -80,3 +80,8 @@ cosmetic — verify the CLA allowlist covers it before choosing a bot identity.
 
 category: integration-issues
 module: .github/workflows/npm-publish.yml, packages/opencode-plugin, CLA gate
+
+## See also
+
+- `../best-practices/2026-11-03-cla-sanctioned-set-gate-design.md` — this measurement (bot fails cla-check, cannot sign) became the deny-overrides-admit exclusion in the #12027 sanctioned-set gate
+- `../security-issues/2026-11-03-gate-printed-remedy-git-ident-injection.md` — injection surface in that gate's printed remedy
