@@ -1431,9 +1431,9 @@ else
   else
     grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*each\.key[[:space:]]*$' <<<"$_tok_block" \
       || { _ca=0; echo "    the token block does not set 'config = each.key'"; }
-    # WHITELIST, not blacklist. The original form rejected only a string literal, so
-    # `config = local.pinned` — 13 tokens on one config, identical blast radius — sailed
-    # through. Anything that is not literally `each.key` is rejected, whatever its syntax.
+    grep -qE '^[[:space:]]*access[[:space:]]*=[[:space:]]*"read"[[:space:]]*$' <<<"$_tok_block" \
+      || { _ca=0; echo "    the token block does not set 'access = \"read\"'"; }
+    # WHITELIST, not blacklist: `config = local.pinned` (13 tokens, one config) once sailed through; anything but `each.key` is rejected.
     _cfg_binding=$(grep -oE '^[[:space:]]*config[[:space:]]*=[[:space:]]*[^[:space:]]+' <<<"$_tok_block" | head -1 | sed -E 's/.*=[[:space:]]*//')
     if [[ -n "$_cfg_binding" && "$_cfg_binding" != "each.key" ]]; then
       _ca=0
