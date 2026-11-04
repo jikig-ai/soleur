@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS public.legal_reauth_event (
 CREATE INDEX IF NOT EXISTS legal_reauth_event_lookup_idx
   ON public.legal_reauth_event (user_id, key, created_at DESC);
 
+-- soleur:no-data-api: public.legal_reauth_event — service-role RPC-only single-use challenge, no api-role table privilege
+
 COMMENT ON TABLE public.legal_reauth_event IS
   'One email-code challenge, bound to one user, key, text hash and web session (ADR-318). Short-lived; consumed '
   'atomically by record_legal_acceptance for a Yes. The code itself is verified by the auth service, never stored here.';
@@ -236,6 +238,9 @@ BEGIN
        WHERE user_id = p_user_id AND key = p_key AND created_at > now() - interval '15 minutes') >= 3 THEN
     RETURN jsonb_build_object('outcome', 'rate_limited');
   END IF;
+
+  -- Challenge rows are transient: every issue also deletes rows older than 30 days (no cron needed).
+  DELETE FROM public.legal_reauth_event WHERE created_at < now() - interval '30 days';
 
   UPDATE public.legal_reauth_event
      SET superseded_at = now()

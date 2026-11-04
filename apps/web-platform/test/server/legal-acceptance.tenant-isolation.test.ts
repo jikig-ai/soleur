@@ -319,6 +319,16 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
     });
   });
 
+  test("challenge rows older than 30 days are purged when the next challenge is issued", async () => {
+    await scenario(async (t, c) => {
+      await issue(t, c.userA, c.sessionA);
+      const [old] = await events(t, c.userA);
+      await t`update public.legal_reauth_event set created_at = now() - interval '31 days' where id = ${old.id}`;
+      await issue(t, c.userB, randomUUID());
+      expect((await events(t, c.userA)).filter((e: any) => e.id === old.id)).toHaveLength(0);
+    });
+  });
+
   test("AC4: the down file refuses while a decision row exists, and drops nothing", async () => {
     await scenario(async (t, c) => {
       await record(t, { sub: c.userA }, { choice: "decline" });
