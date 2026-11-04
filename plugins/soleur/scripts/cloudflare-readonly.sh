@@ -25,13 +25,16 @@
 # CF_API_TOKEN_AUDIT is read-only but is documented under the Doppler dev config, so change-history is expected to record
 # `no-credential` or `other: refused-source` until the owner relocates it (where it lives is an open question). This wrapper's
 # safety is structural: one GET request through one curl call site, absolute curl path, fixed URL templates, an EMPTY
-# environment for curl AND for every jq and date child (`/usr/bin/env -i`; an empty HOME means a planted ~/.jq is never
-# loaded and `$ENV` is empty), the credential on curl's stdin config only, and the xtrace refusal. See standing-delegation.md
+# environment for curl AND for every jq and date child (`/usr/bin/env -i`; an empty HOME means a planted ~/.jq is not
+# loaded and `$ENV` is empty, verified on jq 1.8.2), the credential on curl's stdin config only, and the xtrace refusal. See standing-delegation.md
 # section 9 (Credentials) for the stated exception. A 403 is recorded as unverified and never answered by a token swap.
 #
-# RESIDUAL, not fixed here: BASH_ENV, exported BASH_FUNC_* functions, SHELLOPTS and PS4 are caller-environment channels that act
-# inside this script's OWN bash before and around its checks, so `env -i` on the children does not reach them. The caller is the
-# operator's `doppler run`; nothing in this file claims to defend against a hostile caller environment.
+# RESIDUAL, not fixed here: BASH_ENV, exported BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup
+# (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN bash before and around its checks, so
+# `env -i` on the children does not reach them. The caller is the operator's `doppler run`; nothing in this file claims to defend
+# against a hostile caller environment.
+# ACCEPTED RESIDUAL: a rule ref or an id is operator-authored data and is printed verbatim after a shape check (1 to 64 characters
+# of A-Z a-z 0-9 _ -); it is data under the Boundary paragraph of section 9, never an instruction, and the shapes are bounded.
 #
 # Documentation basis (documentation only; no authenticated call was made), verified 2026-11-04:
 #   - Zone settings GET: the generic response is { success, errors, messages, result } with the setting object under
@@ -75,10 +78,12 @@
 #                       with a non-null ssl) and per rule ref, enabled, ssl and two host booleans. The host booleans are
 #                       LITERAL SUBSTRING figures only and are not a verdict input: a wildcard such as
 #                       ends_with(http.host, ".soleur.ai") or an expression of true defeats them. Records ok ONLY when
-#                       enabled_ssl_rules is 1, that rule's ref is dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible,
-#                       rule_count is 3 and both host booleans are true; anything else is recorded not ok with the figures.
-#                       The 3 and the ref are DATED SNAPSHOTS (2026-11-04): re-derive both from
-#                       apps/web-platform/infra/seo-config-rules.tf at read time.
+#                       enabled_ssl_rules is 1 AND that rule's ref is dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible AND
+#                       rule_count is 3; anything else is recorded not ok with the figures. The wrapper CANNOT verify that
+#                       the rule's expression is host-scoped (it never prints the expression), so Records ok does not depend
+#                       on the host booleans; the owner compares the live expression with
+#                       apps/web-platform/infra/seo-config-rules.tf before any flip go. The 3 and the ref are DATED
+#                       SNAPSHOTS (2026-11-04): re-derive both from that file at read time.
 #   C pagerules-ssl     figures active_rule_count, ssl_rule_count and per rule the matches_app_host substring figure. Records
 #                       ok ONLY when ssl_rule_count is 0. Any SSL page rule is recorded not ok with the figures and flagged
 #                       for CTO review even when matches_app_host is false (a wildcard pattern defeats that boolean).

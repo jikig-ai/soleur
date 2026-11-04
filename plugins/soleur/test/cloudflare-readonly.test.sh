@@ -301,8 +301,16 @@ cf_get_sites() { grep -cE '(^|[^[:alnum:]_])cf_get[[:space:]]+[^[:space:]()]' "$
 cf_get_args() { grep -oE '(^|[^[:alnum:]_])cf_get[[:space:]]+"[^"]+"' "$1" | sed -E 's/^[^c]*cf_get[[:space:]]+//' | sort; }
 curl_assigns() { grep -cE '(^|[^[:alnum:]_])CURL[[:space:]]*\+?=' "$1"; }
 # jq / date census: every invocation line (outside the -x preflight tests) must run behind an empty environment.
-tool_lines() { grep -E '/usr/bin/(jq|date)' "$1" | grep -vE '\[ -x '; }
-tool_unwrapped() { tool_lines "$1" | grep -vE '/usr/bin/env -i /usr/bin/(jq|date)'; }
+# A TRAILING comment is not code: it can carry a decoy `$(/usr/bin/env -i /usr/bin/jq ` that would satisfy a presence census. The
+# whitespace-before-# form leaves `$#`, `${x##y}` and `"$#"` alone.
+strip_trailing() { sed -E 's/[[:space:]]+#.*$//' "$1"; }
+# Every use of /usr/bin/jq or /usr/bin/date outside the `[ -x` preflight tests, and how many of them are the exact call form
+# `$(/usr/bin/env -i /usr/bin/<tool> `. The two counts must be equal (and 4).
+tool_uses() { grep -vE '\[ -x ' "$1" | grep -oE '/usr/bin/(jq|date)' | wc -l; }
+tool_anchored() { grep -vE '\[ -x ' "$1" | grep -oE '[$][(]/usr/bin/env -i /usr/bin/(jq|date) ' | wc -l; }
+# A tool path built from a variable: a /usr/bin directory stored in a variable, $VAR/jq, or an assignment whose value ends in /jq or /date.
+VARPATH_RE='=[[:space:]]*["'"'"']?/usr/bin/?["'"'"']?([[:space:];]|$)|[$][{(]?[A-Za-z_][A-Za-z0-9_]*[})]?["'"'"']?/(jq|date)([^[:alnum:]_-]|$)|[$]\{[^}]*\}["'"'"']?/(jq|date)([^[:alnum:]_-]|$)|(^|[[:space:];])(local[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*/(jq|date)([^[:alnum:]_-]|$)'
+varpath_hits() { grep -cE "$VARPATH_RE" "$1" || true; }
 xtrace_names() { grep -oE '\$\{[A-Z_]+:\+x\}' "$1" | sed -E 's/^\$\{([A-Z_]+):\+x\}$/\1/' | sort -u; }
 tokvar_names() { grep -oE 'TOKVAR=CF_[A-Z_]+' "$1" | sed 's/^TOKVAR=//' | sort -u; }
 sorted_join() { printf '%s\n' "$@" | sort | tr '\n' ' '; }
@@ -364,7 +372,7 @@ grp_source() {
   t "census control: the tolerant label extractor sees tab, 3-space, quoted and alternation arms" eq "$(case_labels "$WORK/cl.txt" | sort | tr '\n' ' ')" "purge raw zap "
   t "census control: the arm counter sees every terminator" eq "$(case_arm_count "$WORK/cl.txt")" 3
   t "census: exactly four cf_get call sites outside the function" eq "$(cf_get_sites "$STRIPPED")" 4
-  local want_tpl
+  local want_tpl vp
   want_tpl=$(printf '%s\n' \
     '"$BASE/accounts/$CF_ACCOUNT_ID/logs/audit?since=$since&before=$now&limit=$LIMIT&direction=desc"' \
     '"$BASE/zones/$CF_ZONE_ID/pagerules?status=active"' \
@@ -380,13 +388,25 @@ grp_source() {
   printf '%s\n' 'export CURL=/x' > "$WORK/cu2.txt"
   t "census control: an indented conditional override counts 1" eq "$(curl_assigns "$WORK/cu1.txt")" 1
   t "census control: an exported form counts 1" eq "$(curl_assigns "$WORK/cu2.txt")" 1
-  t "census: anchor - jq runs in exactly 2 places and date in exactly 2, each behind env -i" bash -c '[[ "$(grep -c "/usr/bin/env -i /usr/bin/jq " "$1")" == 2 && "$(grep -c "/usr/bin/env -i /usr/bin/date " "$1")" == 2 ]]' _ "$STRIPPED"
-  t "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i (empty HOME, empty \$ENV)" eq "$(tool_unwrapped "$STRIPPED" | wc -l)" 0
+  strip_trailing "$STRIPPED" > "$WORK/nocomment.sh"
+  t "census: anchor - the comment-free source still contains jq/date invocations" test -s "$WORK/nocomment.sh"
+  t "census: jq and date are used in exactly 4 places (jq twice, date twice)" eq "$(tool_uses "$WORK/nocomment.sh")" 4
+  t "census: every jq/date use is the exact call form \$(/usr/bin/env -i /usr/bin/<tool> ... (a trailing comment does not count)" eq "$(tool_anchored "$WORK/nocomment.sh")" "$(tool_uses "$WORK/nocomment.sh")"
   tn "census: no bare jq or date command" src_has '(^|[^[:alnum:]_/.-])(jq|date)[[:space:]]+-'
-  printf '%s\n' 'x=$(/usr/bin/jq -c a)' > "$WORK/tw1.txt"
-  printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c a)' '[ -x /usr/bin/jq ] || exit 1' > "$WORK/tw0.txt"
-  t "census control: an unwrapped jq line is counted" eq "$(tool_unwrapped "$WORK/tw1.txt" | wc -l)" 1
-  t "census control: a wrapped jq line and the -x preflight are not counted" eq "$(tool_unwrapped "$WORK/tw0.txt" | wc -l)" 0
+  t "census: no tool path built from a variable" eq "$(varpath_hits "$WORK/nocomment.sh")" 0
+  printf '%s\n' 'x=$(/usr/bin/jq -c a) # $(/usr/bin/env -i /usr/bin/jq -c' > "$WORK/tw1.txt"
+  strip_trailing "$WORK/tw1.txt" > "$WORK/tw1s.txt"
+  printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c a) # trailing comment' '[ -x /usr/bin/jq ] || exit 1' 'y="${z##*/}" "$#"' > "$WORK/tw0.txt"
+  strip_trailing "$WORK/tw0.txt" > "$WORK/tw0s.txt"
+  t "census control: a decoy trailing comment is stripped, leaving 1 use and 0 anchored calls" eq "$(tool_uses "$WORK/tw1s.txt")/$(tool_anchored "$WORK/tw1s.txt")" "1/0"
+  t "census control: a wrapped call survives the strip; the -x preflight is not a use" eq "$(tool_uses "$WORK/tw0s.txt")/$(tool_anchored "$WORK/tw0s.txt")" "1/1"
+  t "census control: the strip leaves \$# and \${x##y} intact" has_file "$WORK/tw0s.txt" 'y="${z##*/}" "$#"'
+  for vp in 'P=/usr/bin' 'x=$(/usr/bin/env -i $P/jq -r a)' 'x=$(/usr/bin/env -i "${P}"/date -u)' 'x=$(/usr/bin/env -i ${D:-/usr/bin}/date -u)' 'J=/opt/x/jq' 'local D=/usr/bin/date'; do
+    printf '%s\n' "$vp" > "$WORK/vp.txt"
+    t "census control: the variable-path ban flags: $vp" eq "$(varpath_hits "$WORK/vp.txt")" 1
+  done
+  printf '%s\n' 'PATH=/usr/bin:/bin' 'u="$BASE/zones/$CF_ZONE_ID/settings/ssl"' '[ -x /usr/bin/jq ] || exit 1' > "$WORK/vp.txt"
+  t "census control: PATH=/usr/bin:/bin, URL templates and the -x preflight are not flagged" eq "$(varpath_hits "$WORK/vp.txt")" 0
   tn "census: no token, zone or account variable on any jq/date line" bash -c 'grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"' _ "$STRIPPED"
   printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c --arg t "$TOK" a)' > "$WORK/tk1.txt"
   tn "census control: a token variable on a jq line is detected" bash -c '! { grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"; }' _ "$WORK/tk1.txt"
@@ -670,6 +690,18 @@ grp_env() {
     t "env[jq/$s]: with a planted \$HOME/.jq the run is still ok" eq "$L1" "cloudflare-readonly: $s ok"
     t "env[jq/$s]: a planted \$HOME/.jq redefining test leaks no token to stdout or stderr" leak_scan "$WORK/comb.txt"
     t "env[jq/$s]: the output is exactly the two-line ok contract" eq "$(printf '%s\n' "$OUT" | wc -l)" 2
+  done
+  # guard_body's jq is a separate call site and its program calls `type` (every guard condition tests `.result | type`), which a
+  # planted .jq can redefine. If that jq inherited HOME the debug output would pollute its verdict and the run would no longer be ok.
+  printf 'def type: ($ENV.%s | debug | "string");\n' CF_API_TOKEN_ZONE_SETTINGS > "$HOMEDIR/.jq"
+  /usr/bin/env HOME="$HOMEDIR" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" /usr/bin/jq -nc '1 | type' > "$WORK/jqctl3.txt" 2>&1
+  t "env[jq-guard] control: a planted .jq redefining type DOES print the token when jq inherits the environment (the probe is live)" has_file "$WORK/jqctl3.txt" "$TOK_Z"
+  for s in "${SUBS[@]}"; do
+    printf 'def type: ($ENV.%s | debug | "string");\n' "$(tokvar_of "$s")" > "$HOMEDIR/.jq"
+    fixture 200 "$(ok_body "$s")"
+    run "${BASE_ENV[@]}" -- "$s"
+    t "env[jq-guard/$s]: with a planted \$HOME/.jq redefining type (a builtin the guard program calls) the run is still ok" eq "$L1" "cloudflare-readonly: $s ok"
+    t "env[jq-guard/$s]: that planted .jq leaks no token to stdout or stderr" leak_scan "$WORK/comb.txt"
   done
   rm -f "$HOMEDIR/.jq"
 }
@@ -1245,9 +1277,13 @@ if [[ -z "$INNER" ]] && want all; then
 
   # --- review round: children run under env -i (W1) ---
   mutate "W1.1 project jq without env -i" "env[jq/ssl-mode]: a planted \$HOME/.jq redefining test leaks no token" env,source '  res=$(/usr/bin/env -i /usr/bin/jq -c' '  res=$(/usr/bin/jq -c'
-  mutate "W1.2 guard jq without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
-  mutate "W1.3 date (now) without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/date'
-  mutate "W1.4 date (since) without env -i" "census: every /usr/bin/jq or /usr/bin/date invocation runs behind env -i" source '  since=$(/usr/bin/env -i /usr/bin/date' '  since=$(/usr/bin/date'
+  mutate "W1.2 guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
+  mutate "W1.2b guard jq without env -i, behavioural" "env[jq-guard/ssl-mode]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
+  mutate "W1.3 date (now) without env -i" "census: every jq/date use is the exact call form" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/date'
+  mutate "W1.4 date (since) without env -i" "census: every jq/date use is the exact call form" source '  since=$(/usr/bin/env -i /usr/bin/date' '  since=$(/usr/bin/date'
+  mutate "W1.6 bare jq with a decoy trailing comment" "census: every jq/date use is the exact call form" source '  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1)' '  res=$(/usr/bin/jq -c --argjson limit "$LIMIT" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1) # $(/usr/bin/env -i /usr/bin/jq '
+  mutate "W1.7 jq path built from a variable" "census: no tool path built from a variable" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  P=/usr/bin; kind=$(/usr/bin/env -i $P/jq -r'
+  mutate "W1.8 date path from a defaulted variable" "census: no tool path built from a variable" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/env -i ${D:-/usr/bin}/date'
   mutate "W1.5 a bare jq command" "census: no bare jq or date command" source '  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14' $'  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14\n  jq -n 1'
 
   # --- Records inputs (W2) ---
@@ -1335,7 +1371,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 100 mutation rows ran" test "$MUT_TOTAL" -ge 100
+  t "mutation floor: at least 106 mutation rows ran (the exact current count)" test "$MUT_TOTAL" -ge 106
 fi
 
 # --- accounting ---
