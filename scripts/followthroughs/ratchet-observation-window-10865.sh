@@ -22,9 +22,13 @@
 #       `failure` in the jobs API, so both the conclusion and the marker are evidence and the job must have RUN); a genuine `exit=1` (a real new
 #       pair) is NOT green and does NOT restart the window, bot PR or not;
 #   (d) job wall time (completed_at - started_at) over EVERY unit that ran and is not an incident, red and timed-out units included (a ceiling must see the
-#       tail): p95 (nearest rank) at most P95_MAX (240) s and the maximum at most MAX_MAX (285) s. These two ceilings are PROVISIONAL: first ruled 210/270 s when the
-#       only prior figure was a local mean of 203 s, re-ruled 240/285 s by the CTO agent on 2026-11-02 from the post-PR5 job population (series: the runbook observation log); the CTO agent re-rules them again (a dated row with the measured
-#       series and a change of these two constants, nothing else) at the close of the window or at the 30-day trigger, whichever is first;
+#       tail): p95 (nearest rank) at most P95_MAX (240) s and the maximum at most MAX_MAX (285) s. These two ceilings are RULED: first ruled 210/270 s when the
+#       only prior figure was a local mean of 203 s, re-ruled 240/285 s by the CTO agent on 2026-11-02 from the post-PR5 job population, and confirmed unchanged on
+#       2026-11-03 — the re-rule the 30-day trigger scheduled, performed early and FINAL — from the whole-population pull of 1,197 units since the s4-drain floor
+#       (p95 237 s overall, ~249-250 s daily on 2026-11-02/03, maximum 317 s, mean billed 3.47 min/unit; series: the runbook observation log). This probe's own
+#       sliding window lags the population by construction (wall_p95_s=206 wall_max_s=284 over units=260 on 2026-11-03): a probe read-window item, not a constants
+#       item. A breach is no longer a re-rule trigger: the recheck trigger is a whole-population p95 above 240 s on two consecutive reads, a CI cost regression
+#       for the budget owner;
 #   (e) composition among the green pull_request units: one docs-only PR (every file a knowledge-base markdown file or a root markdown file), one
 #       DRAFT PR (read from the issue timeline: draft at the unit's own time), and one bot PR (a user of type Bot) when one occurs; when none
 #       occurs by REVIEW_DAYS (30) days after the merge the committed synthetic-green unit test substitutes and the substitution is printed;
@@ -87,8 +91,8 @@ BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
 ORACLE=(".github/workflows/ci.yml" "scripts/ci-pr-affected-replay.py" "plugins/soleur/scripts/lint-ratchet.py" "scripts/ci-pr-affected-audit.accept.tsv" "scripts/lib/test-affected-paths.sh" "scripts/test-all.sh" "$BASELINE")
 MIN_PR=3
 MIN_MG=3
-P95_MAX=240   # PROVISIONAL (see (d)); re-ruled 2026-11-02 from 210
-MAX_MAX=285   # PROVISIONAL (see (d)); re-ruled 2026-11-02 from 270
+P95_MAX=240   # RULED (see (d)); re-ruled 2026-11-02 from 210, confirmed unchanged and FINAL 2026-11-03 (whole-population p95 237 s, max 317 s)
+MAX_MAX=285   # RULED (see (d)); re-ruled 2026-11-02 from 270, confirmed unchanged and FINAL 2026-11-03
 TIMEOUT_WALL=290
 REVIEW_DAYS=30
 MAX_PAGES="${SOAK_MAX_PAGES:-40}"
@@ -525,13 +529,13 @@ if (( bot_seen == 0 )); then
 fi
 nwall=0
 if (( n_w > 0 )); then
-  (( p95 <= P95_MAX )) || { nots+=("wall p95 ${p95}s is over $P95_MAX s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)"); nwall=$((nwall + 1)); }
-  (( max <= MAX_MAX )) || { nots+=("wall max ${max}s is over $MAX_MAX s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)"); nwall=$((nwall + 1)); }
+  (( p95 <= P95_MAX )) || { nots+=("wall p95 ${p95}s is over $P95_MAX s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
+  (( max <= MAX_MAX )) || { nots+=("wall max ${max}s is over $MAX_MAX s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
 else
   nots+=("no unit ran to take a wall time from")
 fi
 if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then
-  nots+=("the $REVIEW_DAYS-day trigger has passed and (d) is the only unmet criterion: the CTO agent re-rules the two wall ceilings now")
+  nots+=("the $REVIEW_DAYS-day trigger has passed and (d) is the only unmet criterion: the ceilings are ruled (2026-11-03) and a breach now is a CI cost regression for the budget owner, not a re-rule")
 fi
 # nothing persists between sweeps: a cut sweep leaves the rest unread THIS sweep, and a faster sweep reads further. A cut is NOT YET only while a criterion is unmet.
 if (( FACTS_CUT == 1 && ${#nots[@]} > 0 )); then nots+=("read budget ended in the PR-facts phase (SOAK_FACTS_BUDGET_S=$FACTS_BUDGET): PRs after that point were not read this sweep"); fi
@@ -540,5 +544,5 @@ if (( ${#nots[@]} > 0 )); then
   printf 'NOT YET: %s\n' "${nots[@]}"
   exit 2
 fi
-echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s, docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. The two wall ceilings are PROVISIONAL: the CTO agent re-rules them at this close (runbook, 'Ceilings are PROVISIONAL'). Closing #10865 does not authorize PR3b (#10859)."
+echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s, docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. The two wall ceilings are RULED (240/285 s, confirmed 2026-11-03; runbook, 'Ceilings are RULED'). Closing #10865 does not authorize PR3b (#10859)."
 exit 0

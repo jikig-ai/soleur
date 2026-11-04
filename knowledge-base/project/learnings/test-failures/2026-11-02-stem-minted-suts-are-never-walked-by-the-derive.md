@@ -38,7 +38,9 @@ Do not spend time hunting for a derivation fix per-suite; declare
 `AFFECTED_<LABEL>_PATHS` with the real dep set and record *why* the derive
 missed in the array comment. The extractor-level fixes (walk stem-minted SUTs,
 tolerate `$(cd … 2>/dev/null && pwd)` prefixes or a `$libdir` map) would retire
-this declaration class — tracked as out-of-scope follow-up, not a per-pair fix.
+this declaration class — implemented 2026-11-03 in the feat-one-shot-11775-10865-extractor-batch
+PR (BFS frontier seeds stem-minted SUTs; the D1 `$(cd)` arm tolerates redirects
+before `&& pwd`).
 
 ## Evidence
 
@@ -47,3 +49,5 @@ seats reproduced the gap three ways (derive-cache record, extracted-harness repl
 `--print-selection` row). `ratchet exit=0 reason=pass live=1510 baseline=1510`
 after the declaration. See also the sibling rule — the SUT-source boundary decides
 declare-vs-accept (`2026-11-01-ratchet-repair-pair-disposition-moved-echoes-and-sut-source-boundary.md`).
+
+See also: `2026-11-03-a-widen-only-derive-fix-can-lose-edges-the-bug-itself-minted.md` — adjudicating the edge losses the fix's stream diff produced (phantom `^dir/` edges minted by the `||`-residue bug, ruled bug-correction).
