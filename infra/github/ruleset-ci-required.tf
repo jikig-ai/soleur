@@ -338,11 +338,15 @@ resource "github_repository_ruleset" "ci_required" {
     # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
     # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
     # runs all 25 contexts); raise only after the canary measures it.
-    # `check_response_timeout_minutes` (75) must exceed the slowest required check on
+    # `check_response_timeout_minutes` (120) must exceed the slowest required check on
     # `merge_group` INCLUDING runner start spread, else a green PR is dequeued. Raised
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured
     # p95 44.1 min, longest success 60.5 min (above the old 60) and one
-    # `checks_timed_out` ejection. The stall probe (45 min) stays below it.
+    # `checks_timed_out` ejection. The stall probe (45 min) stays below it. Raised again
+    # 75 -> 120 on 2026-11-03 (#12030): under hosted-runner saturation (60 jobs running, 222
+    # queued) one `merge_group` CI run took 79 min, its shards waiting 10-28 min for a
+    # runner, and the entry was ejected with `checks_timed_out`. The cost is that a hung
+    # entry can hold the queue 45 min longer than at 75; the demand side is #12030.
     # `max_entries_to_merge = 3` (raised from 1 on #11678 under the ADR-270 raise
     # checklist): groups batch merge LANDINGS, not `merge_group` builds — each
     # position still pays its own cumulative candidate build. Preconditions landed
@@ -356,7 +360,7 @@ resource "github_repository_ruleset" "ci_required" {
       min_entries_to_merge              = 1
       min_entries_to_merge_wait_minutes = 0
       max_entries_to_build              = 2
-      check_response_timeout_minutes    = 75
+      check_response_timeout_minutes    = 120
     }
   }
 }

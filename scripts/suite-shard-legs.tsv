@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-04T00:23:00Z
+# generated-at=2026-11-04T01:33:45Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -78,6 +78,7 @@ apps/cla-evidence/scripts/sentinel-pr.test.sh	5
 apps/cla-evidence/scripts/timestamp.test.sh	3
 apps/cla-evidence/scripts/upload-bypass.test.sh	2
 apps/cla-evidence/scripts/upload-evidence.test.sh	7
+apps/web-platform/infra/inngest-luks-sole-copy	3
 apps/web-platform/scripts/anthropic-key-distinctness.test.sh	3
 apps/web-platform/scripts/assert-byok-rules-exist.test.sh	2
 apps/web-platform/scripts/dev-ledger-parity.test.sh	1
@@ -300,7 +301,7 @@ plugins/soleur/test/roadmap-reconcile.test.sh	3
 plugins/soleur/test/rtk-grammar-parity.test.sh	1
 plugins/soleur/test/schedule-skill-once.test.sh	5
 plugins/soleur/test/schedule-task-design.test.sh	1
-plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	3
+plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	6
 plugins/soleur/test/scripts-shard-manifest.test.sh	1
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
 plugins/soleur/test/scripts-shard-totality.test.sh	7
