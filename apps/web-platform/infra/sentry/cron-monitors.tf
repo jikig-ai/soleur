@@ -912,7 +912,7 @@ resource "sentry_cron_monitor" "scheduled_approval_expiry" {
 # check-in means the re-drive stopped (scheduler dead / function dropped) while owed Art. 17
 # erasures sit in the ledger. There is NO independent cover for that mode: the age gauge and the
 # 20/28-day escalation events are emitted BY the cron, so a dead cron emits none of them; this
-# monitor's missed-check-in issue is the only signal, and it emails nobody until it is routed
+# monitor's missed-check-in issue is the only signal, and it is routed into cron_monitor_failure
 # (cron-monitor-alerts.tf, #10914). The handler heartbeats ok:true when the run completed its
 # bookkeeping (a host refusal is the ledger's normal state, not a cron failure) and ?status=error
 # when any stage failed (seed, claim, owner check, resolve, record or the age read). No in_progress
