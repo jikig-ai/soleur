@@ -37,7 +37,9 @@
 #      see the constant's comment for the measured evidence; an author-slot
 #      noreply@github.com still denies.
 # Rosters are read at remote-tracking refs (last fetch) — the stage-2 deny
-# message tells the operator to `git fetch origin` and retry on fresh rosters.
+# message tells the operator to `git fetch --no-tags origin` and retry on
+# fresh rosters (`--no-tags` is the battery-tag-authorship-suppressed form:
+# remote-tracking refs still refresh, no tags are authored).
 # DENIED_EMAILS is evaluated BEFORE every admission source — deny overrides
 # admit: devin-ai-integration[bot] is in neither roster (measured cla-check
 # fail, PR #11690 / learning 2026-10-30), so it denies even when it equals the
@@ -409,7 +411,7 @@ jq -n \
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: branch commit(s) carry author/committer email(s) outside the CLA-sanctioned set — the required `cla-check` CI status resolves commit.author.user.login via GitHub and fails on unresolvable identities (a wrong `git -c user.email=…` override, an unsigned identity, or devin-ai-integration[bot], which is in neither roster).\n\nOffending emails:\n" + $emails + "\nSanctioned set: the session'"'"'s `git config user.email`; a `<id>+<login>@users.noreply.github.com` (or the pre-2017 `login@users.noreply.github.com`) whose login case-insensitively matches cla.yml'"'"'s `allowlist:` (read at origin/main) or cla-signatures `signedContributors[].name`; a pinned CLA-allowlisted email; or `noreply@github.com` in the committer slot only. Rosters are read at remote-tracking refs — if one changed recently, `git fetch origin` and retry.\n\nOffending commits (h author committer subject):\n" + $offenders + "\n\nRewrite the author/committer to your CLA-signed identity, then re-push:\n" + $fix)
+      permissionDecisionReason: ("BLOCKED: branch commit(s) carry author/committer email(s) outside the CLA-sanctioned set — the required `cla-check` CI status resolves commit.author.user.login via GitHub and fails on unresolvable identities (a wrong `git -c user.email=…` override, an unsigned identity, or devin-ai-integration[bot], which is in neither roster).\n\nOffending emails:\n" + $emails + "\nSanctioned set: the session'"'"'s `git config user.email`; a `<id>+<login>@users.noreply.github.com` (or the pre-2017 `login@users.noreply.github.com`) whose login case-insensitively matches cla.yml'"'"'s `allowlist:` (read at origin/main) or cla-signatures `signedContributors[].name`; a pinned CLA-allowlisted email; or `noreply@github.com` in the committer slot only. Rosters are read at remote-tracking refs — if one changed recently, `git fetch --no-tags origin` and retry.\n\nOffending commits (h author committer subject):\n" + $offenders + "\n\nRewrite the author/committer to your CLA-signed identity, then re-push:\n" + $fix)
     }
   }'
 exit 0
