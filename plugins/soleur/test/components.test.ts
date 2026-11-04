@@ -969,6 +969,13 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     }
   });
 
+  test("the Cloudflare clause of item 2 names exactly one host: api.cloudflare.com (no second or wildcard host)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
+    const hosts = [...new Set([...clause.matchAll(/[A-Za-z0-9*-]+(?:\.[A-Za-z0-9*-]+)*\.(?:com|io|ai|net|org|dev|example)\b/g)].map((m) => m[0]))];
+    expect(hosts, "hosts named in the Cloudflare clause").toEqual(["api.cloudflare.com"]);
+  });
+
   test("Cloudflare slicers are live: a clause re-flowed over lines still slices, a missing anchor slices to empty", () => {
     const flow = flatten("Cloudflare through\n  `x.sh` only, with one of its four\n subcommands `a` or `b`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.");
     expect(slice(flow, "Cloudflare through", "are not Class R").includes("sends GET only")).toBe(true);
