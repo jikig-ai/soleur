@@ -28,6 +28,12 @@
 - Verification: parity 362/362, infra-config-apply 266/266, bootstrap-obs 135/135, fresh-boot-parity 225/225, lint battery 33/33, live lint unclassified:0, systemd-analyze clean, orphan lint clean.
 - Open residual for follow-up issue: ~18 quoted `IDENT="$(` captures outside the 19-file fence (advisory lines) + `scheduled-marketplace-drift`/`scheduled-prod-version-drift`/`scheduled-supabase-watchdog` sites.
 
+## Resume State (pre-review)
+- Pipeline: one-shot. Phase done: work (3 commits pushed, head 9efd37b380 pre-review). Next: soleur:review -> fix findings -> qa -> compound -> ship -> postmerge.
+- Draft PR #12064. Targets #8780/#9659/#10078. Epic #10390 umbrella.
+- Affected gate running in background shell 842db5 -> /tmp/gate-10390.log.
+- Reserved holds: #10382 #8839 #9943 #8525 #8013 #8080 #10290 (operator-reserved, untouched).
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
