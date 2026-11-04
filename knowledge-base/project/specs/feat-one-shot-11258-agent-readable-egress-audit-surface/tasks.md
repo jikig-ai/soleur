@@ -18,7 +18,7 @@ Scope (binding CTO ruling B, 2026-11-04): ADR-288 amendment plus one default-sui
   - [ ] 1.1.4 Arm (d): `TOOL_TIER_MAP` keys and `CC_REGISTERED_PLATFORM_TOOL_NAMES` have no match (no assertion over `readCcMcpAllowlist`)
   - [ ] 1.1.5 Arm (e): anti-vacuity (hard-coded root-to-anchor map independent of `SCAN_ROOTS`, count floor of at most 90% of the measured figure, both population arms non-empty, every expected member exists, synthetic must-match and must-not-match strings)
   - [ ] 1.1.6 The test reads nothing outside `apps/web-platform` (no `knowledge-base/` read), so it stays in the `unit` project; scan `.ts`, `.tsx` and `.mjs`
-- [ ] 1.2 Do not name helpers `*Window`, `*Region` or `*Section`; run `python3 scripts/lint-window-closure-assertion.py`
+- [ ] 1.2 Do not name helpers `*Window`, `*Region` or `*Section`; run `python3 scripts/lint-window-closure-assertion.py --allowlist scripts/lint-window-closure-assertion.allowlist.txt`
 - [ ] 1.3 Run the test on the unmutated tree: arms (a)-(e) green; record the run before any mutant
 
 ## Phase 2: ADR-288 amendment

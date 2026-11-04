@@ -11,6 +11,28 @@ brand_survival_threshold: aggregate pattern
 
 # feat: agent-readable surface over the egress audit summary (deferred from #9545)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04. **Method:** the deepen-plan mechanical gates (4.6 user-brand impact, 4.7 observability, 4.8 PAT
+shapes, 4.11 guard contract via `scripts/lint-guard-contract.py`, 4.12 scope check) were run against this file, every cited
+issue, path and rule id was re-verified live, and the plan-review panel (three engineering seats) plus two follow-up CTO consults
+were folded in earlier. A full agent fan-out was not run: the plan changes one test and one ADR under a binding scope ruling,
+and the per-section research would only repeat the two CTO consults and the CLO pass already recorded.
+
+### Key improvements over the first draft
+1. The ADR-parity arm was dropped: it would have forced the test into the always-run repo-wide project and a second file edit,
+   and proved only same-diff consistency.
+2. Arm (e) now uses hard-coded root anchors and a 90% count floor; a dropped scan root can no longer erase its own check.
+3. The loader chokepoint is one regex over quoted import specifiers (verified: exactly the two pages), `.mjs` is scanned, and
+   the lint command is the allowlist form the repo actually runs.
+
+### New considerations discovered
+- A test that reads `knowledge-base/` is not a unit-project test (repo-wide containment rule); the pin therefore reads only inside
+  the app.
+- `#9545` is now closed, so the amendment describes #11258 as a standalone open item under epic #9601; the plan cites #9545 only
+  as the origin of the deferral.
+- The window-closure lint fails repo-wide without its allowlist argument (18 grandfathered helpers); the AC uses the allowlist form.
+
 ## Overview
 
 **Scope narrowing (binding CTO ruling, 2026-11-04).** Issue #11258 asks for an agent-readable surface over the workspace
@@ -289,8 +311,9 @@ The amendment lists the expected consumer paths and the test file name as plain 
   tree or `git checkout --` of the mutated file; never `git stash`). Summarise row, result and the failing arm in the PR body.
 - `cd apps/web-platform && npx vitest run test/egress-audit-agent-surface-absence.test.ts` (and `cc-mcp-tier-allowlist` to prove
   the import does not disturb it).
-- `python3 scripts/lint-window-closure-assertion.py` (it takes no path argument: run it repo-wide and require exit 0 on the
-  branch), `python3 scripts/lint-guard-contract.py` on this plan,
+- `python3 scripts/lint-window-closure-assertion.py --allowlist scripts/lint-window-closure-assertion.allowlist.txt` (the form
+  `scripts/test-all.sh` runs; repo-wide, no path argument; without the allowlist it reports 18 grandfathered helpers),
+  `python3 scripts/lint-guard-contract.py` on this plan,
   `bash scripts/markdown-lint.sh --repo-sweep` before the first push of markdown, `bash plugins/soleur/test/c4-count-parity.test.sh`.
 - CI is the ship gate for the rest; the local `--affected` battery takes 30+ minutes under load and adds nothing for a
   one-file test plus a markdown edit.
@@ -367,7 +390,7 @@ constraints. Enforcement of CODEOWNERS review is a branch-protection setting hel
   `docs/legal`, `plugins/soleur/docs`, `scripts`, `.github`. Files the pipeline itself writes (a regenerated
   `knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`, a committed run record) are expected and listed in the PR body.
 - [ ] AC7. `bash scripts/markdown-lint.sh --repo-sweep`, `python3 scripts/lint-guard-contract.py <this plan>` and
-  `python3 scripts/lint-window-closure-assertion.py` exit 0.
+  `python3 scripts/lint-window-closure-assertion.py --allowlist scripts/lint-window-closure-assertion.allowlist.txt` exit 0.
 - [ ] AC8. PR text has `Ref #11258` and `Ref #9601` and no `Closes|Fixes|Resolves`; ends with the generation line; commit trailers as
   specified; no issue filed (net issue flow 0).
 - [ ] AC9. `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 (no C4 file changed).
@@ -418,10 +441,42 @@ Product/UX Gate: not relevant (no UI-surface path in the Files lists; the mechan
 processing, no `single-user incident` threshold, no cron reading learnings or specs, no new distribution surface); the CLO
 answered the register question above.
 
+## Observability
+
+The only executable artifact is a test, so the "signal" is its CI verdict. No runtime code is added.
+
+```yaml
+liveness_signal:
+  what: the egress-audit absence pin runs in the vitest unit project on every pull request that touches apps/web-platform
+  cadence: per pull request
+  alert_target: the required CI check on the pull request (red check blocks the merge)
+  configured_in: apps/web-platform/vitest.config.ts (project unit includes test/**/*.test.ts)
+error_reporting:
+  destination: vitest failure output in the CI job log, naming every offending file and pointing at the ADR-288 amendment
+  fail_loud: true
+failure_modes:
+  - mode: an agent tool, MCP entry or tier-map key reaches either egress-audit function or the table
+    detection: arms (a)-(d) of the pin fail
+    alert_route: red CI check on the introducing pull request
+  - mode: the scan silently covers nothing (a dropped root or a changed layout)
+    detection: arm (e) hard-coded root anchors and count floor fail
+    alert_route: red CI check
+  - mode: the agent surface moves to a place the population arms do not reach
+    detection: not detected by this pin (stated residual in the ADR amendment); held by review
+    alert_route: reviewer on the pull request
+logs:
+  where: CI job log of the unit project
+  retention: the CI provider's default job-log retention
+discoverability_test:
+  command: grep -c 'include: \["test/\*\*/\*.test.ts", "lib/\*\*/\*.test.ts"\]' apps/web-platform/vitest.config.ts
+  expected_output: "1"
+```
+
 ## Sharp Edges
 
-- Observability (plan Phase 2.9) is skipped: the Files lists contain no code-class file under `apps/*/server/`, `apps/*/src/`,
-  `apps/*/infra/` or `plugins/*/scripts/` (one test file and markdown), no new infrastructure surface and no autonomous task.
+- Observability: plan Phase 2.9 does not require a section (no code-class file under `apps/*/server/`, `apps/*/src/`,
+  `apps/*/infra/` or `plugins/*/scripts/`, no new infrastructure, no autonomous task), but deepen-plan Phase 4.7 treats a
+  `apps/web-platform/test/` file as non-docs, so a compact `## Observability` section for the test itself is carried above.
 - The spec directory had no `spec.md` (headless one-shot, no brainstorm), so `lane:` defaulted to `cross-domain` (fail-closed).
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will
   fail `deepen-plan` Phase 4.6. This one declares `aggregate pattern` with a stated reason.
