@@ -597,6 +597,28 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "additionalOwnerFields [decided_by], Art. 15) with a service-readable " +
     "path BEFORE approval-queue is enabled for any workspace outside the " +
     "Jikigai canary.",
+  // #12011 PR-B (ADR-319, migration 184): the founder legal-acceptance record. Both tables are RPC-only (service_role
+  // holds no table privilege), so a worker read would fail every export, same as approval_request above.
+  legal_acceptance:
+    "Migration 184 table (#12011, ADR-319), dark and empty until the first real " +
+    "acceptance. Holds a pseudonymous founder uuid with NO foreign key, the key and " +
+    "sha256 of a committed legal text, the choice, an optional note of at most 1000 " +
+    "characters, the web session id and a database-computed row checksum. Kept after " +
+    "account deletion under Art. 17(3)(e) (the record of a legal decision); no erasure " +
+    "scrub touches it by design. Excluded from the self-serve export because service_role " +
+    "has no table privilege on it (RPC-only); Art. 15 access is answered through " +
+    "legal@jikigai.com. Closing condition: before any founder other than the Jikigai " +
+    "operator is admitted, the three published legal documents are updated and a " +
+    "service-readable access path is decided (PA-40 item 17). See " +
+    "knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md.",
+  legal_reauth_event:
+    "Migration 184 table (#12011, ADR-319): a server-issued intent (30 minutes) and, " +
+    "for a Yes, the single-use email-code challenge, bound to a user uuid, a key, a " +
+    "text hash, a version and a web session id. Transient (purged after 30 days when " +
+    "the next challenge is requested; no foreign key; the uuid and the session id are " +
+    "the personal data), RPC-only, not a " +
+    "record of any decision. Excluded from the self-serve export for the same reason " +
+    "as legal_acceptance.",
 };
 
 /**
