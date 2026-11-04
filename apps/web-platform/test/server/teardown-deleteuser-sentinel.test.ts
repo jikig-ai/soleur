@@ -34,7 +34,7 @@
  * threat model (accidental regression, not adversarial authorship).
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "vitest";
 import { stripComments } from "../helpers/strip-comments";
@@ -128,13 +128,25 @@ function deleteUserCarriers(): { carriers: string[]; byRel: Map<string, string> 
   const byRel = new Map<string, string>();
   const visitedDirs = new Set<string>();
   const visit = (full: string): void => {
-    let st: ReturnType<typeof statSync>;
+    // One descriptor for the kind check and the byte read — statSync-then-
+    // readFileSync by path leaves a window where the entry could be swapped
+    // between the two calls (CodeQL js/file-system-race). The descriptor pins
+    // the inode for both observations; directories close it before recursing.
+    let fd: number;
+    let st: ReturnType<typeof fstatSync>;
     try {
-      st = statSync(full); // follows symlinks
+      fd = openSync(full, "r"); // follows symlinks, same as the statSync did
     } catch {
       return; // dangling link — nothing to census
     }
+    try {
+      st = fstatSync(fd);
+    } catch {
+      closeSync(fd);
+      return;
+    }
     if (st.isDirectory()) {
+      closeSync(fd);
       const real = realpathSync(full); // cycle guard for symlinked dirs
       if (visitedDirs.has(real)) return;
       visitedDirs.add(real);
@@ -143,11 +155,15 @@ function deleteUserCarriers(): { carriers: string[]; byRel: Map<string, string> 
       }
       return;
     }
-    if (st.isFile() && SOURCE_EXT_RE.test(full)) {
-      byRel.set(
-        `test/${relative(TEST_ROOT, full)}`,
-        stripComments(readFileSync(full, "utf8"), full),
-      );
+    try {
+      if (st.isFile() && SOURCE_EXT_RE.test(full)) {
+        byRel.set(
+          `test/${relative(TEST_ROOT, full)}`,
+          stripComments(readFileSync(fd, "utf8"), full),
+        );
+      }
+    } finally {
+      closeSync(fd);
     }
   };
   visit(TEST_ROOT);
