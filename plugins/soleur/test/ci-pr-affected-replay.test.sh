@@ -4919,8 +4919,8 @@ mutate ratchet-cause-edited-suite-ignored '    elif edited:' '    elif False:' r
 # Guard 1 M12: nothing attacker-controlled starts a line or carries a control character
 mutate ratchet-ref-text-unquoted '        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, q(text)))' '        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, text))' row_rt_text_inject
 mutate ratchet-baseline-line-shown-raw '    return quote_field(line) if QUOTE_CTL.search(line) or QUOTE_U.search(line) else line' '    return line' row_rt_text_inject_shown
-mutate ratchet-baseline-line-shown-without-c0 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")' 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x0c\x0e-\x1f\x7f]")' row_rt_text_inject_shown
-mutate ratchet-baseline-line-shown-without-del 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")' 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f]")' row_rt_text_inject_shown
+mutate ratchet-baseline-line-shown-without-c0 '_C0_SANS_TAB = "".join(chr(c) for c in range(0x20) if c != 0x09)' '_C0_SANS_TAB = "".join(chr(c) for c in range(0x20) if c not in (0x09, 0x0d))' row_rt_text_inject_shown
+mutate ratchet-baseline-line-shown-without-del 'QUOTE_CTL = re.compile("[" + _C0_SANS_TAB + "\x7f]")' 'QUOTE_CTL = re.compile("[" + _C0_SANS_TAB + "]")' row_rt_text_inject_shown
 mutate ratchet-baseline-line-shown-without-bidi 'or QUOTE_U.search(line) else line' 'else line' row_rt_text_inject_shown
 mutate ratchet-new-pair-path-raw '    entry = ["new-pair\t%s\t%s\t%s" % (q(s), q(p), ' '    entry = ["new-pair\t%s\t%s\t%s" % (q(s), p, ' row_rt_text_inject
 mutate ratchet-cause-neither-path-raw '"edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", q(p)))' '"edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", p))' row_rt_text_inject

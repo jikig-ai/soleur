@@ -254,6 +254,17 @@ export function __clearBlobCacheForTests(): void {
 }
 
 /**
+ * TEST-ONLY: inject a cache entry directly, bypassing the verified provenance
+ * arms — the only way to reach the sink-side integrity assert with bytes that
+ * do not match the key's sha. Production callers cannot produce this state
+ * today; the assert exists so a FUTURE arm cannot produce it either.
+ */
+export function __putBlobCacheForTests(key: string, b: Buffer): void {
+  blobCache.set(key, b);
+  blobCacheBytes += b.length;
+}
+
+/**
  * Classify the diagrams subtree of `ref` (a commit sha, or omitted for the
  * default branch's HEAD) from GitHub's listings alone — no blob is fetched.
  */
@@ -472,6 +483,20 @@ async function stageWith(input: StageInput, configNames: readonly string[]): Pro
           });
         }
         if (inner.signal.aborted) throw new StageAbort(abortedFailure(inner.signal));
+        // Every provenance arm (fetch, cacheGet, known) converges at this one
+        // write. The fetch arm verifies sha+size above; the other two cannot be
+        // mismatched TODAY (known is keyed by gitBlobSha, the cache is fed only
+        // from verified buffers) but nothing STRUCTURAL enforces that — a
+        // future provenance arm, or a shared/persistent cache, would reach this
+        // write unverified. Assert at the sink so the invariant is
+        // arm-independent (CodeQL js/http-to-file-access alert #230).
+        if (buf.length !== s.size || gitBlobSha(buf) !== s.sha) {
+          throw new StageAbort({
+            ok: false,
+            reason: "io_error",
+            detail: "stage: blob integrity mismatch",
+          });
+        }
         await writeFile(target, buf, { flag: "wx", mode: 0o600 });
       }
     };

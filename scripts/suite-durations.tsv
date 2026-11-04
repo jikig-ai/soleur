@@ -165,6 +165,7 @@ plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1222	floor
 plugins/soleur/test/_base-notice-frontmatter.test.sh	7093	measured
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	10959	measured
 plugins/soleur/test/apply-delivery-gap-follower.test.sh	1222	floor
+plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor

@@ -32,7 +32,7 @@ from pathlib import Path
 POSITIONAL = re.compile(
     r"""\.content\s*\??\s*(?:\.\s*)?           # .content / .content? / .content?.
         (?:
-            \[\s*(?:\d+|[\w$.]+\.length\s*-\s*\d+)\s*\]            # [0] / [x.y.length-1]
+            \[\s*(?:\d+|[\w$.]+\.length\s*-\s*\d+)\s*\]            # literal index / x.y.length-1 index
           | at\(\s*-?\d+\s*\)                                      # .at(0)
         )""",
     re.VERBOSE,
