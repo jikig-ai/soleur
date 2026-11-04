@@ -106,9 +106,9 @@ const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   //
   // Re-checked 2026-10-08 against claude-code 2.1.293 (the first release whose
   // bundle knows claude-haiku-5-5): this guard passes with both rows still at
-  // `medium`. Re-checked 2026-11-04 against 2.1.311 (#12026): the
-  guard passes unchanged, both rows still `medium`. The Haiku id never reaches the cron CLI, so it has no row here;
-  // the id-set guard below is what covers it.
+  // `medium`. Re-checked 2026-11-04 against 2.1.311 (#12026): the guard passes
+  // unchanged, both rows still `medium`. The Haiku id never reaches the cron CLI,
+  // so it has no row here; the id-set guard below is what covers it.
   [EXECUTION_MODEL]: "medium",
 };
 
@@ -597,12 +597,12 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
 // Everything above proves the PACKAGE version, and a package version says nothing about the runtime inside the binary: the
 // claude-code 2.1.293 / agent-sdk 0.3.284 binaries embed Bun 1.4.3, whose Brotli decoder is the CVE. The Dockerfile's
 // global install tree is not reached here (its pin is asserted equal to package.json above and the shipped copy is read from
-// the released image after merge); this reads the `npm ci` tree both runtime paths use. The floor is a constant in this
-// file, so one diff could lower it and move the pins together: it proves consistency with the stated floor, not integrity
+// the released image after merge); this reads the `npm ci` tree both runtime paths use. The floor is a constant in
+// test/helpers/vendored-bwrap-tail.ts, so one diff could lower it and move the pins together: it proves consistency with the stated floor, not integrity
 // of the floor, and the sdk-bump attestation plus this header are what a reviewer sees in that diff.
 //
 // The issue's own probe, `strings <bin> | grep -m1 '^Bun v'`, can NEVER report a version: its first hit is the bare string-pool
-// fragment `Bun v` in every release. Only a `Bun v<x.y.z> (` banner counts here.
+// fragment `Bun v` in both measured pairs (2.1.293 and 2.1.311). Only a `Bun v<x.y.z> (` banner counts here.
 
 describe("embedded Bun floor — synthetic mutation rows (#12026 Guard 1)", () => {
   const banner = (v: string, tail = "(Linux x64)") => `Bun v${v} ${tail}`;
@@ -693,10 +693,15 @@ describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process
       "both the agent-sdk and the claude-code linux-x64 binaries embed Bun >= 1.4.4 (BINARY_MISSING, never a skip, on linux-x64 and under CI)",
       () => {
         const rows = scanInstalledEmbeddedBun(join(APP_ROOT, "node_modules"));
-        // Suite-level count: deleting the helper call, or resolving fewer packages, cannot leave this row green.
+        // Suite-level count: resolving fewer packages cannot leave this row green.
         expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
+        // The floor is also asserted here directly, independent of assertEmbeddedBunFloor below: deleting that call
+        // (mutation survivor in the #12073 review) must still red a vulnerable binary.
         for (const r of rows) {
           expect(r.versions.length, `${r.label}: no embedded Bun banner read`).toBeGreaterThanOrEqual(1);
+          for (const v of r.versions) {
+            expect(compareSemver(v, BUN_FLOOR.join(".")), `${r.label} embeds Bun ${v}, below the floor`).toBeGreaterThanOrEqual(0);
+          }
         }
         process.stdout.write(`embedded Bun: ${rows.map((r) => `${r.label}=${r.versions.join("/")}`).join(" ")}\n`);
         assertEmbeddedBunFloor(rows);
