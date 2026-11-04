@@ -548,3 +548,21 @@ Marker for residual 5 (added as a new line directly under its last line, same in
 ```markdown
    *Superseded in part by the 2026-11-04 amendment below: the follow-up is #11258, which stays open, and the absence is pinned by a default-suite test.*
 ```
+
+## Addendum — 2026-11-04 (review round 1, #11258)
+
+The review panel found the scan window narrower than the property the pin names. The as-built test supersedes the arm layout
+sketched above (the sketch is kept as the planning record):
+
+- The scan now covers every top-level directory of `apps/web-platform` except an explicit exclusion list (dependencies, build
+  output, tests, browser tests, static assets, docs, SQL), over all JS/TS extensions, and refuses symlinks. This replaces
+  `SCAN_ROOTS` and `ROOT_ANCHORS` (anti-vacuity arm (e1) and the existence arm (e4) were removed as redundant with the expected sets
+  and the file-count floor, now 1000 of 1049 measured).
+- New arms: (f) the rollup table name occurs only in the three expected files; (g) no production file imports a test-named module.
+  The loader-import matcher accepts extension, subpath, backtick and bare-import spellings. The agent-surface population adds the
+  Agent SDK import specifier and drops the `server/` restriction on the filename arm.
+- Anti-vacuity: named arm members instead of non-empty checks; the composed predicate is driven with synthetic must-trip rows; a
+  last test fails if any arm was skipped or emptied. Expected sets carry a reason per entry, and a failure reports added and
+  removed entries separately with stop-and-escalate wording.
+- "Default-suite" in the text above means the diff-gated `unit` project; the ADR amendment says so and lists what the pin does not
+  see. The ADR amendment also gained the AP-004 exception record, the DPIA-derived constraints and the unresolved cross-member scope.

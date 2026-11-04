@@ -226,7 +226,7 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
    re-display a payload fetched earlier.
 5. **Agent-readable surface parity gap.** The RPC is callable by any authenticated member client but no agent/MCP tool exists. A
    follow-up issue (#11258) tracks it.
-   *Superseded in part by the 2026-11-04 amendment below: the follow-up is #11258, which stays open, and the absence is pinned by a default-suite test.*
+   *Superseded in part by the 2026-11-04 amendment below: the parity gap is now a recorded deferral with a pinned absence and re-evaluation triggers, not an open-ended gap; #11258 stays open.*
 
 The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
 enablement step; the flag flip is tracked in #11237, not part of PR2).
@@ -276,45 +276,87 @@ The status stays **Adopting**.
 
 ## Amendment 2026-11-04 (#11258): the agent-readable surface stays deferred, and its absence is pinned
 
-**Decision.** No agent-exposed surface over the egress audit summary is built now, and no migration, grant, route or tool
-changes. None of the three re-evaluation triggers below has occurred. This amendment supersedes accepted residual 5 (marked in
-place); the other residuals are unchanged.
+**Decision.** Ruled by the CTO agent on 2026-11-04. No agent-exposed surface over the egress audit summary is built now, and no
+migration, grant, route or tool changes. Per repository source, neither of the first two re-evaluation triggers below has occurred;
+the third is flag state, which git cannot show and which was not re-measured for this amendment (collection stays operator-held).
+This amendment supersedes accepted residual 5 in part (marked in place): the gap is now a recorded deferral with a pinned absence
+and triggers. The other residuals are unchanged.
 
+- **Deliberate exception to AP-004 (agent-user parity).** A member reads the workspace aggregate in Scope Grants. An agent reads
+  nothing and is told to point the member to that page (`WEB_EGRESS_PROMPT_ADDENDUM`). The agent already holds its own request
+  history, so the capability it lacks is the cross-session aggregate and the retention state. Parity is restored when the
+  constraints below are met and a trigger fires.
 - **State on 2026-11-04.** Per migrations 177 and 183, `EXECUTE` on the two member-read functions is granted to `authenticated` and
-  revoked from `anon` and `service_role`; live grants were not re-measured for this amendment. On this date a scan of non-test
-  source under `apps/web-platform/{server,lib,app,components}` found the two function names in three files only:
-  `server/egress-audit-read.ts` (the only caller), `lib/egress-audit/summary.ts` (a type comment) and
-  `server/dsar-export-allowlist.ts` (a comment). It found `server/egress-audit-read.ts` imported only by the two server-rendered
-  Scope Grants pages, and found no reference to either function, the loader or the rollup table in any file that builds or
-  registers an agent tool, in any tier-map key, or in the router's registered platform tool names. The router registers the
-  narrate and summarize tools and, behind a flag, the C4 editing tool; `readCcMcpAllowlist` throws on a denylisted or
-  approval-required short name and otherwise returns `{}` in its current phase (#3722). The leader-surface runner registers
-  platform tools built from the `server/*-tools.ts` files; none of them reads egress audit data.
-- **What the pin does not see.** `apps/web-platform/test/egress-audit-agent-surface-absence.test.ts` is a text scan of repository
-  source plus two runtime assertions over the tier map and the router's registered tool names. It does not see a function name
-  assembled at runtime, a plugin-supplied MCP server, an environment-supplied `CC_MCP_ALLOWLIST` value, a database-side change or
-  a deployed configuration. It is designed to fail first when a surface is added; it is not a proof that none exists.
+  revoked from `anon` and `service_role`; the grant state is re-asserted at every deploy by `supabase/verify/177_egress_audit_summary_rpc.sql`
+  and `supabase/verify/183_egress_audit_window_summary.sql`. On this date a scan of non-test source under `apps/web-platform` found
+  the two function names in three files only (`server/egress-audit-read.ts`, the only caller; `lib/egress-audit/summary.ts` and
+  `server/dsar-export-allowlist.ts`, both comments), the loader imported only by the two server-rendered Scope Grants pages, and
+  the rollup table named only in the erasure saga, the ingest and the DSAR allowlist comment. It found no egress-audit reference in
+  any file that builds, registers or classifies an agent tool, in any tier-map key, or in the router's base tool list. The router
+  registers the narrate and summarize tools, behind a flag the C4 editing tool, and for a CRM new-lead chat the `crm_*` tools;
+  `readCcMcpAllowlist` throws on a denylisted or approval-required short name and otherwise returns `{}` in its current phase
+  (#3722). The leader-surface runner assembles its platform tools inline from the `server/**/*-tool(s).ts` builders; none of them
+  reads egress audit data.
+- **What the pin does not see.** `apps/web-platform/test/egress-audit-agent-surface-absence.test.ts` runs in the `unit` project
+  on any diff that touches `apps/web-platform`; a diff confined to `plugins/`, `scripts/` or `.github/` never runs it, and
+  activating per-suite test selection must declare the scanned tree as an input of the suite or mark it always-run. It scans every
+  source file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`) in the app tree except dependencies, build output,
+  tests, browser tests, static assets, docs and SQL, for the two function names, the loader import, the rollup table name, and any
+  egress-audit mention in a file that is a tool builder by filename or that registers tools or imports the Agent SDK. It refuses
+  symlinks and fails if production code imports a test-named module (test-named files themselves are not scanned). Two runtime
+  assertions cover the tier-map keys and the router's base list (narrate and summarize only). It does not see: a name assembled at
+  runtime; a read through a client obtained from a helper (`getFreshTenantClient`, `mintFounderJwt`, `createServiceClient`) in a
+  file that spells none of the names; the per-dispatch C4 and CRM tool names and the leader runner's inline tool list (held by the
+  text scan only); a plugin-supplied MCP server, plugin skills and agents, or plugin code that `cron-ux-audit` runs in-process
+  with a service-role key; an environment-supplied `CC_MCP_ALLOWLIST` value; a database-side change; a deployed configuration;
+  code outside `apps/web-platform` (including `scripts/egress-audit-retention-check.sh`, which already reads the table with the
+  service-role key and is not scheduled); and an operator-run agent holding database credentials. The compensating control for a
+  new service-role importer is `apps/web-platform/scripts/service-role-allowlist-gate.sh` with the CODEOWNERS pin on
+  `apps/web-platform/.service-role-allowlist`. The pin is designed to fail first for the spellings it scans; it is not a proof
+  that no surface exists.
 - **Threat model for a future surface.** An agent acting for a member would hold that member's authority, which both functions
   scope to the whole workspace rather than to the calling session. Every current member already sees that aggregate in the view;
-  what changes is that an agent would exercise the read without the member's per-read intent, and could read what other members'
-  agent sessions contacted. A compromised agent could also use repeated reads to probe what the log retains (residual 2). The log
-  remains a transparency log for members, not a forensic or exfiltration-detection control, and this amendment does not change that.
-- **Constraints any future agent surface must meet.** Member user-JWT client only, never service-role (the functions are revoked
-  from it). Calls only the existing functions: no generic SQL tool, no call-any-RPC tool, no new grant. Read-only and
-  aggregate-only: no `source_host`, no per-request rows, windows of 24h, 7d or 30d only. Rate-limited per member and per session;
-  the agent's own reads are audited and shown to the member. Tiered `gated` with an approval classification in the same PR.
-  Output treated as untrusted. Legal and security review before it merges, including the DPIA addendum re-screen
-  (`knowledge-base/legal/audits/2026-10-15-dpia-screening-addendum-egress-audit-rollup.md`, section 12.6: a second member read
-  path is a fresh t6 and t7 trigger). The absence test and the expected paths below are updated in the same PR.
-- **Re-evaluation triggers (first to occur).** (1) A change adds an agent tool, MCP server entry or allowlist outcome able to reach
-  either function or the rollup table; the absence test is designed to fail first and points here. (2) Read-only platform tools
-  are promoted to the Concierge router (#3722). (3) The first external-organization enablement of egress audit collection, which
-  stays operator-held. Until one occurs, #11258 stays open and no agent-readable surface is built.
-- **Expected consumers (informational; the test header lists the same sets).** `server/egress-audit-read.ts`,
-  `lib/egress-audit/summary.ts`, `server/dsar-export-allowlist.ts`, and the loader's only importers,
-  `app/(dashboard)/dashboard/settings/scope-grants/page.tsx` and
-  `app/(dashboard)/dashboard/settings/scope-grants/egress-audit/page.tsx`.
+  what changes is that an agent would exercise the read without the member's per-read intent, and could read hosts contacted by
+  other sessions (the rollup carries no member or session field, so nothing is attributed). Destination hosts are chosen by the
+  requesting agent or by any page it fetched and are retained for 30 days, so a returned host string is a persistent second-order
+  injection channel across sessions; migration 162's charset check removes spaces and markup but is a floor, not a mitigation. A
+  compromised agent could also use repeated reads as an allow/deny oracle for gateway policy by host, to probe what the log retains
+  (residual 2), or to tune a decoy flood against the overflow signal. The log remains a transparency log for members, not a
+  forensic or exfiltration-detection control, and this amendment does not change that.
+- **Constraints any future agent surface must meet.**
+  - Member user-JWT client only. `service_role` cannot execute the functions but holds full privilege on the rollup table
+    (migration 174) and bypasses membership scoping, so there is also no direct table read by any client; a new service-role
+    importer needs a `.service-role-allowlist` line and CODEOWNERS approval.
+  - Calls only the existing functions: no generic SQL tool, no call-any-RPC tool, no new grant. The workspace id is bound by
+    closure from the server-resolved current workspace and is never a tool argument.
+  - Read-only and aggregate-only: no `source_host`, no per-request rows, only the windows the function already accepts, a small
+    fixed row and byte cap. Hosts reach the model either not at all or as fenced, length-capped, grammar-checked data; the overflow
+    signal is withheld from the agent or coarsened.
+  - Output is reduced to relative ages and is not persisted beyond the 30-day horizon (DPIA addendum C2 and C7), or the surface
+    returns counts only; tool results enter the conversation transcript, which retention and erasure of the rollup do not reach.
+  - Scope: the rollup has no session or member key, so per-session filtering is impossible and the cross-member leak above is not
+    resolved by any constraint here. The surface must be restricted to the role the view already serves or require explicit
+    consent, decided in review.
+  - Rate-limited. Any record of the agent's own reads must not add a member or session field to the rollup or the function output
+    (t7), is visible to the reading member only, and specifies retention, erasure and DSAR treatment in the same PR. A per-member or
+    per-session record is a "who" view: a full DPIA, not a re-screen, and it contradicts the C6 copy "no member or session is
+    recorded" unless that copy changes (DPIA addendum sections 12.5 and 12.6).
+  - Tiered `gated` explicitly in the same PR, with an approval classification (ADR-305, ADR-309). This departs from the
+    auto-approved read-only RPC tools because the record is something an injected agent could use for evasion; a review card does not
+    address output-borne injection, so the output constraints above still apply.
+  - Legal and security review before it merges. The absence test, its expected sets and this amendment are updated in the same PR.
+- **Re-evaluation triggers (first to occur).** The CTO ruling holder re-evaluates; the output is a dated amendment here or a closed
+  #11258. (1) A change adds an agent tool or MCP server entry in repository source able to reach either function or the rollup table;
+  the absence test is designed to fail first for the spellings above and points here. A populated `CC_MCP_ALLOWLIST` outcome is not
+  seen by the test and is held by trigger 2. (2) Read-only platform tools are promoted to the Concierge router (#3722); the test does
+  not detect this, review does. (3) The first external-organization enablement of egress audit collection, which stays operator-held;
+  moving the rollup table into the DSAR allowlist is a second member read path and a DPIA 12.6 re-screen point. Until one occurs,
+  #11258 stays open and no agent-readable surface is built.
+- **Expected sets.** They live in the test (`EXPECTED_NAME_FILES`, `EXPECTED_TABLE_FILES`, `EXPECTED_LOADER_IMPORTERS`), each entry
+  with its reason, so this record cannot drift from them. The DSAR allowlist entry is a comment and may legitimately disappear
+  when the table moves into the allowlist; edit the set in that PR.
 - **Alternatives considered.** Building the surface now: rejected, no consumer exists and collection is off for external
-  organisations. A prose-only record with no pin: rejected, member user-JWT clients already exist in the platform tool files.
+  organisations (flag state not re-measured here). A prose-only record with no pin: rejected, member user-JWT clients already exist
+  in the platform tool files.
 
 The status stays **Adopting**.
