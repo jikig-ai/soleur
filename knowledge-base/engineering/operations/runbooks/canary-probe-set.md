@@ -499,7 +499,7 @@ bump that adds a step surfaces in CI rather than as an unclassified line.
 > entered by `argv0=apply-seccomp` through `/proc/self/fd/3`. The pool holds 21 strings: 19 `<step>` literals (the 16 above plus
 > `prctl(PR_SET_NO_NEW_PRIVS, stub)`, `prctl(PR_SET_SECCOMP, stub)` and `prctl(PR_SET_SECCOMP, namespaces)`) and 2 errno-less lines
 > (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
-> run on 2026-11-04 shows all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
+> run on 2026-11-04 shows, per process, all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
 > pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
 > `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
 

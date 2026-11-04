@@ -427,7 +427,7 @@ None; the addendum lands with the bump.
 
 ### Edge Cases
 
-- `--disable-userns` under the production AppArmor profile and docker default masks.
+- `--disable-userns`: never emitted under our config; its absence is asserted by the proc-mask live spawn and the fixture, and it is not exercised under the AppArmor profile.
 - The sockstat watchdog loop does not terminate the bridge early on a session with one idle connection.
 - Lock row: x64-musl, arm64 and arm64-musl entries all at the new versions.
 - Guard 1: a binary with no `Bun v<semver> (` match at all (format change) reds; the 290 MB scan stays under its explicit timeout.

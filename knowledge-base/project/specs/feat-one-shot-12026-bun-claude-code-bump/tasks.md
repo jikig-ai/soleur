@@ -47,8 +47,8 @@ Branch: `feat-one-shot-12026-bun-claude-code-bump` | Draft PR 12073 | PR body us
 
 ## Phase 4 - Post-merge evidence and issue close (telemetry/image only)
 
-- 4.1 Confirm release, deploy on web-1 and web-2 per host, canary `sdkVersion` 0.3.311 and SDK Bash smoke via `/hooks/deploy-status` and Better Stack, within a stated timeout. Canary and smoke are report-only (no auto-rollback) and web-2 is forwarded after web-1's swap, so this poll is the detection step.
-- 4.1b Rollback if canary/smoke is not ok or hosted Bash fails: revert the atomic pin commit via a new PR (lockfile, Dockerfile, fixture together to 2.1.293 / 0.3.284), redeploy through `web-platform-release.yml` `workflow_dispatch`; never SSH; leave #12026 open and comment the verdict.
+- 4.1 Confirm release, deploy on web-1 and web-2 per host, canary verdict (its `sdkVersion` 0.3.311 is read from the committed fixture: commit identity, not binary evidence; 4.2 is the binary evidence) and SDK Bash smoke via `/hooks/deploy-status` and Better Stack (read web-2 from `.peers["10.0.1.11"]`; treat `canary_infra_error` or an empty `sdk_version` as a failure), within a stated timeout. Canary and smoke are report-only (no auto-rollback) and web-2 is forwarded after web-1's swap, so this poll is the detection step.
+- 4.1b Rollback if canary/smoke is not ok or hosted Bash fails: revert the squash-merge commit of PR 12073 via a new PR (lockfile, Dockerfile, fixture, pin tests and the Haiku 5.5 ids together to 2.1.293 / 0.3.284; never the pin alone; put an `sdk-bump-verified:` trailer in the revert commit or `lockfile-sync` reds; time-to-restore is hours: CI, release build, then web-1 and web-2 sequentially), redeploy through `web-platform-release.yml` (the push trigger after the revert merges, or `workflow_dispatch`); never SSH; leave #12026 open and comment the verdict.
 - 4.2 Extract the three shipped `claude` binaries from the released image and run the corrected probe: all three must report `Bun v1.4.4` or newer or #12026 stays open.
 - 4.3 Check the paid `scheduled-real-sdk-ask-probe` run after merge.
 - 4.4 Comment evidence on #12026, then close it.

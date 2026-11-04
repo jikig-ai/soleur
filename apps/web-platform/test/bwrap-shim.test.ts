@@ -1327,8 +1327,8 @@ describe("bwrap PATH shim (#8752)", () => {
   it("#10032: the committed vendored fixture — tail bind dropped, tmpfs survives once, no --proc, no re-homes", () => {
     const r = root();
     // infra/sandbox-canary-argv.json is the byte-pinned capture the fixture
-    // gate diffs against; its setup stream is the exact shape the shim must
-    // neutralize (a setup stream whose shape, not token indexes, is what the shim must neutralize: a tmpfs /proc early, the tail bind dropped).
+    // gate diffs against; its setup stream is what the shim must neutralize
+    // (the shape matters, not token indexes: a tmpfs /proc early, the tail bind dropped).
     const fixture = JSON.parse(
       readFileSync(join(APP_ROOT, "infra/sandbox-canary-argv.json"), "utf8"),
     ) as { bwrapSetupArgv: string[]; argv: string[] };
