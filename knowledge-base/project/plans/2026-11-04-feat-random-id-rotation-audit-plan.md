@@ -27,6 +27,20 @@ The CLO re-assessment trigger is **2026-11-08**: if rotation is not recorded com
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Research Insights
+
+**Premise Validation (Phase 0.6, all verified live 2026-11-04):** #11294 OPEN; #11711 OPEN; #11215 CLOSED PASS 2026-11-01T18:51Z (inside the 11-12 gate). PRs #11551 (merged 10-30T20:42Z), #11674 (10-31T11:58Z), #11930 (11-03T10:00Z), #11918 (11-03T16:45Z), #11287 (10-29T23:57Z) all MERGED. PR #12064 OPEN (collision note, `web-platform-release.yml` ~L1162 — untouched by this plan). PR #12105 is this branch's own draft. Blocking issues #11923/#11293/#11920/#11922/#11927/#11928 all OPEN. Cited files all exist on `origin/main`. Lingering-branch flag verified stale — `feat-one-shot-11294-redact-random-id-logs` absent from `git for-each-ref` in both clones. Nothing stale except that flag (recorded, not acted on).
+
+**Property List (Phase 0.6b):** (1) a committed per-job verdict — sink, retention, reached-public-log? — for every Terraform-invoking job that can reach the Inngest key addresses; (2) a committed per-secret census — one row per `random_*` resource with route and readiness; (3) per-secret readiness notes an owner can dispatch from without re-deriving; (4) agent-side results visible on both issues as comments; (5) every owner-gated act recorded as a hold.
+
+**Cut List (Phase 0.6b):** no new machinery — the ask proposes no mechanism the repo lacks. The seven-key route (`key-rotate.yml`), the dedicated-pair route (`inngest-key-rotate.yml`), the redaction contract (`tf_redact_random_ids`) and the evidence-preservation record all exist; the gap is the audit/census write-up, which is the deliverable.
+
+**Repo research highlights:** whole-state refresh prints every `random_id` `[id=]` on every streamed plan/apply regardless of `-target` (the exposure mechanism); drift plan captured in `$(...)` since file creation — public sink is the `infra-drift` issue stream not step logs; `random_password.id` is literal `"none"` and `result` is sensitive (provider source `resource_password.go`); `tunnel_secret` `-replace` is a live no-op (`tunnel.tf:14,:21`); retired `_prd` pair feeds nothing (removal #11293); `inngest-key-rotate.yml` apply1 `-replace`s the dedicated random_ids (gate table `scripts/inngest-key-rotate.sh:158-159`).
+
+**External docs:** hashicorp/random `random_password` registry page + `resource_password.go` (`plan.ID = "none"`); GitHub Docs Actions retention (90-day default, 1–90 days for public repos, since 2026-10-01 covering checks/runs/statuses too).
+
+**Institutional learnings applied:** `hr-weigh-every-decision-against-target-user-impact` (User-Brand Impact section); `hr-menu-option-ack-not-prod-write-auth` (all rotations/deletions are Operator Holds — no soleur-delegation marker on either issue); plan-time verify-not-paraphrase (every cited issue/PR/file/line verified live above).
+
 ## Proposed Solution
 
 Produce three committed artifacts under `knowledge-base/project/specs/feat-one-shot-11294-11711-rotation-audit/` plus two issue comments:
@@ -224,6 +238,14 @@ No cross-domain implications beyond these — infrastructure/tooling documentati
 - Redaction contract: `tests/scripts/lib/tf-redact-random-ids.sh` (function `tf_redact_random_ids`; sourced by every streaming step; swept by `plugins/soleur/test/terraform-target-parity.test.ts`; suite `tests/scripts/test-tf-redact-random-ids.sh`).
 - External docs: Terraform Registry `random_password` (`id = "none"`, `result` sensitive — `hashicorp/terraform-provider-random` `resource_password.go`); GitHub Docs "Configuring the retention period for GitHub Actions artifacts and logs" (90-day default; public repos 1–90 days; since 2026-10-01 the setting also covers checks/runs/statuses).
 - Soak gate: #11215 closed PASS 2026-11-01T18:51:02Z (auto-closed by `scripts/followthroughs/inngest-tls-soak-10136.sh` exit 0) — inside the #11711 deadline of 2026-11-12.
+
+## Enhancement Summary
+
+Deepen-plan pass (inline — no Task/Agent spawn capability in this harness; research and review were executed as direct verification instead of a fan-out):
+
+- **Halt gates evaluated:** 4.6 User-Brand Impact — PASS (threshold `aggregate pattern`, concrete artifact/vector lines); 4.7 Observability — SKIP (pure-docs; no Files-to-Edit under code/infra paths); 4.8 PAT-shaped variable — PASS (zero hits); 4.9 UI wireframe — SKIP (no UI surface); 4.10 Encryption Posture — SKIP (no new store/connection); 4.11 Guard Contract — SKIP (no guard deliverable); 4.12 Scope Check — PASS (exactly one unfenced section; all asks `mapped`; one `inferred` item with justification; `Recommendation:` present); 4.13 Task Design — SKIP (no new autonomous-task surface); 4.4/4.45/4.5/4.55 — SKIP (no scheduled-work pattern, no SSH/provisioner apply path, no downtime-inducing operation).
+- **Sharpened during deepen:** added `## Research Insights` (Premise Validation + Property List + Cut List, previously missing); named the drift-check anomaly's three ordered hypotheses; enumerated the full 27-resource census across four Terraform roots (rehearsal roots included — the brief's "census resources" covered only the main root); recorded the artifacts-endpoint-500 known gap against the rehearsal evidence artifact's 90-day retention.
+- **New considerations discovered:** the `inngest_backstop_retire` job is retired (3 census hits, exposure window closed by retirement + deletion); the 11-04 `mode=plan` rehearsal run `41885962147` on `inngest_manual_trigger_secret_dev` already exists — the census's first readiness row is partially exercised; CLO re-assessment trigger 2026-11-08 carried into Success Metrics.
 
 ## Decision Challenges
 
