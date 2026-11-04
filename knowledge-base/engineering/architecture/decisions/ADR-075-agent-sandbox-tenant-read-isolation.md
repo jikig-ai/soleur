@@ -576,3 +576,11 @@ variant-induced AF_UNIX EPERM has no signal on either runner (CTO ruling E, 2026
 **Re-open.** A nonzero bucket in `history_jsonl`, `debug`, `todos` or `tasks` starts the re-open procedure (runbook): statement freeze first, a fresh awareness anchor, a G2-style reachability test, and a CLO advice to the CTO on relocation. The relocation trigger "the census finding readable prompt text in the production HOME" is then presumptively met.
 
 **Not measured.** `/workspaces`, `/tmp/.cs`, `CLAUDE_CONFIG_DIR`, the second web host, the canary container and outer-wrap cohorts. Unmeasured is not safe. The purge of already-persisted shared data is not part of this work: it needs a per-command go-ahead after the CLO sizes it.
+
+## Addendum — 2026-11-04 (#12026): SDK 0.3.311 / CLI 2.1.311
+
+The vendored builder carries the same properties this record states at the pinned `@anthropic-ai/claude-agent-sdk@0.3.311` (one binary shared with CLI 2.1.311), re-proved through the real SDK path before any pin moved: credential-deny, the masked `/proc`, the per-command AF_UNIX-deny variant, and the G2 sibling-session reachability test.
+
+- **`allowAllUnixSockets` mapping.** The 2026-10-16 posture now rests on a reshaped mapping: the optional-chain source form is gone and the knob is read through a settings resolver that a managed policy (`required` or `egress` modes) can drop. Our configuration sets neither mode; the wrapped-command arm shows the helper is still skipped. The static needle is a tripwire only.
+- **One more readable CLI state file (G2 residual list).** B can read `.claude/plugins/store/cc-plugin-<name>_builtin-<hash>.json`, a 92-byte usage-telemetry queue entry (`{"usage-rows-queued": "<uuid> <feature label> ok"}`: a random UUID and a fixed label). Reviewed 2026-11-04: it holds no credential, prompt or tool output, so none of the relocation triggers above fires. It is listed as optional in the G2 pin and its directory is now content-scanned like the others.
+- **New hardening, not a new exposure.** `--unsetenv SRT_ALLOW_NESTED_USERNS` follows the masked-`/proc` bind, and `$HOME/.claude/seed-admin` (the private git directories of cloud-session uploads) is covered by a `--tmpfs` in the captured per-command argv.

@@ -45,6 +45,8 @@ Three constraints fixed the shape before any code moved:
 Measured against the pinned `@anthropic-ai/claude-agent-sdk@0.3.284`
 vendored binary (full record: spec TR7):
 
+> **Pin moved 2026-11-04 (#12026):** the SDK pin is now `0.3.311` (CLI `2.1.311`, one shared binary). The measurements below were taken on 0.3.284 and are a dated record; they were not re-run for this ADR.
+
 1. `network.httpProxyPort` is a host-side loopback port the sandbox
    runtime chains to through its own in-netns proxy — the sandboxed
    child's `localhost` is not the container loopback, so a

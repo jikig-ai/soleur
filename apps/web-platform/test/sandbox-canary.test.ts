@@ -17,6 +17,7 @@ import {
   BWRAP_ONE_ARG_PATH,
   CANARY_BRIDGE_SPAWN_PLACEHOLDER,
   CANARY_TRANSCRIPTS_PLACEHOLDER,
+  CANARY_SEED_ADMIN_PLACEHOLDER,
   CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
@@ -589,7 +590,7 @@ describe("C4 staging root placeholder (#8623)", () => {
     expect(argv.some((t) => /^\/(root|home)(\/|$)/.test(t))).toBe(false);
     const tmpfsC4 = argv.filter((t, i) => t === CANARY_C4_STAGING_PLACEHOLDER && argv[i - 1] === "--tmpfs");
     expect(tmpfsC4).toHaveLength(1);
-    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER, CANARY_TRANSCRIPTS_PLACEHOLDER];
+    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER, CANARY_TRANSCRIPTS_PLACEHOLDER, CANARY_SEED_ADMIN_PLACEHOLDER];
     for (const t of [...argv, ...fx.prepDirs]) {
       for (const m of t.match(/\$\{CANARY_[A-Z0-9_]*\}/g) ?? []) expect(known).toContain(m);
     }
@@ -637,6 +638,46 @@ describe("transcripts placeholder (#10445)", () => {
     });
     expect(out).toEqual(["--tmpfs", "/t"]);
     expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+  });
+});
+
+// #12026 — claude-code 2.1.311 / SDK 0.3.311 covers `$HOME/.claude/seed-admin` with a --tmpfs in every per-command argv.
+describe("seed-admin placeholder (#12026)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const SA = "/root/.claude/seed-admin";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", SA];
+
+  it("maps the seed-admin root to ${CANARY_SEED_ADMIN} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv(RAW, { wsRoot: WS, seedAdminRoot: SA });
+    expect(bwrapSetupArgv).toContain(CANARY_SEED_ADMIN_PLACEHOLDER);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(SA))).toBe(false);
+    expect(prepDirs).toContain(CANARY_SEED_ADMIN_PLACEHOLDER);
+  });
+
+  it("does NOT add the placeholder to prepDirs when the argv never references it", () => {
+    const { prepDirs } = normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc"], {
+      wsRoot: WS,
+      seedAdminRoot: SA,
+    });
+    expect(prepDirs).not.toContain(CANARY_SEED_ADMIN_PLACEHOLDER);
+  });
+
+  it("still throws host_path when seedAdminRoot is NOT supplied (fail-loud), and on look-alike HOME paths when it is", () => {
+    expect(() => normalizeCapturedArgv(RAW, { wsRoot: WS })).toThrow(/host_path/);
+    for (const bad of ["/root/.ssh", `${SA}-evil`, `${SA}x`]) {
+      expect(
+        () => normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], { wsRoot: WS, seedAdminRoot: SA }),
+        `expected host_path throw for '${bad}'`,
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("substituteCanonicalArgv replaces the placeholder at replay and leaves none behind", () => {
+    const out = substituteCanonicalArgv(["--tmpfs", CANARY_SEED_ADMIN_PLACEHOLDER], { ws: "/w", empty: "/e", seedAdmin: "/s" });
+    expect(out).toEqual(["--tmpfs", "/s"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+    // Without the substitution arg the token survives and is flagged (a replay that forgot it would hand bwrap a literal path).
+    expect(hasUnsubstitutedPlaceholder(substituteCanonicalArgv(["--tmpfs", CANARY_SEED_ADMIN_PLACEHOLDER], { ws: "/w", empty: "/e" }))).toBe(true);
   });
 });
 

@@ -495,6 +495,14 @@ before `fork(worker)`, because the measured order runs `fork(worker)`, both `prc
 flip `execvp` out to make it 14 only if a measured argv shows the helper execs the tenant argv directly.) A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
+> **Re-measured 2026-11-04 (#12026; SDK 0.3.311 / CLI 2.1.311, one shared binary).** The helper is now the `claude` binary itself,
+> entered by `argv0=apply-seccomp` through `/proc/self/fd/3`. The pool holds 21 strings: 19 `<step>` literals (the 16 above plus
+> `prctl(PR_SET_NO_NEW_PRIVS, stub)`, `prctl(PR_SET_SECCOMP, stub)` and `prctl(PR_SET_SECCOMP, namespaces)`) and 2 errno-less lines
+> (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
+> run on 2026-11-04 shows all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
+> pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
+> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record.
+
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single

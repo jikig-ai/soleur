@@ -125,11 +125,10 @@ describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real
       prompt: "probe",
       options: {
         abortController: controller,
-        // Stays on Haiku 4.5 on purpose: this drives the REAL Agent SDK query(), whose
-        // bundled CLI is the pinned @anthropic-ai/claude-agent-sdk 0.3.284, and that
-        // bundle does not know claude-haiku-5-5 (the first SDK release that does is
-        // 0.3.293). Retires with the SDK bump; audit-models.sh carves out the two
-        // scripts on the same ground and model-launch-review.test.ts expires it.
+        // Haiku 5.5: this drives the REAL Agent SDK query(), whose bundled CLI is the pinned
+        // @anthropic-ai/claude-agent-sdk 0.3.311, the first pin whose bundle knows the id (an
+        // unknown id silently halves max_tokens). The model is irrelevant to the credential-deny
+        // proof itself: the API is a scripted stand-in.
         model: "claude-haiku-5-5",
         maxTurns: 3,
         permissionMode: "default",
