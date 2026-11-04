@@ -45,9 +45,9 @@ SELF="$SCRIPT_DIR/codeql-main-alert-gate.test.sh"
 
 # The EXACT assertion count of a green run (-ne, not -lt; re-derive it from a green run). Reported by printf + exit at the bottom, NOT through pass/fail, so a
 # harness that stops counting cannot report its own shortfall as green.
-FLOOR=361
+FLOOR=406
 # Exact number of SUT mutants in fixtures/mutants.sh (GATE_MUTANTS=1 adds one assertion per mutant).
-MUTANT_FLOOR=50
+MUTANT_FLOOR=55
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -765,6 +765,113 @@ if want z3; then
 fi
 
 # ---------------------------------------------------------------------------------------------
+# Rows sw*: SWEEP mode (#12065 — one filer, two triggers; the daily cron delegates to this script)
+# ---------------------------------------------------------------------------------------------
+if want sw1; then
+  echo "== sw1: sweep happy path — SHA unset resolves main HEAD, phases 1-2 never called =="
+  mk_case sw1; run_gate SWEEP=true SHA=
+  eq "sw1 green (no alerts, nothing filed)" "$GATE_RC" "0"
+  eq "sw1 commits/main resolved exactly once" "$(count_calls 'commits/main')" "1"
+  eq "sw1 zero check-runs calls" "$(count_calls 'check-runs')" "0"
+  eq "sw1 zero analyses calls" "$(count_calls 'code-scanning/analyses')" "0"
+  eq "sw1 alerts read still ran (phase 3 shared)" "$(count_calls 'code-scanning/alerts')" "1"
+  eq "sw1 files nothing" "$(ncreate)" "0"
+  t "sw1 output names the resolved sweep commit" out_has "sweep mode: evaluating main HEAD ${GOOD_SHA}"
+fi
+
+if want sw2; then
+  echo "== sw2: sweep files a tracker for an untracked critical alert =="
+  mk_case sw2; ov alert-critical-untracked.json alerts-open.json; run_gate SWEEP=true SHA=
+  eq "sw2 exit 1 (a filing day is a RED verdict)" "$GATE_RC" "1"
+  eq "sw2 exactly one tracker filed" "$(ncreate)" "1"
+  eq "sw2 tracker title" "$(latest_title)" "sec: CodeQL alert #101 — js/sql-injection"
+  eq "sw2 sweep-filed trackers carry the P1/action-required label set" "$(latest_labels)" "$LBL_P1"
+  eq "sw2 the main-HEAD resolution ran before filing" "$(count_calls 'commits/main')" "1"
+fi
+
+if want sw2b; then
+  echo "== sw2b: sweep files a tracker for EVERY untracked alert, not only the first =="
+  mk_case sw2b; jq -c '[.[0], (.[0] | .number = 102)]' "$FIX/scenarios/alert-critical-untracked.json" >"$ST/alerts-open.json" || exit 2
+  run_gate SWEEP=true SHA=
+  eq "sw2b exit 1" "$GATE_RC" "1"
+  eq "sw2b both untracked alerts filed" "$(ncreate)" "2"
+fi
+
+if want sw3; then
+  echo "== sw3: a main-HEAD resolution failure degrades as api-error (durable sweep page) =="
+  mk_case sw3; echo 1 >"$ST/main-head.rc"; run_gate SWEEP=true SHA=
+  eq "sw3 exit 1" "$GATE_RC" "1"
+  eq "sw3 exactly one degraded issue" "$(ncreate)" "1"
+  eq "sw3 the degraded title is trigger-scoped (codeql-sweep-degraded)" "$(latest_title)" "codeql-sweep-degraded"
+  eq "sw3 degraded labels" "$(latest_labels)" "$LBL_P2"
+  t "sw3 degraded annotation is api-error" out_has "degraded (api-error)"
+fi
+
+if want sw3b; then
+  echo "== sw3b: a resolution that returns no 40-hex sha degrades instead of running on garbage =="
+  mk_case sw3b; printf '{"sha":"not-hex"}' >"$ST/main-head.json"; run_gate SWEEP=true SHA=
+  eq "sw3b exit 1" "$GATE_RC" "1"
+  eq "sw3b the degraded upsert filed" "$(ncreate) $(latest_title)" "1 codeql-sweep-degraded"
+  eq "sw3b phase 3 never ran (no alerts read)" "$(count_calls 'code-scanning/alerts')" "0"
+fi
+
+if want sw4; then
+  echo "== sw4: a second degraded sweep comments on the open sweep issue rather than creating =="
+  mk_case sw4; echo 1 >"$ST/main-head.rc"; ov issue-sweep-degraded.json issues-open.json; run_gate SWEEP=true SHA=
+  eq "sw4 exit 1" "$GATE_RC" "1"
+  eq "sw4 creates no second degraded issue" "$(ncreate)" "0"
+  eq "sw4 comments on the existing codeql-sweep-degraded issue" "$(ncomment)" "1"
+fi
+
+if want sw5; then
+  echo "== sw5: input validation — SWEEP must be true or false, before any gh call =="
+  i=0
+  # SWEEP= is not a bad input: an empty env var reads as unset (default false), like DRY_RUN's own contract.
+  for bi in "SWEEP=garbage" "SWEEP=yes" "SWEEP=TRUE"; do
+    i=$((i + 1)); mk_case "sw5-$i"; run_gate "$bi"
+    eq "sw5.$i $bi rejected (exit 2)" "$GATE_RC" "2"
+    if [[ ! -s "$ST/calls.log" ]]; then pass "sw5.$i $bi rejected before any gh call"; else fail "sw5.$i $bi rejected before any gh call"; fi
+  done
+fi
+
+if want sw6; then
+  echo "== sw6: mode-aware SHA validation =="
+  mk_case sw6a; run_gate SWEEP=true SHA=abc
+  eq "sw6a SWEEP=true + invalid provided SHA exits 2" "$GATE_RC" "2"
+  if [[ ! -s "$ST/calls.log" ]]; then pass "sw6a rejected before any gh call"; else fail "sw6a rejected before any gh call"; fi
+  mk_case sw6b; run_gate SWEEP=true SHA="$GOOD_SHA"
+  eq "sw6b SWEEP=true + valid provided SHA runs (no resolution call needed)" "$GATE_RC" "0"
+  eq "sw6b a provided SHA skips the commits/main read" "$(count_calls 'commits/main')" "0"
+  eq "sw6b phases 1-2 still skipped with a provided SHA" "$(count_calls 'check-runs')" "0"
+  mk_case sw6c; run_gate SWEEP=false SHA=
+  eq "sw6c SWEEP=false + empty SHA is still a rejected input (push contract unchanged)" "$GATE_RC" "2"
+fi
+
+if want sw7; then
+  echo "== sw7: DRY_RUN in sweep mode announces but writes nothing =="
+  mk_case sw7; ov alert-critical-untracked.json alerts-open.json; run_gate SWEEP=true SHA= DRY_RUN=true
+  eq "sw7 exit 1 (a would-file dry run is still the loud signal)" "$GATE_RC" "1"
+  eq "sw7 nothing created" "$(ncreate)" "0"
+  t "sw7 the dry run announced the tracker it would file" out_has "DRY RUN: would file: sec: CodeQL alert #101"
+fi
+
+if want sw8; then
+  echo "== sw8: a phase-3 API failure in sweep mode is non-green and pages the sweep title =="
+  mk_case sw8; echo 1 >"$ST/alerts-open.rc"; run_gate SWEEP=true SHA=
+  eq "sw8 exit 1" "$GATE_RC" "1"
+  eq "sw8 the degraded issue carries the sweep title" "$(latest_title)" "codeql-sweep-degraded"
+  t "sw8 degraded annotation is api-error" out_has "degraded (api-error)"
+fi
+
+if want sw9; then
+  echo "== sw9: dedupe in sweep mode — a tracked alert is green, a bot-scope violation is not =="
+  mk_case sw9; ov alert-critical-untracked.json alerts-open.json; ov issue-tracked-101.json issues-open.json; run_gate SWEEP=true SHA=
+  eq "sw9 tracked alert: green, nothing filed" "$GATE_RC $(ncreate)" "0 0"
+  mk_case sw9b; ov alert-critical-untracked.json alerts-open.json; ov issue-poison-101.json issues-open.json; run_gate SWEEP=true SHA=
+  eq "sw9b a non-bot tracker is not a dedupe signal (files)" "$(ncreate)" "1"
+fi
+
+# ---------------------------------------------------------------------------------------------
 # Static structure of the script and the workflow
 # ---------------------------------------------------------------------------------------------
 strip_comments() { grep -vE '^[[:space:]]*#' "$1"; }
@@ -782,7 +889,9 @@ if want s1; then
   eq "s1 no gh search" "$(grep -c 'gh search' "$scode")" "0"
   eq "s1 no GitHub expression syntax" "$(grep -c '\${{' "$scode")" "0"
   eq "s1 every gh api call paginates except the ONE analyses page read" "$(grep 'timeout 60 gh api' "$scode" | grep -vc -- '--paginate')" "1"
-  t "s1 the single-page read is the analyses fetch_page" grep -qE 'fetch_page "analyses"' "$scode"
+  eq "s1 the sanctioned single-page fetch_page labels are exactly analyses and main HEAD" \
+    "$(grep -oE 'fetch_page "[A-Za-z ]+"' "$scode" | sed 's/fetch_page "//;s/"$//' | sort -u | tr '\n' ' ')" \
+    "analyses main HEAD "
   tn "s1 no dismissal machinery (DISMISS_ALLOWLIST, state=dismissed) remains in code" grep -qE 'DISMISS_ALLOWLIST|state=dismissed|--search' "$scode"
   eq "s1 every gh issue list is bounded by --limit" "$(grep -c 'gh issue list' "$scode")" "$(grep -c -- '--limit 200' "$scode")"
   t "s1 errexit and pipefail are set" grep -qE '^set -euo pipefail' "$scode"
@@ -804,7 +913,8 @@ if want s2; then
   # Comment lines may name the gate (docs, watcher headers); executable lines in any other file must not.
   # Explicit globs, not a tree walk: this suite's verdict is scoped to the surfaces below.
   refs=("$ROOT"/.github/workflows/*.yml "$ROOT"/.github/actions/*/action.yml "$ROOT"/.github/scripts/*.sh "$ROOT"/plugins/soleur/scripts/*.sh)
-  others="$(grep -HnF 'codeql-main-alert-gate' "${refs[@]}" 2>/dev/null | grep -vF 'codeql-main-alert-gate.yml:' | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
+  # codeql-to-issues.yml is the SANCTIONED sweep caller (#12065: one filer, two triggers).
+  others="$(grep -HnF 'codeql-main-alert-gate' "${refs[@]}" 2>/dev/null | grep -vF 'codeql-main-alert-gate.yml:' | grep -vF 'codeql-to-issues.yml:' | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
   eq "s2 no executable line outside the gate itself references it" "$others" ""
   keyed="$(grep -HnE '(needs|workflow_run|workflows)[^#]*codeql-main-alert-gate' "${refs[@]}" 2>/dev/null || true)"
   eq "s2 no needs/workflow_run reference to the gate" "$keyed" ""
