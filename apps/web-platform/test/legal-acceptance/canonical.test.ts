@@ -55,7 +55,7 @@ describe("text hash", () => {
     const base = readFileSync(FIX, "utf8");
     expect(textHash(base.slice(0, -1))).not.toBe(EXPECTED);
     expect(textHash(base.replace('"quote"', "'quote'"))).not.toBe(EXPECTED);
-    expect(textHash(base.replace("|", "/"))).not.toBe(EXPECTED);
+    expect(textHash(base.split("|").join("/"))).not.toBe(EXPECTED);
   });
 
   it("refuses CR so the hash is the same on every platform", () => {
