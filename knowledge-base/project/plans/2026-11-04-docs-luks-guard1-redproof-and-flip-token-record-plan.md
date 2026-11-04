@@ -14,6 +14,21 @@ requires_cpo_signoff: true
 
 Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04
+**Sections enhanced:** Research Insights (deepen-pass findings), Phase 1 (hook behavior), citations
+**Research agents used:** CTO (forks F1, F2), CPO (conditional sign-off), learnings-researcher, code-simplicity-reviewer (plan review); direct repo/`gh` verification of the deepen-plan gates.
+
+### Key Improvements
+1. The red-proof path was re-routed after finding `CI_DRAFT_LIGHT=on` skips `test-scripts` on any draft push (a draft would show skipped, not red); the full battery comes from a `workflow_dispatch` of `ci.yml` on the throwaway branch.
+2. The throwaway PR targets a disposable base, not main, because the "CI Required" ruleset carries two bypass actors (confirmed in `infra/github/ruleset-ci-required.tf`).
+3. The flip-token item is reduced to a pointer plus a grep-derived ledger, because ADR-282 already carries the design (2026-10-30), the build (2026-11-01) and the access pin (2026-11-02).
+
+### New Considerations Discovered
+- `post-dispatch-watch-gate.sh` does not block `gh workflow run`; it nags until a Monitor is armed, which Phase 1 step 7 already does.
+- The pre-commit gate may refuse the throwaway commit; any bypass needs a recorded CTO ruling (decision-challenges row T4).
+
 ## Overview
 
 Resume the open sole-copy LUKS epic. The epic (#9927) stays open: the PR body says `Ref #9927`, never `Closes`. The CTO ruled on 2026-11-04 that no act in this run is delegable, so nothing is merge-armed beyond ship's own auto-merge of this branch's PR, and no owner-reserved hold is touched.
@@ -28,7 +43,7 @@ Three bounded deliverables:
 
 | Brief claim | Reality (checked 2026-11-04 on `origin/main` 8cc167c2e3) | Plan response |
 |---|---|---|
-| "Flip-token design record for item 4 ... the design must say where the flip write moves" | The design already exists: ADR-282 `Addendum - 2026-10-30 (#9927 item 4, the flip-token design)` (CTO ruling: boot token `doppler_service_token.inngest` becomes `read`; a new root-only 0600 `/etc/default/inngest-flip` read/write token, read only by the cutover-flip unit, carries the `flag_set` write). `Addendum - 2026-11-01 (... the flip-token build record)` records the build (merged as #11815, undelivered until the owner-gated host replace). `Addendum - 2026-11-02 (#11831, #11820)` adds the access-level pin and the silence alarm. The #9927 body's Operator Hold "flip-token design" is therefore technically discharged. | Do NOT restate the design. The addendum points at the three addenda, says the hold is discharged by 2026-10-30, and adds only what none of them contain: a grep-derived ledger of every `INNGEST_CUTOVER_FLIP` reader and writer by token, host versus CI, and the item 8 ordering constraint (CTO ruling F2, option A). |
+| "Flip-token design record for item 4 ... the design must say where the flip write moves" | The design already exists: ADR-282 `Addendum - 2026-10-30 (#9927 item 4, the flip-token design)` (CTO ruling: boot token `doppler_service_token.inngest` becomes `read`; a new root-only 0600 `/etc/default/inngest-flip` read/write token, read only by the cutover-flip unit, carries the `flag_set` write). `Addendum - 2026-11-01 (... the flip-token build record)` records the build (merged as #11815, undelivered until the owner-gated host replace). `Addendum - 2026-11-02 (#11831, #11820)` adds the access-level pin and the silence alarm (#11831 is a closed issue delivered by PR #11854; #11820 is an open issue). The #9927 body's Operator Hold "flip-token design" is therefore technically discharged. | Do NOT restate the design. The addendum points at the three addenda, says the hold is discharged by 2026-10-30, and adds only what none of them contain: a grep-derived ledger of every `INNGEST_CUTOVER_FLIP` reader and writer by token, host versus CI, and the item 8 ordering constraint (CTO ruling F2, option A). |
 | "arm, rollback, resume, reflush and luks-cutover ops in cutover-inngest.yml still consume DOPPLER_TOKEN_INNGEST_ARM; the host-replace preflight reads INNGEST_CUTOVER_FLIP with it" | Confirmed: `.github/workflows/cutover-inngest.yml:164` wires `DOPPLER_TOKEN_INNGEST_ARM` for those five ops; `scripts/cutover-inngest.sh` writes `armed` (~2732) and `rollback` (~3238) under it; `.github/workflows/apply-web-platform-infra.yml` ~1946-1962 reads the flag with it. | This is the item 8 finding for the "I checked" comment and the ledger. No revoke, scope-down or deletion here. |
 | "a throwaway DRAFT PR ... watch the required test-scripts (3/8) check go red" | `CI_DRAFT_LIGHT` is `on` (repo variable, set 2026-10-11). `ci.yml` `draft-light` (line ~263) marks every `pull_request` push to a DRAFT light unless the action is `ready_for_review`; `test-scripts` carries `needs.draft-light.outputs.light != 'true'`, so on a draft it is SKIPPED (not red) and `test` is red by design ("draft: full battery owed at ready"). Also: `test-scripts (3/8)` is not itself a required context; the required context is the `test` aggregator that lists `test-scripts` in `needs:`. | CTO ruling F1: dispatch `ci.yml` on the throwaway branch (`workflow_dispatch` skips `draft-light`, so the full battery runs), fall back to the documented ready path, then to a local mutation run. See Phase 1. |
 | "the throwaway branch must not touch .github/** or scripts/**" and "apply-web-platform-infra.yml triggers on push to main only" | Confirmed by reading every workflow's `on:` block (Phase 1 step 1 reruns it): every `push:` trigger is `branches: [main]`; no workflow runs a mutating job on a non-main push. `pull_request` triggers that match an `apps/web-platform/infra/**` diff: `ci.yml`, `infra-validation.yml` (read-only validate/plan), `check-inngest-bootstrap-build.yml`, `validate-vector-config.yml`, `zot-image-mirror.yml`, `sentry-audit-gate.yml` (the last four are path-filtered and do not match a change to `inngest-redis-luks.tf`). | The throwaway commit touches exactly one line in `apps/web-platform/infra/inngest-redis-luks.tf` (line 168 on `origin/main`). |
@@ -62,6 +77,13 @@ Three bounded deliverables:
 - `2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`: name the failing case, so the red is attributable to the property and not to an unrelated failure.
 - `2026-10-18-a-record-pr-said-measured-where-the-evidence-was-printed.md` and `2026-09-14-the-sweep-that-retired-false-sentences-wrote-new-ones-from-my-own-issue-comment.md`: use the strength word the evidence supports; re-derive every "I checked" claim from `gh`/command output, never from an earlier comment or this plan.
 - `2026-10-15-the-flip-pr-ran-the-verification-and-left-the-sentence-saying-it-was-never-run.md`: sweep by claim subject, not by file list (Phase 3 sweeps ADR-282 for sentences the addendum falsifies, for example the 2026-11-03 line that the CI wall time "is recorded in a follow-up append").
+
+**Deepen-pass findings (2026-11-04).**
+- Gates run mechanically on this plan: 4.6 User-Brand Impact present, threshold `single-user incident`; 4.7 Observability skipped (every Files-to-Edit path is under `knowledge-base/`, pure docs); 4.8 PAT-shaped regex returned no hit; 4.9 no UI surface; 4.10 Encryption Posture skipped (this branch edits no `.tf`/cloud-init/migration file and introduces no store or connection; the throwaway edits an existing attribute on a branch that never merges); 4.11 Guard Contract skipped (no guard is authored); 4.12 exactly one unfenced `## Scope Check`, one `Recommendation:` line, no `status: BLOCKED`; 4.13 no new autonomous task (no workflow, function or timer is created; `workflow_dispatch` runs an existing workflow once).
+- Rule IDs cited in the plan body all resolve as active in `AGENTS.rules.md`: `cq-cite-content-anchor-not-line-number`, `hr-dispatch-async-must-arm-watch`, `hr-monitor-not-run-in-background-for-polling`.
+- Issue/PR citations checked live: #9927 OPEN; #11815 MERGED (2026-11-02T03:57:14Z, "split the Inngest host Doppler token into a read boot token and a read/write flip token"); #11831 is an ISSUE, CLOSED ("pin token access level in the Inngest replace gate"), delivered by PR #11854 (`dd09b31d69`); #11820 is an OPEN issue (silence alert follow-up); #9879 is the deferring PR.
+- Verify-the-negative sweep: "every `push:` trigger is main-only" confirmed by parsing all 30-odd workflow files (no tags, no non-main branches); "`test-scripts` is not a required context" confirmed in `infra/github/ruleset-ci-required.tf` (required: `test`, `dependency-review`, `e2e`, ...); "a draft push skips `test-scripts`" confirmed at the `draft-light` job and the `needs.draft-light.outputs.light != 'true'` term on `test-scripts`.
+- No label is prescribed; no new ADR ordinal; no external SHA or version is cited.
 
 ## Open Code-Review Overlap
 
