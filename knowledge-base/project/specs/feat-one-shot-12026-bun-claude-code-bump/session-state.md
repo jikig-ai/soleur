@@ -26,3 +26,22 @@ cto_spawns=2 (rulings F1-F4 plan-time, F5-F6 batch)
 - Fixture re-captured with the Doppler `ci` ANTHROPIC_API_KEY (CTO F13, dev has no key); first capture failed on a new `$HOME/.claude/seed-admin` tmpfs token, fixed with a new placeholder.
 - PR 10926 flag comment posted (F6). F7 (close 10926 as superseded) stays an owner decision.
 - Open: re-run the prd web_egress count before marking the PR ready and at merge (baseline 1 of 22, re-measured 2026-11-04T17:16:38Z: 1 of 22).
+
+## Review Phase (panel SHA 491b587f68, 13 report-only seats, all returned)
+Ledger: raw finding -> canonical defect -> reporting seats -> disposition. Fix commit shown where applied.
+
+| Canonical defect | Seats | Disposition |
+|---|---|---|
+| P1 `claude-cli-pin-knows-models.test.ts:110` lost `//`, file parses to zero tests, Guard 1 never ran | simplicity, semgrep, data-integrity, pattern, code-quality, architecture, perf, user-impact, git-history, security, test-design | FIXED 998ba4c6f2 (34 passed, Guard 1 printed 1.4.4/1.4.4) |
+| P2 Guard 1 real row: `assertEmbeddedBunFloor` call-site mutation survives | test-design | FIXED 998ba4c6f2 (direct per-version floor assertion) |
+| P2 `--disable-userns` dropped both sides; b2 mutation (mount after it) survives; rationale vs bwrap 0.8.0 | git-history, test-design, security, user-impact | fix round 2 (row + wording; builder never emits it under our config: enableWeakerNestedSandbox true) |
+| P2 stale counts/docs: ADR-053 carve-out, canary-probe-set 483/491/510, betterstack-log-query 206, tf 1764, ADR-272, plan 2.9 Doppler dev, bwrap-shim comment | pattern, agent-native, architecture, git-history, security | fix round 2 |
+| P2 non-required checks (`infra-validation`, `sandbox-canary-capture-gate`) described as gates; rollback needs `sdk-bump-verified:` trailer; Better Stack alert narrower than plan says | architecture, user-impact | fix round 2 (wording) + read both runs on the pushed head before ready |
+| P2/P3 G2 wording (UUID is the CLI session id, not random) and wildcard pin allowlists any builtin plugin store file | data-integrity, security, user-impact | fix round 2 (keep `agents-md` in the pinned name) |
+| P2/P3 two real-SDK suites still on Haiku 4.5 | simplicity, pattern, agent-native, git-history | fix round 2 (swap, re-run with C4_BWRAP_REQUIRED=1) |
+| P2 classifier: warning line + denial line is two lines, predicate wants one | agent-native | measure; helper is not used under our config (allowAllUnixSockets true) -> tracker |
+| P3 comment/title accuracy (first-pin claim x3, "bind last" title, normalizeSpawnTail JSDoc, SETTINGS_MAPPING minifier claim, seed-admin "HOME only", outer-prctl concurrency, "can never match" reason, #10455 cite) | code-quality, pattern, git-history | fix round 2 |
+| Structural gap: guards enumerate a hand-listed name at one reading location (bin/claude.exe, Dockerfile global tree, `.bun-version`, pre-`--dev` mount table, non-`.push` forms) | structural-enumeration, security, user-impact | `.bun-version` floor assertion added; the rest -> one consolidated tracker (Phase 4.2 stays the hard close condition for #12026) |
+| P3 simplicity trims, canary wiring mutants, G2 plugins/store scan control, resume-role sentence in User-Brand Impact, scheduled-marketplace-drift 2.1.228 (pre-existing), image +133 MB, watchdog busy-wait | simplicity, test-design, user-impact, perf, git-history | declined or tracker; no behavior change |
+
+Relay to the user: the agent-native seat made one unintended live model call via the ambient CLI login; the AppArmor half of the masked-/proc proof is covered only by CI `infra-validation` (not a required check).
