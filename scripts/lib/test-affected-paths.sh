@@ -827,6 +827,14 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# plugins/soleur/test/scheduled-realtime-probe-guard (#12009) — executes the probe step body parsed out of the workflow and
+# compares its setup-node version with apps/web-platform/.nvmrc, both through $ROOT-built paths no derivation channel reaches.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULED_REALTIME_PROBE_GUARD_TEST_SH_PATHS=(
+  ".github/workflows/scheduled-realtime-probe.yml"
+  "apps/web-platform/.nvmrc"
+  "plugins/soleur/test/scheduled-realtime-probe-guard.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                           # THIS FILE
+)
 # plugins/soleur/test/web-host-escrow-diagnose-workflow (#9377) — reads the workflow, both runbooks and the two escrow scripts
 # through $REPO-built paths no derivation channel reaches, so a later edit to any of them must still select this guard.
 AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
@@ -1159,6 +1167,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
 # are mined from the repo paths each suite file names, so a diff to a subject
 # selects its guard.
 # ---------------------------------------------------------------------------
+# tests/hooks/emissions — the suite walks plugins/soleur/test/components.test.ts, which reads
+# AGENTS.rules.md via readFileSync (components.test.ts:609/719/745).
+AFFECTED_TESTS_HOOKS_EMISSIONS_PATHS=(
+  "AGENTS.rules.md"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/hooks/test_hook_emissions.sh"
+)
+
 # tests/hooks/incidents — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_HOOKS_INCIDENTS_PATHS=(
