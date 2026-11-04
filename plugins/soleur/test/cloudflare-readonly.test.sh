@@ -407,9 +407,9 @@ grp_source() {
   done
   printf '%s\n' 'PATH=/usr/bin:/bin' 'u="$BASE/zones/$CF_ZONE_ID/settings/ssl"' '[ -x /usr/bin/jq ] || exit 1' > "$WORK/vp.txt"
   t "census control: PATH=/usr/bin:/bin, URL templates and the -x preflight are not flagged" eq "$(varpath_hits "$WORK/vp.txt")" 0
-  tn "census: no token, zone or account variable on any jq/date line" bash -c 'grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"' _ "$STRIPPED"
+  tn "census: no token, zone or account variable on any jq/date line" bash -c '[ "$(grep -E "/usr/bin/(jq|date)" "$1" | grep -Ec "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]")" -gt 0 ]' _ "$STRIPPED"
   printf '%s\n' 'x=$(/usr/bin/env -i /usr/bin/jq -c --arg t "$TOK" a)' > "$WORK/tk1.txt"
-  tn "census control: a token variable on a jq line is detected" bash -c '! { grep -E "/usr/bin/(jq|date)" "$1" | grep -Eq "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]"; }' _ "$WORK/tk1.txt"
+  tn "census control: a token variable on a jq line is detected" bash -c '[ "$(grep -E "/usr/bin/(jq|date)" "$1" | grep -Ec "TOK|CF_API|CF_ZONE|CF_ACCOUNT|[$][{]?[!]")" -eq 0 ]' _ "$WORK/tk1.txt"
   tn "source: no export of the token" src_has '(^|[;[:space:]])(export|declare[[:space:]]+-[A-Za-z]*x)[[:space:]]+(-[A-Za-z]+[[:space:]]+)?TOK'
   tn "source: no /dev/shm" src_has '/dev/shm'
   tn "source: no tee" src_has '(^|[^[:alnum:]_-])tee([^[:alnum:]_-]|$)'
