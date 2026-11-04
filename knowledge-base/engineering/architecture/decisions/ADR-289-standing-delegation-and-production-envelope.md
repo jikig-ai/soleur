@@ -391,3 +391,21 @@ per-command owner go, and the read is re-run immediately before the act. The two
 
 No C4 change: the model draws no agent-read relationships to Sentry, Better Stack or Cloudflare today, and Class R adds
 none. That omission is deliberate, not an oversight.
+
+## Addendum 2026-11-04 (Ref #10205, #10479)
+
+Cloudflare is a Class R vendor for four named reads (zone SSL mode, the config-settings ruleset entrypoint, legacy page
+rules limited to SSL actions, and a bounded change-history count), run only through the GET-only wrapper
+`plugins/soleur/scripts/cloudflare-readonly.sh` under a CTO ruling of 2026-11-04. The 2026-11-03 addendum named
+Cloudflare as a Class R account but no reader existed; this fills that stated gap. The wrapper prints a status, a count
+or a field subset, never a rule expression, description, actor or IP, and a 403 is recorded as `unverified` and never
+answered by widening a token. Placement, the root-anchored `scripts/**` clause of item 4 and the closed set of four
+subcommands live in `standing-delegation.md` section 9 and are pinned in `components.test.ts`; they are not restated.
+
+Credentials exception, stated plainly: the `ssl-mode`, `config-entrypoint` and `pagerules-ssl` subcommands read with
+`CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_RULESETS`, which are Terraform-scoped and write-capable because no
+read-only equivalent exists. That is the one exception to the read-only-token rule, accepted because the wrapper
+hardcodes GET, fixes the host and URL templates, and starts curl with an empty environment; the audit read uses a
+separate read-only `CF_API_TOKEN_AUDIT`, and `CF_API_TOKEN` is never used. The stricter alternative (refuse until a
+read-only token is minted) is recorded as dissent in the feature's decision challenges. `status: adopting` is unchanged,
+and there is no C4 change: the model still draws no agent-read edges to Cloudflare.
