@@ -19,8 +19,9 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 - [x] 1.4 Commit with plain `git commit`; if the pre-commit gate refuses, record that as the local leg and spawn the CTO for the bypass fork, record its ruling in decision-challenges.md before committing
 - [x] 1.5 Push head; `gh pr create --draft --base redproof-luks-guard1-base-20261104`, title "DO NOT MERGE: ...", body `Ref #9927`, no `Closes`
 - [x] 1.6 `gh workflow run ci.yml --ref redproof-luks-guard1-head-20261104`; pin the run id via `gh run list --workflow ci.yml --event workflow_dispatch --branch <head> -L 1`; arm a Monitor watch on it
-- [x] 1.7 Read evidence: `test-scripts (3/8)` job URL and conclusion, failing Guard 1 case text, `test` conclusion, other shards, green 3/8 baseline on the base SHA, Guard 1 per-suite elapsed if printed
+- [x] 1.7 Read evidence (baseline pending, see 1.10): `test-scripts (3/8)` job URL and conclusion, failing Guard 1 case text, `test` conclusion, other shards, green 3/8 baseline on the base SHA, Guard 1 per-suite elapsed if printed
 - [x] 1.8 (not needed: dispatch path worked) If dispatch is blocked or unattributable: fallback A (ready path, then `gh pr ready --undo`); if both fail: fallback D (local mutation run, labelled "not the CI leg"; AC1 undischarged)
+- [ ] 1.10 Record the baseline `test-scripts (3/8)` result of run 41915494979 (unmutated base) on #9927, then close the throwaway PR (see 5.2)
 - [x] 1.9 Check `gh pr view <n> --json isDraft,baseRefName,autoMergeRequest` shows `true`, the base name, `null`
 
 ## Phase 2 - INNGEST_CUTOVER_FLIP ledger (grep-derived)
@@ -32,7 +33,7 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 ## Phase 3 - ADR-282 addendum (committed)
 
 - [x] 3.1 Time the local Guard 1 run (`bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh`); quote command and printed summary (89 of 89 expected); note contention from sibling `test-all.sh` processes if present
-- [x] 3.2 Append `## Addendum - 2026-11-04 (#9927 item 4 reconciliation, Guard 1 CI wall time)`: pointer to 2026-10-30/11-01/11-02 (no design copy), Hold discharged, CTO ruling F2 cited, ledger table, ordering constraint, wall-time paragraph with both sources and scopes, red-proof result paragraph
+- [x] 3.2 Append `## Addendum - 2026-11-04 (#9927 item 4 reconciliation, Guard 1 CI wall time)`: pointer to 2026-10-30/11-01/11-02 (no design copy), design recorded in 2026-10-30 (hold closing is the owner's call), CTO ruling F2 cited, ledger table, ordering constraint, wall-time paragraph with both sources and scopes, red-proof result paragraph
 - [x] 3.3 Add the dated `Superseded` marker under the 2026-11-03 "recorded in a follow-up append" sentence
 - [x] 3.4 Do not cite the 1,251 ms `floor` weight in `scripts/suite-durations.tsv` as a wall time
 - [x] 3.5 Run `python3 scripts/lint-infra-no-human-steps.py`, `bash plugins/soleur/test/c4-count-parity.test.sh`; confirm the diff is additions only plus the one marker
@@ -45,7 +46,7 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 ## Phase 5 - Close handoff
 
 - [ ] 5.1 Put `Throwaway red-proof PR #N (base <name>, head <name>): close it and delete both branches` in this branch's PR body as plain text
-- [ ] 5.2 Final task after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
+- [ ] 5.2 Final task (run as soon as 1.10 is recorded; also `git worktree remove .worktrees/redproof-luks-guard1-head-20261104`; verify `gh pr view 12109 --json state` is CLOSED before this branch's PR merges) after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
 
 ## Not in this run
 
