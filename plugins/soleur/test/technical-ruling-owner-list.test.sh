@@ -505,11 +505,14 @@ mutate weak 's/^.*# mut:owner-list-weak$/      if (0) next # mut:owner-list-weak
   killed weak "$MUT/gate.weak.sh" 1 --report "$FIXTURES/owner-list-hash-noclose.md"
 
 echo "=== Arm 5: assertion-count floor ==="
-ran=$((PASS + FAIL))
+# The floor reports by printf + exit 1, never through assert_eq/print_results it backstops. The threshold and the count
+# are literal bindings on the lines IMMEDIATELY above the `if` (scripts/guard-vacuity-floor.test.sh slices backward over
+# contiguous assignments), so a neutered helper leaves PASS+FAIL at 0 and this fires.
+printf 'owner-list suite: %d assertions ran (floor 511)\n' "$((PASS + FAIL))"
 FLOOR=511
-printf 'owner-list suite: %d assertions ran (floor %d)\n' "$ran" "$FLOOR"
+ran=$((PASS + FAIL))
 if (( ran < FLOOR )); then
-  printf 'FATAL: only %d assertions ran, the floor is %d -- the dispatch was neutered or arms were skipped\n' "$ran" "$FLOOR" >&2
+  printf '[FATAL] assertion floor: only %d assertions ran, the floor is %d -- the dispatch was neutered or arms were skipped (anti-vacuity)\n' "$ran" "$FLOOR" >&2
   exit 1
 fi
 print_results "$FLOOR"
