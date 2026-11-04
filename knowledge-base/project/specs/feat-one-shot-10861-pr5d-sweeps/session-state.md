@@ -43,3 +43,21 @@ Halt gates evaluated mechanically (no Task/Agent tool — per-section research a
 ### Next Action
 
 `soleur:work` executes tasks.md Phase 0 (preflight + measurement receipts). The two `pending - assumed` technical rows in `decision-challenges.md` must resolve to `Ruled by CTO agent, <date>:` before ship — spawn `soleur:engineering:cto` at work time (the ship gate fails on surviving placeholders).
+
+## Work (2026-11-04, drain executed on worktree feat-one-shot-10861-pr5d-sweeps, base fadd34b5c061)
+
+Phase 0: drain claim clean (#12116 only), BASE=fadd34b5c061 recorded; selector rows (730 rows) + fresh audit `gap_suites=4 gap_refs=29 accepted=1537 stale=0` — live set == expected 29 exactly.
+
+Phase 1 (glob-rate): all 3 sweep suites `baselined` (plugins/soleur duration-missing, argv-bearer-sweep rate-over-and-duration-over-30s, boundary-prefix duration-floor); spot_check=3 compared=2190, exit 0. No glob/always_on installs.
+
+Phase 2 (21 deferred-sweep): per-edge patched-rows trial-declares (audit models selector rows verbatim). plugins/soleur: 6 wiring-pin edges (arm-heartbeats, cron-egress-nftables, cron-egress-postapply-assert, git-data-flag-precheck, ensure-kb-index, web-host-escrow-preflight); cron-egress-resolve -> glob-narrow (2 reveal rows anchored on itself at 11/90d); 9 mention accepts (grep-q-pipe-guard JSDoc cite; betterstack-query exec-seam+doc literals; check-web-host/lint-*/prod-version classifier inputs; model-launch trio fixture literals). argv-bearer 5: all edges (S4/HMAC census content-greps scripts/*.sh); kb-drift-walker reveal AGENTS.md+AGENTS.rules.md accepted same commit.
+
+Phase 3 (mega-edge): `glob:.claude/hooks/*grep-q-pipe-guard.test.sh` installed in git-data-birth array (dir class verified via _affected_glob_split; tasks.md literal was malformed head-mid-slash).
+
+Phase 4 (boundary-prefix 7): recorder unreliable x2 (host load 13-17 > 4.0 max, both reps refused) -> static line kinds per tasks 4.1 fallback: 9 message: rows + 3 code-line rows (.settings.json, gitleaks :619/:911, rule-metrics-constants); no suite-scope glob (CTO DEFER ruling honored).
+
+Phase 6: post-edit selector regen + real audit -> `SOLEUR_PR_AFFECTED_AUDIT suites=730 always_on=116 audited=614 unaudited=0 gap_suites=0 gap_refs=0 accepted=1555 stale=0 refs=4374 files_read=1232`; ratchet `--print-baseline` emitted 0 lines (empty baseline file kept per contract); committed ratchet `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0`.
+
+Deviation vs plan: the brief's "edge-or-glob for all 21" resolved per-pair by evidence — pairs that are pure mentions (fixture literals, classifier inputs, JSDoc cite, exec-seam default) took accept rows rather than edges (the ratchet remedy bars declaring files the suite does not read); verdict-input wiring pins took edges per PR5b precedent (push-infra-config). Recorded per-pair in receipts/sweep-decisions.tsv.
+
+explicit-calls.tsv: NONE — all 29 pairs drained.
