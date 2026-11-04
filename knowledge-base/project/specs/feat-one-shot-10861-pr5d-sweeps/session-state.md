@@ -27,6 +27,19 @@ None blocking. Constraint: this planning run has NO Task/Agent tool — the plan
 
 planning subagent only (no fan-out). Sources: parent plan `plans/archive/20261103-165953-…-pr5-strict-zero-plan.md` §D1-D5, its tasks.md §3 + decision-challenges rows 11-17, PR4c `handoff-pr5-deferred-sweep.tsv`/`handoff-pr5-notes.md`, runbook `ci-pr-affected-activation.md` §drain rubric, `scripts/lib/affected-glob.sh`, `scripts/ci-pr-affected-replay.py` (CODE_EXT :1076, keep-shrink :2015, grown :2065), `scripts/audit-suite-reads.sh`, `scripts/always-on-justifications.tsv`, PR5c body #12093, learnings 2026-10-31/2026-11-03.
 
+## Deepen pass (2026-11-04, worktree `feat-one-shot-10861-pr5d-sweeps` — KB edits only)
+
+Halt gates evaluated mechanically (no Task/Agent tool — per-section research agents, review-agent fan-out and the two round-1 realism passes could not be spawned; the grep-level checks ran inline):
+
+- **4.6 User-Brand Impact:** PASS — section present, threshold `none` + decision line; no Files-to-Edit path matches `SENSITIVE_PATH_RE` so no scope-out needed.
+- **4.7 Observability:** initially MISSING — its Step-1 trigger is broader than plan §2.9's (any non-docs Files-to-Edit applies, and this plan edits `.sh`/`.tsv`). Added a compliant `## Observability` block: the surface is the audit/ratchet oracle itself; `discoverability_test.command` = `python3 -c` baseline-line counter (allowlisted verb, ~ms runtime), `expected_output: "0"` (literal, post-drain healthy count).
+- **4.8 PAT variables:** PASS — regex sweep returned zero hits.
+- **4.9 UI wireframe / 4.10 Encryption / 4.11 Guard Contract / 4.13 Task Design / 4.5 network:** not triggered (no UI surface, no store/connection, no new guard, no new autonomous task, no SSH/infra keywords).
+- **4.12 Scope Check:** PASS — one `## Scope Check`, all 9 asks mapped, every plan item cited or `inferred`-justified (`session-state.md`: series convention), no `status: BLOCKED`.
+- **4.4 Precedent-diff:** the `glob:`/`^file` member spellings follow the PR5c precedent (123 narrow globs on main, e.g. `glob:.claude/hooks/*guardrails*.sh` at test-affected-paths.sh:4143) — precedent exists and is cited.
+- **4.45 realism (inline equivalent):** verified the plan's negative claims by grep — baseline file = exactly 22 lines matching the 16+5+1 pair set; `grep -c boundary-prefix accept.tsv` = 0 accept rows; CODE_EXT frozenset at replay.py:1076 confirms extensionless/data files never join the naming walk.
+- **Phases 5-6 (review-agent fan-out + merge):** not executable without the Task tool — recorded as a limitation; the plan carries the mechanical gate evidence instead.
+
 ### Next Action
 
-Run `soleur:deepen-plan` on the plan file (pipeline step 2), then `soleur:work` executes tasks.md Phase 0.
+`soleur:work` executes tasks.md Phase 0 (preflight + measurement receipts). The two `pending - assumed` technical rows in `decision-challenges.md` must resolve to `Ruled by CTO agent, <date>:` before ship — spawn `soleur:engineering:cto` at work time (the ship gate fails on surviving placeholders).

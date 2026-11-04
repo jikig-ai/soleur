@@ -66,6 +66,41 @@ Execute tasks.md §Phase 3 verbatim (quoted under Canonical Tasks below), in thi
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** every touched path is test-selection machinery (`scripts/lib/test-affected-paths.sh`, `*.tsv` oracles, `knowledge-base/` receipts); no diff path matches the canonical `SENSITIVE_PATH_RE` (`apps/web-platform/...`, `apps/*/infra/`, doppler/secret workflows) — the `apps/web-platform/infra/*` paths appear only as *named* edge members, never as edited files.
 
+## Observability
+
+The surface being maintained is itself the observability mechanism (the affected-index audit/ratchet oracle); the section declares how its own state is read.
+
+```yaml
+liveness_signal:
+  what: "SOLEUR_PR_AFFECTED_RATCHET marker line on the advisory affected-index-ratchet CI job, plus SOLEUR_PR_AFFECTED_AUDIT on a local audit run"
+  cadence: "per PR (ratchet job, continue-on-error) / on demand (audit)"
+  alert_target: "GitHub Actions job annotation on the PR + the s4-drain observation-window probe scripts/followthroughs/ratchet-observation-window-10865.sh"
+  configured_in: ".github/workflows/ci.yml (affected-index-ratchet job) and scripts/ci-pr-affected-replay.py"
+
+error_reporting:
+  destination: "GitHub Actions annotations on the affected-index-ratchet job; local receipts under knowledge-base/project/specs/feat-one-shot-10861-pr5d-sweeps/receipts/"
+  fail_loud: "ratchet marker reason=new-pair | stale-line | stale-accept | grown | baseline-deleted; audit exit 1 with gap_suites/gap_refs/stale counts"
+
+failure_modes:
+  - mode: "a suite gains an undeclared read"
+    detection: "ratchet new-pair annotation on the next PR touching the pair's files"
+    alert_route: "PR annotation + #10448 mirror comment cadence"
+  - mode: "an accept row's anchor line is edited"
+    detection: "stale-accept finding on the next audit/ratchet run"
+    alert_route: "PR annotation; self-heals via --print-baseline regeneration"
+  - mode: "baseline/accept desync mid-slice"
+    detection: "stale-line (a drained pair's line still present) or grown (a line main lacks)"
+    alert_route: "blocks the drain commit itself — regenerate per commit"
+
+logs:
+  where: "GitHub Actions job log for affected-index-ratchet; local receipts/*.txt"
+  retention: "GHA default retention; receipts committed to the spec dir permanently"
+
+discoverability_test:
+  command: "python3 -c \"print(sum(1 for _ in open('scripts/ci-pr-affected-audit.baseline.tsv')))\""
+  expected_output: "0"
+```
+
 ## Research Insights
 
 **Premise Validation.** `gh issue view 10861` → OPEN (`s4-drain` label on the issue); #10448 → OPEN; `gh pr view 12116` → OPEN DRAFT titled `WIP: feat-one-shot-10861-pr5d-sweeps` already carrying `s4-drain` (claim already ours). `gh pr list --label s4-drain --state open` → exactly `[#12116]`. Collision precheck (#10333): the only open PR naming #10861 is our own draft; the foreign `test-all.sh` processes are sibling worktrees' runs, unrelated to this drain. Cited artifacts verified on disk: parent tasks.md §3, handoff TSV (43 rows; last 21 = plugins/soleur 16 + argv-bearer 5), `scripts/lib/affected-glob.sh` grammar, `suite-durations.tsv` rows (argv-bearer 47,034 ms `measured`; boundary-prefix 1,222 `floor`; `plugins/soleur` no row → `duration-missing`), `_MIN_ALWAYS_ON_DECLARED=111` (test-all.sh:4234), `m_s_floor` (test-all-affected.test.sh:722), `scripts/always-on-justifications.tsv`. Brief-vs-disk discrepancy noted and corrected: the cited parent plan path lives under `plans/archive/20261103-165953-…`; the tasks.md 3.3 glob literal is malformed as written (corrected spelling adopted). Live measurement on this worktree (HEAD = init commit on `9a41cb8e9e`): `audit` exit 1, `gap_suites=4 gap_refs=29 accepted=1537 stale=0 refs=4371 files_read=1228`; `ratchet` `exit=1 reason=new-pair live=29 baseline=22`; baseline file = 22 lines = exactly the 16+5+1 deferred-sweep/mega-edge pairs; the 7 boundary-prefix pairs are `new-pair` drift (main already red on them).
