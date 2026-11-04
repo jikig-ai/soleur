@@ -23,3 +23,6 @@ Baseline is shrink-only; each commit pruned via `ratchet --print-baseline` to a 
 - `audit --list <real>`: `gap_suites=6 gap_refs=26 accepted=1274 stale=0 refs=4203 files_read=1222`.
 - Remaining 26 refs are PR5c/d scope: argv-bearer-sweep 18 (deferred), inngest-luks-sole-copy 4 (drift), git-data-birth-readiness-gate 1, key-rotate-workflow drift 3 (jobs1-stopgap, test-all-killed, test-suite-lanes).
 - 315 accept rows removed as `not-a-gap` (edge/glob coverage subsumes them — includes pre-existing rows whose pairs the stage edges now cover).
+
+## Post-push fix: glob respelling
+- The spec's `glob:<dir>/<stem>*.<ext>` spelling is MALFORMED under `affected-glob.sh` — `_AGS_HEAD` is the longest metachar-free run, so a literal stem before `*` fails `head-mid-slash` (the head must end in `/`). Legal narrow shape: `glob:<dir>/*<stem>*.<ext>` (leading-`*` tail). All 33 members respelled; `lint-orphan-test-suites` clean, replay suite green.
