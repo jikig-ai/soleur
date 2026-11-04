@@ -261,7 +261,7 @@ also restates the auto-create-unprotected hazard ADR-241 recorded.
 |---|---|---|
 | #10078 lists four probe units (`inngest-consumer-probe`, `web-zot-consumer-probe`, `web-private-nic-guard`, `web-git-data-probe`) | `web-bash-synthetic.service:22` is a **fifth** unprefixed `EnvironmentFile=` unit fed by the same `web-probe-envwrite.sh` writer and armed in the same `cloud-init.yml` block (~:646-650) | Include it in the conditioning set; the class census — not the issue's enumeration — is the file list |
 | #10078 cites probe-unit lines ~:28/:28/:27 and vector `RestartSec=5` | Actual: :30/:30/:29 (drifted +2/3); `vector.service` heredoc carries `RestartSec=10`, `webhook.service` `RestartSec=5` | Facts re-derived per unit at implementation; comments cite measured values |
-| #9659 enumerates 12 workflow files | Census today: 76 hits across **18** files — additions include `review-reminder.yml`, `scheduled-integration-suites.yml`, `main-health-monitor.yml`, `cla-evidence-timestamp.yml`, `apply-deploy-pipeline-fix.yml`, `web-platform-release.yml` | Every hit is classified into the issue's three buckets; the marker lint makes new unclassified sites RED |
+| #9659 enumerates 12 workflow files | Census today: 76 hits across **19** files — additions include `review-reminder.yml`, `scheduled-integration-suites.yml`, `main-health-monitor.yml`, `cla-evidence-timestamp.yml`, `apply-deploy-pipeline-fix.yml`, `web-platform-release.yml`, `scheduled-rehearsal-skip-monitor.yml` (CTO ruling pass, 2026-11-04) | Every hit is classified into the issue's three buckets; the marker lint makes new unclassified sites RED |
 | #8780 says the bootstrap `build` job "keeps `packages: write` and `id-token: write`" | Confirmed ~:84-89, no `environment:` on `build:`; sibling `bump-cloud-init-pin` already main-gated via `infra-privileged` (~:1066) | `build` gets the new admission environment; bump job untouched |
 | #8780 defers until "#8747's gate ships" | #8747's tag-ancestry gate merged via #9301 — the dispatch arm *is* the remaining bypass | Proceed now |
 | "Reusable-release can't hold an environment" (implicit worry the fix must live in callers) | GitHub docs + ADR-241: `environment:` is valid on a job *inside* the reusable workflow and is evaluated against the calling run's ref | Gate lands inside `reusable-release.yml` — one chokepoint covering both callers |
@@ -283,7 +283,7 @@ fails silently where the repo already learned the louder pattern*:
 - **#9659:** #9612 normalized its enumerated `EXISTING=$(gh issue list …)`
   dedupe sites but the class kept growing — a transient `gh` fault at a
   bare `VAR=$(gh …)` site under `set -euo pipefail` aborts the step
-  mid-alarm with no breadcrumb. 76 census hits across 18 files today.
+  mid-alarm with no breadcrumb. 76 census hits across 19 files today.
 - **#10078:** five web-host probe units read `EnvironmentFile=` products
   written late by `web-probe-envwrite.sh` (`|| true`-tolerated), and their
   timers arm unconditionally — an envwrite miss is an armed timer firing
@@ -525,7 +525,8 @@ classification candidates: `scheduled-inngest-health.yml`,
 `scheduled-zot-restart-loop.yml`, `main-health-monitor.yml`,
 `review-reminder.yml`, `scheduled-integration-suites.yml`,
 `cla-evidence-timestamp.yml`, `apply-deploy-pipeline-fix.yml`,
-`web-platform-release.yml`); plus `scripts/test-all.sh`,
+`web-platform-release.yml`, `scheduled-rehearsal-skip-monitor.yml`);
+plus `scripts/test-all.sh`,
 `scripts/suite-durations.tsv`, `scripts/suite-shard-legs.tsv`, and
 `scripts/guard-vacuity-floor.test.sh` if PROMOTED applies.
 
