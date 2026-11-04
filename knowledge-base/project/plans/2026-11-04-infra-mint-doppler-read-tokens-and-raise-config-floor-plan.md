@@ -16,6 +16,25 @@ requires_cpo_signoff: true
 
 # infra: mint read tokens for three more Doppler configs and raise the config floor to 16
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-04
+**Sections enhanced:** User-Brand Impact, Observability, Encryption Posture, Files to Edit (3, 4, 5), Guard Contract, Dependencies & Risks
+**Review agents used:** security-sentinel, user-impact-reviewer, observability-coverage-reviewer, terraform-architect, learnings-researcher, a verify-the-negative/attribution pass (Sonnet), plus the earlier plan-review pair (code-simplicity-reviewer, architecture-strategist) and the CTO and CPO rulings.
+
+### Key Improvements
+
+1. The worst case is now stated as it is: the published map is already a master key (its `prd` token reads the bypass-RLS Supabase service-role key, the Terraform GitHub App key and the proxy TLS key), this change widens the same class by three configs, and the tokens read values directly through the Doppler API; the "names only" wording described only what the scan prints. The emergency revocation route (revert PR plus `[ack-destroy]`, no dispatch route) is named.
+2. Failure semantics are corrected: a failed apply blocks only later merges that touch `apps/web-platform/infra/**` (until retried or `[skip-web-platform-apply]`), not all merges; the merge-to-republish `degraded 13/16` is an expected transient filed as a coverage issue, with no email except the channel-failure backstop.
+3. Edit sites are now exact: nine fixture lines by number and name, the T6/T20/T17 sites, and the four cited line anchors (`:3`, `:55`, `:56`, `:1218`) that make every test-file edit line-count-neutral.
+4. The discoverability probe is a `grep -c` (no shell-active character) and the encryption-posture evidence for the Actions secret is a retrieved GitHub REST citation.
+
+### New Considerations Discovered
+
+- The per-merge apply has no rollback; a crash after a Doppler token create but before the state write is an unverified orphan risk (recorded in Dependencies & Risks).
+- The `infra-validation.yml` `pull_request` plan job and `web-platform-release.yml` (push to `main` on `apps/web-platform/**`) also match the changed paths; Phase 0.3 reads both before any push.
+- Repo-level Actions secrets are reachable by any workflow file a writer pushes on any branch; a census AC pins that only the drift workflow references `DOPPLER_TOKEN_DRIFT_MAP`.
+
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). This is a single-subsystem infra change in practice.
 
 ## Overview
@@ -83,6 +102,15 @@ three literals are counts); `2026-07-07-doppler-branch-config-does-not-isolate-s
 reach is names-only on the runner); `cq-assert-anchor-not-bare-token` and `cq-cite-content-anchor-not-line-number` (the
 new row anchors on resource blocks, not numerals or line numbers).
 
+**Deepen-pass findings and dispositions (2026-11-04).**
+
+- security-sentinel (no blocker): all three configs are `prd` branch configs inheriting the whole `prd` root; branch-only keys are `GIT_DATA_LUKS_KEY`, `BETTERSTACK_LOGS_TOKEN`, `WORKSPACES_LUKS_KEY`, the header bucket and endpoint and the deferred R2 access pair; the detector reads values only for `CF_API_TOKEN*` and `ACCESS_TOKEN_(ID|SECRET)` names and masks them, and none of the new branch-only names match. Only `scheduled-terraform-drift.yml` references the secret. Applied: User-Brand Impact and Dependencies wording, census AC.
+- user-impact-reviewer: applied the master-key worst case, the narrower blocked-merge scope, the transient-degraded wording and the revocation route.
+- observability-coverage-reviewer: applied layer citations (run log, `token-drift verdict:` line, apply workflow failure email), removed the unsupported "ops email" claims; the declared probe is valid under Check 10 and now uses `grep`.
+- terraform-architect (no change required): `depends_on` on the for_each token is valid and cycle-free, adds no attribute diff to the 13 existing instances, and the plan stays 3 creates plus 1 in-place map update with a redacted sensitive value; put the `depends_on` block last, after `access`, separated by a blank line so `terraform fmt` does not realign. Offline `terraform validate` is unverified (no `.terraform` directory); `terraform fmt -check` is the mandatory local check and CI covers validate.
+- learnings-researcher: `2026-08-04-a-count-framed-ratchet-cannot-see-a-rename.md` confirms the F4b set ratchet must be exercised; the 2026-07-03 dark-launch learning confirms CTO R2 (a targeted resource drags in its dependencies, so an operator-excluded address must not be referenced); `-target` selects dependencies never dependents, and the map secret is explicitly in the per-merge list, so the dependent is covered.
+- verify-the-negative pass: every absolute claim held (only the `apply` job targets `token_drift`; the secret is bound only in the drift workflow; the parity suite has no inventory literal; the four line cites hold). Corrections applied: fixture names and the exact edit-site table, the three regions of `scheduled-terraform-drift.yml` (git may count more hunks), and taking the `token_drift` block from `allTf` inside the describe that owns the #9438 test.
+
 **Technical rulings.** All eight forks were ruled by the CTO agent on 2026-11-04 and are recorded verbatim in
 `knowledge-base/project/specs/feat-one-shot-11857-doppler-read-tokens/decision-challenges.md`. The CPO agent confirmed no
 sign-off beyond the owner's merge decision is required.
@@ -123,8 +151,8 @@ run against the final Files-to-Edit list; no open scope-out named these paths at
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** the twice-daily drift scan reports a standing `degraded 13/16` (or `0/16`) coverage issue and ops email for as long as the map is not republished; no end-user page or workflow is touched. A mis-ordered apply could instead fail the per-merge apply and block unrelated merges to main until retried.
-- **If this leaks, the user's data is exposed via:** `DOPPLER_TOKEN_DRIFT_MAP` (a repo-level Actions secret, and a second copy inside Terraform state on the R2 backend). After this change the map holds three more read tokens, among them one that reads the git-data volume passphrase config (`prd_git_data`) and one that reads the web-class workspaces passphrase config (`prd_workspaces_luks_web`); a leaked map therefore reaches the passphrases for customer-data volumes (a passphrase alone does not open a volume without the LUKS header and host access). Every config is a branch of `prd`, so each token already reads the inherited `prd` secrets (the existing `prd` token in the map has that reach today); the new reach is the branch-specific keys.
+- **If this lands broken, the user experiences:** the next drift scan after the merge reports `degraded 13/16` (the floor is 16 while the published map still holds 13 entries) as a standing GitHub coverage issue, which is an EXPECTED transient: it appears at the next scan (up to about 12 hours) and auto-closes once the map is republished. No email is sent for coverage; the ops email is only the backstop when the issue channel itself fails. If the apply fails or applies partly (it has no rollback and "leaves behind whatever it had already created"), the issue stays until a retry, and the failed apply blocks every later merge that touches `apps/web-platform/infra/**` (the push trigger) until it is retried or the merge carries `[skip-web-platform-apply]`; merges that touch nothing under that path are not blocked. No end-user page or workflow is touched.
+- **If this leaks, the user's data is exposed via:** `DOPPLER_TOKEN_DRIFT_MAP`, a repo-level Actions secret (reachable by any workflow file a repository writer pushes on any branch; CODEOWNERS gates merges to `.github/workflows/`, not branch runs; a census confirms only `scheduled-terraform-drift.yml` references it) with a second copy inside Terraform state on the R2 backend. The map is ALREADY a master key to production secrets: its `prd` token reads `SUPABASE_SERVICE_ROLE_KEY` (bypass-RLS read of all user data), the Terraform GitHub App private key and the proxy TLS key, and its `prd_workspaces_luks` token reads web-1's LUKS passphrase, header bucket and R2 pair. This change is a marginal widening of that same class, not a new class: three more branch configs of `prd`, each inheriting the whole `prd` root (the token reads values directly through the Doppler API; "names only" describes only what the scan prints). The new branch-specific keys are `GIT_DATA_LUKS_KEY` and `BETTERSTACK_LOGS_TOKEN` (`prd_git_data`) and `WORKSPACES_LUKS_KEY`, the header bucket and endpoint and, once minted, the bucket-scoped R2 header-escrow access pair (`prd_workspaces_luks_web`, which weakens "a passphrase alone does not open a volume without the header" because the escrow credentials sit in the same config); `prd_workspaces_luks_marker` is created empty and adds a credential with no unique secret (floor bookkeeping only). Emergency revocation: a revert PR that deletes the three tokens, which the destroy guard requires `[ack-destroy]` for; there is no dispatch rotation route (#7263).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** a credential mint that widens what one leaked secret reaches is single-user-incident class even though the change is small, because the failure shape is "one operator secret exposes customer-volume keys", not "some users see a glitch".
 
@@ -136,7 +164,7 @@ Yes. `apply-web-platform-infra.yml` (its `apply` job, which is the only job that
 roots' subtrees), so the merge click is itself the production authorization: the apply creates three Doppler read tokens and
 republishes the map secret. The PR body's first line says so. Every other workflow whose `paths:` match a file this diff edits
 was enumerated: `infra-validation.yml` (static gates on push; a read-only `plan -refresh=false` job on `pull_request` with
-placeholder Doppler/R2 credentials and a PR comment, no apply), `web-platform-release.yml` (`push` to `main` on
+stand-in Doppler/R2 credentials and a PR comment, no apply), `web-platform-release.yml` (`push` to `main` on
 `apps/web-platform/**`, so the merge also fires the normal release path for any `apps/web-platform` change; Phase 0.3 reads it
 and the PR body states what it does), and NOT `apply-deploy-pipeline-fix.yml` (its path list names no file this diff edits;
 re-check in Phase 0.3 because it reaches `hcloud_server.web`). Comment-only edits to `git-data.tf` and
@@ -169,17 +197,17 @@ One PR, five moves:
    - In `resource "doppler_service_token" "token_drift"`, add `depends_on = [doppler_config.workspaces_luks_web, doppler_config.workspaces_luks_marker]` with a comment citing the ordering race (string `config = each.key` builds no edge) and why `git_data_prd` is absent (per-merge exclusion, #9438). Do NOT touch `config = each.key`, `for_each = toset(local.token_drift_configs)` or the locals block (C-a and F5 pin them).
    - Rewrite the SE-4 comment (the paragraph mentioning `git-data-luks.tf` and "MUST add `depends_on`") to say `git_data_prd` is deliberately not depended on (per-merge exclusion, #9438). For the roughly fourteen hard-coded `13`/`thirteen` mentions in the header, add ONE dated sentence at the top ("counts written below are as of 2026-08-03; the live count is the number of name lines in the inventory") instead of editing each line (review finding: one hunk satisfies P5 and keeps the diff small). Comment-only; the dated measurements stay as history.
    - `terraform fmt -check` must pass.
-3. `.github/workflows/scheduled-terraform-drift.yml` (THREE hunks, nothing else)
+3. `.github/workflows/scheduled-terraform-drift.yml` (comment and literal edits confined to THREE regions - the token_drift `env:` block, the run-time re-assertion with its adjacent comments, and the RUNG2 block - nothing else; git may report 4-5 hunks because the regions are not adjacent, none near line 738 or later)
    - token_drift step `env:` block: replace the comment sentence beginning "DOPPLER_CONFIGS_FLOOR deliberately STAYS 13" with a statement that the floor is pinned equal to the inventory's distinct name count by F2/F3 in `plugins/soleur/test/token-drift-workflow-causes.test.sh`, keeping the "Do NOT fix a red by lowering it" sentence; rewrite the "asserts this parses, is >= 13, and equals the inventory's name count" sentence without the number; change `DOPPLER_CONFIGS_FLOOR: 13` to `DOPPLER_CONFIGS_FLOOR: 16` (value measured by the F3 expression after Files-to-Edit 1).
    - Run-time re-assertion: `(( 10#$cfg_floor < 13 ))` -> `< 16`, the `::warning::` text "below the pinned minimum of 13" -> 16, and the adjacent comment "re-checked here against the literal 13" and "at a floor of 13 it collapses" accordingly.
    - rung2-rehearsal-orphan-sweep job: `RUNG2_CONFIGS_FLOOR: 13` -> 16 (S4 requires equality); update the "Three literals, one number" comment minimally.
    - Leave illustrative ratio examples in comments (`2-of-13`, `0/13`, `13/13` in prose at ~lines 256, 259, 719, 944) untouched: they are narrative examples, not pins, and touching them invites a conflict with #12064.
 4. `plugins/soleur/test/token-drift-workflow-causes.test.sh`
-   - Keep every edit LINE-COUNT-NEUTRAL: `scripts/lib/test-affected-paths.sh` cites this file at `:3`, `:55`, `:56` and `:1218`. So NO hoist: set `FLOOR_MINIMUM=16` where it already is defined (F2 block), and change the literal `"configs_floor":13` to `16` in place at the nine fixture sites (the `two`, `clean`, degraded-with-unread, `degraded`, `grown`, `badcov`, `retired`, `shifted` and `stale_inv` fixtures). This replaces the CTO R4 suggestion to hoist and interpolate; the review showed it forces re-quoting seven single-quoted fixtures, moves a comment block and shifts the cited lines, and the CTO's intent (the next raise is cheap) is kept by the F3 equality message naming every site.
-   - Expectations that depend on the floor: the T6 expected string `at-floor 13/13 13 13` becomes `at-floor 13/13 16 13` (the fields are coverage, ratio, configs_floor, configs_expected, so only the third moves); the T20 grep `floor: 13.*ratio: 7/13` becomes `floor: 16.*ratio: 7/13`. `- 13 clean -` and `at-floor 14/13` read `configs` and the ratio, not the floor, and stay. Every degraded-ratio fixture (`2/13`, `7/13`) keeps its ratio but carries `configs_floor` 16, or the raised run-time assertion re-grades it.
-   - T17: the lowered floors become 15 (one below the new minimum) and 0; invert the pass message ("a floor of 13 ... does not" is no longer true) and reword the "< 13" title and failure text. No separate old-floor-13 case (it exercises the same `< 16` branch as 15).
-   - Rewrite only comments that assert a CURRENT fact (the header line "floor against the pinned minimum of 13" and the T17 and F2 comments that name the minimum); leave historical narrative numbers alone.
-5. `plugins/soleur/test/terraform-target-parity.test.ts` - ONE new row inside the describe that holds the #9438 test "the host heartbeat secret reaches ONLY its heartbeat" (that describe has `planTargets`, `tf()`, `block()`, `allTf` and `missingFrom` in scope). See the Guard Contract. Capture the inventory file name from the `file("${path.module}/...")` call in `token-drift-read-tokens.tf` rather than writing a new path literal in the suite (the suite has none today).
+   - Keep every edit LINE-COUNT-NEUTRAL: `scripts/lib/test-affected-paths.sh` cites this file at `:3`, `:55`, `:56` and `:1218`. So NO hoist: set `FLOOR_MINIMUM=16` where it already is defined (F2 block), and change the literal `"configs_floor":13` to `16` in place at the nine fixture sites, by current line: 323 `two`, 344 `clean` (also the T6 fixture), 357 `nocause`, 399 `degraded` (also the T20 fixture), 404 `grown`, 445 `badcov` and 468 `retired` (both escaped as `\"configs_floor\":13`), 496 `shifted`, 988 `stale_inv`; every `configs_expected:13` and the `unk_lowfloor` floor-0 fixture stay. This replaces the CTO R4 suggestion to hoist and interpolate; the review showed it forces re-quoting seven single-quoted fixtures, moves a comment block and shifts the cited lines, and the CTO's intent (the next raise is cheap) is kept by the F3 equality message naming every site.
+   - Expectations that depend on the floor: the T6 expectation (the `[[ "$got" == "at-floor 13/13 13 13" ]]` test, plus its pass line "floor 13, expected 13" and the failure text that quotes the string) becomes `at-floor 13/13 16 13` (the fields are coverage, ratio, configs_floor, configs_expected, so only the third moves); the T20 grep `token-drift verdict: clean .*floor: 13.*ratio: 7/13` becomes `... floor: 16.*ratio: 7/13`. `- 13 clean -` and `at-floor 14/13` read `configs` and the ratio, not the floor, and stay. Every degraded-ratio fixture (`2/13`, `7/13`) keeps its ratio but carries `configs_floor` 16, or the raised run-time assertion re-grades it.
+   - T17: the loop `for lowered in 12 0` becomes `for lowered in 15 0` (one line stays one line); reword the text sites that assert the old minimum - the T17 title (~line 892), the failure echo (~906), the pass message (~908, which says a floor of 13 "does not" downgrade - now false) and the failure text (~911, `< 13 -> degraded, >= 13`). No separate old-floor-13 case (it exercises the same `< 16` branch as 15).
+   - Rewrite only comments that assert a CURRENT fact: header line ~22 ("floor against the pinned minimum of 13"), the F2 comment ~1077 (`configs_floor >= 13`) and the T17 comments; leave historical narrative numbers alone.
+5. `plugins/soleur/test/terraform-target-parity.test.ts` - ONE new row inside the describe that holds the #9438 test "the host heartbeat secret reaches ONLY its heartbeat" (that describe has `planTargets`, `tf()`, `block()`, `allTf` and `missingFrom` in scope). See the Guard Contract. Take the `token_drift` block from `allTf` by matching its resource header (no new `token-drift-read-tokens.tf` literal; `allTf`, `tf()`, `block()` and `missingFrom` are in scope only inside the describe "#8754 PR-B standing tail converges on the per-merge saved plan"). Capture the inventory file name from the `file("${path.module}/...")` call in `token-drift-read-tokens.tf` rather than writing a new path literal in the suite (the suite has none today).
 6. `apps/web-platform/infra/workspaces-luks-fresh-boot.tf` - rewrite the two comments "Deliberately NOT in doppler-config-inventory.txt" (the web-class config block and the marker config block): both configs are now listed; keep the surrounding rationale about per-config scoping.
 7. `apps/web-platform/infra/git-data.tf` - rewrite the sentence in the comment above `local.git_data_liveness_doppler_cfg` that says `prd_git_data` "is not in that inventory today (adding it means minting a drift read token, which is the owner's credential change, not this PR's)"; KEEP the local itself and the literal reasoning: the #9438 test pins it.
 8. `knowledge-base/engineering/architecture/decisions/ADR-168-per-config-read-tokens-for-the-token-drift-scan.md` - one dated 2026-11-04 amendment under `## Known limitations`: 16 tokens, the new floor, `depends_on` on the two per-merge configs, the deliberate absence of an edge to `git_data_prd` (per-merge exclusion, #9438). ADR-164 and the ADR-168 body stay as history.
@@ -207,7 +235,7 @@ None in the repo (no new suite, no new script, so no entry in `scripts/ci-pr-aff
 
 ### Phase 2 - GREEN
 
-- 2.1 Inventory: append three names. 2.2 `token-drift-read-tokens.tf`: add `depends_on`. 2.3 Workflow: three hunks. 2.4 Measure the floor with the F3 expression (expect 16) and hand-write it.
+- 2.1 Inventory: append three names. 2.2 `token-drift-read-tokens.tf`: add `depends_on`. 2.3 Workflow: the three regions. 2.4 Measure the floor with the F3 expression (expect 16) and hand-write it.
 - 2.5 Run, all expected green: `bash plugins/soleur/test/token-drift-workflow-causes.test.sh`, `bash scripts/check-cloudflare-token-drift.test.sh`, `bun test plugins/soleur/test/terraform-target-parity.test.ts`, `bash scripts/check-web-host-escrow-config.test.sh`, `bash scripts/cf-tunnel-liveness-gate-mutations.test.sh`, `bash plugins/soleur/test/c4-count-parity.test.sh`, `terraform -chdir=apps/web-platform/infra fmt -check`.
 - 2.6 Read-only affected-index ratchet: `python3 scripts/ci-pr-affected-replay.py ratchet` (it never writes tracked files). If the new row created an unaccepted suite->path pair, first remove the new path literal (reuse an existing constant), and only then add an accept row with a specific false-positive reason.
 - 2.7 Run the F4b set-ratchet manually against the merge base: it must report the 13 baseline names still present.
@@ -233,12 +261,13 @@ Lead with what it does and its worst case. Then **Needs you**, every item tagged
 - [ ] The token_drift step's `env.DOPPLER_CONFIGS_FLOOR` is 16, the run-time re-assertion compares against 16, `RUNG2_CONFIGS_FLOOR` is 16, and `FLOOR_MINIMUM` is 16 (F1, F2, F2b, F3, S4 green).
 - [ ] The comment "deliberately STAYS 13" no longer appears in `.github/workflows/scheduled-terraform-drift.yml`; the "do not lower it to fix a red" sentence is kept.
 - [ ] `doppler_service_token.token_drift` has `depends_on` containing exactly `doppler_config.workspaces_luks_web` and `doppler_config.workspaces_luks_marker`, and does NOT contain `doppler_config.git_data_prd` (Guard 1 asserts both).
-- [ ] No hunk of `scheduled-terraform-drift.yml` other than the three listed; `git diff --stat -- .github/workflows/` shows one file; no `apply-web-platform-infra.yml` change (no new `-target` is needed).
+- [ ] Every hunk of `scheduled-terraform-drift.yml` lies inside the three listed regions (token_drift `env:` block, run-time re-assertion and its adjacent comments, RUNG2 block) and none starts at or after the line-738 region #12064 edits; `git diff --stat -- .github/workflows/` shows one file; no `apply-web-platform-infra.yml` change (no new `-target` is needed).
 - [ ] `token-drift-workflow-causes.test.sh`, `check-cloudflare-token-drift.test.sh`, `terraform-target-parity.test.ts`, `check-web-host-escrow-config.test.sh`, `cf-tunnel-liveness-gate-mutations.test.sh`, `c4-count-parity.test.sh` and `terraform fmt -check` all pass locally.
 - [ ] The read-only affected-index ratchet reports no new unaccepted pair (or each added accept row carries a specific reason).
 - [ ] Lines 3, 55, 56 and 1218 of `token-drift-workflow-causes.test.sh` still hold the text `scripts/lib/test-affected-paths.sh` cites (the edits there are line-count-neutral).
 - [ ] ADR-168 carries the dated amendment; ADR-263 carries the Superseded note; the live comments in the `.tf`/`.txt` files no longer say the three names are absent from the inventory.
 - [ ] PR #12100 body: `closingIssuesReferences` is `[]`; contains `gh pr merge 12100 --squash` and the plain sentence that merging triggers the apply that creates three Doppler read tokens; "Needs you" holds only `(operator: production-mutating)` items; the PR is a DRAFT, auto-merge not armed.
+- [ ] Census: `git grep -l DOPPLER_TOKEN_DRIFT_MAP -- .github` lists only `.github/workflows/scheduled-terraform-drift.yml` (no second workflow binds the secret).
 - [ ] No workflow was dispatched, no Doppler value read, no token minted, no terraform command run against remote state (verifiable from the session transcript).
 
 ## Test Scenarios
@@ -256,26 +285,26 @@ Lead with what it does and its worst case. Then **Needs you**, every item tagged
 liveness_signal:
   what: the twice-daily token-drift scan step prints "token-drift verdict: ... floor: 16, coverage: at-floor, ratio: 16/16" and writes coverage_ratio to the job outputs
   cadence: twice daily (dispatched by Inngest into scheduled-terraform-drift.yml)
-  alert_target: the standing token-drift coverage GitHub issue and the ops email
+  alert_target: the standing token-drift coverage GitHub issue (filed by the coverage_issue arm, auto-closed by the coverage_close arm); the ops email fires only if the issue channel itself fails
   configured_in: .github/workflows/scheduled-terraform-drift.yml (id token_drift step and its coverage issue/email arms)
 error_reporting:
-  destination: GitHub Actions run annotations plus the standing coverage issue and ops email; the job-level Sentry cron check-in covers the workflow itself
+  destination: the workflow run log (the "token-drift verdict:" line and the ::warning:: annotations) and the standing coverage issue; the job-level Sentry cron check-in covers workflow liveness only, not coverage
   fail_loud: "::warning::Cloudflare token drift read <n>/16 Doppler config(s), below its declared floor of 16" and coverage=degraded
 failure_modes:
   - mode: the apply fails or applies partly, so the map stays at 13 entries
-    detection: the next scan reads 13 of 16 and grades degraded, naming the three unread configs in configs_unread
-    alert_route: standing coverage issue plus ops email; auto-closes when coverage returns to at-floor
+    detection: the workflow run log "token-drift verdict:" line and ::warning:: annotation on the next scan read 13 of 16 and grade degraded, naming the three unread configs in configs_unread
+    alert_route: standing coverage issue (an expected transient between merge and republish); for a failed apply also the apply workflow's own failure email in apply-web-platform-infra.yml, because the scan runs only twice a day; auto-closes when coverage returns to at-floor
   - mode: a listed config does not exist live, so its token create is refused or its read fails
     detection: apply error naming the config, or that config appears in configs_unread on the scan
-    alert_route: same coverage issue and email
+    alert_route: same coverage issue; the apply workflow's failure email names the failing create
   - mode: a later PR lowers the floor or shrinks the inventory
     detection: F2/F2b/F3 and the F4b set ratchet red before merge
-    alert_route: failed required CI check on that PR
+    alert_route: failed required CI check in the PR checks list on that PR
 logs:
   where: GitHub Actions run logs for scheduled-terraform-drift.yml (token_drift step)
   retention: GitHub Actions default log retention (90 days)
 discoverability_test:
-  command: rg -c -e '^prd_git_data' -e '^prd_workspaces_luks_marker' -e '^prd_workspaces_luks_web' apps/web-platform/infra/doppler-config-inventory.txt
+  command: grep -c -e '^prd_git_data' -e '^prd_workspaces_luks_marker' -e '^prd_workspaces_luks_web' apps/web-platform/infra/doppler-config-inventory.txt
   expected_output: 3
 ```
 
@@ -298,8 +327,8 @@ at_rest:
     disclosed_as: not-publicly-claimed
     live_verification: unavailable:this change may not read remote state
   - store: github_actions_secret.doppler_token_drift_map (repo-level Actions secret)
-    mechanism: provider-managed:GitHub-Actions-encrypted-secrets
-    evidence: GitHub docs "Using secrets in GitHub Actions" (values are sealed-box encrypted before they reach GitHub); the exact page URL and retrieval date are confirmed during deepen-plan
+    mechanism: app-layer-envelope:libsodium-public-key-encryption-by-the-terraform-github-provider
+    evidence: GitHub REST docs, page "REST API endpoints for GitHub Actions Secrets", section "Create or update a repository secret" (https://docs.github.com/en/rest/actions/secrets, retrieved 2026-11-04): the value is "encrypted with LibSodium using the public key retrieved from the Get a repository public key endpoint"; the provider does that before the API call. GitHub's own at-rest storage encryption is not attested on that page and is not relied on here
     defends_against: reading the secret value from a repository export, a fork, or the GitHub UI
     does_not_defend: any workflow on main that binds the secret, and anyone able to merge under .github/workflows (CODEOWNERS pins that to the operator); a runner that is compromised during the scan reads the whole 16-token map
     disclosed_as: not-publicly-claimed
@@ -389,8 +418,9 @@ was run on this branch and passes (`ALL TESTS PASSED`); no derived cardinality i
 - **Unverified: `doppler_config.git_data_prd` in state.** Withholding the edge makes the PR independent of that fact (CTO R2). Cost of the other branch if the edge were added and state lacked it: every merge to main fails the apply with HTTP 400 "Name is already in use".
 - **A listed config absent live.** If `prd_git_data` (or another listed name) did not exist in Doppler, its token create would fail and, because the apply is a push-triggered gate on `main`, every per-merge apply would fail until fixed (`[skip-web-platform-apply]` skips all infra). The evidence that it exists: issue #11857 states live Doppler has 16 configs, and ADR-149 records the git-data host born and fed; Phase 0.5 quotes the issue sentence into the PR body. Loud and retry-fixable either way.
 - **Partial apply.** 2 of 3 tokens may be created; the map does not republish; the scan stays `degraded 13/16` until a retry. Loud, never silently green. The owner-facing statement: closing the PR does not undo a merged apply.
+- **Orphaned token on a crashed apply (unverified).** A crash after Doppler creates a token but before the state write could leave a `token-drift-ci-tf-<name>` in Doppler that blocks the retry with a name conflict; the work run records whether the repo documents a recovery, and the plan's answer if not is a retry after deleting that one token through the reviewed route (never an ad-hoc dashboard step).
 - **Merge-to-publish window.** Between merge and the map republish the scan grades `degraded 13/16` (CTO R7), then recovers by itself.
-- **New reach.** One leaked `DOPPLER_TOKEN_DRIFT_MAP` now also reaches the git-data and web-class passphrase configs (names-only on the runner; values only for `CF_API_TOKEN*` and `*_ACCESS_TOKEN_*`). Passphrases are already in Terraform state, so state-holders gain nothing; the repo Actions secret is the widened surface.
+- **New reach.** Marginal widening of an existing class, spelled out in User-Brand Impact: three more `prd` branch configs, whose tokens read values directly through the Doppler API (the scan itself prints only names, counts and failure labels, and reads values only for `CF_API_TOKEN*` and keys matching `ACCESS_TOKEN_(ID|SECRET)`; inherited `prd` keys that match will now also be read through the three new configs, same values, more probes). Passphrases are already in Terraform state, so holders of the R2 key gain nothing; holders of the repo Actions secret are the widened surface.
 - **Rotation obligations grow from 13 to 16**, with no dispatch route (tracked as #7263 for the whole family); unchanged by this PR.
 - **Merge conflicts with #12064** in `scheduled-terraform-drift.yml`: none today; three-hunk discipline keeps it that way.
 - **Fixture churn** in `token-drift-workflow-causes.test.sh` is the largest edit by line count; hoisting `FLOOR_MINIMUM` makes the next raise one edit.

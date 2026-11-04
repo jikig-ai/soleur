@@ -26,7 +26,7 @@ Doppler, no Doppler value read, no token mint, no tracker edit. Local `terraform
 - 2.3 `.github/workflows/scheduled-terraform-drift.yml`: exactly three hunks - the token_drift floor comment and `DOPPLER_CONFIGS_FLOOR`, the run-time `< 13` re-assertion and its warning text, `RUNG2_CONFIGS_FLOOR`. Measure the floor with the F3 expression first (expect 16).
 - 2.4 Run and confirm green: `bash plugins/soleur/test/token-drift-workflow-causes.test.sh`, `bash scripts/check-cloudflare-token-drift.test.sh`, `bun test plugins/soleur/test/terraform-target-parity.test.ts`, `bash scripts/check-web-host-escrow-config.test.sh`, `bash scripts/cf-tunnel-liveness-gate-mutations.test.sh`, `bash plugins/soleur/test/c4-count-parity.test.sh`, `terraform -chdir=apps/web-platform/infra fmt -check`.
 - 2.5 Run the read-only affected-index ratchet (`python3 scripts/ci-pr-affected-replay.py ratchet`); if the new row created an unaccepted pair, remove the new path literal first, and only then add an accept row with a specific reason.
-- 2.6 Run the discoverability probe `rg -c -e '^prd_git_data' -e '^prd_workspaces_luks_marker' -e '^prd_workspaces_luks_web' apps/web-platform/infra/doppler-config-inventory.txt` and confirm it prints 3.
+- 2.6 Run the discoverability probe `grep -c -e '^prd_git_data' -e '^prd_workspaces_luks_marker' -e '^prd_workspaces_luks_web' apps/web-platform/infra/doppler-config-inventory.txt` and confirm it prints 3.
 
 ## Phase 3 - comments and records
 
