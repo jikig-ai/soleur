@@ -84,7 +84,9 @@ describe("parseLegalText", () => {
 
   it("every key and text-hash pattern in the migration is the TypeScript pattern (a count, not an any-match)", () => {
     const sql = readFileSync(path.join(__dirname, "../../supabase/migrations/184_legal_acceptance.sql"), "utf8");
-    const count = (needle: string) => sql.split(needle).length - 1;
+    // Full-line comments are removed first: a comment that merely quotes the pattern must not keep the count right after a validation is deleted.
+    const code = sql.replace(/^\s*--.*$/gm, "");
+    const count = (needle: string) => code.split(needle).length - 1;
     // legal_acceptance.key, legal_reauth_event.key, issue, claim, mark, record
     expect(count(`'${KEY_RE.source}'`)).toBe(6);
     // the same six, plus the row_hash CHECK on legal_acceptance

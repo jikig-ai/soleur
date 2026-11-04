@@ -64,7 +64,8 @@ the file's raw bytes with LF line endings; `sha256sum` gives the same value, whi
 a trailing newline; and a multibyte one) are asserted in TypeScript and by `sha256sum`. The texts directory is not in the production image yet (PR-C precondition below).
 
 **Intent.** `issue_legal_reauth` (service role; the server knows the registry) opens an intent for one (user, key, text hash, version, web session). It lives 30 minutes,
-calling it again with the same inputs returns the live intent (reopening a card burns nothing), an explicit resend voids the earlier intent of that session and inserts
+calling it again with the same inputs returns the live intent (reopening a card burns nothing) unless that intent's confirmed code is older than five minutes, in which case a new intent is opened so the founder
+can confirm again, an explicit resend voids the earlier intent of that session and inserts
 a new one, and at most three new intents per user and key are created in 15 minutes. It is the only source of valid pairs.
 
 **Write path.** One authenticated RPC, `record_legal_acceptance`. The actor is `auth.uid()`; only a token whose audience is exactly `authenticated` may call it (a runtime
@@ -89,7 +90,7 @@ row detectable by anyone who recomputes it. It is not an external anchor, and a 
 the checksum result. PR-D exposes it to the hold evaluator through an internal endpoint that returns only the status, the text hash, the decision time and the checksum result,
 and that derives the founder id from its own configuration, never from the request.
 
-**Reads by the founder.** The founder reads their own rows through RLS; a runtime-audience token reads nothing.
+**Reads by the founder.** The founder reads their own rows through RLS, and only through a token whose audience is exactly `authenticated`; a runtime token or a token with no audience reads nothing.
 
 **Retention and erasure.** The founder is a data subject. The row is kept after erasure with the founder id as a pseudonymous uuid and no foreign key (never called
 anonymised), on Art. 17(3)(e) and Art. 6(1)(f) with a standalone legitimate-interest assessment. The proposed period is the life of the instrument plus five years, capped

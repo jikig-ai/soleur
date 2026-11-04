@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -129,9 +129,9 @@ export function shapeProblems(sqlText: string): string[] {
   const permissive = pols.filter((x) => !/AS RESTRICTIVE/i.test(x));
   if (
     permissive.length !== 1 ||
-    !/FOR SELECT TO authenticated USING \(founder_id = auth\.uid\(\) AND \(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'soleur-runtime'\)/i.test(permissive[0] ?? "")
+    !/FOR SELECT TO authenticated USING \(founder_id = auth\.uid\(\) AND \(auth\.jwt\(\) ->> 'aud'\) = 'authenticated'\)/i.test(permissive[0] ?? "")
   ) {
-    p.push("exactly one permissive policy: SELECT where founder_id = auth.uid() and the audience is not soleur-runtime");
+    p.push("exactly one permissive policy: SELECT where founder_id = auth.uid() and the audience is exactly 'authenticated'");
   }
   if (!pols.some((x) => /AS RESTRICTIVE/i.test(x) && /NOT public\.is_jti_denied_from_jwt\(\)/i.test(x))) p.push("restrictive jti-deny policy missing");
 
@@ -162,7 +162,7 @@ export function shapeProblems(sqlText: string): string[] {
     const hashed =
       col === "reauth_at" || col === "created_at"
         ? new RegExp(`to_char\\(r\\.${col} AT TIME ZONE 'UTC'`, "i").test(hash)
-        : new RegExp(`\\br\\.${col}(::text)?\\s*,`, "i").test(hash);
+        : new RegExp(`(?:\\[|,)\\s*r\\.${col}(::text)?\\s*,`, "i").test(hash);
     if (!hashed) p.push(`row_hash omits ${col}`);
   }
 
@@ -219,11 +219,30 @@ export function shapeProblems(sqlText: string): string[] {
     if (!/IF auth\.uid\(\) IS NOT NULL THEN RAISE EXCEPTION/i.test(fnBody(s, f))) p.push(`${f}: must refuse a user identity`);
   }
 
+  // Nothing later in the file may undo what the earlier statements set up ("present somewhere" is not "in effect last").
+  if (/ALTER TABLE [^;]*legal_acceptance[^;]*\b(DISABLE|NO FORCE)\b/i.test(flat) || /DISABLE ROW LEVEL SECURITY/i.test(flat)) p.push("no statement may disable the guard trigger or row level security");
+  const lastIdx = (re: RegExp) => [...flat.matchAll(new RegExp(re.source, "gi"))].map((m) => m.index ?? -1).pop() ?? -1;
+  if (lastIdx(/DROP TRIGGER [^;]*legal_acceptance_guard/) > lastIdx(/CREATE TRIGGER legal_acceptance_guard/)) p.push("a DROP TRIGGER comes after the guard trigger is created");
+  if (lastIdx(/DROP TRIGGER [^;]*legal_acceptance_no_truncate/) > lastIdx(/CREATE TRIGGER legal_acceptance_no_truncate/)) p.push("a DROP TRIGGER comes after the truncate trigger is created");
+  for (const pol of ["legal_acceptance_founder_select", "legal_acceptance_jti_not_denied"]) {
+    if (lastIdx(new RegExp(`DROP POLICY [^;]*${pol}`)) > lastIdx(new RegExp(`CREATE POLICY ${pol}`))) p.push(`a DROP POLICY comes after ${pol} is created`);
+  }
+  // The time predicates and the consume statement are pinned in full (a flipped comparison or an OR true is a different program).
+  if (!/IF v_event\.verified_at < now\(\) - interval '5 minutes' THEN RETURN jsonb_build_object\('outcome', 'code_expired'\)/i.test(rec)) p.push("record: the 5-minute code freshness predicate is not the reviewed one");
+  if (!/UPDATE public\.legal_reauth_event SET consumed_at = now\(\) WHERE id = v_event\.id AND consumed_at IS NULL AND superseded_at IS NULL; IF NOT FOUND THEN/i.test(rec)) p.push("record: the consume statement is not the reviewed one");
+  if (!/AND \(verified_at IS NULL OR verified_at >= now\(\) - interval '5 minutes'\)/i.test(iss) || !/AND version = p_version/i.test(iss)) p.push("issue: a reused intent must match the version and carry a still-fresh code");
+  if (!/IF v_event\.verified_at IS NOT NULL AND v_event\.verified_at < now\(\) - interval '5 minutes' THEN RETURN jsonb_build_object\('outcome', 'code_stale'\)/i.test(fnBody(s, "claim_legal_reauth_attempt"))) p.push("claim: a stale confirmed code must be its own outcome and burn no attempt");
+  if (!/v_ok := COALESCE\(/i.test(ver)) p.push("verify: a NULL checksum comparison must read as not ok");
+
   // The erasure scrub must not know this table.
   if (/anonymise_approval_request/i.test(flat)) p.push("migration must not touch anonymise_approval_request");
   if (/UPDATE public\.legal_acceptance|DELETE FROM public\.legal_acceptance/i.test(flat)) p.push("no statement may write legal_acceptance outside the insert path");
   return p;
 }
+
+beforeEach(() => {
+  expect.hasAssertions();
+});
 
 describe("migration 184 files", () => {
   it("up, down and verify files exist", () => {
@@ -318,9 +337,25 @@ describe("MUTATIONS: each static mutant of the migration is caught", () => {
     ["15 let claim skip hash validation", () => mutate(/(FUNCTION public\.claim_legal_reauth_attempt\([\s\S]*?)OR p_text_hash IS NULL OR p_text_hash !~ '\^\[0-9a-f\]\{64\}\$'/, "$1"), /claim_legal_reauth_attempt: must validate p_text_hash/],
     ["16 unbind mark from the event id", () => mutate(/WHERE id = p_event_id AND user_id = p_user_id/, "WHERE user_id = p_user_id"), /mark: must be bound to the event id/],
     ["17 move the purge after the early return", () => mutate(/\n\s*-- Challenge rows are transient[^\n]*\n\s*DELETE FROM public\.legal_reauth_event WHERE created_at < now\(\) - interval '30 days';/, ""), /30-day purge must run before any early return/],
-    ["18 let a runtime-audience token read the record", () => mutate(/ AND \(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'soleur-runtime'\)/, ")"), /exactly one permissive policy/],
+    ["18 let a runtime-audience token read the record", () => mutate(/ AND \(auth\.jwt\(\) ->> 'aud'\) = 'authenticated'\);/, ");"), /exactly one permissive policy/],
+    ["18b turn the audience whitelist back into a blocklist in the policy", () => mutate(/\(auth\.jwt\(\) ->> 'aud'\) = 'authenticated'\);/, "(auth.jwt() ->> 'aud') IS DISTINCT FROM 'soleur-runtime');"), /exactly one permissive policy/],
     ["19 add a column that the hash does not cover", () => mutate(/  surface        text        NOT NULL DEFAULT 'web'/, "  extra_note     text,\n  surface        text        NOT NULL DEFAULT 'web'"), /row_hash omits extra_note/],
+    ["20 hash a constant instead of the choice column", () => mutate(/\n(\s*)r\.choice,/, "\n$1left(r.choice, 0),"), /row_hash omits choice/],
+    ["21 append a statement that disables the guard trigger", () => rawUp + "\nALTER TABLE public.legal_acceptance DISABLE TRIGGER legal_acceptance_guard;\n", /disable the guard trigger/],
+    ["22 append a statement that disables row level security", () => rawUp + "\nALTER TABLE public.legal_acceptance DISABLE ROW LEVEL SECURITY;\n", /disable the guard trigger or row level security/],
+    ["23 append a DROP TRIGGER for the guard", () => rawUp + "\nDROP TRIGGER legal_acceptance_guard ON public.legal_acceptance;\n", /DROP TRIGGER comes after/],
+    ["24 append a DROP POLICY for the jti deny", () => rawUp + "\nDROP POLICY legal_acceptance_jti_not_denied ON public.legal_acceptance;\n", /DROP POLICY comes after/],
+    ["25 flip the 5-minute code freshness comparison", () => mutate(/v_event\.verified_at < now\(\) - interval '5 minutes' THEN\n      RETURN jsonb_build_object\('outcome', 'code_expired'\)/, "v_event.verified_at > now() - interval '5 minutes' THEN\n      RETURN jsonb_build_object('outcome', 'code_expired')"), /5-minute code freshness predicate/],
+    ["26 widen the consume statement with an OR true", () => mutate(/WHERE id = v_event\.id AND consumed_at IS NULL AND superseded_at IS NULL;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'legal acceptance: concurrent/, "WHERE id = v_event.id OR true AND consumed_at IS NULL AND superseded_at IS NULL;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'legal acceptance: concurrent"), /consume statement is not the reviewed one/],
+    ["27 reuse a stale-code intent again", () => mutate(/\n\s*AND \(verified_at IS NULL OR verified_at >= now\(\) - interval '5 minutes'\)/, ""), /reused intent must match the version/],
+    ["28 reuse an intent of another version", () => mutate(/\n\s*AND version = p_version/, ""), /reused intent must match the version/],
+    ["29 let claim burn attempts on a stale confirmed code", () => mutate(/'outcome', 'code_stale'/, "'outcome', 'allowed'"), /stale confirmed code must be its own outcome/],
+    ["30 let a NULL checksum comparison read as accepted", () => mutate(/v_ok := COALESCE\(([^;]*), false\);/, "v_ok := $1;"), /NULL checksum comparison/],
   ];
+
+  it("the battery is not silently shrunk (a floor on the number of rows)", () => {
+    expect(rows.length).toBeGreaterThanOrEqual(40);
+  });
 
   for (const [name, build, expected] of rows) {
     it(`row ${name}`, () => {

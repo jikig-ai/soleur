@@ -21,14 +21,14 @@ SELECT 'legal_acceptance_one_permissive_policy_select_only',
             AND (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'legal_acceptance' AND permissive = 'PERMISSIVE' AND cmd = 'SELECT') = 1
             THEN 0 ELSE 1 END::int
 UNION ALL
-SELECT 'legal_acceptance_select_policy_is_founder_only_and_not_runtime_audience',
+SELECT 'legal_acceptance_select_policy_is_founder_only_and_web_audience_only',
        CASE WHEN (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'legal_acceptance'
                     AND permissive = 'PERMISSIVE' AND cmd = 'SELECT' AND roles = '{authenticated}'
-                    AND qual LIKE '%founder_id = auth.uid()%' AND qual LIKE '%soleur-runtime%') = 1 THEN 0 ELSE 1 END::int
+                    AND qual = '((founder_id = auth.uid()) AND ((auth.jwt() ->> ''aud''::text) = ''authenticated''::text))') = 1 THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'legal_acceptance_jti_deny_policy_restrictive',
        CASE WHEN EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'legal_acceptance' AND permissive = 'RESTRICTIVE'
-                          AND qual LIKE '%is_jti_denied_from_jwt%') THEN 0 ELSE 1 END::int
+                          AND cmd = 'ALL' AND roles = '{authenticated}' AND qual = '(NOT is_jti_denied_from_jwt())') THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'legal_reauth_event_no_policy',
        CASE WHEN EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'legal_reauth_event') THEN 1 ELSE 0 END::int
@@ -85,9 +85,15 @@ SELECT 'legal_acceptance_guard_function_refuses_and_requires_intent',
             THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'legal_acceptance_constraints_present',
-       CASE WHEN (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.legal_acceptance'::regclass
-                    AND conname IN ('legal_acceptance_yes_has_reauth', 'legal_acceptance_reauth_only_for_yes',
-                                    'legal_acceptance_reauth_paired', 'legal_acceptance_edit_only_with_request')) = 4 THEN 0 ELSE 1 END::int
+       CASE WHEN (SELECT count(*) FROM pg_constraint c WHERE c.conrelid = 'public.legal_acceptance'::regclass AND c.contype = 'c'
+                    AND (c.conname, pg_get_constraintdef(c.oid)) IN (
+                      ('legal_acceptance_yes_has_reauth', 'CHECK (((choice <> ''accept''::text) OR ((reauth_method IS NOT NULL) AND (reauth_at IS NOT NULL))))'),
+                      ('legal_acceptance_reauth_only_for_yes', 'CHECK (((choice = ''accept''::text) OR ((reauth_method IS NULL) AND (reauth_at IS NULL))))'),
+                      ('legal_acceptance_reauth_paired', 'CHECK (((reauth_method IS NULL) = (reauth_at IS NULL)))'),
+                      ('legal_acceptance_edit_only_with_request', 'CHECK (((choice = ''request_changes''::text) = (requested_edit IS NOT NULL)))'),
+                      ('legal_acceptance_method_check', 'CHECK ((method = ''web-session''::text))'),
+                      ('legal_acceptance_choice_check', 'CHECK ((choice = ANY (ARRAY[''accept''::text, ''decline''::text, ''request_changes''::text])))'))) = 6
+            THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'legal_acceptance_no_foreign_key',
        CASE WHEN EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.legal_acceptance'::regclass AND contype = 'f') THEN 1 ELSE 0 END::int

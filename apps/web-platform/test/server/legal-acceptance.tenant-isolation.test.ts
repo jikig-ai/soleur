@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import postgres from "postgres";
 
 // Behavioural proof of migration 184 against a REAL database (#12011 PR-B, ADR-319): every Guard 3 mutation row,
@@ -41,13 +41,19 @@ interface Ctx {
 
 const ROLLBACK = Symbol("rollback");
 let sql: postgres.Sql<{}>;
+let sql2: postgres.Sql<{}>; // a SECOND connection, for the advisory-lock proof
 
 beforeAll(() => {
   if (!ENABLED) return;
   sql = postgres(URL_ENV!, { ssl: { rejectUnauthorized: false }, max: 1, onnotice: () => {} });
+  sql2 = postgres(URL_ENV!, { ssl: { rejectUnauthorized: false }, max: 1, onnotice: () => {} });
 });
 afterAll(async () => {
   if (sql) await sql.end();
+  if (sql2) await sql2.end();
+});
+beforeEach(() => {
+  expect.hasAssertions(); // a test that asserts nothing is a failure, not a pass
 });
 
 async function scenario(fn: (t: Txn, c: Ctx) => Promise<void>): Promise<void> {
@@ -203,33 +209,69 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
     });
   });
 
-  // Guard 3 row 4: the checksum covers every column. Tamper one column at a time with the guard off and require the
-  // verify function to fail closed. Using a fresh scenario per column keeps each case independent.
-  for (const [col, expr] of [
-    ["text_hash", `'${H2}'`],
-    ["version", "'tampered'"],
-    ["session_id", "'tampered'"],
-    ["event_id", "gen_random_uuid()"],
-    ["founder_id", "gen_random_uuid()"],
-    ["id", "gen_random_uuid()"],
-    ["created_at", "created_at + interval '1 second'"],
-    ["choice", "'decline'"],
-  ] as const) {
+  test("Guard 3: the guard's own intent predicate binds user, key, text hash, version, session and (for a Yes) the confirmed time", async () => {
+    await scenario(async (t, c) => {
+      const ev = await intent(t, c.userA, c.sessionA);
+      await record(t, web(c), { choice: "decline" }); // the intent is now consumed, and it carries NO confirmed code
+      await t`select set_config('app.legal_acceptance_rpc', 'on', true)`;
+      const attempt = (over: Partial<{ founder: string; key: string; hash: string; version: string; session: string; event: string; choice: string }>) => {
+        const o = { founder: c.userB, key: KEY, hash: H2, version: VERSION, session: c.sessionA, event: ev, choice: "decline", ...over };
+        return t`insert into public.legal_acceptance (founder_id, key, text_hash, version, choice, reauth_method, reauth_at, session_id, event_id)
+          values (${o.founder}, ${o.key}, ${o.hash}, ${o.version}, ${o.choice}, ${o.choice === "accept" ? "email-code" : null}, ${o.choice === "accept" ? new Date() : null}, ${o.session}, ${o.event})`;
+      };
+      // Every row below differs from the consumed intent in exactly one attribute (the base row is for another user AND another hash,
+      // so first make it match, then break one attribute at a time).
+      const match = { founder: c.userA, hash: H1 };
+      for (const over of [
+        { founder: c.userB, hash: H1 }, // another user
+        { founder: c.userA, hash: H2 }, // another text hash
+        { ...match, key: "other-key" },
+        { ...match, version: "other-version" },
+        { ...match, session: "other-session" },
+        { ...match, event: randomUUID() },
+        { ...match, choice: "accept" }, // a Yes against an intent whose code was never confirmed
+      ]) {
+        await failsWith(t, /no consumed intent/, () => attempt(over));
+      }
+      await t`select set_config('app.legal_acceptance_rpc', 'off', true)`;
+      expect(await rows(t, c.userB)).toHaveLength(0);
+    });
+  });
+
+  // Guard 3 row 4: the checksum covers every column. Tamper ONE column at a time with the guard off and require the verify
+  // function to fail closed on exactly the row that was changed (UPDATE ... RETURNING names it; a fresh scenario per case).
+  type Kind = "yes" | "request_changes";
+  const tamperCases: Array<[string, Kind, string, string?]> = [
+    ["text_hash", "yes", `text_hash = '${H2}'`],
+    ["version", "yes", "version = 'tampered'"],
+    ["session_id", "yes", "session_id = 'tampered'"],
+    ["event_id", "yes", "event_id = gen_random_uuid()"],
+    ["founder_id", "yes", "founder_id = gen_random_uuid()"],
+    ["id", "yes", "id = gen_random_uuid()"],
+    ["created_at (one microsecond)", "yes", "created_at = created_at + interval '1 microsecond'"],
+    ["reauth_at (one microsecond)", "yes", "reauth_at = reauth_at + interval '1 microsecond'"],
+    ["requested_edit", "request_changes", "requested_edit = 'something else'"],
+    ["choice (alone)", "request_changes", "choice = 'decline'", "alter table public.legal_acceptance drop constraint legal_acceptance_edit_only_with_request"],
+  ];
+  for (const [col, kind, setClause, pre] of tamperCases) {
     test(`Guard 3 row 4: the checksum covers ${col} (a changed value reads as invalid, never accepted)`, async () => {
       await scenario(async (t, c) => {
-        await verifiedIntent(t, c.userA, c.sessionA);
-        await record(t, web(c));
-        expect(await verifyFn(t, c.userA)).toMatchObject({ status: "accepted", row_ok: true });
-        await t.unsafe("alter table public.legal_acceptance disable trigger legal_acceptance_guard");
-        if (col === "choice") {
-          // keep the CHECK constraints satisfied: a decline row carries no reauth columns
-          await t.unsafe(`update public.legal_acceptance set choice = 'decline', reauth_method = null, reauth_at = null where founder_id = '${c.userA}'`);
+        if (kind === "yes") {
+          await verifiedIntent(t, c.userA, c.sessionA);
+          await record(t, web(c));
         } else {
-          await t.unsafe(`update public.legal_acceptance set ${col} = ${expr} where founder_id = '${c.userA}'`);
+          await intent(t, c.userA, c.sessionA);
+          await record(t, web(c), { choice: "request_changes", edit: "Please shorten clause 4." });
         }
+        const before = await verifyFn(t, c.userA);
+        expect(before).toMatchObject({ row_ok: true });
+        expect(before.status).toBe(kind === "yes" ? "accepted" : "changes_requested");
+        await t.unsafe("alter table public.legal_acceptance disable trigger legal_acceptance_guard");
+        if (pre) await t.unsafe(pre);
+        const upd = await t.unsafe(`update public.legal_acceptance set ${setClause} where founder_id = '${c.userA}' returning founder_id, key, text_hash`);
+        expect(upd).toHaveLength(1);
         await t.unsafe("alter table public.legal_acceptance enable trigger legal_acceptance_guard");
-        const [after] = await t`select founder_id, key, text_hash from public.legal_acceptance where founder_id = ${c.userA} or event_id is not null limit 1`;
-        const v = await verifyFn(t, after.founder_id, after.text_hash);
+        const v = await verifyFn(t, upd[0].founder_id as string, upd[0].text_hash as string, upd[0].key as string);
         expect(v).toMatchObject({ status: "invalid", row_ok: false });
       });
     });
@@ -331,6 +373,8 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       await failsWith(t, /web session token/, () => record(t, { ...web(c), aud: "soleur-runtime" }));
       await failsWith(t, /web session token/, () => record(t, { ...web(c), aud: "some-other-audience" }));
       await failsWith(t, /web session required/, () => record(t, { sub: c.userA })); // no session claim
+      await failsWith(t, /web session token/, () => record(t, { ...web(c), aud: null as unknown as string })); // an ABSENT audience is not a web session
+      await failsWith(t, /authenticated callers only/, () => record(t, { session_id: c.sessionA })); // authenticated role but no subject
       const jti = randomUUID();
       await t`insert into public.denied_jti (jti, founder_id, reason) values (${jti}, ${c.userA}, 'test')`;
       await failsWith(t, /token denied/, () => record(t, { ...web(c), jti }));
@@ -351,6 +395,8 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       expect(seenByA.map((r: any) => r.founder_id)).toContain(c.userA);
       const seenByRuntime = await as(t, "authenticated", { ...web(c), aud: "soleur-runtime" }, () => t`select founder_id from public.legal_acceptance`);
       expect(seenByRuntime).toHaveLength(0);
+      const seenWithNoAud = await as(t, "authenticated", { ...web(c), aud: null as unknown as string }, () => t`select founder_id from public.legal_acceptance`);
+      expect(seenWithNoAud).toHaveLength(0); // the read is a whitelist of the web audience, not a blocklist of one other audience
     });
   });
 
@@ -373,8 +419,7 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       expect(first).toMatchObject({ outcome: "issued", reused: false });
       const [ev0] = await events(t, c.userA);
       const lifetime = (new Date(ev0.expires_at).getTime() - new Date(ev0.created_at).getTime()) / 1000;
-      expect(lifetime).toBeGreaterThan(29 * 60);
-      expect(lifetime).toBeLessThan(31 * 60);
+      expect(Math.abs(lifetime - 30 * 60)).toBeLessThan(5); // 30 minutes, not 31 and not 29
       for (let i = 0; i < 4; i++) expect(await issue(t, c.userA, c.sessionA)).toMatchObject({ outcome: "issued", reused: true, event_id: first.event_id });
       expect(await events(t, c.userA)).toHaveLength(1); // reopening a card inserted nothing and burned no cap
       const r2 = await issue(t, c.userA, c.sessionA, { resend: true });
@@ -384,6 +429,9 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       const ev = await events(t, c.userA);
       expect(ev.filter((e: any) => e.superseded_at === null)).toHaveLength(1); // only the newest is live
       expect((await issue(t, c.userA, c.sessionA, { resend: true })).outcome).toBe("rate_limited"); // the 4th insert in the window
+      // 8 minutes later the three still count (the window is 15 minutes, not 1)...
+      await t`update public.legal_reauth_event set created_at = now() - interval '8 minutes' where user_id = ${c.userA}`;
+      expect((await issue(t, c.userA, c.sessionA, { resend: true })).outcome).toBe("rate_limited");
       // Back-date everything past the 15-minute window: a new intent is allowed again.
       await t`update public.legal_reauth_event set created_at = now() - interval '16 minutes' where user_id = ${c.userA}`;
       expect((await issue(t, c.userA, c.sessionA, { resend: true })).outcome).toBe("issued");
@@ -464,6 +512,63 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
       for (const role of ["anon", "authenticated", "service_role"] as const) {
         await failsWith(t, /permission denied/, () => as(t, role, role === "authenticated" ? { sub: c.userA } : null, () => t`select * from public.legal_reauth_event`));
       }
+    });
+  });
+
+  test("the 30-day purge runs even when the call ends in an early return (a founder who already decided)", async () => {
+    await scenario(async (t, c) => {
+      await intent(t, c.userB, c.sessionA);
+      await record(t, web(c, c.userB), { choice: "decline" });
+      const oldEv = await intent(t, c.userA, randomUUID());
+      await t`update public.legal_reauth_event set created_at = now() - interval '31 days' where id = ${oldEv}`;
+      expect((await issue(t, c.userB, c.sessionA)).outcome).toBe("already_recorded"); // early return
+      expect((await events(t, c.userA)).map((e: any) => e.id)).not.toContain(oldEv);
+    });
+  });
+
+  test("a confirmed code that went stale is its own outcome, burns no attempt, and reopening the card opens a NEW intent (the founder can confirm again)", async () => {
+    await scenario(async (t, c) => {
+      const ev = await verifiedIntent(t, c.userA, c.sessionA);
+      await t`update public.legal_reauth_event set verified_at = now() - interval '6 minutes' where id = ${ev}`;
+      const attemptsBefore = (await events(t, c.userA))[0].attempts;
+      expect((await claim(t, c.userA, c.sessionA)).outcome).toBe("code_stale");
+      expect((await events(t, c.userA))[0].attempts).toBe(attemptsBefore); // nothing burned
+      expect((await record(t, web(c))).outcome).toBe("code_expired");
+      const reopened = await issue(t, c.userA, c.sessionA);
+      expect(reopened).toMatchObject({ outcome: "issued", reused: false });
+      expect(reopened.event_id).not.toBe(ev);
+      expect((await events(t, c.userA)).find((e: any) => e.id === ev).superseded_at).not.toBeNull();
+      const cl = await claim(t, c.userA, c.sessionA);
+      expect(cl.outcome).toBe("allowed");
+      await markVerified(t, c.userA, cl.event_id, c.sessionA);
+      expect((await record(t, web(c))).outcome).toBe("recorded");
+    });
+  });
+
+  test("a reused intent must carry the same version (a relabelled text opens a new intent, so the record never keeps a stale label)", async () => {
+    await scenario(async (t, c) => {
+      const first = await issue(t, c.userA, c.sessionA, { version: "2026-11-01" });
+      const second = await issue(t, c.userA, c.sessionA, { version: "2026-11-02" });
+      expect(second).toMatchObject({ outcome: "issued", reused: false });
+      expect(second.event_id).not.toBe(first.event_id);
+      await record(t, web(c), { choice: "decline" });
+      expect((await rows(t, c.userA))[0].version).toBe("2026-11-02");
+    });
+  });
+
+  test("two tabs are serialised: the decision and the issue hold their advisory locks until the transaction ends (proved from a second connection)", async () => {
+    await scenario(async (t, c) => {
+      await intent(t, c.userA, c.sessionA);
+      // issue_legal_reauth holds the (user,key) lock for the rest of this transaction.
+      const [free1] = await sql2`select pg_try_advisory_xact_lock(hashtextextended(${c.userA + ":" + KEY}, 0)) as got`;
+      expect(free1.got).toBe(false);
+      await record(t, web(c), { choice: "decline" });
+      // record_legal_acceptance holds the (user,key,hash) lock too.
+      const [free2] = await sql2`select pg_try_advisory_xact_lock(hashtextextended(${c.userA + ":" + KEY + ":" + H1}, 0)) as got`;
+      expect(free2.got).toBe(false);
+      // A control: a key nobody locked is free, so a false above is the function's lock and not a broken probe.
+      const [control] = await sql2`select pg_try_advisory_xact_lock(hashtextextended(${randomUUID()}, 0)) as got`;
+      expect(control.got).toBe(true);
     });
   });
 

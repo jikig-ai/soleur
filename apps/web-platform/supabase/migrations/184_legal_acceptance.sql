@@ -110,7 +110,7 @@ COMMENT ON TABLE public.legal_reauth_event IS
 -- =====================================================================
 -- 3. RLS and grants
 -- =====================================================================
--- legal_acceptance: the founder reads their own rows (not through a runtime-audience token). No INSERT/UPDATE/DELETE
+-- legal_acceptance: the founder reads their own rows, and only through a web-session token (audience exactly 'authenticated'). No INSERT/UPDATE/DELETE
 -- policy and no write grant for any api role; service_role holds no table privilege either (it reaches the table
 -- through the RPCs only).
 -- legal_reauth_event: RLS on, no policy, no privilege: RPC access only.
@@ -125,7 +125,7 @@ GRANT SELECT ON TABLE public.legal_acceptance TO authenticated;
 DROP POLICY IF EXISTS legal_acceptance_founder_select ON public.legal_acceptance;
 CREATE POLICY legal_acceptance_founder_select ON public.legal_acceptance
   FOR SELECT TO authenticated
-  USING (founder_id = auth.uid() AND (auth.jwt() ->> 'aud') IS DISTINCT FROM 'soleur-runtime');
+  USING (founder_id = auth.uid() AND (auth.jwt() ->> 'aud') = 'authenticated');
 
 -- RESTRICTIVE jti-deny (068/126 shape): a revoked-but-unexpired JWT is refused at the policy boundary.
 DROP POLICY IF EXISTS legal_acceptance_jti_not_denied ON public.legal_acceptance;
@@ -241,7 +241,8 @@ ALTER TABLE public.legal_acceptance ENABLE ALWAYS TRIGGER legal_acceptance_no_tr
 -- =====================================================================
 -- The server (which knows the text registry) opens an intent for one (user, key, text hash, version, web session). It
 -- is the ONLY source of valid pairs: record_legal_acceptance refuses any decision without one. The intent lives 30
--- minutes. Calling again with the same inputs returns the live intent (reopening a card is free); p_resend voids the
+-- minutes. Calling again with the same inputs returns the live intent (reopening a card is free), unless its confirmed
+-- code has gone stale (older than 5 minutes), in which case a new intent is opened so the founder can confirm again; p_resend voids the
 -- earlier intent of the same session and inserts a new one (a new code). Outcomes: issued (reused true/false) |
 -- already_recorded (a decision for this text already exists) | rate_limited (3 new intents for this user and key already
 -- in the last 15 minutes: the CTO ruling of 2026-11-03). Every call first deletes rows older than 30 days.
@@ -288,7 +289,9 @@ BEGIN
   IF NOT COALESCE(p_resend, false) THEN
     SELECT * INTO v_live FROM public.legal_reauth_event
      WHERE user_id = p_user_id AND key = p_key AND text_hash = p_text_hash AND session_id = p_session_id
+       AND version = p_version
        AND superseded_at IS NULL AND consumed_at IS NULL AND expires_at > now()
+       AND (verified_at IS NULL OR verified_at >= now() - interval '5 minutes')
      ORDER BY created_at DESC, id DESC LIMIT 1;
     IF FOUND THEN
       RETURN jsonb_build_object('outcome', 'issued', 'reused', true, 'event_id', v_live.id, 'expires_at', v_live.expires_at);
@@ -326,7 +329,8 @@ COMMENT ON FUNCTION public.issue_legal_reauth(uuid, text, text, text, text, bool
 -- =====================================================================
 -- Counts one code attempt BEFORE the auth service is asked to check the code, so a locked challenge never reaches
 -- the auth service. It returns the event id; mark_legal_reauth_verified is bound to that id. Outcomes: allowed |
--- locked (5 attempts used) | expired | replaced (voided or bound to another text) | not_found.
+-- locked (5 attempts used) | code_stale (a code confirmed more than 5 minutes ago: ask for a new intent, no attempt is
+-- burned) | expired | replaced (voided or bound to another text) | not_found.
 
 CREATE OR REPLACE FUNCTION public.claim_legal_reauth_attempt(
   p_user_id    uuid,
@@ -362,6 +366,9 @@ BEGIN
   END IF;
   IF v_event.expires_at <= now() THEN
     RETURN jsonb_build_object('outcome', 'expired');
+  END IF;
+  IF v_event.verified_at IS NOT NULL AND v_event.verified_at < now() - interval '5 minutes' THEN
+    RETURN jsonb_build_object('outcome', 'code_stale');
   END IF;
   IF v_event.attempts >= 5 THEN
     RETURN jsonb_build_object('outcome', 'locked');
@@ -583,7 +590,7 @@ BEGIN
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'none', 'text_hash', p_text_hash, 'decided_at', NULL, 'row_ok', NULL);
   END IF;
-  v_ok := v_row.row_hash = public.legal_acceptance_row_hash(v_row);
+  v_ok := COALESCE(v_row.row_hash = public.legal_acceptance_row_hash(v_row), false);
   RETURN jsonb_build_object(
     'status', CASE
                 WHEN NOT v_ok THEN 'invalid'
