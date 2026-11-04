@@ -6,6 +6,8 @@
 
 DO $$ BEGIN
   IF to_regclass('public.legal_acceptance') IS NOT NULL THEN
+    -- Lock first: a row inserted between the check and the drop would otherwise be destroyed.
+    LOCK TABLE public.legal_acceptance IN ACCESS EXCLUSIVE MODE;
     IF EXISTS (SELECT 1 FROM public.legal_acceptance) THEN
       RAISE EXCEPTION '184 down refused: public.legal_acceptance holds decision rows (write-once record); archive them under counsel review first';
     END IF;
@@ -13,9 +15,13 @@ DO $$ BEGIN
 END $$;
 
 DROP FUNCTION IF EXISTS public.verify_legal_acceptance(uuid, text, text);
+DROP FUNCTION IF EXISTS public.record_legal_acceptance(text, text, text, text);
+DROP FUNCTION IF EXISTS public.mark_legal_reauth_verified(uuid, uuid, text, text, text);
+DROP FUNCTION IF EXISTS public.claim_legal_reauth_attempt(uuid, text, text, text);
+DROP FUNCTION IF EXISTS public.issue_legal_reauth(uuid, text, text, text, text, boolean);
+-- Pre-review signatures (a DEV database that applied an earlier draft of 184).
 DROP FUNCTION IF EXISTS public.record_legal_acceptance(text, text, text, text, text);
 DROP FUNCTION IF EXISTS public.mark_legal_reauth_verified(uuid, text, text, text);
-DROP FUNCTION IF EXISTS public.claim_legal_reauth_attempt(uuid, text, text, text);
 DROP FUNCTION IF EXISTS public.issue_legal_reauth(uuid, text, text, text);
 
 -- The checksum function takes the table's row type, so it goes before the table; the trigger function goes after

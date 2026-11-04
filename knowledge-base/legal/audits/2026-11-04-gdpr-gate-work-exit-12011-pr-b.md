@@ -33,7 +33,7 @@ Scope: `git diff origin/main...HEAD` on branch `feat-feat-founder-approval-cards
 
 ### `GDPR-Art-9` — special category
 
-**Severity:** none by column name. No column matches the Art. 9 list. `legal_acceptance.requested_edit` is free text and could contain special-category content by accident; it is capped at 1,000 characters and the UI shows a no-personal-data notice (text in the DSAR and notice note). Recorded as a counsel question (PA-40, item 17: whether the note stays at all).
+**Severity:** none by column name. No column matches the Art. 9 list. `legal_acceptance.requested_edit` is free text and could contain special-category content by accident; it is capped at 1,000 characters and the UI will show a no-personal-data notice (PR-C) (text in the DSAR and notice note). Recorded as a counsel question (PA-40, item 17: whether the note stays at all).
 
 ### Other
 

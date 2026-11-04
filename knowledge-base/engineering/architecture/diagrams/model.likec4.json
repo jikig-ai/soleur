@@ -1128,7 +1128,7 @@
 },
 "technology": "Supabase (legal_acceptance, legal_reauth_event; mig 184)",
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-318, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), runtime-audience tokens refused); the challenge and the read-only check are service_role RPCs. The agent has no path to it. Dark until the screens ship."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge and the read-only check are service_role RPCs. No agent tool reaches it and a runtime-audience token can neither read nor write it (code holding the service key in-process is the stated ADR-319 residual). Dark until the screens ship."
 },
 "title": "Legal Acceptances",
 "kind": "database",
@@ -2269,17 +2269,6 @@
 "id": "2e0lg9cd4ztb4",
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)."
 },
-"2f6ofx3vlr7z5": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "platform.infra.legalAcceptanceStore"
-},
-"id": "2f6ofx3vlr7z5",
-"title": "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. Flag-gated, dark (ADR-318)"
-},
 "2g0w538bran25": {
 "technology": "HTTPS (Git Data API)",
 "source": {
@@ -2365,6 +2354,17 @@
 },
 "id": "2jy9gkus366d6",
 "title": "Reads release notes for the in-app Releases page"
+},
+"2knch0ox61ubo": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "platform.infra.legalAcceptanceStore"
+},
+"id": "2knch0ox61ubo",
+"title": "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. Dark until the screens ship (ADR-319)"
 },
 "2lu63nr6gqhmq": {
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
@@ -16933,7 +16933,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-318, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), runtime-audience tokens refused); the challenge and the read-only check are service_role RPCs. The agent has no path to it. Dark until the screens ship."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge and the read-only check are service_role RPCs. No agent tool reaches it and a runtime-audience token can neither read nor write it (code holding the service key in-process is the stated ADR-319 residual). Dark until the screens ship."
 },
 "tags": [],
 "notation": "Data store",
@@ -26508,7 +26508,7 @@
 },
 "parent": null,
 "relations": [
-"2f6ofx3vlr7z5"
+"2knch0ox61ubo"
 ],
 "color": "gray",
 "line": "dashed",

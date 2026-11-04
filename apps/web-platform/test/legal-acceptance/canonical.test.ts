@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { KEY_RE, LegalTextError, getLegalText, isCurrent, loadLegalTexts, parseLegalText, textHash } from "@/server/legal-acceptance/canonical";
+import { KEY_RE, LegalTextError, TEXT_HASH_RE, getLegalText, isCurrent, loadLegalTexts, parseLegalText, textHash } from "@/server/legal-acceptance/canonical";
 
 const FIX = path.join(__dirname, "fixtures/hash-fixture.md");
 const EXPECTED = readFileSync(path.join(__dirname, "fixtures/hash-fixture.sha256"), "utf8").trim();
@@ -28,6 +28,27 @@ describe("text hash", () => {
     const sh = spawnSync("sha256sum", [FIX], { encoding: "utf8" });
     expect(sh.status).toBe(0);
     expect(sh.stdout.split(" ")[0]).toBe(EXPECTED);
+  });
+
+  it("a multibyte fixture hashes the same through the registry loader and sha256sum (bytes, not a re-encoded string)", () => {
+    const fix = path.join(__dirname, "fixtures/hash-fixture-multibyte.md");
+    const expected = readFileSync(path.join(__dirname, "fixtures/hash-fixture-multibyte.sha256"), "utf8").trim();
+    const raw = readFileSync(fix, "utf8");
+    expect(raw).toContain("\u2014"); // em dash
+    expect(raw).toContain("\u201c"); // curly quote
+    const dir = mkdtempSync(path.join(tmpdir(), "legal-multibyte-"));
+    writeFileSync(path.join(dir, "multibyte.md"), readFileSync(fix));
+    expect(loadLegalTexts(dir).get("multibyte")?.textHash).toBe(expected);
+    expect(getLegalText("multibyte", dir).textHash).toBe(expected);
+    const sh = spawnSync("sha256sum", [fix], { encoding: "utf8" });
+    expect(sh.stdout.split(" ")[0]).toBe(expected);
+    // The string-encoding branch agrees too (a latin1 re-encoding would not).
+    expect(textHash(raw)).toBe(expected);
+  });
+
+  it("refuses a file that is not valid UTF-8 instead of hashing a different value than sha256sum would", () => {
+    const bad = Buffer.concat([Buffer.from("---\nversion: 1\n---\nbad "), Buffer.from([0xff, 0xe9]), Buffer.from("\n")]);
+    expect(code(() => parseLegalText("bad-bytes", bad))).toBe("bad_bytes");
   });
 
   it("is sensitive to a trailing newline, a quote and a pipe (a changed text changes the hash)", () => {
@@ -61,9 +82,17 @@ describe("parseLegalText", () => {
     expect(code(() => parseLegalText("ok", doc("version: 1\nvalid_until: tomorrow")))).toBe("bad_valid_until");
   });
 
-  it("the key pattern is the database CHECK pattern", () => {
+  it("every key and text-hash pattern in the migration is the TypeScript pattern (a count, not an any-match)", () => {
     const sql = readFileSync(path.join(__dirname, "../../supabase/migrations/184_legal_acceptance.sql"), "utf8");
-    expect(sql).toContain(`'${KEY_RE.source}'`);
+    const count = (needle: string) => sql.split(needle).length - 1;
+    // legal_acceptance.key, legal_reauth_event.key, issue, claim, mark, record
+    expect(count(`'${KEY_RE.source}'`)).toBe(6);
+    // the same six, plus the row_hash CHECK on legal_acceptance
+    expect(count(`'${TEXT_HASH_RE.source}'`)).toBe(7);
+    // And the version bound is the TypeScript bound.
+    expect(readFileSync(path.join(__dirname, "../../server/legal-acceptance/canonical.ts"), "utf8")).toContain("version.length > 32");
+    expect(sql).toContain("char_length(version) BETWEEN 1 AND 32");
+    expect(sql).toContain("char_length(p_version) NOT BETWEEN 1 AND 32"); // issue_legal_reauth binds the version
   });
 });
 
@@ -88,12 +117,21 @@ describe("registry loading", () => {
   it("loads only files whose name is a valid key", () => {
     expect([...loadLegalTexts(dir).keys()]).toEqual(["terms-update"]);
   });
+  it("getLegalText reads only its own file, so one malformed sibling cannot take every key down", () => {
+    const d = mkdtempSync(path.join(tmpdir(), "legal-sibling-"));
+    writeFileSync(path.join(d, "good-key.md"), doc("version: 1"));
+    writeFileSync(path.join(d, "broken-key.md"), "no front matter at all\n");
+    expect(getLegalText("good-key", d).version).toBe("1");
+    expect(() => loadLegalTexts(d)).toThrow(); // the full load still refuses the broken file
+    expect(code(() => getLegalText("broken-key", d))).toBe("no_front_matter");
+  });
+
   it("getLegalText throws unknown_key for a key with no file and for an invalid key", () => {
     expect(getLegalText("terms-update", dir).version).toBe("1");
     expect(code(() => getLegalText("absent", dir))).toBe("unknown_key");
     expect(code(() => getLegalText("../etc", dir))).toBe("unknown_key");
   });
-  it("the committed registry parses (every committed text is valid)", () => {
+  it("the committed registry loads without error (it is EMPTY until counsel signs off a real text, so this proves the loader and the directory, not any text)", () => {
     expect(() => loadLegalTexts()).not.toThrow();
   });
 });

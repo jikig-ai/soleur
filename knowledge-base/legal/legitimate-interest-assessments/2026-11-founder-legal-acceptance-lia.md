@@ -15,7 +15,7 @@ related:
     "knowledge-base/legal/audits/2026-11-founder-legal-acceptance-attestation.md",
     "knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md",
     "apps/web-platform/supabase/migrations/184_legal_acceptance.sql",
-    "ADR-318",
+    "ADR-319",
   ]
 ---
 
@@ -39,7 +39,7 @@ Guidance followed: ICO, "How do we apply legitimate interests in practice?"; CNI
 2. **Confirmation that the person deciding is the account holder (Yes only).** An email code, single-use and bound to the text, reduces the chance that a stolen or left-open session is used to accept a text. This serves the founder as much as Jikigai.
 3. **Keeping the record after the account is deleted.** The evidential value of purpose 1 would be lost if the record disappeared when the account does; the retention is to establish, exercise or defend legal claims (Art. 17(3)(e)).
 
-The purpose is specific (a decision on a named text), explicit (this LIA, PA-40, and the notice shown on the Request changes field) and legitimate (accountability for commitments, security of an acceptance).
+The purpose is specific (a decision on a named text), explicit (this LIA, PA-40, and the notice that will be shown on the Request changes field) and legitimate (accountability for commitments, security of an acceptance).
 
 **Not pursued:** profiling or scoring the founder, approval-rate analytics, use of the free-text note for anything other than reading it as a change request, model training, enforcement. Nothing in the product reads these tables to enforce anything at this stage.
 
@@ -84,7 +84,7 @@ Low for the operator: a uuid, a choice, a hash and a timestamp, readable by the 
 - Write-once record: UPDATE, DELETE and TRUNCATE are refused; insert only through the recording function.
 - The actor is the authenticated session, never a parameter; a runtime-audience token cannot record a decision.
 - The founder reads only their own rows; `service_role` holds no privilege on either table; the read-only check function returns status, hash, time and a checksum-match flag, not the note.
-- A Yes needs a single-use, 5-minute, text-bound email-code challenge (attempt cap 5; at most 3 challenges per 15 minutes).
+- Every decision needs an intent issued by the Jikigai server for that user, key, text hash and web session (30 minutes; at most 3 new intents per 15 minutes), so a decision cannot be recorded for a text the server did not issue; a Yes also needs a single-use email code confirmed in the last 5 minutes (attempt cap 5).
 - The text is held by hash, not copy.
 - Dark launch; the first real row is conditional on this LIA and the attestation record existing.
 
@@ -113,7 +113,7 @@ Low for the operator: a uuid, a choice, a hash and a timestamp, readable by the 
 - The proposal is bounded: it answers the Art. 5(1)(e) concern that an unbounded evidential record is not proportionate.
 - **Not built.** Migration 184 has no sweep, and the write-once guard refuses deletion, so nothing ends a row today. A controlled deletion path at the end of the period is an engineering follow-up that counsel's decision on the number gates.
 - The 10-year cap is a ceiling, not a target. Counsel may choose a shorter figure.
-- The challenge table has no retention at all as built (Residuals).
+- The intent and challenge table is purged late and not on erasure as built (Residuals).
 
 ---
 
@@ -124,7 +124,7 @@ Low for the operator: a uuid, a choice, a hash and a timestamp, readable by the 
 3. **The free-text note can carry personal data** despite the cap and the notice, and cannot be removed alone on erasure: it is inside the row the guard keeps and the checksum covers.
 4. **Challenge rows are purged late and not on erasure.** `legal_reauth_event` rows expire by timestamp after 5 minutes; rows older than 30 days are deleted whenever the next challenge is issued, so a row can outlast 30 days when no challenge is issued. `user_id` has no foreign key and no erasure step deletes the rows, so they outlive the account until that purge. They are operational and have no evidential purpose after minutes; the 30-day figure is an engineering value, not an approved legal number, and deletion on erasure is not built.
 5. **Backups.** The retention window of database backups is not measured here; a row removed in future may persist there.
-6. **A holder of production credentials can mint a founder session** (ADR-318 property 3, CTO ruling). The email code lowers but does not remove this.
+6. **A holder of production credentials can mint a founder session** (ADR-319 property 3, CTO ruling). The email code lowers but does not remove this.
 7. **Access after erasure is by the database owner role only.** That is the restriction the erasure reply promises; it is a role restriction, not a technical bar.
 
 ---

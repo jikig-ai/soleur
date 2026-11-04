@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-// Static shape tests for migration 184 (#12011 PR-B, ADR-318). The BEHAVIOURAL proof of every Guard 3 mutation row
+// Static shape tests for migration 184 (#12011 PR-B, ADR-319). The BEHAVIOURAL proof of every Guard 3 mutation row
 // runs against a real database in test/server/legal-acceptance.tenant-isolation.test.ts (collected by
 // tenant-integration.yml) and supabase/verify/184_legal_acceptance.sql. This file is the cheap backstop: it strips
 // comments, reads the SQL as text and checks the properties Guard 3 names. The MUTATIONS block applies each static
-// mutant to the RAW migration text and asserts the checker goes RED; a checker that cannot go red is vacuous.
+// mutant to the RAW migration text and asserts the checker goes RED; a checker that cannot go red is vacuous. A lexical
+// check cannot prove a function's logic: the DB-backed test is the proof, this is the tripwire.
 
 const DIR = path.join(__dirname, "../../supabase");
 const UP = path.join(DIR, "migrations/184_legal_acceptance.sql");
@@ -84,6 +85,7 @@ const DEFINER_FNS = [
   "record_legal_acceptance",
   "verify_legal_acceptance",
 ] as const;
+const SERVICE_FNS = ["issue_legal_reauth", "claim_legal_reauth_attempt", "mark_legal_reauth_verified", "verify_legal_acceptance"] as const;
 
 /** Every problem the checker finds in one candidate migration text. Empty means the shape holds. */
 export function shapeProblems(sqlText: string): string[] {
@@ -101,40 +103,67 @@ export function shapeProblems(sqlText: string): string[] {
   if (/REFERENCES/i.test(tbl)) p.push("legal_acceptance must carry no foreign key (erasure must not cascade into it)");
   if (!/method\s+text\s+NOT NULL\s+DEFAULT 'web-session'\s+CHECK \(method = 'web-session'\)/i.test(tbl)) p.push("method not fixed to web-session");
   if (!/UNIQUE \(founder_id, key, text_hash\)/i.test(tbl)) p.push("unique (founder_id, key, text_hash) missing");
+  if (!/session_id\s+text\s+NOT NULL/i.test(tbl)) p.push("session_id must be NOT NULL (every decision comes from a web session)");
+  for (const c of ["legal_acceptance_yes_has_reauth", "legal_acceptance_reauth_only_for_yes", "legal_acceptance_reauth_paired", "legal_acceptance_edit_only_with_request"]) {
+    if (!new RegExp(`CONSTRAINT ${c}\\b`, "i").test(tbl)) p.push(`constraint ${c} missing`);
+  }
   if (!/ALTER TABLE public\.legal_acceptance ENABLE ROW LEVEL SECURITY/i.test(flat)) p.push("RLS not enabled on legal_acceptance");
   if (!/ALTER TABLE public\.legal_reauth_event ENABLE ROW LEVEL SECURITY/i.test(flat)) p.push("RLS not enabled on legal_reauth_event");
 
-  // Grants: no api role writes; authenticated SELECT only on legal_acceptance; nothing on the event table.
-  const tableGrants = statements(s, /^GRANT .* ON TABLE public\.legal_(acceptance|reauth_event)/i);
+  // Grants: no api role writes; authenticated SELECT only on legal_acceptance; nothing on the event table. The TABLE
+  // keyword is optional in SQL, the schema prefix too, and a column list or ALL TABLES is still a grant.
+  const tableGrants = statements(s, /^GRANT .* ON (TABLE )?(public\.)?legal_(acceptance|reauth_event)\b/i);
   if (tableGrants.length !== 1 || !/^GRANT SELECT ON TABLE public\.legal_acceptance TO authenticated$/i.test(tableGrants[0] ?? "")) {
     p.push("table grants must be exactly SELECT on legal_acceptance to authenticated");
+  }
+  if (/GRANT [^;]* ON ALL TABLES/i.test(flat)) p.push("no blanket ALL TABLES grant may appear in this migration");
+  if (/GRANT [^;]*\b(authenticated|anon|service_role)\b[^;]* TO /i.test(flat.replace(/GRANT (SELECT|EXECUTE) ON [^;]* TO (authenticated|service_role)/gi, ""))) {
+    p.push("unexpected GRANT (a role membership or a privilege outside the expected set)");
   }
   for (const t of ["legal_acceptance", "legal_reauth_event"]) {
     if (!new RegExp(`REVOKE ALL ON TABLE public\\.${t} FROM PUBLIC, anon, authenticated, service_role`, "i").test(flat)) p.push(`${t}: REVOKE ALL missing`);
   }
 
-  // Policies: one permissive owner SELECT, one restrictive jti deny.
+  // Policies: one permissive owner SELECT (not through a runtime audience), one restrictive jti deny.
   const pols = statements(s, /^CREATE POLICY/i);
   const permissive = pols.filter((x) => !/AS RESTRICTIVE/i.test(x));
-  if (permissive.length !== 1 || !/FOR SELECT TO authenticated USING \(founder_id = auth\.uid\(\)\)/i.test(permissive[0] ?? "")) p.push("exactly one permissive policy: SELECT where founder_id = auth.uid()");
+  if (
+    permissive.length !== 1 ||
+    !/FOR SELECT TO authenticated USING \(founder_id = auth\.uid\(\) AND \(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'soleur-runtime'\)/i.test(permissive[0] ?? "")
+  ) {
+    p.push("exactly one permissive policy: SELECT where founder_id = auth.uid() and the audience is not soleur-runtime");
+  }
   if (!pols.some((x) => /AS RESTRICTIVE/i.test(x) && /NOT public\.is_jti_denied_from_jwt\(\)/i.test(x))) p.push("restrictive jti-deny policy missing");
 
-  // Guard trigger: all three events, plus truncate.
+  // Guard trigger: all three events, plus truncate; both ENABLE ALWAYS (they also fire in replica mode).
   const trig = statements(s, /^CREATE TRIGGER legal_acceptance_guard\b/i)[0] ?? "";
   if (!/BEFORE INSERT OR UPDATE OR DELETE ON public\.legal_acceptance FOR EACH ROW EXECUTE FUNCTION public\.legal_acceptance_guard\(\)/i.test(trig)) p.push("guard trigger must fire BEFORE INSERT OR UPDATE OR DELETE");
   if (!statements(s, /^CREATE TRIGGER legal_acceptance_no_truncate\b/i).some((x) => /BEFORE TRUNCATE ON public\.legal_acceptance FOR EACH STATEMENT/i.test(x))) p.push("truncate trigger missing");
+  for (const t of ["legal_acceptance_guard", "legal_acceptance_no_truncate"]) {
+    if (!new RegExp(`ALTER TABLE public\\.legal_acceptance ENABLE ALWAYS TRIGGER ${t}\\b`, "i").test(flat)) p.push(`${t}: must be ENABLE ALWAYS (fires in replica mode too)`);
+  }
 
-  // Guard function: UPDATE and DELETE always refuse; INSERT needs the GUC and computes the hash in the database.
+  // Guard function: UPDATE and DELETE always refuse (the raise is INSIDE the condition); INSERT needs the GUC AND a
+  // consumed intent; the hash is database-computed.
   const guard = fnBody(s, "legal_acceptance_guard");
-  if (!/TG_OP = 'UPDATE'/i.test(guard) || !/TG_OP = 'DELETE'/i.test(guard)) p.push("guard must refuse UPDATE and DELETE");
-  if (!/current_setting\('app\.legal_acceptance_rpc', true\)/i.test(guard)) p.push("guard INSERT is not GUC-gated");
+  if (!/IF TG_OP = 'UPDATE' OR TG_OP = 'DELETE' OR TG_OP = 'TRUNCATE' THEN RAISE EXCEPTION/i.test(guard)) p.push("guard must refuse UPDATE, DELETE and TRUNCATE");
+  if (!/IF COALESCE\(current_setting\('app\.legal_acceptance_rpc', true\), ''\) <> 'on' THEN RAISE EXCEPTION/i.test(guard)) p.push("guard INSERT is not GUC-gated");
+  if (!/FROM public\.legal_reauth_event e WHERE e\.id = NEW\.event_id AND e\.user_id = NEW\.founder_id/i.test(guard) || !/e\.consumed_at IS NOT NULL/i.test(guard)) {
+    p.push("guard INSERT must also require a consumed intent for the same event, user, key, text hash and session");
+  }
   if (!/NEW\.row_hash := public\.legal_acceptance_row_hash\(NEW\)/i.test(guard)) p.push("row_hash must be database-computed in the guard");
 
-  // Row hash: length-prefixed columns, text_hash included.
+  // Row hash: length-prefixed, and the hashed list equals the table's column set (a column added later must be added).
   const hash = fnBody(s, "legal_acceptance_row_hash");
   if (!/int4send/i.test(hash)) p.push("row_hash must length-prefix columns (int4send)");
-  for (const col of ["founder_id", "key", "text_hash", "version", "choice", "requested_edit", "method", "reauth_method", "reauth_at", "session_id", "surface", "created_at"]) {
-    if (!new RegExp(`r\\.${col}\\b`, "i").test(hash)) p.push(`row_hash omits ${col}`);
+  const tableCols = [...tbl.matchAll(/^\s{2}([a-z_]+)\s+(?:uuid|text|timestamptz|integer)\b/gm)].map((m) => m[1]).filter((c) => c !== "row_hash");
+  if (tableCols.length < 14) p.push(`could not read the table's columns (${tableCols.length})`);
+  for (const col of tableCols) {
+    const hashed =
+      col === "reauth_at" || col === "created_at"
+        ? new RegExp(`to_char\\(r\\.${col} AT TIME ZONE 'UTC'`, "i").test(hash)
+        : new RegExp(`\\br\\.${col}(::text)?\\s*,`, "i").test(hash);
+    if (!hashed) p.push(`row_hash omits ${col}`);
   }
 
   // Every definer function pins search_path; grant sets are exact.
@@ -144,7 +173,7 @@ export function shapeProblems(sqlText: string): string[] {
     else if (!/SECURITY DEFINER SET search_path = public, pg_temp/i.test(b)) p.push(`${f}: search_path not pinned`);
   }
   const grantFor = (f: string) => statements(s, new RegExp(`^GRANT EXECUTE ON FUNCTION public\\.${f}\\(`, "i")).map((x) => /TO (\w+)$/i.exec(x)?.[1]);
-  for (const f of ["issue_legal_reauth", "claim_legal_reauth_attempt", "mark_legal_reauth_verified", "verify_legal_acceptance"]) {
+  for (const f of SERVICE_FNS) {
     if (JSON.stringify(grantFor(f)) !== JSON.stringify(["service_role"])) p.push(`${f}: EXECUTE must be service_role only`);
   }
   if (JSON.stringify(grantFor("record_legal_acceptance")) !== JSON.stringify(["authenticated"])) p.push("record_legal_acceptance: EXECUTE must be authenticated only");
@@ -152,24 +181,41 @@ export function shapeProblems(sqlText: string): string[] {
     if (grantFor(f).length !== 0) p.push(`${f}: must be EXECUTE-able by nobody`);
   }
 
-  // record_legal_acceptance: actor from the verified session, denied jti, no runtime audience, event consumed under lock.
+  // record_legal_acceptance: actor from the verified session, denied jti, web-session audience only, a live intent
+  // consumed under lock for EVERY choice, the version taken from the intent.
   const rec = fnBody(s, "record_legal_acceptance");
   if (!/IF auth\.uid\(\) IS NULL THEN RAISE EXCEPTION/i.test(rec)) p.push("record: auth.uid() check missing");
   if (!/IF public\.is_jti_denied_from_jwt\(\) THEN RAISE EXCEPTION/i.test(rec)) p.push("record: jti-deny check missing");
-  if (!/'aud'\) = 'soleur-runtime'/i.test(rec)) p.push("record: runtime-audience check missing");
+  if (!/\(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'authenticated' THEN RAISE EXCEPTION/i.test(rec)) p.push("record: audience must be exactly 'authenticated'");
+  if (!/IF v_session IS NULL THEN RAISE EXCEPTION/i.test(rec)) p.push("record: a web session id is required for every choice");
+  if (!/pg_advisory_xact_lock\(hashtextextended\(auth\.uid\(\)::text/i.test(rec)) p.push("record: two tabs must be serialised (advisory lock)");
   if (!/set_config\('app\.legal_acceptance_rpc', 'on', true\)/i.test(rec)) p.push("record: must open the GUC for its own insert");
   if (!/FROM public\.legal_reauth_event[^;]*WHERE user_id = auth\.uid\(\) AND key = p_key AND session_id = v_session[^;]*FOR UPDATE/i.test(rec)) p.push("record: event lookup must be bound to user, key and session under FOR UPDATE");
   if (!/v_event\.text_hash <> p_text_hash/i.test(rec)) p.push("record: event bound to another text hash must not be accepted");
-  if (!/SET consumed_at = now\(\)/i.test(rec)) p.push("record: Yes must consume the event");
-  if (/auth\.uid\(\)\s*=\s*p_/i.test(rec) || /p_user_id|p_founder_id/i.test(rec)) p.push("record: actor must not be a parameter");
+  if (!/SET consumed_at = now\(\)/i.test(rec)) p.push("record: every decision must consume its intent");
+  if (!/v_event\.verified_at IS NULL THEN RAISE EXCEPTION/i.test(rec) || !/interval '5 minutes'/i.test(rec)) p.push("record: a Yes needs a code confirmed in the last 5 minutes");
+  if (/auth\.uid\(\)\s*=\s*p_/i.test(rec) || /p_user_id|p_founder_id|p_version/i.test(rec)) p.push("record: actor and version must not be parameters");
 
-  // Read-only verify never opens the write door.
+  // issue: input validation incl. version, lock, purge before any early return.
+  const iss = fnBody(s, "issue_legal_reauth");
+  if (!/p_version/i.test(iss) || !/pg_advisory_xact_lock/i.test(iss)) p.push("issue: version binding and the per-user lock are required");
+  if (!(iss.search(/DELETE FROM public\.legal_reauth_event WHERE created_at < now\(\) - interval '30 days'/i) >= 0 && iss.search(/DELETE FROM public\.legal_reauth_event/i) < iss.search(/RETURN jsonb_build_object\('outcome', 'already_recorded'/i))) {
+    p.push("issue: the 30-day purge must run before any early return");
+  }
+  // claim / mark: validate every argument; mark is bound to the event id.
+  for (const f of ["claim_legal_reauth_attempt", "mark_legal_reauth_verified"]) {
+    if (!/p_text_hash !~ '\^\[0-9a-f\]\{64\}\$'/i.test(fnBody(s, f))) p.push(`${f}: must validate p_text_hash (a NULL must not skip the replaced branch)`);
+  }
+  if (!/WHERE id = p_event_id AND user_id = p_user_id/i.test(fnBody(s, "mark_legal_reauth_verified"))) p.push("mark: must be bound to the event id returned by claim");
+
+  // Read-only verify never opens the write door and fails closed.
   const ver = fnBody(s, "verify_legal_acceptance");
   if (/set_config\('app\.legal_acceptance_rpc'/i.test(ver)) p.push("verify must not set the GUC");
   if (/\b(INSERT|UPDATE|DELETE)\b/i.test(ver)) p.push("verify must be read-only");
+  if (!/WHEN NOT v_ok THEN 'invalid'/i.test(ver) || !/FROM ONLY public\.legal_acceptance/i.test(ver)) p.push("verify must fail closed (status invalid) and read ONLY the table");
 
   // service_role RPCs refuse any user identity.
-  for (const f of ["issue_legal_reauth", "claim_legal_reauth_attempt", "mark_legal_reauth_verified", "verify_legal_acceptance"]) {
+  for (const f of SERVICE_FNS) {
     if (!/IF auth\.uid\(\) IS NOT NULL THEN RAISE EXCEPTION/i.test(fnBody(s, f))) p.push(`${f}: must refuse a user identity`);
   }
 
@@ -190,12 +236,27 @@ describe("migration 184 files", () => {
     expect(shapeProblems(rawUp)).toEqual([]);
   });
 
-  it("the down file refuses while rows exist, before dropping anything", () => {
+  it("the down file locks the table, refuses while rows exist, and does both before dropping anything", () => {
     const d = norm(stripSql(read(DOWN)));
+    const lock = d.search(/LOCK TABLE public\.legal_acceptance IN ACCESS EXCLUSIVE MODE/i);
     const refuse = d.search(/IF EXISTS \(SELECT 1 FROM public\.legal_acceptance\) THEN RAISE EXCEPTION/i);
     const firstDrop = d.search(/DROP (TABLE|FUNCTION)/i);
-    expect(refuse).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(refuse).toBeGreaterThan(lock);
     expect(firstDrop).toBeGreaterThan(refuse);
+  });
+
+  it("the down file drops the CURRENT signatures (and the pre-review ones for a dev reset)", () => {
+    const d = norm(stripSql(read(DOWN)));
+    for (const sig of [
+      "verify_legal_acceptance(uuid, text, text)",
+      "record_legal_acceptance(text, text, text, text)",
+      "mark_legal_reauth_verified(uuid, uuid, text, text, text)",
+      "claim_legal_reauth_attempt(uuid, text, text, text)",
+      "issue_legal_reauth(uuid, text, text, text, text, boolean)",
+    ]) {
+      expect(d).toContain(`DROP FUNCTION IF EXISTS public.${sig}`);
+    }
   });
 
   it("the verify file asserts the live catalog with a bad column", () => {
@@ -205,8 +266,9 @@ describe("migration 184 files", () => {
     expect(v).toMatch(/AS bad|::int/);
   });
 
-  it("no other migration mentions the table (erasure scrub, grants, policies stay out of it)", () => {
-    const others = readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql") && !f.startsWith("184_"));
+  it("no other migration mentions the table (erasure scrub, grants, policies stay out of it) up to the migration after this one", () => {
+    // Bounded to numbers below 185 so PR-D's own migration (if it needs one) is not red by construction.
+    const others = readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql") && !f.startsWith("184_") && Number.parseInt(f, 10) < 185);
     const hits = others.filter((f) => /legal_acceptance|legal_reauth_event/.test(stripSql(read(path.join(MIGRATIONS, f)))));
     expect(hits).toEqual([]);
   });
@@ -232,15 +294,32 @@ describe("MUTATIONS: each static mutant of the migration is caught", () => {
   const rows: Array<[string, () => string, RegExp]> = [
     ["1 remove DELETE from the trigger events", () => mutate("BEFORE INSERT OR UPDATE OR DELETE ON public.legal_acceptance", "BEFORE INSERT OR UPDATE ON public.legal_acceptance"), /guard trigger must fire/],
     ["2 set the GUC in the verify function", () => mutate(/(CREATE OR REPLACE FUNCTION public\.verify_legal_acceptance\([\s\S]*?BEGIN)/, "$1 PERFORM set_config('app.legal_acceptance_rpc', 'on', true);"), /verify must not set the GUC/],
-    ["3 add the table to the erasure scrub", () => rawUp + "\nCREATE OR REPLACE FUNCTION public.x() RETURNS void LANGUAGE sql AS $$ SELECT 1; $$;\n-- anonymise_approval_request scrub\nDELETE FROM public.legal_acceptance WHERE founder_id = $1;\n", /no statement may write legal_acceptance|must not touch anonymise/],
+    ["3 add the table to the erasure scrub", () => rawUp + "\nCREATE OR REPLACE FUNCTION public.x() RETURNS void LANGUAGE sql AS $$ SELECT 1; $$;\n-- anonymise_approval_request scrub\nDELETE FROM public.legal_acceptance WHERE founder_id = $1;\n", /no statement may write legal_acceptance/],
     ["4 compute row_hash without text_hash", () => mutate(/\n\s*r\.text_hash,[^\n]*/, ""), /row_hash omits text_hash/],
-    ["5 skip the reauth-event consumption for Yes", () => mutate(/SET consumed_at = now\(\)/, "SET verified_at = verified_at"), /record: Yes must consume the event/],
-    ["6 accept an event bound to another text hash", () => mutate(/(FUNCTION public\.record_legal_acceptance\([\s\S]*?)v_event\.text_hash <> p_text_hash/, "$1false"), /event bound to another text hash/],
+    ["4b replace text_hash in the hash by a constant expression that still names it", () => mutate(/\n\s*r\.text_hash,/, "\n        CASE WHEN false THEN r.text_hash END,"), /row_hash omits text_hash/],
+    ["4c compute row_hash without the row id", () => mutate(/\n\s*r\.id::text,[^\n]*/, ""), /row_hash omits id/],
+    ["4d compute row_hash without the intent id", () => mutate(/\n\s*r\.event_id::text,[^\n]*/, ""), /row_hash omits event_id/],
+    ["5 skip the intent consumption", () => mutate(/SET consumed_at = now\(\)/, "SET verified_at = verified_at"), /every decision must consume its intent/],
+    ["6 accept an event bound to another text hash", () => mutate(/v_event\.text_hash <> p_text_hash/, "false"), /event bound to another text hash/],
     ["7a drop the auth.uid() check", () => mutate(/IF auth\.uid\(\) IS NULL THEN/, "IF false THEN"), /record: auth\.uid\(\) check missing/],
-    ["7b drop the runtime-audience check", () => mutate(/'aud'\) = 'soleur-runtime'/, "'aud') = 'never'"), /runtime-audience check missing/],
+    ["7b weaken the audience check to a blocklist of the runtime audience", () => mutate(/\(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'authenticated' THEN/, "(auth.jwt() ->> 'aud') = 'soleur-runtime' THEN"), /audience must be exactly 'authenticated'/],
+    ["7c drop the web-session requirement", () => mutate(/IF v_session IS NULL THEN/, "IF false THEN"), /a web session id is required/],
+    ["7d drop the user/key/session binding of the intent lookup", () => mutate(/AND session_id = v_session\n/, "AND true\n"), /event lookup must be bound/],
+    ["7e drop the two-tab lock", () => mutate(/PERFORM pg_advisory_xact_lock\(hashtextextended\(auth\.uid\(\)/, "PERFORM 1 WHERE hashtextextended(auth.uid()"), /two tabs must be serialised/],
     ["8 add a client write grant", () => rawUp + "\nGRANT INSERT ON TABLE public.legal_acceptance TO authenticated;\n", /table grants must be exactly/],
+    ["8b add a client write grant without the TABLE keyword", () => rawUp + "\nGRANT INSERT ON public.legal_acceptance TO anon;\n", /table grants must be exactly|unexpected GRANT/],
+    ["8c add a blanket grant", () => rawUp + "\nGRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;\n", /ALL TABLES/],
     ["9 add a foreign key on founder_id", () => mutate(/founder_id\s+uuid\s+NOT NULL/, "founder_id uuid NOT NULL REFERENCES public.users(id) ON DELETE SET NULL"), /no foreign key/],
     ["10 drop the search_path pin from record", () => mutate(/(FUNCTION public\.record_legal_acceptance\([\s\S]*?)SET search_path = public, pg_temp/, "$1"), /record_legal_acceptance: search_path not pinned/],
+    ["11 make the triggers origin-only again", () => mutate("ENABLE ALWAYS TRIGGER legal_acceptance_guard", "ENABLE TRIGGER legal_acceptance_guard"), /must be ENABLE ALWAYS/],
+    ["12 neuter the guard's refusal", () => mutate(/RAISE EXCEPTION 'legal acceptance: records are write-once[^;]*;/, "NULL;"), /guard must refuse UPDATE/],
+    ["13 drop the guard's consumed-intent requirement", () => mutate(/AND e\.consumed_at IS NOT NULL/, "AND true"), /consumed intent/],
+    ["14 let a tampered row read as accepted", () => mutate(/WHEN NOT v_ok THEN 'invalid'/, "WHEN false THEN 'invalid'"), /verify must fail closed/],
+    ["15 let claim skip hash validation", () => mutate(/(FUNCTION public\.claim_legal_reauth_attempt\([\s\S]*?)OR p_text_hash IS NULL OR p_text_hash !~ '\^\[0-9a-f\]\{64\}\$'/, "$1"), /claim_legal_reauth_attempt: must validate p_text_hash/],
+    ["16 unbind mark from the event id", () => mutate(/WHERE id = p_event_id AND user_id = p_user_id/, "WHERE user_id = p_user_id"), /mark: must be bound to the event id/],
+    ["17 move the purge after the early return", () => mutate(/\n\s*-- Challenge rows are transient[^\n]*\n\s*DELETE FROM public\.legal_reauth_event WHERE created_at < now\(\) - interval '30 days';/, ""), /30-day purge must run before any early return/],
+    ["18 let a runtime-audience token read the record", () => mutate(/ AND \(auth\.jwt\(\) ->> 'aud'\) IS DISTINCT FROM 'soleur-runtime'\)/, ")"), /exactly one permissive policy/],
+    ["19 add a column that the hash does not cover", () => mutate(/  surface        text        NOT NULL DEFAULT 'web'/, "  extra_note     text,\n  surface        text        NOT NULL DEFAULT 'web'"), /row_hash omits extra_note/],
   ];
 
   for (const [name, build, expected] of rows) {

@@ -19,7 +19,7 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 - [x] 5.2 `184_legal_acceptance.sql`, `.down.sql` (refuses while rows exist), `verify/184_legal_acceptance.sql`
 - [x] 5.3 Text registry `server/legal-acceptance/texts/` and `canonical.ts`; shared hash fixture asserted in bash and vitest
 - [x] 5.4 Art. 30 activity, LIA, attestation record, compliance-posture row, DSAR exclusions, note-field notice; run `soleur:gdpr-gate`
-- [x] 5.5 ADR-318 (re-verify ordinal), ADR-309 pointer, read all three `.c4` files, C4 edits, run C4 tests
+- [x] 5.5 ADR-319 (re-verify ordinal), ADR-309 pointer, read all three `.c4` files, C4 edits, run C4 tests
 
 ## PR-C — Web screens and in-place check (behind `approval-queue`)
 
@@ -27,6 +27,15 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 - [ ] 6.2 Reauth route and decide route per plan Phase C1
 - [ ] 6.3 Page, card, reauth dialog (email code), state derivation, copy file under the CLO sign-off gate
 - [ ] 6.4 Sentry alert rule in `apps/web-platform/infra/sentry`
+
+### PR-C carry-over from the PR-B review (ADR-319, CTO ruling 2026-11-04)
+
+- [ ] 6.5 The card route issues the intent with `issue_legal_reauth` (server knows the registry; version comes from the registry entry), requires a web session, and NEVER mints an intent for a runtime-audience token; reopening a card reuses the live intent, a resend passes `p_resend`
+- [ ] 6.6 Return the same response for a known and an unknown address on the email-code send (spike: unknown address answers 422 `otp_disabled`); dev OTP is 8 digits, prod 6
+- [ ] 6.7 Embed or COPY `server/legal-acceptance/texts/` into the production image (esbuild bundle + Dockerfile copy only `dist/server`) and test the deployed path before any card is built
+- [ ] 6.8 Call `claim_legal_reauth_attempt` before the auth service and `mark_legal_reauth_verified` with the returned event id after; add a per-user (not per-key) attempt ceiling and shorten the auth OTP expiry
+- [ ] 6.9 Record sequence in the route: the session id passed to issue/claim/mark equals the JWT `session_id` (or `ses_id`) the database reads; sign the throwaway OTP session out
+- [ ] 6.10 Define the undo of a mistaken Decline (new text version) and show it in the card copy; the deletion/redaction path for a retained row and its note is a counsel + engineering item (PA-40 item 17)
 
 ## PR-D — Verify endpoint and gate kind
 
@@ -36,7 +45,7 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 
 ## Post-merge
 
-- [ ] 8.1 ADR-318 `adopting` -> `accepted` after the first real acceptance
+- [ ] 8.1 ADR-319 `adopting` -> `accepted` after the first real acceptance
 - [ ] 8.2 CLO gate cleared and counsel review before enabling beyond canary
 - [ ] 8.3 UX test with a non-technical, non-legal founder (CLI and web)
 - [ ] 8.4 Correct roadmap CP2 and place #12011

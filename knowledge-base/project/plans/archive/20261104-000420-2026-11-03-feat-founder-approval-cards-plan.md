@@ -23,7 +23,7 @@ Source documents: brainstorm `knowledge-base/project/brainstorms/2026-11-03-foun
 | Reuse the `approval_request` pattern, not its rows | `180_approval_request.sql` has the RPC, guard-trigger, RLS and grant shapes; it nulls `canonical_action` after 30 days and `anonymise_approval_request` deletes personal-workspace rows | New table `legal_acceptance`; copy the shapes; leave it out of the erasure scrub |
 | "Fresh re-auth" can reuse the existing re-auth code | `server/dsar-reauth.ts` stores events in a process-local `Map`; `useOtpFlow.ts` starts a session; `EmailOtpType` has no reauthentication value | Single-use challenge stored in a table (`legal_reauth_event`), code verified server-side on a throwaway client; Phase A0 spike proves it on the dev project first |
 | Migration number follows 182 | Latest on `origin/main` is 182; 183 is claimed by an unmerged sibling worktree | Use 184, re-checked at PR time |
-| New ADR ordinal | Highest on `origin/main` is ADR-317 | Provisional ADR-318, re-verified at ship |
+| New ADR ordinal | Highest on `origin/main` is ADR-317 | Provisional ADR-319, re-verified at ship |
 | TR1 hash chain across rows | An unkeyed chain is recomputable by a service-role holder, and the external anchor is undecided | Per-row `row_hash` now; chain deferred with the anchor decision (#12021) |
 | TR4 `web-session` author arm | No flow produces such a comment; a `Method:` line the author controls must never pick a lighter check | Deferred; `Method:` stays a label (`tty-ack`) |
 | FR2 pending-cards listing | `go.md` already files and dedupes the `Standing-delegation epic: #N` issue; the web page lists web acceptances | No new script; reuse `go.md`; AC3 rewritten |
@@ -124,7 +124,7 @@ Operator decision, 2026-11-03: the in-place check ships email code only; passwor
 | Web legal-acceptance screen and states (PR-C) | asks 1, 11 | asked |
 | Verify endpoint and read-only token (PR-D) | asks 6 | asked |
 | `Gate: web-acceptance` kind (PR-D) | asks 6, 10 | asked |
-| ADR-318 and C4 edit | — | inferred — justification: the decision adds a store and a trust boundary, so `wg-architecture-decision-is-a-plan-deliverable` requires the record |
+| ADR-319 and C4 edit | — | inferred — justification: the decision adds a store and a trust boundary, so `wg-architecture-decision-is-a-plan-deliverable` requires the record |
 | Art. 30 entry, LIA, attestation, privacy-document updates | — | inferred — justification: the CLO ruling requires a new processing-activity entry and legal basis before the first real row |
 | Per-row `row_hash` | — | inferred — justification: the verifier needs an integrity checksum to detect accidental edit; stated honestly as a checksum |
 | Terraform `doppler_secret` for the verify token and founder id | — | inferred — justification: `hr-all-infrastructure-provisioning-servers` forbids hand-set secrets |
@@ -144,7 +144,7 @@ None. Seven planned edit paths were searched against open `code-review` issues; 
 
 ### ADR
 
-Create ADR-318 (provisional ordinal; re-verify against `origin/main` at ship): "Legal acceptances are recorded in a separate write-once table from the founder's authenticated session and checked by key and text hash through a read-only endpoint." It records: the property-3 sentence above, the per-row checksum (and that an unkeyed chain was rejected), the text registry as the only way to create a request, the email-code step-up as a separate single-use challenge, retention and erasure (pseudonymous uuid, no foreign key), and the external-anchor location as undecided with a signed git tag as the CLO-preferred option. `## Alternatives Considered`: reuse `approval_request` rows (rejected: 30-day text nulling, erasure scrub), GitHub comment as authority (rejected: same identity, ADR-289), JWT-claim freshness (rejected: `mintFounderJwt` mints the same claims), signed file (rejected: key custody the agent can reach), unkeyed hash chain now (rejected: recomputable by a service-role holder). Amend ADR-309 `## Decision` with a one-line pointer to ADR-318 for the legal class. Status `adopting` until PR-D ships and the first real acceptance has run.
+Create ADR-319 (provisional ordinal; re-verify against `origin/main` at ship): "Legal acceptances are recorded in a separate write-once table from the founder's authenticated session and checked by key and text hash through a read-only endpoint." It records: the property-3 sentence above, the per-row checksum (and that an unkeyed chain was rejected), the text registry as the only way to create a request, the email-code step-up as a separate single-use challenge, retention and erasure (pseudonymous uuid, no foreign key), and the external-anchor location as undecided with a signed git tag as the CLO-preferred option. `## Alternatives Considered`: reuse `approval_request` rows (rejected: 30-day text nulling, erasure scrub), GitHub comment as authority (rejected: same identity, ADR-289), JWT-claim freshness (rejected: `mintFounderJwt` mints the same claims), signed file (rejected: key custody the agent can reach), unkeyed hash chain now (rejected: recomputable by a service-role holder). Amend ADR-309 `## Decision` with a one-line pointer to ADR-319 for the legal class. Status `adopting` until PR-D ships and the first real acceptance has run.
 
 ### C4 views
 
@@ -235,6 +235,7 @@ in_transit:
 
 - **If this lands broken, the founder experiences:** a Yes recorded in `legal_acceptance.choice` for a text they did not read or that changed while the page was open (the recorded `text_hash` differs from the text shown), or a Yes they gave that is not recorded so a legal or production step stalls without a visible reason. Covered by AC9 to AC13 and Guard 3.
 - **If this leaks, the founder's workflow is exposed via:** a forged or replayed acceptance row (a reused or cross-card `legal_reauth_event`, or a minted founder session) that lets an agent act as the founder, or the verbatim legal text and founder uuid read by a service-role holder. Covered by AC10, AC11, AC14 and the disclosed residual in property 3.
+- **Artifacts and vectors added at PR-B review (2026-11-04):** the free-text `requested_edit` note (kept forever; a founder or a stolen session writes personal data into it; 1000-character cap, notice and a deletion path are PR-C and counsel items), the web `session_id` and the intent/challenge row (linkable to the auth session; purged after 30 days), the `row_hash` (detects change, not a credential holder), and a permanent Decline written through a stolen web session (accepted by the CTO ruling of 2026-11-04; recovery is a new text version; the intent step stops invented keys and agent tokens).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one forged or mis-recorded legal acceptance ends trust in "the founder decides", so the tier is the highest rather than an aggregate pattern.
 
@@ -293,7 +294,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 
 **Phase B4 — Legal documents.** New numbered Art. 30 activity marked drafted and not counsel-reviewed, added to `DSAR_TABLE_EXCLUSIONS`; standalone LIA; the attestation record in `knowledge-base/legal/audits/`; Privacy Policy / Data Protection Disclosure / GDPR Policy updates if the data-subject class extends beyond the founder; `compliance-posture.md` row; retention and erasure wording; "no personal data" notice text for the note field. Gate: `soleur:gdpr-gate` against the migration.
 
-**Phase B5 — ADR and C4.** ADR-318, the ADR-309 pointer, the `.c4` edits after reading all three files, validation tests.
+**Phase B5 — ADR and C4.** ADR-319, the ADR-309 pointer, the `.c4` edits after reading all three files, validation tests.
 
 ### PR-C — Web screens and in-place check (behind `approval-queue`)
 
@@ -331,7 +332,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 
 **Harness rows.** Remove the stub-endpoint server from the suite so every case sees "unreachable" — the suite must fail rather than pass on all-held. Must-PASS inputs other than the canonical: a registry text containing `|`, `"` and a trailing newline, and a plan with two holds where only the second is a web acceptance.
 
-**Anchor.** The independent anchor is the reviewed in-repo text and its committed hash; changing the plan hash alone does not match a recorded row. A service-role holder is out of scope and disclosed in ADR-318.
+**Anchor.** The independent anchor is the reviewed in-repo text and its committed hash; changing the plan hash alone does not match a recorded row. A service-role holder is out of scope and disclosed in ADR-319.
 
 ### Guard 2 — `Method:` label (`delegation-verify.sh`)
 
@@ -373,7 +374,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 
 **Harness rows.** The static shape test fails if the trigger statement is removed from the SQL. Must-PASS input: a second row for a new text version of the same key.
 
-**Anchor.** None beyond the row checksum; the external anchor and chain are deferred (#12021) and stated as such in ADR-318.
+**Anchor.** None beyond the row checksum; the external anchor and chain are deferred (#12021) and stated as such in ADR-319.
 
 ## Files to Create
 
@@ -399,7 +400,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 - `plugins/soleur/skills/brainstorm-techniques/references/approval-card.md`
 - `plugins/soleur/test/fixtures/standing-delegation/delegation-method-tty-ack.md`
 - `plugins/soleur/test/fixtures/standing-delegation/delegation-method-unknown.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-318-legal-acceptance-record.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-319-legal-acceptance-record.md`
 - `knowledge-base/legal/legitimate-interest-assessments/2026-11-founder-legal-acceptance-lia.md`
 - `knowledge-base/legal/audits/2026-11-founder-legal-acceptance-attestation.md`
 
@@ -431,7 +432,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 - [ ] AC4 (PR-B): the migration applies on the dev project; the down file refuses while rows exist; `verify/184` reports `bad = 0`.
 - [ ] AC5 (PR-B): the guard rejects UPDATE and DELETE; `anonymise_approval_request` leaves the table untouched; the founder-erasure path completes and the legal rows survive.
 - [ ] AC6 (PR-B): `record_legal_acceptance` rejects a client-supplied text, a stale `p_text_hash`, a runtime-audience token and a jti-denied token; a superseded text returns a typed "replaced" error that does not consume the code.
-- [ ] AC7 (PR-B): ADR-318 exists with `## Alternatives Considered`; the `.c4` edits render and the three C4 tests pass.
+- [ ] AC7 (PR-B): ADR-319 exists with `## Alternatives Considered`; the `.c4` edits render and the three C4 tests pass.
 - [ ] AC8 (PR-B): the Art. 30 entry, LIA, attestation record and compliance-posture row are in the same PR with `soleur:gdpr-gate` output attached; the Request changes field has a length cap and a "no personal data" notice.
 - [ ] AC9 (PR-C): Yes is disabled until the text is confirmed (text shorter than the viewport unlocks immediately; the lock state is announced to assistive technology); none of the three choices is pre-selected; Request changes requires text.
 - [ ] AC10 (PR-C): the email code is single-use, valid for at most 5 minutes, capped at 5 attempts, bound to user, key, text hash and session, voided by a resend, and consumed atomically by `record_legal_acceptance`; a code issued for one card is rejected on another.
@@ -447,7 +448,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 
 ### Post-merge (follow-through)
 
-- [ ] AC20: ADR-318 status moves from `adopting` to `accepted` after the first real acceptance has run end to end.
+- [ ] AC20: ADR-319 status moves from `adopting` to `accepted` after the first real acceptance has run end to end.
 - [ ] AC21: the CLO enabling gate is cleared and counsel has reviewed the customer-facing wording and the retention period before `approval-queue` is turned on beyond the canary and before the first real row.
 - [ ] AC22: a non-technical, non-legal founder completes one card on the CLI and one on the web without help (recorded as a comment on #12011).
 - [ ] AC23: roadmap CP2 status corrected and #12011 placed.
@@ -469,7 +470,7 @@ Wireframes were produced at brainstorm time and approved by the operator on 2026
 ## Dependencies & Risks
 
 - **Supabase code route.** The A0 spike must show a throwaway-client email code works before PR-B starts; fallback needs a CTO ruling, not an operator question.
-- **Service-role key and prd Doppler.** A holder can mint a founder session; ADR-318 and property 3 say so and do not claim to defend it.
+- **Service-role key and prd Doppler.** A holder can mint a founder session; ADR-319 and property 3 say so and do not claim to defend it.
 - **Copy gate.** `approval-copy.ts` carries a CLO sign-off gate; PR-C copy ships `PROVISIONAL` until signed.
 - **Retention period.** The recommended period (instrument life plus 5 years, cap 10) is unconfirmed by counsel.
 - **Migration number.** 184 is re-checked at PR time; a sibling can claim it first.

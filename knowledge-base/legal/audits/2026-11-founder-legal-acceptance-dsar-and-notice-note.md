@@ -20,7 +20,7 @@ Scope: tables `legal_acceptance` and `legal_reauth_event` (migration 184). Data 
 
 ## (a) DSAR treatment
 
-**Self-serve export: both tables excluded.** Both go in `DSAR_TABLE_EXCLUSIONS` (code change owed in PR-B; this note does not make it), not in `DSAR_TABLE_ALLOWLIST`. Stated reasons, to be copied into the exclusion entry:
+**Self-serve export: both tables excluded.** Both are in `DSAR_TABLE_EXCLUSIONS` (the code change is in PR-B), not in `DSAR_TABLE_ALLOWLIST`. Stated reasons, to be copied into the exclusion entry:
 
 1. The founder id is a **pseudonymous uuid** and the row is **kept after account deletion under Art. 17(3)(e)**, so the export keyed on the account cannot be the complete route: after erasure there is no account to key it on.
 2. The export worker reads with `service_role`, which holds no privilege on either table (migration 184 revokes it). Putting a table in the allowlist without a grant or a read function would make every export fail.
@@ -45,7 +45,7 @@ To be used in the reply to an account-deletion or Art. 17 request from a founder
 >
 > **For how long.** [Period to be confirmed by counsel. Proposed: for as long as the text is in force, plus 5 years, and no more than 10 years in total.]
 >
-> **Who can see it.** Access is limited to the database administrator role; it is not used for any other purpose and it is not shown to anyone else.
+> **Who can see it.** Access is limited to the database administrator role and to the Jikigai service that checks whether a decision was made before a legal step goes ahead (it reads the status, not your note); it is not shown to anyone else.
 >
 > **Your rights.** You can object to this processing on grounds relating to your situation (Article 21 GDPR); we will tell you our decision. You can ask us what we hold (Article 15 GDPR) by writing to legal@jikigai.com. You can also complain to the CNIL (Commission Nationale de l'Informatique et des Libertés, <https://www.cnil.fr>) or to your own data protection authority.
 

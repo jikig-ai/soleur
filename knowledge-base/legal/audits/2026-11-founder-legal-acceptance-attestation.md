@@ -1,5 +1,5 @@
 ---
-title: "Attestation record — founder legal-acceptance record and email-code challenge (PA-40, ADR-318)"
+title: "Attestation record — founder legal-acceptance record and email-code challenge (PA-40, ADR-319)"
 type: counsel-review
 date: 2026-11-04
 issue: 12011
@@ -8,7 +8,7 @@ signed_off_at: null
 signed_off_by: null
 disposition: "OPEN. This record must exist before the first real row; it is not a sign-off. The sign-off block in section 6 is blank and no reviewer or date is recorded."
 gates: "The first real row in `legal_acceptance`. Not the merge of PR-B (the feature ships dark)."
-open_follow_ups: ["Register Maintenance item 17 (a) to (g)", "external anchor (deferred)", "deletion path at the end of retention (not built)", "challenge-table purge on erasure (not built; opportunistic 30-day purge is built)", "DSAR_TABLE_EXCLUSIONS entry (code, owed in PR-B)"]
+open_follow_ups: ["Register Maintenance item 17 (a) to (g)", "external anchor (deferred)", "deletion path at the end of retention (not built)", "challenge-table purge on erasure (not built; opportunistic 30-day purge is built)"]
 re_evaluation_triggers: "First founder other than the Jikigai operator OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept."
 ---
 
@@ -16,17 +16,17 @@ re_evaluation_triggers: "First founder other than the Jikigai operator OR EEA-ou
 
 # Attestation record — founder legal-acceptance record (PA-40)
 
-This is the attestation record the CLO ruling of 2026-11-03 requires to exist before the first real row. It states what a sign-off would cover, what it would not cover, and what is still open. It records **no determination** and no assurance about the product's behaviour. Technical record: ADR-318 (written in this PR). Processing record: `knowledge-base/legal/article-30-register.md`, PA-40. Assessment: `knowledge-base/legal/legitimate-interest-assessments/2026-11-founder-legal-acceptance-lia.md`. DSAR, erasure and notice text: `knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md`. Migration: `apps/web-platform/supabase/migrations/184_legal_acceptance.sql`.
+This is the attestation record the CLO ruling of 2026-11-03 requires to exist before the first real row. It states what a sign-off would cover, what it would not cover, and what is still open. It records **no determination** and no assurance about the product's behaviour. Technical record: ADR-319 (written in this PR). Processing record: `knowledge-base/legal/article-30-register.md`, PA-40. Assessment: `knowledge-base/legal/legitimate-interest-assessments/2026-11-founder-legal-acceptance-lia.md`. DSAR, erasure and notice text: `knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md`. Migration: `apps/web-platform/supabase/migrations/184_legal_acceptance.sql`.
 
 ## 1. What a sign-off would attest (design properties)
 
-Design properties, as ADR-318 states them. Each is a property of the **design as written in the migration**, not a measurement of a running system. The attestation covers the description being accurate against the migration, not that the system behaves as described in production.
+Design properties, as ADR-319 states them. Each is a property of the **design as written in the migration**, not a measurement of a running system. The attestation covers the description being accurate against the migration, not that the system behaves as described in production.
 
 | # | Design property | Where it sits in the migration |
 |---|---|---|
 | 1 | A decision row, once written, cannot be changed or deleted by any application path; UPDATE, DELETE and TRUNCATE are refused by a guard trigger and a direct insert is refused outside the recording function. | `legal_acceptance_guard`, its two triggers |
 | 2 | The actor of a decision is the authenticated session (`auth.uid()`), never a parameter; a runtime-audience token cannot record a decision. | `record_legal_acceptance` |
-| 3 | A Yes needs an email-code challenge that is confirmed, unexpired, unused and bound to the same user, key, text hash and session, consumed in the same transaction as the insert; the attempt cap is 5, a founder can have at most 3 challenges per key per 15 minutes, and a resend voids the earlier code. | `issue_legal_reauth`, the attempt-claim and confirm functions, `record_legal_acceptance` |
+| 3 | Every decision (Yes, Decline, Request changes) needs a server-issued intent that is live (30 minutes), unused and bound to the same user, key, text hash and session, consumed in the same transaction as the insert; a Yes also needs the email code confirmed in the last 5 minutes; the attempt cap is 5, at most 3 new intents per user and key per 15 minutes, and a resend voids the earlier intent. | `issue_legal_reauth`, the attempt-claim and confirm functions, `record_legal_acceptance` |
 | 4 | The verbatim legal text is not stored in the database; only its sha256 is. | `legal_acceptance.text_hash` |
 | 5 | The founder id is a plain uuid with no foreign key; no erasure step touches the table; the row therefore outlives the account. | table definition; absence of a foreign key |
 | 6 | The row checksum is computed by the database from length-prefixed columns, not supplied by a caller. It detects a changed row. | `legal_acceptance_row_hash`, the guard |
@@ -45,10 +45,10 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 - **That keeping the row after erasure is lawful** under Art. 17(3)(e) and Art. 6(1)(f). Proposed basis only.
 - **That the founder id is anonymous.** It is pseudonymous.
 - **That the free-text note is free of personal data.** The notice reduces the risk.
-- **That the challenge table is handled correctly after the five minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure.
+- **That the intent and challenge table is handled correctly after its 30 minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure.
 - **Customer founders.** Not assessed. Admitting one is outside this record.
 - **Published privacy text.** Not amended by PR-B; whether it needs to be is posed in the DSAR and notice note (part d).
-- **The DSAR export exclusion in code.** The exclusion entry is owed in the PR and has not been checked by this record.
+- **The DSAR export exclusion in code.** The exclusion entries are in the PR (`DSAR_TABLE_EXCLUSIONS`) and are guarded by the allowlist completeness test; this record has not checked their wording against counsel's.
 
 ## 3. Residuals carried
 
@@ -56,7 +56,7 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 2. A holder of production credentials can mint a founder session.
 3. Pseudonymous uuid is linkable through other stores until they age out.
 4. The note can carry personal data and cannot be removed alone on erasure.
-5. Challenge rows are kept past their 5-minute life and past erasure.
+5. Intent and challenge rows are kept past their 30-minute life (purged after 30 days, when the next challenge is requested) and past erasure.
 6. Database backup retention is unmeasured.
 7. After erasure, access is limited to the database owner role by policy, not by a technical bar.
 
@@ -76,7 +76,7 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 
 - [ ] This record exists (done by this file) and the sign-off block in section 6 is completed by counsel, or the operator records an express deferral of each open item.
 - [ ] The LIA exists (done by the file named above) and its balancing outcome is accepted.
-- [ ] ADR-318 exists and states the nine properties above in the same terms; any difference is corrected here, not in the ADR alone.
+- [ ] ADR-319 exists and its three stated properties, its residual-risk list and its Decision text agree with the nine design properties above; any difference is corrected here, not in the ADR alone.
 - [ ] The `DSAR_TABLE_EXCLUSIONS` entry for both tables is in the code.
 - [ ] The notice text for the Request changes field is in the screen (PR-C), word for word from the DSAR and notice note.
 - [ ] The erasure reply wording is available to whoever answers an erasure request.

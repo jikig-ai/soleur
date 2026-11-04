@@ -1,5 +1,5 @@
 /**
- * Text registry for founder legal acceptances (#12011, ADR-318).
+ * Text registry for founder legal acceptances (#12011, ADR-319).
  *
  * A request to accept a legal text can only be created from a committed file in `texts/<key>.md`. The `text_hash`
  * that the database binds to a decision is the sha256 of that file's RAW BYTES, so what the founder was shown and
@@ -18,6 +18,10 @@
  * refused); `version` is required. `texts/.gitattributes` pins LF in the working tree.
  *
  * `sha256sum <file>` produces the same value, which is how the shell-side gate (PR-D) will compare it.
+ *
+ * PR-C PRECONDITION: the server is bundled with esbuild into dist/server and the Dockerfile copies only that directory,
+ * so `texts/` is NOT in the production image yet. PR-C must embed the texts at build time (or COPY the directory and
+ * resolve it from a deployed path) and add a test that the deployed path resolves, before any card is built.
  */
 
 import { createHash } from "node:crypto";
@@ -57,10 +61,20 @@ export function textHash(raw: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** Parse one registry file. Throws LegalTextError with a static message (the text is never echoed). */
-export function parseLegalText(key: string, raw: string): LegalTextEntry {
+/**
+ * Parse one registry file. Throws LegalTextError with a static message (the text is never echoed).
+ * `raw` may be the file's bytes: the hash is taken over the BYTES and the text is decoded afterwards with invalid UTF-8
+ * refused, so `sha256sum <file>` and `textHash` can never disagree (a string read with a lossy decode would).
+ */
+export function parseLegalText(key: string, source: string | Uint8Array): LegalTextEntry {
   if (!KEY_RE.test(key)) throw new LegalTextError("bad_key", "legal text key is not a valid key");
-  const hash = textHash(raw);
+  const hash = textHash(source);
+  let raw: string;
+  try {
+    raw = typeof source === "string" ? source : new TextDecoder("utf-8", { fatal: true }).decode(source);
+  } catch {
+    throw new LegalTextError("bad_bytes", "legal text is not valid UTF-8");
+  }
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(raw);
   if (!m) throw new LegalTextError("no_front_matter", "legal text has no front matter");
   const fields = new Map<string, string>();
@@ -88,14 +102,22 @@ export function loadLegalTexts(dir: string = TEXTS_DIR): Map<string, LegalTextEn
     if (!f.endsWith(".md")) continue;
     const key = f.slice(0, -3);
     if (!KEY_RE.test(key)) continue;
-    out.set(key, parseLegalText(key, readFileSync(path.join(dir, f), "utf8")));
+    out.set(key, parseLegalText(key, readFileSync(path.join(dir, f))));
   }
   return out;
 }
 
-/** The entry for a key, or throws `unknown_key`. The only way a request for a text is created. */
+/**
+ * The entry for a key, or throws `unknown_key`. The only way a request for a text is created. Reads only
+ * `<key>.md`, so one malformed sibling file cannot take every key down.
+ */
 export function getLegalText(key: string, dir: string = TEXTS_DIR): LegalTextEntry {
-  const e = KEY_RE.test(key) ? loadLegalTexts(dir).get(key) : undefined;
-  if (!e) throw new LegalTextError("unknown_key", "no such legal text");
-  return e;
+  if (!KEY_RE.test(key)) throw new LegalTextError("unknown_key", "no such legal text");
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path.join(dir, `${key}.md`));
+  } catch {
+    throw new LegalTextError("unknown_key", "no such legal text");
+  }
+  return parseLegalText(key, bytes);
 }
