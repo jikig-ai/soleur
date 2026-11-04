@@ -1059,7 +1059,7 @@ fi
 # The designed-loud claim needs a named receiver — "loud" without "heard by whom"
 # is an inference the debugging agent must make. Vector's comment must name its
 # detector (Better Stack / betteruptime), mirroring §12b's detector pinning.
-if printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -E 'Better Stack|betterstack|betteruptime'; then
+if printf '%s\n' "$VEC_UNIT_BODY" | grep -cE '^[[:space:]]*#.*(Better Stack|betterstack|betteruptime)' | grep -vq '^0$'; then
   ok "AC22: web vector.service designed-loud comment names its detector (Better Stack)"
 else
   no "AC22: web vector.service designed-loud comment names no detector — 'loud' needs a receiver"

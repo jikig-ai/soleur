@@ -76,9 +76,9 @@ jobs:
     # The bound is narrower than "cannot weaken": this `environment:` line lives
     # in the dispatched ref's own bytes — a ref that omits it skips the check, and
     # a secrets-free env offers no lever forcing the binding. The durable closure
-    # is the UNMODIFIED non-main dispatch (#8780's class); the reachable set
-    # narrows to actors who can land bytes on main, and the unsigned tag/GHCR
-    # surface is residual R1. Reviewer-less:
+    # is the UNMODIFIED non-main dispatch (#8780's class); a secrets-free env
+    # offers no lever forcing the binding, so the unsigned-surface residual is
+    # "bytes on ANY dispatchable ref" — residual R1's class. Reviewer-less:
     # the auto-mint dispatches are unattended; a human gate would deadlock them.
     environment: release-publish
     outputs:

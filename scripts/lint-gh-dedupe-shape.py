@@ -69,12 +69,14 @@ SCAN MODEL (per file)
    begins `gh (issue|pr) (list|search)`. It is a CENSUS site when `IDENT=`
    abuts the `$(` unquoted; a QUOTED site when `IDENT="` abuts it (or the
    `$(` sits inside a double-quoted assignment value).
-5. A site is CLASSIFIED when the logical line binds its failure: the capture's assignment IS the
-   condition command — `if`/`elif`/`while`/`until` immediately preceding
-   `IDENT=$(` (set -e exempt by POSIX; a `then`/`;`-bound body re-arms the
-   abort), or a NON-VACUOUS `||` ADJOINING the `$(…)` span on the same
-   logical line (`|| true`/`|| :`/bare `VAR=""` are silent collapses, not
-   dispositions — the same defect as the inside-substitution `|| true`). Otherwise it is classified only by a `# dedupe:` marker on the
+5. A site is CLASSIFIED when the logical line binds its failure: the capture sits in a
+   condition list — `if`/`elif`/`while`/`until` with no `then`/`do` body
+   keyword between it and the site (set -e exempt by POSIX; a `then`/`do`
+   boundary re-arms the abort), or a NON-VACUOUS `||` ADJOINING the `$(…)`
+   span (modulo same-command redirects and wrapping `)` closes) on the same
+   logical line (`|| true`/`|| :`/bare `VAR=""` first-elements are silent
+   collapses, not dispositions — the same defect as the inside-
+   substitution `|| true`; an EMPTY arm is unmodelable, hence unclassified). Otherwise it is classified only by a `# dedupe:` marker on the
    site's own line or within 2 physical lines above it.
 
 DIRECTION OF ERROR: unclassified sites are findings (the class cannot
@@ -114,14 +116,22 @@ ASSIGN_TAIL = re.compile(r"(?:^|[\s;|&({!])([A-Za-z_][A-Za-z0-9_]*)\+?=$")
 # branch — the normalized fail-open shape), while a BARE `! V=$(gh…)` with no
 # condition keyword suppresses the abort entirely — a silent collapse, not a
 # bound read, and it stays unclassified.
-CONDITION_RE = re.compile(
-    r"(?:^|[\s;|&({])(?:if|elif|while|until)\s+!?\s*"
-    r"[A-Za-z_][A-Za-z0-9_]*\+?=$")
+CONDITION_RE = re.compile(r"(?:^|[\s;|&({])(?:if|elif|while|until)\s")
+# `then`/`do` open a BODY — a site after one is no longer in the condition
+# list. `;`/`&&`/`||` between the keyword and the site are still condition
+# commands (`if a; V=$(…); then` is POSIX-exempt); `else`/`elif`/`fi`/`done`
+# cannot legally precede a site without a `then`/`do` already ending it.
+_BODY_WORD_RE = re.compile(r"\b(?:then|do)\b")
+
+
+def _in_condition(prefix: str) -> bool:
+    m = CONDITION_RE.search(prefix)
+    return m is not None and not _BODY_WORD_RE.search(prefix[m.end():])
 
 # Typed dispositions only — `# dedupe: <anything>` is NOT a marker. The
 # vocabulary is the two buckets this lint's docstring defines; a bogus bucket
 # (`# dedupe: fine`, `# dedupe: bening`) silently classifies nothing.
-MARKER_RE = re.compile(r"#\s*dedupe:\s*(?:benign|fail-closed)\b")
+MARKER_RE = re.compile(r"#\s*dedupe:\s*(?:benign|fail-closed)\s+\S")
 
 
 
@@ -286,48 +296,83 @@ def _has_or_outside(text: str, idx: int, initial_quote: str = None) -> bool:
 
     `X=$(gh …); [ -n "$X" ] || exit 0` contains a `||` that binds the `[ ]`
     while the capture still aborts the step — the `||` must be the first
-    command operator after `)` (modulo whitespace and the quoted site's
-    closing `"`). Anything else — `;`, `|`, `&&`, `&` — means the capture
+    command operator after `)` (modulo whitespace, the quoted site's closing
+    `"`, same-command redirect words like `2>&1`, and `)` closes of wrapping
+    subshells/groups — `V=$(gh…) 2>/dev/null || rc=$?` and `( V=$(gh…) ) || rc=$?`
+    are bound). Any other token — `;`, `|`, `&&`, `&` — means the capture
     stands alone.
 
-    A vacuous handler is still the silent collapse the census exists to red:
-    `|| true` / `|| :` discharge the rc with no disposition — identical to
-    the inside-substitution `$(… || true)` the docstring rejects — and
-    `|| VAR=""` alone discards the fault. `|| rc=$?`-style captures, echoes,
-    `::error::` blocks, and `exit` arms all carry a disposition and bind.
+    A vacuous FIRST element is still the silent collapse the census reds:
+    `|| true` / `|| :` / `|| VAR=`/`""`/`''` discharge the rc with no
+    disposition — identical to the inside-substitution `$(… || true)` — and
+    the verdict is on the arm's first word, so a trailing `; next` or
+    `>/dev/null` cannot launder it. `|| rc=$?`-style captures, `|| {…}`
+    blocks, `|| false` (still aborts — loud), and `exit`/echo/`::error::`
+    arms all carry a disposition and bind. An EMPTY arm (`||` at logical-line
+    end, handler on a continued line the model cannot see) is unclassified —
+    the same loud direction as every unmodelable construct.
 
     initial_quote is the quote context the scan STARTS in: the tail of a
     `IDENT="$(gh …)"` site begins with the `"` that CLOSES the assignment's
-    quote — seeding `"` lets that char toggle dq off instead of on.
+    quote — seeding `"` lets that char toggle dq off instead of on, and a
+    `\"` inside the quoted tail is an escape, never a quote edge.
     """
     i = idx
     n = len(text)
     q = initial_quote
     while i < n:
         ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
         if q:
             if ch == q:
                 q = None
             i += 1
             continue
-        if ch == "\\" and i + 1 < n:
-            i += 2
+        if ch in "'\"":
+            q = ch
+            i += 1
             continue
         if ch.isspace():
             i += 1
             continue
         if ch == "|" and i + 1 < n and text[i + 1] == "|":
-            return _VACUOUS_ARM.match(text[i + 2:]) is None
+            return not _vacuous_first(text[i + 2:])
+        if ch == ")":
+            i += 1
+            continue
+        # A redirect word (`2>/dev/null`, `>&1`, `>file`, `2>`) belongs to the
+        # capture's own command — skip it and any whitespace before re-checking.
+        m = _REDIRECT_RE.match(text, i)
+        if m:
+            i = m.end()
+            continue
         return False
     return False
 
 
-# A `||` arm that discharges the fault silently: `true`/`:` no-ops, or a bare
-# emptying assignment (`VAR=""` — the rc dies with the capture). An arm that
-# stores `$?` (`rc=$?`, `list_rc=$?`) or does anything else is a disposition.
-_VACUOUS_ARM = re.compile(
-    r"\s*(?:true|:|[A-Za-z_][A-Za-z0-9_]*=(?:\"\"|\'\'))\s*"
-    r"[;|&]?\s*(?:#.*)?$")
+# A redirect token: optional fd digit(s), a direction char, optional `&`,
+# then either a target glued on (`>/dev/null`, `2>&1`) or a bare `>`/`2>`
+# whose target follows as the next word.
+_REDIRECT_RE = re.compile(r"[0-9]*[<>]&?(?:[^\s;&|()]+)?")
+
+
+def _vacuous_first(arm: str) -> bool:
+    """Whether the first pipeline element of a `||` arm silently discharges
+    the fault. `true`/`:` are no-ops regardless of arguments; a bare
+    `IDENT=`/`IDENT=""`/`IDENT=''` emptying assignment discards the rc —
+    `$?` does NOT match (it stores, not discards), so `rc=$?`/`list_rc=$?`
+    stay dispositions.
+    """
+    m = re.match(r"\s*([^\s;|&]+)", arm)
+    if m is None:
+        return True  # empty arm — no disposition visible on this line
+    return _VACUOUS_WORD_RE.match(m.group(1)) is not None
+
+
+_VACUOUS_WORD_RE = re.compile(
+    r"(?:true|:|[A-Za-z_][A-Za-z0-9_]*=(?:\"\"|\'\'|))$")
 
 
 def _sites_in_line(ltext: str):
@@ -410,9 +455,10 @@ def _has_marker(raw_lines, lineno_1based: int) -> bool:
     lo = max(0, lineno_1based - 3)
     for k in range(lo, lineno_1based):
         line = raw_lines[k]
-        m = MARKER_RE.search(line)
-        if m and m.start() >= len(_strip_comment(line).rstrip()):
-            return True
+        code_len = len(_strip_comment(line).rstrip())
+        for m in MARKER_RE.finditer(line):
+            if m.start() >= code_len:
+                return True
     return False
 
 
@@ -461,7 +507,7 @@ def scan_file(path: str, rel: str):
         for kind, ident, col, end in _sites_in_line(stripped):
             prefix = stripped[:col]
             tail = stripped[end:]
-            handled = bool(CONDITION_RE.search(prefix)) \
+            handled = _in_condition(prefix) \
                 or _has_or_outside(
                     tail, 0, initial_quote='"' if kind == "quoted" else None)
             if kind == "census":
@@ -478,7 +524,7 @@ def scan_file(path: str, rel: str):
     return census_rows, advisory_rows
 
 
-def collect(root: str):
+def collect(root: str, quiet: bool = False):
     targets = []
     wf_dir = os.path.join(root, ".github", "workflows")
     if os.path.isdir(wf_dir):
@@ -487,6 +533,8 @@ def collect(root: str):
                 continue
             t = os.path.join(wf_dir, name)
             if os.path.islink(t):
+                if quiet:
+                    continue
                 print("dedupe-shape: advisory: symlink skipped: "
                       f"{t} — the census covers tracked workflow files, "
                       "not linked content")
@@ -509,7 +557,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    targets = collect(root)
+    targets = collect(root, args.quiet)
     if not targets:
         print(f"lint-gh-dedupe-shape: zero workflow files under {root} — "
               "refusing to report a clean sweep of nothing.", file=sys.stderr)

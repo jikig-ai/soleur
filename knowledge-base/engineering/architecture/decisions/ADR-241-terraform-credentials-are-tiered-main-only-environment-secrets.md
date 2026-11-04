@@ -1200,9 +1200,11 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
   entirely. Because `release-publish` is secrets-free, no credential lever forces the
   declaration (contrast `infra-privileged`, where stripping it forfeits the Tier-B token).
   What the gate durably closes is therefore the UNMODIFIED non-main dispatch — #8780's
-  defect class — and it narrows the reachable set from anyone with `actions:write` to
-  anyone who can land bytes on `main`, the same bound apply-web-platform-infra.yml states
-  for `infra-privileged`. For signed artifacts the durable main-binding is the cosign
+  defect class. The narrower "land bytes on `main`" bound apply-web-platform-infra.yml
+  states for `infra-privileged` holds there only because its Tier-B secret FORCES the
+  binding; a secrets-free env has no such lever, so this env's honest residual is "bytes
+  on ANY dispatchable ref" (and stale pre-merge refs need no byte-landing at all).
+  For signed artifacts the durable main-binding is the cosign
   identity regexp (`reusable-release.yml@refs/heads/main`); the UNSIGNED surface —
   `contents:write` tag/release creation and `packages:write` GHCR tag mutation via
   GITHUB_TOKEN — gets no such check and is the open residual. A server-side tag/ruleset

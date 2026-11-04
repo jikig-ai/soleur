@@ -4361,13 +4361,17 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
 
       if (REVIEWER_LESS_RATCHET.has(env.name)) {
         seenLessRatchet.add(env.name);
+        // A `reviewers` BLOCK of any shape — users, teams, a var-indirect
+        // list — deadlocks the unattended jobs these environments exist to
+        // admit. Pinning the block's absence (not just an empty users list)
+        // covers every spelling, since `env.body` is comment-stripped.
         expect(
-          ids.length,
-          `github_repository_environment.${env.name} is in REVIEWER_LESS_RATCHET and gained a reviewers.users ` +
-            `list of ${ids.length}. These environments admit UNATTENDED jobs — a required reviewer does not ` +
-            `strengthen the gate, it deadlocks every publish/apply that runs with no human present ` +
+          /\breviewers\b/.test(env.body),
+          `github_repository_environment.${env.name} is in REVIEWER_LESS_RATCHET and gained a reviewers block. ` +
+            `These environments admit UNATTENDED jobs — a required reviewer does not strengthen the gate, ` +
+            `it deadlocks every publish/apply that runs with no human present ` +
             `(ADR-241 D2; #8780). Remove the reviewers block.`,
-        ).toBe(0);
+        ).toBe(false);
         // No `continue`: the branch-policy limb below is their ONLY gate and
         // must still be proven intact.
       }
@@ -4437,7 +4441,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
       re.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = re.exec(stripped)) !== null) {
-        if (/release_publish\b/.test(m[2])) offenders.push(m[1]);
+        if (/release[-_]publish\b/.test(m[2])) offenders.push(m[1]);
       }
     }
     expect(

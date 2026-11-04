@@ -27,9 +27,12 @@
 # the dispatched ref's own bytes: a hostile or stale ref that omits the declaration skips the
 # check entirely, and a secrets-free environment offers no credential lever forcing the binding —
 # unlike `infra-privileged`, where dropping the declaration forfeits the Tier-B token. What this
-# gate durably closes is #8780's defect class — the UNMODIFIED non-main dispatch — and it narrows
-# the reachable set from anyone with actions:write to anyone who can land bytes on main (the same
-# residual apply-web-platform-infra.yml states for infra-privileged). For SIGNED artifacts the
+# gate durably closes is #8780's defect class — the UNMODIFIED non-main dispatch. The narrower
+# "land bytes on main" bound apply-web-platform-infra.yml states holds for infra-privileged only
+# because its Tier-B secret FORCES the binding; a secrets-free env has no such lever, so the
+# honest residual for the unsigned surface is "bytes on ANY dispatchable ref" — and a stale
+# pre-merge ref needs no byte-landing at all, just actions:write (self-heals at apply).
+# For SIGNED artifacts the
 # durable main-binding is the cosign identity regexp (`reusable-release.yml@refs/heads/main`);
 # the UNSIGNED surface — tag/release creation and GHCR tags via GITHUB_TOKEN — is the open
 # residual, R1's class. A YAML-side dispatch-ref guard was considered and cut: a hostile dispatch

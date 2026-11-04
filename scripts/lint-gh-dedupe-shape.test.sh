@@ -571,6 +571,107 @@ YAML
 assert_fires "G16 a bare ||-VAR-empty arm FIRES (discards the fault)" "$r" 9
 assert_not_named "G16b an ||-rc-capture arm does NOT fire" "$r" 11
 
+# G17 -- fix-round residuals: a vacuous arm must be vacuous as the arm's FIRST
+# element — a `; next` or redirect trailer cannot launder `|| true`.
+r="$(mkfix ortrailer)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          A=$(gh issue list --state open) || true; echo "next"
+          B=$(gh issue list --state open) || true >/dev/null
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G17 a || true arm with a ; trailer FIRES" "$r" 9
+assert_fires "G17b a || true-redirect arm FIRES" "$r" 10
+assert_fires "G17 control: the bad line FIRES" "$r" 11
+
+# G18 -- `||` at logical-line end (empty arm, handler on a continued line the
+# model cannot see) is unmodelable — and unmodelable means unclassified.
+r="$(mkfix orempty)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          X=$(gh issue list --state open) ||
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G18 an empty ||-arm at line end FIRES" "$r" 9
+assert_fires "G18 control: the bad line FIRES" "$r" 10
+
+# G19 -- same-command redirects and wrapping `)` closes keep the `||` bound:
+# `V=$(gh…) 2>&1 || {…}` and `( V=$(gh…) ) || rc=$?` are handled.
+r="$(mkfix orbound2)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          V=$(gh issue list --state open) 2>&1 || { echo "::error::fx"; V=""; }
+          ( W=$(gh issue list --state open) ) || w_rc=$?
+          bad=$(gh issue list --state open)
+YAML
+assert_not_named "G19 a redirect-then-|| arm does NOT fire" "$r" 9
+assert_not_named "G19b a paren-close-then-|| arm does NOT fire" "$r" 10
+assert_fires "G19 control: the bad line FIRES" "$r" 11
+
+# G20 -- `if`/`while` condition-LIST members stay bound: `if a; V=$(…)` and
+# `if a && V=$(…)` are POSIX-exempt — only `then`/`do` ends the condition.
+r="$(mkfix condlist)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          if [ -n "$X" ]; V=$(gh issue list --state open); then echo ok; fi
+          if [ -n "$X" ] && W=$(gh issue list --state open); then echo ok; fi
+          bad=$(gh issue list --state open)
+YAML
+assert_not_named "G20 a ; -separated condition-list capture does NOT fire" "$r" 9
+assert_not_named "G20b an && -separated condition-list capture does NOT fire" "$r" 10
+assert_fires "G20 control: the bad line FIRES" "$r" 11
+
+# G21 -- a quoted site's escaped quote does not blind the tail scan:
+# `H="$(gh…) \"inner\"" || {…}` is handled (the `\"` is escape, not a quote edge).
+r="$(mkfix escapedq)"
+cat > "$r/.github/workflows/fx.yml" <<'YAML'
+name: fx
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          set -euo pipefail
+          H="$(gh issue list --state open) \"inner\"" || { echo "::error::fx"; H=""; }
+          bad=$(gh issue list --state open)
+YAML
+assert_fires "G21 control: the bad unquoted line FIRES" "$r" 10
+_geout="$(python3 "$LINTER" --root "$r" 2>&1 || true)"
+if ! printf '%s\n' "$_geout" | grep -q 'advisory.*:9:'; then
+  pass "G21b a quoted site with escaped quotes + || arm stays handled"
+else
+  fail "G21b a quoted site with escaped quotes + || arm stays handled" "absent from advisory" "$(printf '%s' "$_geout" | tr '\n' ' ')"
+fi
+
 # --- the gate's own scope ---------------------------------------------------
 
 # H1 -- a root with no .github/workflows is a USAGE error (rc=2), never a pass.
@@ -647,7 +748,7 @@ fi
 # quoted capture must earn a disposition, a marker, or a deliberate ceiling
 # bump in this file (architecture/pattern seats: unmeasured re-growth
 # channel).
-ADVISORY_CEILING=19
+ADVISORY_CEILING=13
 adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
 if [[ "${adv_n:-0}" -le "$ADVISORY_CEILING" ]]; then
   pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
