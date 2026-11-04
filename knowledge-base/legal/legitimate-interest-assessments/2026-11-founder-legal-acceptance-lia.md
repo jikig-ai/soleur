@@ -73,7 +73,7 @@ At this stage one person, the Jikigai operator, who is the controller's principa
 
 ### (iii) Reasonable expectations
 
-A person who is shown a card that says what is being decided and who then confirms a Yes with an emailed code expects the decision to be recorded. They do not necessarily expect it to be **kept after they delete the account**. That expectation gap is the weak point of this assessment; it is closed only by telling the founder, before they decide, what is kept and for how long. The wording of that statement (on the card and in the erasure reply) is owed and is drafted in the DSAR and notice note; the published privacy documents are not amended by PR-B (see that note, part d), which is acceptable only while the data subject is the operator and must change before any other founder is admitted.
+A person who is shown a card that says what is being decided and who then confirms a Yes with an emailed code expects the decision to be recorded. They do not necessarily expect it to be **kept after they delete the account**. That expectation gap is the weak point of this assessment; it is closed only by telling the founder, before they decide, what is kept and for how long. The wording of that statement (on the card and in the erasure reply) is owed and is drafted in the DSAR and notice note; the published privacy documents carry only a short draft-marked disclosure written ahead of the processing (see that note, part d), which is acceptable only while the data subject is the operator and must be replaced by final wording before any other founder is admitted.
 
 ### (iv) Impact
 
@@ -133,7 +133,7 @@ Low for the operator: a uuid, a choice, a hash and a timestamp, readable by the 
 
 1. Confirm the **retention period** (life of the instrument plus 5 years, cap 10 years) or set another, and the mechanism that removes a row at its end.
 2. Confirm that **Art. 17(3)(e) with Art. 6(1)(f)** supports keeping the row after erasure where claims are foreseeable and none is pending, and whether the answer differs for a customer founder.
-3. Confirm the **balancing outcome** given the expectation gap (Balancing iii) and that notice on the card plus the erasure reply is sufficient while the published privacy documents are unamended.
+3. Confirm the **balancing outcome** given the expectation gap (Balancing iii) and that notice on the card plus the erasure reply is sufficient while the published privacy documents carry only the short draft-marked disclosure.
 4. Decide whether the **free-text note** stays, with the 1000-character cap and the notice, or is dropped, given it cannot be removed alone on erasure.
 5. Confirm how a **DSAR from a person whose account is deleted** is matched to a pseudonymous uuid (Art. 11, Art. 12(2)).
 6. Confirm the **challenge-table purge** and any basis for a longer period.

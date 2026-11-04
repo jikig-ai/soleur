@@ -47,7 +47,7 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 - **That the free-text note is free of personal data.** The notice reduces the risk.
 - **That the intent and challenge table is handled correctly after its 30 minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure.
 - **Customer founders.** Not assessed. Admitting one is outside this record.
-- **Published privacy text.** Not amended by PR-B; whether it needs to be is posed in the DSAR and notice note (part d).
+- **Published privacy text.** A short disclosure marked `[DRAFT — pending CLO/counsel review per #12011]` was added to the Privacy Policy, GDPR Policy and Data Protection Disclosure (canonical and mirror) in PR-B because the CI DSAR lockstep gate requires it. Its wording is not attested as final; the markers remain until external counsel clears item 17. The full update before any other founder is posed in the DSAR and notice note (part d).
 - **The DSAR export exclusion in code.** The exclusion entries are in the PR (`DSAR_TABLE_EXCLUSIONS`) and are guarded by the allowlist completeness test; this record has not checked their wording against counsel's.
 
 ## 3. Residuals carried
@@ -66,7 +66,7 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 
 1. Retention period and the deletion mechanism at its end.
 2. Art. 17(3)(e) with Art. 6(1)(f) for keeping the row after erasure, including for a customer founder.
-3. Balancing outcome given the expectation gap and the unamended published documents.
+3. Balancing outcome given the expectation gap and the published documents carrying only the short draft-marked disclosure.
 4. Whether the note stays.
 5. DSAR matching for a deleted account's uuid (Art. 11, Art. 12(2)).
 6. Challenge-table purge on erasure and the 30-day figure (the opportunistic purge is built).

@@ -64,7 +64,7 @@ Nine design properties match the migration (checked one by one). Section 2 corre
 | Content of the Art. 15 copy | **Corrected**: now includes any `legal_reauth_event` rows still held (they hold the uuid and session id) |
 | Notice for the Request changes field | Matches the 1000-character cap and trim |
 
-Added (c-2), a proposed card-level Art. 13 notice (operator first; Art. 13(4) fallback does not carry to any other founder). Part (d)'s recommendation of no `docs/legal/**` change in PR-B is sound for an operator-only data subject and dark feature; the retention-paragraph conflict it names must be resolved before any other founder. **Verdict: accurate after correction.**
+Added (c-2), a proposed card-level Art. 13 notice (operator first; Art. 13(4) fallback does not carry to any other founder). Part (d) originally recommended no `docs/legal/**` change in PR-B; that was superseded the same day by the lockstep addendum below. The final-form update and the retention-paragraph conflict it names must be resolved before any other founder. **Verdict: accurate after correction.**
 
 ## Artifact 5 — audits/2026-11-04-gdpr-gate-work-exit-12011-pr-b.md
 
@@ -73,6 +73,10 @@ Statements check out (LAWFUL_BASIS and RETENTION annotations present in the migr
 ## Artifact 6 — compliance-posture.md (new row and comment)
 
 Row conditions the gate on the first real row and on any non-Jikigai founder, not on the merge; open limbs (a) to (h) are the right list. One sentence corrected (checksum/`service_role`). Dated comment is conditioned on the merge of the carrying PR. **Verdict: accurate after correction.**
+
+## Addendum 2026-11-04 — published disclosure added in this PR
+
+The CI DSAR lockstep gate (`pr-quality-guards.yml`) requires the three public documents and the posture file to change whenever `dsar-export-allowlist.ts` changes, so the three documents were updated in this PR rather than at the non-Jikigai-founder gate: Privacy Policy 4.17 and a Section 7 bullet, GDPR Policy 3.19, Data Protection Disclosure 2.3(aj), 5.3(a) and 10.3(l), each mirrored in `plugins/soleur/docs/pages/legal/` and the three SHA pins regenerated, no TC_VERSION bump. The text is short, written ahead of the processing exactly as the PR #11889 precedent does (tables exist from migration apply, nothing writes to them, applies from the date the write path ships, operator only first), covers only what migration 184 and PA-40 state, and states the retention proposal as unconfirmed. It is marked `[DRAFT — pending CLO/counsel review per #12011]`; **those markers remain until external counsel clears counsel item 17.** This audit does not clear them: it is the in-repo v1 attestation, and publishing draft-marked text keeps the public record honest about its status. Wording verified against the migration (no foreign key, write-once guard, 30-day purge of code-request rows only when the next request is made, `service_role` without table privilege, note readable by the founder and the database owner but not returned by the status check). Final-form wording for all three documents is still owed before any founder other than the operator is admitted. The Privacy Policy retention statements elsewhere that data is deleted on account deletion are qualified by an explicit exception in 4.17 and Section 7.
 
 ## Determinations
 
