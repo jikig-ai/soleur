@@ -840,23 +840,23 @@ without the pin update reds.
 
 **#8780 — publish admission**
 
-- [ ] AC-A1: `github_repository_environment.inngest_config_signing` carries
+- [x] AC-A1: `github_repository_environment.inngest_config_signing` carries
   `deployment_branch_policy { protected_branches = false; custom_branch_policies = true }`,
   a `github_repository_environment_deployment_policy.inngest_config_signing_main`
   (`branch_pattern = "main"`), and retains non-empty `reviewers.users`.
-- [ ] AC-A2: `github_repository_environment.release_publish` exists with a
+- [x] AC-A2: `github_repository_environment.release_publish` exists with a
   `main`-only policy set, no reviewers, no secrets — declared in
   `apps/web-platform/infra/release-publish-environment.tf`.
-- [ ] AC-A3: all three new resources appear as `-target=` entries in
+- [x] AC-A3: all three new resources appear as `-target=` entries in
   `apply-web-platform-infra.yml`'s allow-list.
-- [ ] AC-A4: `reusable-release.yml` `release` job declares
+- [x] AC-A4: `reusable-release.yml` `release` job declares
   `environment: release-publish`; `build-inngest-bootstrap-image.yml`
   `build` job declares `environment: release-publish`.
-- [ ] AC-A5: `terraform-target-parity.test.ts` pins both new
+- [x] AC-A5: `terraform-target-parity.test.ts` pins both new
   job↔environment bindings, asserts `inngest_config_signing` and
   `release_publish` are each in the exactly-`{main}` policy set, and pins
   the three `-target=` lines.
-- [ ] AC-A6: ADR-241 carries the amendment recording the admission-gate
+- [x] AC-A6: ADR-241 carries the amendment recording the admission-gate
   class (in this PR, not a follow-up).
 - [ ] AC-A7 (post-merge verification): the targeted apply ran from main
   and `gh api repos/jikig-ai/soleur/environments/{release-publish,inngest-config-signing}/deployment-branch-policies`
@@ -865,31 +865,31 @@ without the pin update reds.
 
 **#9659 — dedupe normalization**
 
-- [ ] AC-B1: every census hit of
+- [x] AC-B1: every census hit of
   `git grep -nE '=\$\([[:space:]]*gh (issue|pr) (list|search)' -- '.github/workflows/'`
   is fail-open-wrapped, `||`-handled, or adjacent to a `# dedupe:
   fail-closed`/`# dedupe: benign` marker; `scripts/lint-gh-dedupe-shape.py`
   prints `unclassified: 0` and runs green in `test-all.sh`.
-- [ ] AC-B2: every filing-path site enumerated in the issue (the 12-file
+- [x] AC-B2: every filing-path site enumerated in the issue (the 12-file
   list) is rewritten to the fail-open shape with a per-site `::error::`
   slug preserving its monitor name.
-- [ ] AC-B3: `lint-gh-dedupe-shape.py` + `.test.sh` registered as a suite
+- [x] AC-B3: `lint-gh-dedupe-shape.py` + `.test.sh` registered as a suite
   pair (`test-all.sh` run_suite lines, `suite-durations.tsv`,
   `suite-shard-legs.tsv`, `guard-vacuity-floor.test.sh` PROMOTED check).
 
 **#10078 — EnvironmentFile conditioning**
 
-- [ ] AC-C1: the five probe units (`inngest-consumer-probe`,
+- [x] AC-C1: the five probe units (`inngest-consumer-probe`,
   `web-bash-synthetic`, `web-git-data-probe`, `web-private-nic-guard`,
   `web-zot-consumer-probe`) each carry
   `ConditionPathExists=/etc/default/<their-file>` in `[Unit]`, keep
   `EnvironmentFile=` unprefixed, and carry a SKIP-VS-FAIL comment naming
   the boot-emit fatal channel + their own heartbeat-beat detector.
-- [ ] AC-C2: `webhook.service` (repo file + `cloud-init.yml` embedded
+- [x] AC-C2: `webhook.service` (repo file + `cloud-init.yml` embedded
   twin) and the `vector.service` heredoc carry designed-loud comments;
   no `ConditionPathExists` on their env file; `WEBHOOK_SERVICE_B64`
   regenerated in `infra-config-apply.sh`.
-- [ ] AC-C3: per-unit test pins updated — condition-path-set ≡
+- [x] AC-C3: per-unit test pins updated — condition-path-set ≡
   envfile-path-set per unit, unprefixed retention, no reset lines,
   negative pins on webhook/vector (incl. heredoc extraction, not only
   `*.service` files); all referenced `.test.sh` suites green.

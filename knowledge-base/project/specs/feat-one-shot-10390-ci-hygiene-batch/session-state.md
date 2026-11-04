@@ -22,6 +22,12 @@
 ## Technical-Ruling Gate
 - cto_spawns=1 (one batched spawn, 4 rows ruled — all matched assumed defaults; census corrected 18→19 files, `scheduled-rehearsal-skip-monitor.yml` added)
 
+## Work Phase
+- Tier B fan-out: 3 agents (A=#8780, B=#9659, C=#10078) — all returned, output integrated as 3 per-workstream commits (5bde809d40, 5edf1e698f, b9914bd6d2).
+- Lead integration fix: lint-gh-dedupe-shape-live registered in ALWAYS_ON_SUITES + always-on-justifications.tsv (orphan lint clean 810/0).
+- Verification: parity 362/362, infra-config-apply 266/266, bootstrap-obs 135/135, fresh-boot-parity 225/225, lint battery 33/33, live lint unclassified:0, systemd-analyze clean, orphan lint clean.
+- Open residual for follow-up issue: ~18 quoted `IDENT="$(` captures outside the 19-file fence (advisory lines) + `scheduled-marketplace-drift`/`scheduled-prod-version-drift`/`scheduled-supabase-watchdog` sites.
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
