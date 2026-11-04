@@ -557,7 +557,7 @@ sketched above (the sketch is kept as the planning record):
 - The scan now covers every top-level directory of `apps/web-platform` except an explicit exclusion list (dependencies, build
   output, tests, browser tests, static assets, docs, SQL), over all JS/TS extensions, and refuses symlinks. This replaces
   `SCAN_ROOTS` and `ROOT_ANCHORS` (anti-vacuity arm (e1) and the existence arm (e4) were removed as redundant with the expected sets
-  and the file-count floor, now 1000 of 1049 measured).
+  and the file-count floor, now about 95% of the 1049 measured, with per-directory minimums).
 - New arms: (f) the rollup table name occurs only in the three expected files; (g) no production file imports a test-named module.
   The loader-import matcher accepts extension, subpath, backtick and bare-import spellings. The agent-surface population adds the
   Agent SDK import specifier and drops the `server/` restriction on the filename arm.
@@ -566,3 +566,10 @@ sketched above (the sketch is kept as the planning record):
   removed entries separately with stop-and-escalate wording.
 - "Default-suite" in the text above means the diff-gated `unit` project; the ADR amendment says so and lists what the pin does not
   see. The ADR amendment also gained the AP-004 exception record, the DPIA-derived constraints and the unresolved cross-member scope.
+
+Round 2 (fix-range review of the commit above) added: build-output and report directories to the exclusion list; per-directory
+minimum file counts; import matchers that accept block comments before the specifier, `require.resolve(` and `new URL(`, and a
+whitespace-run linearity check; arm (g) now also refuses production imports of modules in the excluded source directories (one
+reasoned exception, the test-runner config); camelCase and `tools/` agent file names; a separate message for scan-integrity
+failures; and ADR wording changes from the legal re-review (cross-session scope, persisted output, record of agent reads,
+disclosure minimisation), the service-role gate's real scope, and operator sign-off ownership.

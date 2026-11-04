@@ -15,10 +15,14 @@ import { CC_REGISTERED_PLATFORM_TOOL_NAMES } from "@/server/cc-dispatcher";
 
 const APP_ROOT = path.resolve(__dirname, "..");
 // Every top-level directory is scanned unless named here, so a new directory is covered by default. These hold no
-// application source: dependencies, build output, this suite, browser tests, static assets, docs, SQL and CI config.
-const EXCLUDED_TOP_DIRS = new Set(["node_modules", ".next", ".git", ".github", "test", "e2e", "public", "assets", "docs", "supabase"]);
+// application source: dependencies, build output and reports, this suite, browser tests, static assets, docs, SQL and CI config.
+// Arm (g) refuses a production import that resolves into any of the source-bearing ones (test, e2e, docs, supabase).
+const EXCLUDED_TOP_DIRS = new Set([
+  "node_modules", ".next", ".git", ".github", "dist", "out", "coverage", "playwright-report", "test-results",
+  "test", "e2e", "public", "assets", "docs", "supabase",
+]);
 const SOURCE_EXT = /\.[cm]?[jt]sx?$/;
-// Test-named files are not scanned; arm (g) fails if production code imports one.
+// Test-named files are not scanned; arm (g) fails if production code imports one (or any module in an excluded directory).
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\//;
 
 // The two member-read functions (migrations 177 and 183), the egress-audit family in any spelling, the rollup table and the
@@ -26,13 +30,21 @@ const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\//;
 const RPC_NAME = /get_egress_audit_(window_)?summary/;
 const EGRESS_AUDIT = /egress[-_]?audit/i; // also camelCase (loadEgressAudit) and the rollup table name
 const TABLE_NAME = /egress_audit_rollup/;
-const IMPORT_SPEC = String.raw`(?:from\s*["']|import\s*\(?\s*["'\x60]|require\s*\(\s*["'\x60])`;
-const LOADER_IMPORT = new RegExp(`${IMPORT_SPEC}[^"'\\x60]*egress-audit-read[^"'\\x60]*["'\\x60]`);
-const TEST_IMPORT = new RegExp(`${IMPORT_SPEC}[^"'\\x60]*(?:\\.(?:test|spec)|__tests__)[^"'\\x60]*["'\\x60]`);
+// Spellings: static `from`, dynamic `import(`, `require(`, `require.resolve(`, `new URL(`, and a bare `import "x"`, with block
+// comments allowed before the specifier (webpack magic comments). The arms are unambiguous so a long whitespace run stays linear.
+const CMT = String.raw`(?:\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/\s*)*`;
+const IMPORT_SPEC =
+  String.raw`(?:from\s*["']|import\s*(?:\(\s*` + CMT + String.raw`)?["'\x60]|require(?:\.resolve)?\s*\(\s*` + CMT +
+  String.raw`["'\x60]|new\s+URL\s*\(\s*["'\x60])`;
+const LOADER_IMPORT = new RegExp(IMPORT_SPEC + String.raw`[^"'\x60]*egress-audit-read[^"'\x60]*["'\x60]`);
+const TEST_IMPORT = new RegExp(
+  IMPORT_SPEC + String.raw`(?:[^"'\x60]*(?:\.(?:test|spec)|__tests__)|(?:@\/|(?:\.\.?\/)+)(?:test|e2e|docs|supabase)\/)[^"'\x60]*["'\x60]`,
+);
 
 // An agent-surface file is a platform tool builder (filename arm) or any file that builds, registers or classifies tools, or
 // imports the Agent SDK (marker arm). Both arms are measured separately so that dropping one is visible.
-const AGENT_FILENAME = /(^|\/)(?:[^/]*-)?tools?\.[cm]?[jt]sx?$/;
+// This arm is a mention check on files that look like tool code, not a reachability check (see the ADR amendment).
+const AGENT_FILENAME = /(^|\/)(?:[^/]*-)?tools?\.[cm]?[jt]sx?$|[a-z]Tools?\.[cm]?[jt]sx?$|(^|\/)tools\//;
 const AGENT_MARKER =
   /createSdkMcpServer|mcp__soleur_platform__|TOOL_TIER_MAP|CC_MCP_ALLOWLIST|mcpServers:|canUseTool|@anthropic-ai\/claude-agent-sdk/;
 
@@ -52,19 +64,32 @@ const EXPECTED_LOADER_IMPORTERS: Record<string, string> = {
   "app/(dashboard)/dashboard/settings/scope-grants/egress-audit/page.tsx": "member page (server component)",
   "app/(dashboard)/dashboard/settings/scope-grants/page.tsx": "Scope Grants card (server component)",
 };
-// 95% of the 1049 files measured on 2026-11-04 (a floor with margin, not an exact count).
+// Production files allowed to import from an excluded directory, each with its reason.
+const EXPECTED_EXCLUDED_DIR_IMPORTERS: Record<string, string> = {
+  "vitest.config.ts": "test-runner config importing the suite registry from test/; not application code",
+};
+// About 95% of the 1049 files measured on 2026-11-04 (a floor with margin, not an exact count), and a per-directory minimum so
+// that excluding a whole directory (e.g. scripts, hooks, infra) is visible. Measured: server 446, lib 120, app 175, components
+// 234, hooks 18, scripts 42, infra 3, top-level files 11.
 const MIN_SCANNED_FILES = 1000;
+const MIN_PER_TOP_DIR: Record<string, number> = { server: 400, lib: 100, app: 150, components: 200, hooks: 15, scripts: 35, infra: 2 };
 // Named members of each arm, so that a regex or marker rename that shrinks an arm to a stray file is visible.
 const FILENAME_ARM_MEMBERS = ["server/narrate-tool.ts", "server/inbox-tools.ts", "server/approval/tools.ts"];
 const MARKER_ARM_MEMBERS = ["server/cc-dispatcher.ts", "server/tool-tiers.ts", "server/agent-runner.ts"];
 
 const POINTER =
   "If this file is not an agent tool, MCP entry or allowlist, remove the egress-audit reference. If it is a UI-only consumer, " +
-  "add it to the expected set with a reason and record it in the ADR. If it is agent-reachable, STOP: it needs the operator, " +
-  "the CTO ruling holder, and legal and security review first; do not edit the expected sets to make this pass. A removed " +
+  "add it to the expected set with a reason and record it in the ADR. If it is agent-reachable, STOP: it needs the human " +
+  "operator's sign-off, the CTO ruling holder, and legal and security review first; do not edit the expected sets to make this pass. A removed " +
   "entry means the set and the ADR need updating. Record: " +
   "knowledge-base/engineering/architecture/decisions/ADR-288-aggregated-egress-audit-spool-via-vector-to-app-ingest.md, " +
   "amendment 2026-11-04 (#11258).";
+
+// For failures of the scan itself (not an egress-audit finding): the window must stay faithful to the tree.
+const POINTER_SCAN =
+  "The scan window must stay faithful to the tree: a symlink, an unreadable file or a production import of a module the scan " +
+  "does not read (test, e2e, docs, SQL) hides code from this pin. Move the code into a scanned location or remove the import; " +
+  "do not widen the exclusions without the review recorded in ADR-288, amendment 2026-11-04 (#11258).";
 
 type Scanned = { rel: string; text: string };
 
@@ -74,7 +99,7 @@ function walkSources(dirRel: string, top: boolean): string[] {
     if (entry.name === "node_modules" || entry.name === ".next") continue;
     const rel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
     // A symlink would be read or skipped depending on its target type; refuse it so the scan never silently differs.
-    if (entry.isSymbolicLink()) throw new Error(`symlink in the scanned tree: ${rel}. ${POINTER}`);
+    if (entry.isSymbolicLink()) throw new Error(`symlink in the scanned tree: ${rel}. ${POINTER_SCAN}`);
     if (entry.isDirectory()) {
       if (top && EXCLUDED_TOP_DIRS.has(entry.name)) continue;
       out.push(...walkSources(rel, false));
@@ -91,7 +116,7 @@ function scan(): Scanned[] {
       .sort()
       .map((rel) => ({ rel, text: readFileSync(path.join(APP_ROOT, rel), "utf8") }));
   } catch (e) {
-    throw new Error(`scan failed: ${(e as Error).message}. ${POINTER}`);
+    throw new Error(`scan failed: ${(e as Error).message}. ${POINTER_SCAN}`);
   }
   return cache;
 }
@@ -144,8 +169,8 @@ describe("egress audit: no agent-reachable surface (ADR-288 amendment 2026-11-04
     ran.add("f");
   });
 
-  it("(g) no production file imports a test-named module (those are not scanned)", () => {
-    expect(names(scan().filter((f) => TEST_IMPORT.test(f.text))), POINTER).toEqual([]);
+  it("(g) no production file imports a test-named module or a module in an excluded directory (those are not scanned)", () => {
+    expect(drift(names(scan().filter((f) => TEST_IMPORT.test(f.text))), EXPECTED_EXCLUDED_DIR_IMPORTERS), POINTER_SCAN).toEqual(CLEAN);
     ran.add("g");
   });
 });
@@ -153,6 +178,11 @@ describe("egress audit: no agent-reachable surface (ADR-288 amendment 2026-11-04
 describe("the pin cannot read green over an empty or shrunken scan (anti-vacuity)", () => {
   it("(e2) the scan covers at least the floor of source files", () => {
     expect(scan().length, "scan shrank below the floor; if files were legitimately removed, lower MIN_SCANNED_FILES").toBeGreaterThanOrEqual(MIN_SCANNED_FILES);
+    const perDir: Record<string, number> = {};
+    for (const f of scan()) perDir[f.rel.split("/")[0]] = (perDir[f.rel.split("/")[0]] ?? 0) + 1;
+    for (const [dir, min] of Object.entries(MIN_PER_TOP_DIR)) {
+      expect([dir, (perDir[dir] ?? 0) >= min], `${dir} has ${perDir[dir] ?? 0} scanned files, minimum ${min}`).toEqual([dir, true]);
+    }
     ran.add("e2");
   });
 
@@ -195,22 +225,41 @@ describe("the pin cannot read green over an empty or shrunken scan (anti-vacuity
       `from "@/server/egress-audit-read/index"`,
       "import(`@/server/egress-audit-read`)",
       `import "@/server/egress-audit-read"`,
+      `import(/* webpackChunkName: "x" */ "@/server/egress-audit-read")`,
+      `import(/* webpackIgnore: true */ /* second */ "@/server/egress-audit-read")`,
+      `require.resolve("./egress-audit-read")`,
+      `new URL("./egress-audit-read.ts", import.meta.url)`,
     ];
     for (const s of loader) expect([s, LOADER_IMPORT.test(s)]).toEqual([s, true]);
     for (const s of [`from "@/server/observability"`, `feature: "egress-audit-read"`, `// see egress-audit-read.ts`, "imported from `egress-audit-read.ts`"]) {
       expect([s, LOADER_IMPORT.test(s)]).toEqual([s, false]);
     }
-    for (const s of [`from "./x.test"`, `from "../x.spec.ts"`, `import("./__tests__/y")`, `require("./z.test.mjs")`]) {
+    for (const s of [
+      `from "./x.test"`,
+      `from "../x.spec.ts"`,
+      `import("./__tests__/y")`,
+      `require("./z.test.mjs")`,
+      `import(/* webpackIgnore: true */ "./x.test")`,
+      `from "@/test/helpers/x"`,
+      `from "../e2e/fixtures"`,
+      `from "../../docs/x"`,
+      `import("@/supabase/functions/x")`,
+    ]) {
       expect([s, TEST_IMPORT.test(s)]).toEqual([s, true]);
     }
-    for (const s of [`from "./latest"`, "// the constants from `test/x.test.ts`", `from "./contest"`]) {
+    for (const s of [`from "./latest"`, "// the constants from `test/x.test.ts`", `from "./contest"`, `from "node:test"`, `from "@/lib/docsify"`, `from "@/lib/supabase/server"`, `from "../lib/test-utils"`]) {
       expect([s, TEST_IMPORT.test(s)]).toEqual([s, false]);
     }
+    // A long run of whitespace after `import` must stay linear (no catastrophic backtracking).
+    const long = `import${" ".repeat(100_000)}x`;
+    const t0 = Date.now();
+    expect([LOADER_IMPORT.test(long), TEST_IMPORT.test(long)]).toEqual([false, false]);
+    expect(Date.now() - t0).toBeLessThan(1000);
     ran.add("e5-import");
   });
 
   it("(e5-agent) AGENT_FILENAME and AGENT_MARKER match what they must and nothing else", () => {
-    for (const s of ["server/zz-probe-tools.ts", "server/inbox-tool.ts", "server/sub/x-tools.ts", "server/tools.ts", "lib/zz/tools.js", "hooks/x-tools.mts"]) {
+    for (const s of ["server/zz-probe-tools.ts", "server/inbox-tool.ts", "server/sub/x-tools.ts", "server/tools.ts", "lib/zz/tools.js", "hooks/x-tools.mts", "server/egressTools.ts", "lib/tools/x.ts"]) {
       expect([s, AGENT_FILENAME.test(s)]).toEqual([s, true]);
     }
     for (const s of ["server/tool-tiers.ts", "server/stools.ts", "server/toolbox.ts", "server/tools-census.sh"]) {
