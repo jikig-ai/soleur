@@ -21,7 +21,7 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 - [x] 1.6 `gh workflow run ci.yml --ref redproof-luks-guard1-head-20261104`; pin the run id via `gh run list --workflow ci.yml --event workflow_dispatch --branch <head> -L 1`; arm a Monitor watch on it
 - [x] 1.7 Read evidence (baseline pending, see 1.10): `test-scripts (3/8)` job URL and conclusion, failing Guard 1 case text, `test` conclusion, other shards, green 3/8 baseline on the base SHA, Guard 1 per-suite elapsed if printed
 - [x] 1.8 (not needed: dispatch path worked) If dispatch is blocked or unattributable: fallback A (ready path, then `gh pr ready --undo`); if both fail: fallback D (local mutation run, labelled "not the CI leg"; AC1 undischarged)
-- [ ] 1.10 Record the baseline `test-scripts (3/8)` result of run 41915494979 (unmutated base) on #9927, then close the throwaway PR (see 5.2)
+- [x] 1.10 Record the baseline `test-scripts (3/8)` result of run 41915494979 (unmutated base) on #9927, then close the throwaway PR (see 5.2)
 - [x] 1.9 Check `gh pr view <n> --json isDraft,baseRefName,autoMergeRequest` shows `true`, the base name, `null`
 
 ## Phase 2 - INNGEST_CUTOVER_FLIP ledger (grep-derived)
@@ -45,8 +45,8 @@ Branch: `feat-one-shot-luks-guard1-redproof-flip-token-design`. PR body: `Ref #9
 
 ## Phase 5 - Close handoff
 
-- [ ] 5.1 Put `Throwaway red-proof PR #N (base <name>, head <name>): close it and delete both branches` in this branch's PR body as plain text
-- [ ] 5.2 Final task (run once BOTH 1.10 is recorded AND this branch's PR exists; also `git worktree remove .worktrees/redproof-luks-guard1-head-20261104`; verify `gh pr view 12109 --json state` is CLOSED before this branch's PR merges) after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
+- [x] 5.1 Put `Throwaway red-proof PR #N (base <name>, head <name>): close it and delete both branches` in this branch's PR body as plain text
+- [x] 5.2 Final task (run once BOTH 1.10 is recorded AND this branch's PR exists; also `git worktree remove .worktrees/redproof-luks-guard1-head-20261104`; verify `gh pr view 12109 --json state` is CLOSED before this branch's PR merges) after this branch's PR exists: re-check `isDraft` true and `autoMergeRequest` null, `gh pr close <n>`, delete base and head branches and the head worktree, remove the board item if it persists (the owner may do it earlier)
 
 ## Not in this run
 
