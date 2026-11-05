@@ -2470,7 +2470,7 @@ row_rt_floors_census() {   # every shape the generator knows is listed once, and
 }
 
 # ---- the baseline-state table and the growth rule (HEAD^1 is the base) -----------------------------------------
-row_rt_reintroduced() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-ok.tsv && ! grep -q '^grown' <<<"$ROUT" && rt_in good adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present: exit 1 unconditionally — strict zero retired the file, even an empty re-add; the !grown assertion keeps the reintroduced marker from masking a co-firing grown
+row_rt_reintroduced() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-ok.tsv && ! grep -q '^grown' <<<"$ROUT" && grep -qxF -- $'baseline-reintroduced\tscripts/bl-ok.tsv\ta baseline file absent at the base cannot be adopted: strict zero retired it' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && rt_in good adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present: exit 1 unconditionally — strict zero retired the file, even an empty re-add; the !grown assertion keeps the reintroduced marker from masking a co-firing grown; the detail text and the absent regenerate-remedy pin the arm's output
 row_rt_reintroduced_newpair() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv && grep -qxF -- $'new-pair\tscripts/bad\tdata/gap.txt\tscripts/bad.test.sh:1' <<<"$ROUT"; }   # live-pair detail co-fires under the reintroduced marker
 row_rt_deleted() { rt_in std del 1 baseline-deleted --baseline scripts/bl-ok.tsv && grep -qxF -- 'remedy: restore it from main: git checkout origin/main -- scripts/bl-ok.tsv' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL"; }   # the deleted baseline is restored, never regenerated   # base present, HEAD absent, pairs still live
 row_rt_deleted_end() { rt_in good del 0 pass --baseline scripts/bl-ok.tsv; }   # the PR5 end state: nothing live
@@ -2508,7 +2508,7 @@ lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(150000))
 lines.append(lines[0])
 print("\n".join(lines))
 PY
-  local t0=$SECONDS r; rt_is 1 baseline-reintroduced --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && return "$r"; return 1   # uncommitted-at-base: reintroduced is the marker; the dup/stale checks still run inside the budget
+  local t0=$SECONDS r; rt_is 1 baseline-reintroduced --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && [[ "$r" -eq 0 ]] && grep -q '^baseline-dup'$'\t' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && return 0; return 1   # uncommitted-at-base: reintroduced is the marker; the dup/stale checks still run (and the restore/regenerate remedy stays out) inside the budget
 }
 row_rt_baseline_dir() { rt_in std ok 2 baseline-unreadable --baseline scripts; }
 row_rt_helper_renamed() { rt_in std renamed 2 internal --baseline scripts/bl-ok.tsv && grep -q 'lint-ratchet.py has no baseline_at' <<<"$RERR"; }
@@ -2967,7 +2967,7 @@ chk "ratchet oracle: each of the helper, the path library, the runner, ci.yml an
 chk "ratchet oracle: a diff that only adds the accept file (and so exempts a new pair) is named" row_rt_oracle_accept_only
 chk "ratchet oracle: every RATCHET_* path constant of the SUT is in RATCHET_ORACLE" row_rt_oracle_constants
 chk "ratchet oracle: in --print-baseline mode the notice goes to stderr" row_rt_oracle_stderr
-chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports adoption changes no verdict)" row_rt_helper_pr_tree_ignored
+chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports baseline-reintroduced changes no verdict)" row_rt_helper_pr_tree_ignored
 chk "ratchet helpers: a merge base without lint-ratchet.py is exit 2 internal, naming the remedy" row_rt_helper_base_missing
 chk "ratchet helpers: a merge-base copy that does not compile is exit 2 internal, though the PR tree repairs it" row_rt_helper_base_uncompilable
 

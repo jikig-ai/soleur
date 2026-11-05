@@ -152,9 +152,7 @@ explicit go-ahead that names the command, from the person who owns the budget.
 
 ## 7. The ratchet (S4 index completion PR3a, #10448)
 
-The audit exits 1 on `main` today (the committed baseline holds whatever `wc -l scripts/ci-pr-affected-audit.baseline.tsv` reports, which is the number to quote; dated measurements: 294 gap suites and 1,884 gap pairs on `4da1673510` when PR3a was built,
-1,886 baseline lines on `33feda184e`, and the count after the PR4 drain is in the PR4 body), so a check that simply required the audit to pass could never
-be green. `python3 -I scripts/ci-pr-affected-replay.py ratchet` is the audit as a **ratchet**: since PR5z (#10861) the check is **strict zero** — the committed baseline is retired and the live set of `(suite, undeclared tracked path)` pairs, after the `--accept` exemptions, must be EMPTY; a re-added baseline file is `baseline-reintroduced`, never adopted. Its contract
+`python3 -I scripts/ci-pr-affected-replay.py ratchet` is the audit as a **ratchet**: since PR5z (#10861) the check is **strict zero** — the committed baseline is retired (the drain ran 294 gap suites / 1,884 gap pairs on `4da1673510` down to zero across PR3a→PR5d; dated measurements in the slice PR bodies) and the live set of `(suite, undeclared tracked path)` pairs, after the `--accept` exemptions, must be EMPTY; a re-added baseline file is `baseline-reintroduced`, never adopted. Its contract
 (exit codes, the order of the checks, the baseline-state table, the formats) is the RATCHET section of `python3 scripts/ci-pr-affected-replay.py --help`; this section is how to
 operate it. What a green ratchet means is the one wording of section 4: literal-name completeness over what the audit reads, necessary but not sufficient. The
 declared limits of that reading (what the audit cannot see: computed names, comment and heredoc text, glued or generated paths, and the others) are stated as mechanisms in the DECLARED LIMITS section of
@@ -184,11 +182,11 @@ cannot weaken the base-resolution helper together with the baseline; a PR that m
 
 | Exit | Reason token | What it means | What to do |
 |---|---|---|---|
-| 0 | `pass` | live equals the baseline and every other check holds | nothing |
+| 0 | `pass` | the live set is empty and every other check holds | nothing |
 | 1 | `new-pair` | a suite names a tracked path that is not declared, not accepted and not in the baseline | declare or accept it (below); never add a baseline line |
 | 1 | `baseline-reintroduced` | a baseline file exists at HEAD while the base has none: after strict zero a re-added file can never adopt | delete the file; a baseline is never re-created |
 | 1 | `baseline-deleted` | a baseline file was deleted while pairs are still live (reachable only via `--baseline` on a retained file or an old base, now that the committed baseline is retired) | restore the file or the pairs |
-| 1 | `stale-line`, `baseline-dup`, `baseline-order`, `grown` | present/present baseline checks; unreachable at the default path now that no committed baseline exists — they still gate any `--baseline <file>` invocation against a base that has one | fix or delete the offending lines |
+| 1 | `stale-line`, `baseline-dup`, `baseline-order`, `grown` | present/present baseline checks; `grown` needs a base baseline, but the line-level checks still co-fire on a malformed re-add under `baseline-reintroduced` | fix or delete the offending lines (under `baseline-reintroduced`: delete the file) |
 | 1 | `unaudited` | the audit could not read the suite in full | fix the selector row or make its inputs readable |
 | 1 | `star-row`, `stale-accept` | an accept row for a readable suite as a whole, or an accept row the tree no longer backs, or a malformed accept file | delete or correct the accept row |
 | 2 | `floor-*`, `selector-failed`, `selector-timeout` | infrastructure: the selector failed, hung, fell back, printed a short, extra or inconsistent output, or the census read nothing | re-run the job; a reproduction on the same SHA is a defect: report it on #10448 |
@@ -208,8 +206,8 @@ reads); or it touched **neither** (main moved, or an edge or accept row that cov
 1. **Declare the path** in `AFFECTED_<LABEL>_PATHS` in `scripts/lib/test-affected-paths.sh`, only when the suite really reads or executes the file, or the file's state feeds its verdict — e.g. an ignore-rules file a suite-side `git --exclude-standard` call consults, though the suite's own bytes never open it (that is what the selector must know to select the suite). Editing that file is a runner trigger and runs the full battery once.
 2. **Add an anchor-keyed accept row** to `scripts/ci-pr-affected-audit.accept.tsv` (`suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`; the anchor and ordinal are on the `ref` line of the failure text and in `audit --all-refs`) only when the suite merely names the file: a message, a fixture it writes into a scratch tree, a negative-test string. The reason names the line kind. **An accept row on a file the suite really reads or whose state feeds its verdict is a false negative that becomes live once the lever flips**, and no automated control checks that the suite does not read the file: this check does not verify it. A CODEOWNERS entry routes the review, but no required review exists in this repository's ruleset, so the author and the reviewer must check the claim by reading the suite.
 
-A baseline row cannot be added: the failure text offers no way to, `ratchet --print-baseline` only removes pairs once a baseline exists, and the growth rule refuses any line the base does not have. PR4 (#10860) drained the code-extension pairs
-it could prove are real reads; the pairs that remain in the file (`wc -l` is the count) are mentions, non-code pairs, and the real reads whose edge was held back because declaring it reveals more mentions (PR4b and PR4c take them first, PR5 the rest). Until they are drained or accepted,
+A baseline row cannot be added: the failure text offers no way to, `ratchet --print-baseline` only removes pairs once a baseline exists, the growth rule refuses any line the base does not have, and a re-added file is `baseline-reintroduced` whatever it covers. PR4 (#10860) drained the code-extension pairs
+it could prove are real reads, PR5a→PR5d the rest; what remains undrained is nothing — the live set is empty. Going forward,
 **a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
 
 A rename or move of a path a baselined suite names reads as a new pair (growth, exit 1): a rename of a baselined path or suite is a **drain-class PR**. Declare or accept the renamed pairs first, then rename, or rename in the same PR with every renamed pair declared or accepted.
