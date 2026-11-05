@@ -675,9 +675,9 @@ resource "betteruptime_heartbeat" "git_data_host_prd" {
 # try to create it and Doppler would answer 400 "Name is already in use" on every merge. With
 # literals an absent config makes THIS write fail loudly instead. The config name sits in a local
 # (still a plain string, no resource address) because the token-drift inventory test treats every
-# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` is not in
-# that inventory today (adding it means minting a drift read token, which is the owner's credential
-# change, not this PR's). The URL is not in user_data, so
+# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` has been
+# in that inventory since #11857 (its drift read token deliberately has NO depends_on edge to
+# `doppler_config.git_data_prd`, which stays a per-merge exclusion). The URL is not in user_data, so
 # the rung-2 rehearsal render carries no production monitor and a rehearsal host (whose scratch
 # config lacks this secret by construction) cannot ping it. It rides the per-merge -target list
 # beside git_data_prd and is refused by the git-data birth route (GIT_DATA_BIRTH_REFUSED).
