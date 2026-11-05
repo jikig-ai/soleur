@@ -638,16 +638,6 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # `exit 1` and never through the verdict helper it backstops (ADR-193), with the bound a literal on
 # the line directly above its `if`, so the mutant is CONSTRUCTIBLE. Each suite also runs an
 # instrument self-test that exits 2 before any real row if its helpers misreport.
-# `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh` added by #12146 — the
-# `--refresh-stage-a` suite, a NEW floor-bearing file in a deferred directory that grew the ledger
-# 47 -> 48 and reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED (the ledger is
-# shrink-only; this gate's own FAIL message: "cover it … do NOT raise this number"). It qualifies on
-# all three counts: the floor is `-lt` over `$cases`, an independent per-row counter incremented at the
-# CALL SITE (in the chk/rcis/state row helpers, never inside pass()/fail()) with a `passes + fails ==
-# cases` conservation check ordered before it; both are emitted by `printf '[FATAL] …'` + `exit 1` and
-# never routed through the verdict helpers they backstop (ADR-193); and the bound (`MIN_ROWS=67`) is a
-# literal on the line directly above its `if`, so the mutant is CONSTRUCTIBLE. An instrument self-test
-# drives both helpers once and exits 1 before any real row if either counter fails to move.
 # `apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh` (#8539) — the zot-pull /
 # NIC-G1 mutation battery gained its FIRST anti-vacuity floor when the #8539 rows landed (before
 # it, deleting a row left `N/N mutants killed`, exit 0). A floor-bearing suite in a deferred
@@ -1113,6 +1103,16 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # infra-validation.yml's comment-stripped view.
 
 # ---------------------------------------------------------------------------------------
+# `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh` added by #12146 — the
+# `--refresh-stage-a` suite, a NEW floor-bearing file in a deferred directory that grew the ledger
+# 47 -> 48 and reddened ARM 5c. PROMOTED, not deferred, and not by raising MAX_DEFERRED (the ledger is
+# shrink-only; this gate's own FAIL message: "cover it … do NOT raise this number"). It qualifies on
+# all three counts: the floor is `-lt` over `$cases`, an independent per-row counter incremented at the
+# CALL SITE (in the chk/rcis/state row helpers, never inside pass()/fail()) with a `passes + fails ==
+# cases` conservation check ordered before it; both are emitted by `printf '[FATAL] …'` + `exit 1` and
+# never routed through the verdict helpers they backstop (ADR-193); and the bound (`MIN_ROWS=83`) is a
+# literal on the line directly above its `if`, so the mutant is CONSTRUCTIBLE. An instrument self-test
+# drives both helpers once and exits 1 before any real row if either counter fails to move.
 # THE SINGLE CANONICAL PROMOTED_FILES ASSIGNMENT — every promotion edits THIS line; the
 # count pin below reds ANY second assignment-shaped site: an indented `  PROMOTED_FILES=…`,
 # a double-quoted `PROMOTED_FILES="…"`, or a `PROMOTED_FILES+=` append all count, so a

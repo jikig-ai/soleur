@@ -4,7 +4,7 @@
 # The mode re-emits exactly one file, apps/web-platform/.github/workflows/fix-constraints-stage-a.yml,
 # and only when the existing bytes are an exact, ledger-listed historical emission of the template
 # (references/fix-constraints-stage-a.emitted.sha256). Anything else is refused with exit 75 and the
-# file is left byte-identical. This suite drives the mode through twelve cases against hermetic
+# file is left byte-identical. This suite drives the mode through fourteen cases against hermetic
 # `git init` fixtures (CONSTRAINT_SCAFFOLD_REPO_ROOT); the real apps/web-platform tree is never touched.
 # A case that varies the ledger or the template runs a per-case SANDBOX COPY of scripts/ and
 # references/ (the script derives REF_DIR from its own location, so the repo-root override alone
@@ -57,6 +57,21 @@ rcis() {
   if [[ "$RC" == "$want" ]]; then RC_OK=1; pass "$label (rc $RC)"; else fail "$label (want rc $want, got $RC; stdout: $(printf '%s' "$OUT" | tail -n 2 | tr '\n' ' '))"; fi
 }
 state() { local label="$1"; shift; cases=$((cases + 1)); if [[ "$RC_OK" == 1 ]] && "$@"; then pass "$label"; else fail "$label"; fi; }
+# Instrument control for the row helpers (the pass/fail control above cannot see these): drive each
+# helper once in each direction and require the counters to move accordingly, then unwind the
+# counters. Reported with printf + exit, never through the helpers under test.
+c0=$cases; p0=$passes; f0=$fails
+RC=7; RC_OK=1
+chk "control" false >/dev/null; rcis "control" 0 >/dev/null; state "control" true >/dev/null
+f1=$fails; p1=$passes
+RC=0; RC_OK=1
+chk "control" true >/dev/null; rcis "control" 0 >/dev/null; state "control" true >/dev/null
+if [[ $((f1 - f0)) -ne 3 || $((passes - p1)) -ne 3 || $((cases - c0)) -ne 6 ]]; then
+  printf '[FATAL] HELPER CONTROL BROKEN: chk/rcis/state did not record 3 failures then 3 passes (fails +%s, passes +%s, rows +%s)\n' \
+    "$((f1 - f0))" "$((passes - p1))" "$((cases - c0))" >&2
+  exit 1
+fi
+cases=$c0; passes=$p0; fails=$f0; RC=0; RC_OK=0
 
 # assert_fixture_dir: the CANONICAL copy (byte-for-byte; fixture-dir-operand-assert.test.sh pins it).
 assert_fixture_dir() {
@@ -108,6 +123,7 @@ printf '{ "dependencies": { "next": "15.0.0" } }\n' > "$BASE/apps/web-platform/p
 printf 'export default function Page() { return null; }\n' > "$BASE/apps/web-platform/app/page.tsx"
 printf '"use client";\nexport const G = () => "g";\n' > "$BASE/apps/web-platform/components/g.tsx"
 printf 'export const APP = "fixture";\n' > "$BASE/apps/web-platform/server/config.ts"
+printf '{ "lockfileVersion": 3 }\n' > "$BASE/apps/web-platform/package-lock.json"
 printf 'sentinel-config\n' > "$BASE/apps/web-platform/.dependency-cruiser.cjs"
 printf 'sentinel-runner\n' > "$BASE/apps/web-platform/scripts/constraint-gates.sh"
 printf 'sentinel-baseline\n' > "$BASE/apps/web-platform/.dependency-cruiser-known-violations.json"
@@ -162,11 +178,12 @@ rcis "2a already-current file with the ledger removed" 0
 chk "2a' says already current" out_has "already current"
 state "2b not rewritten (backdated mtime not advanced)" test ! "$FX/$FIX_A_REL" -nt "$TMPROOT/ref2"
 state "2c not rewritten (inode unchanged)" test "$(inode_of "$FX/$FIX_A_REL")" = "$ino_before"
+state "2d no leftover temp file or lock directory" no_leftover "$FX"
 
 # --- 3. Edited copy: refused, file untouched, user's content never printed ------------------------
 TOKEN="sk-""ant-api03-ZZZZ$(printf 'Z%.0s' 1 2 3 4 5 6 7 8)SYNTH"
 FX="$(new_case c3)"
-{ cat "$OLD_FIXTURE"; printf '# edited by a founder: %s\n' "$TOKEN"; } > "$FX/$FIX_A_REL"
+{ head -n 100 "$OLD_FIXTURE"; printf '# edited by a founder: %s\n' "$TOKEN"; tail -n +101 "$OLD_FIXTURE"; } > "$FX/$FIX_A_REL"
 cp "$FX/$FIX_A_REL" "$TMPROOT/c3.before"
 commit_all "$FX" "edited"
 run_refresh "$FX"
@@ -237,12 +254,13 @@ rcis "6c dangling-symlink destination" 70
 
 # --- 7. Ledger anchored to the template; no downgrade ---------------------------------------------
 want_hash="$(sha_of "$fresh_real")"
-cases=$((cases + 1))
-if grep -Fxq -- "$want_hash" <<<"$(ledger_hashes "$REAL_REFS/fix-constraints-stage-a.emitted.sha256" 2>/dev/null || true)"; then
-  pass "7a the CURRENT template's emission is in the ledger"
-else
-  fail "7a the current template's emission ($want_hash) is NOT in references/fix-constraints-stage-a.emitted.sha256 — append a row only if the template keeps the frozen Stage A to Stage B interface and contents: read; regenerate with the command in the ledger header"
-fi
+ledger_rows="$(ledger_hashes "$REAL_REFS/fix-constraints-stage-a.emitted.sha256" 2>/dev/null || true)"
+last_row="${ledger_rows##*$'\n'}"
+bad_rows="$(grep -Evc '^[0-9a-f]{64}$' <<<"$ledger_rows" || true)"
+dup_rows="$(sort <<<"$ledger_rows" | uniq -d)"
+chk "7a the LAST ledger row is the CURRENT template's emission ($want_hash): append a row only if the template keeps the frozen Stage A to Stage B interface and contents: read; regenerate with the command in the ledger header" test "$last_row" = "$want_hash"
+chk "7a' no ledger row is a duplicate (a duplicate makes a legitimate upgrade read as a downgrade)" test -z "$dup_rows"
+chk "7a'' every ledger row is a lowercase 64-hex digest and there are at least two rows" test "$bad_rows" = 0 -a "$(printf '%s\n' "$ledger_rows" | wc -l | tr -d ' ')" -ge 2
 
 FX="$(new_case c7b)"
 SB="$(new_sandbox c7b)"
@@ -258,6 +276,7 @@ rcis "7b installed file newer than the plugin's template is refused" 75
 state "7b' bytes unchanged" same_bytes "$FX/$FIX_A_REL" "$TMPROOT/em-newer"
 state "7b'' says the installed file is newer" out_has "newer than this plugin"
 state "7b''' prints no diff on a downgrade refusal" test -z "$(grep -E '^[<>] ' <<<"$OUT" || true)"
+state "7b'''' no leftover temp file or lock directory" no_leftover "$FX"
 
 # --- 8. Ledger unusable: fail closed ---------------------------------------------------------------
 for variant in removed no-data-rows comment-only; do
@@ -272,6 +291,7 @@ for variant in removed no-data-rows comment-only; do
   run_refresh "$FX" "$SB/scripts"
   rcis "8 ledger $variant refuses the stale fixture" 75
   state "8 ledger $variant leaves the bytes unchanged" same_bytes "$FX/$FIX_A_REL" "$OLD_FIXTURE"
+  state "8 ledger $variant leaves no temp file or lock directory" no_leftover "$FX"
 done
 
 # --- 9. Symlink and hash-tool arms -----------------------------------------------------------------
@@ -302,16 +322,26 @@ for tool in sha256sum shasum; do
 case "$(basename "$0"):$#:${1:-}:${2:-}" in
   sha256sum:1:*) printf '\n'; exit 0 ;;
   shasum:3:-a:256) printf '\n'; exit 0 ;;
-  *) echo "fake hash tool: unexpected argv: $*" >&2; exit 64 ;;
+  *) echo "unexpected argv: $*" >> "${FAKE_REFUSED:?}"; exit 64 ;;
 esac
 FAKE
   chmod +x "$FAKE/$tool"
 done
 RC=0
-OUT="$(PATH="$FAKE:$PATH" CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX" TMPDIR="$TMPROOT/tmp" bash "$REAL_SCRIPTS/constraint-scaffold.sh" --refresh-stage-a 2>"$TMPROOT/err")" || RC=$?
+OUT="$(FAKE_REFUSED="$TMPROOT/fake-refused" PATH="$FAKE:$PATH" CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX" TMPDIR="$TMPROOT/tmp" bash "$REAL_SCRIPTS/constraint-scaffold.sh" --refresh-stage-a 2>"$TMPROOT/err")" || RC=$?
 ERR="$(cat "$TMPROOT/err")"
 rcis "9c empty digest from the hash tool is an error, never a ledger match" 69
 state "9c' bytes unchanged" same_bytes "$FX/$FIX_A_REL" "$OLD_FIXTURE"
+state "9c'' the script called the hash tools only with argv shapes the fake accepts" test ! -s "$TMPROOT/fake-refused"
+
+FX="$(new_case c9d)"
+assert_fixture_dir "$FX"
+git -C "$FX" mv apps appsreal
+ln -s appsreal "$FX/apps"
+commit_all "$FX" "symlinked apps"
+run_refresh "$FX"
+rcis "9d symlinked apps/ directory (physical dir must equal the literal target path)" 75
+state "9d' the file behind the symlink is unchanged" same_bytes "$FX/appsreal/web-platform/.github/workflows/fix-constraints-stage-a.yml" "$OLD_FIXTURE"
 
 # --- 10. A refresh writes the one file and nothing else -------------------------------------------
 FX="$(new_case c10)"
@@ -323,6 +353,7 @@ rcis "10a refresh succeeds" 0
 state "10a' the destination changed" test ! "$(sha_of "$FX/$FIX_A_REL")" = "$(sha_of "$OLD_FIXTURE")"
 n=0; untouched=1; for f in $others; do n=$((n + 1)); same_bytes "$FX/$f" "$SNAP/$n" || untouched=0; done
 state "10b stage-b, gates workflow, config, runner and baseline are byte-unchanged" test "$untouched" = 1
+state "10c git sees exactly one modified path and no stray file" test "$(git -C "$FX" status --porcelain)" = " M $FIX_A_REL"
 
 # --- 11. No pin literal in the script or the ledger -----------------------------------------------
 POS="$TMPROOT/pos11"
@@ -342,11 +373,12 @@ on_block() { awk '/^on:/{p=1;next} p&&/^[^ \t]/{exit} p' "$TPL_CODE"; }
 triggers="$(on_block | grep -E '^  [a-z_]+:' | sed 's/:.*//; s/^  //' | sort | tr '\n' ' ' || true)"
 perm_block="$(awk '/^permissions:/{p=1;next} p&&/^[^ \t]/{exit} p' "$TPL_CODE" | grep -v '^[[:space:]]*$' || true)"
 chk "12a name is fix-constraints-stage-a (Stage B filters on it)" grep -Fxq 'name: fix-constraints-stage-a' "$TPL"
-chk "12b artifact name prefix fix-constraints-patch- is kept" grep -Fq 'name: fix-constraints-patch-' "$TPL"
-chk "12b' artifact name prefix fix-constraints-giveup- is kept" grep -Fq 'name: fix-constraints-giveup-' "$TPL"
+chk "12b artifact name prefix fix-constraints-patch- is kept (in code, not a comment)" grep -Fq 'name: fix-constraints-patch-' "$TPL_CODE"
+chk "12b' artifact name prefix fix-constraints-giveup- is kept (in code, not a comment)" grep -Fq 'name: fix-constraints-giveup-' "$TPL_CODE"
 chk "12c triggers are pull_request (+ workflow_dispatch for manual retry) only; got: $triggers" test "$triggers" = "pull_request workflow_dispatch "
 chk "12d top-level permissions are exactly contents: read" test "$perm_block" = "  contents: read"
-chk "12e no write scope and no id-token anywhere in the template body" test -z "$(grep -E '^[[:space:]]+(id-token|[a-z-]+):[[:space:]]*write[[:space:]]*$' "$TPL_CODE" || true)"
+chk "12c' no privileged or chained trigger spelling anywhere in the template body (quoted keys included)" test -z "$(grep -E 'pull_request_target|workflow_run|issue_comment' "$TPL_CODE" || true)"
+chk "12e no write scope, write-all or id-token anywhere in the template body (any quoting or flow style)" test -z "$(grep -E ':[[:space:]]*["'"'"']?write|write-all|id-token' "$TPL_CODE" || true)"
 
 # --- 13. The run lock: an owner-less fresh lock is held, an old one is stale, EPERM is not "gone" ----
 FX="$(new_case c13a)"; mkdir -p "$FX/.git/constraint-scaffold.lock"
@@ -360,7 +392,24 @@ rcis "13b owner-less lock older than the grace window is stale and taken over" 0
 
 FX="$(new_case c13c)"; mkdir -p "$FX/.git/constraint-scaffold.lock"; printf '1\n' > "$FX/.git/constraint-scaffold.lock/pid"
 run_refresh "$FX"
-rcis "13c a live process of another user (pid 1: kill -0 says EPERM) is not read as gone" 69
+root_note=""; if kill -0 1 2>/dev/null; then root_note=" (running with kill -0 rights on pid 1: the ps -p leg is NOT discriminated here)"; fi
+rcis "13c a live process of another user (pid 1: kill -0 says EPERM) is not read as gone$root_note" 69
+
+FX="$(new_case c13d)"; mkdir -p "$FX/.git/constraint-scaffold.lock"
+(exit 0) & dead_pid=$!; wait "$dead_pid" || true
+printf '%s\n' "$dead_pid" > "$FX/.git/constraint-scaffold.lock/pid"
+run_refresh "$FX"
+rcis "13d a FRESH lock whose owner pid is dead is stale and taken over (the owner-less grace must not hold it)" 0
+
+# --- 14. The current template installs with npm ci: no lockfile, no refresh -------------------------
+FX="$(new_case c14)"
+assert_fixture_dir "$FX"
+git -C "$FX" rm -q apps/web-platform/package-lock.json
+git -C "$FX" commit -q -m "no lockfile"
+run_refresh "$FX"
+rcis "14a target without package-lock.json is refused (a bun-era install would break at npm ci)" 75
+state "14b bytes unchanged" same_bytes "$FX/$FIX_A_REL" "$OLD_FIXTURE"
+state "14c no leftover temp file or lock directory" no_leftover "$FX"
 
 # --- Accounting -------------------------------------------------------------------------------------
 if [[ $((passes + fails)) -ne "$cases" ]]; then
@@ -371,7 +420,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
 fi
 
 # --- Anti-vacuity floor (ADR-193 #1). The literal sits directly above the `if`. -----------------------
-MIN_ROWS=67
+MIN_ROWS=83
 if [[ "$cases" -lt "$MIN_ROWS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d.\n' "$cases" "$MIN_ROWS" >&2
   printf '  Rows were deleted or skipped; a green run here would be a coverage loss.\n' >&2

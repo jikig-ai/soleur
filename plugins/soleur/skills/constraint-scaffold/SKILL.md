@@ -78,20 +78,37 @@ gate, and the fix is the listed import, not a re-run. In refresh mode nothing is
 bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-baseline
 ```
 
-Refresh a stale auto-recovery workflow (agent-only; never shown to the founder; the workflow must be
-committed and the tree clean). A repo that installed the scaffold keeps the claude-code-action pin its
-first install wrote, because the default mode refuses to overwrite. `--refresh-stage-a` re-emits exactly
+Refresh a stale auto-recovery workflow (agent-only; never shown to the founder). Run it when a repo that
+already installed the scaffold carries an old claude-code-action pin in its Stage A workflow, or when
+the plugin's Stage A template changed: the default mode refuses to overwrite, so the first install's
+pin stays. The workflow must be committed and the tree clean. `--refresh-stage-a` re-emits exactly
 one file, `apps/web-platform/.github/workflows/fix-constraints-stage-a.yml`, and only when the installed
 bytes are an exact historical emission listed in
 [fix-constraints-stage-a.emitted.sha256](./references/fix-constraints-stage-a.emitted.sha256). It
 converges the file on the **current** template, so it is a content upgrade (install command, model id,
-token wiring) as well as a pin bump. Outcomes: `already current` (exit 0, nothing written); `refreshed`
-(exit 0; review with `git diff` and commit); exit **75** with the file left byte-unchanged when the
-installed copy is edited or from a version the ledger does not know (the report shows only the
-template-side differences, never your file: read your own file and merge by hand), is newer than this
-plugin's template (update the plugin; there is no downgrade), or is a symlink or behind one. There is no
-bite-proof: the swap changes none of config, runner or baseline. If the run is SIGKILLed, delete the
-leftover untracked `.fix-constraints-stage-a.*` file next to the workflow (never `git add -A`):
+token wiring) as well as a pin bump, and it normalises the file mode to 0644. The current template
+installs with `npm ci`, so the target needs a committed `package-lock.json`. Soleur's own
+repo-root dogfood copy is hand-maintained and is not reachable by this flag.
+
+Outcomes and the next step:
+
+| Exit | Meaning | Next step |
+|---|---|---|
+| 0 | `already current`, or `refreshed` | after `refreshed`: review with `git diff` and commit |
+| 67 | workflow untracked, or tree dirty | commit the workflow / the other changes, re-run |
+| 69 | run lock held, no sha256 tool, or an I/O failure | wait and re-run (a lock clears itself within a minute of its owner dying) |
+| 70 | no `.dependency-cruiser.cjs`, or no stage-a workflow | restore the file from git; installs that predate the two-stage split have no Stage A file |
+| 75 | refused, file left byte-unchanged | see below |
+| 143 | interrupted | review `git diff`; the file is replaced only by a final atomic rename |
+
+Exit **75** means: the installed copy is edited or from a version the ledger does not know (the report
+shows only the template-side differences, never your file: read your own file and merge by hand; after
+a hand merge the flag keeps refusing, because the file is no longer a known emission), is newer than
+this plugin's template (update the plugin; there is no downgrade), is a symlink or behind one (replace
+it with a regular file by hand), has no `package-lock.json` beside it (add and commit one, or merge by
+hand), or changed while the command ran (re-run). There is no bite-proof: the swap changes none of
+config, runner or baseline. If the run is SIGKILLed, delete the leftover untracked
+`.fix-constraints-stage-a.*` file next to the workflow (never `git add -A`):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-stage-a
@@ -151,7 +168,9 @@ that it ran green once:
    One verdict line on stdout: `constraint-scaffold: bite-proof pass -> fail(no-client-to-server-secret@direct, no-client-to-server-secret-transitive@via-hop) -> pass depcruise=<version>`.
 
 **Exit code 75** is `--refresh-stage-a` only: it removes nothing and leaves the workflow byte-unchanged
-(see the refresh block above). **Exit codes 71–74 and what the agent does next.** Every bite failure prints
+(see the refresh block above).
+
+**Exit codes 71–74 and what the agent does next.** Every bite failure prints
 `constraint-scaffold: bite-proof FAILED (<code>): <msg>` and the last 40 lines of the relevant log
 on stdout. In **default mode** the self-cleanup is armed before the first artifact is written and
 disarmed only after the bite has passed, so this holds for every failure in between — 66..74 (75 is
@@ -194,9 +213,10 @@ the fixture tree as it was; and the `TMPDIR`-inside-repo refusal.
 `test/refresh-stage-a.test.sh` (scripts shard) pins `--refresh-stage-a`: refresh of a ledger-listed
 emission (mode 0644), the already-current no-op, refusal of an edited or newline-stripped copy with no
 echo of the user's file, the guard order (70 before 67 before 69; symlink before tree), the no-downgrade
-rule, fail-closed on a missing, empty or comment-only ledger, the empty-digest arm, that no other
-emitted file is written, that neither the script nor the ledger carries a pin literal, and the frozen
-Stage A to Stage B interface.
+rule, fail-closed on a missing, empty or comment-only ledger, the ledger itself (newest row last, unique,
+64-hex), the empty-digest arm, symlinked file / `.github` / `apps`, the `package-lock.json` precondition,
+the run-lock rows (owner-less grace, dead owner, EPERM), that no other emitted file is written, that
+neither the script nor the ledger carries a pin literal, and the frozen Stage A to Stage B interface.
 
 `test/boundary.test.sh` (scripts shard) proves the gate is not vacuous: a value import of `server/**`
 via the `@/server/…` alias FAILS, an `import type` of the same PASSES, route-group/metacharacter

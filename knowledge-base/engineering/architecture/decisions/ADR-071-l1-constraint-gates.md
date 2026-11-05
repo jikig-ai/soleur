@@ -323,17 +323,23 @@ overwrite:
    ledger row order is the rank).
 
 **Privilege rule.** A workflow belongs to class 4 only if its token scope is `contents: read` and it
-holds no write credential. Stage B and any write-scoped workflow stay in class 2. A ledger row may not
-admit a Stage A emission whose `permissions:` differs from `contents: read`; changing that needs an
-ADR-074 amendment. The test asserts it on the current template (`refresh-stage-a.test.sh`, case 12).
+holds no repo-write credential (Stage A does hold the founder's model API key; that is the reason the
+clobber guard exists). Stage B and any write-scoped workflow stay in class 2. A ledger row may not
+admit a Stage A emission whose `permissions:` differs from `contents: read`, or whose trigger set is
+anything beyond `pull_request` and `workflow_dispatch` (`pull_request_target` would hand secrets to
+fork code while leaving `contents: read` intact); changing either needs an ADR-074 amendment. The
+test asserts both on the current template, comment-stripped (`refresh-stage-a.test.sh`, case 12).
 
 **Frozen Stage A to Stage B interface.** Stage B is not refreshable, so an older Stage B must keep
 working against a newer Stage A. The interface is frozen as: (a) the Stage A workflow name
 `fix-constraints-stage-a` (Stage B filters `workflow_run` on it), (b) the artifact names
 `fix-constraints-patch-<pr>` and `fix-constraints-giveup-<pr>`, (c) the ADR-074 `meta.json` schema.
 A Stage A change to any of these is not a ledger-append event; it needs a Stage B refresh path
-first. (Verified from git history: none of the six historical Stage A emissions changed (a) or (b).)
-Stage B staleness is accepted, and safe, only because of this frozen interface.
+first. (Verified from git history: none of the six historical Stage A emissions changed (a) or (b).
+Case 12 asserts (a) and (b) on the current template; (c) is held by ADR-074 and review, not by a test.)
+Stage B staleness is accepted: an installed Stage B keeps working against a newer Stage A because of
+this frozen interface. That says nothing about Stage B's own pins and validation logic, which never
+reach installed copies, and no Stage B refresh path exists or is planned.
 
 **Bite-proof.** The 2026-09-19 sentence "a `prove_bite` step at the tail of both modes" is amended:
 the bite-proof runs in every mode that can change what the gate enforces (config, runner, baseline).

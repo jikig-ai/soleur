@@ -39,21 +39,27 @@
 #   67  dirty working tree (baseline capture requires a clean tree)
 #   68  dependency-cruiser binary missing, or baseline capture failed
 #   69  git/base-ref/worktree/temp-dir error, TMPDIR resolves inside the repository, or another
-#       scaffold run holds the run lock (<git-common-dir>/constraint-scaffold.lock, owner pid inside)
+#       scaffold run holds the run lock (<git-common-dir>/constraint-scaffold.lock, owner pid inside;
+#       a live owner, or a lock younger than a minute that has no owner pid yet, is held). In
+#       --refresh-stage-a also: no sha256 tool, a failed mktemp/render/chmod/mv, or a digest that
+#       is not 64 hex.
 #   70  --refresh-baseline / --refresh-stage-a before generation (no .dependency-cruiser.cjs yet, or
 #       no fix-constraints-stage-a.yml to refresh — run default mode first)
 #   71  bite-proof: gate did not pass on the clean HEAD tree before the probe (config/toolchain)
 #   72  bite-proof: gate did NOT reject the injected client->server-secret imports on their edges
 #   73  bite-proof: gate did not return to green after the probes were removed
 #   74  bite-proof: real client->server-secret violation(s) on HEAD newer than the baseline
-#   75  --refresh-stage-a refused, file left byte-unchanged (refused, not retryable): the installed
-#       workflow is not a known pristine emission (edited, or a version the ledger does not know), is
-#       NEWER than this plugin's template (update the plugin; never downgrade), is a symlink or sits
-#       behind one, or changed during the run. Removes nothing.
+#   75  --refresh-stage-a refused, file left byte-unchanged (merge by hand or update the plugin; a
+#       re-run helps only after "changed during the run"): the installed workflow is not a known
+#       pristine emission (edited, or a version the ledger does not know), is NEWER than this
+#       plugin's template (update the plugin; never downgrade), is a symlink or sits behind one,
+#       the target has no package-lock.json (the current template installs with `npm ci`), this
+#       plugin's ledger lacks its own template's emission, or the file changed during the run.
 #
-# (--refresh-stage-a has its own, smaller window: the only thing it can leave behind is its temp
-# file `.fix-constraints-stage-a.XXXXXX` next to the workflow, removed by the same trap; only a
-# SIGKILL leaves it, and the recovery is to delete that untracked file, never `git add -A`.)
+# (--refresh-stage-a has its own, smaller window: it removes only its own temp file
+# `.fix-constraints-stage-a.XXXXXX` and its run lock, via the same trap. Only a SIGKILL leaves
+# either behind; the recovery is to delete the untracked temp file, never `git add -A`; a stale
+# lock clears itself on the next run.)
 #
 # In default mode the self-cleanup is armed BEFORE the first artifact is written and disarmed
 # only after the bite has passed: every failure in between (67..74, a failed `mktemp`, a
@@ -227,7 +233,9 @@ _wt_cleanup() {
 # Run lock: two scaffold runs in one repo (a default run and a --refresh-baseline, or two
 # sessions) would each `mv` into the same baseline and one run's cleanup would delete the other's
 # staged inputs mid-bite. One `mkdir` lock in the git common dir, holding the owner pid; a stale
-# lock (owner gone) is taken over, a live one is a 69 with the pid named. Released by the handler.
+# lock (owner gone) is taken over, a live one is a 69 with the pid named, and so is a lock with no
+# owner pid yet that is under a minute old (a run between its mkdir and its pid write). Released by
+# the handler.
 RUN_LOCK=""
 take_run_lock() {
   local common
@@ -249,7 +257,7 @@ take_run_lock() {
       fail_stdout 69 "another constraint-scaffold run is starting in this repository (the run lock has no owner pid yet); wait a moment and re-run"
     fi
     rm -rf -- "$RUN_LOCK"
-    mkdir "$RUN_LOCK" 2>/dev/null || { RUN_LOCK=""; fail_stdout 69 "cannot take the run lock at $RUN_LOCK"; }
+    mkdir "$RUN_LOCK" 2>/dev/null || { local lockpath="$RUN_LOCK"; RUN_LOCK=""; fail_stdout 69 "cannot take the run lock at $lockpath"; }
   fi
   printf '%s\n' "$$" > "$RUN_LOCK/pid"
 }
@@ -565,14 +573,14 @@ sha256_hex() {
   fi
   printf '%s' "${out%% *}"
 }
-is_sha256() { grep -Eq '^[0-9a-f]{64}$' <<<"$1"; }
+is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 
 # ledger_rank <sha>: the 1-based rank of the row among the ledger's data rows, or nothing. Exact
 # equality on the FIRST field only (a substring or prefix match would admit a different hash), so a
 # missing, empty or comment-only ledger matches nothing. Always returns 0: the caller tests the OUTPUT.
 ledger_rank() {
   [[ -f "$STAGE_A_LEDGER" ]] || return 0
-  awk -v h="$1" '/^[[:space:]]*#/ || !NF {next} {n++} $1 == h {print n; exit}' "$STAGE_A_LEDGER" || true
+  awk -v h="$1" '/^[[:space:]]*#/ || !NF {next} {n++} ($1 "") == (h "") {print n; exit}' "$STAGE_A_LEDGER" || true
   return 0
 }
 
@@ -589,21 +597,33 @@ refresh_stage_a() {
   # 1. Existence first, before every check that can fail for another reason or write a lock. A
   #    dangling symlink is not a file, so it is also 70.
   [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 70
-  [[ -f "$dest" ]] || die "no fix-constraints-stage-a.yml at $TARGET_REL/.github/workflows to refresh — run the default mode first" 70
+  [[ -f "$dest" ]] || die "no fix-constraints-stage-a.yml at $TARGET_REL/.github/workflows to refresh — restore it from git if it was deleted (git checkout -- <path>); an install that predates the two-stage split has no Stage A file and is not covered by this flag" 70
   if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     die "no sha256 tool (sha256sum or shasum) on PATH" 69
   fi
   # 2. Path safety. A symlinked FILE is refused; so is any destination whose PHYSICAL directory is
   #    not exactly <target>/.github/workflows (a symlinked .github passes a repo-containment check
-  #    and would redirect the write). One physical string is used for mktemp, mv and the recheck.
+  #    and would redirect the write). The expected directory is built from the physical REPO_ROOT
+  #    and the literal target, not resolved from TARGET, so a symlinked apps/ or apps/web-platform/
+  #    cannot satisfy it. After the check `dest` is rebound to its physical form, so the recheck and
+  #    the mv use the same directory the check approved.
   if [[ -L "$dest" ]]; then
     die "fix-constraints-stage-a.yml is a symlink; refusing to refresh through it (left unchanged)" 75
   fi
   dest_dir="$(physdir "$(dirname -- "$dest")")" || dest_dir=""
-  want_dir="$(physdir "$TARGET")" || want_dir=""
-  want_dir="$want_dir/.github/workflows"
+  want_dir="$REPO_ROOT/$TARGET_REL/.github/workflows"
+  case "$dest_dir" in
+    /proc/*|/sys/*|/dev/*) die "the repository sits under a synthetic filesystem ($dest_dir); refusing (left unchanged)" 69 ;;
+  esac
   if [[ -z "$dest_dir" || "$dest_dir" != "$want_dir" ]]; then
     die "the physical directory of fix-constraints-stage-a.yml (${dest_dir:-unresolvable}) is not $TARGET_REL/.github/workflows; refusing to write through a redirected directory (left unchanged)" 75
+  fi
+  dest="$dest_dir/${dest##*/}"
+  # The current template installs with `npm ci` in the target; a repo whose gate predates that
+  # (the earliest emissions installed with bun) may have no package-lock.json, and the refreshed
+  # job would then fail at its install step on the first PR that needs recovery.
+  if [[ ! -f "$TARGET/package-lock.json" ]]; then
+    die "$TARGET_REL/package-lock.json is missing and the current stage-a template installs with \`npm ci\`; add and commit a lockfile, or merge the template into your workflow by hand (left unchanged)" 75
   fi
   # 3. Reviewable: tracked and clean. The hash gate below, not this, is the clobber control.
   if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "${dest#"$REPO_ROOT"/}" >/dev/null 2>&1; then
@@ -616,15 +636,14 @@ refresh_stage_a() {
   take_run_lock
   # 5. Fresh emission to a temp file next to the destination (same filesystem: atomic rename).
   STAGE_A_TMP="$(mktemp "$dest_dir/.fix-constraints-stage-a.XXXXXX")" || die "cannot create a temp file next to fix-constraints-stage-a.yml" 69
+  # assert_fixture_dir is called at each write operand because the repo-wide fixture-relative
+  # ratchet counts an unproven operand; both operands are already physical absolute paths here.
   assert_fixture_dir "$STAGE_A_TMP"
   sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" > "$STAGE_A_TMP" || die "cannot render the stage-a template" 69
-  if ! sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" | cmp -s - "$STAGE_A_TMP"; then
-    die "the rendered stage-a emission did not verify against a second render" 69
-  fi
   want="$(sha256_hex "$STAGE_A_TMP")"
   have="$(sha256_hex "$dest")"
-  # An empty or malformed digest must never reach classification: an empty `have` would otherwise
-  # compare equal to nothing here but is the shape a fail-open match takes elsewhere.
+  # An empty or malformed digest must never reach classification: with both digests empty,
+  # `have == want` below would print "already current" over a tool that measured nothing.
   if ! is_sha256 "$want" || ! is_sha256 "$have"; then
     die "could not compute a sha256 for the stage-a workflow (the hash tool printed no digest); left unchanged" 69
   fi
@@ -641,16 +660,18 @@ refresh_stage_a() {
   fi
   if [[ -z "$have_rank" ]]; then
     say "FAILED (75): fix-constraints-stage-a.yml differs from every known emission (edited, or a version this ledger does not know); left unchanged"
-    say "template-side differences follow (your file is not printed; read it yourself and merge by hand):"
+    say "template-side differences follow (your file is not printed; read it yourself and merge by hand; limited to 60 lines):"
     stage_a_report
+    say "full target: references/fix-constraints-stage-a.template with __TARGET_DIR__ replaced by $TARGET_REL. After a hand merge this flag keeps refusing: the file is no longer a known emission"
     log "fix-constraints-stage-a.yml is not a known pristine emission; left unchanged"
     exit 75
   fi
   if [[ "$have_rank" -gt "$want_rank" ]]; then
     die "the installed fix-constraints-stage-a.yml is newer than this plugin's template (ledger row $have_rank of $want_rank); update the plugin, do not downgrade. Left unchanged" 75
   fi
-  # 8. Pre-write recheck (narrows the window; the residual is a microsecond-wide race with an editor
-  #    on a tracked, clean file, recoverable from the reflog), then the one write.
+  # 8. Pre-write recheck (narrows the window; the residual is a microsecond-wide race with an editor.
+  #    The committed copy stays recoverable with `git checkout -- <file>`; an edit saved inside that
+  #    window and not yet committed would be lost), then the one write.
   now="$(sha256_hex "$dest")"
   if [[ ! -f "$dest" || -d "$dest" || -L "$dest" || "$now" != "$have" ]]; then
     die "fix-constraints-stage-a.yml changed during the run; left unchanged — re-run" 75
@@ -692,7 +713,7 @@ fi
 require_clean_tree "before generating the gate"
 
 for f in "$CFG" "$RUNNER" "$WORKFLOW" "$FIXWORKFLOW_A" "$FIXWORKFLOW_B"; do
-  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force). Committed gate: re-baseline via --refresh-baseline; a stale fix-constraints-stage-a.yml: --refresh-stage-a. Untracked leftovers of a killed first install: delete them (\`git clean -n $TARGET_REL\` lists them), run \`git worktree prune\`, re-run" 66
+  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force). Committed gate: re-baseline via --refresh-baseline; a committed, stale fix-constraints-stage-a.yml: --refresh-stage-a. Untracked leftovers of a killed first install: delete them (\`git clean -n $TARGET_REL\` lists them), run \`git worktree prune\`, re-run" 66
 done
 [[ -e "$BASELINE" ]] && die "refuse-if-exists: ${BASELINE#"$REPO_ROOT"/} already present (re-baseline via --refresh-baseline)" 66
 
