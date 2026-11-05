@@ -646,6 +646,25 @@ describe("the in-place email check (AC10, AC11)", () => {
 });
 
 // =====================================================================================================================
+describe("start-step send respects the cooldown after a rate_limited answer", () => {
+  it("disables the first-step button and shows the wait hint until OTP_RESEND_COOLDOWN_MS has passed, then re-enables it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockFetch({ send: { body: { ok: false, reason: "rate_limited" } } });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCard();
+    await user.click(yesButton());
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode })).toBeDisabled();
+    expect(screen.getByText(LEGAL_COPY.dialog.resendWait)).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(OTP_RESEND_COOLDOWN_MS + 1_000);
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode })).toBeEnabled());
+    expect(screen.queryByText(LEGAL_COPY.dialog.resendWait)).toBeNull();
+  });
+});
+
 describe("the email code no longer counts: 403 reverify (contract 1)", () => {
   it("returns to the send step, asks for a new code, and the next confirm verifies again", async () => {
     let n = 0;
@@ -798,13 +817,19 @@ describe("a send that follows a failed send asks for a fresh mail (resend:true)"
     ["a network failure", "throw" as const],
   ])("after %s the retry from the first step sends resend:true; the send after a success is plain again", async (_n, failure) => {
     let n = 0;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const f = mockFetch({ send: () => (++n === 1 ? failure : { body: SENT }) });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderCard();
     await user.click(yesButton());
     await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
     await screen.findByRole("alert");
     expect(f.reauths()[0].body).toEqual({ step: "send" });
+    // A rate_limited answer starts the cooldown, so the start button waits it out; an `unavailable` one does not.
+    act(() => {
+      vi.advanceTimersByTime(OTP_RESEND_COOLDOWN_MS + 1_000);
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
     await screen.findByLabelText(LEGAL_COPY.dialog.codeLabel);
     expect(f.reauths()[1].body).toEqual({ step: "send", resend: true });
@@ -885,5 +910,81 @@ describe("Yes lock is not a one-way latch against a later reflow", () => {
     region.scrollTop = 0;
     fireEvent.scroll(region);
     expect(screen.getByRole("checkbox")).toHaveAttribute("aria-disabled", "false");
+  });
+});
+
+// =====================================================================================================================
+describe("No / Request changes have no code step: how the card words a 403 reverify and a non-JSON 200", () => {
+  const REVERIFY = { status: 403, body: { error: "reverify" } };
+
+  async function submitChanges(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(changesButton());
+    await user.type(screen.getByRole("textbox"), "note");
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.changes.send }));
+  }
+  async function submitDecline(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(noButton());
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.decline.confirm }));
+  }
+
+  // Today's behaviour (the decide route's 42501 refusal wrote nothing): there is no code to redo here, so the answer reads as
+  // "nothing was recorded", with no email dialog, no reload button and no success.
+  it.each([
+    ["Request changes", submitChanges],
+    ["No", submitDecline],
+  ])("%s: a 403 reverify says nothing was recorded, opens no email dialog, offers no reload and stays pending", async (_n, submit) => {
+    const f = mockFetch({ decide: REVERIFY });
+    const user = userEvent.setup();
+    renderCard();
+    await submit(user);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(LEGAL_COPY.errors.nothingRecorded);
+    expect(alert).not.toHaveTextContent(LEGAL_COPY.dialog.reverify);
+    expect(alert).not.toHaveTextContent(LEGAL_COPY.errors.unknownResult);
+    expect(within(alert).queryByRole("button", { name: LEGAL_COPY.errors.reload })).toBeNull();
+    expect(screen.queryByTestId("legal-reauth-dialog")).toBeNull();
+    expect(screen.queryByLabelText(LEGAL_COPY.dialog.codeLabel)).toBeNull();
+    expect(screen.queryByText(LEGAL_COPY.declined.badge)).toBeNull();
+    expect(screen.queryByText(LEGAL_COPY.changesRequested.badge)).toBeNull();
+    expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
+    expect(f.decides()).toHaveLength(1);
+    expect(f.reauths()).toHaveLength(0);
+  });
+
+  it.each([
+    ["Request changes", submitChanges],
+    ["No", submitDecline],
+  ])("%s: a 200 whose body is not JSON says to reload to check, never 'nothing was recorded', and shows no success", async (_n, submit) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>gateway page</html>", { status: 200, headers: { "content-type": "text/html" } })));
+    const user = userEvent.setup();
+    renderCard();
+    await submit(user);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
+    expect(alert).not.toHaveTextContent("Nothing was recorded");
+    expect(within(alert).getByRole("button", { name: LEGAL_COPY.errors.reload })).toBeInTheDocument();
+    expect(screen.queryByText(LEGAL_COPY.declined.badge)).toBeNull();
+    expect(screen.queryByText(LEGAL_COPY.changesRequested.badge)).toBeNull();
+    expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
+  });
+
+  it("the Yes path: a 200 whose decide body is not JSON also says reload to check and shows no accepted state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/decide")) return new Response("not json", { status: 200 });
+        const step = (JSON.parse(String(init.body ?? "{}")) as { step?: string }).step;
+        return { ok: true, status: 200, json: async () => (step === "send" ? SENT : VERIFIED) };
+      }),
+    );
+    const user = userEvent.setup();
+    renderCard();
+    await openDialogAndSendCode(user);
+    await enterCode(user);
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
+    expect(alert).not.toHaveTextContent("Nothing was recorded");
+    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
   });
 });

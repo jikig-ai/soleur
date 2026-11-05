@@ -338,6 +338,30 @@ describe("send", () => {
     expect(mem.has(USER, "fixture-terms")).toBe(false);
   });
 
+  it("an auth client factory that throws (anon key missing) on SEND is unavailable and reported (stage send), not a thrown 500; the retry then mails again", async () => {
+    const mem = new SendFailureMemory();
+    const log: string[] = [];
+    const row = { data: { outcome: "issued", reused: false, event_id: EVENT, expires_at: "2099-01-01T00:00:00Z" } };
+    const svc = fakeRpc(log, { issue_legal_reauth: [row, { data: { ...row.data, reused: true } }] });
+    const boom = new Error(`anon key is not configured for ${EMAIL}`);
+    const factory = vi.fn(() => {
+      throw boom;
+    });
+    const r = await sendReauthCode({ service: svc.client, authClient: factory, sendFailures: mem }, { id: ID, entry: ENTRY, resend: false });
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", boom, expect.objectContaining({ userId: USER, extra: expect.objectContaining({ stage: "send" }) }));
+    const ctx = h.report.mock.calls[0][2];
+    expect(ctx.level).toBeUndefined();
+    expect(JSON.stringify(ctx)).not.toContain(EMAIL);
+    // No code was sent, so the next plain send on the still-live intent must mail (the failure is remembered).
+    const auth = fakeAuth(log);
+    const retry = await sendReauthCode({ service: svc.client, authClient: auth.factory, sendFailures: mem }, { id: ID, entry: ENTRY, resend: false });
+    expect(retry).toEqual({ ok: true, state: "sent" });
+    expect(auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
+  });
+
   it("no address on the session: unavailable, reported (stage send_no_address), nothing is emailed", async () => {
     const { r, auth } = await sendWith(() => ({ error: null }), { id: { ...ID, email: null } });
     expect(r).toEqual({ ok: false, reason: "unavailable" });

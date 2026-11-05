@@ -90,7 +90,9 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
   }
 
   async function send(resend: boolean) {
-    if (resend && cooling) return;
+    // A failed or rate-limited send turns the next attempt into a resend, which opens a new intent and spends the
+    // 3-per-15-minutes budget, so no send (start step or resend) goes out while the cooldown runs.
+    if (cooling) return;
     if (!begin("send")) return;
     const asResend = resend || lastSendFailed.current;
     const post = await postJson(`/api/legal-acceptance/${encodeURIComponent(keyName)}/reauth`, asResend ? { step: "send", resend: true } : { step: "send" });
@@ -139,7 +141,14 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
     if (out.recheck) {
       setVerified(false);
       setCode("");
-      if (out.recheck === "start") setStep("start");
+      if (out.recheck === "start") {
+        // The server says the check no longer counts: the founder must be able to ask for a new code now, not after the
+        // cooldown of the earlier send. The 3-per-15-minutes intent budget on the server is the bound.
+        if (coolTimer.current !== null) clearTimeout(coolTimer.current);
+        coolTimer.current = null;
+        setCooling(false);
+        setStep("start");
+      }
     }
     setError({ message: out.message, help: false, reload: out.reload });
   }
@@ -205,9 +214,18 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
 
         <div className="flex flex-col gap-2">
           {step === "start" ? (
-            <Button variant="gold" loading={busy === "send"} loadingLabel={LEGAL_COPY.dialog.sendingCode} onClick={() => void send(false)}>
-              {LEGAL_COPY.dialog.sendCode}
-            </Button>
+            <>
+              <Button
+                variant="gold"
+                loading={busy === "send"}
+                loadingLabel={LEGAL_COPY.dialog.sendingCode}
+                disabled={cooling}
+                onClick={() => void send(false)}
+              >
+                {LEGAL_COPY.dialog.sendCode}
+              </Button>
+              {cooling && <p className="text-xs text-soleur-text-muted">{LEGAL_COPY.dialog.resendWait}</p>}
+            </>
           ) : (
             <>
               <Button

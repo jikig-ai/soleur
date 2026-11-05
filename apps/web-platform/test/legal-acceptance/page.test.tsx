@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   report: vi.fn(),
   lookups: [] as string[],
   from: [] as string[],
+  secondKey: { value: false },
+  textFailure: { value: null as unknown },
 }));
 
 class NotFound extends Error {}
@@ -56,16 +58,24 @@ vi.mock("@/server/approval/ops", async (orig) => ({
 }));
 
 const RAW = "---\nversion: 3\nvalid_until: 2099-12-31\n---\nCUSTOMER TERMS\n\n1. Who these terms are between.\n\nEnd of version 3.\n";
+const RAW_B = "---\nversion: 9\nvalid_until: 2099-12-31\n---\nOTHER TERMS\n\nEnd of version 9.\n";
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
   return {
     ...real,
     getLegalText: (key: string) => {
       h.lookups.push(key);
+      if (h.textFailure.value) throw h.textFailure.value;
       if (key !== "customer-terms") throw new real.LegalTextError("unknown_key", "no such legal text");
       return real.parseLegalText(key, RAW);
     },
-    loadLegalTexts: () => new Map([["customer-terms", real.parseLegalText("customer-terms", RAW)]]),
+    loadLegalTexts: () => {
+      if (h.textFailure.value) throw h.textFailure.value;
+      const m = new Map([["customer-terms", real.parseLegalText("customer-terms", RAW)]]);
+      // A second registry key, only when a test asks for it (keeps the single-key tests above unchanged).
+      if (h.secondKey.value) m.set("other-terms", real.parseLegalText("other-terms", RAW_B));
+      return m;
+    },
   };
 });
 
@@ -94,6 +104,8 @@ beforeEach(() => {
   h.report.mockReset();
   h.lookups.length = 0;
   h.from.length = 0;
+  h.secondKey.value = false;
+  h.textFailure.value = null;
 });
 afterEach(cleanup);
 
@@ -185,6 +197,23 @@ describe("a failed read is reported and throws", () => {
     expect(h.report).toHaveBeenCalledWith("pageReadFailed", expect.anything(), expect.objectContaining({ extra: { read: "legal_acceptance" } }));
   });
 
+  it("a broken registry (not an unknown key) is reported as pageReadFailed and throws, never an empty page or a not-found", async () => {
+    const real = await vi.importActual<typeof import("@/server/legal-acceptance/canonical")>("@/server/legal-acceptance/canonical");
+    for (const failure of [new Error("disk gone"), new real.LegalTextError("bad_bytes", "legal text is not valid UTF-8")]) {
+      h.report.mockReset();
+      h.textFailure.value = failure;
+      await expect(call("customer-terms")).rejects.toThrow("legal text read failed");
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledWith("pageReadFailed", failure, expect.objectContaining({ extra: { read: "legal_text" } }));
+      expect(h.from).toEqual([]);
+    }
+  });
+
+  it("an unknown key is a not-found and is NOT reported as a failed read", async () => {
+    await expect(call("no-such-text")).rejects.toBeInstanceOf(NotFound);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
   it("a malformed row (unknown choice) is not rendered as an empty or pending card", async () => {
     h.rows.value = [row({ choice: "maybe" })];
     await expect(call("customer-terms")).rejects.toThrow("legal acceptance read failed");
@@ -225,6 +254,49 @@ describe("index page", () => {
     h.flag.mockResolvedValue(false);
     render(await IndexPage());
     expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.notAvailable);
+  });
+
+  it("flag off with a row only for key A: key A is listed and key B (no row) is NOT, even though the registry has it", async () => {
+    h.secondKey.value = true;
+    h.rows.value = [row({ key: "customer-terms", choice: "accept" })];
+    h.flag.mockResolvedValue(false);
+    render(await IndexPage());
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /Customer terms, version 3/ })).toHaveAttribute("href", "/dashboard/approvals/legal/customer-terms");
+    expect(screen.queryByRole("link", { name: /Other terms/ })).toBeNull();
+    expect(screen.queryByText(/Other terms/)).toBeNull();
+  });
+
+  it("flag off with a row only for key B: key B is listed and key A is not (the filter is per key, not 'any row exists')", async () => {
+    h.secondKey.value = true;
+    h.rows.value = [row({ key: "other-terms", text_hash: "e".repeat(64), version: "9", choice: "decline" })];
+    h.flag.mockResolvedValue(false);
+    render(await IndexPage());
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /Other terms, version 9/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Customer terms/)).toBeNull();
+  });
+
+  it("flag on: both registry keys are listed, with or without rows", async () => {
+    h.secondKey.value = true;
+    h.rows.value = [row({ key: "customer-terms" })];
+    render(await IndexPage());
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
+  it("a broken registry is reported as pageReadFailed and throws, never an empty list or a not-found", async () => {
+    const failure = new Error("registry unreadable");
+    h.textFailure.value = failure;
+    await expect(IndexPage()).rejects.toThrow("legal text read failed");
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith("pageReadFailed", failure, expect.objectContaining({ extra: { read: "legal_text" } }));
+    expect(h.from).toEqual([]);
+  });
+
+  it("a malformed row is reported as pageReadFailed (index) and throws", async () => {
+    h.rows.value = [row({ choice: "maybe" })];
+    await expect(IndexPage()).rejects.toThrow("legal acceptance read failed");
+    expect(h.report).toHaveBeenCalledWith("pageReadFailed", null, expect.objectContaining({ extra: { read: "legal_acceptance_index" } }));
   });
 
   it("reads the flag first, for the signed-in user with no workspace", async () => {
