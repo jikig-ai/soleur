@@ -2500,7 +2500,7 @@ row_rt_fault_enoent() { rt_fault ENOENT scripts/bad.test.sh --root "$RT/ok" --li
 row_rt_fault_census() { rt_fault EIO @census --root "$RT/ok" --list "$RT/L-std" --baseline scripts/bl-ok.tsv; [[ "$RC" -eq 2 ]] && rt_marker 2 floor-unreadable; }   # a raw OSError out of the census
 row_rt_baseline_symlink() {   # a symlinked baseline that leaves the tree is refused (its text never printed); one inside the tree is read
   ln -sf "$RT/outside.tsv" "$RT/ok/scripts/bl-link-out.tsv"; ln -sf bl-ok.tsv "$RT/ok/scripts/bl-link-in.tsv"
-  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 0 pass --baseline scripts/bl-link-in.tsv
+  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 1 baseline-reintroduced --baseline scripts/bl-link-in.tsv   # the in-tree symlink resolves — then the uncommitted path is a re-add: baseline-reintroduced, never adopted
 }
 row_rt_big_baseline() {   # a 150000-line baseline with a duplicate: the duplicate check is linear (list.count was quadratic and outlived the 30 s the harness allows on any runner: 60000 lines took under 25 s on a fast CI runner and the quadratic mutant survived there)
   python3 - > "$RT/ok/scripts/bl-big.tsv" <<'PY'
@@ -2508,7 +2508,7 @@ lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(150000))
 lines.append(lines[0])
 print("\n".join(lines))
 PY
-  local t0=$SECONDS r; rt_is 1 stale-line --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && return "$r"; return 1
+  local t0=$SECONDS r; rt_is 1 baseline-reintroduced --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && return "$r"; return 1   # uncommitted-at-base: reintroduced is the marker; the dup/stale checks still run inside the budget
 }
 row_rt_baseline_dir() { rt_in std ok 2 baseline-unreadable --baseline scripts; }
 row_rt_helper_renamed() { rt_in std renamed 2 internal --baseline scripts/bl-ok.tsv && grep -q 'lint-ratchet.py has no baseline_at' <<<"$RERR"; }
@@ -2678,9 +2678,9 @@ row_rt_marker_fields() {   # exactly the pinned field list, on a pass, a verdict
   rt_sel_is "$RT/fl-below.txt" 2 floor-rows-vs-of && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=2\ reason=floor-rows-vs-of\ live=[0-9]+\ baseline=[0-9]+$ ]]
 }
 row_rt_usage() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv || return 1; rt_go --root "$RT/ok" --no-such-flag; [[ "$RC" -eq 2 ]] && ! grep -q SOLEUR_PR_AFFECTED_RATCHET <<<"$ROUTALL"; }   # a usage error prints no marker (the control: a run does)
-row_rt_oracle() {
+row_rt_oracle() {   # the oracle fixture writes a baseline at the canonical path absent at base: baseline-reintroduced since strict zero, and the notice still names all three oracle inputs
   rt_go --root "$RT/oracle" --list "$RT/L-std" --baseline scripts/ci-pr-affected-audit.baseline.tsv
-  [[ "$RC" -eq 0 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 0 pass
+  [[ "$RC" -eq 1 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 1 baseline-reintroduced
 }
 row_rt_oracle_each() {   # each oracle input alone, in a diff, is named (the PR-tree helper, the path library, the runner, ci.yml, the replay script)
   local ot; for ot in "${RT_OTOUCH[@]}"; do rt_in std "ot_${ot%%:*}" 0 pass --baseline scripts/bl-ok.tsv && grep -qxF -- "oracle-inputs-changed: ${ot#*:}" <<<"$ROUT" || return 1; done

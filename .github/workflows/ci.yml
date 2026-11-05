@@ -397,9 +397,10 @@ jobs:
           PR_SELECTION_STAGE2_TIMEOUT: "90"
         run: bash scripts/ci-pr-selection.sh
 
-  # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. `ratchet` compares the live set of
-  # (suite, undeclared tracked path) pairs with the committed shrink-only baseline scripts/ci-pr-affected-audit.baseline.tsv, so it is green on a tree
-  # whose audit exits 1 and red the moment a suite names a path that is neither declared, accepted nor already baselined. Runbook:
+  # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. Since PR5z (#10861) the check is
+  # strict zero: no committed baseline exists — `ratchet` is green on a tree whose audit exits 1 when the live set of (suite, undeclared
+  # tracked path) pairs is empty, and red the moment a suite names a path that is neither declared nor accepted (a re-added baseline file
+  # is baseline-reintroduced, never adopted). Runbook:
   # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md#ratchet-red-on-a-pr-or-queue-entry. NOT in scripts/required-checks.txt,
   # the canonical ruleset JSON or infra/github: making it a required context is PR3b (#10859) and waits for an observation window and the budget
   # owner's go-ahead. It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
