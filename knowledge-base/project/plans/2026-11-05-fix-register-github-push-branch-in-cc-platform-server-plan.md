@@ -127,8 +127,20 @@ Addendum names this exact PR as the one that must settle the pending-approval qu
 approval-required tool in cc"), ADR-305 (gated tools never enter `allowedTools`), ADR-311 (broker spike; this push
 tool is the "quickest route" named in #11640), `#5388` c4 precedent (`resolveC4FlagEnabled`, fail closed, persona gate),
 `#9558` (support never mints or writes). Deferred items: #11534 table rows quoted in the Research Reconciliation table.
-No `knowledge-base/project/learnings` file covers cc grants or the push tool (searched for `ExecutionGrants`,
-`approvalFailClosed`, `github_push_branch`, `resolveC4FlagEnabled`; one unrelated hit).
+*Corrected in review round 1 (2026-11-05); the original sentence read "No `knowledge-base/project/learnings` file covers cc grants or the push tool ... one unrelated hit", which was false.*
+One learning mentions the push tool and the grants:
+`knowledge-base/project/learnings/2026-10-30-a-nonempty-check-was-satisfied-by-the-error-message-it-should-have-caught.md`
+(the ADR-311 spike). Its Session Errors item 1 records that a CTO scope ruling rested on a false premise: `github_push_branch` and
+`ExecutionGrants` existed only in the legacy runner while entitled cc sessions run in `cc-dispatcher.ts`; the prevention it
+names is to give a ruling agent the `git grep` that shows where each relied-on symbol is wired and which runner executes the
+affected sessions. Its other items (a "non-empty" check satisfied by an error line, prose claims about code that a command had
+not falsified) are why the ADR text here carries the falsifying commands. The archived June plan
+`knowledge-base/project/plans/archive/20261013-032858-2026-06-03-fix-concierge-git-workspace-plumbing-per-user-repo-plan.md` also names
+`github_push_branch`: it carries a "CPO sign-off gate" (wiring write tools into the Concierge needs an explicit operator or CPO
+acknowledgement) that this plan had not cited; see "Review Round 1" below. The runner-wiring premise was re-checked in review
+round 1 with `git grep -n -E "buildGithubTools\(|buildGithubPushBranchTool\(" -- apps/web-platform/server`: `buildGithubTools` is called
+only from `agent-runner.ts` (the legacy runner), and `ws-handler.ts` imports `dispatchSoleurGo` from `./cc-dispatcher`, the runner
+that executes cc (Concierge) sessions; the push tool reaches cc only through the new registrar.
 
 **Technical rulings (CTO agent, 2026-11-05).** Eight forks ruled and persisted in
 `knowledge-base/project/specs/feat-one-shot-11636-cc-github-push-branch/decision-challenges.md`. Decisions used
@@ -161,6 +173,26 @@ Checked the planned file list against open `code-review` issues (two-stage `gh -
   dispatch process only (`gitWithInstallationAuth`); the failure to guard against is the token or a push capability
   reaching the sandbox or the model-visible tool result. The tool takes only `branch` and `force`; owner, repo,
   installation, workspace path and default branch are closed over, never model input.
+- **Artifact and vector pairs (added in review round 1, each with its mitigation or scope-out):**
+  - *The full server environment, via a `.git` hook or config entry the agent wrote.* The legacy push child inherits the
+    whole `process.env`, runs outside the sandbox on an Owner-approved push that looks benign, and its stderr is relayed to the
+    model. Mitigated for the cc form by the opt-in hardened push (hooks path, proxy and header overrides, allowlisted child
+    environment, real-directory `.git` check; ADR-309 addendum item 7). Scope-out, a flip precondition (ADR-309 flip item 9b): `url.*.insteadOf`
+    redirection and the approval gate's own `.git` read. This replaces the earlier "installation token only" framing.
+  - *A stale `default_branch` after the cold build.* An Owner-approved push could land on a renamed default branch.
+    Mitigated: `rejectProtectedBranch` blocks `main`, `master` and the captured name, and the fail-closed lookup never falls back to a
+    fixed name; scope-out: a rename mid-Query is a documented staleness window (ADR-309 addendum item 5).
+  - *A non-Owner member as the requester.* The member gets a read-only card and the static pending text; the Owner decides.
+    Mitigated by the existing gate (`viewerRole`, `decider_not_owner`); scope-out: the requester-visible outcome after the chat ends
+    rides the existing inbox and notification path and is not widened here.
+  - *The tool is absent on the next cold build after a flag flip, or after a transient registration failure.* Benign (no tool, no
+    addendum, no half state) and visible to the operator through the Sentry outcome events; the model is not told, which is accepted
+    (ADR-309 addendum item 4).
+  - *Prose claims (the model says a push happened when the gate held it).* Accepted residual: there is no automated detector for model
+    prose; mitigated by the prompt addendum, the static deny texts that echo no input, the `commit` in the success result and the
+    card status frames as ground truth.
+  - *The Bash lane to the same GitHub effects.* Pre-existing and conditional on a live egress forwarder; scope-out, carried into flip
+    item 12 (ADR-309 addendum item 10).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one unapproved or wrong-commit push to one user's repository, by an agent
   the user trusted with web access, is a trust-breaking incident for the whole approval story, so the aggregate tier
@@ -670,3 +702,42 @@ None. The flag flip, toggle-copy rewording, compliance-posture addendum and PA-3
 - Body states: nothing changes for users until the operator flips `approval-queue`; the flip preconditions (toggle copy first, CLO check, dogfood on the Owner workspace, then wider); the #11534 triggers that fired (probe re-run: fired, item stays deferred; "next PR touching `server/approval/*`": not fired by an edit, item stays deferred); the probe `RESULT:` line.
 - Avoid the words "soak", "stays 0", "stays zero" and "post-deploy verify" in the body (the sweepers key on them); no operator checklist in the ship message (`hr-ship-message-no-operator-checklist`).
 - `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` on every commit.
+
+## Review Round 1 (2026-11-05)
+
+Appended after the multi-agent review of the implementation (history above is left as written). Deviations from the plan, all ruled
+by the CTO and CLO agents on 2026-11-05 (rows in `decision-challenges.md`):
+
+- **Allowlist exemption reverted.** Phase 2.3(g) and Research Reconciliation row 7 planned a one-constant relaxation of the
+  `readCcMcpAllowlist` throw. It was reverted: the throw is total again (ADR-311 says #11636 must not weaken it). The constant
+  `CC_GRANT_WIRED_APPROVAL_TOOLS` stays only as the registrar and census constant; a test pins that the env value throws; Phase 2 (#3722)
+  must route the push tool through the registrar.
+- **Hardened push added (cc only, opt-in).** Not in the plan: it reuses the `_git-hardening` leaf, adds proxy and header overrides, an
+  allowlisted child environment and a real-directory `.git` check, with the legacy push byte-identical (ADR-309 flip item 9a). Flip item 9b stays.
+- **Wired-set assertion added.** `assertCcApprovalSetWired` runs in the dispatcher's registration `try` block; the sweep consumes real
+  registrar output; a registered-build test asserts the only MCP server is `soleur_platform`; mutation floors ratcheted. The transitive
+  import-graph census was not built (recorded as a residual).
+- **Prompt addendum became a function with the default branch.** `ccPushPromptAddendum(defaultBranch)` replaces the planned static constant;
+  it names the default branch, says a protected-branch refusal spends the approval, tells the model to use the tool and not Bash, to
+  commit first, and to follow the retry instruction in the result.
+- **Observability reason set narrowed.** The Sentry outcome event is emitted only for `registered`, `flag-error`,
+  `default-branch-unresolved` and the new `default-branch-unsafe` (own op); the expected dark states are silent; failure arms pass `null`
+  first and the class name in `extra`.
+- **Helper reuse.** The registrar reuses `defaultFetchDefaultBranch`, `isSafeBranch` and the segment guard from
+  `resolve-protected-branches.ts` (now exported) and imports the options type from `github-tools.ts` instead of a copy.
+- **Success result carries `commit`** when a grant exists; a post-approval push failure in the strict form appends the static
+  `PUSH_FAILED_APPROVAL_SPENT` text.
+- **Tests added** for all of the above: `test/git-auth-hardened.test.ts`, `test/git-auth-hardened-env.test.ts`,
+  `test/push-branch-hardened.test.ts`, the wired-set assertion in `test/cc-github-push.test.ts`, the registered-build server-keys
+  assertions in `test/cc-dispatcher-real-factory.test.ts`, and the tightened census files.
+- **Docs.** ADR-309 flip checklist items 8 through 12 (CLO register, DPA, card disclosure and toggle-copy forwarder preconditions; the
+  Bash-lane condition), the ADR-311 dated addendum, a stative C4 edge description, and the corrected learnings sentence above.
+- **The archived June plan's "CPO sign-off gate" is satisfied by the 2026-11-05 CPO advisory.** That plan required an explicit operator or
+  CPO acknowledgement before wiring `github_push_branch` into the Concierge. The plan-time CPO advisory of 2026-11-05 approving this
+  registration at product level is taken as that explicit CPO acknowledgement (ruling recorded in `decision-challenges.md`); the
+  operator can see and overrule the call there.
+- **Fork 2 precedent note (history review).** The per-conversation Map departs from the per-dispatch re-resolve used for the c4
+  tool (#5388, #5390), which avoided factory state because the factory runs only on a cold conversation. The Map is safe on warm
+  turns because it is written on each cold build, deleted at the start of every cold build and at every drain site of the sibling
+  maps, and is never an input to `canUseTool` (it feeds only the unregistered-tool mirror); the cost of a wrong entry is a
+  spurious or hidden diagnostic event, not a gate decision.

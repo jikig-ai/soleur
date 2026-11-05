@@ -2280,6 +2280,17 @@
 "id": "2e0lg9cd4ztb4",
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)."
 },
+"2eeaw1pytdwjh": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "2eeaw1pytdwjh",
+"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
+},
 "2g0w538bran25": {
 "technology": "HTTPS (Git Data API)",
 "source": {
@@ -3554,17 +3565,6 @@
 },
 "id": "z47jvim9cbvr",
 "title": "Writes learnings, promotes to constitution"
-},
-"zl0mktm3txay": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "zl0mktm3txay",
-"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher now reaches the gate too and registers the github_push_branch tool behind it, still dark behind the approval-queue flag); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
 },
 "zwq65c0ft453": {
 "technology": "HTTPS",
@@ -26407,7 +26407,7 @@
 "id": "s955hc",
 "source": "platform.engine",
 "target": "platform.infra.approvalStore",
-"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal (the \nConcierge cc dispatcher now reaches the ",
+"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal (the \nConcierge cc dispatcher registers ",
 "points": [
 [
 2084,
@@ -26458,7 +26458,7 @@
 },
 "parent": null,
 "relations": [
-"zl0mktm3txay"
+"2eeaw1pytdwjh"
 ],
 "color": "gray",
 "line": "dashed",

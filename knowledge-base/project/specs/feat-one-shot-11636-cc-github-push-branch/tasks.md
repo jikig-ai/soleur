@@ -51,3 +51,11 @@ Branch: feat-one-shot-11636-cc-github-push-branch. One PR, `fix(approval):` pref
 - Phase 2 done: 2.1 `buildGithubPushBranchTool` + `requireGrant`; 2.2 `server/cc-github-push.ts`; 2.3 dispatcher wiring (grants hoisted, registrar call wrapped in a fail-closed try/catch, `approvalTools`, `platformToolNames`, addendum, per-conversation Map with accessor `getCcRegisteredApprovalTools`, `readCcMcpAllowlist` relaxation); 2.4 three mutant rows `G1-RG1..RG3` killed with `--only`, floors raised for the four census files, `--check-anchors` 231 rows apply.
 - Phase 3 done (docs agent): ADR-309 addendum 2026-11-05 (Ref #11636) with flip-checklist items 8 and 9 mirrored into the archived handover; C4 `engine -> approvalStore` edge description extended and `model.likec4.json` re-rendered; negative-claim sweep comment edits in `cc-dispatcher.ts` and `workspace-settings-tools.ts`.
 - Phase 4.2 done: real-SDK approval-gate probe via the ci config, result line recorded in the ADR addendum. The PR body (4.5) is left to ship.
+
+## Progress (review round 1, 2026-11-05)
+
+- Review round 1 done on the code side (commits c4f56ce44a, 27ed2de3fb, e755c45dca, 06b453c3e0): hardened cc push, allowlist exemption reverted, wired-set assertion, addendum function with the default branch, observability reason set, helper reuse, success `commit`.
+- Docs pass done: ADR-309 addendum revised in place, flip checklist items 8 through 12 (mirrored into the archived handover copy), forward pointers on the earlier addendum bullets, ADR-311 dated addendum, stative C4 edge description with `model.likec4.json` re-rendered, plan corrections and a "Review Round 1" section, decision-challenges rows (CTO, CLO, CPO rulings).
+- Real-SDK approval-gate probe re-run via the ci config: `RESULT: PASS (sdk=0.3.311 cli=2.1.311, cases-run=10)`.
+- What remains: `soleur:ship` (PR body per the plan's Ship Notes, the tracking issue for flip item 9b from its decision-challenges row, `closingIssuesReferences = []`).
+
