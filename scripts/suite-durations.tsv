@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1261
-# generated-at=2026-11-05T19:37:41Z
+# generated-at=2026-11-05T22:36:36Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -138,6 +138,7 @@ plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	336	measured
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	390	measured
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	5676	measured
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	407	measured
+plugins/soleur/skills/incident/test/pull-card.test.sh	1261	floor
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	6665	measured
 plugins/soleur/skills/launch-check/test/baseline.test.sh	6400	measured
 plugins/soleur/skills/launch-check/test/identity.test.sh	10200	measured

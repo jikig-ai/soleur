@@ -780,6 +780,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/server/agent-runner-sandbox-config.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-flow.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-types.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/ops.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/tools.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-classifier.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-lane.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
@@ -1074,6 +1075,13 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
   "plugins/soleur/skills/incident/scripts/redact-engine.py"
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+# pull-card.test.sh greps and parses the marker registry through a $REPO_ROOT path the derive does not
+# select. The three query-script names are skill-text needles, accepted in scripts/ci-pr-affected-audit.accept.tsv.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_PULL_CARD_TEST_SH_PATHS=(
+  "apps/web-platform/server/git-lock-marker-telemetry.ts"  # plugins/soleur/skills/incident/test/pull-card.test.sh:17
+  "plugins/soleur/skills/incident/test/pull-card.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 # plugins/soleur/test/scheduled-realtime-probe-guard (#12009) — executes the probe step body parsed out of the workflow and

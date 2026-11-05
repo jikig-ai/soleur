@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-05T19:37:41Z
+# generated-at=2026-11-05T22:36:36Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -140,6 +140,7 @@ plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	2
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	2
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
+plugins/soleur/skills/incident/test/pull-card.test.sh	5
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
@@ -408,7 +409,7 @@ scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	7
 scripts/domain-model-drift	4
 scripts/egress-audit-retention-check	1
-scripts/egress-gw-probe-silent-12180	5
+scripts/egress-gw-probe-silent-12180	4
 scripts/ensure-doppler	8
 scripts/ensure-kb-index	4
 scripts/expenses-verify-by-check	3
