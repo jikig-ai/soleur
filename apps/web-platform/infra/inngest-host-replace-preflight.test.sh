@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Host-replace inherited-done preflight (#8252) fails closed, and the CI flip credential cannot write
-# (Ref #9927 item 8; plan: knowledge-base/project/plans/2026-11-05-chore-retire-inngest-arm-write-cutover-ops-plan.md).
+# (Ref #9927 item 8; plan: knowledge-base/project/plans/archive/20261105-140457-2026-11-05-chore-retire-inngest-arm-write-cutover-ops-plan.md).
 #
 # Guard 1 - the single `Preflight` step of job `inngest_host_replace` in apply-web-platform-infra.yml.
 #   Its `run:` body is extracted BY NAME and EXECUTED under a stubbed `doppler` (and a toggled `jq`), so a
