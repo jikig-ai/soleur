@@ -1,0 +1,11 @@
+# PR5d accept-row provenance (review fix-round narration) — added accept rows that cover pairs
+# OUTSIDE the original 29-pair live set measured at Phase 0 on fadd34b5c061.
+# Convention per tasks.md 0.3: drift is drained, never baselined — refs revealed for other suites
+# during the slice's audit window (post-edit drift + re-anchored carryovers) take accept rows in the
+# drain commit.
+# Columns: class<TAB>rows<TAB>pairs<TAB>note
+slice-revealed	2	2	tests/scripts/argv-bearer-sweep -> AGENTS.md + AGENTS.rules.md — revealed by the kb-drift-walker edge declaration (receipts/reveal-trials.tsv, kb-drift-walker.sh:30,31); accept rows installed in the SAME commit as the edge per tasks.md 2.3
+post-edit-drift	115	76	accept rows added/refreshed for pairs outside the original 29 on other suites — refs revealed during the slice window, dominated by plugins/soleur/test/git-env-list-parity.test.sh (27), tests/scripts/scratch-residue (25), plugins/soleur/skills/launch-check/test/issues-guards.test.sh (12), scripts/compound-promote (12), scripts/betterstack-emitter-read (11), plugins/soleur/skills/launch-check/test/issues-resume.test.sh (8), scripts/followthrough-varq-ban (8), tests/scripts/git-data-rung2-evidence-capture (3), plugins/soleur/skills/launch-check/test/redact-gate.test.sh (3), .claude/hooks/cla-signed-author-gate.test.sh (2), .claude/hooks/ship-kb-archive-gate.test.sh (1), plugins/soleur/test/fanout-suite-scope.test.sh (1), plugins/soleur/test/scheduled-realtime-probe-guard.test.sh (1), scripts/battery-tag-authorship (1). Naming files: scripts/pre-push-ratchet-lane.sh (27 rows), scripts/betterstack-query.sh (7), scripts/followthroughs/inngest-soak-6178.sh (4), scripts/dogfood/grok-gpu-bootstrap.sh (4), scripts/test-weakness-miner.sh (3), scripts/lint-followthrough-varq-ban.sh (3), et al. Most are re-anchored carryovers — the pair already carried an accept row pre-slice; the drain refreshed anchors to work-time SHAs (accepted count moved only 1537 -> 1555 = +18: 16 newly-accepted drained pairs + the 2 reveal pairs)
+# Review figure reconciliation: the review's "~11 added accept rows outside the original 29" is the
+# approximate scale of the slice-revealed + newly-paired rows (the argv-bearer 2 plus ~9 boundary-prefix
+# pairs that were new-pair drift relative to the 22 baselined, 13 rows) — full measured counts above.
