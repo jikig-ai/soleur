@@ -175,13 +175,13 @@ None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowled
 
 ### Pre-merge (PR)
 
-- [ ] `grep -c 'CLI_VERSION: "2.1.311"' .github/workflows/scheduled-marketplace-drift.yml` returns 1 and the file contains no `2.1.228`.
-- [ ] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (output pasted in the PR body); the scratch binary reports `Bun v1.4.4` via the corrected probe.
-- [ ] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the five files carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
-- [ ] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (noted in the PR body); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
+- [x] `grep -c 'CLI_VERSION: "2.1.311"' .github/workflows/scheduled-marketplace-drift.yml` returns 1 and the file contains no `2.1.228`.
+- [x] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (output pasted in the PR body); the scratch binary reports `Bun v1.4.4` via the corrected probe.
+- [x] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the five files carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
+- [x] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (noted in the PR body); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
 - [ ] `pen-cli/package.json` `overrides` has the exact `@anthropic-ai/claude-agent-sdk: 0.3.311` entry; the lock shows `node_modules/@anthropic-ai/claude-agent-sdk` and its eight platform packages at 0.3.311, regenerated under npm 11.21.1; `lockfile-sync` is green.
-- [ ] `engine-contract-probe.sh` passes against the regenerated lock (or Phase 3 is dropped with the stated reason and the PR body says so).
-- [ ] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
+- [x] `engine-contract-probe.sh` passes against the regenerated lock (or Phase 3 is dropped with the stated reason and the PR body says so).
+- [x] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
 - [ ] CI required checks green: `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`; non-required `infra-validation` and `sandbox-canary-capture-gate` read by hand.
 - [ ] PR body contains `Closes #12102`, the Brotli statement, and the customer-reinstall note; label `meta/machinery` applied; follow-up issue for `operator-digest.workflow.yml` filed and referenced.
 
