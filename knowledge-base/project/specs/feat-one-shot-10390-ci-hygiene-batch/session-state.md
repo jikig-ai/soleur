@@ -57,6 +57,13 @@
 - PA-13 (c) limb flagged by E+F agent (rests on retracted premise) — follow-up filed separately.
 - Next: full-branch review round → qa → compound → ship → postmerge. Operator step pending: #10136 zot accepted-risk owner confirmation.
 
+## D/E/F Review Round Complete (2026-11-05)
+- 9-seat panel over range 469902bf92..HEAD (44 files): 2 P1 + 7 P2 + ~15 P3; all fixed inline.
+- P1s: liveness SQL unsatisfiable (match() on JSON raw + retired first=1 field → JSONExtractString + bounded subqueries + heartbeat exact-one-match); orphan suite inngest-luks-field-8525.test.sh (registered in test-all.sh).
+- Cron hardening: SQL age bound + order/limit, staleBeforeIso UPDATE conjunct (TOCTOU), per-row try/catch + failed counter, report memoized in own step, stopEligible=false, timeouts.start=10m queue bound, attempt passthrough, SettleLifecycle excludes stale_working.
+- P3 batch: alert comment suffix, verdict-map row, runbook/tasks token fixes, followthrough newest-row conjunct + dead code, test mock .lt/.or/.order/.limit.
+- Trailer emitted 9cd5d37d3f (Reviewed-Coverage: full 9/9). Next: soleur:compound → soleur:ship → postmerge.
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
