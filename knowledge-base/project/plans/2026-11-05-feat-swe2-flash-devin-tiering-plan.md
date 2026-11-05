@@ -82,7 +82,11 @@ the operator has no documented path to route it cheaper.
 
 ## Proposed Solution
 
-Docs+routing (Approach A from the brainstorm; B deferred to #12141):
+Docs+routing (Approach A from the brainstorm; B deferred to #12141). Plan-review
+consolidation applied (advisor + DHH + Kieran + simplicity; all mechanical findings
+adopted — the emitted `harness.ts` spawn strings are IN scope since they are the real
+point-of-use surface; the registry-id `agent` arg and unconditional "inherit" text are
+stale today independent of Flash):
 
 1. **INSTRUCTIONS.md §Domain agents (:239-252)** — rewrite the spawn guidance:
    - Profile rule keyed on TOOL SURFACE (SpecFlow/CPO C3): "spawn `subagent_explore`
@@ -123,17 +127,44 @@ Docs+routing (Approach A from the brainstorm; B deferred to #12141):
 5. **plugins/soleur/AGENTS.md** — Devin-mapping bullet after :189: the five
    `model: haiku` research agents map to `subagent_explore` + `agent.subagent_model` on
    Devin; `model: haiku` frontmatter is inert there.
-6. **Test pin (P4)** — extend a devin test file (e.g. `devin-harness.test.ts` or a new
-   small suite) asserting INSTRUCTIONS.md carries the explore/general tool-surface rule
-   and the `agent.subagent_model` key, so the routing guidance can't silently rot.
+6. **Test pin (P4)** — a small dedicated suite pinning the DISTINCTIVE new phrases in
+   INSTRUCTIONS.md (the tool-surface rule + `agent.subagent_model` key — profile names
+   alone are vacuous, they already exist at :320), a negative pin against re-adding the
+   stale alias sentence, and a pin on the preserved sequential-fallback contract.
+7. **`lib/harness.ts` devin arms (review finding — in scope):** `spawnAgent` instruction
+   emits the profile rule (explore for no-exec seats, general for exec/git/`gh` incl.
+   poll loops) and drops the unconditional "Inherit the session model" (false for
+   explore); `formatAgentSpawn` devin arm keeps the registry id out of the `agent` arg
+   guidance (it names a profile, not a soleur id — the id travels in the prompt's
+   definition path); `pollInstructions("devin")` names `subagent_general` for the
+   exit-coded loop. Re-pin `devin-harness.test.ts:108` (+ `harness.test.ts` arms) to the
+   new strings. §Polling prose uses state-of-fact form — stay clear of the
+   `pr-merge-poll` banned `(once|after|until) the (poll|loop|fence)…printed` class.
+
+**Review corrections folded into items 1–5:** `agent.subagent_model` reach IS documented
+— applies to `subagent_explore` + unpinned customs, NEW sessions only; it never reaches
+`subagent_general`, so poll loops and exec-needing spawns get no cheaper (assert, don't
+hedge). Only the no-exec researchers (`repo-research-analyst`,
+`best-practices-researcher`; `framework-docs-researcher` pending MCP-on-explore
+verification) map to `subagent_explore` — `git-history-analyzer` and
+`learnings-researcher` need exec → `subagent_general` (item 5 must say this, not
+"the five"). Drop "Soleur's tier `log()` line" from the checks (no consumer on Devin) —
+honest checks are `devin models` allowlist, admin policy, observable spend. Name the
+webfetch exclusion in the routing rule. Preserve §Domain agents :241-252 contract
+(definition-path recipe + sequential-fallback disclosure) verbatim. The opt-in line
+carries the promo date + "re-verify rate" suffix (dormant-deferral precedent).
+`model-launch-review` collateral: also frontmatter `description:` (subject to the
+word-budget gate — measure first), `README.md` mirror line, `audit-models.sh` header
+comment, and "Items 2–6" → "2–7" in the post-table prose.
 
 ## Files to Edit
 
 - `plugins/soleur/devin/INSTRUCTIONS.md` (§Domain agents, §Devin-specific considerations, §Polling)
+- `plugins/soleur/lib/harness.ts` (devin spawn + poll instruction strings)
 - `knowledge-base/engineering/architecture/decisions/ADR-110-harness-semantic-model-tier-map.md` (addendum)
 - `plugins/soleur/skills/model-launch-review/SKILL.md` (row 7 + collateral)
 - `plugins/soleur/AGENTS.md` (Model Selection Policy bullet)
-- `plugins/soleur/test/devin-harness.test.ts` (or sibling — phrase pins)
+- `plugins/soleur/test/` — new or extended phrase-pin suite; `devin-harness.test.ts` / `harness.test.ts` re-pins
 
 ## Implementation Phases
 
