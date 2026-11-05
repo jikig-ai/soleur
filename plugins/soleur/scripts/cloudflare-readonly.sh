@@ -18,10 +18,13 @@
 # be empty, so the first live read is after the merge.
 #
 # Token binding (no flag, no fallback; CF_API_TOKEN is never used):
-#   ssl-mode -> CF_API_TOKEN_ZONE_SETTINGS     config-entrypoint, pagerules-ssl -> CF_API_TOKEN_RULESETS
+#   ssl-mode -> CF_API_TOKEN_ZONE_SETTINGS     config-entrypoint -> CF_API_TOKEN_RULESETS
+#   pagerules-ssl -> CF_API_TOKEN_PAGERULES_READ (zone-scoped Page Rules: Read on soleur.ai only; read-only; no fallback to
+#   CF_API_TOKEN_RULESETS, which returned 403 on /pagerules, and no fallback to any other token)
 #   change-history -> CF_API_TOKEN_AUDIT plus CF_ACCOUNT_ID       the others also need CF_ZONE_ID
 # CF_API_TOKEN_ZONE_SETTINGS and CF_API_TOKEN_RULESETS are Terraform-scoped and write-capable (no read-only equivalent exists
 # yet); that exception is removable when read-only equivalents are minted, which is a credential change and the owner's.
+# CF_API_TOKEN_PAGERULES_READ is the read-only token minted for check C (#10479), so C is no longer part of that exception.
 # CF_API_TOKEN_AUDIT is read-only but is documented under the Doppler dev config, so change-history is expected to record
 # `no-credential` or `other: refused-source` until the owner relocates it (where it lives is an open question). This wrapper's
 # safety is structural: one GET request through one curl call site, absolute curl path, fixed URL templates, an EMPTY
@@ -51,7 +54,8 @@
 #     bad-response, never guessed.
 #   - action_parameters.ssl for set_config is not documented, so ssl is read defensively and enum-checked.
 #   - Page rules: any one of Zone Read, Zone Write, Page Rules Read or Page Rules Write is accepted (from the plan deepen pass,
-#     not re-read). CF_API_TOKEN_RULESETS may lack it; a 403 there is a valid recorded result.
+#     not re-read). CF_API_TOKEN_RULESETS lacks it (a live 403, 2026-11-05), so check C is bound to the dedicated read-only
+#     CF_API_TOKEN_PAGERULES_READ; a 403 there is still a valid recorded result and is never answered by a token swap.
 #
 # Output contract: the first stdout line is `cloudflare-readonly: <subcommand> ok` or
 # `cloudflare-readonly: <subcommand> unverified - <reason>`, then (ok only) one JSON projection line, EXCEPT exits 64 and 78
@@ -101,7 +105,7 @@ set -uo pipefail
 # expansion, so the Bearer value would leak the moment it is bound. Test the STATE, not a list of ways to enable it.
 case "$-" in
   *x*)
-    if [ -n "${CF_API_TOKEN_ZONE_SETTINGS:+x}${CF_API_TOKEN_RULESETS:+x}${CF_API_TOKEN_AUDIT:+x}${CF_API_TOKEN:+x}" ]; then
+    if [ -n "${CF_API_TOKEN_ZONE_SETTINGS:+x}${CF_API_TOKEN_RULESETS:+x}${CF_API_TOKEN_PAGERULES_READ:+x}${CF_API_TOKEN_AUDIT:+x}${CF_API_TOKEN:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -279,7 +283,7 @@ SUB="$1"
 case "$SUB" in
   ssl-mode) TOKVAR=CF_API_TOKEN_ZONE_SETTINGS; load_credential zone; sub_ssl_mode ;;
   config-entrypoint) TOKVAR=CF_API_TOKEN_RULESETS; load_credential zone; sub_config_entrypoint ;;
-  pagerules-ssl) TOKVAR=CF_API_TOKEN_RULESETS; load_credential zone; sub_pagerules_ssl ;;
+  pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ; load_credential zone; sub_pagerules_ssl ;;
   change-history) TOKVAR=CF_API_TOKEN_AUDIT; load_credential account; sub_change_history ;;
   *) die 64 "refused: unknown subcommand" ;;
 esac
