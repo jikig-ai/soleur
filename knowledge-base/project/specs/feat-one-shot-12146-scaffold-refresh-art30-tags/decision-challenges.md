@@ -28,3 +28,10 @@ nothing was put to the operator. The plan's rulings are copied below from the ag
 - Plan review corrected the implementation sketch in R3's exit-site table: verification happens before the `mv`, so no
   failure after the write exists; the refusal path hand-rolls its exit instead of calling `die`; the shared trap owner is
   reused instead of adding a second handler.
+- Deepen-plan (security-sentinel, test-design-reviewer, architecture-strategist; all Mechanical) hardened R3's
+  implementation: the refusal report prints template-side lines only (never the user's file, which may hold a pasted
+  secret); the ledger row order is a rank and an installed file newer than the plugin's template is refused (no
+  downgrade); the physical destination directory must equal the expected one; a pre-write recheck narrows the TOCTOU
+  window. R2 gained a privilege rule (re-emittable workflows are `contents: read` only) and a frozen Stage A to Stage B
+  interface, both asserted by a test. R6's suite grew from 11 to 12 cases (the interface case) with labelled sub-rows.
+  None of these changes a CTO ruling's direction.

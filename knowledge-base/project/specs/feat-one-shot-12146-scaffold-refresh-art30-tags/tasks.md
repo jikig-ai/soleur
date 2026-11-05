@@ -7,11 +7,11 @@ Tracker: #12146 (items 2 and 3). PR #12177 (draft). PR body uses `Ref #12146`, n
 
 - 1.1 Generate `plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.emitted.sha256` from template git history (six rows; header carries the regeneration command and the append-only rule)
 - 1.2 Create fixture `plugins/soleur/skills/constraint-scaffold/test/fixtures/stage-a.v1.0.236.emitted` (byte copy of the substituted emission at 21c9168e59)
-- 1.3 Create `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh` with the 11 cases in the plan
-  - 1.3.1 cases 1-4: refresh, already current, edited copy refused (75), stripped newline refused
-  - 1.3.2 cases 5-6: dirty tree (67) and ordering, stage-a/config absent and dangling symlink (70, no lock)
-  - 1.3.3 cases 7-8: current template hash in ledger (message prints regen command), missing/empty ledger fails closed
-  - 1.3.4 cases 9-11: symlink file/parent refused, other emitted files unchanged, no pin literal in script or ledger
+- 1.3 Create `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh` with the 12 cases and labelled sub-rows in the plan (per-case sandbox copy of scripts/ and references/, base fixture cp -R, MIN_ROWS floor)
+  - 1.3.1 cases 1-4: refresh (mode 0644), already current (no ledger read), edited copy refused (75, template-side report only, planted token absent), stripped newline refused
+  - 1.3.2 cases 5-6: dirty tree (67), live-lock positive control, untracked destination (67), symlink-before-tree (75); stage-a/config absent and dangling symlink (70, no lock taken)
+  - 1.3.3 cases 7-8: current template hash in ledger (message prints regen command), downgrade refused (75), missing/empty/comment-only ledger fails closed
+  - 1.3.4 cases 9-12: symlinked file/parent and empty-digest arms, other emitted files unchanged and dest changed, no pin literal (with positive control), frozen A-to-B interface and contents: read
   - 1.3.5 confirm the suite is RED (unknown flag, rc 64)
 
 ## Phase 2: GREEN (`--refresh-stage-a` in constraint-scaffold.sh)
@@ -19,14 +19,15 @@ Tracker: #12146 (items 2 and 3). PR #12177 (draft). PR body uses `Ref #12146`, n
 - 2.1 Header: Modes, exit 75, exit 70 text, line-131 usage text
 - 2.2 Arg parse third arm, `MODE="stage-a"`
 - 2.3 Functions: `sha256_of` (sha256sum else shasum -a 256), `fresh_stage_a`, exact first-field ledger match, `refresh_stage_a`
-- 2.4 Step order per plan (70 first, symlink, tree, lock, mktemp, verify, classify, chmod 0644, mv); reuse `_wt_cleanup` with `STAGE_A_TMP`; no top-level trap lines
-- 2.5 Refusal path: hand-rolled exit 75 with `{ diff ... || true; } | head -60`
+- 2.4 Step order per plan (70 first, symlink and physical-dir equality, tracked + clean tree, arm traps then lock, mktemp, verify, rank classify, pre-write recheck, chmod 0644, mv); reuse `_wt_cleanup` with `${STAGE_A_TMP:-}`; no top-level trap lines
+- 2.5 Refusal path: hand-rolled exit 75; template-side-only report (`diff | grep -v '^< ' | cut -c1-200 | head -60`, wrapped so SIGPIPE cannot abort); downgrade refusal prints no diff
 - 2.6 Suite green; run parity, emit-fix-constraints and bite-proof locally
 
 ## Phase 3: docs and records
 
 - 3.1 SKILL.md: Usage block, fix "only re-writable artifact" sentence, Self-tests row, ledger link, pin-bump author guidance (no description change)
-- 3.2 ADR-071 dated amendment (third artifact class, one-line alternatives, bite-proof position); ADR-074 pointer line
+- 3.2 ADR-071 dated amendment (four-class enumeration, contents: read privilege rule, frozen A-to-B interface, amended bite-proof sentence, one-line alternatives); ADR-074 pointer line
+- 3.3 constraint-scaffold.sh header, 66 hint, SKILL.md 75 mentions (71-74 prose, 66..74 cleanup sentence), SIGKILL recovery
 
 ## Phase 4: registries
 
@@ -44,6 +45,7 @@ Tracker: #12146 (items 2 and 3). PR #12177 (draft). PR body uses `Ref #12146`, n
 
 ## Phase 6: verify and PR
 
+- 6.0 File the `take_run_lock` race scope-out issue (label deferred-scope-out; verify the label exists; roadmap milestone)
 - 6.1 `git diff origin/main -- apps/web-platform/test/claude-pin-lockstep.test.ts` is empty
 - 6.2 PR body: `Ref #12146`, `## Changelog`, `semver:patch`; check `sync-pr-behind.sh 12177 --queue-state` before any push; real push exit code
 - 6.3 CI: rely on required `test`; read infra-validation and sandbox-canary-capture-gate by hand; stop if the owner-run freeze blocks the merge

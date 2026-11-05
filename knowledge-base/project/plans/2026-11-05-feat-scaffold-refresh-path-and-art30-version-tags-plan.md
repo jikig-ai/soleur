@@ -11,6 +11,27 @@ brand_survival_threshold: aggregate pattern
 
 <!-- lane: the branch has no spec.md to carry a lane from, so the fail-closed default cross-domain applies (TR2). -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Gates run:** Phase 4.6 (User-Brand Impact present, threshold `aggregate pattern`), 4.7 (Observability: `bash` verb allowlisted, command not suite-shaped, `expected_output` a matchable literal, verified with `tokenizeExpected`), 4.8 (no PAT-shaped variable), 4.9 (no UI surface), 4.11 (Guard Contract lint green), 4.12 (one unfenced Scope Check, no `unmapped`/`BLOCKED`). 4.4, 4.5, 4.55, 4.10, 4.13 do not trigger (no scheduled job, no network symptom, no downtime-class change, no new store or connection, no new autonomous task).
+**Live verification:** cited PRs and issues (#12136 merged, #12177 open draft, #8626 open and it does edit the register, #8381 open, #12102 closed), all six ledger hashes recomputed from git history, rule id `cq-write-failing-tests-before` active, label `semver:patch` exists, ADR-071/074/129 exist, every referenced repo path is tracked.
+**Agents used:** security-sentinel, test-design-reviewer, architecture-strategist (plus the earlier plan-review panel and the CTO and CLO rulings).
+
+### Key improvements
+
+1. No downgrade: the ledger row order is the rank; an installed file newer than the plugin's template is refused (the ledger alone could not tell stale from newer).
+2. The refusal report is template-side only and width-bounded: the earlier `diff -u` would have printed a user's edited workflow, including any secret pasted into it, into the agent transcript.
+3. Path safety is stricter: the physical destination directory must equal `$TARGET/.github/workflows` (repo containment let a symlinked `.github` redirect the write); symlink and untracked arms exit before any diff; a pre-write recheck narrows the TOCTOU window and the residual is stated.
+4. The Stage A to Stage B wire interface and the `contents: read` privilege are frozen in the ADR-071 amendment and asserted by test case 12, so "append a ledger row" cannot ship a change that silently disables an older Stage B.
+5. The test design is hardened: ledger and template manipulated in a per-case sandbox copy, live-lock positive control, destinations that hold ledger-member bytes so a guard (not classification) is what refuses, a fake hash tool for the empty-digest arm, bash 3.2 and BSD portability, labelled sub-rows, an anti-vacuity floor.
+6. SKILL.md and the ledger now say a refresh is a content upgrade (install command, model id, token wiring), not only a pin bump.
+
+### New considerations
+
+- 75 appears in four documentation sites besides the matrix; all are listed in Phase 3.
+- A pre-existing `take_run_lock` race is filed as a tracked scope-out rather than left invisible.
+
 ## Overview
 
 Tracker #12146 left three boxes open after PR #12136 moved every claude-code-action pin in this repository to
@@ -60,7 +81,7 @@ Properties the work must buy:
 
 - P1. A repository that installed the scaffold can obtain the current stage-a workflow without hand-editing a workflow file.
 - P2. A user-edited stage-a workflow is never silently overwritten.
-- P3. A stale pin is never silently skipped: current means a quiet no-op, anything else is a loud, coded refusal with the diff on stdout.
+- P3. A stale pin is never silently skipped: current means a quiet no-op, anything else is a loud, coded refusal with a template-side report on stdout.
 - P4. The refresh adds no new claude-code-action pin carrier that can drift out of the lockstep guard's view.
 - P5. The Art. 30 register states the pin control without any perishable value.
 
@@ -83,7 +104,7 @@ Ruled by CTO agent, 2026-11-05 (seven rulings, summarised; full text in `decisio
 
 - R1 shape: new flag `--refresh-stage-a` on the existing script, third mode. New exit code 75 ("existing file is not a known pristine emission"). Reuse 0, 2, 64, 65, 67, 69, 70.
 - R2 scope: exactly one file, `apps/web-platform/.github/workflows/fix-constraints-stage-a.yml`, held in a one-row (template, destination, ledger) table. Recorded by an ADR-071 amendment plus a pointer line in ADR-074; no new ADR.
-- R3 clobber guard: sha256 ledger of every historical substituted emission; overwrite only on an exact byte match; any other bytes are refused (75) with a bounded diff on stdout. Already-current is a no-op exit 0.
+- R3 clobber guard: sha256 ledger of every historical substituted emission; overwrite only on an exact byte match; any other bytes are refused (75) with a bounded, template-side-only report (deepen-plan security review: the user's file is never printed) on stdout. Already-current is a no-op exit 0.
 - R4 lockstep: pin derived from the template at run time; `claude-pin-lockstep.test.ts` stays byte-identical.
 - R5 no bite-proof in the refresh; verification is hash classification before the write and `cmp` after.
 - R6 new test file `refresh-stage-a.test.sh` plus two committed fixtures and sorted registry rows.
@@ -156,7 +177,7 @@ The first is the status quo; the second is the failure the clobber guard exists 
 
 **If this leaks, the user's workflow is exposed via:** a refresh that replaced a user-edited stage-a file with the
 template would change what a secret-bearing, untrusted-`pull_request` job runs without the founder reading a diff.
-The ledger-only overwrite rule and the refusal (exit 75, file byte-unchanged, diff on stdout) bound that exposure to
+The ledger-only overwrite rule and the refusal (exit 75, file byte-unchanged, template-side report only) bound that exposure to
 bytes the template already shipped. No credential value is read, written or logged by the mode.
 
 **Brand-survival threshold:** aggregate pattern
@@ -237,36 +258,53 @@ for this plan (`git show <commit>:<template> | sed 's|__TARGET_DIR__|apps/web-pl
 | 21c9168e59 | 2026-10-05 | v1.0.236 | 45fdc5c5e0060d8ced95d64688061dc567beba1329a9323b6b6a7817ecdd2895 |
 | 0195929c1d | 2026-11-05 | v1.0.263 | 58377282013228a6bd5bbf1a9d647ee2710622711efa58710999b3c46585a1da |
 
-Ledger file shape: a `#` header that says "append a row for every change to fix-constraints-stage-a.template; never
-remove a row" and carries the regeneration command, so any reviewer can re-derive a row from git history:
-`git show <commit>:plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template | sed 's|__TARGET_DIR__|apps/web-platform|g' | sha256sum`.
-Each data row's first whitespace-separated field is the hash (`awk '{print $1}'`, so blanks and tabs need no special
-handling). The ledger contains no `claude-code-action` string and no 40-hex action SHA (a sha256 is 64 hex and does not
-match a word-bounded 40-hex scan). The pin-tag column is informational; there is no commit column (a PR cannot know its
-own squash-commit id). The rows are GENERATED by that command at implementation time, never typed.
+Ledger file shape: a `#` header, then one data row per line, `<sha256>  <pin-tag>  <date>  <what a refresh changes>`;
+only the first whitespace-separated field is read (`awk '{print $1}'`, so blanks, tabs and trailing notes need no special
+handling). Row ORDER is the sequence: rows are appended chronologically, newest last, never reordered or removed, and the
+line index of a row is its rank (the downgrade guard in Phase 2 step 9 reads it). The header says so, carries the
+regeneration command so a reviewer can re-derive any row from git history, and carries the compatibility note: "A row
+certifies only that Soleur emitted these bytes once. Append a row only if the new template keeps the frozen A-to-B interface
+and the `contents: read` permission set (ADR-071 amendment 2026-11-05)." The per-row change notes come from the template
+commits (so a reviewer sees that a refresh is a content upgrade, not only a pin bump): d86256032e initial (`bun install
+--frozen-lockfile`, model sonnet-4-6); 48b13c1f2e model to sonnet-5; f5f51c84b0 install step to `npm ci --ignore-scripts`;
+6d27cd17da model to claude-sonnet-5-5; 21c9168e59 adds the `github_token` input and moves to action v1.0.236; 0195929c1d moves
+to action v1.0.263. The ledger contains no `claude-code-action` string and no 40-hex action SHA (a sha256 is 64 hex and does
+not match a boundary-anchored 40-hex scan). There is no commit column (a PR cannot know its own squash-commit id). The rows are
+GENERATED by that command at implementation time, never typed. Refresh converges the file on the current template, including the
+install command: a 2026-07-01-era copy that installed with bun moves to `npm ci`; this adds no precondition because the sibling
+`constraint-gates.yml` template already runs `npm ci --ignore-scripts` (constraint-gates-workflow.template line 65), so a repo
+whose gate works already has the lockfile.
 
 1.2 Create ONE committed fixture, `plugins/soleur/skills/constraint-scaffold/test/fixtures/stage-a.v1.0.236.emitted`, a
 byte copy of the substituted emission at 21c9168e59 (the era the tracker names; ledger row 5 of 6, so a scan that stops at
 the first row cannot pass). The non-`.yml` suffix plus the `test/fixtures/` path hide it from the lockstep census by two
-independent reasons (the census scans only `.yml/.yaml/.template` and skips `test` and `fixtures` segments). Plan review
-cut the second (v1.0.101) fixture: classification is a hash lookup, so a second byte shape exercises the same code path.
+independent reasons (the census scans only `.yml/.yaml/.template` and skips `test` and `fixtures` segments). Plan review cut the
+second (v1.0.101) fixture: classification is a hash lookup, so a second byte shape exercises the same code path.
 
-1.3 Create `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh` (hermetic `git init` fixtures via
-`CONSTRAINT_SCAFFOLD_REPO_ROOT`, the repo's `git-fixture-env.sh` chokepoint, accumulate-then-exit, independent `cases`
-counter and instrument self-test as in `parity.test.sh`). Eleven cases (plan review cut the other nine as duplicates of
-these code paths; exit 64 and 65 are pre-existing paths):
+1.3 Create `plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh`. Structure (deepen-plan test-design
+review): hermetic `git init` fixtures via `CONSTRAINT_SCAFFOLD_REPO_ROOT` and the repo's `git-fixture-env.sh` chokepoint;
+build ONE base fixture repo and `cp -R` it per case; for every case that varies the ledger or the template, copy `scripts/` and
+`references/` into a per-case sandbox and run the COPY (the script derives `REF_DIR` from its own location, so
+`CONSTRAINT_SCAFFOLD_REPO_ROOT` alone cannot move the ledger); accumulate-then-exit with the independent `cases` counter, the
+instrument self-test and a `MIN_ROWS` anti-vacuity floor as in `parity.test.sh`; sub-rows are labelled (`3a`, `3b`, ...) so a
+failure names the behavior; a STATE assertion (bytes unchanged, no lock) is recorded only when the rc assertion for that
+sub-row already matched, so the RED run does not report false greens. Portability (bash 3.2, BSD): hash helper is
+`sha256sum` else `shasum -a 256`; mode read with `ls -l | cut -c1-10`, never `stat`; strip a final newline with
+`printf '%s' "$(<f)"`; boundary-anchored greps `(^|[^0-9a-f])[0-9a-f]{40}([^0-9a-f]|$)` (no `\b`); "file not rewritten" is
+checked by backdating with `touch -t 200001010000` and asserting `! [ dest -nt ref ]` plus an unchanged inode. Twelve cases:
 
-1. v1.0.236 fixture, clean and committed: rc 0, file byte-equal to the fresh emission, no lock or temp file remains.
-2. Already current: rc 0, "already current" on stdout, file content and `ls -li` line (inode, size, mtime) unchanged (no `stat` flags: GNU and BSD differ).
-3. Edited copy (the fixture plus one appended comment line): rc 75, file hash before equals after, the `--- existing` / `+++ fresh` diff on STDOUT, no lock or temp file remains. MUTATION pair: the same fixture unedited is case 1.
-4. Final newline stripped from the fixture: rc 75 (exact bytes, no text normalisation).
-5. Dirty tree: rc 67, file unchanged; with a live lock held as well, still 67 (tree check precedes the lock); a symlinked destination on a dirty tree is 75 (symlink check precedes the tree check).
-6. Stage-a absent: rc 70, also on a dirty tree (70 precedes the tree check), and no lock file is created; config absent: rc 70; a dangling-symlink destination: rc 70.
-7. The current template's substituted hash is in the ledger. RED row that forces a ledger append on every template change; its failure message prints the regeneration command and the ledger path, so a pin-bump PR knows exactly what to do.
-8. Ledger missing, or present with zero data rows (or only comment lines): every input is refused (rc 75, file unchanged), never refreshed. Fail closed. Also: the refreshed file's mode is 0644.
-9. Symlinked destination file, and a symlinked parent directory: refused (75), link target untouched. Plus a unit row: an unreadable destination (empty hash) is refused (69), never classified.
-10. After a refresh the other emitted files (stage-b, constraint-gates.yml, config, runner, baseline) are byte-unchanged.
-11. No pin literal: no word-bounded 40-hex string and no `claude-code-action@` in `constraint-scaffold.sh` or the ledger.
+1. Refresh the v1.0.236 fixture (clean, committed, under `umask 077`): 1a rc 0; 1b bytes equal the fresh emission; 1c mode is `-rw-r--r--`; 1d no leftover temp file or lock directory.
+2. Already current, with the ledger REMOVED in the sandbox (already-current is the one input that never consults the ledger): 2a rc 0 and "already current"; 2b not rewritten (backdated mtime, inode).
+3. Edited copy (the fixture plus one appended line carrying a fake `sk-ant-` token): 3a rc 75; 3b bytes unchanged; 3c stdout lists template-side lines and hunk headers but NOT the existing-side line and not the planted token (the refusal output never prints the user's file content); 3d no leftover. Mutation pair: the same fixture unedited is case 1.
+4. Final newline stripped from the fixture: rc 75, bytes unchanged.
+5. Guards before the write, each with a destination that holds ledger-member bytes and a dirtied DIFFERENT tracked file: 5a dirty tree gives 67, bytes unchanged; 5b live lock (the lock directory pre-created with the test shell's own pid, which `kill -0` sees as live) on a clean tree gives 69 (positive control that the lock is reached); 5c dirty tree plus the live lock gives 67 (tree check precedes the lock); 5d symlinked destination on a dirty tree gives 75 (symlink check precedes the tree check); 5e destination untracked but byte-valid on a clean tree gives 67 (the refresh must be reviewable with `git diff`).
+6. Existence precedes everything: 6a stage-a absent on a dirty tree with a live lock held gives 70; 6b config absent gives 70; 6c dangling-symlink destination gives 70; 6d in 6a the pre-created lock's pid file is still the test shell's pid (the mode took no lock).
+7. Ledger anchor to the template: 7a the CURRENT template's substituted hash is in the real ledger (the RED forcer for every template change; its failure message prints the regeneration command and the ledger path); 7b downgrade: in the sandbox, fake the template as an OLDER ledger row's bytes while the destination holds the NEWEST row's bytes: rc 75, "installed file is newer than this plugin's template", bytes unchanged, no diff printed.
+8. Ledger unusable (sandbox: removed, zero data rows, comment-only): the stale fixture is refused with rc 75 and bytes unchanged.
+9. Symlink and hash-tool arms: 9a symlinked destination file whose target holds ledger-member bytes outside the repo gives 75, target unchanged, no diff printed; 9b symlinked parent (`.github` pointing at another directory inside the repo) gives 75 and the pointed-at file is unchanged (the physical destination directory must EQUAL `$TARGET/.github/workflows`, containment under the repo root is not enough); 9c `sha256sum` and `shasum` shadowed on `PATH` by a strict fake that emits an empty digest (any other argv exits 64) gives 69 with bytes unchanged.
+10. After a refresh, 10a rc 0 and the destination changed; 10b the other emitted files (stage-b, constraint-gates.yml, config, runner, baseline), each holding distinct sentinel contents, are byte-unchanged.
+11. No pin literal: 11a positive control (a known 40-hex string and a `claude-code-action@` string fed through the same helper are found); 11b `constraint-scaffold.sh` has neither; 11c the ledger has neither; both files are checked to exist first (`grep` rc 2 is not a pass).
+12. Frozen Stage A to Stage B interface and privilege (architecture review): the current Stage A template keeps `name: fix-constraints-stage-a`, both artifact-name prefixes `fix-constraints-patch-` and `fix-constraints-giveup-`, an `on:` block whose only trigger is `pull_request` (no `pull_request_target`, `workflow_run`, `issue_comment`), and `permissions` of exactly `contents: read` with no `id-token` and no write scope. The constants are frozen from the oldest ledger era; the case does not compare against the current Stage B template.
 
 Run it; it fails (flag unknown, exit 64). That is the RED.
 
@@ -285,38 +323,45 @@ Ordering and exit-site table (by position relative to the first write, the `mv`)
 | Exit | Position | State left behind |
 |---|---|---|
 | 2, 64, 65 | before any read of the target | nothing written |
-| 70 (stage-a or config missing) | before the write, before the tree check and the lock | nothing written, no lock taken |
-| 67 (dirty tree) | before the write | nothing written |
-| 69 (lock held, no hash tool or malformed hash, mktemp failure, fresh-emission verification failure) | before the write | nothing written; temp file removed by `_wt_cleanup` |
+| 70 (stage-a or config missing, dangling symlink) | before the write, before the symlink check, the tree check and the lock | nothing written, no lock taken |
+| 75 (symlinked destination, or physical destination directory is not exactly `$TARGET/.github/workflows`) | before the write | existing file byte-unchanged; goes through `die`, never prints a diff |
+| 67 (destination untracked, or dirty tree) | before the write | nothing written |
+| 69 (lock held, no hash tool or malformed hash, `mktemp` failure, fresh-emission verification failure) | before the write | nothing written; temp file removed by `_wt_cleanup` |
 | 0 (already current) | before the write | no write |
-| 75 (not a known emission, or ledger unusable, or symlinked destination or parent) | before the write | existing file byte-unchanged |
+| 75 (not a known emission; ledger unusable; installed file NEWER than this plugin's template; destination changed during the run) | before the write | existing file byte-unchanged |
 | 69 (`mv` itself fails) | at the write | original intact (rename is atomic in the same directory); temp file removed |
-| 0 (refreshed) | after the write | success; no fallible step follows the `mv`, so nothing exits non-zero after a successful write |
+| 0 (refreshed) | after the write | success; no fallible step follows the `mv` |
 
 Steps in `refresh_stage_a`, in this order (plan review fixed the order: the 70 check must precede every check that can
 fail for another reason or write a lock, so the Observability probe deterministically reaches 70 on a dirty tree and
 stays read-only):
 
-1. Arg parse (64), then `detect_nextjs` (65).
+1. Arg parse (64), then `detect_nextjs` (65). Initialise `STAGE_A_TMP=""` at top level and read it everywhere as `${STAGE_A_TMP:-}`, so an early `die` under `set -euo pipefail` cannot trip an unbound variable inside the EXIT trap and replace the intended exit code with 1.
 2. Existence: `[[ -f "$CFG" ]]` then `[[ -f "$FIXWORKFLOW_A" ]]`, else 70 (a dangling symlink is not a file, so it is also 70). Before any tree check and before the lock.
-3. Symlink: `[[ -L "$FIXWORKFLOW_A" ]]` refuses (75); and the `append_once` containment check (`physpath` of the destination must resolve under `$REPO_ROOT`) refuses a symlinked parent such as `.github -> outside` (75). `physpath` alone cannot see a symlinked file, so both checks are needed.
-4. `require_clean_tree` (67).
-5. `take_run_lock` (69). The mode REUSES the single trap owner `_wt_cleanup` (ADR-129): add a `STAGE_A_TMP` variable it `rm -f`s, and branch its "interrupted" message on `MODE` so a stage-a interrupt does not print the `--refresh-baseline` text. It already calls `remove_emitted_artifacts` only when `MODE=default`. Every new `trap` line stays indented inside a function or `if` block: `bite-proof.test.sh` pins the arm and disarm lines by grep (`^trap - EXIT INT TERM$` at column 0), and a stray top-level line would shift that pin.
-6. `mktemp "$dest_dir/.fix-constraints-stage-a.XXXXXX"` (explicit template so BSD `mktemp` on bash 3.2 works), assign `STAGE_A_TMP` immediately.
-7. Write the fresh emission to the temp file; compute `want` (hash of the temp file) and `have` (hash of the destination). Require both to match `^[0-9a-f]{64}$`, else 69: an empty `have` must never reach classification (fail-open: it would match every row). Verify the temp file against a second `sed` pass (`cmp -s`) BEFORE the write, so the `mv` is the last fallible step.
-8. `have == want`: print `already current`, exit 0.
-9. `have` not equal to the first field of any non-comment ledger row (exact field equality, e.g. `awk -v h="$have" '/^[[:space:]]*#/ || !NF {next} $1 == h {f=1} END {exit !f}'`; a missing or empty ledger therefore matches nothing): print `FAILED (75): fix-constraints-stage-a.yml differs from every known emission (edited, or a version this ledger does not know); left unchanged`, then the bounded diff, then exit 75. Do NOT use `die` for this (it exits before the diff). Hand-roll `say`, the diff, `log`, `exit 75`. The diff is `{ diff -u --label existing --label fresh -- "$dest" "$STAGE_A_TMP" || true; } | head -60` so neither `diff` rc 1 nor SIGPIPE from `head` aborts the script under `set -euo pipefail`; the fixed labels keep the test's stdout assertion free of random temp names.
-10. `chmod 0644 "$STAGE_A_TMP"` (mktemp creates 0600; the workflow is 0644 and a silent mode change on a founder's file is a defect), then `mv` over the destination, then print `refreshed fix-constraints-stage-a.yml ... review with git diff`.
+3. Path safety, through `die` (never the diff path): `[[ -L "$FIXWORKFLOW_A" ]]` refuses (75); compute the physical destination directory ONCE (`physdir`) and require it to EQUAL the physical `$TARGET/.github/workflows` (a symlinked parent such as `.github -> ../../../.github` passes a repo-containment check and would redirect the write to the repo-root dogfood workflow); use that one physical string for `mktemp`, `chmod`, `mv` and `cmp`. `physpath` alone cannot see a symlinked file, hence both checks.
+4. `git -C "$REPO_ROOT" ls-files --error-unmatch -- "$FIXWORKFLOW_A"` (untracked destination refuses with 67: "commit the workflow first so the refresh is reviewable with git diff"), then `require_clean_tree` (67). The hash gate in step 9, not the tree guard, is the clobber control; the tree guard makes the result reviewable and revertable.
+5. Arm the traps, THEN `take_run_lock` (69), as `--refresh-baseline` does. The mode REUSES the single trap owner `_wt_cleanup` (ADR-129): add the `STAGE_A_TMP` removal to it, and branch its "interrupted" message on `MODE` so a stage-a interrupt does not print the `--refresh-baseline` text. It already calls `remove_emitted_artifacts` only when `MODE=default`. Do NOT add HUP or PIPE to the shared trap lines (`bite-proof.test.sh` pins them by grep, and a stray top-level `trap - EXIT INT TERM` line would shift its disarm pin); instead every pipeline that feeds `head` is wrapped `{ ... || true; }` so SIGPIPE cannot abort the script. Every new `trap` line stays indented inside a function or `if` block.
+6. `mktemp "$DEST_DIR/.fix-constraints-stage-a.XXXXXX"` (explicit template so BSD `mktemp` on bash 3.2 works), assign `STAGE_A_TMP` immediately.
+7. Write the fresh emission to the temp file; compute `want` (hash of the temp file) and `have` (hash of the destination). Require both to match `^[0-9a-f]{64}$`, else 69: an empty `have` must never reach classification (fail-open: it would match every row). Verify the temp file against a second `sed` pass (`cmp -s`) before the write.
+8. `have == want`: print `already current`, exit 0 (the one input that never consults the ledger).
+9. Ledger classification (exact first-field equality, e.g. `awk -v h="$X" '/^[[:space:]]*#/ || !NF {next} {n++} $1 == h {print n; exit}'` printing the row's 1-based rank among data rows and nothing on a miss, so the caller tests for non-empty OUTPUT, not the exit code, which is 0 either way; a missing or empty ledger therefore matches nothing): `want` must resolve to a ledger row, else 75 ("this plugin's ledger lacks its own template; update the plugin"); `have` not in the ledger means print `FAILED (75): fix-constraints-stage-a.yml differs from every known emission (edited, or a version this ledger does not know); left unchanged`, then a template-side-only report, then exit 75; `rank(have) > rank(want)` means 75 with "installed file is newer than this plugin's template; update the plugin, do not downgrade" and NO diff. Do NOT use `die` for the not-a-known-emission arm (it exits before the report); hand-roll `say`, the report, `log`, `exit 75`. The report never prints the user's file: `{ diff -- "$dest" "$STAGE_A_TMP" | grep -v '^< ' | cut -c1-200 | head -60 || true; }` keeps the hunk headers and only the template-side lines (the ones diff prefixes with a right angle bracket), bounded in width and count, so a secret pasted into an edited workflow, a minified line or control characters in repo-controlled content never reach the agent transcript. The agent reads its own file when it merges by hand.
+10. Pre-write recheck: `[[ -f "$dest" && ! -d "$dest" && ! -L "$dest" ]]` and re-hash the destination, which must equal `have`, else 75 ("changed during the run"). Then `chmod 0644 "$STAGE_A_TMP"` (mktemp creates 0600; a silent mode change on a founder's file is a defect), `mv` over the destination, then print `refreshed fix-constraints-stage-a.yml ... review with git diff`.
+
+Stated residual (security review): between the step-10 recheck and the `mv` there is a microsecond window in which an editor,
+`git checkout` or another agent could change the file; the lock excludes only other scaffold runs. The file is tracked and
+the tree was clean, so the lost edit is recoverable from the editor buffer or reflog; a claim-then-verify rename was
+considered and cut as disproportionate. `rename(2)` never follows a symlink at the final component, so a swap to a symlink
+inside the window cannot redirect the write.
 
 All other messages go stdout first, then stderr, through the existing `say`/`log` path. Bash 3.2 safe. The (template,
 destination, ledger) triple is three named variables, not a table (R2 scopes the mode to one file).
 
 ### Phase 3, docs and records
 
-- `plugins/soleur/skills/constraint-scaffold/SKILL.md`: add a Usage block after `--refresh-baseline` ("Refresh a stale auto-recovery workflow, agent-only, clean tree"): when to run it, the 75 refusal and how to merge by hand, no bite-proof, never run by the founder; fix the sentence that calls the baseline "the only re-writable artifact"; add a Self-tests row for `refresh-stage-a.test.sh`; link the ledger from `references/` per the plugin reference-link rule. `description:` is NOT touched (word budget).
-- ADR-071 amendment and ADR-074 pointer (see Architecture Decision).
-- SKILL.md also tells a pin-bump author what to do: when `fix-constraints-stage-a.template` changes, append a ledger row (the regeneration command is in the ledger header); the template itself is not edited for this, because any template edit changes its own emission hash.
-- ADR-071 amendment: the Alternatives list is one line per rejected option, taken from the Cut List above.
+- `plugins/soleur/skills/constraint-scaffold/SKILL.md`: add a Usage block after `--refresh-baseline` ("Refresh a stale auto-recovery workflow, agent-only, clean tree, workflow committed"): when to run it, that refresh converges the file on the CURRENT template (install command, model id and token wiring as well as the pin), the 75 refusals (edited, unknown version, installed newer than the plugin) and how to merge by hand (the report shows only template-side lines; read your own file), no bite-proof, never run by the founder, and the recovery for a SIGKILL (delete a leftover untracked `.fix-constraints-stage-a.*` file next to the workflow, never `git add -A`). Fix the sentence that calls the baseline "the only re-writable artifact" (it spans a line break: anchor on the phrase, not a line number); add a Self-tests row for `refresh-stage-a.test.sh`; add 75 to the 71-74 prose and to the "66..74" cleanup sentence ("75 is stage-a-mode only, removes nothing, and leaves the file byte-unchanged"); link the ledger from `references/` per the plugin reference-link rule. `description:` is NOT touched (word budget).
+- SKILL.md also tells a pin-bump author what to do: when `fix-constraints-stage-a.template` changes, append a ledger row (the regeneration command is in the ledger header) only if the change keeps the frozen A-to-B interface and the `contents: read` permission set; the template itself is not edited for this, because any template edit changes its own emission hash.
+- `constraint-scaffold.sh` header: Modes, exit 75 ("refused, not retryable"), 70 extended, the cleanup prose that lists 66..74; the 66 refusal for an existing stage-a file appends a hint to `--refresh-stage-a` while keeping the prefix `fix-constraints-stage-a.yml already present`, which `emit-fix-constraints.test.sh` line 185 matches by substring.
+- ADR-071 amendment (dated 2026-11-05), content fixed by the architecture review: (1) Consequences (b) is rewritten as an enumeration of FOUR classes with the consequence-of-overwrite rationale for each (prose is append-once; executables are refuse-only; the baseline JSON is re-writable only via `--refresh-baseline`; and the new template-keyed re-emittable workflow); (2) the re-emittable class is limited to workflows whose token scope is `contents: read` and which hold no write credential: Stage B and any write-scoped workflow stay refuse-only, and a ledger row may not admit a Stage A emission whose `permissions:` differs from `contents: read` (changing that needs an ADR-074 amendment; case 12 asserts it); (3) the frozen Stage A to Stage B wire interface is (a) `name: fix-constraints-stage-a`, (b) artifact names `fix-constraints-patch-<pr>` and `fix-constraints-giveup-<pr>`, (c) the ADR-074 `meta.json` schema; a Stage A change to any of these is not a ledger-append event, it needs a Stage B refresh path first (verified: none of the six historical Stage A emissions changed (a) or (b)); Stage B staleness (for example the c99a4451df pagination fix) is accepted and safe only because of this frozen interface; (4) the Decision sentence "a `prove_bite` step at the tail of both modes" is amended: the bite-proof runs in every mode that can change what the gate enforces (config, runner, baseline); the Stage A refresh changes none of them, so skipping it is a property of the mode's write set, not an opt-out, and the rejected `--skip-bite-proof` flag stays rejected; (5) Alternatives Considered gets one line each for `--force`, a sibling script, a pin-line-only edit and a pristine-modulo-pin heuristic. ADR-074 gets one pointer sentence (Stage A is the one re-emittable workflow; the A-to-B interface is frozen as listed in the ADR-071 amendment).
 
 ### Phase 4, registries
 
@@ -355,7 +400,8 @@ repo's markdownlint on the file.
 
 - Run locally, each as its own command (a brace expansion `test/{a,b}.test.sh` runs only the first file and passes the rest as arguments; use `for t in refresh-stage-a parity emit-fix-constraints; do bash "plugins/soleur/skills/constraint-scaffold/test/$t.test.sh" || exit 1; done`): the new suite, `parity.test.sh`, `emit-fix-constraints.test.sh`, `bite-proof.test.sh` (it pins the trap arm and disarm lines by grep, so the shared-trap edit must be checked, not assumed), `git diff origin/main -- apps/web-platform/test/claude-pin-lockstep.test.ts` (must be empty), and the Phase 5 legal lints.
 - Repo ratchets that scan the new shell shapes (`mv "$tmp" "$dest"`, `rm -f`, `> "$tmp"`, `have="$(...)"`, the new test's `rm -rf "$fx"`): `plugins/soleur/test/fixture-relative-assert.test.sh` (its baseline `fixture-relative-assert.baseline.txt` is pinned by row equality, so a rise reddens exactly like a fall; it already carries rows for `constraint-scaffold.sh`), `plugins/soleur/test/fixture-dir-operand-assert.test.sh`, and `python3 scripts/lint-shell-capture-exit.py` (its baseline `lint-shell-capture-exit.baseline.txt` may only shrink). Write the new code guard-first (`assert_fixture_dir` before a destructive operand, `|| true` on captures that can fail) rather than baselining new rows; if a row legitimately moves, regenerate that baseline in the same commit and say why.
-- Everything else (generator, lockstep, components, C4) is left to CI's required `test` check.
+- File the `take_run_lock` tracking issue named in Non-Goals (check the label with `gh label list --limit 200 | grep deferred-scope-out` first).
+- Everything else (generator, lockstep, components) is left to CI's required `test` check.
 - PR body: `Ref #12146`; `## Changelog` section; `semver:patch` label (a new agent-only flag on an existing skill, no new component); mention the decision-challenges rulings. Never a closing keyword.
 - Merge discipline: rely on CI's required `test` check (required: test, lockfile-sync, markdown-lint, tenant-integration-required); read `infra-validation` and `sandbox-canary-capture-gate` by hand. Before any push run `bash plugins/soleur/scripts/sync-pr-behind.sh 12177 --queue-state`; never push to a PR in the merge queue. Check each push's real exit code (no `| tail`). `git add` and `git commit` in separate calls; `cd` into the worktree first; no `rm -rf` inside the worktree. Never `--admin`, never touch the ruleset; if the owner-run merge freeze blocks the merge, stop with the PR queued or ready and report.
 
@@ -400,7 +446,7 @@ ledger-listed historical emission of the template, and otherwise leaves the file
 
 **Assembly.** The chokepoint is the single `mv` in `refresh_stage_a`; every path to it passes through the three-way
 classification (equal to fresh, ledger member, else refuse). The destination set is exactly one file; every other emitted
-file has no write path in this mode, and case 10 snapshots all of them. The members that drift are the ledger rows; the
+file has no write path in this mode, and case 10b snapshots all of them. The members that drift are the ledger rows; the
 ledger is read by the same parser the script uses (first whitespace-separated field of each non-comment line), never by
 a hand-written list in the test. There is one write site; the symlink check and the tree check run before it on the same
 destination.
@@ -409,17 +455,22 @@ destination.
 
 | # | Mutation | Must redden |
 |---|----------|-------------|
-| 1 | Append one comment line to the ledger-member copy | case 3 (exit 75 and byte-unchanged) |
+| 1 | Append one comment line to the ledger-member copy | case 3a, 3b |
 | 2 | Drop the final newline of the ledger-member copy | case 4 (proves exact-byte match, not normalised text) |
-| 3 | Remove the ledger file, or empty it to zero data rows | case 8 (a refresh happening anyway; must fail closed) |
+| 3 | Remove the ledger file, or empty it to zero data rows or comment-only | case 8 (a refresh happening anyway; must fail closed) |
 | 4 | Make `ledger_has` stop at the first row | case 1 (the fixture is ledger row 5 of 6) |
 | 5 | Make `ledger_has` treat "no match" as "allow" | cases 3, 4, 8 |
-| 6 | Reorder: move the clean-tree check after the `mv` | case 5 (dirty tree must leave the file unchanged) |
-| 7 | Dispatch: make the mode parse but run nothing (exit 0, nothing checked) | case 1 (file must equal the fresh emission) |
-| 8 | Add a write to stage-b or constraint-gates.yml inside the mode | case 10 |
-| 9 | Remove the symlink check | case 9 |
-| 10 | Move the 70 check after the lock | case 6 (no lock file may exist) |
-| 11 | Let an empty or malformed hash classify (fail open: `have` empty matches any row) | case 8 plus a unit row feeding an unreadable file |
+| 6 | Reorder: move the clean-tree check after the `mv` | case 5a (dirty tree must leave the file unchanged; the destination holds ledger-member bytes so only the guard can refuse it) |
+| 7 | Dispatch: make the mode parse but run nothing (exit 0, nothing checked) | case 1b (file must equal the fresh emission) and case 10a |
+| 8 | Add a write to stage-b or constraint-gates.yml inside the mode | case 10b |
+| 9 | Remove the symlink check | case 9a |
+| 10 | Move the 70 check after the lock or the tree check | case 6a, 6d (rc 70, and the pre-created live lock is untouched) |
+| 11 | Let an empty or malformed hash classify (fail open: `have` empty matches any row) | case 9c (fake hash tool emitting an empty digest) |
+| 12 | Drop the rank comparison (a newer installed file is rewritten to an older template) | case 7b |
+| 13 | Print the existing side of the diff (leaks a secret pasted into an edited workflow) | case 3c |
+| 14 | Weaken the physical-destination-directory equality to repo containment | case 9b |
+| 15 | Skip the pre-write recheck | no shipped case (a race cannot be driven deterministically); design-time review only, residual stated in Phase 2 |
+| 16 | Let the template gain a write permission or a second trigger | case 12 |
 
 **Harness rows.** Suite edits that MUST redden: stub `fail()` to a no-op or delete the `cases` conservation check (the
 instrument self-test inherited from `parity.test.sh` catches it); replace the fresh-emission comparison in case 1 with a
@@ -450,10 +501,10 @@ liveness_signal:
   configured_in: "plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh (die/say path)"
 error_reporting:
   destination: "stdout first, then stderr (agent runtimes surface stdout and swallow stderr); layer 7, no Sentry"
-  fail_loud: "every non-zero exit prints 'constraint-scaffold: FAILED (<code>): <msg>' on stdout; 75 also prints a bounded diff"
+  fail_loud: "every non-zero exit prints 'constraint-scaffold: FAILED (<code>): <msg>' on stdout; 75 also prints a bounded template-side-only report (never the user's file)"
 failure_modes:
   - mode: "installed stage-a is user-edited or from an unknown version"
-    detection: "ledger miss, exit 75, diff on stdout, file byte-unchanged (cases 3, 4)"
+    detection: "ledger miss, exit 75, template-side report on stdout, file byte-unchanged (cases 3, 4)"
     alert_route: "invoking agent merges by hand per SKILL.md"
   - mode: "ledger missing or empty"
     detection: "fail closed: refused, nothing written (case 8)"
@@ -473,29 +524,29 @@ discoverability_test:
 ```
 
 (In this repository `apps/web-platform/.github/workflows/fix-constraints-stage-a.yml` does not exist, so the probe
-deterministically reaches the exit-70 arm without writing anything, because the 70 check precedes the tree check and the lock. The expected token is `(70)` alone: preflight Check 10 tokenizes `expected_output` and substring-matches any token, so `FAILED (70)` would also be satisfied by a 64, 65 or 67 failure. Re-check at deepen time that the command stays inside
+deterministically reaches the exit-70 arm without writing anything, because the 70 check precedes the tree check and the lock. The expected token is `(70)`: preflight Check 10 tokenizes `expected_output` with `tokenizeExpected` (`plugins/soleur/test/lib/discoverability-test-parser.ts`, which splits on commas, the word `or`, quotes, brackets and `/`, not on whitespace; verified by running it: `(70)` is one token) and substring-matches a token against stdout, so only a 70 satisfies it. A value whose every token contains whitespace (such as `FAILED (70)`) is rejected by deepen-plan Phase 4.7 as prose, which is the second reason to use the whitespace-free token. Re-check at deepen time that the command stays inside
 the 15-second preflight cap and the read-only sandbox.)
 
 ## Acceptance Criteria
 
 - [ ] AC1. `constraint-scaffold.sh --refresh-stage-a` on a fixture holding the v1.0.236 emission rewrites the file byte-equal to the fresh emission (mode 0644) and exits 0.
-- [ ] AC2. On an already-current file it exits 0, prints `already current` and does not write (inode and mtime unchanged).
-- [ ] AC3. On an edited copy (any byte differing from every ledger member, including a stripped final newline) it exits 75, leaves the file byte-identical and prints a bounded diff on stdout.
-- [ ] AC4. Dirty tree exits 67; missing stage-a, missing config or a dangling symlink exits 70 (also on a dirty tree, with no lock taken); a symlinked destination or parent exits 75; none of them writes. Exit 64 and 65 are pre-existing paths and are not re-tested.
-- [ ] AC5. A missing or empty ledger refuses (never refreshes); a symlinked destination is refused; the lock and temp file are released on every exit.
-- [ ] AC6. `refresh-stage-a.test.sh` exists with the 11 cases, passes, and has one new sorted row in each of `scripts/suite-durations.tsv` and `scripts/suite-shard-legs.tsv`; `bash scripts/lint-orphan-test-suites.sh` passes; accept rows exist only where the replay ratchet required them.
+- [ ] AC2. On an already-current file it exits 0, prints `already current` and does not write (inode unchanged, backdated mtime not advanced), even when the ledger is absent.
+- [ ] AC3. On an edited copy (any byte differing from every ledger member, including a stripped final newline) it exits 75, leaves the file byte-identical and prints a bounded template-side-only report on stdout (never the existing file's content, never a planted token).
+- [ ] AC4. Dirty tree exits 67; missing stage-a, missing config or a dangling symlink exits 70 (also on a dirty tree, with no lock taken); a symlinked destination, or a physical destination directory other than `$TARGET/.github/workflows`, exits 75; an untracked destination exits 67; none of them writes. Exit 64 and 65 are pre-existing paths and are not re-tested.
+- [ ] AC5. A missing, empty or comment-only ledger refuses a stale file (never refreshes); an installed file whose ledger rank is newer than the plugin's template is refused with no diff (no downgrade); an empty or malformed hash is a 69, never a match; the lock and temp file are released on every exit.
+- [ ] AC6. `refresh-stage-a.test.sh` exists with the 12 cases and their labelled sub-rows, passes, and has one new sorted row in each of `scripts/suite-durations.tsv` and `scripts/suite-shard-legs.tsv`; `bash scripts/lint-orphan-test-suites.sh` passes; accept rows exist only where the replay ratchet required them.
 - [ ] AC7. `constraint-scaffold.sh` and the ledger contain no `claude-code-action@` and no word-bounded 40-hex string; the pin comes only from the template at run time.
 - [ ] AC8. `git diff origin/main -- apps/web-platform/test/claude-pin-lockstep.test.ts` is empty and that test passes; `parity.test.sh`, `emit-fix-constraints.test.sh`, `bite-proof.test.sh` still pass locally; `generator.test.sh` is left to CI; the fixture-relative, fixture-dir-operand and shell-capture-exit ratchets are green with no baseline growth.
 - [ ] AC9. `grep -rnE '5aa6f47e|v1\.0\.[0-9]{2,}' knowledge-base/legal` returns only `audits/2026-07-counsel-review-7086.md` (a dated record left alone) and no hit inside `article-30-register.md`; the three replacements match the CLO text verbatim.
 - [ ] AC10. `bash scripts/lint-legal-registers.sh` and `bash scripts/lint-art30-reverification.sh` pass; markdown-lint passes on the register, SKILL.md and the ADRs.
 - [ ] AC11. PR body contains `Ref #12146` and no `Closes`/`Fixes`/`Resolves #12146`; it has a `## Changelog` section and a `semver:patch` label.
-- [ ] AC12. ADR-071 carries the dated 2026-11-05 amendment (third artifact class, alternatives, bite-proof position); ADR-074 has the pointer line; no `.c4` file is edited.
+- [ ] AC12. ADR-071 carries the dated 2026-11-05 amendment (four-class enumeration, the `contents: read` privilege rule, the frozen Stage A to Stage B interface, the amended bite-proof sentence, one-line alternatives); ADR-074 has the pointer line; case 12 passes; no `.c4` file is edited.
 - [ ] AC13. `decision-challenges.md` has the `| Item | Class | Ruling |` rows for R1-R7 and the CLO ruling, each `Ruled by ...` cell copied from the agent reply, and `ship/scripts/technical-ruling-gate.sh` passes on it.
 - [ ] AC14. Post-merge: boxes 2 and 3 of #12146 are ticked, box 1 untouched, the directive comment intact, and the probe's output and exit code are reported verbatim.
 
 ## Test Scenarios
 
-Covered by the 11 cases in Phase 1.3 and the mutation matrices in the Guard Contract (mutation M drives guard G red, not
+Covered by the 12 cases in Phase 1.3 and the mutation matrices in the Guard Contract (mutation M drives guard G red, not
 only command X reaches state Y). Integration check: after a refresh, run `parity.test.sh`-style comparison of the
 refreshed fixture file with `sed "s|__TARGET_DIR__|apps/web-platform|g"` of the template (case 1 does this directly; hashing a fresh emission twice, once as `want` and once through the second `sed` pass, is the in-script equivalent).
 
@@ -510,12 +561,25 @@ All findings below are Mechanical (one right answer) and were applied to this pl
 - Applied, DHH P1 #3 (pin-bump discoverability), differently: the template is NOT edited (any template edit changes its own emission hash), so the guidance lives in the ledger header, the SKILL.md block and case 7's failure message, which prints the regeneration command.
 - Not applied: nothing was declined.
 
+## Deepen-Plan Outcome (2026-11-05, headless)
+
+Findings from security-sentinel (8), test-design-reviewer (8) and architecture-strategist (6) were all Mechanical (one right
+answer) and are applied above. Judgement calls, recorded here so a later reader sees what was not taken:
+
+- Not taken, security #3 claim-then-verify rename: disproportionate for a tracked, clean-tree file; a pre-write re-hash narrows the window and the residual is stated in Phase 2.
+- Not taken, security #5 stale-temp sweep and HUP/PIPE traps: the shared trap lines are pinned by `bite-proof.test.sh`; pipelines are wrapped instead, and SKILL.md names the SIGKILL recovery.
+- Not taken, security #6 CODEOWNERS rows, runtime structural re-check and a history-reproducibility test: out of scope and listed in Non-Goals; case 12 asserts the structural properties on the template in CI.
+- Taken in reduced form, security #7: the `take_run_lock` race is a tracked scope-out, not fixed here.
+- Taken, architecture #3: no lockfile precondition is added because the sibling `constraint-gates.yml` already runs `npm ci --ignore-scripts`, so a repo whose gate works already has the lockfile; the content-upgrade fact is documented instead.
+
 ## Non-Goals
 
 - The affected-index-ratchet failures, Better Stack incident `soleur-egress-gw-probe-silent-prd`, the `digest-scrub.sh` token-pattern gap, item 1 of #12146 (all named out of scope in the brief). Pre-existing, owned elsewhere.
 - Installs that predate the two-stage split (the old `issue_comment` dispatcher): there is no stage-a file, the mode exits 70; migrating them is a separate default-mode question. Not tracked as a deferral: no such install is known and the gate was never promoted to required.
 - Refreshing config, runner, baseline, `constraint-gates.yml` or stage-b (CTO R2).
 - Installed copies of the operator-digest asset (item 1, parent session).
+- A pre-existing race in `take_run_lock` (the `mkdir` and the pid write are not atomic, so a second run in the gap reads an empty owner and takes a live lock; `kill -0` EPERM reads as stale). It predates this change and also affects `--refresh-baseline`; fixing the shared helper is out of scope. Tracked: Phase 6 files one `deferred-scope-out` issue for it (re-evaluation: when the lock is next touched), with the milestone from `knowledge-base/product/roadmap.md`.
+- A CODEOWNERS row for the template and ledger (the file only has a `*` fallback and its own header says routing is not enforcement) and a runtime structural re-check of the rendered workflow (case 12 asserts the same properties on the template in CI; a compromised plugin can already run arbitrary code in the agent session).
 
 ## Risks and Sharp Edges
 
