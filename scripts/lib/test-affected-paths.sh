@@ -1248,6 +1248,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "README.md"  # plugins/soleur/scripts/admin-merge-ready.test.sh:344
   "apps/web-platform/.dockerignore"
   "apps/web-platform/app/layout.tsx"
+  # terraform-target-parity.test.ts:8353 asserts the apply workflow's arm step points a reader at this gate script (wiring pin).
+  "apps/web-platform/infra/arm-heartbeats.sh"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
@@ -1258,6 +1260,11 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   # heartbeat-reprovision-parity.test.ts existsSync/readFileSync's it through checkFeeders' evidence file (timer feeder).
   # terraform-target-parity.test.ts readFileSync's it for the doppler_secret/betteruptime address census.
   "apps/web-platform/infra/cloud-init-registry.yml"
+  # ship-deploy-pipeline-fix-gate.test.ts:586/581 assert the deploy workflow's trigger set carries these members (wiring pins).
+  "apps/web-platform/infra/cron-egress-nftables.sh"
+  "apps/web-platform/infra/cron-egress-postapply-assert.sh"
+  # terraform-target-parity.test.ts:9302 FLAG_WRITERS_ALLOWED: the only paths permitted to write the store flag (wiring pin).
+  "apps/web-platform/infra/git-data-flag-precheck.sh"
   "apps/web-platform/infra/git-data-luks.tf"  # plugins/soleur/test/terraform-target-parity.test.ts:6763
   "apps/web-platform/infra/git-data.tf"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
@@ -1293,6 +1300,13 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "apps/web-platform/test/broker-mechanism-spike.test.ts"
+  # same trigger-set wiring pin as its cron-egress siblings (ship-deploy-pipeline-fix-gate.test.ts:580);
+  # exact-file spelling reveals 2 rows for cron-egress-allowlist.txt anchored on this file at 11 commits/90d — refused
+  "glob:apps/web-platform/infra/*cron-egress-resolve.sh"
+  "glob:scripts/*betterstack-query.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-agents-rule-budget.py"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-workflows.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*prod-version-drift-b9-probe.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:tests/scripts/*test-infra-privileged-tier-census*.sh"  # real read; exact-file spelling would reveal 50 accept rows; anchor churn 26 commits/90d
   "glob:apps/web-platform/lib/*types*.ts"  # real read; anchor churn 9 commits/90d
   "knowledge-base/engineering/architecture/decisions/"
@@ -1306,6 +1320,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "lefthook.yml"  # plugins/soleur/test/gdpr-gate-glob-liveness.test.sh:8
   "packages/opencode-plugin/"
   "scripts/check-adr-ordinals.sh"
+  # repo-hook-launchers.test.ts:31 devinBaseline pins it in the real hook-command set (wiring pin).
+  "scripts/ensure-kb-index.sh"
   # #11294: terraform-target-parity.test.ts SOURCES scripts/key-rotate.sh and the sibling it sources to read their gate tables (Guard 5).
   "scripts/inngest-key-rotate.sh"
   "scripts/key-rotate.sh"
@@ -1319,6 +1335,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/setup-cursor.sh"
   "scripts/setup-devin.sh"
   "scripts/ship-incident-pir-gate.sh"
+  # web-host-escrow-preflight-census.test.ts:50,203 PREFLIGHT_RUN: the census asserts every rebirth-shaped workflow runs exactly this command (wiring pin).
+  "scripts/web-host-escrow-preflight.sh"
   "tests/scripts/lib/destroy-guard-filter-web-platform.jq"  # plugins/soleur/test/token-drift-workflow-causes.test.sh:1218
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
@@ -1675,6 +1693,13 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
+  # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
+  # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
+  "scripts/betterstack-ingest-probe.sh"
+  "scripts/ensure-doppler.sh"
+  "scripts/kb-drift-walker.sh"
+  "scripts/supabase-advisor-scan.sh"
+  "scripts/supabase-logs-query.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
   # S9 (#9757 item 2): the stage extracts and EXECUTES the rehearsal workflow's two terraform destroy step bodies under stubs and pins the
@@ -4444,6 +4469,9 @@ AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "apps/web-platform/infra/cloud-init-git-data.yml"  # tests/scripts/test-git-data-birth-readiness-gate.sh:392
   "apps/web-platform/infra/git-data.tf"
+  # real read; sed-extracts the canonical PATTERN at test-git-data-birth-readiness-gate.sh:2970;
+  # exact-file spelling would reveal ~142 pairs anchored on a 71-commits/90d file — doubly refused
+  "glob:.claude/hooks/*grep-q-pipe-guard.test.sh"
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
