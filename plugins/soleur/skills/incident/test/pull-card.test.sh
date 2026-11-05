@@ -426,7 +426,7 @@ if [[ $? -eq 0 ]]; then
 else
   fail "marker comment missing beside SOLEUR_INCIDENT_PULL"
 fi
-if grep -F 'const WEDGE_RE' "$MARKER_TS" | grep -qF 'SOLEUR_INCIDENT_PULL'; then
+if grep -qF 'SOLEUR_INCIDENT_PULL' < <(grep -F 'const WEDGE_RE' "$MARKER_TS"); then
   fail "WEDGE_RE contains SOLEUR_INCIDENT_PULL"
 else
   pass "WEDGE_RE does not contain SOLEUR_INCIDENT_PULL"
