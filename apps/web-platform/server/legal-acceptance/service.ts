@@ -12,7 +12,7 @@
  */
 
 import type { LegalChoiceWire, LegalDecideResult } from "@/lib/legal-acceptance-wire";
-import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
+import { codePointLength, REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
 import { isCurrent, type LegalTextEntry } from "./canonical";
 import { reportLegalOp } from "@/server/approval/ops";
 
@@ -186,9 +186,9 @@ export type DecideRejectReason = "hash_mismatch" | "text_expired" | "replaced" |
 
 /**
  * Validate the choice/note pair. Returns the note to send (trimmed for request_changes, null otherwise) or null when
- * the pair is malformed. The trimmed value is what is sent, and the cap is applied to the UNTRIMMED length in UTF-16
- * units: trimmed is never longer than untrimmed and a unit count is never smaller than the database's character
- * count, so anything accepted here satisfies the SQL CHECK (the cap here is deliberately conservative).
+ * the pair is malformed. The trimmed value is what is sent, and the cap is applied to the UNTRIMMED length in code
+ * points, the same unit the SQL CHECK counts (and the card's counter): trimmed is never longer than untrimmed, so
+ * anything accepted here satisfies the CHECK.
  * A NUL (not storable in Postgres text) and a lone surrogate (not valid UTF-8) are refused.
  */
 /** A UTF-16 surrogate with no partner (escapes only, so the pattern is unambiguous). */
@@ -197,7 +197,7 @@ const notStorable = (text: string): boolean => text.includes("\u0000") || LONE_S
 
 export function normaliseNote(choice: LegalChoiceWire, note: unknown): { ok: true; note: string | null } | { ok: false } {
   if (choice === "request_changes") {
-    if (typeof note !== "string" || note.length > REQUEST_CHANGES_MAX || notStorable(note)) return { ok: false };
+    if (typeof note !== "string" || codePointLength(note) > REQUEST_CHANGES_MAX || notStorable(note)) return { ok: false };
     const trimmed = note.trim();
     return trimmed.length === 0 ? { ok: false } : { ok: true, note: trimmed };
   }

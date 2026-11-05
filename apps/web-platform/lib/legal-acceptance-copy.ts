@@ -148,7 +148,7 @@ export const LEGAL_COPY = {
     body: "Nothing changed. The current terms stay in place. This answer is final: to change it, your team sends a new version of the text.",
   },
   changesRequested: {
-    badge: "Waiting for revision",
+    badge: "Change requested",
     title: "You asked for changes",
     noteHeading: "Your note",
     body: "Nothing is accepted. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
@@ -189,7 +189,7 @@ export const LEGAL_COPY = {
     answerDetail: (label: string, version: string) => `Accept the updated ${label}, version ${version}. Nothing is recorded until your code is accepted.`,
     sendCode: "Send me a code",
     sendNewCode: "Send me a new code",
-    resendWait: "You can ask for a new code in about a minute.",
+    resendWait: "Please wait a little before asking for a new code.",
     sendingCode: "Sending",
     cannotGetCode: "I cannot get the code",
     help: "If the code does not arrive, check your spam folder, then ask your team for help. There is no other way to confirm it is you from this card, and nothing has been recorded.",
@@ -203,21 +203,21 @@ export const LEGAL_COPY = {
     confirmAndRecord: "Confirm and record Yes",
     confirming: "Checking",
     sendError: {
-      rate_limited: "Too many codes were requested. Wait a few minutes, then try again. Nothing was recorded.",
+      rate_limited: "Too many codes were requested. Please wait about 15 minutes, then try again. Nothing was recorded.",
       already_recorded: "This card already has an answer. Nothing more was recorded. Reload this page to see it.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",
       unavailable: "We could not send the code. Nothing was recorded, try again shortly.",
     },
     verifyError: {
       wrong_code: "That code is wrong or has expired. Codes only work for a few minutes. Check it, or send a new one. Nothing was recorded.",
-      locked: "Too many tries. Wait about 15 minutes, then ask for a new code. Nothing was recorded.",
+      locked: "Too many tries. Please wait a few minutes before asking for a new code. Nothing was recorded.",
       expired: "That code has expired. Send a new one. Nothing was recorded.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",
       code_stale: "The confirmation is too old. Send a new code. Nothing was recorded.",
       unavailable: "We could not check the code. Nothing was recorded, try again shortly.",
     },
     /** The server no longer counts the email check (HTTP 403 reverify): back to the first step. */
-    reverify: "The email check no longer counts, so nothing was recorded. Ask for a new code to try again.",
+    reverify: "Nothing was recorded. Please ask for a new code and try again.",
     decideError: {
       code_expired: "The confirmation is too old. Send a new code. Nothing was recorded.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",

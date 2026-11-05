@@ -18,7 +18,11 @@ vi.mock("@/server/approval/ops", async (orig) => ({
 import { parseLegalText } from "@/server/legal-acceptance/canonical";
 import {
   AttemptCeiling,
+  CODE_RE,
+  SendFailureMemory,
+  SEND_FAILURE_TTL_MS,
   createThrowawayAuthClient,
+  readCappedBody,
   resolveIdentity,
   sendReauthCode,
   tokenFacts,
@@ -212,14 +216,14 @@ describe("send", () => {
 
   const sendWith = async (
     send: () => { error: unknown },
-    o: { reused?: boolean; resend?: boolean; id?: Identity & { ok: true } } = {},
+    o: { reused?: boolean; resend?: boolean; id?: Identity & { ok: true }; sendFailures?: SendFailureMemory } = {},
   ) => {
     const log: string[] = [];
     const row = { data: { outcome: "issued", reused: o.reused === true, event_id: EVENT, expires_at: "2099-01-01T00:00:00Z" } };
     const svc = fakeRpc(log, { issue_legal_reauth: [row] });
     const auth = fakeAuth(log, { send });
     const r = await sendReauthCode(
-      { service: svc.client, authClient: auth.factory },
+      { service: svc.client, authClient: auth.factory, sendFailures: o.sendFailures ?? new SendFailureMemory() },
       { id: o.id ?? ID, entry: ENTRY, resend: o.resend === true },
     );
     return { r, auth };
@@ -285,6 +289,55 @@ describe("send", () => {
     expect(fresh.auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
   });
 
+  it("a plain send after a FAILED send mails again (the reused-intent skip never claims a code that was not sent); success clears it", async () => {
+    const mem = new SendFailureMemory();
+    const failures: Array<() => { error: unknown }> = [
+      () => ({ error: { name: "AuthRetryableFetchError", status: 503, message: "down" } }),
+      () => ({ error: { name: "AuthApiError", status: 429, code: "over_email_send_rate_limit", message: "slow" } }),
+      () => ({ error: { name: "AuthApiError", status: 422, code: "validation_failed", message: "bad" } }),
+      () => {
+        throw new Error("network");
+      },
+    ];
+    for (const fail of failures) {
+      const first = await sendWith(fail, { reused: false, resend: false, sendFailures: mem });
+      expect(first.r.ok).toBe(false);
+      // The intent is still live, so the database now says reused; the retry is a plain send and MUST email.
+      const retry = await sendWith(() => ({ error: null }), { reused: true, resend: false, sendFailures: mem });
+      expect(retry.r).toEqual({ ok: true, state: "sent" });
+      expect(retry.auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
+      // Cleared by the success: the next plain send on a reused intent skips the mail again.
+      const after = await sendWith(() => ({ error: null }), { reused: true, resend: false, sendFailures: mem });
+      expect(after.auth.spies.signInWithOtp).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a failed send with no address is remembered too; a failure for one key or user never forces a mail for another", async () => {
+    const mem = new SendFailureMemory();
+    await sendWith(() => ({ error: null }), { id: { ...ID, email: null }, sendFailures: mem });
+    const same = await sendWith(() => ({ error: null }), { reused: true, resend: false, sendFailures: mem });
+    expect(same.auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
+    await sendWith(() => ({ error: { status: 503 } }), { sendFailures: mem });
+    const otherUser = await sendWith(() => ({ error: null }), {
+      reused: true,
+      resend: false,
+      sendFailures: mem,
+      id: { ...ID, userId: "00000000-0000-4000-8000-0000000000bb" },
+    });
+    expect(otherUser.auth.spies.signInWithOtp).not.toHaveBeenCalled();
+  });
+
+  it("the remembered failure expires with the intent window", () => {
+    let t = 1_000;
+    const mem = new SendFailureMemory(() => t);
+    mem.mark(USER, "fixture-terms");
+    expect(mem.has(USER, "fixture-terms")).toBe(true);
+    t += SEND_FAILURE_TTL_MS - 1;
+    expect(mem.has(USER, "fixture-terms")).toBe(true);
+    t += 2;
+    expect(mem.has(USER, "fixture-terms")).toBe(false);
+  });
+
   it("no address on the session: unavailable, reported (stage send_no_address), nothing is emailed", async () => {
     const { r, auth } = await sendWith(() => ({ error: null }), { id: { ...ID, email: null } });
     expect(r).toEqual({ ok: false, reason: "unavailable" });
@@ -322,7 +375,6 @@ describe("verify", () => {
     const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
     expect(r).toEqual({ ok: false, reason });
     expect(auth.spies.verifyOtp).not.toHaveBeenCalled();
-    expect(auth.factory).not.toHaveBeenCalled();
   });
 
   it("a wrong code (403 from the auth service) is wrong_code, the session is still discarded, and nothing is marked", async () => {
@@ -390,9 +442,9 @@ describe("verify", () => {
     }
   });
 
-  it("a client factory that throws (anon key missing) is unavailable and reported, not a thrown 500 after the claim", async () => {
+  it("a client factory that throws (anon key missing) is unavailable and reported, not a thrown 500", async () => {
     const log: string[] = [];
-    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+    const svc = fakeRpc(log, {});
     const factory = vi.fn(() => {
       throw new Error("anon key is not configured");
     });
@@ -401,13 +453,36 @@ describe("verify", () => {
     expect(h.report).toHaveBeenCalledWith("reauthFailed", expect.any(Error), expect.objectContaining({ extra: expect.objectContaining({ stage: "verify_client" }) }));
   });
 
-  it("the throwaway client refuses to be built without an anon key (no silent empty-key fallback)", () => {
+  it("the throwaway client refuses to be built without an anon key (our own guard, no silent empty-key fallback)", () => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "");
     try {
-      expect(() => createThrowawayAuthClient()).toThrow();
+      expect(() => createThrowawayAuthClient()).toThrow("auth anon key is not configured");
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("the client is built BEFORE the attempt is claimed or counted: a missing key burns no attempt", async () => {
+    const log: string[] = [];
+    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+    const ceiling = new AttemptCeiling(1, 60_000, () => 0);
+    const factory = vi.fn(() => {
+      throw new Error("auth anon key is not configured");
+    });
+    const deps = { service: svc.client, authClient: factory, ceiling };
+    expect(await verifyReauthCode(deps, { id: ID, entry: ENTRY, code: "123456" })).toEqual({ ok: false, reason: "unavailable" });
+    // No database claim, and the per-user ceiling (max 1) was not consumed: the next call is not "locked".
+    expect(log).toEqual([]);
+    expect(await verifyReauthCode(deps, { id: ID, entry: ENTRY, code: "123456" })).toEqual({ ok: false, reason: "unavailable" });
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", expect.any(Error), expect.objectContaining({ extra: expect.objectContaining({ stage: "verify_client" }) }));
+  });
+
+  it("the code pattern is the wire module's range: 6 to 8 ASCII digits", () => {
+    expect(CODE_RE.test("123456")).toBe(true);
+    expect(CODE_RE.test("12345678")).toBe(true);
+    expect(CODE_RE.test("12345")).toBe(false);
+    expect(CODE_RE.test("123456789")).toBe(false);
+    expect(CODE_RE.test("12345a")).toBe(false);
   });
 
   it("a signOut that rejects or errors never turns a good verify into a throw: the verify still succeeds and the failure is reported", async () => {
@@ -424,6 +499,26 @@ describe("verify", () => {
       const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
       expect(r).toEqual({ ok: true });
       expect(h.report.mock.calls.some((c) => c[0] === "reauthFailed" && c[2].extra.stage === "discard")).toBe(true);
+    }
+  });
+
+  it("even a throwing reporter inside the discard failure path cannot turn a good verify into a throw", async () => {
+    h.report.mockReset();
+    h.report.mockImplementation((_op: string, _e: unknown, ctx: { extra: { stage: string } }) => {
+      if (ctx.extra.stage === "discard") throw new Error("reporter down");
+    });
+    try {
+      const log: string[] = [];
+      const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed], mark_legal_reauth_verified: [{ data: { outcome: "verified" } }] });
+      const auth = fakeAuth(log, {
+        signOut: () => {
+          throw new Error("revoke blew up");
+        },
+      });
+      const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
+      expect(r).toEqual({ ok: true });
+    } finally {
+      h.report.mockReset();
     }
   });
 
@@ -457,6 +552,16 @@ describe("verify", () => {
     const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed], mark_legal_reauth_verified: [{ data: { outcome } }] });
     const r = await verifyReauthCode({ service: svc.client, authClient: fakeAuth(log).factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
     expect(r).toEqual({ ok: false, reason });
+  });
+
+  it("a not_claimed mark is unavailable AND reported (stage mark_not_claimed, no level override)", async () => {
+    const log: string[] = [];
+    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed], mark_legal_reauth_verified: [{ data: { outcome: "not_claimed" } }] });
+    const r = await verifyReauthCode({ service: svc.client, authClient: fakeAuth(log).factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    const hit = h.report.mock.calls.filter((c) => c[0] === "reauthFailed" && c[2].extra.stage === "mark_not_claimed");
+    expect(hit).toHaveLength(1);
+    expect(hit[0][2].level).toBeUndefined();
   });
 
   it("the per-user ceiling stops guesses before the database or the auth service is touched, across keys", async () => {
@@ -597,6 +702,16 @@ describe("note rules", () => {
     expect(normaliseNote("decline", "x")).toEqual({ ok: false });
     expect(normaliseNote("accept", 5)).toEqual({ ok: false });
   });
+  it("the cap counts characters (code points), exactly like the database CHECK: 600 emoji are accepted, 1001 are refused", () => {
+    const emoji = "\u{1F600}";
+    expect(emoji.length).toBe(2);
+    expect(normaliseNote("request_changes", emoji.repeat(600))).toMatchObject({ ok: true });
+    expect(normaliseNote("request_changes", emoji.repeat(1000))).toMatchObject({ ok: true });
+    expect(normaliseNote("request_changes", emoji.repeat(1001))).toEqual({ ok: false });
+    // BMP-only text: the unit count and the character count agree.
+    expect(normaliseNote("request_changes", "b".repeat(1000))).toMatchObject({ ok: true });
+    expect(normaliseNote("request_changes", "b".repeat(1001))).toEqual({ ok: false });
+  });
   it("rejects a NUL (Postgres text cannot hold it) and a lone surrogate (not valid UTF-8); a valid surrogate pair is fine", () => {
     expect(normaliseNote("request_changes", "a\u0000b")).toEqual({ ok: false });
     expect(normaliseNote("request_changes", "bad \uD800 half")).toEqual({ ok: false });
@@ -645,5 +760,33 @@ describe("Sentry feature tag (the alert rules match feature=legal-acceptance plu
     expect(h.errSink).not.toHaveBeenCalled();
     real.reportLegalOp("reauthFailed", null, {});
     expect(h.errSink).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("readCappedBody", () => {
+  it("a declared Content-Length over the cap is refused WITHOUT reading the stream", async () => {
+    const read = vi.fn();
+    const req = {
+      headers: new Headers({ "content-length": "9000" }),
+      body: { getReader: () => ({ read, cancel: vi.fn() }) },
+    } as unknown as Request;
+    expect(await readCappedBody(req, 8 * 1024)).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("an undeclared (chunked) body is cancelled the moment the cap is crossed", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const chunks = [new Uint8Array(60), new Uint8Array(60), new Uint8Array(60)];
+    const read = vi.fn(async () => (chunks.length ? { done: false, value: chunks.shift() as Uint8Array } : { done: true, value: undefined }));
+    const req = { headers: new Headers(), body: { getReader: () => ({ read, cancel }) } } as unknown as Request;
+    expect(await readCappedBody(req, 100)).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // It stopped reading at the overflow: the third chunk was never pulled.
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("a body within the cap is returned whole", async () => {
+    const req = new Request("http://localhost/x", { method: "POST", body: '{"a":1}' });
+    expect(await readCappedBody(req, 100)).toBe('{"a":1}');
   });
 });

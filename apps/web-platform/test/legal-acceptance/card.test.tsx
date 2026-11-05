@@ -364,12 +364,15 @@ describe("a failed or malformed decide never shows success (AC11)", () => {
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.changes.send }));
   }
 
-  // Contract: only a genuine 4xx proves nothing was written. A committed row can sit behind a 5xx or a lost reply, so
+  // Contract: only a refusal status our own routes emit (400, 401, 403, 404, 413, 415) proves nothing was written. A committed row can sit behind a 5xx or a lost reply, so
   // 5xx, 429 and a network error all say "reload to check", never "Nothing was recorded".
   it.each([
     ["HTTP 400", { status: 400, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
     ["HTTP 403", { status: 403, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
-    ["HTTP 409", { status: 409, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
+    ["HTTP 404", { status: 404, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
+    ["HTTP 408", { status: 408, body: { error: "x" } }, LEGAL_COPY.errors.unknownResult],
+    ["HTTP 409", { status: 409, body: { error: "x" } }, LEGAL_COPY.errors.unknownResult],
+    ["HTTP 499", { status: 499, body: { error: "x" } }, LEGAL_COPY.errors.unknownResult],
     ["HTTP 500", { status: 500, body: { error: "x" } }, LEGAL_COPY.errors.unknownResult],
     ["HTTP 503", { status: 503, body: {} }, LEGAL_COPY.errors.unknownResult],
     ["HTTP 429", { status: 429, body: { error: "slow down" } }, LEGAL_COPY.errors.unknownResult],
@@ -782,6 +785,47 @@ describe("Send me a new code: client cooldown and the rate_limited reason (contr
     await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendNewCode }));
     expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.dialog.sendError.rate_limited);
     expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendNewCode })).toBeDisabled();
+  });
+});
+
+// =====================================================================================================================
+describe("a send that follows a failed send asks for a fresh mail (resend:true)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([
+    ["an unavailable answer", { status: 500, body: {} } as Reply],
+    ["a rate_limited answer", { body: { ok: false, reason: "rate_limited" } satisfies LegalReauthSendResult } as Reply],
+    ["a network failure", "throw" as const],
+  ])("after %s the retry from the first step sends resend:true; the send after a success is plain again", async (_n, failure) => {
+    let n = 0;
+    const f = mockFetch({ send: () => (++n === 1 ? failure : { body: SENT }) });
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(yesButton());
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByRole("alert");
+    expect(f.reauths()[0].body).toEqual({ step: "send" });
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByLabelText(LEGAL_COPY.dialog.codeLabel);
+    expect(f.reauths()[1].body).toEqual({ step: "send", resend: true });
+  });
+
+  it("the retry flag lives in one dialog: after fail then success, a fresh dialog's first send is plain again", async () => {
+    let n = 0;
+    const f = mockFetch({ send: () => (++n === 1 ? { status: 500, body: {} } : { body: SENT }) });
+    const user = userEvent.setup();
+    const first = renderCard();
+    await user.click(yesButton());
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByLabelText(LEGAL_COPY.dialog.codeLabel);
+    first.unmount();
+    renderCard();
+    await user.click(yesButton());
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByLabelText(LEGAL_COPY.dialog.codeLabel);
+    expect(f.reauths()[2].body).toEqual({ step: "send" });
   });
 });
 

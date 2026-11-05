@@ -112,16 +112,25 @@ describe("wording that must not claim more than happened", () => {
     expect(/goes to your team|will come back to you/i.test("Your note goes to your team.")).toBe(true);
   });
 
-  it("the locked wording is neutral: it does not say a new code helps right away (the per-user ceiling also answers locked)", () => {
+  it("the locked wording is accurate and neutral: wait, then ask again; no promise of a time or that a new code helps right away (a per-challenge lock and the per-user ceiling both answer locked)", () => {
     const t = copy.LEGAL_COPY.dialog.verifyError.locked;
-    expect(t).toMatch(/15 minutes/);
+    expect(t).toMatch(/wait a few minutes/i);
+    expect(t).not.toMatch(/\d+ minutes/);
     expect(t).not.toMatch(/send a new code/i);
   });
 
+  it("the rate-limited send reason says about 15 minutes (the database window); the changes badge does not promise a revision", () => {
+    expect(copy.LEGAL_COPY.dialog.sendError.rate_limited).toMatch(/about 15 minutes/);
+    expect(copy.LEGAL_COPY.changesRequested.badge).toBe("Change requested");
+    expect(copy.LEGAL_COPY.changesRequested.badge).not.toMatch(/revision|waiting/i);
+  });
+
   it("has copy for a code that no longer counts and for the resend wait", () => {
-    expect(copy.LEGAL_COPY.dialog.reverify).toMatch(/new code/i);
+    expect(copy.LEGAL_COPY.dialog.reverify).toMatch(/ask for a new code and try again/i);
     expect(copy.LEGAL_COPY.dialog.reverify).toMatch(/nothing was recorded/i);
-    expect(copy.LEGAL_COPY.dialog.resendWait).toBeTruthy();
+    // neutral about the cause: it must not blame the code or claim a reason
+    expect(copy.LEGAL_COPY.dialog.reverify).not.toMatch(/no longer counts|expired|wrong|too old/i);
+    expect(copy.LEGAL_COPY.dialog.resendWait).not.toMatch(/\bminute\b/i);
   });
 
   it("format helpers", () => {

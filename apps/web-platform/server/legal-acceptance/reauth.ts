@@ -12,8 +12,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import {
-  LEGAL_CODE_MAX_DIGITS,
-  LEGAL_CODE_MIN_DIGITS,
+  isLegalCode,
   type LegalReauthSendResult,
   type LegalReauthVerifyResult,
 } from "@/lib/legal-acceptance-wire";
@@ -106,8 +105,9 @@ export async function resolveIdentity(supabase: IdentityClient, wrapperUserId: s
  *
  * IN-PROCESS and PER HOST: a restart, a deploy or a second host resets it, so it is a best-effort second fence. The
  * database counter (5 per challenge, claimed before the auth service is asked) stays the hard bound. Kept as its own
- * small class rather than `SlidingWindowCounter` (server/rate-limiter.ts) because that one reads `Date.now()` directly
- * (no injectable clock for the window tests) and has no sweep of its own. The clock and the store are injectable.
+ * small class rather than `SlidingWindowCounter` (server/rate-limiter.ts) because that one reads `Date.now()` directly,
+ * so the window could not be tested on an injected clock (it does have its own `prune()`). The clock and the store are
+ * injectable here.
  */
 export const VERIFY_CEILING_MAX = 10;
 export const VERIFY_CEILING_WINDOW_MS = 15 * 60_000;
@@ -144,6 +144,49 @@ export class AttemptCeiling {
 
 export const defaultVerifyCeiling = new AttemptCeiling();
 
+// ── failed-send memory ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** How long a failed send is remembered: the life of the intent the database opened for it (30 minutes). */
+export const SEND_FAILURE_TTL_MS = 30 * 60_000;
+
+/**
+ * Remembers, per user and key, that the last attempt to EMAIL the code failed after the intent was opened. The intent
+ * stays live in the database, so a plain retry comes back `reused`, and a reused intent normally means "the earlier code
+ * is still valid, send nothing". After a failed send no code exists, so that skip would claim a mail that never left.
+ * While a failure is remembered a plain send mails again; a successful send forgets it.
+ *
+ * IN-PROCESS and PER HOST, like the ceiling: another host or a restart forgets it, and the dialog covers that case by
+ * sending `resend:true` after any failed send. Both halves together make the false "sent" impossible in practice.
+ */
+export class SendFailureMemory {
+  private readonly until = new Map<string, number>();
+  constructor(private readonly now: () => number = Date.now) {}
+
+  private k(userId: string, key: string): string {
+    return `${userId}\u0000${key}`;
+  }
+  mark(userId: string, key: string): void {
+    const t = this.now();
+    this.until.set(this.k(userId, key), t + SEND_FAILURE_TTL_MS);
+    if (this.until.size > 5_000) for (const [k, v] of this.until) if (v <= t) this.until.delete(k);
+  }
+  has(userId: string, key: string): boolean {
+    const k = this.k(userId, key);
+    const v = this.until.get(k);
+    if (v === undefined) return false;
+    if (v <= this.now()) {
+      this.until.delete(k);
+      return false;
+    }
+    return true;
+  }
+  clear(userId: string, key: string): void {
+    this.until.delete(this.k(userId, key));
+  }
+}
+
+export const defaultSendFailures = new SendFailureMemory();
+
 // ── throwaway auth client ────────────────────────────────────────────────────────────────────────────────────────
 
 export interface AuthErrorLike {
@@ -163,7 +206,7 @@ export interface ThrowawayAuthClient {
 /** A fresh anon client with no cookies and no session persistence: nothing it does can touch the founder's session. */
 export function createThrowawayAuthClient(): ThrowawayAuthClient {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  // No empty-key fallback: a missing key must fail loudly into `unavailable` (reported), not build a client that 401s.
+  // No empty-key fallback: a missing key must fail loudly into `unavailable` (reported), never build a half-configured client.
   if (!anonKey) throw new Error("auth anon key is not configured");
   return createClient(serverUrl(), anonKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -181,6 +224,7 @@ export interface ReauthDeps {
   service: LegalRpcClient;
   authClient: () => ThrowawayAuthClient;
   ceiling?: AttemptCeiling;
+  sendFailures?: SendFailureMemory;
 }
 
 /**
@@ -201,7 +245,8 @@ const reportFailed = (stage: string, err: unknown, userId: string, o: { level?: 
  * Open (or reuse) the intent, then email the code.
  *
  * - A REUSED intent without a resend means the earlier code is still valid: answer `sent` and send nothing (a second send
- *   inside the auth service's window would only trip its 429).
+ *   inside the auth service's window would only trip its 429). EXCEPT when the earlier send FAILED (remembered in
+ *   `SendFailureMemory`): then no code exists and the mail is attempted again.
  * - The auth service answers 422 `otp_disabled` for an address it does not know and 200 for one it does; both come back as
  *   the identical `{ok:true,state:"sent"}`. For a signed-in founder that 422 is abnormal, so it is reported at warn level
  *   (class only). Any OTHER 422 is a real failure.
@@ -216,29 +261,41 @@ export async function sendReauthCode(
   const issued = await issueIntent(deps.service, { userId: a.id.userId, entry: a.entry, sessionId: a.id.sessionId, resend: a.resend });
   if (issued.outcome === "already_recorded") return { ok: false, reason: "already_recorded" };
   if (issued.outcome === "rate_limited") return { ok: false, reason: "rate_limited" };
-  if (issued.reused && !a.resend) return { ok: true, state: "sent" };
+  const memory = deps.sendFailures ?? defaultSendFailures;
+  const failedBefore = memory.has(a.id.userId, a.entry.key);
+  if (issued.reused && !a.resend && !failedBefore) return { ok: true, state: "sent" };
+
+  // Any failure from here on leaves a live intent with no code behind it: remember it so a plain retry mails again.
+  const fail = (reason: "unavailable" | "rate_limited"): LegalReauthSendResult => {
+    memory.mark(a.id.userId, a.entry.key);
+    return { ok: false, reason };
+  };
+  const sent = (): LegalReauthSendResult => {
+    memory.clear(a.id.userId, a.entry.key);
+    return { ok: true, state: "sent" };
+  };
 
   if (!a.id.email) {
     reportFailed("send_no_address", null, a.id.userId);
-    return { ok: false, reason: "unavailable" };
+    return fail("unavailable");
   }
   try {
     const { error } = await deps.authClient().auth.signInWithOtp({ email: a.id.email, options: { shouldCreateUser: false } });
-    if (!error) return { ok: true, state: "sent" };
-    if (error.status === 429) return { ok: false, reason: "rate_limited" };
+    if (!error) return sent();
+    if (error.status === 429) return fail("rate_limited");
     if (error.status === 422) {
       if (error.code === OTP_DISABLED_CODE) {
         reportFailed("send_422", error, a.id.userId, { level: "warn" });
-        return { ok: true, state: "sent" };
+        return sent();
       }
       reportFailed("send", error, a.id.userId);
-      return { ok: false, reason: "unavailable" };
+      return fail("unavailable");
     }
     reportFailed("send", error, a.id.userId);
-    return { ok: false, reason: "unavailable" };
+    return fail("unavailable");
   } catch (err) {
     reportFailed("send", err, a.id.userId, { thrown: true });
-    return { ok: false, reason: "unavailable" };
+    return fail("unavailable");
   }
 }
 
@@ -248,7 +305,7 @@ const OTP_DISABLED_CODE = "otp_disabled";
 // ── verify ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** ASCII digits only; the range is defined once in the wire module (6 in production, up to 8 in dev). */
-export const CODE_RE = new RegExp(`^[0-9]{${LEGAL_CODE_MIN_DIGITS},${LEGAL_CODE_MAX_DIGITS}}$`);
+export const CODE_RE = { test: isLegalCode };
 
 /**
  * Verify the emailed code. Order is load-bearing: the attempt is counted in the database BEFORE the auth service is
@@ -258,6 +315,16 @@ export async function verifyReauthCode(
   deps: ReauthDeps,
   a: { id: Extract<Identity, { ok: true }>; entry: LegalTextEntry; code: string },
 ): Promise<LegalReauthVerifyResult> {
+  // The client is built FIRST: a missing key fails into `unavailable` before an attempt is counted or claimed, so a
+  // configuration fault never burns a founder's guesses.
+  let client: ThrowawayAuthClient;
+  try {
+    client = deps.authClient();
+  } catch (err) {
+    reportFailed("verify_client", err, a.id.userId, { thrown: true });
+    return { ok: false, reason: "unavailable" };
+  }
+
   const ceiling = deps.ceiling ?? defaultVerifyCeiling;
   if (!ceiling.consume(a.id.userId)) return { ok: false, reason: "locked" };
 
@@ -272,15 +339,7 @@ export async function verifyReauthCode(
     return { ok: false, reason: "unavailable" };
   }
 
-  let client: ThrowawayAuthClient;
   let error: AuthErrorLike | null;
-  try {
-    client = deps.authClient();
-  } catch (err) {
-    // The client could not even be built (a missing key): nothing was asked of the auth service.
-    reportFailed("verify_client", err, a.id.userId, { thrown: true });
-    return { ok: false, reason: "unavailable" };
-  }
   try {
     ({ error } = await client.auth.verifyOtp({ email: a.id.email, token: a.code, type: "email" }));
   } catch (err) {

@@ -26,12 +26,26 @@ export interface LegalRowFacts {
 /**
  * How a POST ended.
  *   - `ok`: 2xx with a readable body.
- *   - `rejected`: a genuine 4xx (not 429) from our own route. The request was refused, so nothing was written.
+ *   - `rejected`: a status our own routes emit for a refusal (400, 401, 403 that is not reverify, 404, 413, 415). The
+ *     request was refused before anything was written. A status we do not emit (408, 409, 499 from a proxy, ...) says
+ *     nothing about our route, so it is `unknown`.
  *   - `reverify`: HTTP 403 with `{error:"reverify"}`: the email check no longer counts (decide route, contract 1).
  *   - `unknown`: everything else (5xx, 429, a network error, a timeout, an abort, an unreadable body). A committed row can
  *     sit behind any of these, so the caller must never say "nothing was recorded" for it.
  */
 export type LegalPost<T> = { kind: "ok"; value: T } | { kind: "rejected" } | { kind: "reverify" } | { kind: "unknown" };
+
+/** The only refusals our routes answer; any other status may come from a proxy or sit in front of a committed row. */
+const REFUSAL_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404, 413, 415]);
+
+/** A request deadline: `AbortSignal.timeout` when it exists, else an `AbortController` aborted by a timer. */
+function deadline(ms: number): { signal?: AbortSignal; done: () => void } {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") return { signal: AbortSignal.timeout(ms), done: () => undefined };
+  if (typeof AbortController === "undefined") return { done: () => undefined };
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  return { signal: ctl.signal, done: () => clearTimeout(t) };
+}
 
 async function isReverifyBody(res: Response): Promise<boolean> {
   try {
@@ -43,26 +57,30 @@ async function isReverifyBody(res: Response): Promise<boolean> {
 }
 
 export async function postJson(url: string, body: unknown): Promise<LegalPost<unknown>> {
-  let res: Response;
+  const limit = deadline(PENDING_WATCHDOG_MS);
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      ...(typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(PENDING_WATCHDOG_MS) } : {}),
-    });
-  } catch {
-    return { kind: "unknown" };
-  }
-  if (!res.ok) {
-    if (res.status === 403 && (await isReverifyBody(res))) return { kind: "reverify" };
-    if (res.status >= 400 && res.status < 500 && res.status !== 429) return { kind: "rejected" };
-    return { kind: "unknown" };
-  }
-  try {
-    return { kind: "ok", value: await res.json() };
-  } catch {
-    return { kind: "unknown" };
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        ...(limit.signal ? { signal: limit.signal } : {}),
+      });
+    } catch {
+      return { kind: "unknown" };
+    }
+    if (!res.ok) {
+      if (res.status === 403 && (await isReverifyBody(res))) return { kind: "reverify" };
+      return REFUSAL_STATUSES.has(res.status) ? { kind: "rejected" } : { kind: "unknown" };
+    }
+    try {
+      return { kind: "ok", value: await res.json() };
+    } catch {
+      return { kind: "unknown" };
+    }
+  } finally {
+    limit.done();
   }
 }
 

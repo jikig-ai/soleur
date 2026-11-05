@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   report: vi.fn(),
   texts: { dir: "" },
   ceiling: { value: null as unknown },
+  failures: { value: null as unknown },
   clientFails: { value: false },
 }));
 
@@ -81,6 +82,8 @@ vi.mock("@/server/legal-acceptance/reauth", async (orig) => {
     ...real,
     verifyReauthCode: (deps: Parameters<typeof real.verifyReauthCode>[0], a: Parameters<typeof real.verifyReauthCode>[1]) =>
       real.verifyReauthCode({ ...deps, ceiling: h.ceiling.value as InstanceType<typeof real.AttemptCeiling> }, a),
+    sendReauthCode: (deps: Parameters<typeof real.sendReauthCode>[0], a: Parameters<typeof real.sendReauthCode>[1]) =>
+      real.sendReauthCode({ ...deps, sendFailures: h.failures.value as InstanceType<typeof real.SendFailureMemory> }, a),
   };
 });
 // The registry directory is a fixture dir (the real one holds no legal text yet).
@@ -92,7 +95,7 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
 import { POST as reauth } from "@/app/api/legal-acceptance/[key]/reauth/route";
 import { POST as decide } from "@/app/api/legal-acceptance/[key]/decide/route";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
-import { AttemptCeiling } from "@/server/legal-acceptance/reauth";
+import { AttemptCeiling, SendFailureMemory } from "@/server/legal-acceptance/reauth";
 
 const jwt = (payload: Record<string, unknown>) =>
   `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
@@ -131,6 +134,7 @@ beforeEach(() => {
   h.throwaway.signOut.mockResolvedValue({ error: null });
   h.serviceRpc.mockResolvedValue(issued);
   h.ceiling.value = new AttemptCeiling();
+  h.failures.value = new SendFailureMemory();
   h.clientFails.value = false;
 });
 

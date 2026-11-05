@@ -50,6 +50,10 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
   // Client cooldown on "Send me a new code": the auth service accepts one code per address per minute.
   const [cooling, setCooling] = useState(false);
   const coolTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True after a send that ended in an error or `rate_limited`, cleared by a success. The server skips the mail for a
+  // plain send on a live intent ("the earlier code is still valid"); after a failed send no code exists, so every send
+  // that follows one is asked for as a resend, and "sent" is never told for a mail that was not attempted.
+  const lastSendFailed = useRef(false);
 
   useEffect(
     () => () => {
@@ -88,9 +92,11 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
   async function send(resend: boolean) {
     if (resend && cooling) return;
     if (!begin("send")) return;
-    const post = await postJson(`/api/legal-acceptance/${encodeURIComponent(keyName)}/reauth`, resend ? { step: "send", resend: true } : { step: "send" });
+    const asResend = resend || lastSendFailed.current;
+    const post = await postJson(`/api/legal-acceptance/${encodeURIComponent(keyName)}/reauth`, asResend ? { step: "send", resend: true } : { step: "send" });
     end();
     const parsed = post.kind === "ok" ? parseSend(post.value) : null;
+    lastSendFailed.current = !parsed?.ok;
     if (parsed?.ok) {
       setVerified(false);
       setCode("");
