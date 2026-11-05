@@ -19,3 +19,13 @@
 
 ### Components Invoked
 soleur:plan, soleur:deepen-plan (inline), collision-precheck.sh, ratchet-observation-window-10865.sh (read-only probe)
+
+## Work Phase
+- Status: complete (2026-11-05)
+- Arm executed: (a') measured-verdict — suite-durations.tsv floor→measured 718 (CI merge_group medians 677/1057/718); glob-rate verdict `always_on` (over-25-percent); ALWAYS_ON_SUITES install; _MIN_ALWAYS_ON_DECLARED 111→112 + f1 pin; justifications row; 13 accept rows + 3 kb-consumers rows deleted (always_on exits gap accounting); edge block :4165 stays per AC 6.
+- Rider repair: accept row for real-sdk-ask-probe-workflow.test.sh → approval/ops.ts (EXCLUDED mention) — un-pauses main red the window sits on.
+- Verify: ratchet exit=0 live=0; always-on-ledger 14/0; fast-tier-budget 9/0; kb-consumers 31/0; selector emits always_on.
+- Comments posted: #10448 resolution, #10865 probe verbatim, #10859 entry-condition status (rename-carry dissolved, canary met, window open), #12129 p95 datapoint.
+- Untouched: ci.yml continue-on-error, required-checks.txt, ruleset-ci-required.tf, pr-fanout-ledger.txt, CI_PR_AFFECTED, activation lock — all zero-diff (flip stays held for budget owner).
+- Incident: edited test-all.sh mid-flight under the background --print-selection run → byte-offset syntax error, rc=2; re-ran after edits landed (documented hazard, work SKILL §1172).
+- Commits: 97206b0baf (duration promotion), 4b039c2332 (install+drain+repair), 03556feee8 (tasks tick); pushed, draft PR #12199.
