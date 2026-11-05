@@ -19,7 +19,7 @@ The incident skill tells the agent to pull Better Stack, Sentry, and Supabase, t
 ## Goals
 
 - The incident skill runs the three existing readers before the founder confirms facts.
-- The founder sees a redacted hypothesis card, with more than one hypothesis when the lines support more than one, and a coverage line per source.
+- The founder sees a redacted coverage card: one sentence built only from coverage fields, or `hypotheses=none`, and a coverage line per source.
 - Confirming the card does not skip `ACK-ART33`, `ACK-ART34`, or `COMMIT-PIR`.
 - A missing source, an empty result, or exit 0 on the wrong question is labeled a gap.
 
@@ -60,11 +60,11 @@ The founder may pass a window and an optional complaint sentence. The complaint 
 
 ### FR3: Partial failure
 
-If Doppler `prd` cannot be read and `prd_terraform` can, the card drafts from Better Stack and marks Sentry and Supabase unverified. If Doppler itself is unavailable, the card says nothing was queried. Better Stack exit 3 and Supabase exit 3 are reported with the script's own meaning.
+If Doppler `prd` cannot be read and `prd_terraform` can, Better Stack still runs. Sentry and Supabase are `verdict=never-ran` `reason=wrapper` when that source was going to be executed. With no issue id, Sentry stays `not-queried` `reason=no-issue-id`. If the `doppler` binary is missing, Better Stack and Supabase are `reason=wrapper` and Sentry follows that same split. Better Stack exit 3 is `verdict=never-ran`. Supabase exit 3 keeps the script's data verdict on the card and the marker `verdict=queried`.
 
 ### FR4: Hypothesis card
 
-The card lists hypotheses, what would disprove each, and for each source the window, the table or ref, and the exit or coverage verdict. It does not set `affected_user_count`, `data_categories_breached`, `risk_to_subjects`, `revenue_impact`, the Art. 33/34 booleans, `brand_survival_threshold`, or `detected_at` from telemetry. It prints the pull time as a candidate awareness moment.
+The card is the coverage lines plus at most one sentence built only from those fields, or `hypotheses=none`. It does not rank causes, say what would disprove the complaint, or print a pull time. For each source that ran, or that the Doppler wrapper skipped, it names the window, the table or ref, and the exit or coverage verdict. A `reason=usage` line does not print the refused window. It does not set `affected_user_count`, `data_categories_breached`, `risk_to_subjects`, `revenue_impact`, the Art. 33/34 booleans, `brand_survival_threshold`, or `detected_at` from telemetry.
 
 ### FR5: Sentinel before display
 

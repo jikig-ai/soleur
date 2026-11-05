@@ -74,7 +74,7 @@ lacks() {
 need_file "$SKILL"
 
 has 'This skill should be used when scaffolding a redaction-gated post-incident report (PIR) after a production incident.' "$SKILL"
-has 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h' "$SKILL"
+has 'doppler run -p soleur -c prd_terraform -- env -u BS_TABLE -u BS_TABLE_S3 scripts/betterstack-query.sh --table t520508_soleur_inngest_vector_prd_3_logs --since 1h' "$SKILL"
 has 'doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --since 24h' "$SKILL"
 has 'doppler run -p soleur -c prd -- scripts/sentry-issue.sh' "$SKILL"
 has "$TABLE" "$SKILL"
@@ -449,6 +449,165 @@ case "$held" in
   /*) pass "temp was outside the repo" ;;
   *) fail "temp path was not absolute" ;;
 esac
+
+# Execute the Phase 0 fence. A stub doppler does not exec the readers.
+fence="${TMP_DIR}/phase0-fence.sh"
+awk '
+  /^```bash$/ { n++; if (n==1) grab=1; next }
+  /^```$/ && grab { exit }
+  grab { print }
+' "$SKILL" > "$fence"
+if [[ -s "$fence" ]]; then
+  pass "extracted the phase 0 fence"
+else
+  fail "could not extract the phase 0 fence"
+fi
+stub_bin="${TMP_DIR}/bin"
+mkdir -p "$stub_bin"
+printf '%s\n' '#!/bin/bash' 'exit 0' > "${stub_bin}/doppler"
+chmod 755 "${stub_bin}/doppler"
+printf '%s\n' '#!/bin/bash' 'exit 2' > "${TMP_DIR}/sentinel-exit-2.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' > "${TMP_DIR}/sentinel-exit-0.sh"
+chmod 755 "${TMP_DIR}/sentinel-exit-2.sh" "${TMP_DIR}/sentinel-exit-0.sh"
+plugin_root="${REPO_ROOT}/plugins/soleur"
+(
+  cd "$REPO_ROOT" || exit 99
+  PATH="${stub_bin}:${PATH}" \
+    CLAUDE_PLUGIN_ROOT="$plugin_root" \
+    SENTINEL="${TMP_DIR}/sentinel-exit-2.sh" \
+    INCIDENT_SUPABASE_PROJECT=soleur-inngest-prd \
+    INCIDENT_COMPLAINT='checkout button failed' \
+    BS_TABLE=not_the_card_table \
+    bash -x "$fence" >"${TMP_DIR}/fence-halt.out" 2>"${TMP_DIR}/fence-halt.err"
+  printf '%s\n' "$?" > "${TMP_DIR}/fence-halt.rc"
+)
+halt_rc="$(cat "${TMP_DIR}/fence-halt.rc")"
+if [[ "$halt_rc" -eq 2 ]]; then
+  pass "fence exits 2 when the complaint sentinel exits 2"
+else
+  fail "fence complaint halt rc=${halt_rc}"
+fi
+if grep -qx 'SOLEUR_INCIDENT_HALT reason=sentinel-exit-2' "${TMP_DIR}/fence-halt.out"; then
+  pass "complaint halt is on stdout"
+else
+  fail "complaint halt missing from stdout"
+fi
+if grep -qF 'checkout button failed' "${TMP_DIR}/fence-halt.out"; then
+  fail "complaint text reached stdout"
+else
+  pass "complaint text stayed off stdout"
+fi
+python3 - "${TMP_DIR}/fence-halt.err" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+a = "ref=ifsccnjhymdmidffkzhl"
+b = "ref=pigsfuxruiopinouvjwy"
+ok = False
+for ln in text.splitlines():
+    if a not in ln or b not in ln:
+        continue
+    ia = ln.find(a)
+    ib = ln.find(b, ia + len(a))
+    if ib == -1:
+        continue
+    mid = ln[ia + len(a):ib]
+    if "\\n" in mid:
+        ok = True
+sys.exit(0 if ok else 1)
+PY
+if [[ $? -eq 0 ]]; then
+  pass "xtrace keeps the two supabase refs on separate lines"
+else
+  fail "xtrace did not keep the two supabase refs on separate lines"
+fi
+if grep -qF -- '--table t520508_soleur_inngest_vector_prd_3_logs' "${TMP_DIR}/fence-halt.err" \
+  && grep -qF -- 'env -u BS_TABLE' "${TMP_DIR}/fence-halt.err"; then
+  pass "xtrace pins the betterstack table and unsets BS_TABLE"
+else
+  fail "xtrace did not pin the betterstack table"
+fi
+(
+  cd "$REPO_ROOT" || exit 99
+  PATH="${stub_bin}:${PATH}" \
+    CLAUDE_PLUGIN_ROOT="$plugin_root" \
+    SENTINEL="${TMP_DIR}/sentinel-exit-0.sh" \
+    INCIDENT_WINDOW='999w' \
+    bash -x "$fence" >"${TMP_DIR}/fence-usage.out" 2>"${TMP_DIR}/fence-usage.err"
+)
+if grep -qF 'reason=usage' "${TMP_DIR}/fence-usage.out" \
+  && ! grep -qF '999w' "${TMP_DIR}/fence-usage.out" \
+  && ! grep -qF 'window=1h' "${TMP_DIR}/fence-usage.out" \
+  && ! grep -qF 'window=24h' "${TMP_DIR}/fence-usage.out"; then
+  pass "a refused window is usage and is not printed"
+else
+  fail "refused window leaked or was not usage"
+fi
+(
+  cd "$REPO_ROOT" || exit 99
+  PATH="${stub_bin}:${PATH}" \
+    CLAUDE_PLUGIN_ROOT="$plugin_root" \
+    SENTINEL="${TMP_DIR}/sentinel-exit-0.sh" \
+    INCIDENT_SENTRY_ISSUE_ID='--redact' \
+    bash -x "$fence" >"${TMP_DIR}/fence-dash.out" 2>"${TMP_DIR}/fence-dash.err"
+)
+if grep -qF 'sentry verdict=never-ran reason=usage' "${TMP_DIR}/fence-dash.out" \
+  && ! grep -qF 'sentry-issue.sh' "${TMP_DIR}/fence-dash.err" \
+  && ! grep -qF -- '--redact' "${TMP_DIR}/fence-dash.out"; then
+  pass "a leading-dash issue id is usage and is not executed"
+else
+  fail "leading-dash issue id was executed or printed"
+fi
+(
+  cd "$REPO_ROOT" || exit 99
+  env -u CLAUDE_PLUGIN_ROOT \
+    PATH="${stub_bin}:${PATH}" \
+    SENTINEL="${TMP_DIR}/sentinel-exit-0.sh" \
+    bash -x "$fence" >"${TMP_DIR}/fence-root.out" 2>"${TMP_DIR}/fence-root.err"
+  printf '%s\n' "$?" > "${TMP_DIR}/fence-root.rc"
+)
+root_rc="$(cat "${TMP_DIR}/fence-root.rc")"
+if [[ "$root_rc" -eq 2 ]] \
+  && grep -qx 'SOLEUR_INCIDENT_HALT reason=plugin-root-unverified' "${TMP_DIR}/fence-root.out" \
+  && ! grep -qF 'betterstack-query.sh' "${TMP_DIR}/fence-root.err"; then
+  pass "an empty plugin root halts before a reader"
+else
+  fail "empty plugin root did not halt before a reader rc=${root_rc}"
+fi
+
+# TERM during the Better Stack read must exit 143 and must not start Supabase.
+printf '%s\n' '#!/bin/bash' 'if [[ "$*" == *betterstack-query.sh* ]]; then sleep 30; fi' 'exit 0' > "${stub_bin}/doppler"
+chmod 755 "${stub_bin}/doppler"
+python3 - "$fence" "$stub_bin" "$plugin_root" "${TMP_DIR}/sentinel-exit-0.sh" "$REPO_ROOT" <<'PY'
+import os, signal, subprocess, sys, time
+fence, stub_bin, plugin_root, sentinel, repo = sys.argv[1:]
+env = os.environ.copy()
+env["PATH"] = stub_bin + os.pathsep + env.get("PATH", "")
+env["CLAUDE_PLUGIN_ROOT"] = plugin_root
+env["SENTINEL"] = sentinel
+for key in ("INCIDENT_WINDOW", "INCIDENT_SENTRY_ISSUE_ID", "INCIDENT_COMPLAINT", "INCIDENT_SUPABASE_PROJECT"):
+    env.pop(key, None)
+proc = subprocess.Popen(
+    ["bash", fence], cwd=repo, env=env,
+    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, text=True,
+)
+deadline = time.time() + 3
+while time.time() < deadline:
+    if proc.poll() is not None:
+        break
+    time.sleep(0.05)
+os.killpg(proc.pid, signal.SIGTERM)
+rc = proc.wait(timeout=5)
+out = proc.stdout.read() if proc.stdout is not None else ""
+bad = rc != 143 or "source=supabase" in out
+sys.exit(1 if bad else 0)
+PY
+if [[ $? -eq 0 ]]; then
+  pass "TERM during the pull exits 143 and does not start supabase"
+else
+  fail "TERM during the pull did not stop the later readers"
+fi
+printf '%s\n' '#!/bin/bash' 'exit 0' > "${stub_bin}/doppler"
+chmod 755 "${stub_bin}/doppler"
 
 echo "pull-card.test.sh: ${PASS} passed, ${FAIL} failed"
 if [[ "$FAIL" -ne 0 ]]; then
