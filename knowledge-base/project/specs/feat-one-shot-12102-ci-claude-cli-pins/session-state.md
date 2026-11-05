@@ -13,7 +13,7 @@ None blocking. collision-precheck exit 10 was this branch's own draft PR.
 - CLI_VERSION -> exactly 2.1.311; no pin-table row edit (value-agnostic).
 - claude-code-action -> v1.0.263 (tag-object SHA 3b7e1a45ca6f231c62605aabcf79e6a41b08c7da) in 4 workflows + constraint-scaffold template; no claude_code_version input exists.
 - pen-cli lock: exact overrides entry for agent-sdk 0.3.311, gated on engine-contract-probe.sh.
-- operator-digest pin v1.0.101 left out; follow-up issue.
+- operator-digest pin: deferred by F4, then folded in by F7 (review round); one follow-up issue remains.
 
 ### Components Invoked
 soleur:plan, soleur:deepen-plan, learnings-researcher, cto

@@ -93,7 +93,7 @@ None. (Queried open `code-review` issues against every planned file path; no bod
 | Canary re-run against 2.1.311 before merge | — | inferred — justification: CTO F1; the canary parses CLI output records and was measured on 2.1.228 only, so a version jump of 83 releases can silently change its input |
 | constraint-scaffold template bump | "Check the four anthropics/claude-code-action v1.0.236 uses" | inferred — justification: the template is the source of the `fix-constraints-stage-a.yml` dogfood copy and ships to customers on the same vulnerable pin; leaving it creates dogfood/template drift |
 | engine-contract-probe gate on the lock bump | "if it ships to customers" | inferred — justification: CTO F3; the probe's header requires it before an engine lockfile bump |
-| Follow-up issue for `operator-digest.workflow.yml` (v1.0.101) | — | inferred — justification: CTO F4; same class, customer-facing, larger jump, so it is tracked instead of silently dropped |
+| `operator-digest.workflow.yml` pin (v1.0.101) folded in; one follow-up issue for the post-merge run and the constraint-scaffold refresh gap | — | inferred — justification: CTO F4 first deferred it, then F7 (review round, measured evidence) amended F4: on v1.0.101 the asset's unquoted `Bash(...)` allowlist is silently widened to bare `Bash`, so the bump is a containment fix |
 
 ### Split Assessment
 
@@ -151,7 +151,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 
 - 5.1 PR body (not the title) contains `Closes #12102`, the bundled-Bun statement ("v1.0.236 shipped Bun 1.3.14 and CLI 2.1.284; v1.0.263 ships Bun 1.4.4 and CLI 2.1.311; whether the jobs decode a network Brotli response stays unverified and is moot after the bump"), the canary scratch-run result, the engine-contract-probe result, the `test-pretooluse-hooks` dispatch result, the expected-non-required `claude-code-review` note, and the customer reinstall note. Label `meta/machinery`; semver label per ship (patch).
 - 5.2 Do not push to a PR that is in the merge queue (dequeue via GraphQL `dequeuePullRequest` first). Check each push's real exit code (no `| tail`). `cd` into the worktree before git writes. Do not touch PR 10926 or any other open tracker.
-- 5.3 File one follow-up issue for the `operator-digest.workflow.yml` pin (`claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101`, customer-facing asset, 162-release jump needing its own input-drift review and `operator-digest-workflow.test.sh` run), milestone from `knowledge-base/product/roadmap.md`, labels `domain/engineering`, `type/security`, `deferred-scope-out`. No existing open issue covers it (searched). Net-issue-flow: the PR closes one issue and files one, so if the gate asks for it use the override marker with justification "deferred scope-out of #12102, customer-facing template, separate risk profile" and a `Filed:` line.
+- 5.3 (amended by F7, review round) The `operator-digest.workflow.yml` pin is bumped IN this PR to the v1.0.263 tag-object SHA after the CTO's three conditions (allowlist covers every command the skill runs; `operator-digest-workflow.test.sh` and the lockstep guard pass; the PR body states the mangling finding and that already-provisioned copies stay on v1.0.101 until re-provisioned). File ONE follow-up issue (labels `domain/engineering`, `type/security`, `deferred-scope-out`, `follow-through`) with two checklist items: a real dispatched run in the private operator-digest repo after re-provisioning completes with no permission-denied tool errors, and a refresh path (or documented manual step) for repositories already scaffolded from the constraint-scaffold template. Net-issue-flow: the PR closes one issue and files one (net 0).
 - 5.4 Registry files (`scripts/ci-pr-affected-audit.accept.tsv`, `suite-durations.tsv`, `suite-shard-legs.tsv`): no new suite or workflow is added, so no rows are expected; if a registry check reds, insert the row in sorted position, never appended.
 - 5.5 Read the non-required `infra-validation` and `sandbox-canary-capture-gate` runs on the pushed head by hand; required checks are `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`.
 
@@ -165,11 +165,16 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 - `plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template` (action SHA)
 - `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json` (override)
 - `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json` (regenerated)
-- `knowledge-base/legal/article-30-register.md` (only if it states the pinned version as current; see 2.4)
+- `knowledge-base/legal/article-30-register.md` (states the drain workflow's pin as current fact; updated with a dated note)
+- `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` (pin, amended by F7)
+- `apps/web-platform/test/repo-wide-suites.ts` (registers the lockstep guard, sorted position)
+- review-round doc edits: `ADR-182`, `ADR-191`, `plugin-delivery-recovery.md`, `model-launch-review/SKILL.md`, `fix-constraints-stage-a.yml` (comment only)
 
 ## Files to Create
 
-None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowledge-base/project/specs/feat-one-shot-12102-ci-claude-cli-pins/`).
+- `apps/web-platform/test/claude-pin-lockstep.test.ts` (review round: asserts the claude-code-action SHAs, CLI_VERSION, Dockerfile, package.json and the pen-cli override agree)
+- `scripts/followthroughs/claude-code-action-residual-pins-12136.sh` (probe for the follow-up issue)
+- spec artifacts `decision-challenges.md` and `tasks.md` live under `knowledge-base/project/specs/feat-one-shot-12102-ci-claude-cli-pins/`.
 
 ## Acceptance Criteria
 
@@ -183,7 +188,7 @@ None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowled
 - [x] `engine-contract-probe.sh` passes against the regenerated lock (145 PASS, 0 FAIL on 2026-11-05; the refreshed transcript is deliberately not committed, the result goes in the PR body).
 - [x] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
 - [ ] CI required checks green: `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`; non-required `infra-validation` and `sandbox-canary-capture-gate` read by hand.
-- [ ] PR body contains `Closes #12102`, the Brotli statement, and the customer-reinstall note; label `meta/machinery` applied; follow-up issue for `operator-digest.workflow.yml` filed and referenced.
+- [ ] PR body contains `Closes #12102`, the Brotli statement, and the customer-reinstall note; label `meta/machinery` applied; follow-up issue (post-merge digest run; constraint-scaffold refresh path) filed and referenced; the PR body states the digest allowlist finding.
 
 ### Post-merge (operator-free, agent-run)
 

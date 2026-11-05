@@ -17,18 +17,20 @@ import path from "node:path";
 //   - the pen-cli engine override for `@anthropic-ai/claude-agent-sdk` equals
 //     this app's SDK pin, and its committed lock resolves that version.
 //
-// DELIBERATELY NOT SCANNED: plugins/soleur/skills/operator-digest/assets/
-// operator-digest.workflow.yml. It is provisioned into another repository and
-// is still on an older action release by a recorded decision (follow-up
-// tracked in the #12102 residual-pins issue). Scanning only `.github/workflows`
-// and the one template keeps that asymmetry explicit rather than hidden behind
-// an allowlist entry that could outlive the decision.
+// ALSO SCANNED: plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml.
+// It is provisioned into another repository, so a copy already installed there
+// keeps its old pin until re-provisioned; this guard covers the asset in this
+// repo. On v1.0.101 that asset's unquoted `Bash(...)` allowlist was silently
+// widened to bare `Bash` by the action's argument parsing (CTO F7), which is
+// why it cannot be left on an older release.
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const read = (rel: string): string => readFileSync(path.join(REPO_ROOT, rel), "utf8");
 
 const TEMPLATE =
   "plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template";
+const DIGEST_ASSET =
+  "plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml";
 const DRIFT_WORKFLOW = ".github/workflows/scheduled-marketplace-drift.yml";
 const DOCKERFILE = "apps/web-platform/Dockerfile";
 const PEN_CLI_DIR = "plugins/soleur/skills/pencil-setup/scripts/pen-cli";
@@ -54,7 +56,7 @@ interface Site {
 function collect(): { sites: Site[]; uses: Record<string, number> } {
   const sites: Site[] = [];
   const uses: Record<string, number> = {};
-  for (const file of [...workflowFiles(), TEMPLATE]) {
+  for (const file of [...workflowFiles(), TEMPLATE, DIGEST_ASSET]) {
     const text = read(file);
     const n = (text.match(USE_RE) ?? []).length;
     if (n > 0) uses[file] = n;
@@ -80,7 +82,8 @@ describe("claude pin lockstep (#12102)", () => {
   it("every claude-code-action use is a full-SHA pin with a version comment", () => {
     const { sites, uses } = collect();
     // Non-vacuity: the census must see the sites it exists to compare.
-    expect(Object.keys(uses).length, "files carrying a claude-code-action use").toBeGreaterThanOrEqual(5);
+    expect(Object.keys(uses).length, "files carrying a claude-code-action use").toBeGreaterThanOrEqual(6);
+    expect(Object.keys(uses), "the operator-digest asset must be in the census").toContain(DIGEST_ASSET);
     for (const [file, n] of Object.entries(uses)) {
       const matched = sites.filter((s) => s.file === file).length;
       expect(matched, `${file}: ${n} use(s) but ${matched} full-SHA pin(s)`).toBe(n);

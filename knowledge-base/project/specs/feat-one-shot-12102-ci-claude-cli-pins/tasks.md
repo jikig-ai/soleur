@@ -33,7 +33,7 @@ Branch: `feat-one-shot-12102-ci-claude-cli-pins` | Draft PR 12136 | PR body uses
 
 ## Phase 4 - Ship wiring
 
-- 4.1 File the follow-up issue for `operator-digest.workflow.yml` (v1.0.101); net-issue-flow override marker with justification and `Filed:` line if the gate demands.
+- 4.1 (amended by F7) The operator-digest pin is folded into this PR. File ONE follow-up issue: post-merge dispatched run in the private operator-digest repo, and a constraint-scaffold refresh path. Net 0 against Closes #12102.
 - 4.2 PR body: `Closes #12102`, Brotli statement, canary/probe/dispatch results, expected-non-required `claude-code-review` note, customer reinstall note. Label `meta/machinery`.
 - 4.3 Read non-required `infra-validation` and `sandbox-canary-capture-gate` on the pushed head; required checks: test, lockfile-sync, markdown-lint, tenant-integration-required.
 - 4.4 Registry files: no rows expected; any added row goes in sorted position.
