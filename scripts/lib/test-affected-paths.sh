@@ -1076,6 +1076,13 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# pull-card.test.sh greps and parses the marker registry through a $REPO_ROOT path the derive does not
+# select. The three query-script names are skill-text needles, accepted in scripts/ci-pr-affected-audit.accept.tsv.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_PULL_CARD_TEST_SH_PATHS=(
+  "apps/web-platform/server/git-lock-marker-telemetry.ts"  # plugins/soleur/skills/incident/test/pull-card.test.sh:17
+  "plugins/soleur/skills/incident/test/pull-card.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # plugins/soleur/test/scheduled-realtime-probe-guard (#12009) — executes the probe step body parsed out of the workflow and
 # compares its setup-node version with apps/web-platform/.nvmrc, both through $ROOT-built paths no derivation channel reaches.
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULED_REALTIME_PROBE_GUARD_TEST_SH_PATHS=(
