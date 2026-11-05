@@ -19,6 +19,8 @@
 # Run: bash apps/web-platform/infra/inngest-host-replace-preflight.test.sh
 # Presence under apps/web-platform/infra/ IS registration - derived and run by run-registered-suites.sh (#8736).
 
+# The sed mutation expressions are deliberately single-quoted literals.
+# shellcheck disable=SC2016
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -155,7 +157,7 @@ run_step() {
 
 # rows <workflow> <label>: executes every behavioural row; prints one "BAD:<row>" per failing row.
 rows() {
-  local wf="$1" lbl="$2" od="$SANDBOX/rows.$2" rc
+  local wf="$1" od="$SANDBOX/rows.$2" rc
   extract_step "$wf" "$od"
   if [ "$(meta_get "$od" found)" != "1" ]; then printf 'BAD:step-not-found-once\n'; return 0; fi
   expect() { # name want_rc [grep-pattern-in-output]
