@@ -86,6 +86,13 @@ cat > "$FIXTURES/fail.sh" <<'EOF'
 echo "this fixture fails on purpose"
 exit 1
 EOF
+cat > "$FIXTURES/sigred.sh" <<'EOF'
+#!/usr/bin/env bash
+# Interrupt the runner (TERM to its pid), then exit 1: a red reaped by an interrupted run.
+kill -TERM "$PPID"
+sleep 0.3
+exit 1
+EOF
 cat > "$FIXTURES/selfterm.sh" <<'EOF'
 #!/usr/bin/env bash
 kill -TERM $$
@@ -107,7 +114,8 @@ cat > "$FIXTURES/envprobe.sh" <<'EOF'
 #!/usr/bin/env bash
 # Records whether SOLEUR_TEST_JOBS is in this process's environment (#12013).
 if [ -n "${SOLEUR_TEST_JOBS+x}" ]; then own=set; else own=absent; fi
-printf '%s\n' "$own" > "${PROBE_OUT:?PROBE_OUT is not set}"
+if [ -n "${SOLEUR_PJ_PROVISIONAL_FILE+x}" ]; then pj=set; else pj=absent; fi
+printf '%s\n%s\n' "$own" "$pj" > "${PROBE_OUT:?PROBE_OUT is not set}"
 exit 0
 EOF
 cat > "$FIXTURES/ok.sh" <<'EOF'
@@ -116,6 +124,62 @@ echo "fixture ok"
 exit 0
 EOF
 chmod +x "$FIXTURES"/*.sh
+
+# Release-file fixtures (#12013 backfill arms). The ORDER of two suites is decided by files, never by
+# sleeps: <waitfor> is polled (at most <maxtenths> tenths of a second, so a scheduler that never lets the
+# releasing suite start still terminates), <writeat> says when this suite creates its own release file.
+mk_rel_fixture() {  # <name> <sleep_s> <waitfor|-> <writeat:start|end|none> [maxtenths]
+  local name="$1" slp="$2" wf="$3" wa="$4" mt="${5:-20}"
+  assert_fixture_dir "$FIXTURES"
+  cat > "$FIXTURES/$name.sh" <<EOF
+#!/usr/bin/env bash
+echo "S $name \$(date +%s%N)" >> "$FIXTURES/timeline.log"
+[ "$wa" = start ] && : > "$FIXTURES/rel.$name"
+if [ "$wf" != "-" ]; then
+  for _i in \$(seq 1 $mt); do [ -e "$FIXTURES/$wf" ] && break; sleep 0.1; done
+fi
+sleep "$slp"
+[ "$wa" = end ] && : > "$FIXTURES/rel.$name"
+echo "E $name \$(date +%s%N)" >> "$FIXTURES/timeline.log"
+exit 0
+EOF
+  chmod +x "$FIXTURES/$name.sh"
+}
+mk_timeline_fixture indD 0.4
+mk_timeline_fixture indE 0.4
+mk_rel_fixture holdT  0.05 rel.indA2 none 20   # holds token T until indA2 has STARTED (or 2 s elapse)
+mk_rel_fixture headT  0.2  -        none
+mk_rel_fixture headY  0.3  -        none
+mk_rel_fixture xU     0.3  -        none
+mk_rel_fixture indA2  0.4  -        start      # independent that releases holdT/holdQ when it starts
+mk_rel_fixture holdQ  0.05 rel.indA2 none 20   # barrier arm: holds T; released by indA2 starting
+
+# tl_check "S:a<E:b" "E:x>=S:y" ... - every clause must hold over $FIXTURES/timeline.log (ns stamps).
+# A missing label is a FAILED clause, never a skipped one. Self-tested below.
+tl_check() {  # [--log <file>] <clause>...
+  local log="$FIXTURES/timeline.log"
+  if [[ "${1:-}" == --log ]]; then log="$2"; shift 2; fi
+  python3 - "$log" "$@" <<'PY'
+import sys, re
+log, clauses = sys.argv[1], sys.argv[2:]
+w = {}
+for line in open(log):
+    k, label, ns = line.split()
+    w.setdefault(label, {})[k] = int(ns)
+bad = 0
+for c in clauses:
+    m = re.fullmatch(r'([SE]):(\w+)(<|>=)([SE]):(\w+)', c)
+    assert m, "bad clause " + c
+    a = w.get(m.group(2), {}).get(m.group(1)); b = w.get(m.group(5), {}).get(m.group(4))
+    if a is None or b is None:
+        print("MISSING stamp for", c); bad += 1; continue
+    ok = (a < b) if m.group(3) == '<' else (a >= b)
+    if not ok:
+        print("FAILED", c, a - b); bad += 1
+sys.exit(1 if bad else 0)
+PY
+}
+started_order() { grep -oE '^\[run\] [^ ]+ started' <<<"$1" | awk '{print $2}' | tr '\n' ' '; }
 
 # --- Sandbox builder --------------------------------------------------------
 # $1 = out path, $2 = arm name.
@@ -157,6 +221,11 @@ _pj_resolve_run_mode
 lane_declare "tokA" "artifact:fixture-shared" "fixture token pair A"
 lane_declare "tokB" "artifact:fixture-shared" "fixture token pair B"
 lane_declare "starS" "*" "fixture drain barrier"
+lane_declare "holdT" "artifact:bfT" "backfill fixture: holds T"
+lane_declare "holdQ" "artifact:bfT" "backfill fixture: holds T (barrier arm)"
+lane_declare "headT" "artifact:bfT" "backfill fixture: queued head blocked on T"
+lane_declare "headY" "artifact:bfT artifact:bfU" "backfill fixture: head on T and U"
+lane_declare "xU" "artifact:bfU" "backfill fixture: shares only U with headY"
 '''
 calls = {
     "clean":     [("indA","indA.sh"),("indB","indB.sh"),("indC","indC.sh")],
@@ -168,8 +237,28 @@ calls = {
     "one":       [("okfixture","ok.sh")],
     "envprobe":  [("envprobe","envprobe.sh")],
     "livered":   [("slowL","slowL.sh"),("bad","fail.sh")],
+    "sigred":    [("sigred","sigred.sh"),("indA","indA.sh")],
+    "bf1":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh")],
+    "bf5":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh"),("indD","indD.sh"),("indE","indE.sh")],
+    "bf2":       [("holdT","holdT.sh"),("headY","headY.sh"),("xU","xU.sh"),("indA","indA2.sh")],
+    "bf3":       [("holdQ","holdQ.sh"),("starS","starS.sh"),("indA","indA2.sh")],
+    "torn":      [("holdT","holdT.sh"),("headT","headT.sh")],
+    "many":      [("starS","starS.sh")] + [(f"ok{i}","ok.sh") for i in range(60)],
 }[arm]
-body = prelude + "".join(
+extra = {
+    # Simulate the torn reap of _pj_reap: wait -n returns with an EMPTY -p variable once (the job
+    # left the table first). `rp` is the caller's local; bash scoping lets the shadowing function clear it.
+    "torn": '''
+_tear_once=1
+wait() { builtin wait "$@"; local _r=$?; if (( _tear_once == 1 )); then _tear_once=0; rp=""; fi; return $_r; }
+''',
+    # Count lane_tokens_conflict calls (a clock-free cost check on the fill pass).
+    "many": '''
+eval "$(declare -f lane_tokens_conflict | sed '1s/lane_tokens_conflict/_ltc_orig/')"
+lane_tokens_conflict() { printf x >> "''' + fixtures + '''/conflict.count"; _ltc_orig "$@"; }
+''',
+}.get(arm, "")
+body = prelude + extra + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
 ) + "_pj_drain\n"
 s = s[:i] + body + s[j:]
@@ -401,7 +490,7 @@ fi
 # (#11939): a suite that itself runs a nested test-all.sh must not inherit a pool request.
 PROBE_FILE="$TMP/envprobe.reading"; rm -f "$PROBE_FILE"
 export PROBE_OUT="$PROBE_FILE"; run_arm envprobe 4 || true; unset PROBE_OUT
-if [[ "$(cat "$PROBE_FILE" 2>/dev/null)" == "absent" ]]; then
+if [[ "$(sed -n 1p "$PROBE_FILE" 2>/dev/null)" == "absent" ]]; then
   pass "A8 — SOLEUR_TEST_JOBS is not in the environment of a suite the runner spawns"
 else
   fail "A8 — the pool width leaked into a spawned suite: $(cat "$PROBE_FILE" 2>/dev/null || echo '<no reading>')"; dump "$ARM_OUT"
@@ -426,6 +515,189 @@ if [[ "$n_dem" == "1" ]]; then
   pass "A8 — SOLEUR_TEST_JOBS is demoted from the environment exactly once"
 else
   fail "A8 — expected one 'export -n SOLEUR_TEST_JOBS', found $n_dem"
+fi
+
+# --- A9: the provisional-red sidecar (#12013) --------------------------------------
+# affected-tests.sh hands the runner SOLEUR_PJ_PROVISIONAL_FILE; the runner appends one
+# `label<TAB>rc<TAB>epoch` line per red at exactly two sites (the pool reap line, the serial tail), rc 1..127
+# only, and demotes the variable from the environment of every suite it spawns. The gate reads the file
+# only when its budget kills the run (plugins/soleur/scripts/affected-tests.test.sh F4).
+SC="$TMP/provisional.sidecar"
+sidecar_run() {  # <arm> <jobs> — fresh empty sidecar, run, leave the file for inspection
+  assert_fixture_dir "$TMP"
+  : > "$SC"; export SOLEUR_PJ_PROVISIONAL_FILE="$SC"; run_arm "$1" "$2" || true; unset SOLEUR_PJ_PROVISIONAL_FILE
+}
+t_a="$(date +%s)"
+sidecar_run mixed 4
+t_b="$(date +%s)"
+if [[ "$(wc -l < "$SC")" == "1" ]] && awk -F'\t' -v a="$t_a" -v b="$t_b" 'NR==1 && $1=="bad" && $2==1 && $3>=a && $3<=b+1 {ok=1} END {exit !ok}' "$SC"; then
+  pass "A9 — pool: a planted red is recorded once as 'bad<TAB>1<TAB>epoch' (the reap site)"
+else
+  fail "A9 — pool sidecar wrong: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
+fi
+sidecar_run mixed ""
+if [[ "$(wc -l < "$SC")" == "1" ]] && awk -F'\t' '$1=="bad" && $2==1 && $3 ~ /^[0-9]+$/ {ok=1} END {exit !ok}' "$SC"; then
+  pass "A9 — serial: the same red is recorded once (the run_suite tail site; no double count with the verdict)"
+else
+  fail "A9 — serial sidecar wrong: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
+fi
+sidecar_run clean 4
+if [[ ! -s "$SC" && "$ARM_RC" == "0" ]]; then
+  pass "A9 — control: an all-green pool run writes nothing"
+else
+  fail "A9 — clean run wrote '$(tr '\t\n' '>|' < "$SC")' (rc=$ARM_RC)"
+fi
+sidecar_run killed 4
+if [[ ! -s "$SC" ]]; then
+  pass "A9 — a signal-shaped rc (143) is never recorded as a red (ADR-177: unresolved, not failed)"
+else
+  fail "A9 — signal-shaped rc was recorded: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
+fi
+sidecar_run sigred 4
+if [[ ! -s "$SC" ]]; then
+  pass "A9 — a red reaped after the runner was interrupted (INT/TERM) is not recorded"
+else
+  fail "A9 — an interrupted run recorded: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
+fi
+rm -f "$SC"; export SOLEUR_PJ_PROVISIONAL_FILE="$SC"; run_arm mixed 4 || true; unset SOLEUR_PJ_PROVISIONAL_FILE
+if [[ ! -e "$SC" ]]; then
+  pass "A9 — a named-but-absent sidecar is never created by the runner (the gate owns the file)"
+else
+  fail "A9 — the runner created the sidecar itself"
+fi
+# nested-runner isolation: no suite the runner spawns sees the variable.
+assert_fixture_dir "$TMP"
+PROBE_FILE="$TMP/envprobe.sidecar"; rm -f "$PROBE_FILE"; : > "$SC"
+export PROBE_OUT="$PROBE_FILE" SOLEUR_PJ_PROVISIONAL_FILE="$SC"; run_arm envprobe 4 || true; unset PROBE_OUT SOLEUR_PJ_PROVISIONAL_FILE
+if [[ "$(sed -n 2p "$PROBE_FILE" 2>/dev/null)" == "absent" && "$(sed -n 1p "$PROBE_FILE" 2>/dev/null)" == "absent" ]]; then
+  pass "A9 — SOLEUR_PJ_PROVISIONAL_FILE is not in the environment of a suite the runner spawns (a nested runner cannot append)"
+else
+  fail "A9 — the sidecar path leaked into a spawned suite: $(tr '\n' '|' < "$PROBE_FILE" 2>/dev/null || echo '<no reading>')"; dump "$ARM_OUT"
+fi
+n_pdem="$(grep -c '^export -n SOLEUR_PJ_PROVISIONAL_FILE$' "$TARGET" || true)"
+n_pdef="$(grep -c '^_provisional_append() {' "$TARGET" || true)"
+n_pcall="$(grep -c '^[[:space:]]*\(.*&& \)\?_provisional_append "' "$TARGET" || true)"
+if [[ "$n_pdem" == "1" && "$n_pdef" == "1" && "$n_pcall" == "2" ]]; then
+  pass "A9 — one demotion, one definition, exactly two append sites (reap line + serial tail)"
+else
+  fail "A9 — demotions=$n_pdem defs=$n_pdef call-sites=$n_pcall (want 1/1/2)"
+fi
+
+# --- A10: conservative backfill (#12013) -----------------------------------------------
+# A candidate may launch iff a slot is free, it conflicts with no LIVE suite, and it conflicts with nothing
+# still queued AHEAD of it. `*` conflicts with everything: a queued `*` blocks every later suite, and a `*`
+# candidate launches only with the pool drained and nothing queued before it. SOLEUR_PJ_FIFO=1 restores the
+# strict FIFO the runner had before (the A/B control of the measurement). Order of suites that share a token
+# is registration order in both modes; only INDEPENDENT suites may jump a blocked head.
+
+# Instrument self-test: the timeline checker must pass a real backfill timeline and FAIL an instantaneous,
+# sequential one (so an overlap clause cannot pass vacuously when the fixtures degenerate), and fail on a
+# missing label rather than skip it.
+GOOD_TL="$TMP/tl.good"; BAD_TL="$TMP/tl.bad"
+printf 'S holdT 100\nS indA2 110\nE holdT 200\nE indA2 210\n' > "$GOOD_TL"
+printf 'S holdT 100\nE holdT 100\nS indA2 101\nE indA2 101\n' > "$BAD_TL"
+if tl_check --log "$GOOD_TL" "S:indA2<E:holdT" >/dev/null && ! tl_check --log "$BAD_TL" "S:indA2<E:holdT" >/dev/null \
+   && ! tl_check --log "$GOOD_TL" "S:nope<E:holdT" >/dev/null; then
+  pass "A10 — instrument: the timeline checker passes a backfill timeline, fails a sequential one and a missing label"
+else
+  fail "A10 — the timeline checker is not discriminating"
+fi
+
+# Canonical shape: a blocked head with independent suites behind it.
+run_arm bf1 4 || true
+BF1_ORDER="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"
+if [[ "$ARM_RC" == "0" && "$BF1_ORDER" == "holdT headT indA indB indC " ]]; then
+  pass "A10 — backfill run exits 0 and the verdicts stay in registration order"
+else
+  fail "A10 — bf1 rc=$ARM_RC order='$BF1_ORDER'"; dump "$ARM_OUT"
+fi
+if tl_check "S:indA2<E:holdT" "S:indB<E:holdT" "S:indC<E:holdT" "S:headT>=E:holdT"; then
+  pass "A10 — independent suites ran beside the live token holder; the token-blocked head waited for it"
+else
+  fail "A10 — backfill timeline wrong (independents must overlap holdT, headT must follow it)"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+# Solo attribution: backfill overlaps a suite with a LATER launch, so the first one must stop claiming sole
+# ownership of the machine-global tmp delta. The timing row carries the label and the tmp_delta field.
+assert_fixture_dir "$TMP"
+TIMING_FILE="$TMP/timing.bf1"; : > "$TIMING_FILE"
+run_arm bf1 4 || true
+unset TIMING_FILE
+if grep -E '(^|[[:space:]])holdT([[:space:]]|$)' "$TMP/timing.bf1" | grep -q 'tmp_delta=unattributed'; then
+  pass "A10 — solo attribution: the suite overlapped by a backfilled launch reports tmp_delta=unattributed"
+else
+  fail "A10 — holdT's timing row lacks tmp_delta=unattributed: $(grep -E 'holdT' "$TMP/timing.bf1" | head -2 | tr '\t' '>')"
+fi
+BF1_STARTS="$(started_order "$ARM_OUT")"
+# frozen from the strict-FIFO algorithm on main (recorded 2026-11-05; see the SOLEUR_PJ_FIFO arm below):
+FIFO_FROZEN_ORDER="holdT headT indA indB indC "
+
+# Second blocked member after a compliant first: headY holds {T,U} behind the live T; xU shares only U.
+# xU conflicts with nothing LIVE, only with the queued headY, so it must wait for headY.
+run_arm bf2 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:xU>=E:headY" "S:indA2<E:holdT" "S:headY>=E:holdT"; then
+  pass "A10 — a suite sharing a token with an earlier QUEUED suite never jumps it (order among conflicting suites)"
+else
+  fail "A10 — order among conflicting suites violated"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# Barrier: a queued `*` suite blocks every later suite, even token-free ones.
+run_arm bf3 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:starS>=E:holdQ" "S:indA2>=E:starS"; then
+  pass "A10 — a queued * barrier blocks later token-free suites (no skip-ahead past a barrier)"
+else
+  fail "A10 — barrier arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# (No starvation arm: _pj_submit blocks while the pool is saturated, so the queue never holds an independent suite
+# beside a token-ready head when a slot frees - "head tried last" is observationally equivalent at the launcher.
+# Measured with an order-preserving head-last mutant on 2026-11-05: it survives, and is equivalent for that reason.
+# The head-first rule is pinned by the order-among-conflicting and barrier arms above, which a head-last
+# reordering of the queue does fail.)
+
+# Torn reap: wait -n comes back with an empty -p variable once. The torn branch never calls _pj_fill, so a
+# queued suite is launched by the drain's own fill and must still be reaped (not left UNACCOUNTED).
+run_arm torn 4 || true
+if [[ "$ARM_RC" == "0" ]] && ! grep -q 'UNACCOUNTED' <<<"$ARM_OUT" && [[ "$(verdict_lines "$ARM_OUT" | tr '\n' ' ')" == "holdT headT " ]]; then
+  pass "A10 — a torn reap does not strand a queued suite (drain fills until empty)"
+else
+  fail "A10 — torn-reap drain left a suite unaccounted (rc=$ARM_RC)"; dump "$ARM_OUT"
+fi
+
+# The knob: SOLEUR_PJ_FIFO=1 reproduces strict FIFO exactly - independents wait behind the blocked head, and the
+# launch order equals the frozen order recorded from main.
+export SOLEUR_PJ_FIFO=1; run_arm bf1 4 || true; unset SOLEUR_PJ_FIFO
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2>=E:holdT" "S:indB>=S:headT"; then
+  pass "A10 — SOLEUR_PJ_FIFO=1 restores strict FIFO (independents idle behind the blocked head)"
+else
+  fail "A10 — FIFO knob did not reproduce strict FIFO"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+if [[ "$(started_order "$ARM_OUT")" == "$FIFO_FROZEN_ORDER" ]]; then
+  pass "A10 — the knob's launch order equals the frozen order recorded from main"
+else
+  fail "A10 — FIFO launch order '$(started_order "$ARM_OUT")' != frozen '$FIFO_FROZEN_ORDER'"
+fi
+FIFO_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"; FIFO_RC="$ARM_RC"
+if [[ "$FIFO_VERDICTS" == "$BF1_ORDER" && "$FIFO_RC" == "0" ]]; then
+  pass "A10 — replay parity: backfill and strict FIFO print identical verdicts in identical order, same exit"
+else
+  fail "A10 — verdict replay differs between backfill ('$BF1_ORDER') and FIFO ('$FIFO_VERDICTS')"
+fi
+# A second, non-canonical shape (5 independents) must also backfill and replay in order.
+run_arm bf5 4 || true
+if [[ "$ARM_RC" == "0" && "$(verdict_lines "$ARM_OUT" | tr '\n' ' ')" == "holdT headT indA indB indC indD indE " ]] \
+   && tl_check "S:indA2<E:holdT" "S:indB<E:holdT" "S:headT>=E:holdT"; then
+  pass "A10 — a differently shaped queue (5 independents behind the head) backfills and replays in order"
+else
+  fail "A10 — non-canonical backfill shape wrong (rc=$ARM_RC)"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+# Cost, without a clock: lane_tokens_conflict calls while 60 suites queue behind a live `*` suite.
+rm -f "$FIXTURES/conflict.count"
+run_arm many 4 || true
+CC="$(wc -c < "$FIXTURES/conflict.count" 2>/dev/null || echo 0)"
+if [[ "$ARM_RC" == "0" ]] && (( CC > 0 )) && (( CC <= 3000 )); then
+  pass "A10 — the fill pass stays bounded: $CC lane_tokens_conflict calls for 61 suites (ceiling 3000)"
+else
+  fail "A10 — conflict-call count $CC outside (0, 3000] or rc=$ARM_RC"
 fi
 
 # --- A6: fallback arms --------------------------------------------------------

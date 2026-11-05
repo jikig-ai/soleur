@@ -261,6 +261,11 @@ _AFF_SCOPE_REQ=0
 # flag wins over the env var, matching the flag-over-env convention the other
 # mode flags follow. Parallel scheduling applies to the RUN path only —
 # selection (--affected, --print-selection, --enumerate) is untouched.
+# Launch order (#12013): conservative BACKFILL. A suite blocked on a token no longer idles the
+# free slots; a later suite launches iff it conflicts with no live suite and with nothing still
+# queued ahead of it (so suites that share a token keep registration order, and a queued `*`
+# blocks everything after it). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
+# control of the measurement, not a tuning knob. Tests: scripts/test-all-parallel-scheduler.test.sh.
 _JOBS_REQ=""
 # Wall-clock bound for the enumerate family (#8761). Overridable by
 # SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
@@ -1465,6 +1470,13 @@ export -n TEST_GROUP
 # #11939 class, for a different variable. Pinned by scripts/test-all-parallel-scheduler.test.sh A8.
 export -n SOLEUR_TEST_JOBS
 
+# #12013: the provisional-red sidecar path is a carrier of the same kind. affected-tests.sh hands it
+# to THIS runner; a suite that runs a nested sandboxed test-all.sh (its fixtures plant FAILs on
+# purpose) must never append those to the outer gate's sidecar. The shell variable stays readable
+# (`export -n` only demotes it from the environment of what we spawn). Pinned by
+# scripts/test-all-parallel-scheduler.test.sh (the demotion count and the nested-runner arm).
+export -n SOLEUR_PJ_PROVISIONAL_FILE
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -1930,7 +1942,25 @@ run_suite() {
   else
     "$@" || rc=$?
   fi
+  (( _pj_mode == 0 )) && _provisional_append "$label" "$rc"
   _run_suite_verdict "$label" "$rc" "$start" "$tmp_before" "$_suite_log"
+}
+
+# #12013: when affected-tests.sh handed this runner a sidecar (SOLEUR_PJ_PROVISIONAL_FILE), record
+# each red the moment it is seen: one `label<TAB>rc<TAB>epoch` line, one short O_APPEND write (atomic).
+# The gate reads it only if its budget kills the run, so a red seen before the kill is not reported
+# as a deferral. Exactly two callers, one per run mode (_pj_fmt_done for the pool, the serial tail of
+# run_suite) so nothing is double-counted; _run_suite_verdict is NOT one (the pool reaches it at
+# drain too). rc 1..127 only: a 128+n status is unresolved (ADR-177), never a red. An interrupted
+# run (_pj_sig) records nothing. Fail-open by design: a missing/unwritable sidecar changes nothing.
+_provisional_append() {  # _provisional_append <label> <rc>
+  local f="${SOLEUR_PJ_PROVISIONAL_FILE:-}" rc="${2:-}"
+  [[ "$f" == /* && -f "$f" && -w "$f" ]] || return 0
+  [[ "$rc" =~ ^[0-9]+$ ]] || return 0
+  (( 10#$rc >= 1 && 10#$rc <= 127 )) || return 0
+  (( _pj_sig == 1 )) && return 0
+  printf '%s\t%s\t%s\n' "${1//[[:cntrl:]]/?}" "$(( 10#$rc ))" "${EPOCHSECONDS:-$(date +%s)}" | tee -a -- "$f" >/dev/null 2>&1 || true
+  return 0
 }
 
 # The post-exec half of run_suite, factored so the serial path and the parallel
@@ -2115,6 +2145,7 @@ _pj_submitted=0       # jobs the chokepoint handed the scheduler
 _pj_rendered=0        # jobs whose verdict was printed at drain
 _pj_unaccounted=0     # jobs submitted but never measured (UNACCOUNTED class)
 _pj_sig=0             # set by the INT/TERM trap armed with parallel mode
+_pj_fifo=0            # 1 = strict FIFO launch (SOLEUR_PJ_FIFO=1, the A/B control); 0 = conservative backfill
 _pj_cap=""            # per-run capture dir for <idx>.out/.err files
 _pj_queue=()          # FIFO of unlaunched job indices
 _pj_live_pids=()      # pids currently live (kept in sync with _pj_state)
@@ -2139,9 +2170,10 @@ _PJ_HARD_CAP=$(( 10#${_PJ_HARD_CAP} ))
 # derived from the existing registration source by construction. What defers
 # under _pj_mode==1 is only `"$@"`: each registration becomes a job with an
 # index, a token set from scripts/lib/test-suite-lanes.sh, and a capture file
-# pair. A strict FIFO launches jobs while (a) the pool has a free slot and (b)
-# no token intersects a live job's set — `*` intersects everything and is the
-# drain barrier. `wait -n -p` reaps in completion order; every verdict prints
+# pair. The launcher (_pj_fill) walks the queue in registration order and starts a
+# job while (a) the pool has a free slot, (b) no token intersects a live job's set
+# and (c) none intersects a job still queued ahead of it (backfill; strict FIFO under
+# SOLEUR_PJ_FIFO=1) — `*` intersects everything and is the drain barrier. `wait -n -p` reaps in completion order; every verdict prints
 # at drain in index order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/
 # [TRIPWIRE]/[skip] lines, TEST_TIMING_LOG rows and the terminal marker are
 # produced by the same code as the serial path.
@@ -2152,6 +2184,10 @@ _pj_say_serial() {  # _pj_say_serial <reason> — one announced fallback line.
 
 _pj_resolve_run_mode() {
   _pj_mode=0
+  # SOLEUR_PJ_FIFO=1 restores the strict FIFO launch order this runner had before backfill (#12013). It is
+  # read once, here, and is the A/B control of the measurement; documented in this runner's header only.
+  _pj_fifo=0
+  [[ "${SOLEUR_PJ_FIFO:-}" == "1" ]] && _pj_fifo=1
   local want="${_JOBS_REQ:-${SOLEUR_TEST_JOBS:-}}"
   # THE DEFAULT. Unset resolves to serial — the explicit, measured choice:
   # parallel ships opt-in (the #7376 interference diagnosis closed 2026-10-20; the
@@ -2240,6 +2276,7 @@ _pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writ
     note=" — provisional, verdict at drain"
   fi
   printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]//[[:cntrl:]]/?}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
+  _provisional_append "${_pj_label[j]}" "$rc"
 }
 
 _pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.
@@ -2280,13 +2317,50 @@ _pj_launch() {
   printf '[run] %s started (pid=%s)\n' "${_pj_label[idx]}" "${_pj_pid[idx]}" >&2
 }
 
-_pj_fill() {  # launch every queue head that is launchable (strict registration order)
-  while (( ${#_pj_queue[@]} > 0 )); do
-    _pj_launchable "${_pj_queue[0]}" || return 0
-    local idx="${_pj_queue[0]}"
-    _pj_queue=("${_pj_queue[@]:1}")
-    _pj_launch "$idx"
+_pj_fill() {  # launch what may launch, in registration order (conservative backfill; strict FIFO under SOLEUR_PJ_FIFO=1)
+  if (( _pj_fifo == 1 )); then
+    while (( ${#_pj_queue[@]} > 0 )); do
+      _pj_launchable "${_pj_queue[0]}" || return 0
+      local idx="${_pj_queue[0]}"
+      _pj_queue=("${_pj_queue[@]:1}")
+      _pj_launch "$idx"
+    done
+    return 0
+  fi
+  # Backfill (#12013). One pass over the queue in registration order, so the head is always the first
+  # candidate and a token-ready head is never delayed by an independent stream. A candidate launches iff
+  #   (i)   a slot is free,
+  #   (ii)  its tokens conflict with no LIVE suite  (live_tok: the union of the live suites' token sets),
+  #   (iii) its tokens conflict with no suite still QUEUED ahead of it  (skip_tok: the union of the token
+  #         sets of earlier candidates that stayed queued), so order among conflicting suites is preserved.
+  # `*` conflicts with everything: a queued `*` suite lands in skip_tok and blocks every later suite, and a
+  # `*` candidate launches only with the pool drained and nothing queued before it (lane_tokens_conflict "*"
+  # "" is TRUE, so the empty-set case is stated explicitly here instead of asked of it). lane_tokens_conflict
+  # stays the only comparison. A launch cannot unblock an earlier skipped candidate (it only adds to the live
+  # set), so one pass is complete; the work per call is linear in the queue, not quadratic.
+  (( ${#_pj_queue[@]} > 0 )) || return 0
+  local live_tok="" skip_tok="" any_q=0 j idx tok ok
+  local -a rest=()
+  for (( j = 0; j < _pj_next; j++ )); do
+    [[ "${_pj_state[j]:-}" == "live" ]] && live_tok+=" ${_pj_tok[j]}"
   done
+  for idx in "${_pj_queue[@]}"; do
+    if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
+    tok="${_pj_tok[idx]}"; ok=1
+    if [[ " $tok " == *" * "* ]]; then
+      (( _pj_live_n == 0 && any_q == 0 )) || ok=0
+    else
+      lane_tokens_conflict "$tok" "$live_tok" && ok=0
+      if (( ok == 1 && any_q == 1 )) && lane_tokens_conflict "$tok" "$skip_tok"; then ok=0; fi
+    fi
+    if (( ok == 1 )); then
+      _pj_launch "$idx"
+      live_tok+=" $tok"
+    else
+      rest+=("$idx"); skip_tok+=" $tok"; any_q=1
+    fi
+  done
+  if ((${#rest[@]})); then _pj_queue=("${rest[@]}"); else _pj_queue=(); fi
 }
 
 _pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeable.
@@ -2398,8 +2472,19 @@ _pj_render() {  # _pj_render <idx> — print one suite's block in registration o
 
 _pj_drain() {
   (( _pj_mode == 1 )) || return 0
-  while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
-  (( _pj_sig == 0 )) && _pj_fill || true
+  # Fill until empty (#12013): the torn-reap branch of _pj_reap never calls _pj_fill, and under backfill one
+  # fill may leave a queued suite whose blocker has just been reaped. A launch from a single trailing fill
+  # would leave that suite live at render and mark it UNACCOUNTED, so reap and fill alternate until nothing
+  # is live or queued. The signature guard stops a pass that changed nothing (an unlaunchable queue).
+  local _dsig=""
+  while (( _pj_sig == 0 )); do
+    while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
+    (( _pj_sig == 0 && ${#_pj_queue[@]} > 0 )) || break
+    _pj_fill
+    [[ "${#_pj_queue[@]}:$_pj_live_n" == "$_dsig" ]] && break
+    _dsig="${#_pj_queue[@]}:$_pj_live_n"
+    (( _pj_live_n > 0 )) || break
+  done
   if (( _pj_sig == 1 )); then
     # Interrupted: TERM live workers explicitly — a signal targeted at the
     # runner (kill -TERM <runner-pid>) never reaches them the way a

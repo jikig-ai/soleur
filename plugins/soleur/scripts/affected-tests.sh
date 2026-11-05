@@ -32,13 +32,15 @@
 #   1  a selected test failed, the delegated runner was signal-killed (rc 3
 #      maps to 1 reason=runner-signal), or the content-trigger command failed
 #      (reason=content-trigger-failed); a failure seen before budget expiry
-#      wins over deferral
+#      wins over deferral: a budget kill (runner rc 124/137) after the runner
+#      recorded a red (rc 1..127, stamped before the deadline) in its
+#      SOLEUR_PJ_PROVISIONAL_FILE sidecar exits 1 reason=failed-before-budget
 #   4  AFFECTED_GATE_REFUSED — no-stack, bad-config key=<k>,
 #      vacuous-test-command, no-base-ref, not-a-repo (--self-check outside a
 #      repository), toolchain-missing, runner-refused,
 #      foreign-runner (a foreign scripts/test-all.sh AND no adapter resolves)
 #   6  AFFECTED_GATE_BUDGET_DEFERRED — budget expired AND a CI test workflow was
-#      detected; CI stays the authoritative gate
+#      detected AND no red was seen before the kill; CI stays the authoritative gate
 #   7  no test suite detected at all — disclosed note, never labelled passed
 #
 # Output contract:
@@ -577,14 +579,20 @@ if [[ -n "$RUNNER" ]]; then
     echo "affected-tests: no CI test workflow detected — wall-clock budget not enforced; running to completion."
   fi
   rc=0
+  # (#12013) The provisional-red sidecar: a runner that knows the variable appends one
+  # `label<TAB>rc<TAB>epoch` record per red it has already seen; an unknown variable is inert, so a
+  # customer runner needs no capability probe. The gate owns the file (fresh mktemp, removed on
+  # every exit), so a stale file at a guessable path is never read. Read only at the 124|137 arm.
+  PROVISIONAL_FILE=""
+  if affected_mktemp provisional; then PROVISIONAL_FILE="$AFFECTED_TMP"; fi
   # (#12013, ADR-242 addendum) Hand the runner's parallel pool a width of 4 for a local --affected
   # run: not --full, not under CI, not over a width the operator set (SOLEUR_TEST_JOBS=1 is the serial
   # override), and only when the runner itself mentions the knob. The prefix scopes it to this call.
   # Pinned by plugins/soleur/test/affected-tests-pool-default.test.sh.
   if (( ! ARG_FULL )) && [[ -z "${CI:-}" ]] && grep -q SOLEUR_TEST_JOBS "$RUNNER"; then
-    SOLEUR_TEST_JOBS="${SOLEUR_TEST_JOBS:-4}" affected_bound bash "$RUNNER" "$_flag" || rc=$?
+    SOLEUR_PJ_PROVISIONAL_FILE="$PROVISIONAL_FILE" SOLEUR_TEST_JOBS="${SOLEUR_TEST_JOBS:-4}" affected_bound bash "$RUNNER" "$_flag" || rc=$?
   else
-    affected_bound bash "$RUNNER" "$_flag" || rc=$?
+    SOLEUR_PJ_PROVISIONAL_FILE="$PROVISIONAL_FILE" affected_bound bash "$RUNNER" "$_flag" || rc=$?
   fi
   # A delegated verdict is eligible for the content trigger unless the operator
   # passed --full; finish() runs it only when this run passed.
@@ -599,6 +607,13 @@ if [[ -n "$RUNNER" ]]; then
     124|137)
       (( rc == 137 )) && echo "affected-tests: the runner exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
       if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 && "$CI_NAME" != none ]]; then
+        # (#12013) A red the runner printed before the kill is still a red: rc 1..127, stamped
+        # strictly before the deadline (a worker that turns the kill's TERM into exit 1 lands after
+        # it). Signal-shaped rc (>= 128) is unresolved, not failed (ADR-177). Malformed or missing
+        # records resolve to nothing, so the deferral below is the unchanged default.
+        if affected_sidecar_red "$PROVISIONAL_FILE" "$AFFECTED_DEADLINE"; then
+          finish 1 "$_dmode" failed-before-budget runner "$CI_NAME" - - -
+        fi
         finish 6 "$_dmode" budget-deferred runner "$CI_NAME" - - -
       fi
       finish 1 "$_dmode" failed runner "$CI_NAME" - - - ;;

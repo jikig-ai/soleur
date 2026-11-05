@@ -230,6 +230,20 @@ affected_mktemp() { # <tag> — sets AFFECTED_TMP to a fresh registered scratch 
   AFFECTED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-$1.XXXXXX")" || return 1 # lint-trap-ownership: ok — owning `trap affected_scratch_clean EXIT INT TERM` is installed by the sourcing gate (affected-tests.sh); a sourced lib cannot own an EXIT trap without clobbering the importer's
   AFFECTED_SCRATCH+=("$AFFECTED_TMP")
 }
+# affected_sidecar_red <file> <deadline-epoch> — 0 iff the runner's provisional-red sidecar holds a
+# record `label<TAB>rc<TAB>epoch` with rc in 1..127 and epoch strictly before the deadline. Every
+# other shape (missing/empty/unreadable file, short or non-numeric fields, rc 0 or >= 128, a late
+# stamp) is "no red seen": the caller keeps its deferral. Numbers are parsed with 10# so a leading
+# zero is decimal, never an octal arithmetic error.
+affected_sidecar_red() {
+  local f="${1:-}" deadline="${2:-}" label rc ep extra
+  [[ -n "$f" && -f "$f" && -r "$f" && "$deadline" =~ ^[0-9]+$ ]] || return 1
+  while IFS=$'\t' read -r label rc ep extra || [[ -n "$label$rc$ep" ]]; do
+    [[ -z "$extra" && "$rc" =~ ^[0-9]+$ && "$ep" =~ ^[0-9]+$ ]] || continue
+    (( 10#$rc >= 1 && 10#$rc <= 127 && 10#$ep < deadline )) && return 0
+  done < "$f"
+  return 1
+}
 affected_scratch_clean() {
   ((${#AFFECTED_SCRATCH[@]} > 0)) && rm -f "${AFFECTED_SCRATCH[@]}"
   return 0
@@ -303,7 +317,7 @@ _affected_cmd_vacuous() { # <command string> → rc 0 when it certifies nothing
 #           global-paths | full-requested |
 #           custom-command | delegated | runner-refused | runner-signal | foreign-runner |
 #           no-stack | bad-config key=<k> | vacuous-test-command | no-base-ref |
-#           toolchain-missing | no-tests | budget-deferred | bad-usage | help |
+#           toolchain-missing | no-tests | budget-deferred | failed-before-budget | bad-usage | help |
 #           content-trigger-failed | inert-content-trigger
 #   Counts are decimal, or `-` when the path does not produce a count
 #   (delegated runner, opaque test_command, refused runs).

@@ -111,6 +111,79 @@ else
   fail "lane_tokens_conflict contract violated"
 fi
 
+# 6. The replay arms' explicit override (#12013): every registered `ci-pr-affected-replay-*` label carries an override
+#    equal to what the classifier derives for it MINUS `lock:test-all`. The arms drive sandboxed copies of the
+#    runner under `mktemp -d` roots and never take the real advisory lock, so the token only serialized them.
+#    The comparison is made against `_lane_derive` (the classifier WITHOUT the override lookup), so a token the
+#    suite file later gains (xargs -P, _site/, a live-repo git verb) moves the derived side and reds the label;
+#    the label list comes from --enumerate-commands, not from a hard-coded set.
+_norm_toks() { local -a a; read -ra a <<<"${1:-}"; { printf '%s\n' "${a[@]+"${a[@]}"}" | grep -v '^$' || true; } | sort -u | tr '\n' ' ' | sed 's/ *$//'; }
+_derived_minus_lock() { local t; t="$(_lane_derive "$@")"; _norm_toks "$(tr ' ' '\n' <<<"$t" | { grep -vxF 'lock:test-all' || true; } | tr '\n' ' ')"; }
+# arm_override_ok <override-tokens> <argv...> — 0 iff the override equals derived-minus-lock for that argv.
+arm_override_ok() { local ov="$1"; shift; [[ "$(_norm_toks "$ov")" == "$(_derived_minus_lock "$@")" ]]; }
+
+# Instrument self-tests: the comparison is not vacuous. (H1) a classifier input that does not exist derives `*`
+# (fail closed), which an empty override must NOT equal; (H2) a must-pass fixture that names test-all.sh only in a
+# comment and as a planted path derives exactly `lock:test-all`, so an EMPTY override equals derived-minus-lock;
+# and a fixture that also carries an inner pool must NOT equal the empty override.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+_h_dir="$(mktemp -d "${TMPDIR:-/tmp}/lanes-h.XXXXXX")"
+assert_fixture_dir "$_h_dir"
+printf '#!/usr/bin/env bash\n# drives a sandboxed copy of scripts/test-all.sh\ncp seed scripts/test-all.sh\n' > "$_h_dir/h2.test.sh"
+printf '#!/usr/bin/env bash\nbash scripts/test-all.sh\nxargs -P 4 true\n' > "$_h_dir/h3.test.sh"
+h_ok=1
+arm_override_ok "" bash "$_h_dir/does-not-exist.test.sh" && h_ok=0                  # H1: nonexistent input must NOT pass
+arm_override_ok "" bash "$_h_dir/h2.test.sh" || h_ok=0                             # H2: comment/planted-path mention only
+[[ "$(_lane_derive bash "$_h_dir/h2.test.sh")" == "lock:test-all" ]] || h_ok=0     # H2 control: derived is exactly the token
+arm_override_ok "" bash "$_h_dir/h3.test.sh" && h_ok=0                             # a gained cpu:pool token reds an empty override
+arm_override_ok "cpu:pool" bash "$_h_dir/h3.test.sh" || h_ok=0
+rm -rf "$_h_dir"
+if (( h_ok == 1 )); then
+  pass "replay-arm guard instrument: nonexistent input and a gained token red an empty override; the mention-only fixture passes"
+else
+  fail "replay-arm guard instrument is not discriminating"
+fi
+
+arm_n=0; arm_bad=()
+declare -A arm_seen=()
+for r in "${rows[@]}"; do
+  IFS=$'\t' read -ra fields <<<"$r"
+  label="${fields[1]}"
+  [[ "$label" == *ci-pr-affected-replay-* ]] || continue
+  [[ -n "${arm_seen[$label]:-}" ]] && continue
+  arm_seen[$label]=1; arm_n=$((arm_n + 1))
+  # The override IS the label's token set; the lookup without it must derive exactly lock:test-all today.
+  ov="$(lane_tokens_for "$label" "${fields[@]:2}")"
+  [[ "$(_lane_derive "${fields[@]:2}")" == "lock:test-all" ]] || arm_bad+=("$label:derived-not-exactly-lock:test-all($(_lane_derive "${fields[@]:2}"))")
+  arm_override_ok "$ov" "${fields[@]:2}" || arm_bad+=("$label:override='$ov'")
+done
+# The non-empty floor is a guard on the label list itself (3 arms today); written as a statement, not as an
+# `if` floor, so scripts/guard-vacuity-floor.test.sh does not read it as a counter floor needing a mutant.
+arm_gate=1
+(( arm_n < 3 )) && arm_gate=0
+(( ${#arm_bad[@]} == 0 )) || arm_gate=0
+if (( arm_gate == 1 )); then
+  pass "replay arms: each of $arm_n registered ci-pr-affected-replay-* labels overrides to its derived tokens minus lock:test-all"
+else
+  fail "replay arms: n=$arm_n (floor 3) violations: ${arm_bad[*]:-none}"
+fi
+# The suite file itself never takes the advisory lock (the premise of dropping the token).
+replay_file="plugins/soleur/test/ci-pr-affected-replay.test.sh"
+if [[ -r "$replay_file" ]] && ! grep -qE '(^|[^_[:alnum:]])tc_acquire([^_[:alnum:]]|$)' "$replay_file"; then
+  pass "replay suite file never calls tc_acquire (the arms never take the real advisory lock)"
+else
+  fail "replay suite file is unreadable or calls tc_acquire — the empty override is no longer justified"
+fi
+
 echo ""
 echo "=== test-suite-lanes: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1
