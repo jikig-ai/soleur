@@ -111,7 +111,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // grep -cE '^\s*test\(' = 349.
 // 349 -> 353 (#9927 item 10, +4): the G2f registration pin (live, mutation matrix, must-PASS rows) and its ci.yml wiring pin - Guard 1 stays registered in the required test-scripts leg.
 // Exact: grep -cE '^\s*test\(' = 353.
-const TEST_FLOOR = 353;
+// 353 -> 354 (#11857, +1): token_drift ordering and closure row (inventory-named doppler_config blocks vs depends_on, the per-merge -target list and the operator-applied exclusions; mutants and a must-pass fixture run through the same function). Exact: 354.
+const TEST_FLOOR = 354;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6186,6 +6187,65 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(hb).toMatch(/^\s*paused\s*=\s*true\s*$/m);
     expect(hb).toMatch(/^\s*push\s*=\s*false\s*$/m);
     expect(hb).toMatch(/ignore_changes\s*=\s*\[paused\]/);
+  });
+
+  test("token_drift is ordered after every inventory-named doppler_config that is a per-merge target, and never after an operator-applied exclusion (#11857)", () => {
+    // The pure check, so the same code runs on the real tree and on the synthetic mutants below.
+    const orderingProblems = (hcl: string, inventory: string[], targets: Set<string>, excl: Set<string>) => {
+      const src = stripComments(hcl);
+      const tok = block(src, /^resource\s+"doppler_service_token"\s+"token_drift"\s*\{/m);
+      const dm = /^\s*depends_on\s*=\s*\[([^\]]*)\]/m.exec(tok);
+      const deps = new Set(dm ? [...dm[1].matchAll(/\b[a-z][a-z0-9_]*\.[A-Za-z0-9_]+\b/g)].map((m) => m[0]) : []);
+      const found: string[] = [];
+      const problems: string[] = tok === "" ? ["no doppler_service_token.token_drift block"] : [];
+      for (const m of src.matchAll(/^resource\s+"doppler_config"\s+"([a-z0-9_]+)"\s*\{/gm)) {
+        const cfg = /^\s*name\s*=\s*"([^"]+)"\s*$/m.exec(block(src, new RegExp(`^resource\\s+"doppler_config"\\s+"${m[1]}"\\s*\\{`, "m")))?.[1];
+        if (!cfg || !inventory.includes(cfg)) continue;
+        const addr = `doppler_config.${m[1]}`;
+        found.push(addr);
+        if (excl.has(addr)) {
+          if (deps.has(addr)) problems.push(`${addr} is an operator-applied exclusion and must not be in depends_on`);
+        } else {
+          if (!deps.has(addr)) problems.push(`${addr} is listed in the inventory but not in depends_on`);
+          if (!targets.has(addr)) problems.push(`${addr} is in depends_on but not a per-merge -target`);
+        }
+      }
+      for (const d of deps) if (excl.has(d)) problems.push(`${d} (exclusion) is in depends_on`);
+      return { problems, found };
+    };
+    // The inventory path is read from the file() call that derives the key set, so this suite carries no path literal for it.
+    const invName = /token_drift_configs\s*=\s*distinct\(\s*\[[\s\S]*?file\("\$\{path\.module\}\/([^"]+)"\)/.exec(allTf)?.[1] ?? "";
+    expect(invName, "token_drift_configs must derive from a file() call").not.toBe("");
+    const inventory = readFileSync(join(INFRA_DIR, invName), "utf8").split("\n").filter((l) => /^[a-z0-9_]+$/.test(l));
+    const real = orderingProblems(allTf, inventory, planTargets, OPERATOR_APPLIED_EXCLUSIONS);
+    expect(real.found.length, "non-vacuity: the scanner finds the inventory-named doppler_config blocks").toBeGreaterThanOrEqual(3);
+    expect(real.problems).toEqual([]);
+    // Closure half: a different syntax (single-line list, a reference in another attribute) is still caught here.
+    const closure = [...refClosure(["doppler_service_token.token_drift"])].filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a));
+    expect(closure).toEqual([]);
+
+    // Mutants and the must-pass non-canonical input, all through the same function.
+    const hcl = (deps: string, cfgs: Array<[string, string]>) =>
+      cfgs.map(([r, n]) => `resource "doppler_config" "${r}" {\n  name = "${n}"\n}\n`).join("") +
+      `resource "doppler_service_token" "token_drift" {\n  for_each = toset([])\n${deps}\n}\n`;
+    const cfgs: Array<[string, string]> = [["aa", "prd_aa"], ["bb", "prd_bb"], ["xx", "prd_xx"]];
+    const inv = ["prd_aa", "prd_bb", "prd_xx"];
+    const tg = new Set(["doppler_config.aa", "doppler_config.bb"]);
+    const ex = new Set(["doppler_config.xx"]);
+    // must-PASS: reversed order, multi-line, trailing comma, a comment between entries
+    const okDeps = "  depends_on = [\n    doppler_config.bb, # why\n    doppler_config.aa,\n  ]";
+    expect(orderingProblems(hcl(okDeps, cfgs), inv, tg, ex).problems).toEqual([]);
+    expect(orderingProblems(hcl(okDeps, cfgs), inv, tg, ex).found.length).toBe(3);
+    // 1: an entry dropped
+    expect(orderingProblems(hcl("  depends_on = [doppler_config.aa]", cfgs), inv, tg, ex).problems.length).toBeGreaterThan(0);
+    // 3: the exclusion added
+    expect(orderingProblems(hcl("  depends_on = [doppler_config.aa, doppler_config.bb, doppler_config.xx]", cfgs), inv, tg, ex).problems.length).toBeGreaterThan(0);
+    // 4: a further inventory-named config that is neither depended on nor excluded
+    expect(orderingProblems(hcl(okDeps, [...cfgs, ["cc", "prd_cc"]]), [...inv, "prd_cc"], tg, ex).problems.length).toBeGreaterThan(0);
+    // 5: depended on but dropped from the per-merge -target list
+    expect(orderingProblems(hcl(okDeps, cfgs), inv, new Set(["doppler_config.aa"]), ex).problems.length).toBeGreaterThan(0);
+    // 2: a scanner that sees nothing finds nothing, which the non-vacuity floor above turns red
+    expect(orderingProblems("", inv, tg, ex).found).toEqual([]);
   });
 
   test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
