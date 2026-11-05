@@ -201,7 +201,7 @@ ALWAYS_RUN_JOBS = frozenset((
     "encryption-posture", "marketplace-manifest-guard", "service-role-allowlist-gate", "tc-document-sha-guard",
     "adr-ordinals", "rule-body-lint", "lockfile-sync", "sandbox-canary-capture-gate", "plugin-root-propagation-gate",
     "lint-webplat", "web-platform-build", "shard-totality-mutations", "grok-fidelity", "harness-discovery", "test", "e2e",
-    "critical-css-gate", "affected-index-ratchet",
+    "critical-css-gate", "affected-index-ratchet", "oracle-selection", "oracle-index-check",
 ))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
@@ -1755,7 +1755,8 @@ RATCHET_CAP = 25
 # The files whose change in a diff makes the check's OWN oracle part of that diff (a non-blocking notice, never a verdict): the workflow, this script, the
 # helper (its merge-base copy decides the base text, but the PR-tree copy is what a later run trusts), the accept file (a new row exempts a new pair), the path
 # library and the runner (they decide what the selector prints, so what is "live") and the baseline.
-RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE)
+RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE,
+                  "scripts/ci-oracle-lane.sh", "scripts/ci-oracle-lane.test.sh", "scripts/ci-oracle-lane-suites.txt")
 STAR_WHYS = ("star-row-readable-suite", "star-row-unreadable-members", "star-row-tracked-suite")
 RATCHET_REMEDY_NEW = (
     "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, "

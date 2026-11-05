@@ -216,6 +216,8 @@ jobs:
           reason=proof_error
           [[ "$id" =~ ^[0-9]+$ ]] || finish
           mg="$id"
+          # per_page=100 with no pagination: today ~45 job entries. Once a run exceeds 100 jobs, page-1 truncation can
+          # only drop a six-leg member's group, which lands as legs_incomplete — elide=false, the fail-closed side.
           jobs=$(timeout 20 gh api "repos/${GH_REPO}/actions/runs/${mg}/jobs?per_page=100&filter=latest" 2>/dev/null) || finish
           n=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null) || finish
           [[ "$n" =~ ^[0-9]+$ ]] || finish
@@ -1839,7 +1841,7 @@ jobs:
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     needs: [push-dedupe, draft-light, oracle-selection]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && needs.oracle-selection.outputs.active != 'true' }}
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha)) }}
     runs-on: ubuntu-latest
     # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
     # sites and takes `--rows A-B`; each leg runs its third plus the
@@ -2164,6 +2166,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        # The manifest step self-gates on oracle_only, so the checkout does too: on every non-oracle run this job
+        # collapses to the manifest step's not-oracle-only no-op instead of paying a full clone.
+        if: needs.oracle-selection.outputs.oracle_only == 'true'
         with:
           persist-credentials: false
 

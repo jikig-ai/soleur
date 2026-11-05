@@ -58,6 +58,7 @@
 #   O-FORK            same-repo head (pull_request)
 #   O-MG-SHAPE        the merge_group sha pair is valid and resolvable
 #   O-ATTEMPT         run attempt 1 only
+#   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops test-webplat from the skip list
 #   O-MAX-FILES       the ≤500 changed-file cap
 #   O-STATUS          M/A/D status letters only
 #   O-MODES           modes ⊆ {000000,100644,100755} on both sides
@@ -236,6 +237,7 @@ TAP="scripts/lib/test-affected-paths.sh"
 KB_A="knowledge-base/project/learnings/zzleak-a.md"
 KB_B="knowledge-base/project/specs/zzleak-pipe/zzleak-y.md"
 ORACLE_FIVE="test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build"
+ORACLE_FOUR="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
 FIVE_RE='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
 DEFAULTS=$'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha='
 
@@ -396,8 +398,13 @@ for _t in ins_member ins_member_end del_member reorder new_array del_array ren_a
   fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
 done
 unset _t
-# Guard 1 row 6 (must-PASS non-canonical): baseline.tsv + a KB specs .md + a NEW array block.
-fx_case mustpass6; fx_op mustpass6 M "$BASELINE"; fx_op mustpass6 M "$KB_B"; fx_tap mustpass6 new_array; fx_done mustpass6
+# Guard 1 row 6 (must-PASS non-canonical): accept.tsv + a KB specs .md + a NEW array block (baseline.tsv was the
+# third member until PR5z made it a non-member — accept.tsv keeps the row a must-PASS).
+fx_case mustpass6; fx_op mustpass6 M "$ACCEPT"; fx_op mustpass6 M "$KB_B"; fx_tap mustpass6 new_array; fx_done mustpass6
+# DIAGRAMS carve-out (ported from ci-pr-selection.sh): a diagrams .md inside an otherwise-oracle diff keeps
+# oracle_only=true but drops test-webplat from would_skip/skip_legs.
+fx_case diag; fx_op diag M "$ACCEPT"; fx_op diag A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_done diag
+fx_case diagx; fx_op diagx A "knowledge-base/engineering/architecture/diagrams/zzleak-diag.md"; fx_op diagx M "apps/web-platform/zzleak-code.ts"; fx_done diagx
 # a mode flip on an oracle path stays oracle (both modes allowed)
 fx_case mflip; fx_op mflip X "$ACCEPT"; fx_done mflip
 fx_case mflipdoc; fx_op mflipdoc X "$KB_A"; fx_done mflipdoc
@@ -638,10 +645,21 @@ expect_full() {  # $1=label: oracle_only=false, nothing would be skipped
 
 row_oracle_surface() {  # the must-PASS set: surface members and in-extent hunks all classify
   local d="$1" f
-  for f in accept base1 ab acceptdel kbdoc kbspec rootmd rootnew kbdel kbrn mflip mflipdoc mustpass6; do
+  for f in accept kbdoc kbspec rootmd rootnew kbdel kbrn mflip mflipdoc mustpass6; do
     drive "$f" "$d"
     expect_lane "O-SURFACE oracle-only fixture '$f'"
   done
+  # baseline.tsv is NOT a surface member (PR5z strict-zero): the only possible diff on that path is a
+  # baseline-reintroduced alarm shape — modify, modify-with-sibling and delete all pay the full battery.
+  for f in base1 ab acceptdel; do
+    drive "$f" "$d"
+    expect_full "O-SURFACE baseline-path fixture '$f'"
+    check_eq "O-SURFACE '$f': reason" "$N_REASON" "outside_surface"
+  done
+  # the diagrams carve-out: oracle_only stays true, would_skip drops test-webplat (four-name list)
+  drive diag "$d"
+  check_eq "O-DIAGRAMS accept+diagrams.md: oracle_only" "$O_OO" "true"
+  check_eq "O-DIAGRAMS would_skip is the four-name subset" "$N_WOULD" "$ORACLE_FOUR"
   for f in tap_ins_member tap_ins_member_end tap_del_member tap_reorder tap_new_array tap_del_array tap_ren_array tap_comment_in; do
     drive "$f" "$d"
     expect_lane "O-EXTENT in-extent hunk '$f'"
@@ -804,11 +822,11 @@ row_event_out() {  # only pull_request and merge_group classify
 }
 row_mg() {  # the merge_group arm: whole-batch diff over MERGE_GROUP_BASE_SHA..MERGE_GROUP_HEAD_SHA
   local d="$1" f
-  for f in accept ab kbdoc tap_new_array tap_ins_member mustpass6; do
+  for f in accept kbdoc tap_new_array tap_ins_member mustpass6; do
     drive "$f" "$d" "EVENT_NAME=merge_group"
     expect_lane "O-MG oracle-only batch '$f'"
   done
-  for f in replay ex_ciyml tapx_always_on tapx_func_edit nd0 typ empty; do
+  for f in replay ex_ciyml tapx_always_on tapx_func_edit nd0 typ empty ab; do
     drive "$f" "$d" "EVENT_NAME=merge_group"
     expect_full "O-MG non-oracle batch '$f'"
   done
@@ -826,6 +844,10 @@ row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutra
   check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: active" "$O_ACTIVE" "true"
   check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
   check_eq "O-SWITCH SWITCH=on, unlocked: notice locked=false" "$N_LOCKED" "false"
+  # the diagrams carve-out reaches skip_legs too (unlocked): four-name subset
+  drive diag "$d" "SWITCH=on"
+  check_eq "O-DIAGRAMS unlocked: active" "$O_ACTIVE" "true"
+  check_eq "O-DIAGRAMS unlocked: skip_legs is the four-name subset" "$O_SKIP" "$ORACLE_FOUR"
   for v in "ON" "On" " on" "on " $'on\n' $'\non' "1" "true" "yes" "onn" "o" "off" "\"on\""; do
     drive accept "$d" "SWITCH=$v"
     check_eq "O-SWITCH SWITCH='${v//$'\n'/\\n}': oracle_only" "$O_OO" "false"
@@ -877,7 +899,13 @@ row_property() {  # Guard 1 property sweep: ANY generated combination of in-surf
     [ "$g" = 1 ] && fx_op "$cname" M AGENTS.md
     fx_done "$cname"
     drive "$cname" "$d"
-    expect_lane "O-PROP in-surface subset {accept=$a,baseline=$b,edge=$c,doc=$e,root=$g}"
+    if [ "$b" = 1 ]; then
+      # baseline.tsv is a non-member (PR5z): any subset containing it pays the full battery
+      expect_full "O-PROP baseline-containing subset {accept=$a,baseline=$b,edge=$c,doc=$e,root=$g}"
+      check_eq "O-PROP baseline subset: reason" "$N_REASON" "outside_surface"
+    else
+      expect_lane "O-PROP in-surface subset {accept=$a,baseline=$b,edge=$c,doc=$e,root=$g}"
+    fi
   done; done; done; done; done
   # every in-surface member plus ONE contaminant (the second member defeats it) — Guard 1 row 2
   # generalized: for each contaminant, a diff of [accept.tsv, in-extent hunk, KB doc] + contaminant.
@@ -1158,7 +1186,9 @@ mutate() {  # $1=label $2=base driver file $3=sed expression $4...=row functions
 kill_guard() { printf 's|^.*# GUARD:%s$|  : # MUTATED|' "$1"; }
 
 # Guard 1 — the surface, the exclusion list, the extent check
-mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" "$(kill_guard O-SURFACE)"        row_oracle_surface row_allowlist
+# the surface guard spans four lines (if / diagrams-flag case / continue / fi) — a one-line kill would orphan the
+# `then`; delete the whole block so every path falls through to outside_surface instead of classifying in-surface.
+mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" '/if is_oracle_data_path "\$p" || is_doc_path "\$p"; then/,/fi  # GUARD:O-SURFACE/d'  row_oracle_surface row_allowlist
 mutate "O-EXCLUSION the exclusion list is removed"              "$PRISTINE" "$(kill_guard O-EXCLUSION)"      row_exclusions
 mutate "O-EXCLUSION replay.py dropped from the exclusion list"  "$PRISTINE" '/ci-pr-affected-replay\.py/d'     row_exclusions
 mutate "O-EXCLUSION ci.yml dropped from the exclusion list"     "$PRISTINE" '/workflows\/ci\.yml/d'            row_exclusions
@@ -1193,6 +1223,7 @@ mutate "O-LOCK the arm ignores the lock"                        "$UNLOCKED"  "$(
 mutate "O-LOCK the lock is not read"                            "$PRISTINE"  "$(kill_guard O-LOCK-READ)"     row_lock
 mutate "O-DEFAULTS the defaults are not written first"          "$PRISTINE"  "$(kill_guard O-DEFAULTS)"      row_defaults_first
 mutate "O-EXIT the always-exit-0 trap is removed"               "$PRISTINE"  "$(kill_guard ALWAYS-EXIT-0)"   row_diff_error
+mutate "O-DIAGRAMS the diagrams carve-out flag is removed"      "$PRISTINE"  "$(kill_guard O-DIAGRAMS-FLAG)" row_oracle_surface
 # dead block, not an orphan: `if ! true; then` + a comment swallowing the rest of the line leaves a well-formed
 # never-executing reset, so the emitted skip_legs survives to the final write (line-count and grammar rows both see it).
 _e1='s/^if \[ "$active" != true/if ! true; then : # MUTATED-IF /'

@@ -95,8 +95,8 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # oracle-only lane (#12156): five legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
 # `needs:` and the skip conjunct appended AFTER every earlier term — the same four-term shape as the S4 PR term
 # (event disjunct, active, head_sha nonempty, head bound to either event's sha); `shard-totality-mutations` carries
-# `needs.oracle-selection.outputs.active != 'true'` (active, not oracle_only — oracle_only is true during the
-# locked dark phase while active stays false, so gating on oracle_only would skip the leg while dark).
+# the same four-term conjunct MINUS the skip_legs membership — it skips on event+active+bound-head alone
+# (active, not oracle_only: oracle_only is true during the locked dark phase while active stays false).
 OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
 SHARD_GATED="shard-totality-mutations"
 OR_T_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
@@ -105,7 +105,7 @@ OR_T_HN="needs.oracle-selection.outputs.head_sha != '' && "
 OR_T_HE="needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && "
 OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
-SHARD_TERM="needs.oracle-selection.outputs.active != 'true'"
+SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
 LIGHT_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard oracle-index-check oracle-selection plugin-root-propagation-gate pr-selection push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'

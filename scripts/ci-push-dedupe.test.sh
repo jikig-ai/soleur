@@ -119,10 +119,11 @@ OR_T_HN="needs.oracle-selection.outputs.head_sha != '' && "
 OR_T_HE="needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && "
 OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
-# shard-totality-mutations is gated on `active`, not `oracle_only`: oracle_only already true during the
-# locked dark phase would skip the advisory leg while the lane is dark (active stays false under
-# ORACLE_LANE_LOCKED=1), violating the dark-launch "no skips while locked" AC.
-ORACLE_ONLY_TERM="needs.oracle-selection.outputs.active != 'true'"
+# shard-totality-mutations carries the SAME four-term conjunct as the five lane legs MINUS the skip_legs
+# membership (it skips on active alone — the advisory leg is lane-unsafe whatever the leg list says):
+# `!(event && active == 'true' && head_sha != '' && head_sha == (pr.sha || mg.sha))`.
+SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
+ORACLE_ONLY_TERM="$SHARD_TERM"
 SHARD_GATED="shard-totality-mutations"
 # the oracle-selection job's own condition, mirroring the pr-selection pin: var-gated, both lane events —
 # and written INSIDE a `${{ }}` wrapper where pr-selection's is a bare expression.
@@ -534,7 +535,7 @@ if mode == "ocensus":
         return found
     found = census2(re.compile(r"needs\s*\.\s*oracle-selection\b|needs\s*\[\s*['\"]oracle-selection['\"]\s*\]", re.I), d.get("jobs") or {})
     want = {"%s.if" % n: 4 for n in ORGATED}
-    want["shard-totality-mutations.if"] = 1
+    want["shard-totality-mutations.if"] = 3
     tags = []
     for n in list(ORGATED) + ["shard-totality-mutations"]:
         if found.get("%s.if" % n, 0) != want["%s.if" % n]: tags.append("O-REF:%s.if:%d" % (n, found.get("%s.if" % n, 0)))
@@ -580,11 +581,11 @@ if mode == "truth":
         sks = ("", n, "test-webplat,test-bun,test-scripts-heavy", "test-scripts", "test-scripts-heavy,x") if n in PRGATED else ("",)
         hss = (("a" * 40, "a" * 40), ("a" * 40, "b" * 40), ("", ""), ("", "a" * 40)) if n in PRGATED else (("", ""),)
         # oracle dims: active x skip_legs x head-bound for the five lane legs; the shard leg evals on
-        # the same `active` dim (its conjunct is `active != 'true'` — oracle_only would have skipped it
-        # during the locked dark phase).
+        # the same conjunct minus the contains() membership (skips on event + active + bound head).
         oacs = ("", "true") if n in ORGATED or n in SHARDG else ("",)
         osks = ("", n, "x," + n, "test-scripts") if n in ORGATED else ("",)
-        ohss = ("bound", "unbound", "empty") if n in ORGATED else ("",)
+        # shard now carries the head-bound terms too (the same conjunct minus the contains): sweep the ohs dim
+        ohss = ("bound", "unbound", "empty") if n in ORGATED or n in SHARDG else ("",)
         for event in ("push", "pull_request", "merge_group", "workflow_dispatch"):
             for elide in ("", "false", "true"):
               for light in ("", "false", "true"):
@@ -604,9 +605,9 @@ if mode == "truth":
                         prskip = n in PRGATED and event == "pull_request" and active == "true" and hs != "" and hs == ph and ("," + n + ",") in ("," + sk + ",")
                         orskip = n in ORGATED and event in ("pull_request", "merge_group") and oac == "true" and ob == "bound" and ("," + n + ",") in ("," + osk + ",")
                         want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true") and not prskip and not orskip
-                        # the shard conjunct is `active != 'true'` with NO event term: an active='true' value skips it on
-                        # every event (in practice the gated oracle job can only produce it on lane events).
-                        if n in SHARDG and oac == "true": want = False
+                        # the shard conjunct is the lane conjunct minus skip_legs membership: skips on
+                        # event + active + bound head, whatever the list says.
+                        if n in SHARDG and event in ("pull_request", "merge_group") and oac == "true" and ob == "bound": want = False
                         if got is None: tags.append("TT-ERR:%s" % n)
                         elif got != want: tags.append("TT:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty", active or "empty", sk or "empty", "m" if hs and hs == ph else "x", oac or "empty", ob))
         if ev(j.get("if"), "push", "false", "success", cancelled=True) is not False and "always()" not in str(j.get("if")):

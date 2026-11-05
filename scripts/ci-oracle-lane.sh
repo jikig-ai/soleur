@@ -3,7 +3,7 @@
 #
 # WHAT IT DECIDES. For a pull_request or merge_group run it answers one question: is EVERY changed path inside the
 # oracle surface? When it is, the five heavy `test` legs (test-webplat, test-bun, test-scripts, test-scripts-heavy,
-# web-platform-build) may skip while `shard-totality-mutations` skips on `oracle_only` and the `oracle-index-check`
+# web-platform-build) may skip while `shard-totality-mutations` skips on `active` and the `oracle-index-check`
 # leg runs the oracle-validation manifest — an oracle-data diff changes no executable path, so the full battery
 # proves nothing about it. It is a COST lever that may fail in ONE direction only: every unknown yields the full
 # battery (oracle_only=false, active=false, skip_legs empty). It NEVER fails the step: it always exits 0 (an EXIT
@@ -153,11 +153,13 @@ is_doc_path() {
   return 1
 }
 
-# The two literal ratchet data files.
+# The literal ratchet data file. baseline.tsv is deliberately NOT a member: PR5z (#10861) deleted it for strict zero,
+# so the only diff that can ever touch that path is a re-introduction — exactly the `baseline-reintroduced` shape the
+# ratchet names as an alarm. Keeping it admitted would lane-skip the one forbidden shape while the only remaining
+# catch is an advisory job; a baseline path falls through to outside_surface and pays the full battery.
 is_oracle_data_path() {
   case "$1" in
     scripts/ci-pr-affected-audit.accept.tsv) return 0 ;;
-    scripts/ci-pr-affected-audit.baseline.tsv) return 0 ;;
   esac
   return 1
 }
@@ -232,7 +234,7 @@ check_hunks() {  # $1 = diff file   GUARD:O1-EXTENT-MISS
 # ---- the work -------------------------------------------------------------------------------------------------------
 run() {
   local parts p1 p2 h rl st p n nul size om nm
-  local diff_base diff_head index_seen
+  local diff_base diff_head index_seen diagrams=0
 
   reason=not_lane_event
   [[ "${EVENT_NAME:-}" =~ ^(pull_request|merge_group)$ ]] || return 0  # GUARD:O-EVENT
@@ -321,7 +323,10 @@ run() {
     if [[ "$p" == *,* ]]; then reason=odd_path; return 0; fi  # GUARD:O-PATH-CHARS
     if [ "$p" = "$ORACLE_INDEX" ]; then index_seen=1; continue; fi  # GUARD:O1-INDEX-PATH
     if is_excluded_path "$p"; then reason=excluded; return 0; fi  # GUARD:O-EXCLUSION
-    if is_oracle_data_path "$p" || is_doc_path "$p"; then continue; fi  # GUARD:O-SURFACE
+    if is_oracle_data_path "$p" || is_doc_path "$p"; then
+      case "$p" in knowledge-base/engineering/architecture/diagrams/*) diagrams=1 ;; esac  # GUARD:O-DIAGRAMS-FLAG
+      continue
+    fi  # GUARD:O-SURFACE
     reason=outside_surface; return 0  # GUARD:O1-OUTSIDE
   done < "$work/names.z"
   [ "$n" -eq "$files" ] || { reason=malformed_diff; return 0; }
@@ -345,6 +350,9 @@ run() {
   reason=oracle
   oracle_only=true
   would_skip="$ORACLE_SKIP_SET"
+  # The diagrams carve-out (ported from ci-pr-selection.sh: diagrams paths feed the web-platform surface, so a doc
+  # class that includes one keeps test-webplat running even when the lane otherwise qualifies).
+  [ "$diagrams" = 1 ] && would_skip="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
   return 0
 }
 
@@ -357,6 +365,9 @@ run
 
 # Re-validate every value against its output grammar before it is written. A value that fails collapses to the defaults.
 [[ "$oracle_only" =~ ^(true|false)$ ]] || oracle_only=false  # GUARD:O1-GRAMMAR-ONLY
+# The SHAs describe a classified-oracle diff only; a non-oracle verdict emits them EMPTY so a consumer can never read
+# a bound pair beside oracle_only=false (they are set before the fork/attempt/switch gates for the grammar check).
+[ "$oracle_only" = true ] || { head_sha=""; base_sha=""; }
 [[ "$head_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
 [[ "$base_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
 if [ "$active" != true ] || [ "$oracle_only" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$ ]]; then  # GUARD:O-GRAMMAR
