@@ -197,7 +197,7 @@ rows() {
     if [ -s "$od/ghenv" ]; then printf 'BAD:%s(token-written-to-github-env)\n' "$1"; fi
     if [ -n "$CUR_TOK" ]; then
       if grep -qF -- "$CUR_TOK" "$LAST_OUT" "$LAST_SUMMARY"; then printf 'BAD:%s(token-in-output)\n' "$1"; fi
-      if cut -d'|' -f1 "$LAST_LOG" | grep -qF -- "$CUR_TOK"; then printf 'BAD:%s(token-in-argv)\n' "$1"; fi
+      if grep -qF -- "$CUR_TOK" < <(cut -d'|' -f1 "$LAST_LOG"); then printf 'BAD:%s(token-in-argv)\n' "$1"; fi
     fi
   }
   local TOK='tok-A1b2C3-synthetic'
@@ -302,7 +302,7 @@ tf_viol() {
   [ "$n" = "1" ] || printf 'VIOL:secret-name-unique\n'
   for f in "$infra"/*.tf; do
     case "$(basename "$f")" in inngest-arm-write-token.tf) continue ;; esac
-    if sed -e 's/#.*//' -e 's#//.*##' "$f" | grep -q 'doppler_service_token\.inngest_arm_write'; then printf 'VIOL:arm-key-elsewhere\n'; fi
+    if grep -q 'doppler_service_token\.inngest_arm_write' < <(sed -e 's/#.*//' -e 's#//.*##' "$f"); then printf 'VIOL:arm-key-elsewhere\n'; fi
   done
   local od="$SANDBOX/tfwf.$MUTANTS_RUN"; extract_step "$wf" "$od"
   [ "$(meta_get "$od" env_keys)" = "$SECRET_NAME" ] || printf 'VIOL:preflight-env-name\n'
@@ -334,7 +334,7 @@ v="$(tf_viol "$TF_REAL" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL")"
 if [ -z "$v" ]; then pass "G3: access read, by-reference scope, secret carries its own key, outside the drift map and inventory"; else fail "G3 violations on the real token file" "$(printf '%s' "$v" | tr '\n' ' ')"; fi
 
 # need_viol <fn-output> <code> <label>
-need() { if printf '%s\n' "$1" | grep -qF -- "$2"; then pass "$3"; else fail "$3" "wanted $2, got: $(printf '%s' "$1" | tr '\n' ' ')"; fi; }
+need() { if grep -qF -- "$2" <<<"$1"; then pass "$3"; else fail "$3" "wanted $2, got: $(printf '%s' "$1" | tr '\n' ' ')"; fi; }
 
 # The mutants only mean something against a clean control; skip them (and say so) when it is not.
 if [ "${#FAILURES[@]}" -eq 0 ]; then

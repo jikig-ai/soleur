@@ -4269,11 +4269,11 @@ assert "#9927 G2 anti-vacuity: options, the environment ternary, the token terna
   "[[ -n '$G2_OPTIONS' && -n '$G2_ENV_SET' && -n '$G2_TOK_SET' && -n '$G2_IF_SET' && -n '$G2_PRIV_SET' && -n '$G2_LABELS' ]]"
 for _v in $_G2_RETIRED; do
   assert "#9927 G2 retired verb '$_v' is not a workflow_dispatch option (bare, quoted or with a trailing comment)" \
-    "! printf '%s' '$G2_OPTIONS' | tr ' ' '\\n' | grep -qxF '$_v'"
+    "! printf '%s' '$G2_OPTIONS' | tr ' ' '\\n' | grep -cxF '$_v' >/dev/null"
   assert "#9927 G2 retired verb '$_v' appears in no inputs.op test of the workflow (any ternary, if:, or contains() form)" \
-    "! grep -E 'inputs\\.op' '$_G2_YAML_CODE' | grep -qE \"(^|[^a-z-])$_v([^a-z-]|\\\$)\""
+    "! grep -E 'inputs\\.op' '$_G2_YAML_CODE' | grep -cE \"(^|[^a-z-])$_v([^a-z-]|\\\$)\" >/dev/null"
   assert "#9927 G2 retired verb '$_v' has no case label in the orchestrator (combined, quoted or spaced spellings included)" \
-    "! printf '%s' '$G2_LABELS' | tr ' ' '\\n' | grep -qxF '$_v'"
+    "! printf '%s' '$G2_LABELS' | tr ' ' '\\n' | grep -cxF '$_v' >/dev/null"
 done
 assert "#9927 G2 the token ternary (DOPPLER_TOKEN_INNGEST_ARM env) names EXACTLY the literal set: $_G2_TOKEN_OPS" \
   "[[ '$G2_TOK_SET' == '$_G2_TOKEN_OPS' ]]"
@@ -4285,16 +4285,16 @@ assert "#9927 G2 the Tier-B loader ternary names EXACTLY backup" \
   "[[ '$G2_PRIV_SET' == 'backup' ]]"
 G2_UNGATED=0
 for _o in $G2_TOK_SET $G2_PRIV_SET; do
-  printf '%s' " $G2_ENV_SET " | grep -qF " $_o " || G2_UNGATED=$((G2_UNGATED + 1))
+  printf '%s' " $G2_ENV_SET " | grep -cF " $_o " >/dev/null || G2_UNGATED=$((G2_UNGATED + 1))
 done
 assert "#9927 G2 every credentialed op is reviewer-gated (environment set is a superset of the token set and the loader set; ungated=$G2_UNGATED)" \
   "[[ '$G2_UNGATED' -eq 0 ]]"
 assert "#9927 G2 backup is NOT in the arm-token set (over-grant: that token is soleur-inngest/prd scope, not Hetzner)" \
-  "! printf '%s' ' $G2_TOK_SET ' | grep -qF ' backup '"
+  "! printf '%s' ' $G2_TOK_SET ' | grep -cF ' backup ' >/dev/null"
 assert "#9927 G2 the surviving case labels equal EXACTLY the literal positive set (plus the unknown-op catch-all)" \
   "[[ '$G2_LABELS' == '$_G2_LABELS' ]]"
 assert "#9927 G2 the unknown-op catch-all arm still refuses (a retired verb dispatched from a stale ref exits non-zero)" \
-  "awk '/^case \"\\\$OP\" in\$/{f=1;next} /^esac\$/{f=0} f' '$BODY_SH' | grep -A2 -E '^  \\*\\)' | grep -qE \"unknown op .*exit 1\""
+  "awk '/^case \"\\\$OP\" in\$/{f=1;next} /^esac\$/{f=0} f' '$BODY_SH' | grep -A2 -E '^  \\*\\)' | grep -cE \"unknown op .*exit 1\" >/dev/null"
 assert "#9927 G2 no FLUSH_LATCH_SINCE mapping or reader remains (its only consumer, G3.7, went with op=arm)" \
   "! grep -qF 'FLUSH_LATCH_SINCE' '$WF_YAML' && ! grep -qF 'FLUSH_LATCH_SINCE' '$BODY_SH'"
 
