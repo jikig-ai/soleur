@@ -15,10 +15,11 @@ renders them into the PR body and files `action-required` issues as needed.
 
 ## Notes
 
-- Planning ran headless under the one-shot pipeline on the Devin harness: no
-  `run_subagent` capability in this session, so the technical rulings above are
-  `pending - assumed` per `technical-ruling-delegation.md` and the plan's first
-  implementation phase performs the CTO consult.
+- Planning ran headless under the one-shot pipeline on the Devin harness: the
+  planning-time rows were left `pending - assumed` per
+  `technical-ruling-delegation.md`, and the work-time CTO consult (one batched
+  spawn) resolved them to `Ruled by CTO agent, 2026-11-05` — arm (a') the
+  install path, arm B dormant (measured 718 ms ≤ 10 s).
 - Premise validation (2026-11-05): #10448 OPEN with the deferred item mirrored
   (comment 2026-11-05T00:03Z); #10859 OPEN held for the budget owner; #10865
   OPEN, window restarted at the #12116 merge 2026-11-05T01:27:24Z; #12129 OPEN

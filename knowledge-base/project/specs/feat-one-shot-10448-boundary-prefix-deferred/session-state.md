@@ -29,3 +29,8 @@ soleur:plan, soleur:deepen-plan (inline), collision-precheck.sh, ratchet-observa
 - Untouched: ci.yml continue-on-error, required-checks.txt, ruleset-ci-required.tf, pr-fanout-ledger.txt, CI_PR_AFFECTED, activation lock — all zero-diff (flip stays held for budget owner).
 - Incident: edited test-all.sh mid-flight under the background --print-selection run → byte-offset syntax error, rc=2; re-ran after edits landed (documented hazard, work SKILL §1172).
 - Commits: 97206b0baf (duration promotion), 4b039c2332 (install+drain+repair), 03556feee8 (tasks tick); pushed, draft PR #12199.
+
+## Review Phase
+- Class: code (.sh diffs) → 8 core seats + structural-enumeration (guard-shaped) + test-design (edited anti-vacuity assertion) = 10 seats; semgrep→shellcheck substitute (bash-only); user-impact skipped (threshold none); design-risk no.
+- Pre-checks: merge-tree rc=0 vs origin/main; mergeable=MERGEABLE/BEHIND; prepush-secret-scan CLEAN (8 scanned); collision-precheck exit=10 — foreign test-all.sh procs in sibling worktrees only (feat-one-shot-12013, feat-swe2-flash, feat-one-shot-12120), no duplicate-scope PR.
+- PANEL_SHA=e22d57880403cad842d1c6e6627e3915b0b3329c. Seats spawned background parallel 2026-11-05.

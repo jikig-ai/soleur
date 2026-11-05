@@ -211,7 +211,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
   # #10448 boundary-prefix sweeps .claude/hooks{,/lib} and plugins/soleur/scripts{,/lib}
-  # wholesale (4 dir globs, ~164 files) — a file class scanned wholesale like the ratchets
+  # wholesale (4 dir globs, ~170 files) — a file class scanned wholesale like the ratchets
   # above. Measured-verdict install (CTO ruling 2026-11-05): 718 ms measured,
   # selection over the 25% bar on both PR5d readings (97/200 conservative,
   # 48/151 excluded) — the policy's own >25% answer, never an amended bar.
@@ -4176,6 +4176,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# Retained per deferred-item AC 6 while the suite is ALWAYS_ON (dead for selection — rung 1
+# short-circuits — and moot to the audit census; the #11648 demotion precedent keeps the edge
+# set for a future re-pricing). KNOWN under-declaration by design: the suite sweeps
+# .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} wholesale (the always_on install's
+# reason) but this block only declares the named hooks edges — if the suite is ever withdrawn
+# to edge-selection, plugins/soleur/scripts/ diffs would silently under-select until widened.
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".claude/hooks/brand-hex-commit-gate.sh"
