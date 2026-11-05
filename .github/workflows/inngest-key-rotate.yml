@@ -161,8 +161,8 @@ jobs:
     outputs:
       approval_epoch: ${{ steps.approve.outputs.approval_epoch }}
     steps:
-      # Live verify of THIS environment, run after the reviewer click and before the stamp (the sha256-pinned script
-      # cannot carry it; mirrored from scripts/key-rotate.sh kk_chk_approval). A referenced-but-absent or drifted
+      # Live verify of THIS environment, run after the reviewer click and before the stamp (this job runs no checkout and
+      # scripts/inngest-key-rotate.sh does not source kk_chk_approval; mirrored from scripts/key-rotate.sh kk_chk_approval). A referenced-but-absent or drifted
       # environment auto-creates UNPROTECTED, so fail closed with approval_environment_unprotected on an unreadable
       # read, a missing required_reviewers/branch_policy type, an EMPTIED reviewer list, or a branch policy that
       # admits anything but refs/heads/main. Failing here keeps apply1 (the first write job) from ever running.
@@ -178,7 +178,7 @@ jobs:
             || { echo "inngest-key-rotate verdict=approval_environment_unprotected (protection_rules lack required_reviewers or a branch policy)" >&2; exit 1; }
           jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$out" >/dev/null \
             || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the required_reviewers rule lists no reviewer)" >&2; exit 1; }
-          pol="$(gh api "repos/${GITHUB_REPOSITORY}/environments/key-rotate-approval/deployment-branch-policies")" \
+          pol="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/environments/key-rotate-approval/deployment-branch-policies")" \
             || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the deployment-branch-policies read failed; fail closed)" >&2; exit 1; }
           jq -e '.branch_policies as $p | ($p | length) > 0 and all($p[]; .type == "branch" and .name == "main")' <<<"$pol" >/dev/null \
             || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the branch policy does not restrict deployments to refs/heads/main alone)" >&2; exit 1; }
@@ -235,8 +235,8 @@ jobs:
         run: bash scripts/inngest-key-rotate.sh apply1
 
   reboot:
-    needs: [guard, apply1]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_reboot == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') }}
+    needs: [guard, approve, apply1]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_reboot == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KR_ADMIT_S + KR_REBOOT_STEP_S + KR_VERIFY_STEP_S + KR_JOB_SLACK_S) / 60.
@@ -337,8 +337,8 @@ jobs:
             bash scripts/inngest-key-rotate.sh verify
 
   apply2:
-    needs: [guard, apply1, reboot]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply2 == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && needs.reboot.result == 'success' }}
+    needs: [guard, approve, apply1, reboot]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply2 == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') && needs.reboot.result == 'success' }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KR_APPLY_STEP_S + KR_JOB_SLACK_S) / 60.
@@ -380,8 +380,8 @@ jobs:
         run: bash scripts/inngest-key-rotate.sh apply2
 
   redeploy:
-    needs: [guard, apply1, reboot, apply2]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_redeploy == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && needs.reboot.result == 'success' && needs.apply2.result == 'success' }}
+    needs: [guard, approve, apply1, reboot, apply2]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_redeploy == 'true' && (needs.apply1.result == 'success' || needs.apply1.result == 'skipped') && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') && needs.reboot.result == 'success' && needs.apply2.result == 'success' }}
     runs-on: ubuntu-24.04
     # (KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S) / 60: the redeploy is bounded by the pipeline's own 4800 s ceiling.
     timeout-minutes: 95

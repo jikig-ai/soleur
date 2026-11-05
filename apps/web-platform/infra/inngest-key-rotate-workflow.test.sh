@@ -1594,6 +1594,8 @@ SC = [
  ("rotate/apply2-cancelled", dict(event="workflow_dispatch", gout=gout("gout-rotate"), force={"apply2": "cancelled"})),
  ("rotate/redeploy-fails", dict(event="workflow_dispatch", gout=gout("gout-rotate"), force={"redeploy": "failure"})),
  ("converge/reboot-fails", dict(event="workflow_dispatch", gout=gout("gout-converge"), force={"reboot": "failure"})),
+ ("rotate/approve-fails", dict(event="workflow_dispatch", gout=gout("gout-rotate"), force={"approve": "failure"})),
+ ("converge/approve-fails", dict(event="workflow_dispatch", gout=gout("gout-converge"), force={"approve": "failure"})),
  ("guard-refused", dict(event="workflow_dispatch", gout={"go": "false"}, guard_result="failure")),
  ("guard-ok-no-go", dict(event="workflow_dispatch", gout=dict(gout("gout-rotate"), go="false"))),
  ("guard-failed-late", dict(event="workflow_dispatch", gout=gout("gout-rotate"), guard_result="failure")),
@@ -1646,7 +1648,7 @@ ENV = {
  ("notify", "notify"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_RESULT_APPLY1="${{ needs.apply1.result }}", EFF_RESULT_REBOOT="${{ needs.reboot.result }}", EFF_RESULT_APPLY2="${{ needs.apply2.result }}", EFF_RESULT_REDEPLOY="${{ needs.redeploy.result }}", GH_TOKEN=TOK),
 }
 # the approve job's envverify step (P2-2, #11923 follow-up): kk_chk_approval's live environment verify inlined in the
-# workflow because the sha256-pinned script cannot carry it. It must exist and bind GH_TOKEN only (the job token under
+# workflow because the approve job runs no checkout and scripts/inngest-key-rotate.sh does not source kk_chk_approval. It must exist and bind GH_TOKEN only (the job token under
 # contents: read; no secret values may reach the reviewer-gated environment).
 _envv = next((s for s in jobs["approve"]["steps"] if s.get("id") == "envverify"), None)
 if _envv is None: viol.append("envverify-missing")
@@ -1688,6 +1690,8 @@ rotate/reboot-fails      guard=success approve=success apply1=success reboot=fai
 rotate/apply2-cancelled  guard=success approve=success apply1=success reboot=success apply2=cancelled redeploy=skipped notify=success
 rotate/redeploy-fails    guard=success approve=success apply1=success reboot=success apply2=success redeploy=failure notify=success
 converge/reboot-fails    guard=success approve=success apply1=skipped reboot=failure apply2=skipped redeploy=skipped notify=success
+rotate/approve-fails     guard=success approve=failure apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=success
+converge/approve-fails   guard=success approve=failure apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=success
 guard-refused            guard=failure approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
 guard-ok-no-go           guard=success approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
 guard-failed-late        guard=failure approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=success
@@ -1696,7 +1700,7 @@ EOF
 wfviol() { python3 "$TMP/wfcheck.py" "$1" "$TMP" "$TMP/matrix.expected" 2>&1; }
 MATRIX_NOW="$(python3 "$TMP/wfcheck.py" "$WF" "$TMP" - 2>&1)"
 [[ "$(wfviol "$WF")" == "" ]] && ok "W1 the real workflow conforms: the evaluated job matrix equals the expected table, the permissions / checkout credentials / per-step env / env -i allow-lists are the exact closed sets, no continue-on-error, no expression in a run body, secrets only in the dotted form" || bad "W1 violations" "$(wfviol "$WF")"
-[[ "$(cat "$TMP/matrix.expected")" == "$MATRIX_NOW" ]] && ok "W2 the job matrix (every job's if: EVALUATED per mode and per failure scenario) is: plan runs only guard and apply1 (the approve gate is skipped); rotate and converge run approve before the first write job; converge skips apply1; any failure or cancellation after the first write runs notify; a refused guard or a push runs nothing" || bad "W2 matrix" "$MATRIX_NOW"
+[[ "$(cat "$TMP/matrix.expected")" == "$MATRIX_NOW" ]] && ok "W2 the job matrix (every job's if: EVALUATED per mode and per failure scenario) is: plan runs only guard and apply1 (the approve gate is skipped); rotate and converge run approve before the first write job; converge skips apply1; a FAILED approve blocks every write job (the apply1-skipped allowance is converge-scoped and cannot leak the failure downstream); any failure or cancellation after the first write runs notify; a refused guard or a push runs nothing" || bad "W2 matrix" "$MATRIX_NOW"
 [[ "$(grep -c 'continue-on-error' "$WF")" == 0 ]] && ok "W3 there is no continue-on-error anywhere in the workflow text" || bad "W3 continue-on-error"
 # executed allow-lists: run each env -i step's own text against a stub script that dumps its environment
 declare -A OUTER=([HOME]=/h [RUNNER_TEMP]=/rt [GITHUB_OUTPUT]=/o [GITHUB_STEP_SUMMARY]=/s [GITHUB_RUN_ID]=1 [GITHUB_RUN_ATTEMPT]=1 [GITHUB_REPOSITORY]=a/b [GITHUB_SERVER_URL]=https://x [HCLOUD_TOKEN]=T0 [GH_TOKEN]=g0 [DOPPLER_TOKEN]=d0

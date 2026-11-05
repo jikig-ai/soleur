@@ -461,7 +461,7 @@ kk_chk_approval() {
     KR_CHECK_DETAIL="the key-rotate-approval environment's required_reviewers rule lists no reviewer (a review nobody can give is no gate)"
     return 1
   fi
-  pol="$(gh api "repos/${GITHUB_REPOSITORY:-}/environments/key-rotate-approval/deployment-branch-policies" 2>/dev/null)" \
+  pol="$(gh api --paginate "repos/${GITHUB_REPOSITORY:-}/environments/key-rotate-approval/deployment-branch-policies" 2>/dev/null)" \
     || { KR_CHECK_TOKEN=approval_environment_unprotected; KR_CHECK_DETAIL="the key-rotate-approval deployment-branch-policies read failed (an unreadable read is an unprotected environment, fail closed)"; return 1; }
   if ! jq -e '.branch_policies as $p | ($p | length) > 0 and all($p[]; .type == "branch" and .name == "main")' <<<"$pol" >/dev/null 2>&1; then
     KR_CHECK_TOKEN=approval_environment_unprotected
