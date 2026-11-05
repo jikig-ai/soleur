@@ -53,3 +53,10 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 ### Review + QA (2026-11-05)
 - Panel 7/7 seats (code class, tier none; enumeration seat replaced architecture-strategist): 0 P1, 2 P2 (stale pre-strict-zero contract text), ~12 P3 — all fixed inline (73f497e48a, e22bdcce22) + trailers emitted (fafd182aaa full 7/7; d052789e64 fix-round 6/6).
 - QA: every Test Scenario is unit/integration — executed via suite rows 96-167 (738/738 green, mutants killed), strict-zero audit+ratchet on rebased tree, oracle notice, drift-disposition receipt. No UI/API surface → nothing else to QA.
+
+### Compound + resume (2026-11-05)
+- Learning filed: knowledge-base/project/learnings/workflow-patterns/2026-11-05-merge-queue-wait-lets-new-gaps-land-mid-drain.md
+- Remaining: soleur:ship (ready PR #12127 → auto-merge → merge-queue poll → postmerge) → close-out:
+  #10861 final-marker comment (`SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0` +
+  audit line + slice links #11226/#11950/#12050/#12093/#12116/#12127), release `s4-drain` label
+  from the merged PR, #10448 mirror comment. Last SHA: <fill-at-push>.
