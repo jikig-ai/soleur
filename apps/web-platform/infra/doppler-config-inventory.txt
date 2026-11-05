@@ -33,10 +33,9 @@
 # FILE REPORTS; IT GATES NOTHING" — true when written, false since #7234, and the sentence a
 # reader would have trusted while deleting a line.
 #
-# The file is EXPECTED to drift: `git-data-luks.tf` declares a `prd_git_data` config that will
-# exist after git-data birth, and rehearsal dispatches create ephemeral
-# `prd_git_data_rehearsal_*` configs. The change that alters the project's config set owns both
-# edits — this file AND the floor — in the same PR; re-run the `# command:` line above.
+# The file is EXPECTED to drift: rehearsal dispatches create ephemeral
+# `prd_git_data_rehearsal_*` configs, and any change that alters the project's config set owns
+# both edits — this file AND the floor — in the same PR; re-run the `# command:` line above.
 # Ephemeral rehearsal configs need no edit at all: they only push the count ABOVE the floor,
 # which the one-sided `>=` gate absorbs.
 #
@@ -55,18 +54,20 @@
 # thing now, and the suite additionally asserts the raw and deduped counts AGREE, so a duplicate
 # line fails loudly instead of shifting the pin.
 #
-# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER (NONE DERIVED FROM ANOTHER), PLUS A SET RATCHET ──
-# Regenerating this file is only ONE of the edits. When the project legitimately grows (git-data
-# birth adding `prd_git_data` is the known case), raise ALL of these in the SAME PR:
+# ── RAISING THE FLOOR: THREE FLOOR LITERALS MOVE TOGETHER (NONE DERIVED FROM ANOTHER), PLUS A SET RATCHET ──
+# Regenerating this file is only ONE of the edits. When the project legitimately grows (#11857
+# raised it from 13 to 16), raise ALL of these in the SAME PR, to the number the `grep` in the
+# CI-check note below prints:
 #
 #   1. `.github/workflows/scheduled-terraform-drift.yml`  — the token_drift step's
-#      `env: DOPPLER_CONFIGS_FLOOR: 13`                       (the declared gate)
+#      `env: DOPPLER_CONFIGS_FLOOR`                           (the declared gate)
 #   2. `.github/workflows/scheduled-terraform-drift.yml`  — the same step's run-time
-#      re-assertion `(( 10#$cfg_floor < 13 ))`                (external to the declaration)
-#   3. `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `FLOOR_MINIMUM=13`
+#      re-assertion `(( 10#$cfg_floor < N ))`                 (external to the declaration)
+#   3. `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `FLOOR_MINIMUM`
 #                                                              (the pre-merge ratchet)
-#   (and `RUNG2_CONFIGS_FLOOR: 13` in the same workflow's rung2-rehearsal-orphan-sweep job,
-#    which declares the same demand for the scratch-config half of that sweep)
+#   (and `RUNG2_CONFIGS_FLOOR` in the same workflow's rung2-rehearsal-orphan-sweep job,
+#    which declares the same demand for the scratch-config half of that sweep; the fixtures
+#    in that test file that carry a `configs_floor` follow the minimum)
 #
 #   4. `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `INVENTORY_REMOVALS_ACK`
 #      (the F4b SET ratchet, and the layer that actually fires above 13)
@@ -95,14 +96,17 @@
 # 40 tfplan fixtures. Treat it as defence in depth behind F4b, never as the thing that catches
 # a shrink.
 #
-# ⚠️ ADDING `prd_git_data` NEEDS A `depends_on`, AND NOTHING ELSE WILL TELL YOU. `config =
-# each.key` is a STRING, so Terraform builds NO dependency edge from the token to the config.
-# Every name in this file today belongs to a config that pre-exists outside Terraform — but
-# `git-data-luks.tf` declares `doppler_config.git_data_prd`, and ADR-149 says `prd_git_data`
-# appears at git-data birth. The PR that adds that name here MUST also add
-# `depends_on = [doppler_config.git_data_prd]` to `doppler_service_token.token_drift`, or the
-# token create can be ordered before the config exists and the apply fails on a race that reads
-# as flake.
+# ⚠️ A NAME THAT IS A TERRAFORM-DECLARED CONFIG NEEDS A `depends_on`, AND NOTHING ELSE WILL
+# TELL YOU. `config = each.key` is a STRING, so Terraform builds NO dependency edge from the
+# token to the config. `prd_workspaces_luks_web` and `prd_workspaces_luks_marker` are declared
+# in `workspaces-luks-fresh-boot.tf`, so `doppler_service_token.token_drift` carries
+# `depends_on = [doppler_config.workspaces_luks_web, doppler_config.workspaces_luks_marker]`
+# (a suite row pins it). `prd_git_data` is declared too (`doppler_config.git_data_prd`), but it
+# is DELIBERATELY NOT depended on: that config is a per-merge OPERATOR_APPLIED_EXCLUSION, kept
+# out of every per-merge plan on purpose (see `git-data.tf` and #9438), because a reference
+# would pull it into the closure and a state that lacked it would fail every merge with HTTP 400
+# "Name is already in use". An earlier version of this paragraph said the opposite (CTO ruling
+# 2026-11-04 reversed it). A NEW Terraform-declared name needs the same decision and that row.
 #
 # WHY THE COUNT RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and
 # only `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back
@@ -117,13 +121,12 @@
 # and the sentence that made the round trip look unpreventable rather than merely unprevented.
 # See ADR-164, "Known limitations" (amended), and ADR-168.
 #
-# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: the live project holds MORE configs than are listed
-# below. The name list was NOT regenerated and stays as-is on purpose (CTO ruling 2026-11-02): it is the for_each key set
-# that mints one read token per name, so adding a name is a credential-minting change. prd_git_data,
-# prd_workspaces_luks_marker and prd_workspaces_luks_web are Terraform-declared and deliberately not listed here; the PR
-# that mints their tokens (#11857) raises this list, adds the depends_on that prd_git_data needs, and raises
-# DOPPLER_CONFIGS_FLOOR together. The `# generated:` stamp on line 1 records this verification date, not a regeneration
-# of the names; it only resets the 90-day staleness caveat.
+# RE-VERIFIED 2026-11-02 against live `doppler configs -p soleur`: the live project held MORE configs than were listed
+# then. Adding a name is a credential-minting change (this list is the for_each key set that mints one read token per
+# name). #11857 added prd_git_data, prd_workspaces_luks_marker and prd_workspaces_luks_web, which are Terraform-declared,
+# and raised DOPPLER_CONFIGS_FLOOR to match in the same change. Those three names were taken from the Terraform
+# declarations, NOT from a fresh `# command:` run, so the `# generated:` stamp on line 1 is unchanged on purpose: it
+# still records the 2026-11-02 verification, not a regeneration of the names, and bumping it would falsify the age signal.
 ci
 cli
 cli_ops
@@ -133,7 +136,10 @@ dev_scheduled
 prd
 prd_cla
 prd_ghcr
+prd_git_data
 prd_kb_drift_walker
 prd_scheduled
 prd_terraform
 prd_workspaces_luks
+prd_workspaces_luks_marker
+prd_workspaces_luks_web
