@@ -149,10 +149,10 @@ None (no open `code-review` issue names `.claude/hooks/cla-signed-author-gate.te
 
 ## Acceptance Criteria
 
-- [ ] AC1: `E=$(mktemp -d); HOME=$E XDG_CONFIG_HOME=$E GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash .claude/hooks/cla-signed-author-gate.test.sh` exits 0 and reports `26/26 passed` (pre-fix: exit 128 right after `PASS: T14`, reproduced during planning). Use a separate `$E` so the env assignments do not depend on left-to-right expansion of `$HOME`.
-- [ ] AC2: Normal-environment run is still `26/26 passed`; `T15` and `T16` both print `PASS`. `git diff` shows no change to `run_hook_noglobal`, `init_git_repo`, `make_repo`, `commit_branch` or any `tN()` body (hook-call path stays identity-unset).
-- [ ] AC3: `python3 scripts/ci-pr-affected-replay.py audit` summary `gap_refs=` and `stale=` are unchanged versus `origin/main` (no new line in the test file names the cla workflow path literal; the two content-anchored accept rows still match).
-- [ ] AC4: `git diff --name-only origin/main...HEAD` outside `knowledge-base/project/{plans,specs}/` lists only `.claude/hooks/cla-signed-author-gate.test.sh`.
+- [x] AC1: `E=$(mktemp -d); HOME=$E XDG_CONFIG_HOME=$E GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash .claude/hooks/cla-signed-author-gate.test.sh` exits 0 and reports `26/26 passed` (pre-fix: exit 128 right after `PASS: T14`, reproduced during planning). Use a separate `$E` so the env assignments do not depend on left-to-right expansion of `$HOME`.
+- [x] AC2: Normal-environment run is still `26/26 passed`; `T15` and `T16` both print `PASS`. `git diff` shows no change to `run_hook_noglobal`, `init_git_repo`, `make_repo`, `commit_branch` or any `tN()` body (hook-call path stays identity-unset).
+- [x] AC3: `python3 scripts/ci-pr-affected-replay.py audit` summary `gap_refs=` and `stale=` are unchanged versus `origin/main` (no new line in the test file names the cla workflow path literal; the two content-anchored accept rows still match).
+- [x] AC4: `git diff --name-only origin/main...HEAD` outside `knowledge-base/project/{plans,specs}/` lists only `.claude/hooks/cla-signed-author-gate.test.sh`.
 - [ ] AC5: PR #12198 body contains `Closes #12120`; PR title no longer `WIP:` at ship time.
 
 ## Test Scenarios
