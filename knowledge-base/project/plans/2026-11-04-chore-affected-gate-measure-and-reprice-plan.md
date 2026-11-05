@@ -12,6 +12,8 @@ brand_survival_threshold: aggregate pattern
 
 # chore(tests): measure the local affected gate and re-price its slow edge-selected suites
 
+> **Superseded 2026-11-05 (review design pass, CTO ruling).** Phase 1 and every mention of the `suite-rate` subcommand, its test and its `commits.tsv` output are history: `glob-rate` with a blank-entry candidates file reports the same existing selection rates, so the subcommand was dropped before merge. AC4 is read as: the rates come from `glob-rate` at the base, and the replay test is unchanged. See the ADR-242 amendment of 2026-11-04 and `decision-challenges.md`.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-04

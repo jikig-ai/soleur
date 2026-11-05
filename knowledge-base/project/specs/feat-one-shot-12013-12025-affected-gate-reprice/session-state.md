@@ -24,3 +24,6 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x3, learnings-researche
 - Exit gate: deferred by its own 2400 s budget after 118 of 298 suites, no red; the covering suites (replay arms a/b/c, test-all-affected-b, the new test) were run directly and pass
 - Operator leftover: the private clone /data/git-repositories/jikig-ai/measure-clone-r1 could not be deleted by the agent (safety check) and is left for the operator
 - lint-ratchet: user-ruff not adopted (relay; do not adopt unprompted)
+
+## Review Phase
+- Design pass (simplicity + architecture) found no P1. CTO ruling 2026-11-05 (binding): drop the `suite-rate` subcommand, its test, manifest rows and data; recompute the rates with `glob-rate` and a blank-entry candidates file at the base. Done in the review phase.

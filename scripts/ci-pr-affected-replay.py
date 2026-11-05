@@ -49,7 +49,6 @@ SUBCOMMANDS
   audit        [--root DIR] [--list FILE] [--accept FILE] [--all-refs]
   ratchet      [--root DIR] [--list FILE] [--baseline FILE] [--accept FILE] [--base REF] [--print-baseline] [--report FILE]
   glob-rate    --candidates FILE --out DIR [--list FILE] [--pairs FILE] [--commits N] [--base REF] [--spot-check K] [--root DIR]   (S4 PR5: read-only row 6 measurement, see cmd_glob_rate)
-  suite-rate   --out DIR [--list FILE] [--commits N] [--base REF] [--spot-check K] [--root DIR]   (#12025: read-only, the existing selection rate of every suite, see cmd_suite_rate)
 The receipt paths are arguments; no repository path literal lives in this file.
 
 AUDIT OUTPUT. `gap<TAB>suite<TAB>N<TAB>paths` (the first six, all with --all-refs, which also prints under it one
@@ -2465,76 +2464,6 @@ def cmd_glob_rate(a):
     return 0
 
 
-# ---- suite-rate (#12025): the EXISTING selection rate of every suite --------------------------------------------------------------------
-# READ-ONLY and network-free. glob-rate models a CANDIDATE edge set; this reports what the index selects TODAY. It reuses glob_units (pinned
-# base, last N first-parent commits, each classified), glob_selector_rows (ONE selector run gives every suite's class and edges),
-# glob_existing_hit (the selection bit of a row for a diff) and glob_spot_check (the real selector on evenly spaced diffs must agree with the
-# model, else exit 4), so the loop costs one selector run plus the spot-check, never one selector run per commit.
-
-SR_MARKER = "SOLEUR_PR_AFFECTED_SUITE_RATE"
-SR_CAVEAT = "current-edges-applied-to-older-diffs;survivors-only"
-SR_TSV_COLUMNS = ("suite", "class", "measured", "hits", "attributable", "rate_pct")
-SR_COMMIT_COLUMNS = ("sha", "kind", "files_n", "selected_n", "subject")
-
-
-def cmd_suite_rate(a):
-    """suite-rate: per suite, in how many of the last N attributable first-parent commits of --base the CURRENT index selects it (#12025).
-    READ-ONLY: it writes only under --out (suite-rate.tsv, commits.tsv, suite-rate.header) and makes no network call. A row is `measured` only
-    when it is an `edge:` row with edges; an always_on, group, unclassified or edge-less row selects on every diff by definition and is reported
-    as 100.0 with measured=no, never as a rate. runner-changed, not-evaluable and empty commits are counted in their own header columns and leave
-    the denominator. The standing limit is stamped in the header: today's edges applied to older diffs, and the commits that landed are survivors.
-    Exit 0 done; 1 no attributable commit in the window; 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged or an internal error."""
-    if a.spot_check < 1:
-        raise ValueError("--spot-check must be at least 1: a rate is not accepted until the model has agreed with the real selector")
-    root = a.root or repo_root()
-    rows = glob_selector_rows(load_rows(a.list, root))
-    base_sha, units = glob_units(root, a.base, a.commits)
-    attr = [u for u in units if u[2] == "attributable"]  # sr:attr
-    if not attr:
-        print("replay: no attributable commit in the last %d first-parent commits of %s: nothing to measure" % (a.commits, quote_field(a.base)), file=sys.stderr)
-        return 1
-    counts = Counter(u[2] for u in units)
-    spot_k, spot_cmp = glob_spot_check(root, rows, units, a.spot_check, rows)  # sr:spot
-    lib = run(["git", "rev-parse", "%s:%s" % (base_sha, RUNNER_TRIGGERS[1])], cwd=root, check=False)  # sr:lib
-    if lib.returncode != 0:
-        raise ValueError("%s is not tracked at %s: the rates cannot be tied to an index version" % (RUNNER_TRIGGERS[1], base_sha[:12]))
-    lib_sha = lib.stdout.strip()
-    hits = Counter()
-    selected_n = {}
-    for sha, files, _kind, _deleted in attr:
-        n = 0
-        for label, (cls, edges) in rows.items():
-            if glob_existing_hit(cls, edges, files):
-                hits[label] += 1
-                n += 1
-        selected_n[sha] = n
-    suite_lines = []
-    for label, (cls, edges) in sorted(rows.items()):
-        measured = cls.startswith("edge:") and bool(edges)  # sr:measured
-        h = hits[label] if measured else len(attr)
-        suite_lines.append((quote_field(label), quote_field(cls), "yes" if measured else "no", str(h), str(len(attr)),
-                            "%.1f" % (100.0 * h / len(attr))))
-    commit_lines = []
-    for sha, files, kind, _deleted in units:
-        subj = run(["git", "log", "-1", "--format=%s", sha], cwd=root, check=False).stdout.strip()
-        commit_lines.append((sha, kind, str(len(files)), str(selected_n[sha]) if kind == "attributable" else "-", quote_field(subj)))
-    header = ("%s base=%s window=%d lib_sha=%s date=%s units=%d attributable=%d runner_changed=%d not_evaluable=%d empty=%d suites=%d "
-              "spot_check=%d spot_compared=%d caveat=%s"
-              % (SR_MARKER, base_sha, a.commits, lib_sha, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), len(units), len(attr),
-                 counts["runner"], counts["not_evaluable"], counts["empty"], len(suite_lines), spot_k, spot_cmp, SR_CAVEAT))
-    table = "\t".join(SR_TSV_COLUMNS) + "\n" + "".join("\t".join(r) + "\n" for r in suite_lines)
-    os.makedirs(a.out, exist_ok=True)
-    with open(os.path.join(a.out, "suite-rate.tsv"), "w") as fh:
-        fh.write(table)
-    with open(os.path.join(a.out, "commits.tsv"), "w") as fh:
-        fh.write("\t".join(SR_COMMIT_COLUMNS) + "\n" + "".join("\t".join(r) + "\n" for r in commit_lines))
-    with open(os.path.join(a.out, "suite-rate.header"), "w") as fh:
-        fh.write(header + "\n")
-    sys.stdout.write(table)
-    print(header)
-    return 0
-
-
 def main(argv):
     ap = argparse.ArgumentParser(prog="ci-pr-affected-replay", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2602,24 +2531,13 @@ def main(argv):
     gr.add_argument("--commits", type=int, default=200, help="how many first-parent commits of --base form the units (default 200)")
     gr.add_argument("--base", default="origin/main", help="the commit or ref whose first-parent history is replayed; pass the recorded SHA, not a moving ref")
     gr.add_argument("--spot-check", type=int, default=3, dest="spot_check", help="run the REAL selector on K (at least 1, default 3) evenly spaced diffs and require the model to agree on every candidate suite (exit 4 on a divergence or an empty sample)")
-    sr = sub.add_parser("suite-rate", formatter_class=argparse.RawDescriptionHelpFormatter,
-                        epilog="exit codes: 0 done; 1 no attributable commit in the window; 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged from the real selector, or an internal error. "
-                               "Rows file: bash scripts/test-all.sh --print-selection --paths=README.md > rows.txt (take it BEFORE any index edit). Base: git rev-parse origin/main (record it).",
-                        help="the EXISTING selection rate of every suite over the last N first-parent commits (read-only)")
-    sr.add_argument("--out", required=True, help="directory suite-rate.tsv, commits.tsv and suite-rate.header are written under")
-    sr.add_argument("--root", default="", help="the tree to read (default: the current checkout)")
-    sr.add_argument("--list", default="", help="the saved selector rows (--print-selection --paths=README.md output); without it the selector runs once")
-    sr.add_argument("--commits", type=int, default=100, help="how many first-parent commits of --base form the window (default 100)")
-    sr.add_argument("--base", default="origin/main", help="the commit or ref whose first-parent history is read; pass the recorded SHA, not a moving ref")
-    sr.add_argument("--spot-check", type=int, default=5, dest="spot_check", help="run the REAL selector on K (at least 1, default 5) evenly spaced diffs and require the model to agree on every suite (exit 4 otherwise)")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
         return 2
     try:
         return {"collect": cmd_collect, "ejections": cmd_ejections, "aggregate": cmd_aggregate, "verdict": cmd_verdict,
-                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet, "glob-rate": cmd_glob_rate,
-                "suite-rate": cmd_suite_rate}[a.cmd](a)
+                "cp-upper": cmd_cp, "audit": cmd_audit, "ratchet": cmd_ratchet, "glob-rate": cmd_glob_rate}[a.cmd](a)
     except ReadError as e:
         print("replay: %s" % e, file=sys.stderr)
         return 3

@@ -8,7 +8,7 @@ Issues: #12013, #12025. Draft PR: #12103. Follow-up filed: #12106.
 - [x] 0.1 Recorded `BASE_SHA` 8cc167c2e3, load 5.6, 8 sibling runners; branch rebased onto it
 - [x] 0.2 `--print-selection` shows `fallback=none` on the current diff (298 of 741)
 
-## Phase 1 - `suite-rate` subcommand (tests first)
+## Phase 1 - `suite-rate` subcommand (tests first) - DROPPED in review (CTO ruling 2026-11-05: `glob-rate` with a blank-entry candidates file gives the same rates; code, test, manifest rows and data removed; items below are history)
 
 - [x] 1.1 Failing `plugins/soleur/test/ci-pr-affected-suite-rate.test.sh` written first (rows R1-R4, window variation, help, four mutations, harness control)
 - [x] 1.2 `cmd_suite_rate` in `scripts/ci-pr-affected-replay.py` on the existing helpers; docstring updated
@@ -17,8 +17,8 @@ Issues: #12013, #12025. Draft PR: #12103. Follow-up filed: #12106.
 
 ## Phase 2 - Selection rates
 
-- [x] 2.1 `suite-rate --commits 100` at the pinned base: 406 s, spot-check agreed on 3655 comparisons
-- [x] 2.2 `suite-rate.tsv`, `commits.tsv` and the header are in `measurements/`
+- [x] 2.1 Rates at the pinned base (first with `suite-rate`, 406 s, spot-check 3655 comparisons; after the ruling recomputed with `glob-rate --commits 100` and a blank-entry candidates file in a base checkout)
+- [x] 2.2 `glob-rate.tsv`, `glob-rate.marker` and the candidates file are in `measurements/` (the `suite-rate` outputs were removed)
 
 ## Phase 3 - Gate measurement (#12013)
 
