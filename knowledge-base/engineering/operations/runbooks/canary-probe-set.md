@@ -531,7 +531,7 @@ line-anchored, nothing trailing), is debounced per user (keyed with the error co
 keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
 in #10455). The same forgery can reach the tenant notice: the notice requires the SDK's error flag, a single non-blank
 line and a pre-command helper step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
-is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. Wake path for both alerts: email (each alert's own channel), plus a Slack post (inferred); see **Slack wake check, dashboard read 2026-11-05** below.
+is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the alert only prompts the check above. Wake path for both alerts: email plus an inferred Slack post (a post is not a guaranteed page); see **Slack wake check, dashboard read 2026-11-05** below.
 
 **Slack wake check, run 2026-10-19 (#10455 d), read-only.** Two reads with the read-only token (Doppler `soleur/prd_terraform`,
 `BETTERSTACK_API_TOKEN_READONLY`; counts and flags only, nothing written):
@@ -554,17 +554,16 @@ doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer
 What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
 property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
 
-**Slack wake check, dashboard read 2026-11-05 (#10455 item 4, the open point of the 2026-10-19 check (d)).** This supersedes the
-2026-10-19 conclusion above that nothing here claims Slack wakes. It was read from the Better Stack dashboard, because the 2026-10-19 API
-reads could not show it and were not re-run. **Observed:** the Slack integration is connected (Incidents product, single-channel mode,
+**Slack wake check, dashboard read 2026-11-05 (#10455 item 4).** This supersedes the 2026-10-19 conclusion above that nothing here
+claims Slack wakes. It was read from the Better Stack dashboard (the 2026-10-19 API reads could not show it). **Observed:** the Slack integration is connected (Incidents product, single-channel mode,
 channel `#error-found`, workspace Soleur.ai), and the incident for the Logs alert `soleur-egress-gw-probe-fail-prd` (2026-11-04) shows
 Slack posts on its timeline at incident start and at auto-resolve, next to the email sends. **Inferred:** the integration is account-wide
 and the Logs alerts take a team-level escalation target (the 2026-10-19 read above shows one on all 17 alerts at that date;
-`betterstack-logs-alerts.tf` sets `team_name = "Your team"` and gates `policy_id` on `var.betterstack_paid_tier`), so Logs-alert
+`betterstack-logs-alerts.tf` sets `team_name = "Your team"` on the free tier), so Logs-alert
 incidents reach Slack, including `agent_sandbox_bash_denial` and `faithful_canary_sandbox_broken`, which were not separately observed.
-**Unchanged:** those two alerts still carry `email = true` with `push`, `call`, `sms` and `critical_alert` false and no escalation policy
-in `betterstack-logs-alerts.tf` (three other Logs alerts, `inngest_luks_wrong_volume`, `inngest_luks_key_probe_fail` and
-`inngest_step_524`, also arm `push`, #11068 and #11260); the Slack post comes from the Incidents integration, not from an alert flag.
+**Flags (this finding changes none):** those two alerts carry `email = true` with `push`, `call`, `sms` and `critical_alert` false and no
+escalation policy in `betterstack-logs-alerts.tf` (other Logs alerts in that file also arm `push`); the Slack post comes from the
+Incidents integration, not from an alert flag.
 **Limits:** a Slack post is not proof of a phone push or a read (a push depends on the Slack client's notification settings; the
 2026-10-22 heartbeat incidents were posted to the channel and still went unseen, ADR-298), and Logs-alert escalation policies stay gated
 off on the free tier (`var.betterstack_paid_tier`). To repeat the check, read the timeline of a recent Logs-alert incident in the

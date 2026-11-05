@@ -694,6 +694,6 @@ cost-capture has no hourly cadence.
 ## Amendment — 2026-11-05 (#10455): a Slack post is observed on one Logs-alert incident
 
 Appended, not edited. The text above is unchanged; where it conflicts with this section, this section wins. The "Wake path" bullet of the
-2026-10-19 (#10453) amendment ("the Slack wake of ADR-260 is not verified for Logs alerts") is superseded by the 2026-11-05 dashboard read,
-recorded in `canary-probe-set.md` under "Slack wake check, dashboard read 2026-11-05": a Slack post is observed on a Logs-alert incident
+2026-10-19 (#10453) amendment ("the Slack wake of ADR-260 is not verified for Logs alerts") has its Slack clause superseded by the 2026-11-05 dashboard read,
+recorded in `canary-probe-set.md` under "Slack wake check, dashboard read 2026-11-05": a Slack post is observed on one Logs-alert incident
 and inferred for the others. A factual correction; no decision changes.
