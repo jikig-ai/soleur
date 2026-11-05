@@ -1036,13 +1036,18 @@ fi
 #       substring test on the marker line alone sees nothing.
 #   W5  `>&"2"` and `1>&2` spellings.
 # And W3, the growth gap: the reason table is hardcoded, so a NEW fail-closed halt added with
-# no marker passed silently. The cardinality check below closes that — the number of halts and
-# the number of markers must agree per file.
+# no marker passed silently. Distinct-reason cardinality false-fails a reason two phases share
+# (incident reuses plugin-root-unverified, sentinel-unreadable, and sentinel-exit-2). The floor
+# below walks each executable `exit 2` and requires a `SOLEUR_*_HALT reason=` in the arm since
+# the previous `exit 2`, inclusive of this exit's line. Guidance on stderr between the marker
+# and the exit still counts. An unmarked exit fails even when an earlier arm was marked.
+# Census of executable `exit 2` lines: incident 12, legal-generate 5, linear-fetch 5,
+# trigger-cron 2.
 # ---------------------------------------------------------------------------
 t22_missing=""
 t22_on_stderr=""
 t22_uncovered=""
-t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,draft-empty,invalid-calendar-date,mttr-transposed,mttd-transposed
+t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,temp-inside-worktree,sentinel-unreadable,sentinel-exit-2,draft-alloc-failed,draft-empty,invalid-calendar-date,mttr-transposed,mttd-transposed
 ${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,draft-empty
 ${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective
 ${TRIGGER_SKILL}:SOLEUR_TRIGGER_CRON_HALT:plugin-root-unverified,producer-missing"
@@ -1093,22 +1098,33 @@ while IFS= read -r t22_spec; do
     fi
   done < <(printf '%s\n' "${t22_reasons}" | tr ',' '\n')
 
-  # GROWTH FLOOR (W3): a new fail-closed halt must arrive with a marker. Count `exit 2`
-  # dispatches and distinct markers in the executable region and require agreement.
-  t22_exits=$(printf '%s\n' "${t22_exec}" | grep -c 'exit 2' || true)
-  t22_marks=$(printf '%s\n' "${t22_exec}" | grep -oE "${t22_prefix} reason=[a-z-]+" | sort -u | grep -c . || true)
-  if [[ "${t22_exits}" -gt "${t22_marks}" ]]; then
-    t22_uncovered="${t22_uncovered} ${t22_file##*/skills/}(${t22_exits} halts vs ${t22_marks} markers)"
+  # GROWTH FLOOR (W3): a new fail-closed halt must arrive with a marker in its own arm.
+  # The arm is every executable line after the previous `exit 2` through this one. A guidance
+  # echo between the marker and `exit 2` stays inside the arm. Resetting at the previous exit
+  # keeps an earlier arm's marker from covering this one.
+  t22_bare=$(printf '%s\n' "${t22_exec}" | awk -v prefix="${t22_prefix}" '
+    BEGIN { arm = ""; bare = 0 }
+    {
+      arm = arm $0 "\n"
+      if (index($0, "exit 2") > 0) {
+        if (index(arm, prefix " reason=") == 0) bare++
+        arm = ""
+      }
+    }
+    END { print bare + 0 }
+  ')
+  if [[ "${t22_bare}" -gt 0 ]]; then
+    t22_uncovered="${t22_uncovered} ${t22_file##*/skills/}(${t22_bare} unmarked exit 2)"
   fi
 done < <(printf '%s\n' "${t22_specs}")
 
 if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" && -z "${t22_uncovered}" ]]; then
-  echo "PASS: Test 22: all 18 fail-closed halts across the 4 gates (incident 7, legal-generate 4, linear-fetch 5, trigger-cron 2) emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
+  echo "PASS: Test 22: all 24 fail-closed halts across the 4 gates (incident 12, legal-generate 5, linear-fetch 5, trigger-cron 2) emit a SOLEUR_*_HALT reason= marker on STDOUT from an executable line in the same arm — a repeated reason covers its own exit, and an exit with no marker in its arm fails"
   PASS=$((PASS + 1))
 else
   [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* marker EMITTED from an executable line at:${t22_missing} — a marker that appears only in prose or a comment is documentation, and a halt nobody can see in telemetry is indistinguishable from a run that never happened"
   [[ -n "${t22_on_stderr}" ]] && echo "FAIL: Test 22: SOLEUR_* marker redirected to stderr at:${t22_on_stderr} — the human guidance belongs on stderr, but the MARKER is the machine-readable half and must go to stdout (check the brace group too: \`exit 2; } >&2\` redirects the whole arm)"
-  [[ -n "${t22_uncovered}" ]] && echo "FAIL: Test 22: a gate has more fail-closed halts than distinct markers at:${t22_uncovered} — a new halt was added without one, and the reason table above cannot notice that on its own"
+  [[ -n "${t22_uncovered}" ]] && echo "FAIL: Test 22: an executable exit 2 has no SOLEUR_*_HALT reason= in its arm since the previous exit 2 at:${t22_uncovered} — a new halt was added without a marker, and the reason table above cannot notice that on its own"
   FAIL=$((FAIL + 1))
 fi
 
