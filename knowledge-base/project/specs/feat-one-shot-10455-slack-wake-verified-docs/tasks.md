@@ -1,5 +1,7 @@
 # Tasks: record the verified Slack wake path for Better Stack Logs alerts (Ref #10455)
 
+> Superseded at review: items 1.3, 3.1 and 4.1 describe the first draft (unscoped flag claim, original ADR heading, "done / verified" status). The landed wording is narrower; see `decision-challenges.md` row I and `session-state.md`, "Review Phase".
+
 Plan: knowledge-base/project/plans/2026-11-05-docs-record-slack-wake-verified-for-logs-alerts-plan.md
 
 ## Phase 1: canonical record

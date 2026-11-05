@@ -37,7 +37,7 @@ Class non-code, tier none, design-risk no; seats: git-history-analyzer, pattern-
 | 9 | canonical paragraph first clause restates the 2026-10-19 result | duplicate prose | simplicity (P3) | fixed (62bf9e9dfd) |
 | 10 | Sentry masked-dir-precreate-failed clause still reads "until verified" | Sentry rule with no Slack action | history (P3), pattern (P3) | left as written (brief; decision-challenges rows F, H) |
 | 11 | stale message text in sandbox-alerts.test.sh | test message cites a retired runbook phrase | pattern (P3) | left (an apps/web-platform edit triggers the infra workflow; rows A, B, I) |
-| 12 | "the email only prompts the check above" loosely worded | optional wording | code-quality (P3) | not applied (still true) |
+| 12 | "the email only prompts the check above" loosely worded | optional wording | code-quality (P3) | applied in fix round 1 ("the alert only prompts") |
 
 ### Fix round 1 (range bdfcc18e06..62bf9e9dfd; seats: history, pattern, security, code-quality, simplicity; report-only)
 
@@ -57,4 +57,8 @@ No P1, no P2; 5 seats closed ledger rows 1-9. Findings and dispositions (all fix
 | Sentry clause; stale test message; ADR-218 old bullet | history, pattern | left as ruled (rows A, B, F, H) |
 
 Remaining: one verification pass over both fix commits, then the lead's affected-gate run.
+
+### Verification pass (one fresh seat over 62bf9e9dfd and c43331ddf5)
+
+No P1, no P2; every ledger row closed. Two P3 findings in planning files (row 12 contradicted the fix table; the plan and tasks.md kept pre-fix wording without a superseded note), both fixed in the commit after c43331ddf5. Lead's affected-gate run: NOT obtained. The only runner capacity was held by a sibling worktree's full-gate run (about 2.6 hours old), and this branch's preview queued behind it with no output for over 6 minutes; the queued run was stopped (own pid only). Substituted, all green on the pushed tree: the three suites that read the touched runbooks (faithful-canary-sandbox-alert 90/0, bwrap-probe-rollback-alert 84/0, sandbox-canary-soak 50/50), lint-infra-no-human-steps, markdownlint on the four content files, the plan's acceptance commands 1-5 and 7, and the technical-ruling gate. `soleur:ship` Phase 4 runs the affected gate.
 

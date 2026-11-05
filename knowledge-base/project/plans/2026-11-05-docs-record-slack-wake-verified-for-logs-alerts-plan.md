@@ -184,7 +184,7 @@ match multi-line spans exactly or replace by a short scripted substitution; a si
 
 ### Phase 1: the canonical record (`canary-probe-set.md`)
 
-> Superseded at review: the quoted paragraph below is the first draft. The landed wording is narrower (flag claim scoped to the two runbook alerts, no unrecorded "Current team" label); see `decision-challenges.md` row I and `session-state.md`, "Review Phase".
+> Superseded at review: the first-draft wording in Overview, Research Insights and Phases 1-4 below (the unscoped flag claim, the "Current team" label, the "done / verified" status, the original ADR heading and the "(same record)" pointer) is narrower in the landed text; see `decision-challenges.md` row I and `session-state.md`, "Review Phase".
 
 1. In the paragraph that ends "...the email only prompts the check above. The wake path for both alerts is
    email-only on the Better Stack free tier until the ADR-260 Slack integration is verified.", replace the last
