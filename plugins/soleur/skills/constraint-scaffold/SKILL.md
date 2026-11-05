@@ -96,7 +96,8 @@ Outcomes and the next step:
 |---|---|---|
 | 0 | `already current`, or `refreshed` | after `refreshed`: review with `git diff` and commit |
 | 67 | workflow untracked, or tree dirty | commit the workflow / the other changes, re-run |
-| 69 | run lock held, no sha256 tool, or an I/O failure | wait and re-run (a lock clears itself within a minute of its owner dying) |
+| 69 | run lock held | wait and re-run (a lock whose owner died clears on the next run; a lock with no owner pid yet is honoured for a minute) |
+| 69 | no sha256 tool, a repository under `/proc`, `/sys` or `/dev`, or an I/O failure (mktemp, render, chmod, mv) | fix the tool or location; a re-run alone does not help |
 | 70 | no `.dependency-cruiser.cjs`, or no stage-a workflow | restore the file from git; installs that predate the two-stage split have no Stage A file |
 | 75 | refused, file left byte-unchanged | see below |
 | 143 | interrupted | review `git diff`; the file is replaced only by a final atomic rename |
@@ -105,8 +106,9 @@ Exit **75** means: the installed copy is edited or from a version the ledger doe
 shows only the template-side differences, never your file: read your own file and merge by hand; after
 a hand merge the flag keeps refusing, because the file is no longer a known emission), is newer than
 this plugin's template (update the plugin; there is no downgrade), is a symlink or behind one (replace
-it with a regular file by hand), has no `package-lock.json` beside it (add and commit one, or merge by
-hand), or changed while the command ran (re-run). There is no bite-proof: the swap changes none of
+it with a regular file by hand), has no tracked `package-lock.json` beside it (commit one, or merge by
+hand; checked only when a write would happen, so an already-current file still exits 0), or changed
+while the command ran (re-run). There is no bite-proof: the swap changes none of
 config, runner or baseline. If the run is SIGKILLed, delete the leftover untracked
 `.fix-constraints-stage-a.*` file next to the workflow (never `git add -A`):
 
@@ -212,7 +214,7 @@ the fixture tree as it was; and the `TMPDIR`-inside-repo refusal.
 
 `test/refresh-stage-a.test.sh` (scripts shard) pins `--refresh-stage-a`: refresh of a ledger-listed
 emission (mode 0644), the already-current no-op, refusal of an edited or newline-stripped copy with no
-echo of the user's file, the guard order (70 before 67 before 69; symlink before tree), the no-downgrade
+echo of the user's file, the guard order (70 before 67 before 69; symlink before tree; lockfile only when a write would happen), the no-downgrade
 rule, fail-closed on a missing, empty or comment-only ledger, the ledger itself (newest row last, unique,
 64-hex), the empty-digest arm, symlinked file / `.github` / `apps`, the `package-lock.json` precondition,
 the run-lock rows (owner-less grace, dead owner, EPERM), that no other emitted file is written, that

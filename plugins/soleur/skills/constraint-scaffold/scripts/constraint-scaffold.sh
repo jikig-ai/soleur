@@ -41,19 +41,19 @@
 #   69  git/base-ref/worktree/temp-dir error, TMPDIR resolves inside the repository, or another
 #       scaffold run holds the run lock (<git-common-dir>/constraint-scaffold.lock, owner pid inside;
 #       a live owner, or a lock younger than a minute that has no owner pid yet, is held). In
-#       --refresh-stage-a also: no sha256 tool, a failed mktemp/render/chmod/mv, or a digest that
-#       is not 64 hex.
+#       --refresh-stage-a also: no sha256 tool, a repository under /proc, /sys or /dev, a failed
+#       mktemp/render/chmod/mv, or a digest that is not 64 hex.
 #   70  --refresh-baseline / --refresh-stage-a before generation (no .dependency-cruiser.cjs yet, or
 #       no fix-constraints-stage-a.yml to refresh — run default mode first)
 #   71  bite-proof: gate did not pass on the clean HEAD tree before the probe (config/toolchain)
 #   72  bite-proof: gate did NOT reject the injected client->server-secret imports on their edges
 #   73  bite-proof: gate did not return to green after the probes were removed
 #   74  bite-proof: real client->server-secret violation(s) on HEAD newer than the baseline
-#   75  --refresh-stage-a refused, file left byte-unchanged (merge by hand or update the plugin; a
-#       re-run helps only after "changed during the run"): the installed workflow is not a known
+#   75  --refresh-stage-a refused, file left byte-unchanged (merge by hand, update the plugin, or fix
+#       the named precondition and re-run): the installed workflow is not a known
 #       pristine emission (edited, or a version the ledger does not know), is NEWER than this
 #       plugin's template (update the plugin; never downgrade), is a symlink or sits behind one,
-#       the target has no package-lock.json (the current template installs with `npm ci`), this
+#       the target has no tracked package-lock.json (the current template installs with `npm ci`), this
 #       plugin's ledger lacks its own template's emission, or the file changed during the run.
 #
 # (--refresh-stage-a has its own, smaller window: it removes only its own temp file
@@ -619,12 +619,7 @@ refresh_stage_a() {
     die "the physical directory of fix-constraints-stage-a.yml (${dest_dir:-unresolvable}) is not $TARGET_REL/.github/workflows; refusing to write through a redirected directory (left unchanged)" 75
   fi
   dest="$dest_dir/${dest##*/}"
-  # The current template installs with `npm ci` in the target; a repo whose gate predates that
-  # (the earliest emissions installed with bun) may have no package-lock.json, and the refreshed
-  # job would then fail at its install step on the first PR that needs recovery.
-  if [[ ! -f "$TARGET/package-lock.json" ]]; then
-    die "$TARGET_REL/package-lock.json is missing and the current stage-a template installs with \`npm ci\`; add and commit a lockfile, or merge the template into your workflow by hand (left unchanged)" 75
-  fi
+
   # 3. Reviewable: tracked and clean. The hash gate below, not this, is the clobber control.
   if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "${dest#"$REPO_ROOT"/}" >/dev/null 2>&1; then
     die "fix-constraints-stage-a.yml is not tracked by git — commit the workflow first so the refresh is reviewable with git diff" 67
@@ -668,6 +663,15 @@ refresh_stage_a() {
   fi
   if [[ "$have_rank" -gt "$want_rank" ]]; then
     die "the installed fix-constraints-stage-a.yml is newer than this plugin's template (ledger row $have_rank of $want_rank); update the plugin, do not downgrade. Left unchanged" 75
+  fi
+  # The current template installs with `npm ci` in the target; a repo whose gate predates that (the
+  # earliest emissions installed with bun) may have no package-lock.json, and the refreshed job
+  # would then fail at its install step on the first PR that needs recovery. Checked only when a
+  # write is about to happen (an already-current file exited above), and the lockfile must be
+  # tracked: an untracked or gitignored one is absent on a clean CI clone.
+  if [[ ! -f "$TARGET/package-lock.json" ]] \
+     || ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$TARGET_REL/package-lock.json" >/dev/null 2>&1; then
+    die "$TARGET_REL/package-lock.json is missing or not tracked by git and the current stage-a template installs with \`npm ci\`; commit a lockfile there, or merge the template into your workflow by hand (left unchanged)" 75
   fi
   # 8. Pre-write recheck (narrows the window; the residual is a microsecond-wide race with an editor.
   #    The committed copy stays recoverable with `git checkout -- <file>`; an edit saved inside that

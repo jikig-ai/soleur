@@ -1110,7 +1110,7 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # all three counts: the floor is `-lt` over `$cases`, an independent per-row counter incremented at the
 # CALL SITE (in the chk/rcis/state row helpers, never inside pass()/fail()) with a `passes + fails ==
 # cases` conservation check ordered before it; both are emitted by `printf '[FATAL] …'` + `exit 1` and
-# never routed through the verdict helpers they backstop (ADR-193); and the bound (`MIN_ROWS=84`) is a
+# never routed through the verdict helpers they backstop (ADR-193); and the bound (`MIN_ROWS=98`) is a
 # literal on the line directly above its `if`, so the mutant is CONSTRUCTIBLE. An instrument self-test
 # drives both helpers once and exits 1 before any real row if either counter fails to move.
 # THE SINGLE CANONICAL PROMOTED_FILES ASSIGNMENT — every promotion edits THIS line; the
