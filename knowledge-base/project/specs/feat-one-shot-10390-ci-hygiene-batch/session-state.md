@@ -48,6 +48,15 @@
 - Fix-round seats pending: ae452868 a976c5a5 81338752 f342350e 64daf179 5336bde6 297472e3 (perf 25db85ef done verified=4 new=0).
 - After: seat synthesis -> verifier pass -> trailers+evidence -> D/E/F review round -> qa -> compound -> ship. Operator step pending: #10136 zot accepted-risk owner confirmation.
 
+## Takeover + D/E/F Implementation Complete (2026-11-05, second session arm)
+- Prior session orphaned ~19:07 UTC (no watch on PR #12064, zero file writes 90min+, session gone). Devin session took over the pipeline on the same branch.
+- Committed prior session's uncommitted fix-round-3 lint work (774412182c) + partial D edits integrated into D commit.
+- D/E/F implemented by 2 parallel write-only agents, lead committed per-workstream: d90b37f8fb (D), 88b7ab1260 (E), 8d74cda097 (F).
+- Suite greens reported: inngest 621/621, cutover-workflow 1158/1158, git-data-access 822/822, dark-gate 185/185, host-state 30/30, heartbeat-feeder 176/176, luks-field-8525 9/9, vitest batch 382/382, spawn-lifecycle 42/42, lint-encryption-posture 139/139 + repo-sweep PASS, legal-doc-shas + consistency 43/43, lint-legal-registers 11/11, dedupe-shape 62/62.
+- Comments posted: #8525 directive (earliest=2026-11-12) + follow-through label; #7978 corrective w/ live ULID-absence evidence (ulid_rows=0 over 30d); #10136 zot accepted-risk record (owner confirmation pending — PR must NOT auto-close #10136).
+- PA-13 (c) limb flagged by E+F agent (rests on retracted premise) — follow-up filed separately.
+- Next: full-branch review round → qa → compound → ship → postmerge. Operator step pending: #10136 zot accepted-risk owner confirmation.
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
