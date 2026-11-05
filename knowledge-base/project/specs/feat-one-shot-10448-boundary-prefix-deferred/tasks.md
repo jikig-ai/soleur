@@ -5,20 +5,20 @@ Branch: `feat-one-shot-10448-boundary-prefix-deferred`. Draft PR: #12199. Issue:
 
 ## Phase 0 — Setup and ruling
 
-- [ ] 0.1 Spawn `soleur:engineering:cto` (prompt: "Rule on this technical question (BINDING). Do NOT use AskUserQuestion.") with the evidence packet from plan Phase 0 — PR5d deferral ruling row 10 + ACs, `receipts/glob-rate/glob-rate.tsv` row, `glob_decide` code facts (`src=measured` gate, `GLOB_ALWAYS_MAX_MS=10000`, 1222 ms = generated `default-weight` placeholder not a measurement), the three arms (a / a' / b) and their per-arm disqualifying facts
-- [ ] 0.2 Record the ruling verbatim in `knowledge-base/project/specs/feat-one-shot-10448-boundary-prefix-deferred/decision-challenges.md`, replacing the `pending - assumed` row (format: `Ruled by CTO agent, <date>: <decision> - <rationale>`)
+- [x] 0.1 Spawn `soleur:engineering:cto` (prompt: "Rule on this technical question (BINDING). Do NOT use AskUserQuestion.") with the evidence packet from plan Phase 0 — PR5d deferral ruling row 10 + ACs, `receipts/glob-rate/glob-rate.tsv` row, `glob_decide` code facts (`src=measured` gate, `GLOB_ALWAYS_MAX_MS=10000`, 1222 ms = generated `default-weight` placeholder not a measurement), the three arms (a / a' / b) and their per-arm disqualifying facts — **ruled 2026-11-05: arm (a') measured-verdict; second row: rename-carry condition dissolved under strict zero**
+- [x] 0.2 Record the ruling verbatim in `knowledge-base/project/specs/feat-one-shot-10448-boundary-prefix-deferred/decision-challenges.md`, replacing the `pending - assumed` row (format: `Ruled by CTO agent, <date>: <decision> - <rationale>`)
 
-## Phase 1 — Resolution (exactly one arm executes)
+## Phase 1 — Resolution (arm a' ruled; arm B executes ONLY if the measured row lands >10 s and `glob_decide` returns `baselined`)
 
-### Arm B — accepted-gap (assumed default)
+### Arm B — accepted-gap (terminal state of arm a' only if measured >10 s)
 
 - [ ] 1a.1 Edit `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` §7: add the residual paragraph naming `boundary-prefix.test.sh`'s four dir globs (~164 files under `.claude/hooks/` and `plugins/soleur/scripts/`) and the argv-bearer-sweep whole-tree census as the audit's documented lower bound, with measured rates/durations and a pointer at `DECLARED LIMITS`
 - [ ] 1a.2 Verify `python3 -I scripts/ci-pr-affected-replay.py ratchet` reports `exit=0 reason=pass live=0` (no edge/accept change under this arm)
 - [ ] 1a.3 Post the resolution comment on #10448 naming the ruling and closing the deferred item (arm b)
 
-### Arm A/A' — install (only if ruled)
+### Arm A' — install (RULED 2026-11-05; the 25% constant is NOT amended)
 
-- [ ] 1b.1 Obtain a `measured` duration row: time the suite, regenerate `scripts/suite-durations.tsv` via `scripts/regenerate-shard-manifest.py` (if arm a amends the bar instead, land the `glob_decide` constant change + runbook amendment text with the ruling quoted)
+- [ ] 1b.1 Obtain a `measured` duration row: time the suite, regenerate `scripts/suite-durations.tsv` via `scripts/regenerate-shard-manifest.py` (per the ruling there is NO arm-a constant amendment — if the measured row exceeds `GLOB_ALWAYS_MAX_MS=10000` the verdict is `baselined` and the Arm-B documentation tasks execute instead)
 - [ ] 1b.2 Re-measure at work time: `git fetch origin main && git rev-parse origin/main`; save `bash scripts/test-all.sh --print-selection --paths=README.md > rows.txt`; run `python3 -I scripts/ci-pr-affected-replay.py glob-rate --candidates <4-dir-glob TSV> --list rows.txt --pairs <7-pair TSV> --commits 200 --base <sha> --spot-check 3 --out knowledge-base/project/specs/feat-one-shot-10448-boundary-prefix-deferred/receipts/`
 - [ ] 1b.3 Install per the measured verdict and the ruling (`glob:`/`dir/` edges in `AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS` :4165 or an `ALWAYS_ON_SUITES` entry :132 — both in `scripts/lib/test-affected-paths.sh`; precedent: #11648 demotion when a re-priced median exceeded LOCAL_FAST_CAP_MS)
 - [ ] 1b.4 Reconcile the 7 named pairs' dispositions: re-run the audit for `stale-accept` on the 13 accept rows; keep `^glob:.claude/hooks/*guardrails*.sh` and the exact-file edges (deferred-item AC 6)
@@ -32,7 +32,7 @@ Branch: `feat-one-shot-10448-boundary-prefix-deferred`. Draft PR: #12199. Issue:
 
 ## Phase 3 — #10859 status comment (verify only, no flip)
 
-- [ ] 3.1 Post a dated comment on #10859: (1) window open/paused per the Phase-2 probe; (2) rename-carry design unmet and stale under strict zero (precondition empty-set; flag for re-rule or dissolution); (3) jobs-API canary met per the 2026-10-23 observation-log entry (PR #10899, run 39937846319 — noting the run-level conclusion also carried draft-light and e2e reds, so `continue-on-error`'s run-level effect was not isolated)
+- [ ] 3.1 Post a dated comment on #10859: (1) window open/paused per the Phase-2 probe; (2) rename-carry design dissolved as vacuous under strict zero (CTO ruling 2026-11-05 — conditional on strict zero holding, revival blocked by `baseline-reintroduced` + condition (c)); (3) jobs-API canary met per the 2026-10-23 observation-log entry (PR #10899, run 39937846319 — noting the run-level conclusion also carried draft-light and e2e reds, so `continue-on-error`'s run-level effect was not isolated)
 - [ ] 3.2 Record the item-9 remainder for the owner: oracle control (a), accept-row growth design (b), cumulative baseline check at merge time (c), re-ruled ceilings (e — DONE), budget-owner go-ahead (f)
 
 ## Phase 4 — Verification and close-out

@@ -229,10 +229,21 @@ discoverability_test:
 
 ## Implementation Phases
 
-### Phase 0 — CTO ruling on the resolution arm (blocking first step)
+### Phase 0 — CTO ruling on the resolution arm (DONE 2026-11-05)
 
-Spawn `soleur:engineering:cto` ("Rule on this technical question (BINDING). Do
-NOT use AskUserQuestion.") with the evidence packet:
+**Ruled by CTO agent, 2026-11-05: arm (a')** — obtain a `measured` duration
+row at work time, re-run `glob-rate` on a recorded `origin/main` SHA, install
+the verdict `glob_decide` returns (expected `always_on`: `ALWAYS_ON_SUITES`
+entry at `scripts/lib/test-affected-paths.sh:132`, edge block at :4165 stays
+per AC 6; the 25% constant is NOT amended; a measured row >10 s returns
+`baselined` → the same PR documents the accepted gap in runbook §7). The CTO's
+own Class R check measured 3 runs at 1295/2477/1966 ms — under the 10 s cap
+with >4× headroom, so the expected verdict is `always_on`. Phase 1b executes
+arm (a'); Phase 1a is dormant unless the measured row lands over the cap.
+Recorded verbatim in `decision-challenges.md`.
+
+Original brief for the consult, kept for provenance — the ruling used this
+evidence packet:
 
 - PR5d deferral ruling + ACs (`specs/archive/20261105-010239-...-pr5d-sweeps/decision-challenges.md` row 10);
 - measured data (`receipts/glob-rate/glob-rate.tsv`): `duration_ms=1222 src=floor`, `rate_conservative=97/200`, `rate_excluded=48/151`, verdict `baselined`/`duration-floor`;
@@ -270,8 +281,8 @@ against, not only the case for):
   audit never sees (no `new-pair` red) and a change to such a file does not
   select the suite (no run); the residual persists into activation.
 
-Record the ruling verbatim in `specs/feat-one-shot-10448-boundary-prefix-deferred/decision-challenges.md`
-(replacing the `pending - assumed` row) and proceed on the ruled arm.
+The ruling is recorded verbatim in `specs/feat-one-shot-10448-boundary-prefix-deferred/decision-challenges.md`
+(replacing the `pending - assumed` row); work proceeds on arm (a').
 
 ### Phase 1a — Accepted-gap arm (only if ruled)
 
@@ -330,10 +341,11 @@ evidence trail (posting there is optional, one line).
 Verify and post a dated status comment on #10859:
 
 - (1) window: OPEN, restarted 2026-11-05T01:27:24Z — from the Phase-2 probe.
-- (2) ruled rename-carry design: **unmet and stale** — no ruled design exists
-  (repo grep, 2026-11-05); its ruled precondition ("a pair already in the base
-  baseline") is empty-set under strict zero since PR5z deleted the baseline;
-  flag for re-rule or dissolution (CTO call, recorded in decision-challenges).
+- (2) ruled rename-carry design: **dissolved** — Ruled by CTO agent 2026-11-05:
+  vacuously satisfied under strict zero (the base-baseline domain it governs is
+  the empty set since PR5z deleted the baseline; revival is blocked twice over
+  by `baseline-reintroduced` and condition (c), and requires no separate
+  re-rule trigger).
 - (3) failing-`continue-on-error` jobs-API canary: **met** — 2026-10-23 canary
   (PR #10899, run 39937846319, job concluded `failure`, annotations
   `exit=1 reason=new-pair`), recorded in the runbook observation log.
@@ -395,7 +407,7 @@ External writes (not files): comments on #10448 (resolution mirror), #10865
 - [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet` on the branch reports `exit=0 reason=pass live=0` (strict zero preserved; no baseline line, no stale accept)
 - [ ] If install arm: the measured `glob-rate` receipt is committed under `knowledge-base/project/specs/feat-one-shot-10448-boundary-prefix-deferred/receipts/` and the 7 named pairs' accept rows remain valid or are reconciled in the same commit
 - [ ] A comment on #10865 posts the work-time probe output (status line + `NOT YET` lines verbatim); no flip change accompanies it
-- [ ] A dated status comment on #10859 records: window open/paused; rename-carry design unmet and stale under strict zero (flagged for re-rule or dissolution); canary met per the 2026-10-23 observation-log entry
+- [ ] A dated status comment on #10859 records: window open/paused; rename-carry condition dissolved as vacuous under strict zero (CTO ruling 2026-11-05, conditional on strict zero holding); canary met per the 2026-10-23 observation-log entry
 - [ ] `continue-on-error: true` on `affected-index-ratchet`, `scripts/required-checks.txt`, `CI_PR_AFFECTED`, and the activation lock are all untouched
 - [ ] The 7 named pairs' individual dispositions and the `^glob:.claude/hooks/*guardrails*.sh` edge remain installed (deferred-item AC 6)
 
