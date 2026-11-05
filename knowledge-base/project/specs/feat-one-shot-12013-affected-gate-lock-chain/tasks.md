@@ -17,8 +17,10 @@ long run, do not raise `budget_seconds`.
 ## Phase 1 - F4: budget kill reports a visible red (first)
 
 - 1.1 Tests first in `plugins/soleur/scripts/affected-tests.test.sh` (Guard 3 arms 1-10, harness rows H1/H2); run them RED.
-- 1.2 `scripts/test-all.sh`: sidecar append (`label<TAB>rc<TAB>epoch`, rc 1..127, label scrubbed, skip when `_pj_sig==1`) in
-  `_pj_fmt_done` and in the serial tail of `run_suite` guarded by `_pj_mode==0`; `export -n SOLEUR_PJ_PROVISIONAL_FILE`.
+- 1.2 `scripts/test-all.sh`: sidecar append (`label<TAB>rc<TAB>epoch`, epoch from `${EPOCHSECONDS:-$(date +%s)}`, rc 1..127, label
+  scrubbed, skip when `_pj_sig==1`) in `_pj_fmt_done` and in the serial tail of `run_suite` guarded by `_pj_mode==0`;
+  `export -n SOLEUR_PJ_PROVISIONAL_FILE` next to `SOLEUR_TEST_JOBS`, plus a count arm mirroring the A8 demotion pin. The
+  kill-induced-exit arm must run in both pool and serial modes (the serial arm has no `_pj_sig` trap; the epoch filter is its only protection).
 - 1.3 `plugins/soleur/scripts/affected-tests.sh`: `affected_mktemp provisional`, env hand-over in BOTH branches of the runner
   call, the `124|137` mapping (record rc `10#`, 1..127, epoch before `AFFECTED_DEADLINE`), header exit contract.
 - 1.4 `plugins/soleur/scripts/lib/affected-tests/common.sh` reason catalog; one row in `affected-gate-contract.md`.

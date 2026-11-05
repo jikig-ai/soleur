@@ -12,6 +12,20 @@ closes: none (Ref #12013 only)
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** Phase 1 (record stamp, demotion pin), Research Insights (verification ledger), tasks.md propagation
+**Agents and checks used:** CTO ruling (5 forks), three-agent plan review (DHH, Kieran, code-simplicity), deepen-plan halts 4.6 (user-brand), 4.7 (observability), 4.8 (PAT grep), 4.11 (`scripts/lint-guard-contract.py`, 3 entries), 4.12 (scope check), 4.13 (not triggered: no new autonomous task), 4.55 (not triggered: no serving-surface change), live verification of every cited issue/PR number, label and rule id. Per-section external research was skipped on purpose: the subject is this repo's own runner, the institutional learnings were already mined at plan time, and no framework or SDK is involved.
+
+### Key improvements
+1. Sidecar record carries an epoch from `${EPOCHSECONDS:-$(date +%s)}` (the gate's own clock is `date +%s`, `affected_now`), so the comparison with `AFFECTED_DEADLINE` is in one unit; the serial path cannot assume bash 5 (`EPOCHSECONDS` is bash 5.0+ and the serial arm has no bash floor).
+2. The new `export -n SOLEUR_PJ_PROVISIONAL_FILE` demotion is pinned the way the existing one is: the A8 arm of `scripts/test-all-parallel-scheduler.test.sh` counts `^export -n SOLEUR_TEST_JOBS$` in the runner; add the same count for the new variable so a deleted demotion reds.
+3. Confirmed from source: `CI` set forces serial (`scripts/test-all.sh` ~2172), and `timeout -k 10` is the budget kill, so a TERM-converted exit after the deadline is real and the epoch filter is load-bearing.
+
+### New considerations
+- The serial arm has no `_pj_sig` trap: the epoch filter is the only protection there, so the "kill-induced exit" arm of Guard 3 must run in BOTH modes.
+
 ## Overview
 
 Spec lacks valid lane: - defaulted to cross-domain (TR2 fail-closed).
@@ -125,6 +139,21 @@ removed); the clock-based fill bound replaced by a conflict-call count; the knob
 into deterministic gates and recorded observations; CI is not evidence for the backfill. Not applied: merging #12152 into
 #12151 (distinct re-evaluation triggers and a blocked-by chain; kept as two); dropping the knob (CTO required it).
 
+### Deepen-plan verification ledger (2026-11-05)
+
+| Check | Command or source | Result |
+|---|---|---|
+| Cited issues and PRs | `gh issue view` / `gh pr view` for 12013, 12025, 12103, 12106, 12110, 12128, 12149, 12151, 12152, 7942 | 12013, 12106, 12110, 12128 (PR), 12149 (PR), 12151, 12152, 7942 OPEN; 12025 CLOSED; 12103 MERGED |
+| Labels used on the follow-ups | `gh label list --limit 200` for priority/p3-low, type/chore, domain/engineering, deferred-automation | all four exist (the issues were created with them) |
+| Rule ids cited | grep `[id: ...]` in `AGENTS.md` | the only rule id in the plan body is `cq-write-failing-tests-before` (present) |
+| Guard Contract | `python3 -I scripts/lint-guard-contract.py <plan>` | 3 guard entries, OK |
+| Infra-step lint | `python3 -I scripts/lint-infra-no-human-steps.py <plan>` | OK |
+| PAT-shaped variables (4.8) | the skill's regex sweep | no match |
+| CI forces the serial pool | `scripts/test-all.sh` `_pj_resolve_run_mode` first fallback arm: `if [[ -n "${CI:-}" ]]; then _pj_say_serial "ci (shards already isolate the battery)"` | confirmed |
+| Budget kill is a group signal | `plugins/soleur/scripts/lib/affected-tests/common.sh` `affected_timeout`: `timeout -k 10 "$secs" "$@"` (GNU timeout runs the command in its own process group and signals the group) | confirmed; a worker converting TERM to exit 1 is reaped after the deadline |
+| Gate clock | `affected_now() { date +%s; }` | epoch seconds; sidecar records use the same unit |
+| Demotion pin pattern | `scripts/test-all-parallel-scheduler.test.sh` A8 counts `^export -n SOLEUR_TEST_JOBS$` | mirror it for the new variable |
+
 ### Selection probe (edge evidence for the follow-up)
 
 Command: `bash scripts/test-all.sh --print-selection --paths=plugins/soleur/skills/plan/SKILL.md` (cold derive, cache
@@ -184,13 +213,16 @@ visible red as a deferral.
   `SOLEUR_TEST_JOBS=1`). No capability probe: an environment variable a runner does not know is inert, so a customer runner is
   untouched without one.
 - `scripts/test-all.sh`: when `SOLEUR_PJ_PROVISIONAL_FILE` names a writable regular file, append one line
-  `<label><TAB><rc><TAB><epoch-seconds>` with a single `printf >> "$file"` (one short O_APPEND write is atomic), for rc in
+  `<label><TAB><rc><TAB><epoch-seconds>` (epoch from `${EPOCHSECONDS:-$(date +%s)}`, the same unit as the gate's `affected_now`) with a single `printf >> "$file"` (one short O_APPEND write is atomic), for rc in
   1..127 only, label scrubbed with `${label//[[:cntrl:]]/?}` (a tab or newline would corrupt the record). Exactly two append
   sites, one per run mode, so nothing is double-counted: `_pj_fmt_done` for the pool (the live reap line; the shared writer all
   three reap sites already call, including the torn-reap branch) and the serial tail of `run_suite` (the line after the
   `"$@"` / `tee` block, just before `_run_suite_verdict`, guarded by `_pj_mode == 0`). `_run_suite_verdict` itself is NOT a
   site: it is shared and the pool reaches it at drain, so appending there would double-count pool reds. Skip the append when
-  `_pj_sig == 1` (an interrupted run).
+  `_pj_sig == 1` (an interrupted run). Demote the variable from the environment of every suite the runner spawns with `export -n
+  SOLEUR_PJ_PROVISIONAL_FILE` beside the existing `export -n SOLEUR_TEST_JOBS` (~line 1466): a nested sandboxed `test-all.sh` must
+  never append its fixture-planted FAILs to the outer sidecar. Pin it the way A8 pins the existing demotion (a count of
+  `^export -n SOLEUR_PJ_PROVISIONAL_FILE$` in the runner), so a deleted demotion reds.
 - Kill-induced exits are not reds. `affected_timeout` (`common.sh` ~150-157) runs `timeout -k 10`, which signals the whole
   process group, and a worker that turns the TERM into exit 1 is reaped through `_pj_fmt_done` after the deadline. The gate
   therefore counts only records whose epoch is strictly before `AFFECTED_DEADLINE`; later records are ignored.
