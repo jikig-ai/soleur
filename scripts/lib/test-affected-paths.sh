@@ -2949,6 +2949,15 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_ARCHIVE_KB_TEST_ARCHIVE_KB_PARTIAL_RUN_TEST_SH_PA
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh — reads the workflow it
+# wires (WF="$ROOT/.github/workflows/codeql-to-issues.yml" at :25); a real read, not a
+# mention, so it is a declared edge not an accept row.
+AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS=(
+  ".github/workflows/codeql-to-issues.yml"
+  "plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/go-routing-table-parity.test.sh — three-way parity over the
 # go routing table; all three operands are "$ROOT/"-prefixed literals that
 # derivation cannot expand.
