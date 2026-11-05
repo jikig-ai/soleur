@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { startOriginTlsListener } from "./origin-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -157,6 +158,10 @@ app.prepare().then(() => {
   });
 
   const wss = setupWebSocket(server, dev);
+
+  // #10479 — the Cloudflare-to-origin TLS listener (strict SSL mode). Inert (null) without valid
+  // ORIGIN_TLS_* material; shares every handler with `server` above. See ./origin-tls.
+  const originTls = startOriginTlsListener({ httpServer: server });
 
   // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
   // proxy listener. A session that lands on a non-owning web host is relayed
@@ -396,6 +401,7 @@ app.prepare().then(() => {
     const forceExit = setTimeout(() => {
       log.warn("Shutdown timeout reached, forcing exit");
       server.closeAllConnections();
+      originTls?.closeAllConnections();
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
@@ -433,6 +439,7 @@ app.prepare().then(() => {
 
     server.close();
     server.closeIdleConnections();
+    originTls?.close();
 
     // #5274 3.D — stop accepting new proxied sessions from peer hosts. Inert
     // (null) in dev/single-host. In-flight proxied sessions drain via the wss

@@ -5583,6 +5583,7 @@ case "$COMPONENT" in
         -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
+        -p 0.0.0.0:443:3443 \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.

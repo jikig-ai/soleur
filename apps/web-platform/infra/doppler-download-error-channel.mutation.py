@@ -94,8 +94,8 @@ MUTATIONS = [
      'soleur-doppler-download "$TMPENV" && rc=0 || rc=$?',
      'if ! soleur-doppler-download "$TMPENV"; then rc=$?; fi'),
     ("docker stderr NOT captured", CI,
-     '      -p 0.0.0.0:3000:3000 \\\n      "$(cat /run/soleur-image-ref',
-     '      -p 0.0.0.0:3000:3000 \\\n      2>/run/soleur-stage-detail.d/docker_run \\\n      "$(cat /run/soleur-image-ref'),
+     '      -p 0.0.0.0:443:3443 \\\n      "$(cat /run/soleur-image-ref',
+     '      -p 0.0.0.0:443:3443 \\\n      2>/run/soleur-stage-detail.d/docker_run \\\n      "$(cat /run/soleur-image-ref'),
     # ── birth-path gate ──────────────────────────────────────────────────────────────────
     ("gate host-scoping", TRAIL,
      '($hn == null or $hn == "" or $hn == $eh)', '($hn == null or $hn != null)'),
