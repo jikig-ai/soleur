@@ -365,6 +365,8 @@ retention expires, and an indefinite lock would break web-1's cutover flow, whic
 **`doppler-config-inventory.txt` is deliberately not edited**, for the same reason the marker config is absent from it:
 adding a name mints a drift-read token and forces floor edits.
 
+> **Superseded 2026-11-04 (#11857):** `doppler-config-inventory.txt` is no longer left unedited. It now lists `prd_workspaces_luks_web`, `prd_workspaces_luks_marker` and `prd_git_data`, a drift read token is minted for each, and the declared floor is 16. `doppler_service_token.token_drift` depends_on the two workspaces configs; see the 2026-11-04 amendment under "Known limitations" in ADR-168.
+
 **Precondition for the live conversion (#9372).** `scripts/check-web-host-escrow-config.sh` in live mode must pass
 before the workflow runs: the provisioner formats even when escrow is missing, by design. It is not run by the PR that
 introduced it.
