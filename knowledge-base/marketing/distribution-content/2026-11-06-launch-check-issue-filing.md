@@ -5,7 +5,6 @@ publish_date: 2026-11-06
 channels: x
 status: scheduled
 pr_reference: "#11949"
-issue_reference: "#11910"
 ---
 
 ## X/Twitter Thread
