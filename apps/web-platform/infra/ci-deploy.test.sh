@@ -337,8 +337,12 @@ case "$verb" in
     # in tests, matching pre-#6178 blanket-mock behavior).
     # `show -p ActiveEnterTimestamp --value …` prints MOCK_SYSTEMCTL_ACTIVE_ENTER (default empty —
     # systemd's value for a unit that has not entered active since boot): inngest_quiesce_state's
-    # void rule reads it.
-    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
+    # void rule reads it. #11920: a try-restart that actually fired records its OWN fresh value in
+    # $_sdir/active_enter_ts (written by the try-restart arm below) — the post-restart read the
+    # vector verify makes; the env var stays the PRE-restart baseline.
+    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then
+      if [[ -e "$_sdir/active_enter_ts" ]]; then cat "$_sdir/active_enter_ts"; else printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
+    fi
     exit 0
     ;;
   stop)
@@ -351,6 +355,21 @@ case "$verb" in
     exit 0 ;;
   enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
   start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  try-restart)
+    # #11920: try-restart restarts ONLY an active unit — on an inactive one it is a SILENT
+    # exit-0 no-op (the shape the vector verify, not sudo rc, must catch). Honors the legacy
+    # blanket fail plus MOCK_SYSTEMCTL_TRY_RESTART_FAIL; MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE
+    # models an accepted restart whose ActiveEnterTimestamp nevertheless does not move. A
+    # restart that fires records a fresh timestamp in $_sdir/active_enter_ts (the `show` arm
+    # above reads it back; MOCK_SYSTEMCTL_ACTIVE_ENTER_AFTER overrides the value).
+    [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]] && exit 1
+    [[ "${MOCK_SYSTEMCTL_TRY_RESTART_FAIL:-}" == "1" ]] && exit 1
+    if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]] \
+       && ! { [[ "$_stateful" == "1" ]] && [[ -e "$_sdir/stopped" ]]; } \
+       && [[ "${MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE:-}" != "1" ]]; then
+      printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER_AFTER:-$(date)}" > "$_sdir/active_enter_ts"
+    fi
+    exit 0 ;;
 esac
 # restart + any other verb honor the legacy blanket fail toggle (existing tests).
 if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
@@ -6745,6 +6764,113 @@ for qs_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled
     "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
 done
 unset qs_case qs_want qs_reason
+
+# --- #11920: restart vector — the no-SSH egress-token-rotation lever ----------------------
+# The arm runs `sudo /usr/bin/systemctl try-restart vector.service` — the EXACT argv of the
+# already-live DROPIN_TRY_RESTART sudoers grant — then verifies is-active=active AND an
+# ActiveEnterTimestamp advanced past a baseline taken BEFORE the verb (try-restart on an
+# inactive unit is a silent exit-0 no-op: the VERIFY, not sudo rc, is the gate), and fans
+# out AFTER the local verify passes (quiesce ordering). The inngest quiesce/health checks
+# do NOT apply to vector.
+echo ""
+echo "--- Restart vector (#11920) ---"
+
+# The grant argv is read back out of the shipped sudoers file — the lockstep pin is against
+# the live grant, not a restated literal, so drifting EITHER side goes red. An empty read
+# fails the assert arm (never vacuous).
+VR_SUDOERS="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+VR_GRANT="$(grep -oE '/usr/bin/systemctl try-restart vector\.service' "$VR_SUDOERS" | head -1)"
+
+# Happy path + argv lockstep: active unit whose timestamp advances past the pre-verb baseline
+# → success. The sudo log must carry the grant's exact argv line and never the plain
+# `restart` argv (Guard 3 mutation 3 — argv drift is a sudo denial on a real host).
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SUDO_LOG="$ROW_DIR/sudo" MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")"'
+ok=0
+if [[ -n "$VR_GRANT" && "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_RC" -eq 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qxF "$VR_GRANT" "$ROW_DIR/sudo" \
+     && ! grep -qxF '/usr/bin/systemctl restart vector.service' "$ROW_DIR/sudo" \
+     && [[ "$(jq -r '.component // ""' "$ROW_DIR/state" 2>/dev/null)" == "vector" ]] \
+     && grep -qF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector succeeds on an active unit — exact try-restart argv in the sudo log, component=vector frame" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC grant='$VR_GRANT' sudo=$(cat "$ROW_DIR/sudo" 2>/dev/null | tr '\n' '|')"
+
+# try-restart itself denied/failed (rc≠0 — e.g. a host missing the DROPIN_TRY_RESTART grant)
+# → vector_restart_failed BEFORE the verify.
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_TRY_RESTART_FAIL=1 MOCK_SUDO_LOG="$ROW_DIR/sudo"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qxF "$VR_GRANT" "$ROW_DIR/sudo" 2>/dev/null \
+     && ! grep -qF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: sudo/try-restart rc≠0 → vector_restart_failed (verify never reached)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# Guard 3 mutation 5: a stub systemctl that exits 0 on try-restart while is-active reports
+# inactive (the try-restart no-op on an inactive unit — silent by design). sudo rc alone
+# would pass this; the VERIFY must catch it → vector_restart_unverified.
+run_inngest_row "restart vector _ _" 'export MOCK_SUDO_LOG="$ROW_DIR/sudo"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qF 'VECTOR_RESTART_VERIFY: is-active=inactive' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: exit-0-but-inactive (try-restart no-op) → vector_restart_unverified" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# The second verify half: unit IS active but ActiveEnterTimestamp did not advance past the
+# pre-verb baseline (accepted restart that did not actually re-enter active) → unverified.
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE=1 MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qF 'VECTOR_RESTART_VERIFY: ActiveEnterTimestamp did not advance' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: active but timestamp not advanced → vector_restart_unverified" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# Fan-out (Guard 3 mutation 2): with SOLEUR_DEPLOY_PEERS armed the SAME `restart vector _ _`
+# forwards to every peer AFTER the local restart+verify pass — quiesce ordering, proven by
+# the logger line order VERIFY:ok → FANOUT:accepted → SUCCESS.
+VRF_DIR="$(mktemp -d)"
+jq -n '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"fixture-fanout-secret",parameter:{source:"header",name:"X-Signature-256"}}}}]' \
+  > "$VRF_DIR/hooks.json"
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SUDO_LOG="$ROW_DIR/sudo" MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")" SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="'"$VRF_DIR"'/hooks.json"'
+ok=0
+_vln="$(grep -nF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
+_fln="$(grep -nF 'FANOUT: peer 10.9.9.9 accepted' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
+_sln="$(grep -nF 'SUCCESS: restart vector' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
+if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" \
+     && -n "$_vln" && -n "$_fln" && -n "$_sln" \
+     && "$_vln" -lt "$_fln" && "$_fln" -lt "$_sln" ]]; then ok=1; fi
+row_verdict "restart vector fans out to peers AFTER local restart+verify (VERIFY → FANOUT → SUCCESS ordering)" "$ok" \
+  "reason=$ROW_REASON verify@$_vln fanout@$_fln success@$_sln"
+unset _vln _fln _sln
+
+# A peer that does NOT accept the forward fails the arm loud — mirrors the quiesce/enable
+# arms' `*_peer_fanout_unaccepted` contract (the peer's own verdict is unreadable here).
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")" SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="'"$VRF_DIR"'/hooks.json" MOCK_CURL_DEPLOY_PEER_CODE=500'
+ok=0
+if [[ "$ROW_REASON" == "vector_peer_fanout_unaccepted" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qF 'FANOUT: peer 10.9.9.9 NOT accepted' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: a non-accepted peer fan-out → vector_peer_fanout_unaccepted" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+rm -rf "$VRF_DIR"; unset VRF_DIR VR_SUDOERS VR_GRANT
+
+# Component scoping: the allowlist stays CLOSED — an inert component still refuses
+# component_not_restartable (vector's addition did not widen it).
+assert_state_contains "restart of an inert component rejected (component_not_restartable)" \
+  "component_not_restartable" "1" \
+  "restart grafana _ _"
+
+# Quiesce-check scoping: the inngest-only refusal must NOT leak into the vector arm. Seed the
+# quiesced-inngest shape (inactive+disabled+valid marker): if the refusal ran here it would
+# exit inngest_quiesced_restart_refused BEFORE the verb — instead the vector arm still runs
+# try-restart (a no-op on the inactive stub) and lands vector_restart_unverified on verify.
+run_inngest_row "restart vector _ _" 'qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && ! grep -qF 'INNGEST_RESTART_REFUSED' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector skips the inngest quiesce refusal (quiesced inngest shape + marker → arm still runs)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
 
 # inngest_quiesce_state, driven DIRECTLY (the contract §2 tri-state): extracted from ci-deploy.sh by
 # its definition line and run against the systemctl mock. Covers the marker-validity and void rules

@@ -16,6 +16,9 @@
 # THE ORDER (forward-only; there is no old key to roll back to after phase 1):
 #   guard   no writes: the refusal ladder (link flag 1, soak #11215 closed, no related run in flight, one server soleur-inngest
 #           at 10.0.1.40, the pre-reboot host SERVING, run_attempt 1, typed confirm, quiet_window)
+#   approve environment key-rotate-approval, no secret values: rotate and converge only; the run waits here for the reviewer
+#           click (#11923) before the first production-mutating job. The reboot job's `admit` re-check is the precedent
+#           for re-anchoring read-only facts after an approval wait of any length.
 #   apply1  phase 1: -replace the dedicated random_id(s), update the dedicated Doppler secret(s). The soleur/prd key that
 #           unrelated deploys read is untouched until the scheduler is verified SERVING.
 #   reboot  the ONE Hetzner control-plane soft reboot (the only lever that reaches 10.0.1.40), then wait for a NEW boot_id,
@@ -143,9 +146,29 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: bash scripts/inngest-key-rotate.sh guard
 
-  apply1:
+  # The reviewer gate (#11923): a dedicated job on the key-rotate-approval environment (required_reviewers + a main
+  # branch policy). It carries NO secret values — rebinding apply1's `environment:` would force DOPPLER_TOKEN_INFRA_PRIVILEGED
+  # onto a second environment, a value the Terraform GitHub App cannot write (ADR-100/ADR-241). mode=plan writes
+  # nothing and never pauses; rotate and converge wait here for the reviewer click.
+  approve:
     needs: guard
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply1 == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.mode != 'plan' }}
+    environment: key-rotate-approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 11
+    permissions:
+      contents: read
+    outputs:
+      approval_epoch: ${{ steps.approve.outputs.approval_epoch }}
+    steps:
+      - name: Stamp the approval time
+        id: approve
+        timeout-minutes: 1
+        run: echo "approval_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  apply1:
+    needs: [guard, approve]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply1 == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KR_APPLY_STEP_S + KR_JOB_SLACK_S) / 60.

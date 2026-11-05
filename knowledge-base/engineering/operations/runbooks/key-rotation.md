@@ -26,26 +26,46 @@ anywhere in this procedure and none is needed.
   writes nothing.
 - `mode=rotate` needs the typed confirm `ROTATE-<KEY>-<YYYY-MM-DD>` (the key name upper-cased, the UTC date of the run), the
   `quiet_window` attestation, and for the webhook secret the `webhook_patch_ready` attestation.
-- **The confirm is a fat-finger guard, not an authorization.** The `infra-privileged` environment has ZERO required reviewers
-  (measured 2026-11-02), so the string is derivable from public inputs. The authorization is the owner's own fresh in-session go
-  naming the exact command. **An agent never dispatches `rotate`; that is policy, not a mechanism.** The guard additionally refuses a
-  ref other than `main` (`ref_refused`), a bot or empty actor (`actor_refused`) and any actor outside the committed owner allowlist
-  (`actor_not_owner`). A personal access token of the owner still passes: disclosed residual. A reviewer-gated environment is tracked
-  in #11923; until it exists, `mode=rotate` for `inngest_manual_trigger_secret_prd`, `kb_drift_ingest_signing_key` and
-  `github_webhook_secret` refuses `approval_environment_missing`.
+- **The confirm is a fat-finger guard, not an authorization.** The authorization mechanism is the `key-rotate-approval`
+  environment: every `mode=rotate` run parks at a credential-free `approve` job in "Waiting" until a listed reviewer approves it
+  in the Actions UI — see the approval section below. The guard additionally refuses a ref other than `main` (`ref_refused`), a
+  bot or empty actor (`actor_refused`) and any actor outside the committed owner allowlist (`actor_not_owner`), and it live-reads
+  the environment's `protection_rules` before anything writes: an absent environment, a missing `required_reviewers` or
+  branch-policy rule, or a failed read refuses `approval_environment_unprotected`. A personal access token can still START the
+  dispatch, but the run cannot pass `approve` — the reviewer's click is a distinct human act; a PAT approval of the job is the
+  owner's click by design. **An agent never dispatches `rotate`; that is policy, now backed by the reviewer gate.**
 - One key per dispatch. The confirm names exactly one key.
+
+### The approval gate (`key-rotate-approval`)
+
+Every `mode=rotate` dispatch of this workflow — and every `mode=rotate`/`mode=converge` dispatch of the sibling
+`inngest-key-rotate.yml` — parks at an `approve` job bound to the `key-rotate-approval` environment (Terraform-provisioned:
+required reviewer user 54279, a `main`-only deployment branch policy, `prevent_destroy` on the policy). `mode=plan` never parks:
+it writes nothing and binds no approval. The run shows as "Waiting" in the Actions UI; the reviewer opens the run and clicks
+**Approve**, and the production-mutating jobs start only after that. The job holds no secrets and writes nothing — it only stamps
+`approval_epoch`, and `authorization_stale` measures from THAT stamp, not the dispatch time, so an approval queued for any length
+cannot make the run self-refuse. If a dispatch refuses `approval_environment_unprotected`, verify the environment before
+re-dispatching:
+
+```bash
+gh api repos/jikig-ai/soleur/environments/key-rotate-approval --jq '.protection_rules[].type'
+```
+
+Both `required_reviewers` and `branch_policy` must be listed. If either is missing, restore the environment through the infra
+apply path (`apply-web-platform-infra.yml` owns the `github_repository_environment.key_rotate_approval` target) — do NOT
+hand-edit it, and do not run the rotate anyway: the guard refuses for a reason.
 
 ## The seven keys
 
 | `key` input | What changes | Consumer and pickup | Notes |
 |---|---|---|---|
 | `inngest_manual_trigger_secret_dev` | `random_id` and `soleur/dev INNGEST_MANUAL_TRIGGER_SECRET` (replaced together) | developer shells and dev servers read `soleur/dev` at their own start; no production container consumes it, so the redeploy is a rehearsal of the route's last leg, not a pickup (#11927) | shakedown key, rotate it first |
-| `inngest_manual_trigger_secret_prd` | `random_id` and `soleur/prd INNGEST_MANUAL_TRIGGER_SECRET` (replaced together) | host-side readers pick it up at apply; the routes `trigger-cron`, `schedule-reminder`, `cohort` and `home-census` return 401 on a host whose container has not swapped yet | `approval_environment_missing` until #11923 |
+| `inngest_manual_trigger_secret_prd` | `random_id` and `soleur/prd INNGEST_MANUAL_TRIGGER_SECRET` (replaced together) | host-side readers pick it up at apply; the routes `trigger-cron`, `schedule-reminder`, `cohort` and `home-census` return 401 on a host whose container has not swapped yet | — |
 | `inngest_signing_key_dev` | `random_id` and `soleur/dev INNGEST_SIGNING_KEY` | as the dev manual trigger | dev only |
 | `inngest_event_key_dev` | `random_id` and `soleur/dev INNGEST_EVENT_KEY` | as the dev manual trigger | dev only |
-| `kb_drift_ingest_signing_key` | `random_id` only; BOTH copies (`soleur/prd_kb_drift_walker` and `soleur/prd`) update in place in the same apply | the walker reads its config at its next run; the `soleur/prd` copy needs the redeploy | refuses inside the 03:00-03:30 UTC window and while a walker run is in flight; `approval_environment_missing` until #11923 |
-| `egress_audit_ingest_token` | nothing: **plan only** | Vector reads the token at start and no restart lever exists without a host shell (#11920) | `rotate` refuses `egress_rotate_unsupported_no_vector_restart_lever` |
-| `github_webhook_secret` | `random_id` only; `soleur/prd GITHUB_APP_WEBHOOK_SECRET` updates in place | the verifier uses ONE secret (a grace window is #11922); deliveries fail 401 until the owner step below | `webhook_patch_ready=true`, ends `owner_step_pending`; `approval_environment_missing` until #11923 |
+| `kb_drift_ingest_signing_key` | `random_id` only; BOTH copies (`soleur/prd_kb_drift_walker` and `soleur/prd`) update in place in the same apply | the walker reads its config at its next run; the `soleur/prd` copy needs the redeploy | refuses inside the 03:00-03:30 UTC window and while a walker run is in flight |
+| `egress_audit_ingest_token` | `random_id`; CURRENT updates in place and `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` is `-replace`d with the old value in the SAME apply (apply-A), then `-replace`d back to empty by a later clear apply | the app accepts CURRENT+PREVIOUS after the redeploy; Vector reads CURRENT only at process start, so the run restarts `vector.service` on every web host through the deploy webhook before PREVIOUS is cleared (#11920) | see the egress sequence below; a failed host keeps PREVIOUS — the old token stays valid (lossless) |
+| `github_webhook_secret` | `random_id` only; `soleur/prd GITHUB_APP_WEBHOOK_SECRET` updates in place | the verifier uses ONE secret (a grace window is #11922); deliveries fail 401 until the owner step below | `webhook_patch_ready=true`, ends `owner_step_pending` |
 
 ## Dispatch order
 
@@ -58,8 +78,10 @@ anywhere in this procedure and none is needed.
    `_prd` rotate.
 3. `kb_drift_ingest_signing_key`, started outside the window the guard computes (roughly 00:45 to 03:30 UTC; the guard prints the
    refusal if you are inside it).
-4. `inngest_manual_trigger_secret_prd`, after #11923.
-5. `github_webhook_secret` last, in a quiet window, after #11923 and with the App private key at hand.
+4. `egress_audit_ingest_token` — the first `_prd`-class rotate exercises the full approval → vector-restart → clear chain; the
+   run parks at `approve`, so leave the reviewer click for a window where you can watch the whole run.
+5. `inngest_manual_trigger_secret_prd`.
+6. `github_webhook_secret` last, in a quiet window, with the App private key at hand.
 
 The plan rehearsal command shape (no confirm):
 
@@ -91,7 +113,7 @@ every verdict line and every guard boolean (`key-rotate check <name>=<bool>`); t
 ### What `plan_ok` tells you
 
 `mode=plan` ends `plan_ok` when the gate passes, with exit 0, and its line ends with `rotate_would_refuse=<token|none>`. The field is
-report-only: it names the first rotate-only rung this key would meet right now (the egress refusal, `approval_environment_missing`,
+report-only: it names the first rotate-only rung this key would meet right now (`approval_environment_unprotected`,
 or a re-check: `run_in_flight`, `run_list_unreadable`, `kb_drift_cron_window`, `kb_drift_walker_in_flight`; an earlier `plan` run
 that is still running counts as `run_in_flight` too, because a rotate would refuse on it). It is **advisory**: `plan_ok` with `rotate_would_refuse` other than `none` means a rotate dispatched now
 would refuse, not that the plan failed. Not evaluated by `plan` (they need the dispatch inputs or the issues API, which the apply job
@@ -105,6 +127,36 @@ read-only (a related workflow in flight, an earlier `key-rotate.yml` run, the kb
 refuses `rotated_redeploy_failed` naming the blocking workflow. Runs of `web-platform-release.yml` and `apply-deploy-pipeline-fix.yml`
 (members of the `web-1-swap` group) are not counted as blockers there, because their deploy jobs are queued behind this job's own hold
 and the group serializes the swap anyway (UNVERIFIED live: the first dev rehearsal settles it). Every other related workflow still blocks.
+
+## The egress rotate sequence (`egress_audit_ingest_token`)
+
+The egress token rotates losslessly through a grace window: for a bounded period the app accepts BOTH the new and the old token, so
+in-flight Vector sends are never rejected. The run's legs, in order:
+
+1. **Apply-A.** One Terraform apply mints the new `EGRESS_AUDIT_INGEST_TOKEN`, updates the `doppler_secret` in place, AND
+   `-replace`s `doppler_secret.egress_audit_ingest_token_previous` with the pre-apply value of the old CURRENT. The old value is
+   read value-silently into `TF_VAR_egress_audit_ingest_token_previous` — it never reaches argv or a log.
+2. **Fleet redeploy.** The app restarts on every host and begins accepting CURRENT+PREVIOUS (`configuredTokens` in
+   `server/egress-audit-ingest.ts`). The redeploy strictly precedes the Vector restart: a Vector restarted first would send the
+   new token to an app still on the old env, and every bucket would be rejected.
+3. **Vector restart, every web host.** The run dispatches `restart vector _ _` to the deploy webhook with the peers roster. Each
+   host runs `sudo /usr/bin/systemctl try-restart vector.service` — the exact argv of the existing `DROPIN_TRY_RESTART` sudoers
+   grant — verifies `is-active` plus an `ActiveEnterTimestamp` delta, and writes a `component=vector` deploy-status frame
+   (`reason=success`, `vector_restart_failed` or `vector_restart_unverified`). The leg is green only when EVERY host reports a
+   fresh success frame after the leg's baseline; a failed, unverified or silent host fails the run. `try-restart` deliberately
+   does not start an inactive unit — a host whose Vector was already down reports `vector_restart_unverified`, not success.
+4. **Clear apply.** Only after every host is verified does a second apply `-replace` PREVIOUS back to the empty default.
+   `doppler secrets get EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS -p soleur -c prd` returning empty is the post-check.
+
+Any non-success before the clear apply leaves PREVIOUS populated — deliberately: the old token stays accepted, the lossless
+direction. The notify job files the action-required issue; the fix is a fresh `rotate` (idempotent). The **PREVIOUS lifecycle**
+is Terraform-owned end to end: `ignore_changes=[value]` makes routine applies diff-free on it (no drift noise, and a merge apply
+can never early-clear the grace token); it is set ONLY by apply-A's `-replace` and cleared ONLY by the clear apply's `-replace`.
+A non-empty PREVIOUS after a supposedly clean run means the clear apply did not land — treat it as the failure above, not as
+drift, and do NOT clear it by hand through the Doppler CLI (an untracked mutation of Terraform-owned state).
+
+No host shell is needed anywhere in this sequence: the restart lever rides the same `/hooks/deploy` + `/hooks/deploy-peer` +
+`/hooks/deploy-status` channel as the redeploy, and the sudoers grant it uses was already delivered.
 
 ## Before a `prd` manual-trigger rotation
 
@@ -121,7 +173,8 @@ The three passing verdicts (`guard_ok`, `plan_ok`, `rotate_ok`) are the first ro
 |---|---|---|
 | `guard_ok` | passing: every guard rung passed (exit 0; the guard wrote nothing) | none: the apply job runs |
 | `plan_ok` | passing: the plan gate passed in `mode=plan` (exit 0; nothing was applied); `rotate_would_refuse` is advisory (see above) | read `rotate_would_refuse`, then dispatch the rotate when it is `none` |
-| `rotate_ok` | passing: the apply landed, every copy changed and the fleet redeploy was confirmed by `track.sh` (exit 0) | none (it does not prove each consumer picked up the value) |
+| `rotate_ok` | passing: the apply landed, every copy changed and the fleet redeploy was confirmed by `track.sh` (exit 0); for egress it also means every web host reported a fresh `component=vector` success frame AND the clear apply emptied PREVIOUS | none (it does not prove each consumer picked up the value) |
+| `vector_restarted` | passing interim marker (egress only): the fleet redeploy and the per-host vector restart were confirmed; the PREVIOUS clear leg is next — the terminal green is still the rotate-complete verdict above | none unless the run stalls: if it never reaches the terminal green, the clear leg failed — see `previous_not_cleared` below |
 | `ref_refused` | dispatched from a ref other than `main` | dispatch from `main` |
 | `inputs_invalid` | mode not `plan`/`rotate`, or key not one of the seven (an API dispatch bypasses the choice list) | correct the input |
 | `actor_refused` | `github.actor` or `github.triggering_actor` is empty or a `[bot]` | dispatch as the owner, not through a bot |
@@ -129,8 +182,7 @@ The three passing verdicts (`guard_ok`, `plan_ok`, `rotate_ok`) are the first ro
 | `rerun_refused` | `GITHUB_RUN_ATTEMPT` is not 1 (a re-run would reuse the first attempt's go) | dispatch a fresh run; only `plan` may be re-run |
 | `confirm_mismatch` | the typed confirm is not exactly `ROTATE-<KEY>-<YYYY-MM-DD>` (key upper-cased, UTC date of the run) | retype it for today's UTC date |
 | `quiet_window_missing` | `quiet_window` was not attested | check the attestation conditions, then set `quiet_window=true` |
-| `egress_rotate_unsupported_no_vector_restart_lever` | `egress_audit_ingest_token` is plan-only (#11920) | none: only `plan` runs for this key |
-| `approval_environment_missing` | the key needs the reviewer-gated environment (#11923) | wait for #11923; the dev keys are not subject to it |
+| `approval_environment_unprotected` | the `key-rotate-approval` environment is absent, its `protection_rules` lack `required_reviewers` or the branch policy, or the live read failed (fail-closed) | verify with `gh api repos/jikig-ai/soleur/environments/key-rotate-approval --jq '.protection_rules[].type'`; restore it through the infra apply path, then re-dispatch |
 | `webhook_patch_not_ready` | `github_webhook_secret` without `webhook_patch_ready=true` | have the App private key at hand, then set it |
 | `owner_step_open` | an `owner_step_pending` issue for the webhook secret is open, or its label or listing is unreadable (fails closed) | finish the owner step and close that issue |
 | `kb_drift_cron_window` | the remaining apply-and-redeploy budget would overlap 03:00-03:30 UTC | dispatch outside roughly 00:45 to 03:30 UTC |
@@ -139,7 +191,7 @@ The three passing verdicts (`guard_ok`, `plan_ok`, `rotate_ok`) are the first ro
 | `run_list_unreadable` | the run listing failed (fails closed, never read as none-in-flight) | re-dispatch; check GitHub API status if it repeats |
 | `redaction_coverage_unconfirmed` | the redaction suite on the dispatched ref exited non-zero or lacks a labelled tainted/deposed/drift row | expected until the filter-fix PR (#11930) is on `main`; the run log lists the missing labels |
 | `credential_absent` | `GH_TOKEN`, `GITHUB_REPOSITORY`, a Terraform backend credential, `DOPPLER_TOKEN` or `DOPPLER_TOKEN_TF` is missing | fix the loader or secret |
-| `authorization_stale` | the guard's go is older than 60 minutes or the UTC date rolled, or fewer than the apply bound plus 240 s remain in the apply step | re-dispatch under a fresh confirm |
+| `authorization_stale` | the approval is older than 60 minutes (measured from the approve job's `approval_epoch` output, so the queue wait itself never counts) or the UTC date rolled, or fewer than the apply bound plus 240 s remain in the apply step | re-dispatch under a fresh confirm and a fresh approval |
 | `copy_unreadable` | a Doppler copy could not be read value-silently; the log prints a fixed cause class (`listing_failed`, `listing_empty`, `listing_timeout`, `read_failed`, `read_empty`, `read_timeout`) | fix the `DOPPLER_TOKEN_TF` scope or the config, then re-dispatch |
 | `plan_gate_refused` | the plan touches an address or action outside the key's rows (the log names at most five offenders) | stop and read the plan gate rows; do not widen the gate without an ADR |
 | `replace_not_requested` | a replace was planned for a reason other than the requested `-replace` (for example a tainted resource) | resolve the tainted resource through the infra apply path, then re-plan |
@@ -152,7 +204,9 @@ After the apply the script classifies every copy
 (`present-unchanged`, `present-changed`, `absent`, `unknown`) and ends with exactly one verdict, with this precedence:
 `post_hash_unreadable`, then `partial_absent_state`, then `value_unchanged`, then `copies_differ`. There is **no converge mode and no
 redeploy-only mode**: recovery is a fresh `rotate` of the same key under a fresh typed confirm (it mints another value, which is
-harmless for all keys in scope; roll-forward is the only direction because the previous value is not retained).
+harmless for all keys in scope; roll-forward is the only direction because the previous value is not retained — egress excepted,
+which retains the old value in `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` for the bounded grace window above and clears it before
+`rotate_ok`).
 
 | Verdict | Doppler | Terraform state | Running containers | Next safe action |
 |---|---|---|---|---|
@@ -162,7 +216,8 @@ harmless for all keys in scope; roll-forward is the only direction because the p
 | `copies_differ` (kb_drift) | both present, unequal | new | old | fresh `rotate` outside the cron window |
 | `partial_absent_state` (single-copy key, copy absent) | absent | partial | old | URGENT, not auto-repaired: do not restart anything; run the recovery `rotate` now (every copy absent is the shape a rotate recovers) |
 | `partial_absent_state` (kb_drift, copies mixed) | some present, some absent | partial | old | URGENT, not auto-repaired: do not restart anything. A rotate refuses identically while the copies are mixed: recreate the missing copy in Doppler (or accept the mixed state), then rotate |
-| `rotated_redeploy_failed` | new | new | old, or a MIXED fleet if the canary swapped and prod did not | fresh `rotate` (kb_drift: the next 03:00 UTC walker run is rejected until a redeploy lands; manual trigger prd: `soleur:trigger-cron` answers 401; dev keys: none). The new value is landed; the redeploy re-check never refuses on staleness, the kb window or `quiet_window`: it waits up to 480 s (30 s polls) for a blocking related run, an earlier run or a walker to clear, and the verdict names the workflow that blocked it |
+| `rotated_redeploy_failed` | new | new | old, or a MIXED fleet if the canary swapped and prod did not | fresh `rotate` (kb_drift: the next 03:00 UTC walker run is rejected until a redeploy lands; manual trigger prd: `soleur:trigger-cron` answers 401; dev keys: none; egress: the vector-restart leg and the clear apply land here too — PREVIOUS is retained, the old token stays accepted, and the run log names the host that missed its fresh `component=vector` success frame). The new value is landed; the redeploy re-check never refuses on staleness, the kb window or `quiet_window`: it waits up to 480 s (30 s polls) for a blocking related run, an earlier run or a walker to clear, and the verdict names the workflow that blocked it |
+| `previous_not_cleared` (egress) | CURRENT new; `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` still set | PREVIOUS populated | new | the old token stays accepted — the lossless direction. Re-dispatch the rotate (the clear leg re-runs); if it refuses again, clear `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` by hand in Doppler soleur/prd |
 | `owner_step_pending` | new | new | new | the single owner action below (the issue carries no re-dispatch command) |
 | `job_cancelled` | unknown | unknown | unknown | a job was cancelled or killed after a write may have happened and left no stop sentence; the issue says `no write_started marker seen` when the apply never reported one. Read the run, then treat it as the nearest verdict above |
 | `issue_unfiled` | as the verdict that preceded it | as that verdict | as that verdict | the `action-required` issue could not be filed (listing failed or truncated, missing label, create did not stick); the red run is the only record. List it with `gh run list --workflow key-rotate.yml --status failure`, read the verdict with the recipe above, and file the issue by hand |
@@ -210,15 +265,17 @@ the bare phrase "signature verification failed" also matches the Stripe and Rese
 
 ## Residuals (disclosed)
 
-- The typed confirm is derivable and the environment has no reviewers: a write-access actor or a personal access token of the owner
-  can start a forced rotation (#11923).
+- The typed confirm is derivable, and a write-access actor or a personal access token of the owner can still START a dispatch —
+  but the run cannot reach a production-mutating job without a listed reviewer's click at the `key-rotate-approval` gate. A PAT
+  approval of that job is the owner's click by design (#11923 closed the zero-gate gap; this is the bounded residual).
 - A `push` run of the sibling workflow `inngest-key-rotate.yml` joining the shared concurrency group `inngest-key-rotate` can replace
   our pending dispatch, and our pending dispatch also cancels a sibling pending dispatch (the same literal group). This is fail-safe
   (nothing mutates); re-dispatch.
 - The `ref_refused` and actor rungs guard accidents, not edited workflow code: a write-access actor who dispatches a branch copy of
-  the workflow runs that branch's ladder. The real boundary is the reviewer-gated environment and its deployment-branch policy
-  (#11923, #9294). `authorization_stale` is measured from the guard job's own clock; whether GitHub's run `createdAt` would be a better
-  origin is UNVERIFIED, so the code is unchanged.
+  the workflow runs that branch's ladder — but GitHub evaluates the environment's `required_reviewers` and `main` branch policy
+  before any job starts, so a branch copy still parks at `approve` and never reaches a mutating job unapproved (the sibling
+  credential surfaces are #9294). Since 2026-11-05 `authorization_stale` is measured from the approve job's `approval_epoch`
+  output rather than the guard job's clock; whether GitHub's run `createdAt` would be a better origin is UNVERIFIED either way.
 - The redaction sanity step runs the redaction suite on the dispatched ref. It is an ordering and sanity step; the safety weight is
   that no Terraform stream ever reaches a log (`kr_tf` sends both streams to a private file and the plan JSON is projected to five
   fields and deleted).

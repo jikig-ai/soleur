@@ -101,7 +101,7 @@ printf '\n=== A. static: the workflow (parsed YAML) ===\n'
 [[ "$(yq 'sorted(k for k in on.keys())')" == "['push', 'workflow_dispatch']" ]] && ok "A1 triggers are exactly workflow_dispatch plus a registration push" || bad "A1 triggers: $(yq 'sorted(on.keys())')"
 [[ "$(yq 'on["push"]["paths"]')" == "['.github/workflows/inngest-key-rotate.yml']" && "$(yq 'on["push"]["branches"]')" == "['main']" ]] && ok "A2 the push trigger is main-only and scoped to this file alone (it only registers the workflow)" || bad "A2 push scope"
 [[ "$(yq 'sorted(j for j in jobs if "if" not in jobs[j])')" == "[]" ]] && ok "A3 every job carries an if: (its truth per mode and per failure scenario is EVALUATED in section W, not matched as text)" || bad "A3 job without if"
-[[ "$(yq 'sorted(jobs.keys())')" == "['apply1', 'apply2', 'guard', 'notify', 'reboot', 'redeploy']" ]] && ok "A4 the jobs are exactly guard, apply1, reboot, apply2, redeploy, notify" || bad "A4 jobs: $(yq 'sorted(jobs.keys())')"
+[[ "$(yq 'sorted(jobs.keys())')" == "['apply1', 'apply2', 'approve', 'guard', 'notify', 'reboot', 'redeploy']" ]] && ok "A4 the jobs are exactly guard, approve, apply1, reboot, apply2, redeploy, notify" || bad "A4 jobs: $(yq 'sorted(jobs.keys())')"
 [[ "$(yq 'sorted(on["workflow_dispatch"]["inputs"].keys())')" == "['confirm', 'keys', 'mode', 'quiet_window', 'reason', 'rotated_at']" ]] && ok "A5 the inputs are mode, keys, confirm, reason, rotated_at, quiet_window" || bad "A5 inputs"
 [[ "$(yq '[("default" in on["workflow_dispatch"]["inputs"][k], on["workflow_dispatch"]["inputs"][k]["required"]) for k in ("mode","keys")]')" == "[(False, True), (False, True)]" ]] && ok "A6 mode and keys are required with NO default (the owner's go names them)" || bad "A6 mode/keys defaults"
 [[ "$(yq 'on["workflow_dispatch"]["inputs"]["mode"]["options"]')" == "['plan', 'rotate', 'converge']" && "$(yq 'on["workflow_dispatch"]["inputs"]["keys"]["options"]')" == "['signing', 'event', 'both']" ]] && ok "A7 mode is {plan, rotate, converge} (plan first) and keys is {signing, event, both}" || bad "A7 options"
@@ -122,7 +122,7 @@ check "A21 no terraform, doppler, curl or gh command in the workflow text (the s
 check "A22 nothing is uploaded (no upload-artifact or cache step: a public repo's artifacts are readable by any account)" bash -c "! grep -Eq 'upload-artifact|actions/cache|step-summary-upload' '$WF'"
 check "A23 the workflow never names the standalone restart workflow or the restart verb (that lever cannot reach 10.0.1.40)" bash -c "! grep -Eiq 'restart-inngest-server|restart inngest' '$WF' '$BODY'"
 check "A24 no test seam (KR_*) is set anywhere in the workflow" bash -c "! grep -Eq 'KR_(SLEEP|NOW|HZ_BASE|TRACK|HOST_STATE|BS_QUERY|INFRA_DIR)' '$WF'"
-[[ "$(yq '[jobs[j].get("environment") for j in ("guard","apply1","reboot","apply2","redeploy","notify")]')" == "[None, 'infra-privileged', 'infra-privileged', 'infra-privileged', None, None]" ]] && ok "A25 apply1, reboot and apply2 run in the Tier-B environment infra-privileged; the guard, the redeploy and notify hold no Tier-B credential" || bad "A25 environments"
+[[ "$(yq '[jobs[j].get("environment") for j in ("guard","approve","apply1","reboot","apply2","redeploy","notify")]')" == "[None, 'key-rotate-approval', 'infra-privileged', 'infra-privileged', 'infra-privileged', None, None]" ]] && ok "A25 apply1, reboot and apply2 run in the Tier-B environment infra-privileged and approve alone binds key-rotate-approval (never the Tier-B one: DOPPLER_TOKEN_INFRA_PRIVILEGED must not reach the reviewer gate); the guard, the redeploy and notify hold no Tier-B credential" || bad "A25 environments"
 [[ "$(yq '[sum(1 for s in jobs[j]["steps"] if s.get("uses","").startswith("./.github/actions/infra-credentials")) for j in ("guard","apply1","reboot","apply2","redeploy","notify")]')" == "[0, 1, 1, 1, 0, 0]" ]] && ok "A26 the credential loader runs in exactly the three Tier-B jobs (each declares the Tier-B environment, census G1j)" || bad "A26 loader"
 SECRETS_OF() { yq "sorted(set(__import__('re').findall(r'secrets\\.([A-Z0-9_]+)', __import__('json').dumps(jobs['$1']))))"; }
 [[ "$(SECRETS_OF guard)" == "['BETTERSTACK_QUERY_HOST', 'BETTERSTACK_QUERY_PASSWORD', 'BETTERSTACK_QUERY_USERNAME', 'DOPPLER_TOKEN']" ]] && ok "A27 guard credentials: the Tier-A Doppler token and the Better Stack read pair only (the Hetzner token it uses is READ-ONLY, fetched by the script)" || bad "A27 guard secrets: $(SECRETS_OF guard)"
@@ -152,6 +152,7 @@ bad = []
 for j in ("apply1", "reboot", "apply2", "redeploy"):
     if "guard" not in closure(j): bad.append(j + ":no-guard-transitively")
     if "guard" not in needs(j): bad.append(j + ":guard-not-a-direct-need")
+if "approve" not in needs("apply1"): bad.append("apply1:not-behind-approve")
 if "apply1" not in closure("reboot"): bad.append("reboot:before-apply1")
 if "reboot" not in closure("apply2"): bad.append("apply2:before-reboot")
 if "apply2" not in closure("redeploy") or "reboot" not in closure("redeploy"): bad.append("redeploy:before-apply2")
@@ -159,7 +160,7 @@ if sorted(needs("notify")) != ["apply1", "apply2", "guard", "reboot", "redeploy"
 print(" ".join(bad))
 PY
 }
-[[ -z "$(graph_violations "$WF")" ]] && ok "A32 every write job needs the guard (directly and transitively); reboot needs apply1, apply2 needs reboot, redeploy needs apply2 and reboot; notify needs every job (the conditions are evaluated in section W)" || bad "A32 graph" "$(graph_violations "$WF")"
+[[ -z "$(graph_violations "$WF")" ]] && ok "A32 every write job needs the guard (directly and transitively); apply1 waits behind the approve job (a needs drop is invisible to the evaluated matrix, so it is pinned here), reboot needs apply1, apply2 needs reboot, redeploy needs apply2 and reboot; notify needs every job (the conditions are evaluated in section W)" || bad "A32 graph" "$(graph_violations "$WF")"
 
 # Timeouts derive from the script's BUDGET TABLE (rounded up to minutes).
 [[ "$(yq 'jobs["guard"]["timeout-minutes"]')" == "$(mins "$B_GUARD_JOB")" && "$(yq 'next(s["timeout-minutes"] for s in jobs["guard"]["steps"] if s.get("id") == "guard")')" == "$(mins "$B_GUARD")" ]] && ok "A33 guard: job $(mins "$B_GUARD_JOB") min and step $(mins "$B_GUARD") min equal the budget table (KR_GUARD_JOB_S, KR_GUARD_S)" || bad "A33 guard timeouts"
@@ -1455,8 +1456,11 @@ for j, k in re.findall(r"needs\.([a-z0-9]+)\.outputs\.([a-z_0-9]+)", txt):
 def kr_outs(start, end):
     m = re.search(r"^%s\(\) \{.*?^%s" % (start, end), body, re.S | re.M)
     return set(re.findall(r"kr_out ([a-z_0-9]+)", m.group(0))) if m else set()
+# the approve step is inline (no kr_ subcommand): its written set is the NAME= tokens its run: appends to $GITHUB_OUTPUT
+approve_run = next(s["run"] for s in jobs["approve"]["steps"] if s.get("id") == "approve")
 written = {"guard": kr_outs("kr_cmd_guard", "kr_cmd_apply1"), "admit": kr_outs("kr_cmd_admit", "kr_cmd_reboot"),
-           "post": kr_outs("kr_cmd_reboot", "# kr_poll_host"), "verify": kr_outs("kr_cmd_verify", "# APPLY 2")}
+           "post": kr_outs("kr_cmd_reboot", "# kr_poll_host"), "verify": kr_outs("kr_cmd_verify", "# APPLY 2"),
+           "approve": set(re.findall(r"([a-z_0-9]+)=", approve_run))}
 for sid, k in re.findall(r"steps\.([a-z]+)\.outputs\.([a-z_0-9]+)", txt):
     if k not in written.get(sid, set()): bad.append("steps.%s.outputs.%s" % (sid, k))
 print(" ".join(sorted(set(bad))))
@@ -1472,7 +1476,7 @@ cat > "$TMP/wfcheck.py" <<'PY'
 import re, sys, yaml
 wf, gdir, expf = sys.argv[1], sys.argv[2], sys.argv[3]
 d = yaml.safe_load(open(wf)); jobs = d["jobs"]; text = open(wf).read(); viol = []
-ORDER = ["guard", "apply1", "reboot", "apply2", "redeploy", "notify"]
+ORDER = ["guard", "approve", "apply1", "reboot", "apply2", "redeploy", "notify"]
 STATUS = {"always", "cancelled", "failure", "success"}
 
 def tokenize(src):
@@ -1526,11 +1530,12 @@ def run_matrix(scn):
     res = {}; outs = {}
     for j in ORDER:
         needs = jobs[j].get("needs", []); needs = [needs] if isinstance(needs, str) else list(needs)
+        extra_used = set()
         def var(name, _n=needs):
             if name == "github.event_name": return scn["event"]
             if name in ("true", "false"): return name == "true"
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.result", name)
-            if m: return res.get(m.group(1), "skipped")
+            if m: extra_used.add("result"); return res.get(m.group(1), "skipped")
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.outputs\.([a-z_0-9]+)", name)
             if m: return outs.get(m.group(1), {}).get(m.group(2), "")
             raise ValueError("unknown context " + name)
@@ -1549,11 +1554,15 @@ def run_matrix(scn):
                 p = P(tokenize(m.group(1) if m else src), {"var": var, "fn": fn}); ok = bool(p.parse()); used = p.used
         except Exception as e:
             viol.append("unevaluable:%s:%s" % (j, e)); ok, used = False, set()
-        implicit = not (used & STATUS)
+        # an if: that reads needs.<job>.result is still evaluated when the need is skipped (apply1's plan disjunct runs
+        # although approve was skipped; a result reference suppresses the implicit success() gate — GitHub semantics)
+        used |= extra_used
+        implicit = not (used & STATUS) and "result" not in used
         if implicit and not all(res.get(n) == "success" for n in needs): ok = False
         if j == "guard" and scn.get("guard_result"): res[j] = scn["guard_result"] if ok else "skipped"
         else: res[j] = scn.get("force", {}).get(j, "success") if ok else "skipped"
         if j == "guard" and res[j] != "skipped": outs[j] = scn["gout"]
+        if j == "approve" and res[j] != "skipped": outs[j] = {"approval_epoch": "1"}
     return res
 
 def gout(name):
@@ -1586,7 +1595,7 @@ if len(exp) != len(table): viol.append("matrix:rows")
 
 # ---- exact permissions
 RW = {"contents": "read", "actions": "read", "issues": "write"}
-PERMS = {"guard": {"contents": "read", "actions": "read", "issues": "read"}, "apply1": RW, "reboot": RW, "apply2": RW, "redeploy": RW, "notify": {"issues": "write"}}
+PERMS = {"guard": {"contents": "read", "actions": "read", "issues": "read"}, "approve": {"contents": "read"}, "apply1": RW, "reboot": RW, "apply2": RW, "redeploy": RW, "notify": {"issues": "write"}}
 for j, want in PERMS.items():
     if jobs[j].get("permissions") != want: viol.append("perms:" + j)
 if d.get("permissions") != {"contents": "read"}: viol.append("perms:workflow")
@@ -1608,6 +1617,9 @@ BS = {"BETTERSTACK_QUERY_HOST": "${{ secrets.BETTERSTACK_QUERY_HOST }}", "BETTER
 TOK = "${{ github.token }}"; DP = "${{ secrets.DOPPLER_TOKEN }}"
 ENV = {
  ("guard", "guard"): dict(INPUT_MODE="${{ inputs.mode }}", INPUT_KEYS="${{ inputs.keys }}", INPUT_CONFIRM="${{ inputs.confirm }}", INPUT_REASON="${{ inputs.reason }}", INPUT_ROTATED_AT="${{ inputs.rotated_at }}", INPUT_QUIET_WINDOW="${{ inputs.quiet_window }}", GH_TOKEN=TOK, DOPPLER_TOKEN=DP, **BS),
+ # the approve job's stamp step is the only run step that is not a script subcommand: it binds NO env (no secret values
+ # may reach the reviewer-gated environment); the key is the step's exact run: text, so the pin is closed on both
+ ("approve", 'echo "approval_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"'): None,
  ("apply1", "apply1"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_PLAN_BLOCK=G("plan_block"), GH_TOKEN=TOK, DOPPLER_TOKEN=DP),
  ("reboot", "admit"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_SERVER_ID=G("server_id"), EFF_ROTATED_AT=G("rotated_at"), EFF_REBOOT_POST=G("reboot_post"), GH_TOKEN=TOK, DOPPLER_TOKEN=DP, **BS),
  ("reboot", "reboot"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_SERVER_ID=G("server_id"), EFF_REBOOT_POST="${{ steps.admit.outputs.reboot_post }}", GH_TOKEN=TOK),
@@ -1645,23 +1657,23 @@ for j in ("notify",):
 print("\n".join(sorted(set(viol))))
 PY
 cat > "$TMP/matrix.expected" <<'EOF'
-plan                     guard=success apply1=success reboot=skipped apply2=skipped redeploy=skipped notify=skipped
-rotate                   guard=success apply1=success reboot=success apply2=success redeploy=success notify=skipped
-converge                 guard=success apply1=skipped reboot=success apply2=success redeploy=success notify=skipped
-rotate/apply1-fails      guard=success apply1=failure reboot=skipped apply2=skipped redeploy=skipped notify=success
-rotate/reboot-fails      guard=success apply1=success reboot=failure apply2=skipped redeploy=skipped notify=success
-rotate/apply2-cancelled  guard=success apply1=success reboot=success apply2=cancelled redeploy=skipped notify=success
-rotate/redeploy-fails    guard=success apply1=success reboot=success apply2=success redeploy=failure notify=success
-converge/reboot-fails    guard=success apply1=skipped reboot=failure apply2=skipped redeploy=skipped notify=success
-guard-refused            guard=failure apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
-guard-ok-no-go           guard=success apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
-guard-failed-late        guard=failure apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=success
-push                     guard=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
+plan                     guard=success approve=skipped apply1=success reboot=skipped apply2=skipped redeploy=skipped notify=skipped
+rotate                   guard=success approve=success apply1=success reboot=success apply2=success redeploy=success notify=skipped
+converge                 guard=success approve=success apply1=skipped reboot=success apply2=success redeploy=success notify=skipped
+rotate/apply1-fails      guard=success approve=success apply1=failure reboot=skipped apply2=skipped redeploy=skipped notify=success
+rotate/reboot-fails      guard=success approve=success apply1=success reboot=failure apply2=skipped redeploy=skipped notify=success
+rotate/apply2-cancelled  guard=success approve=success apply1=success reboot=success apply2=cancelled redeploy=skipped notify=success
+rotate/redeploy-fails    guard=success approve=success apply1=success reboot=success apply2=success redeploy=failure notify=success
+converge/reboot-fails    guard=success approve=success apply1=skipped reboot=failure apply2=skipped redeploy=skipped notify=success
+guard-refused            guard=failure approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
+guard-ok-no-go           guard=success approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
+guard-failed-late        guard=failure approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=success
+push                     guard=skipped approve=skipped apply1=skipped reboot=skipped apply2=skipped redeploy=skipped notify=skipped
 EOF
 wfviol() { python3 "$TMP/wfcheck.py" "$1" "$TMP" "$TMP/matrix.expected" 2>&1; }
 MATRIX_NOW="$(python3 "$TMP/wfcheck.py" "$WF" "$TMP" - 2>&1)"
 [[ "$(wfviol "$WF")" == "" ]] && ok "W1 the real workflow conforms: the evaluated job matrix equals the expected table, the permissions / checkout credentials / per-step env / env -i allow-lists are the exact closed sets, no continue-on-error, no expression in a run body, secrets only in the dotted form" || bad "W1 violations" "$(wfviol "$WF")"
-[[ "$(cat "$TMP/matrix.expected")" == "$MATRIX_NOW" ]] && ok "W2 the job matrix (every job's if: EVALUATED per mode and per failure scenario) is: plan runs only guard and apply1; rotate runs all five; converge skips apply1; any failure or cancellation after the first write runs notify; a refused guard or a push runs nothing" || bad "W2 matrix" "$MATRIX_NOW"
+[[ "$(cat "$TMP/matrix.expected")" == "$MATRIX_NOW" ]] && ok "W2 the job matrix (every job's if: EVALUATED per mode and per failure scenario) is: plan runs only guard and apply1 (the approve gate is skipped); rotate and converge run approve before the first write job; converge skips apply1; any failure or cancellation after the first write runs notify; a refused guard or a push runs nothing" || bad "W2 matrix" "$MATRIX_NOW"
 [[ "$(grep -c 'continue-on-error' "$WF")" == 0 ]] && ok "W3 there is no continue-on-error anywhere in the workflow text" || bad "W3 continue-on-error"
 # executed allow-lists: run each env -i step's own text against a stub script that dumps its environment
 declare -A OUTER=([HOME]=/h [RUNNER_TEMP]=/rt [GITHUB_OUTPUT]=/o [GITHUB_STEP_SUMMARY]=/s [GITHUB_RUN_ID]=1 [GITHUB_RUN_ATTEMPT]=1 [GITHUB_REPOSITORY]=a/b [GITHUB_SERVER_URL]=https://x [HCLOUD_TOKEN]=T0 [GH_TOKEN]=g0 [DOPPLER_TOKEN]=d0
@@ -1713,12 +1725,16 @@ wfm swap_outputs 'jobs["apply1"]["if"] = jobs["apply1"]["if"].replace("run_apply
 wfrow WM2 "swapping run_apply1 and run_reboot between apply1 and reboot" swap_outputs "matrix:converge"
 wfm no_apply1_status 'jobs["redeploy"]["if"] = jobs["redeploy"]["if"].replace(" && needs.apply2.result == '"'"'success'"'"'", "")'
 wfrow WM3 "a redeploy that no longer requires apply2 to have SUCCEEDED runs after a cancelled apply2" no_apply1_status "matrix:rotate/apply2-cancelled"
-wfm no_go 'jobs["apply1"]["if"] = jobs["apply1"]["if"].replace("needs.guard.outputs.go == '"'"'true'"'"' && ", "")'
-wfrow WM4 "an apply1 whose condition no longer reads the guard's go output runs when the guard succeeded but said go=false" no_go "matrix:guard-ok-no-go"
+# removing the go check alone is now invisible: the approve job is skipped on go=false and apply1's approval disjunct
+# would still be false — the mutant must ALSO bypass the approval gate for the no-go dispatch to reach apply1
+wfm no_go 'jobs["apply1"]["if"] = jobs["apply1"]["if"].replace("needs.guard.outputs.go == '"'"'true'"'"' && ", "").replace("needs.approve.result == '"'"'success'"'"'", "'"'"'true'"'"'")'
+wfrow WM4 "an apply1 whose condition reads neither the guard's go output nor the approval gate runs when the guard succeeded but said go=false" no_go "matrix:guard-ok-no-go"
 wfm no_dispatch 'jobs["guard"]["if"] = "${{ true }}"'
 wfrow WM5 "a guard that lost its workflow_dispatch gate runs on the registration push" no_dispatch "matrix:push"
-wfm notify_noalways 'jobs["notify"]["if"] = jobs["notify"]["if"].replace("always() && ", "")'
-wfrow WM6 "a notify job without always() never runs after a failed or cancelled job" notify_noalways "matrix:rotate/apply1-fails"
+# always() is not the only thing that keeps notify evaluable after a failure: needs.redeploy.result is also a result
+# read, which suppresses the implicit success() gate — the mutant must drop BOTH for the gate to re-engage
+wfm notify_noalways 'jobs["notify"]["if"] = jobs["notify"]["if"].replace("always() && ", "").replace(" && needs.redeploy.result != '"'"'success'"'"'", "")'
+wfrow WM6 "a notify job carrying neither always() nor a needs.<job>.result read falls under the implicit success() gate and never runs after a failed or cancelled job" notify_noalways "matrix:rotate/apply1-fails"
 wfm notify_plan 'jobs["notify"]["if"] = jobs["notify"]["if"].replace(" && needs.guard.outputs.mode != '"'"'plan'"'"'", "")'
 wfrow WM7 "a notify job that does not exclude mode=plan" notify_plan "matrix:plan"
 wfm notify_green 'jobs["notify"]["if"] = jobs["notify"]["if"].replace(" && needs.redeploy.result != '"'"'success'"'"'", "")'

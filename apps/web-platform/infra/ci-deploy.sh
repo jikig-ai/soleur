@@ -4423,6 +4423,37 @@ verify_inngest_quiesced() {
   return 0
 }
 
+# Verify vector.service was actually restarted (#11920). `try-restart` on an INACTIVE unit is a
+# SILENT exit-0 no-op, so the sudo return code alone can never prove the restart — this check is
+# the gate. Pass = `is-active` reports active AND the unit's ActiveEnterTimestamp advanced PAST
+# the baseline the handler captured BEFORE the verb (a still-active unit whose timestamp did not
+# move was not restarted). Both queries are read-only (no sudo), matching inngest_quiesce_state's
+# reads. Deliberately NOT a /health probe: vector's serving surface is telemetry shipping, and
+# `doppler run` env resolution sits between unit-start and pipeline-readiness, so the unit-state +
+# fresh-timestamp pair is the checkable contract.
+#   arg 1: baseline epoch seconds (0 when the unit carried no prior timestamp). REQUIRED —
+#     a `${1:-N}` default here would be a second match for the #5145 drift guard's
+#     exactly-one-extraction pin on that shape (ci-deploy.test.sh).
+#   rc 0: restarted + active · rc 1: unverified → vector_restart_unverified
+verify_vector_restart() {
+  local baseline_epoch="$1"
+  [[ "$baseline_epoch" =~ ^[0-9]+$ ]] || baseline_epoch=0
+  local a ae ae_epoch
+  a="$(systemctl is-active vector.service 2>/dev/null || true)"
+  if [[ "$a" != "active" ]]; then
+    logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: is-active=${a:-<empty>} — try-restart left the unit not-active (an inactive vector stays inactive by design)"
+    return 1
+  fi
+  ae="$(systemctl show -p ActiveEnterTimestamp --value vector.service 2>/dev/null || true)"
+  ae_epoch="$(date -d "$ae" +%s 2>/dev/null || true)"
+  if [[ ! "$ae_epoch" =~ ^[0-9]+$ || "$ae_epoch" -le "$baseline_epoch" ]]; then
+    logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: ActiveEnterTimestamp did not advance (baseline=${baseline_epoch} now=${ae_epoch:-unparseable})"
+    return 1
+  fi
+  logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: ok — active, ActiveEnterTimestamp ${baseline_epoch} → ${ae_epoch}"
+  return 0
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -4462,8 +4493,10 @@ fi
 
 if [[ "$ACTION" == "restart" ]]; then
   # restart inngest _ latest — lightweight systemctl restart (#4538).
-  # Only inngest is restartable; web-platform restart is docker-level.
-  if [[ "$COMPONENT" != "inngest" ]]; then
+  # restart vector _ _ — no-SSH telemetry-pipeline restart, the egress-token-rotation
+  # lever (#11920). Only inngest and vector are restartable; web-platform restart is
+  # docker-level.
+  if [[ "$COMPONENT" != "inngest" && "$COMPONENT" != "vector" ]]; then
     logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not restartable"
     echo "Error: component '$COMPONENT' is not restartable" >&2
     final_write_state 1 "component_not_restartable"
@@ -4645,9 +4678,57 @@ flock -n 200 || {
 # flock -n would write "lock_contention" over the winner's in-progress state.
 write_state "$EXIT_RUNNING" "running"
 
-# --- Restart action handler (#4538) ---
+# --- Restart action handler (#4538; vector arm #11920) ---
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
+  if [[ "$COMPONENT" == "vector" ]]; then
+    # #11920 — the no-SSH egress-token-rotation lever. The argv is the already-live
+    # DROPIN_TRY_RESTART sudoers grant's EXACT argv (deploy-inngest-bootstrap.sudoers):
+    # `try-restart`, NOT `restart` — an INACTIVE vector must stay inactive (a deliberate
+    # down state is not this lever's to undo). The inngest-only quiesce/health logic
+    # below does NOT apply to vector.
+    #
+    # try-restart on an inactive unit is a SILENT exit-0 no-op, so sudo rc alone cannot
+    # prove the restart — verify_vector_restart is the gate, and the baseline is
+    # captured BEFORE the verb. Both reads are unprivileged (no sudo).
+    _v_base_ts="$(systemctl show -p ActiveEnterTimestamp --value vector.service 2>/dev/null || true)"
+    _v_base_epoch="$(date -d "$_v_base_ts" +%s 2>/dev/null || true)"
+    [[ "$_v_base_epoch" =~ ^[0-9]+$ ]] || _v_base_epoch=0
+    echo "Restarting vector.service (try-restart)..."
+    if ! sudo /usr/bin/systemctl try-restart vector.service; then
+      logger -t "$LOG_TAG" "FAILED: systemctl try-restart vector.service"
+      final_write_state 1 "vector_restart_failed"
+      exit 1
+    fi
+
+    set +e
+    verify_vector_restart "$_v_base_epoch"
+    VERIFY_RC=$?
+    set -e
+    if [[ "$VERIFY_RC" -ne 0 ]]; then
+      logger -t "$LOG_TAG" "FAILED: restart vector — unit not verifiably restarted (is-active/timestamp)"
+      final_write_state 1 "vector_restart_unverified"
+      exit 1
+    fi
+
+    # Fan the SAME `restart vector _ _` out to every peer web host over the private net —
+    # the rotate leg needs vector restarted on EVERY host, not just the dispatched one.
+    # Mirrors the quiesce arm's local → verify → fan-out ordering; peers receive on
+    # /hooks/deploy-peer → no re-fan. A peer 202 is SPAWN-ACCEPTANCE only — the peer's own
+    # verdict lands on ITS deploy-status slot (DI-C3), which the workflow polls.
+    if ! fan_out_to_peers; then
+      # MEASURED-BY: fan_out_to_peers' non-zero return on the line above (same contract
+      # as the quiesce/enable arms: spawn-acceptance is measured here, the peer's own
+      # verdict is not).
+      logger -t "$LOG_TAG" "FAILED: restart vector — a peer fan-out was NOT accepted (unreachable/rejected)"
+      final_write_state 1 "vector_peer_fanout_unaccepted"
+      exit 1
+    fi
+
+    logger -t "$LOG_TAG" "SUCCESS: restart $COMPONENT"
+    final_write_state 0 "success"
+    exit 0
+  fi
   # #8077: a quiesced unit (op=quiesce-web's stop+disable) is deliberate — the watchdog's restart
   # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb. The SHAPE is the
   # signal (contract §3): a disabled not-running unit with no valid quiesce marker is refused too
