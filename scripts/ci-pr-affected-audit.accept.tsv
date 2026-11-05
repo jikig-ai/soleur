@@ -3033,3 +3033,4 @@ tests/scripts/zot-log-channel-probe	scripts/ensure-doppler.sh	7c59a1e49464	1	fal
 tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh	0e28e1d32b7b	1	false-positive: message: scripts/lint-followthrough-varq-ban.sh:354: see receipts/pairs-decisions.tsv (pair classified mention)
 tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh	538ede2b0768	1	false-positive: message: scripts/lint-followthrough-varq-ban.sh:599: see receipts/pairs-decisions.tsv (pair classified mention)
 tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh	a156176796ef	1	false-positive: message: scripts/lint-followthrough-varq-ban.sh:318: see receipts/pairs-decisions.tsv (pair classified mention)
+plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh	apps/web-platform/server/approval/ops.ts	8cde150c9915	1	false-positive: EXCLUDED declaration row in the probe own exclusion list; the suite names ops.ts to declare it out of scope, it never reads it
