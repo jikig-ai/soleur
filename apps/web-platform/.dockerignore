@@ -148,6 +148,9 @@ scripts/
 .git
 .gitignore
 *.md
+# Founder legal texts (#12011 PR-C): the registry files are `.md` and the runner stage COPYs them. Re-included so a change
+# to the `*.md` rule above can never drop them from the build context (the hash is taken over these exact bytes).
+!server/legal-acceptance/texts/*.md
 
 test/
 # ...but vitest.config.ts is NOT excluded, it sits at the context root, and
