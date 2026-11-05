@@ -158,7 +158,7 @@ SECOND flush on the same host — not a recovery — has no dispatch either: see
 [§ Retired cutover verbs and the re-cutover / second-FLUSHALL path](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8).
 For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
 
-### The inherited-`done` preflight: how it reads the flag and why (#8252, #9927)
+### The inherited-done preflight: how it reads the flag and why (#8252, #9927)
 
 This section holds the rationale that used to sit as comments above the preflight step in
 `apply-web-platform-infra.yml` (moved here on 2026-11-05 to keep that workflow under its file-size

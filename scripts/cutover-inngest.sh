@@ -22,7 +22,8 @@
 # stdout, which this child process inherits.
 #
 # RUNTIME DEPENDENCY. The workflow's `actions/checkout` step is required by ALL ops now,
-# not just the rollback/resume Better Stack confirm it was originally added for (op=arm, the other original consumer, was retired in #9927). Gating it on
+# not just the Better Stack reads it was originally added for (rollback's confirm_flip_state, resume's G3/G4 reads;
+# op=arm, the other original consumer, was retired in #9927). Gating it on
 # `inputs.op` would break every cutover op, on a workflow_dispatch-only path where no CI
 # signal would catch it. See ADR-150.
 #
@@ -146,7 +147,7 @@ if [[ -n "${CUTOVER_PAGE_SIZE:-}" ]]; then
 fi
 
 # THE SHARED flip-FSM READER (#7674). One reader, two callers: confirm_flip_state (below) and
-# _flip_liveness_count (G3.7's H signal), and — since #8054 — op=execute 2.0's two reads.
+# _flip_liveness_count (resume G3's H signal; formerly op=arm G3.7's), and — since #8054 — op=execute 2.0's two reads.
 # Extracted rather than duplicated so the transport, credential config and query shape cannot
 # drift between the confirm path, the gate path and the cutover's own pre-flight.
 #
@@ -659,7 +660,7 @@ _generation_scoped_count() {
   return 0
 }
 
-# G3.7's SECOND signal (#7674): H, the dedicated host's own liveness witness.
+# resume G3's SECOND signal (#7674; formerly op=arm G3.7's): H, the dedicated host's own liveness witness.
 #
 # WHY THIS EXISTS. L (the latch count above) alone cannot tell "no flush has happened" from
 # "I cannot tell". Measured 2026-08-25: G3.7's query returned 0 rows at 7d, 30d AND 365d, so the
@@ -671,7 +672,7 @@ _generation_scoped_count() {
 # cutover-inngest-workflow.test.sh:
 #
 #   1. KEY ON THE TAG, NEVER AN ENUMERATED `reason` SET. run_flip's catch-all arm emits
-#      `noop-unset`, and that is the arm that fires in the state G3.7 actually gates (a genuine
+#      `noop-unset`, and that is the arm that fires in the state the retired G3.7 gated (a genuine
 #      first arm, flag unset). A reader keyed on {noop-rolled-back, noop-done, noop-aborted}
 #      would read H=0 on a perfectly healthy host and refuse every legitimate arm — converting a
 #      fail-OPEN gate into an unconditionally-closed one.
@@ -2812,19 +2813,22 @@ case "$OP" in
     # starts the server, verifies it actually serves, records the owner marker and completes to
     # `done` WITHOUT re-running FLUSHALL.
     #
-    # GATED, because `flushed` authorises a prod start. Two preconditions, both fail-closed:
-    #  G1 the flag must currently be a TERMINAL non-serving state (done/aborted/rolled-back).
-    #     Writing `flushed` over an in-flight armed/flipping flip would race the running FSM.
-    #  G2 the durable flush latch must EXIST. `flushed` asserts "the flush already happened"; if
-    #     no latch is recorded that assertion is unfounded, and starting the server would adopt a
-    #     queue that was never flushed. Answered off-host, never by SSH.
+    # GATED, because `flushed` authorises a prod start. The gates, all fail-closed:
+    #  G1 the flag must currently be `done` (the code below accepts `done` ONLY; aborted and
+    #     rolled-back are refused). Writing `flushed` over an in-flight armed/flipping flip would
+    #     race the running FSM.
+    #  G2 (documented, NOT enforced since #9927 - see below) the durable flush latch must EXIST.
+    #     `flushed` asserts "the flush already happened"; if no latch is recorded that assertion is
+    #     unfounded, and starting the server would adopt a queue that was never flushed.
+    #  G3 host audibility, G4 bootstrap-done (below).
     #
     #     NOTHING ENFORCES G2 NOW. From #7462 until #9927 it was enforced at op=arm's G3.7 (over
     #     betterstack-query.sh, keyed on the `flip-complete` / `refuse-rearm-after-done` emit_state
     #     literals); op=arm was retired in #9927 and G3.7 went with it, and op=reflush (the only
     #     thing that could clear the latch, #7777) was retired too. So the latch check is
-    #     documentation only again. G1 below — `done` ONLY — is the SOLE guard of this verb: only a
-    #     completed flip evidences that a FLUSHALL actually happened. Do NOT widen G1 to
+    #     documentation only again. G1 below — `done` ONLY — is the SOLE guard of the flush-evidence
+    #     property (G3/G4 gate deliverability, not evidence): only a completed flip evidences that
+    #     a FLUSHALL actually happened. Do NOT widen G1 to
     #     aborted/rolled-back to compensate: that would re-open #7674/#5450 (a scheduler started
     #     against a queue that was never flushed).
     #
@@ -2863,7 +2867,7 @@ case "$OP" in
     #
     # G3 — HOST-AUDIBILITY GATE (#7674, CTO ruling). `flushed` is acted on ONLY by the on-host 30s
     # timer. Writing it to a dark host recovers nothing AND parks the flag in a state op=resume's
-    # own G1 rejects as IN-FLIGHT, while (when op=arm still existed, retired in #9927) op=arm was separately refused by G3.7 — stranding the only
+    # own G1 rejects as IN-FLIGHT, stranding the only
     # dispatchable re-entry the system has, i.e. manufacturing a fresh instance of the KNOWN DEAD
     # END this arm already documents, which has no clearing apply_target today (#7695). Refusing is
     # strictly dominant: it forfeits nothing the write would have achieved.

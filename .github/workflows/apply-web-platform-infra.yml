@@ -1942,11 +1942,11 @@ jobs:
           set -uo pipefail
           RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
           if [[ -z "${DOPPLER_TOKEN_INNGEST_FLIP_READ:-}" ]]; then
-            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the failed apply-web-platform-infra push run, or dispatch it with its default target, then re-dispatch this replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
+            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the apply-web-platform-infra push run if one failed, otherwise dispatch it with its default target, then re-dispatch this replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
             exit 1
           fi
-          blind() { echo "::error::inherited-done preflight: no verdict could be formed (${1}), so this replace is not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
-          warn_unset() { echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until it is set (no CI cutover verb exists since #9927; runbook: Retired cutover verbs)."; }
+          blind() { local t=""; case "$1" in *"exit 124") t=" - timed out after 30s" ;; esac; echo "::error::inherited-done preflight: no verdict could be formed (${1}${t}), so this replace is not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
+          warn_unset() { echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET or empty. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until it is set (#9927 retired the verbs that could re-arm it; runbook: Retired cutover verbs)."; }
           command -v doppler >/dev/null 2>&1 || blind "doppler missing"
           command -v jq >/dev/null 2>&1 || blind "jq missing"
           NAMES_RC=0
@@ -1983,7 +1983,7 @@ jobs:
           if [[ "$FLAG" == "armed" || "$FLAG" == "flipping" ]]; then
             echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- this replace WILL strand the scheduler, and NOT via the inherited-done path. The /mnt/data flush latch survives the replace, so the FSM takes flush_already_performed -> refuse_rearm_after_done and writes flag=aborted, which is outside inngest-server-flip-guard.sh's allowlist. op=resume accepts 'done' only, so there is NO one-dispatch recovery from this state -- resolve the flag with the operator BEFORE replacing."
           elif [[ "$FLAG" != "done" && "$FLAG" != "flushed" ]]; then
-            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it (no CI cutover verb exists since #9927; runbook: Retired cutover verbs)."
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it (#9927 retired the verbs that could re-arm it; runbook: Retired cutover verbs)."
           fi
           if [[ "$FLAG" == "done" ]]; then
             {

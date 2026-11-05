@@ -4301,20 +4301,37 @@ assert "#9927 G2 no FLUSH_LATCH_SINCE mapping or reader remains (its only consum
 # --- Guard 2 hardening (#9927 review): arm-token consumption is EXACTLY one expression, no `secrets: inherit`,
 # the op-literal extraction tolerates spacing/quote style, and one-line case arms are found as labels. Each
 # check is a function of a FILE so the mutation rows below run the SAME code on a mutated copy.
-_g2_arm_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oE 'secrets\.DOPPLER_TOKEN_INNGEST_ARM' | wc -l | tr -d ' '; }
-_g2_inherit_n() { grep -vE '^[[:space:]]*#' "$1" | grep -cE '^[[:space:]]*secrets:[[:space:]]*inherit([[:space:]]|$)' || true; }
+# Case-insensitive and bracket-aware: Actions resolves secret names case-insensitively and accepts secrets['NAME'].
+_g2_arm_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oiE "secrets(\.|\[[^]]*)doppler_token_inngest_arm" | wc -l | tr -d ' '; }
+_g2_inherit_n() { grep -vE '^[[:space:]]*#' "$1" | grep -cE "^[[:space:]]*secrets:[[:space:]]*[\"']?inherit[\"']?([[:space:]]|$)" || true; }
+# Dynamic whole-context spellings that reach the arm token without naming it.
+_g2_dynamic_n() { grep -vE '^[[:space:]]*#' "$1" | grep -ciE 'tojson\(secrets\)|join\(secrets|secrets\[[[:space:]]*format\(' || true; }
 assert "#9927 G2 the arm token secret is consumed EXACTLY once in the workflow (non-comment): the one scoped env ternary" \
   "[[ \"\$(_g2_arm_secret_n '$WF_YAML')\" == 1 ]]"
 assert "#9927 G2 the workflow never uses 'secrets: inherit' (it would hand every secret, the arm token included, to a callee)" \
   "[[ \"\$(_g2_inherit_n '$WF_YAML')\" == 0 ]]"
+assert "#9927 G2 the workflow never reaches the arm token through toJSON(secrets) / join(secrets / secrets[format(...)]" \
+  "[[ \"\$(_g2_dynamic_n '$WF_YAML')\" == 0 ]]"
 G2M_DIR="$(mktemp -d)"; SCRATCH+=("$G2M_DIR")
 cp "$_G2_YAML_CODE" "$G2M_DIR/wf-ok.yml"
 { cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}"; } > "$G2M_DIR/wf-second-consumer.yml"
 grep -v 'secrets\.DOPPLER_TOKEN_INNGEST_ARM' "$_G2_YAML_CODE" > "$G2M_DIR/wf-no-consumer.yml" || true
 { cat "$_G2_YAML_CODE"; echo "    secrets: inherit"; } > "$G2M_DIR/wf-inherit.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets['DOPPLER_TOKEN_INNGEST_ARM'] }}"; } > "$G2M_DIR/wf-bracket.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets.doppler_token_inngest_arm }}"; } > "$G2M_DIR/wf-lower.yml"
+{ cat "$_G2_YAML_CODE"; echo '    secrets: "inherit"'; } > "$G2M_DIR/wf-inherit-quoted.yml"
+{ cat "$_G2_YAML_CODE"; echo "          ALL: \${{ toJSON(secrets) }}"; } > "$G2M_DIR/wf-tojson.yml"
 { cat "$_G2_YAML_CODE"; echo "    # secrets: inherit  (a comment, must not count)"; echo "    # secrets.DOPPLER_TOKEN_INNGEST_ARM (comment)"; } > "$G2M_DIR/wf-comment-only.yml"
 assert "#9927 G2 MUTATION: a second consumer of the arm token reads count=2 (judged RED)" \
   "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-second-consumer.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a bracket-spelled second consumer secrets['DOPPLER_TOKEN_INNGEST_ARM'] reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-bracket.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a lower-case second consumer secrets.doppler_token_inngest_arm reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-lower.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a quoted 'secrets: \"inherit\"' is detected" \
+  "[[ \"\$(_g2_inherit_n '$G2M_DIR/wf-inherit-quoted.yml')\" == 1 ]]"
+assert "#9927 G2 MUTATION: an added toJSON(secrets) is detected" \
+  "[[ \"\$(_g2_dynamic_n '$G2M_DIR/wf-tojson.yml')\" == 1 ]]"
 assert "#9927 G2 MUTATION: removing the only consumer reads count=0 (judged RED, not vacuously green)" \
   "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-no-consumer.yml')\" == 0 ]]"
 assert "#9927 G2 MUTATION: an added 'secrets: inherit' is detected (count=1)" \
@@ -4458,7 +4475,8 @@ _DISPATCHED=$((PASS + FAIL))
 #   op=rollback / op=resume / execute / probe rows are unchanged.
 # 965 -> 977 (+12) at the #9927 review round (this PR), measured from the STALE FLOOR FATAL line: Guard 2 hardening - arm-token
 #   consumption count==1, no `secrets: inherit`, tolerant op-literal extraction, one-line case-arm labels (live + mutation rows).
-_EXACT_FLOOR=977
+# 977 -> 982 (+5, this PR's review fix round): bracket/lower-case arm readers, quoted inherit, toJSON(secrets) ban + live row.
+_EXACT_FLOOR=982
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

@@ -12,6 +12,11 @@
 #   secret name the preflight reads with plaintext_value equal to its OWN token's key, and outside the
 #   token-drift map and the config inventory. Pins run on comment-stripped, whitespace-collapsed text.
 #
+# SCOPE (read before trusting a green): the wiring and scan checks name the SPELLINGS this repo can produce today
+# (a -replace of hcloud_server.inngest in a workflow/action file, a literal or bracket secrets reference, the
+# dynamic toJSON/join/format forms). They are not a proof that no other consumer can exist: a reusable workflow
+# that hides the replace in a script, or a composite action fed the secret through an input, is outside them.
+#
 # Harness conventions: code-edit rows run as MUTANTS (copy, sed the copy, assert the edit LANDED on the
 # expected diff-line count, require the NAMED violation); the unmutated control runs first and must be clean;
 # floors are reported with printf + exit, never through pass()/fail().
@@ -88,6 +93,7 @@ case "${1-} ${2-}" in
       invalid)  printf 'this is not json\n' ;;
       array)    printf '["INNGEST_CUTOVER_FLIP"]\n' ;;
       rc1)      exit 1 ;;
+      rc124)    exit 124 ;;
       *)        exit 64 ;;
     esac ;;
   "secrets get")
@@ -129,8 +135,12 @@ open(out + "/body.sh", "w").write(body)
 import re
 names = [s.get("name", "") for s in steps]
 idx = next((i for i, s in enumerate(steps) if s.get("name") == name), -1)
-first_plan = next((i for i, n in enumerate(names) if isinstance(n, str) and (n.startswith("Terraform plan") or n.startswith("Terraform apply"))), 10**6)
-pat = re.compile(r"-replace=['\"]?hcloud_server\.inngest['\"]?(\s|\\|$)")
+def runs_of(st):
+    return st.get("run") if isinstance(st.get("run"), str) else ""
+first_plan = next((i for i, st in enumerate(steps) if (isinstance(st.get("name"), str) and (st["name"].startswith("Terraform plan") or st["name"].startswith("Terraform apply"))) or (i != idx and re.search(r"terraform\s+(plan|apply)|-replace", runs_of(st)))), 10**6)
+pat = re.compile(r"-replace(=|[ \t]+)['\"]?[^\s'\"]*hcloud_server\.inngest")
+jb = d["jobs"][job]
+defaults_bad = "1" if (d.get("defaults") or jb.get("defaults") or any(k in (jb.get("env") or {}) for k in ("BASH_ENV", "ENV", "PATH", "SHELLOPTS"))) else "0"
 rj, bad = 0, []
 for jn, j in d["jobs"].items():
     runs = "\n".join(s.get("run", "") for s in (j.get("steps") or []) if isinstance(s.get("run"), str))
@@ -151,6 +161,7 @@ meta = {
     "order_ok": "1" if 0 <= idx < first_plan else "0",
     "replace_jobs_n": rj,
     "replace_jobs_bad": ",".join(bad),
+    "defaults_bad": defaults_bad,
 }
 open(out + "/meta", "w").write("\n".join("%s=%s" % kv for kv in meta.items()) + "\n")
 PY
@@ -196,6 +207,7 @@ rows() {
   run_step "$od" "$PATH_FULL" "$TOK" invalid val 'done'; rc=$RUN_RC;                   expect names-invalid-json 1
   run_step "$od" "$PATH_FULL" "$TOK" array val 'done'; rc=$RUN_RC;                     expect names-not-object 1
   run_step "$od" "$PATH_FULL" "$TOK" rc1 val 'done'; rc=$RUN_RC;                       expect names-rc1 1
+  run_step "$od" "$PATH_FULL" "$TOK" rc124 val 'done'; rc=$RUN_RC;                     expect names-timeout 1 'exit 124 - timed out after 30s'
   run_step "$od" "$PATH_NODOP" "$TOK" ok_key val 'done'; rc=$RUN_RC;                   expect doppler-missing 1
   run_step "$od" "$PATH_NOJQ" "$TOK" ok_key val 'done'; rc=$RUN_RC;                    expect jq-missing 1
   run_step "$od" "$PATH_FULL" "$TOK" ok_key fail ''; rc=$RUN_RC;                       expect get-fails 1
@@ -213,8 +225,8 @@ rows() {
   run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'armed'; rc=$RUN_RC;                   expect value-armed 0 'WILL strand the scheduler'
   run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'flipping'; rc=$RUN_RC;                expect value-flipping 0 'WILL strand the scheduler'
   run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'weird'; rc=$RUN_RC;                   expect value-other 0 'outside inngest-server-flip-guard'
-  run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'Bad Value!'; rc=$RUN_RC;              expect value-bad-shape 0 'unexpected shape'
-  if grep -qF 'Bad Value' "$LAST_OUT"; then printf 'BAD:value-bad-shape(value-echoed)\n'; fi
+  run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'Leak-Canary-9Z-0123456789-longer'; rc=$RUN_RC; expect value-bad-shape 0 'unexpected shape'
+  if grep -qF 'Leak-Canary' "$LAST_OUT" "$LAST_SUMMARY"; then printf 'BAD:value-bad-shape(value-echoed)\n'; fi
   run_step "$od" "$PATH_FULL" "$TOK" ok_key val 'done' 'xtrace'; rc=$RUN_RC;           expect xtrace-refused 78
   return 0
 }
@@ -230,11 +242,13 @@ static_viol() {
   [ "$(meta_get "$od" order_ok)" = "1" ] || printf 'VIOL:step-order\n'
   [ -z "$(meta_get "$od" replace_jobs_bad)" ] || printf 'VIOL:replace-job-unguarded\n'
   case "$(meta_get "$od" replace_jobs_n)" in ''|*[!0-9]*|0) printf 'VIOL:replace-job-vacuous\n' ;; esac
+  [ "$(meta_get "$od" defaults_bad)" = "0" ] || printf 'VIOL:defaults-or-shell-env\n'
+  [ "$(grep -c 'timeout 30 doppler secrets' "$od/body.sh")" = "2" ] || printf 'VIOL:timeout-pin\n'
   [ "$(meta_get "$od" env_keys)" = "$SECRET_NAME" ] || printf 'VIOL:env-keys\n'
   [ "$(meta_get "$od" env_vals)" = '${{ secrets.'"$SECRET_NAME"' }}' ] || printf 'VIOL:env-value\n'
   local n; n="$(meta_get "$od" body_lines)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  [ "$n" -ge 40 ] || printf 'VIOL:body-too-short\n'
+  [ "$n" -ge 60 ] || printf 'VIOL:body-too-short\n'
   if grep -qE 'secrets\.|secrets\[|toJSON\(' "$od/body.sh"; then printf 'VIOL:body-secrets-access\n'; fi
   if grep -qF "$OLD_SECRET" "$wf"; then printf 'VIOL:residual-arm-reference\n'; fi
   if ! grep -qE '^[[:space:]]*case "\$-" in \*x\*\)' "$od/body.sh"; then printf 'VIOL:xtrace-refusal-missing\n'; fi
@@ -251,6 +265,12 @@ scan_viol() {
   [ "$f" = "apply-web-platform-infra.yml " ] || printf 'VIOL:flip-read-secret-readers\n'
   n="$(grep -rIiEh 'secrets(\.|\[[^]]*)doppler_token_inngest_flip_read' "$gh" 2>/dev/null | grep -vcE '^[[:space:]]*#')"
   [ "$n" = "1" ] || printf 'VIOL:flip-read-ref-count\n'
+  # Dynamic whole-context spellings reach either secret without naming it; no workflow uses them today.
+  n="$(grep -rIiEh 'tojson\(secrets\)|join\(secrets|secrets\[[[:space:]]*format\(' "$gh/workflows" "$gh/actions" 2>/dev/null | grep -vcE '^[[:space:]]*#')"
+  [ "$n" = "0" ] || printf 'VIOL:dynamic-secrets\n'
+  # A host replace of hcloud_server.inngest anywhere in .github/workflows or .github/actions other than the guarded job's file.
+  f="$(grep -rIlE -e "-replace(=|[[:space:]]+)['\"]?[^[:space:]'\"]*hcloud_server\.inngest" "$gh/workflows" "$gh/actions" 2>/dev/null | sed 's#.*/##' | sort | tr '\n' ' ')"
+  [ "$f" = "apply-web-platform-infra.yml " ] || printf 'VIOL:replace-elsewhere\n'
 }
 
 # tf_viol <tf> <drift> <inventory> <workflow> [infra-dir]: prints one VIOL:<code> per Guard 3 violation.
@@ -272,6 +292,7 @@ tf_viol() {
   case "$norm" in *' repository = "soleur" '*) : ;; *) printf 'VIOL:repository\n' ;; esac
   case "$norm" in *' name = "inngest-ci-flip-read" '*) : ;; *) printf 'VIOL:token-name\n' ;; esac
   case "$norm" in *lifecycle*|*ignore_changes*) printf 'VIOL:lifecycle\n' ;; esac
+  [ "$(printf '%s' "$norm" | grep -o 'resource "github_actions_secret"' | wc -l)" = "1" ] || printf 'VIOL:secret-resource-count\n'
   n=0
   for f in "$infra"/*.tf; do
     case "$(sed -e 's/#.*//' -e 's#//.*##' "$f" | tr -s '[:space:]' ' ')" in
@@ -281,7 +302,7 @@ tf_viol() {
   [ "$n" = "1" ] || printf 'VIOL:secret-name-unique\n'
   for f in "$infra"/*.tf; do
     case "$(basename "$f")" in inngest-arm-write-token.tf) continue ;; esac
-    if sed -e 's/#.*//' -e 's#//.*##' "$f" | grep -q 'doppler_service_token\.inngest_arm_write\.key'; then printf 'VIOL:arm-key-elsewhere\n'; fi
+    if sed -e 's/#.*//' -e 's#//.*##' "$f" | grep -q 'doppler_service_token\.inngest_arm_write'; then printf 'VIOL:arm-key-elsewhere\n'; fi
   done
   local od="$SANDBOX/tfwf.$MUTANTS_RUN"; extract_step "$wf" "$od"
   [ "$(meta_get "$od" env_keys)" = "$SECRET_NAME" ] || printf 'VIOL:preflight-env-name\n'
@@ -352,12 +373,36 @@ d["jobs"]["zz_replace"] = {"runs-on": "ubuntu-latest", "steps": [{"name": "apply
 yaml.safe_dump(d, open(sys.argv[2], "w"))
 PYM
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(static_viol "$m" m18)" 'VIOL:replace-job-unguarded' "G1 m18: a second job that replaces the host without the preflight -> RED"
+  mutate "$WF_REAL" g1m21 2 -e "$RNG{" -e 's/chars, value withheld/chars, value ${FLAG}/' -e '}'; m=$MUT; need "$(rows "$m" m21)" '(value-echoed)' "G1 m21: the unexpected flag value echoed to the log -> RED"
+  mutate "$WF_REAL" g1m22 2 -e "$RNG{" -e 's/timeout 30 doppler secrets --only-names/doppler secrets --only-names/' -e '}'; m=$MUT; need "$(static_viol "$m" m22)" 'VIOL:timeout-pin' "G1 m22: the timeout dropped from a doppler call -> RED"
+  mutate "$WF_REAL" g1m24 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Scoped replace\\n        run: terraform apply -auto-approve"; m=$MUT; need "$(static_viol "$m" m24)" 'VIOL:step-order' "G1 m24: a terraform apply step (any name) ahead of the preflight -> RED"
+  m="$SANDBOX/mut.g1m23.yml"
+  python3 - "$WF_REAL" "$m" "$JOB" <<'PYM'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+d["jobs"][sys.argv[3]]["defaults"] = {"run": {"shell": "true {0}"}}
+yaml.safe_dump(d, open(sys.argv[2], "w"))
+PYM
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(static_viol "$m" m23)" 'VIOL:defaults-or-shell-env' "G1 m23: a job-level default shell that turns the body into a no-op -> RED"
+  m="$SANDBOX/mut.g1m25.yml"
+  python3 - "$WF_REAL" "$m" <<'PYM'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+d["jobs"]["zz_replace"] = {"runs-on": "ubuntu-latest", "steps": [{"name": "apply", "run": "terraform apply -replace hcloud_server.inngest -auto-approve\n"}]}
+yaml.safe_dump(d, open(sys.argv[2], "w"))
+PYM
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(static_viol "$m" m25)" 'VIOL:replace-job-unguarded' "G1 m25: a second job replacing the host with the space-separated -replace spelling -> RED"
   ghm="$SANDBOX/ghm"; assert_fixture_dir "$ghm"; mkdir -p "$ghm"; cp -r "$ROOT/.github/workflows" "$ghm/"; cp -r "$ROOT/.github/actions" "$ghm/"
   printf 'name: zz\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n    env:\n      X: ${{ secrets['"'"'doppler_token_inngest_arm'"'"'] }}\n    steps:\n      - run: "true"\n' > "$ghm/workflows/zz-arm.yml"
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(scan_viol "$ghm")" 'VIOL:arm-secret-readers' "G1 m19: a new workflow reading the arm secret (lowercase bracket spelling) -> RED"
   rm -f "$ghm/workflows/zz-arm.yml"
   printf 'name: zz\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n    env:\n      X: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}\n    steps:\n      - run: "true"\n' > "$ghm/workflows/zz-flip.yml"
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(scan_viol "$ghm")" 'VIOL:flip-read-secret-readers' "G1 m20: a new workflow reading the flip-read secret -> RED"
+  printf 'name: zz\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n    env:\n      ALL: ${{ toJSON(secrets) }}\n    steps:\n      - run: "true"\n' > "$ghm/workflows/zz-dyn.yml"
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(scan_viol "$ghm")" 'VIOL:dynamic-secrets' "G1 m26: a workflow handing the whole secrets context to a job -> RED"
+  rm -f "$ghm/workflows/zz-dyn.yml"
+  printf 'name: zz\non: workflow_dispatch\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: terraform apply -replace hcloud_server.inngest\n' > "$ghm/workflows/zz-repl.yml"
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(scan_viol "$ghm")" 'VIOL:replace-elsewhere' "G1 m27: a host replace in a workflow file other than the guarded one -> RED"
   rm -rf "$ghm"
 
   echo "== Guard 3 mutants"
@@ -377,6 +422,11 @@ PYM
   need "$g" 'VIOL:secret-name-unique' "G3 m9: a second resource publishing the same secret name -> RED"
   need "$g" 'VIOL:arm-key-elsewhere' "G3 m10: the arm key referenced outside its own file -> RED"
   rm -f "$im/zz-dup.tf"
+  printf 'locals {\n  k = jsonencode(doppler_service_token.inngest_arm_write)\n}\n' > "$im/zz-dup.tf"
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(tf_viol "$im/inngest-flip-read-token.tf" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL" "$im")" 'VIOL:arm-key-elsewhere' "G3 m14: the whole arm token resource referenced outside its own file -> RED"
+  rm -f "$im/zz-dup.tf"
+  m="$SANDBOX/mut.g3m15"; cp "$TF_REAL" "$m"; printf '\nresource "github_actions_secret" "second" {\n  repository      = "soleur"\n  secret_name     = "OTHER"\n  encrypted_value = "x"\n}\n' >> "$m"; MUTANTS_RUN=$((MUTANTS_RUN + 1))
+  need "$(tf_viol "$m" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL")" 'VIOL:secret-resource-count' "G3 m15: a second github_actions_secret resource in the token file -> RED"
   mutate "$TF_REAL" g3m11 1 '/^  access  *= *"read"$/a\  lifecycle { ignore_changes = [name] }'; need "$(tf_viol "$MUT" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL")" 'VIOL:lifecycle' "G3 m11: a lifecycle/ignore_changes block -> RED"
   mutate "$TF_REAL" g3m12 2 's/^  repository  *= *"soleur"/  repository      = "other"/'; need "$(tf_viol "$MUT" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL")" 'VIOL:repository' "G3 m12: the secret published to another repository -> RED"
   mutate "$TF_REAL" g3m13 2 's/^  name  *= *"inngest-ci-flip-read"/  name    = "inngest-boot"/'; need "$(tf_viol "$MUT" "$DRIFT_REAL" "$INVENTORY_REAL" "$WF_REAL")" 'VIOL:token-name' "G3 m13: the token name colliding with an existing token -> RED"
@@ -392,7 +442,7 @@ fi
 TOTAL=$((passes + fails))
 printf '\n== %d passed, %d failed (%d assertions, %d stubbed executions in the control, %d mutants)\n' "$passes" "$fails" "$TOTAL" "$CONTROL_ROWS" "$MUTANTS_RUN"
 # Anti-vacuity floors, reported with printf + exit so a neutered pass()/fail() cannot hide them.
-MIN_ASSERTIONS=39; MIN_MUTANTS=31; MIN_CONTROL_ROWS=18
+MIN_ASSERTIONS=48; MIN_MUTANTS=40; MIN_CONTROL_ROWS=19
 if [ "$TOTAL" -lt "$MIN_ASSERTIONS" ]; then printf 'FAIL FLOOR: %d assertions ran, floor %d\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 1; fi
 if [ "$fails" -eq 0 ]; then
   if [ "$MUTANTS_RUN" -lt "$MIN_MUTANTS" ]; then printf 'FAIL FLOOR: %d mutants ran, floor %d\n' "$MUTANTS_RUN" "$MIN_MUTANTS" >&2; exit 1; fi
