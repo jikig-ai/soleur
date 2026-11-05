@@ -41,10 +41,6 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "volume-bound",
     reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested module",
   },
-  "cron-agent-spawn-stale-settle": {
-    placement: "volume-bound",
-    reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested settle path it sweeps with (#8839)",
-  },
   "cfo-on-payment-failed": {
     placement: "volume-bound",
     reason: "conservative pin: reaches server/workspace-resolver.ts only through byok-resolver.ts resolveCurrentWorkspaceId (a Supabase lookup, no filesystem access); moving that helper to a filesystem-free module unpins it (#9137)",
