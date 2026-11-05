@@ -368,18 +368,18 @@ Blind-surface note (plan Phase 2.9.2): the cc dispatcher is a container dispatch
 
 ### Pre-merge (PR)
 
-- [ ] `cc-dispatcher.ts` constructs exactly one `ExecutionGrants` inside `realSdkQueryFactory` and passes `approval: createApprovalGateDeps({ ... grants })` and `approvalFailClosed: true` in `ccDeps` (Guard 3 presence pins green).
-- [ ] With `approvalFailClosed` set, each of the eight `APPROVAL_REQUIRED_TOOLS` denies with the static unavailable text and sends no review card when approval is absent, when the flag seam returns false, and when it throws; wiring-absent mirrors one Sentry error `approval-gate-failed` with `extra.stage = wiring-absent`, null first argument, no tool input in the payload (Guard 1).
-- [ ] With `approvalFailClosed` unset, behavior is byte-identical (review card for a required tool with approval absent; card for flag off): pinned by a test.
-- [ ] The three exempt CRM writes, with the switch set and approval wired and the flag seam returning true, never call `isEnabled`, show the review card, and deny on Reject (no per-tool flag read for non-required tools).
-- [ ] The derived sweep (Guard 2) is green (registered intersect required is empty; every registered gated tool is exempt; floor met) and fails naming the tool under each mutation row.
-- [ ] Each Guard 1 mutation row was applied once to the implementation during work and the named test went RED (recorded in the PR).
-- [ ] `runner-census.test.ts` no longer forbids the wiring; the negative "cc registers no slice-1 tool and imports none of their builders" census still passes.
-- [ ] The cc real-factory wiring test asserts distinct grants per factory invocation, `enforcing === false` at construction, the switch, and that no required tool is in the final `allowedTools`.
-- [ ] `readCcMcpAllowlist` still throws for every `APPROVAL_REQUIRED_TOOLS` short name, matches `/approval/i`, and its message no longer claims "no approval wiring".
-- [ ] ADR-309 carries the dated addendum, the corrected sentinel bullet, and no universal statement that the addendum contradicts; no `.c4` change; `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
+- [x] `cc-dispatcher.ts` constructs exactly one `ExecutionGrants` inside `realSdkQueryFactory` and passes `approval: createApprovalGateDeps({ ... grants })` and `approvalFailClosed: true` in `ccDeps` (Guard 3 presence pins green).
+- [x] With `approvalFailClosed` set, each of the eight `APPROVAL_REQUIRED_TOOLS` denies with the static unavailable text and sends no review card when approval is absent, when the flag seam returns false, and when it throws; wiring-absent mirrors one Sentry error `approval-gate-failed` with `extra.stage = wiring-absent`, null first argument, no tool input in the payload (Guard 1).
+- [x] With `approvalFailClosed` unset, behavior is byte-identical (review card for a required tool with approval absent; card for flag off): pinned by a test.
+- [x] The three exempt CRM writes, with the switch set and approval wired and the flag seam returning true, never call `isEnabled`, show the review card, and deny on Reject (no per-tool flag read for non-required tools).
+- [x] The derived sweep (Guard 2) is green (registered intersect required is empty; every registered gated tool is exempt; floor met) and fails naming the tool under each mutation row.
+- [x] Each Guard 1 mutation row was applied once to the implementation during work and the named test went RED (recorded in the PR).
+- [x] `runner-census.test.ts` no longer forbids the wiring; the negative "cc registers no slice-1 tool and imports none of their builders" census still passes.
+- [x] The cc real-factory wiring test asserts distinct grants per factory invocation, `enforcing === false` at construction, the switch, and that no required tool is in the final `allowedTools`.
+- [x] `readCcMcpAllowlist` still throws for every `APPROVAL_REQUIRED_TOOLS` short name, matches `/approval/i`, and its message no longer claims "no approval wiring".
+- [x] ADR-309 carries the dated addendum, the corrected sentinel bullet, and no universal statement that the addendum contradicts; no `.c4` change; `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
 - [ ] PR title/body use only `Ref #11635` and `Ref #9601`, no close keyword. No new issue is filed. No other `#`-number appears in any line this PR adds (existing comments the PR leaves untouched may carry theirs; scope the check to added lines), and no issue number from the range the task brief excludes.
-- [ ] The Guard 1 mutation battery anchors are intact: `bash apps/web-platform/test/approval-guard1-mutation.test.sh --check-anchors` reports no anchor mismatch.
+- [x] The Guard 1 mutation battery anchors are intact: `bash apps/web-platform/test/approval-guard1-mutation.test.sh --check-anchors` reports no anchor mismatch.
 
 ### Post-merge
 
