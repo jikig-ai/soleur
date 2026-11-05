@@ -64,6 +64,11 @@
 - P3 batch: alert comment suffix, verdict-map row, runbook/tasks token fixes, followthrough newest-row conjunct + dead code, test mock .lt/.or/.order/.limit.
 - Trailer emitted 9cd5d37d3f (Reviewed-Coverage: full 9/9). Next: soleur:compound → soleur:ship → postmerge.
 
+## Rebase State (conflict resolution in progress)
+- PR #12064 CONFLICTING vs origin/main — 9 files: suite-durations/shard-legs TSVs (regenerate via regenerate-shard-manifest.py), legal-doc-shas.ts (re-pin via check-tc-document-sha.sh after legal content resolves), data-protection-disclosure/gdpr-policy/privacy-policy canonical+mirror, compliance-posture.md (content merge).
+- PR body closes list verified: "Closes #8780" + "Ref #10136" — #10136 must NOT be a Closes (owner confirmation pending). Remaining issues to add as Closes at ship: #9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624.
+- Pipeline remaining after rebase: push -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. Operator step pending: #10136 zot accepted-risk owner confirmation.
+
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
