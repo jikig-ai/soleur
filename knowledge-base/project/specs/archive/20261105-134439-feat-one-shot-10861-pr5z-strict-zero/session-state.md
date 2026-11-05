@@ -64,3 +64,7 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 ### Ship state (2026-11-05, last SHA f40cc68b1c → next commits are archive+ready)
 - PR body set per task 5.1 + semver:patch label; Reviewed trailers on fafd182aaa/d052789e64.
 - Remaining: archive-kb → commit+push → `gh pr ready 12127` → `gh pr merge 12127 --squash --auto` → poll MERGED (merge queue: keep polling on BEHIND, never sync) → postmerge → close-out: #10861 comment (marker `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0` + audit line `suites=732 gap_suites=0 unaudited=0 stale=0` + slice links #11226/#11950/#12050/#12093/#12116/#12127) → `gh pr edit 12127 --remove-label s4-drain` → #10448 mirror comment.
+
+### Resume point (post-ready, 2026-11-05 ~14:00)
+- HEAD 4227134249 pushed; PR #12127 marked READY; wait-ready-run armed (K=1).
+- Next: on exit 0 → `gh pr merge 12127 --squash --auto` → poll state→MERGED (merge queue; BEHIND/queue_wait is expected, never sync/update-branch by hand; today's queue latency ~70min) → postmerge checks → close-out: `gh issue comment 10861` with final marker `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0` + audit line `suites=732 gap_suites=0 unaudited=0 stale=0` + slice links #11226/#11950/#12050/#12093/#12116/#12127 → `gh pr edit 12127 --remove-label s4-drain` → `gh issue comment 10448` mirror.
