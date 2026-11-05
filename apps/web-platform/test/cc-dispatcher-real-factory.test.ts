@@ -393,6 +393,8 @@ import { realSdkQueryFactory } from "@/server/cc-dispatcher";
 import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
 import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
 import { createCanUseTool } from "@/server/permission-callback";
+import { ExecutionGrants } from "@/server/approval/grants";
+import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
 
 // Helper: build a fake Query that the SDK mock returns.
 function makeFakeQuery() {
@@ -824,6 +826,52 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // rendering connect-repo copy to a connected user.
     mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: true });
     expect(await readDep()).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Approval wiring (ADR-309 addendum): the live ccDeps object carries the gate dependency, one fresh grants object per
+  // factory invocation, and the fail-closed switch. A source-text census cannot see the live object; this can.
+  // -------------------------------------------------------------------------
+  describe("approval wiring on the live canUseTool deps", () => {
+    type CcApprovalDeps = {
+      approval?: { grants: { enforcing: boolean }; workspaceId: string };
+      approvalFailClosed?: boolean;
+    };
+    const capture = async (): Promise<CcApprovalDeps> => {
+      const mock = createCanUseTool as unknown as { mockClear(): void; mock: { calls: unknown[][] } };
+      mock.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const ctx = mock.mock.calls[0][0] as { deps: CcApprovalDeps };
+      return ctx.deps;
+    };
+
+    it("carries the gate dependency, a grants object with enforcing off, and the fail-closed switch", async () => {
+      const deps = await capture();
+      expect(deps.approval).toBeDefined();
+      expect(deps.approval?.grants).toBeInstanceOf(ExecutionGrants);
+      expect(deps.approval?.grants.enforcing).toBe(false);
+      expect(deps.approvalFailClosed).toBe(true);
+    });
+
+    it("binds the gate to the resolved active workspace", async () => {
+      const deps = await capture();
+      // The default fixture resolves the solo workspace, whose id is the user id.
+      expect(deps.approval?.workspaceId).toBe("user-1");
+    });
+
+    it("builds a distinct grants object per factory invocation (never module scope, so none leaks across Queries)", async () => {
+      const first = await capture();
+      const second = await capture();
+      expect(first.approval?.grants).toBeDefined();
+      expect(second.approval?.grants).toBeDefined();
+      expect(second.approval?.grants).not.toBe(first.approval?.grants);
+    });
+
+    it("registers no approval-required tool in the final allowedTools", async () => {
+      await realSdkQueryFactory(makeArgs());
+      const opts = mockQuery.mock.calls[0][0].options;
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(opts.allowedTools).not.toContain(tool);
+    });
   });
 
   // -------------------------------------------------------------------------

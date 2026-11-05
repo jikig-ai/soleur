@@ -304,6 +304,8 @@ const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { isApprovalRequiredTool } from "./approval/tools";
+import { createApprovalGateDeps } from "./approval/gate";
+import { ExecutionGrants } from "./approval/grants";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -316,9 +318,9 @@ import { isApprovalRequiredTool } from "./approval/tools";
  * whitespace-only env. Throws a plain Error if any short-name in the env
  * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
  * tools — cross-tenant credentials by construction), or (b) an
- * approval-required tool (`isApprovalRequiredTool`; ADR-309: the cc runner has
- * no approval wiring, so a promoted approval tool would run on the legacy
- * in-memory gate and skip the queue). Phase 1 does NOT yet build a populated
+ * approval-required tool (`isApprovalRequiredTool`; ADR-309: no cc tool builder
+ * is wired to the execution grants, so a promoted approval tool could not be
+ * bound to an approval). Phase 1 does NOT yet build a populated
  * `soleur_platform` server even when valid names are present — promotion is
  * Phase 2 (#3722).
  *
@@ -347,11 +349,12 @@ export function readCcMcpAllowlist(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
       );
     }
-    // #4672 — the cc runner has no approval wiring, so a promoted approval tool would run on the legacy in-memory gate
-    // and silently skip the queue. Refuse it here (static message; the short name is the only env echo).
+    // No cc tool builder is wired to the execution grants (the gate and the grants object exist on this path, but nothing
+    // reads a grant), so a promoted approval tool could not be bound to an approval. Refuse it here as the backstop
+    // (static message; the short name is the only env echo).
     if (isApprovalRequiredTool(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the cc runner has no approval wiring (ADR-309)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309 approval)`,
       );
     }
   }
@@ -2894,6 +2897,10 @@ export const realSdkQueryFactory: QueryFactory = async (
     gitAskpassScriptPath = writeAskpassScriptTo(askpassDir, ".soleur-askpass.sh");
   }
 
+  // One grants object per factory invocation, i.e. per Query (never module scope: it must not leak across users or
+  // Queries). Sticky `enforcing` therefore spans every turn of this Query. See the ADR-309 addendum.
+  const approvalGrants = new ExecutionGrants();
+
   const ccDeps: CanUseToolDeps = {
     abortableReviewGate: (
       ccSession,
@@ -2967,6 +2974,17 @@ export const realSdkQueryFactory: QueryFactory = async (
       workspacePath,
     }),
     connectedRepoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
+    // The durable approval flow's dependency, built from the same factory the legacy runner uses. Construction touches no
+    // database, flag or network: everything is closure-only until an approval-required tool reaches the gate.
+    approval: createApprovalGateDeps({
+      userId: args.userId,
+      workspaceId: activeWorkspaceId,
+      repoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
+      workspacePath,
+      grants: approvalGrants,
+    }),
+    // cc never answers an approval-required tool from the in-memory review card: no verdict from the flow means deny.
+    approvalFailClosed: true,
     // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
     // releases, BEFORE allowing the held command. A release that did not
     // actually write the ack (cross-frame attempt, transient ack-write fault)

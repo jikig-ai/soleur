@@ -36,7 +36,8 @@ import {
 } from "./review-gate";
 import { getToolTier, buildGateCard, buildOfflineGateMessage, pluginToolPrefix, type ToolTier } from "./tool-tiers";
 import { isApprovalRequiredTool } from "./approval/tools";
-import { runApprovalGate } from "./approval/gate-flow";
+import { APPROVAL_UNAVAILABLE_DENY, runApprovalGate } from "./approval/gate-flow";
+import { reportApprovalOp } from "./approval/ops";
 import type { ApprovalGateDeps } from "./approval/gate-types";
 import {
   isFileTool,
@@ -298,6 +299,13 @@ export interface CanUseToolDeps {
    * module that can decide an approval (the agent shares this process): see approval/decide.ts.
    */
   approval?: ApprovalGateDeps;
+  /**
+   * Set only by the cc dispatcher (ADR-309 addendum). When true, an `APPROVAL_REQUIRED_TOOLS` member that the approval
+   * flow gave no verdict for (the `approval` dependency is absent, the flag is off, or the flag read failed) is DENIED
+   * with the static unavailable text instead of falling through to the in-memory review card. Unset (the legacy runner and
+   * every existing fixture) leaves the gated branch unchanged. Expected to become the default once the flag is promoted.
+   */
+  approvalFailClosed?: boolean;
 }
 
 export interface CanUseToolContext {
@@ -1508,6 +1516,35 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             logDecision: (name, decision, reason) => logPermissionDecision("canUseTool-platform-gated", name, decision, reason),
           });
           if (approvalVerdict !== null) return approvalVerdict;
+        }
+
+        // cc only (`approvalFailClosed`): the approval flow gave no verdict for a required tool (the dependency is absent,
+        // or the flag is off or unreadable), and that tool must never be answered from the requester-answerable in-memory
+        // card below. Static text only, no tool input echoed. A missing dependency is a wiring defect and goes to Sentry
+        // (existing op, told apart by `stage`); flag off or unreadable is a normal dormant state and a read failure is
+        // already mirrored by the flag seam, so those two only log.
+        if (deps.approvalFailClosed && isApprovalRequiredTool(toolName)) {
+          if (!deps.approval) {
+            reportApprovalOp("gateFailed", null, {
+              toolName,
+              conversationId: ctx.conversationId,
+              userId: ctx.userId,
+              extra: { stage: "wiring-absent" },
+            });
+          }
+          log.warn(
+            {
+              sec: true,
+              tool: toolName,
+              tier,
+              decision: "platform-gate-approval-fail-closed",
+              enforcing: deps.approval?.grants.enforcing ?? false,
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Platform tool gate refused: the approval flow gave no verdict for an approval-required tool",
+          );
+          logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "approval flow gave no verdict");
+          return { behavior: "deny" as const, message: APPROVAL_UNAVAILABLE_DENY };
         }
 
         const gateId = randomUUID();
