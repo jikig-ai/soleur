@@ -54,7 +54,7 @@ An issue id must match `^[A-Za-z0-9_-]+$`. An id outside that grammar is not exe
 
 The `prd_terraform` Doppler config is the wrong config for Sentry and for Supabase.
 
-The application ref `ifsccnjhymdmidffkzhl` is always the Supabase command. A second Supabase command, with the same `--since` and `-c prd`, runs only when the founder gives the project name `soleur-inngest-prd` or the ref `pigsfuxruiopinouvjwy`: `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref pigsfuxruiopinouvjwy --since <the same window>`. The word inngest alone does not add this second command. Do not replace the application query. The card names the ref that was queried and says the other ref was not queried.
+The application ref `ifsccnjhymdmidffkzhl` is always the Supabase command. A second Supabase command, with the same `--since` and `-c prd`, runs only when the founder gives the project name `soleur-inngest-prd` or the ref `pigsfuxruiopinouvjwy`: `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref pigsfuxruiopinouvjwy --since <the same window>`. The word inngest alone does not add this second command. Do not replace the application query. The application card line always carries `ref=ifsccnjhymdmidffkzhl`. When the second command runs, its result is a separate card line carrying `ref=pigsfuxruiopinouvjwy`, and the marker stays the application exit. Otherwise the application line says the other ref was not queried.
 
 Better Stack names table `t520508_soleur_inngest_vector_prd_3_logs` and `limit=100`. Do not decode `.raw`. Do not pass `--no-archive`. Exit 3 is `verdict=never-ran`. Exit 2 and exit 78 are `verdict=unverified` `reason=credential-refused`. Do not print stderr. Exit 0 with an empty body is `exit=0` and `stdout-empty`. That does not say the table or the archive had no rows. It is not health and it is not disproof of the complaint. Exit 0 with a body counts lines containing `"raw"`, and `truncated=true` only when that count is 100. Any other Better Stack exit is `verdict=unverified` `reason=reader-exit-N`, and the body is not rows.
 
@@ -62,7 +62,7 @@ Supabase copies the stdout `verdict=` and `reason=` pair and does not copy `rows
 
 Sentry exit 77 is `verdict=unverified` `reason=401`. Exit 78 is `verdict=unverified` `reason=credential-refused`. Exit 1 is `verdict=unverified` `reason=reader-exit-1`. No retry, the body is not shown, and the skill does not halt. Any reader exit this section does not name is `verdict=unverified` `reason=reader-exit-N`.
 
-Each source gets a line. One failure does not skip the others or the nineteen-field interview. If the `doppler` binary is missing, all three are `verdict=never-ran` `reason=wrapper`. If `prd` cannot be read and `prd_terraform` can, Better Stack still runs and Sentry and Supabase are `verdict=never-ran` `reason=wrapper`. Do not parse wrapper stdout as rows. Do not start `doppler login`. Do not run `scripts/ensure-doppler.sh`. Do not re-exec.
+Each source gets a line. One failure does not skip the others or the nineteen-field interview. If the `doppler` binary is missing, all three are `verdict=never-ran` `reason=wrapper`. If `prd` cannot be read and `prd_terraform` can, Better Stack still runs and Sentry and Supabase are `verdict=never-ran` `reason=wrapper`. Do not parse wrapper stdout as rows. Do not start `doppler login`. Do not run `scripts/ensure-doppler.sh`. Do not re-exec. A Better Stack or Supabase line that ran, or that the Doppler wrapper skipped, appends `window=` of the allowlisted value or the default. A `reason=usage` line does not print the refused window.
 
 Print one stdout marker per source, with no log body: `SOLEUR_INCIDENT_PULL source=<betterstack|sentry|supabase> verdict=<queried|not-queried|unverified|never-ran>`. A `reason=` suffix is allowed. The verdict set does not grow.
 
@@ -73,6 +73,8 @@ The card is not written under `post-mortems/`. When the founder confirms the car
 Run this fence from the worktree root that contains `scripts/`, as one shell. Create each stdout temp with `mktemp` outside the repository, mode `0600`, and remove it on `EXIT INT TERM HUP`. Redirect stdout on the reader command and discard stderr. Do not print the temp path on the pass path or the fail path. Do not `Read` or `cat` the temp. `pull-card.sh` is the only reader of that temp. Show the card only when the sentinel exits 0. A zero-byte card emits `SOLEUR_INCIDENT_PULL` with `reason=card-empty`, shows nothing, does not print `SOLEUR_INCIDENT_HALT`, and starts the nineteen-field interview. Sentinel exit 1 on the card emits `SOLEUR_INCIDENT_PULL` with `reason=card-redaction-failed`, prints no offset line, does not print the temp path, does not print `SOLEUR_INCIDENT_HALT`, does not enter Phase 6's iterate-until-clean loop, and still starts the interview. Phase 6's loop is unchanged. Exit 2 prints `SOLEUR_INCIDENT_HALT` and shows nothing.
 
 ```bash
+# Paste the Phase 6 SENTINEL assignment above the readability check before running this fence.
+# Each fence is its own shell, so the later assignment does not survive. Do not add a second copy of the sentinel path to this file.
 set +e
 set -u
 bs_out="$(mktemp)"
@@ -128,11 +130,12 @@ if [[ -n "$bs_skip" ]]; then
   bs_line="betterstack verdict=never-ran reason=usage"
 elif [[ "$tf_ok" -ne 1 ]]; then
   echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=never-ran reason=wrapper"
-  bs_line="betterstack verdict=never-ran reason=wrapper"
+  bs_line="betterstack verdict=never-ran reason=wrapper window=${bs_since}"
 else
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since "$bs_since" >"$bs_out" 2>/dev/null
   bs_rc=$?
   bs_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" betterstack "$bs_rc" "$bs_out")"
+  bs_line="${bs_line} window=${bs_since}"
   if [[ "$bs_rc" -eq 0 ]]; then
     echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=queried"
   elif [[ "$bs_rc" -eq 3 ]]; then
@@ -148,7 +151,7 @@ if [[ -n "$sb_skip" ]]; then
   sb_line="supabase verdict=never-ran reason=usage"
 elif [[ "$prd_ok" -ne 1 ]]; then
   echo "SOLEUR_INCIDENT_PULL source=supabase verdict=never-ran reason=wrapper"
-  sb_line="supabase verdict=never-ran reason=wrapper"
+  sb_line="supabase verdict=never-ran reason=wrapper window=${sb_since}"
 else
   doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --since "$sb_since" >"$sb_out" 2>/dev/null
   sb_rc=$?
@@ -164,13 +167,15 @@ else
   else
     echo "SOLEUR_INCIDENT_PULL source=supabase verdict=unverified reason=reader-exit-${sb_rc}"
   fi
+  sb_line="${sb_line} ref=ifsccnjhymdmidffkzhl window=${sb_since}"
   if [[ "$sb_project" == "soleur-inngest-prd" || "$sb_project" == "pigsfuxruiopinouvjwy" ]]; then
     doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref pigsfuxruiopinouvjwy --since "$sb_since" >"$sb2_out" 2>/dev/null
     sb2_rc=$?
     sb2_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" supabase "$sb2_rc" "$sb2_out")"
-    sb_line="${sb_line} other-ref=pigsfuxruiopinouvjwy ${sb2_line}"
+    sb2_line="${sb2_line} ref=pigsfuxruiopinouvjwy window=${sb_since}"
+    sb_line="${sb_line}"$'\n'"${sb2_line}"
   else
-    sb_line="${sb_line} ref=ifsccnjhymdmidffkzhl other-ref=not-queried"
+    sb_line="${sb_line} other-ref=not-queried"
   fi
 fi
 if [[ -z "$issue_id" ]]; then
@@ -196,21 +201,26 @@ else
     echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=reader-exit-${sy_rc}"
   fi
 fi
+complaint_keep=""
+if [[ -n "$complaint" ]]; then
+  printf '%s\n' "$complaint" > "$complaint_out"
+  bash "$SENTINEL" "$complaint_out" >/dev/null 2>&1
+  complaint_rc=$?
+  if [[ "$complaint_rc" -eq 0 ]]; then
+    complaint_keep="$complaint"
+  elif [[ "$complaint_rc" -ne 1 ]]; then
+    echo "SOLEUR_INCIDENT_HALT reason=sentinel-exit-2"
+    exit 2
+  fi
+fi
 {
   printf '%s\n' "$bs_line"
   printf '%s\n' "$sb_line"
   printf '%s\n' "$sy_line"
-  if [[ -n "$complaint" ]]; then
-    printf '%s\n' "$complaint" > "$complaint_out"
-    bash "$SENTINEL" "$complaint_out" >/dev/null 2>&1
-    complaint_rc=$?
-    if [[ "$complaint_rc" -eq 0 ]]; then
-      printf 'complaint: %s\n' "$complaint"
-    elif [[ "$complaint_rc" -ne 1 ]]; then
-      echo "SOLEUR_INCIDENT_HALT reason=sentinel-exit-2"
-      exit 2
-    fi
+  if [[ -n "$complaint_keep" ]]; then
+    printf 'complaint: %s\n' "$complaint_keep"
   fi
+  # Before the card sentinel, replace this single hypotheses=none line only when one sentence can be built from the coverage fields above. Leave hypotheses=none otherwise.
   printf '%s\n' "hypotheses=none"
 } > "$card"
 if [[ ! -s "$card" ]]; then
@@ -232,8 +242,6 @@ else
   fi
 fi
 ```
-
-Before the sentinel, replace the single `hypotheses=none` line only when one sentence can be built from the coverage fields above. Leave `hypotheses=none` otherwise.
 
 > **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism*. The pull at the start of this phase is the only live read. Do not run a second pull from this note. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
 

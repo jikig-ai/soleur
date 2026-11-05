@@ -48,6 +48,7 @@ case "$source_name" in
   supabase)
     pair=""
     if [[ -r "$stdout_path" ]]; then
+      # Human stdout is log lines, then one verdict line last. An earlier line can carry both tokens. Keep the last complete pair. Do not copy rows=.
       pair="$(awk '
         {
           v = ""
@@ -57,9 +58,12 @@ case "$source_name" in
             if ($i ~ /^reason=/) r = $i
           }
           if (v != "" && r != "") {
-            print v, r
-            exit
+            last_v = v
+            last_r = r
           }
+        }
+        END {
+          if (last_v != "" && last_r != "") print last_v, last_r
         }
       ' "$stdout_path" 2>/dev/null || true)"
     fi

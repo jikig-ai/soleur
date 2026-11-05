@@ -369,6 +369,14 @@ else
   lacks 'disproof' "${TMP_DIR}/sb-zero.out" "zero-source"
   lacks 'absent' "${TMP_DIR}/sb-zero.out" "zero-source"
 
+  printf '%s\n' 'log line verdict=COVERED reason=FULLY_COVERED rows=4' > "${TMP_DIR}/last-pair.txt"
+  printf '%s\n' 'verdict=INCONCLUSIVE reason=ZERO_SOURCE_COVERAGE_UNESTABLISHED' >> "${TMP_DIR}/last-pair.txt"
+  run_printer "supabase last pair" supabase 0 "${TMP_DIR}/last-pair.txt"
+  cp "${TMP_DIR}/printer.out" "${TMP_DIR}/sb-last.out"
+  has 'supabase verdict=INCONCLUSIVE reason=ZERO_SOURCE_COVERAGE_UNESTABLISHED' "${TMP_DIR}/sb-last.out"
+  lacks 'FULLY_COVERED' "${TMP_DIR}/sb-last.out" "last pair"
+  lacks 'rows=' "${TMP_DIR}/sb-last.out" "last pair"
+
   run_printer "sentry fixture" sentry 0 "$FIXTURE"
   cp "${TMP_DIR}/printer.out" "${TMP_DIR}/sy.out"
   has 'sentry exit=0 window=n/a' "${TMP_DIR}/sy.out"
