@@ -71,7 +71,7 @@ CODE="$(grep -vE '^[[:space:]]*#' "$WF")"
 # Agent allowlist grants Write (the agent writes digest.md).
 # The quoting pin runs on the comment-stripped $CODE and is anchored at both ends: a rule left outside the
 # closing quote, or a quoted example sitting in a comment, must not satisfy it.
-if printf '%s\n' "$CODE" | grep -qE -- '^[[:space:]]+--allowedTools[[:space:]]+"[^"]*Bash\(gh pr list:\*\)[^"]*Bash\(gh issue list:\*\)[^"]*Bash\(git log:\*\)[^"]*"[[:space:]]*$'; then pass=$((pass+1)); else
+if grep -qE -- '^[[:space:]]+--allowedTools[[:space:]]+"[^"]*Bash\(gh pr list:\*\)[^"]*Bash\(gh issue list:\*\)[^"]*Bash\(git log:\*\)[^"]*"[[:space:]]*$' <<<"$CODE"; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: --allowedTools value must be one double-quoted run holding every spaced Bash(...) rule (claude_args is tokenised like a shell)" >&2; fi
 if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -cE >/dev/null '\bWrite\b'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: --allowedTools must contain Write" >&2; fi
