@@ -49,3 +49,7 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 - Residual absorbed: new suite `codeql-to-issues-sweep-wiring` (landed via #12070 during the queue wait) reads `.github/workflows/codeql-to-issues.yml` undeclared — real read → `AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS` edge declared (drift-disposition.tsv row 3).
 - Strict-zero asserted on the rebased tree: `test ! -f` baseline PASS; audit exit 0 `suites=732 gap_suites=0 gap_refs=0 unaudited=0 stale=0` (receipts/audit-final.txt); ratchet `exit=0 reason=pass live=0 baseline=0` + expected `oracle-inputs-changed` notice; ADR-276 closing line present; `PR_AFFECTED_LOCKED` intact; `CI_PR_AFFECTED` var 404.
 - Next: commit + push, then soleur:review → qa → compound → ship → Phase 5 close-out.
+
+### Review + QA (2026-11-05)
+- Panel 7/7 seats (code class, tier none; enumeration seat replaced architecture-strategist): 0 P1, 2 P2 (stale pre-strict-zero contract text), ~12 P3 — all fixed inline (73f497e48a, e22bdcce22) + trailers emitted (fafd182aaa full 7/7; d052789e64 fix-round 6/6).
+- QA: every Test Scenario is unit/integration — executed via suite rows 96-167 (738/738 green, mutants killed), strict-zero audit+ratchet on rebased tree, oracle notice, drift-disposition receipt. No UI/API surface → nothing else to QA.
