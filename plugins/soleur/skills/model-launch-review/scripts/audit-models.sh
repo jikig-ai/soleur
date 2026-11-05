@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-models.sh — deterministic auditor for the per-Anthropic-model-release checklist.
+# audit-models.sh — deterministic auditor for the Anthropic side of the per-model-release checklist (xAI item 6 and Devin item 7 are agent-run, not in this script).
 #
 # Modes:
 #   (default)   full audit report to stdout; every check group is named (no silent green).

@@ -105,6 +105,8 @@ describe("Devin harness", () => {
     expect(spawn.tool).toBe("run_subagent");
     expect(spawn.agent).toBe("soleur:legal:clo");
     expect(spawn.instruction).toContain("run_subagent");
-    expect(spawn.instruction).toContain("Inherit the session model");
+    expect(spawn.instruction).toContain("subagent_explore");
+    expect(spawn.instruction).toContain("subagent_general");
+    expect(spawn.instruction).toContain("profile, not a model");
   });
 });

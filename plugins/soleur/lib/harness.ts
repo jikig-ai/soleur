@@ -311,7 +311,10 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
 
   if (harness === "devin") {
     return (
-      `Use the **run_subagent** tool with agent \`${agentId}\` and this prompt:\n\n${prompt}`
+      `Use the **run_subagent** tool — profile \`subagent_explore\` when the task ` +
+      `needs read/grep/glob/web_search and nothing else (no exec/git/gh/webfetch), ` +
+      `otherwise \`subagent_general\` — passing the definition path for \`${agentId}\` ` +
+      `in this prompt:\n\n${prompt}`
     );
   }
 
@@ -391,8 +394,12 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
       agent: entry.id,
       prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the Devin compatibility instructions at ${resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md")}.\n\n${prompt}`,
       instruction:
-        `Spawn via **run_subagent** with agent \`${entry.id}\`. ` +
-        "Inherit the session model and permissions. " +
+        `Spawn via **run_subagent** — profile \`subagent_explore\` when the task ` +
+        "needs read/grep/glob/web_search and nothing else (no exec/git/gh/webfetch), " +
+        "otherwise `subagent_general`. `run_subagent` takes a profile, not a model " +
+        "and not a Soleur agent id — the id travels in the prompt's definition path. " +
+        "Explore lands on the router's default subagent model; general inherits the " +
+        "parent model. Permissions are inherited either way. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
     };
   }
@@ -561,7 +568,7 @@ export function pollInstructions(harness: Harness): string {
         // all, and that negative over the whole string is a stronger guard than any
         // phrase match that would have to replace it. The measurement it rests on lives
         // in `devin/INSTRUCTIONS.md` §Polling. Do not re-add the bullet to be helpful.
-        "- Arm the wait as a background **run_subagent** running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
+        "- Arm the wait as a background **run_subagent** (profile `subagent_general` — the loop needs `exec`) running an exit-coded poll loop: one exit code per actionable transition (`MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `postmerge verification complete`, check failure). Its completion notification is the only wake primitive, so the loop must EXIT to report.",
         "- Give the loop its own **bounded** exits, so a wait that ends without a transition is still diagnosable: a deadline exit (`Merge poll timed out`) and a probe-error exit (`gh` non-zero N consecutive ticks). An unbounded loop cannot report at all, because only its exit wakes you.",
         "- **Partially verified, and this is the part to watch.** Arming IS measured: on Devin CLI 3000.11.1 `run_subagent` returns immediately and the parent continues. Waking the parent on that subagent's completion is NOT yet measured end to end. So treat a missing wake as possible, not impossible: if no notification has arrived by the deadline you set, fall back to foreground **exec** `gh` probes on your own cadence and say in the deliverable that the wait ran foreground. Never report a merge or a deploy you did not observe.",
         "- Mutations (`gh pr update-branch`, the merge itself) stay in the foreground — never inside the waiting subagent.",
