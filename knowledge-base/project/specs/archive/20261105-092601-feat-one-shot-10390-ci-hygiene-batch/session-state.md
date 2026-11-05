@@ -90,4 +90,9 @@
   - AC-F1..F3: DPD §2.3(o) all-three-bearing + count fix canonical+mirror; PA-13(f)/PA-21/PA-22 superseded markers; PA-14 dated-marker amendment + ledger records entries; LUKS qualifier on all surfaces; legal-doc-shas re-pinned; legal gates green (sha/mirror-drift/scope-block/registers/consistency 43).
 - Affected gate queued behind sibling worktree run (advisory lock) — see /tmp/gate-final.log.
 - Next: gate green -> soleur:compound -> soleur:ship -> postmerge. Operator step: #10136 zot accepted-risk owner confirmation.
-echo done
+
+## Ship CI Rounds (2026-11-05)
+- Round 1: sibling-sweep + service-role gates -> allowlist entry + parity dependents (4259ec36b9).
+- Round 2: tenant-integration vitest x3 + model.c4 + sentry unrouted + EXECUTION_PLACEMENT (02b76c58da + dedup b37d19c2e2 + dup-row removal 5453f9dea8). GuardA drift red on deploy-script-tests is EXPECTED pre-merge state for carrier edits (#9081, non-required).
+- Advisory-only red: affected-index-ratchet (stale-accept, pre-existing main-side pairs).
+- PR state: BEHIND after latest main move; merge queue will re-evaluate. Operator step pending: #10136 zot accepted-risk owner confirmation. Residual #12092 filed.
