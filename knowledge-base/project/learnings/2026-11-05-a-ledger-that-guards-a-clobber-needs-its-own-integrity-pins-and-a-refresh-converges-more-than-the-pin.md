@@ -60,7 +60,11 @@ installed one (toolchain, install command, permissions), not just the value the 
    hand-written regex over prose containing `*`, `(`, `.`.
 4. **A new floor-bearing suite under a deferred directory grew the vacuity-floor ledger 47→48;
    found only when the affected gate ran.** Recovery: added it to `PROMOTED_FILES`. **Prevention:**
-   work-skill bullet 6.7 now names the `PROMOTED_FILES` step (this PR).
+   work-skill bullet 6.7 already says to run `guard-vacuity-floor.test.sh` first, which names the
+   `PROMOTED_FILES` remedy in its promotion note; run it before the first commit of any new floor-bearing
+   suite under `plugins/soleur/skills/*/test/`, `apps/web-platform/infra/` or `.claude/hooks/`. Extending
+   the bullet was tried and dropped: `work/SKILL.md` has 12 bytes of headroom under its
+   `lint-skill-body-budget.py` ceiling.
 5. **The plan's "no lockfile precondition needed" premise was false for the bun-era ledger rows**
    (found by the user-impact seat). Recovery: lockfile precondition + tests. **Prevention:** when a
    plan skips a precondition because "a sibling already does X", verify the sibling is itself
