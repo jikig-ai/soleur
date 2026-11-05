@@ -1,4 +1,4 @@
-AUDIT_READS_HEADER	rev=8cc167c2e327157dce2c9fc9f089bd45dbd050f0	mode=check	netns=unshare	idmap=current	reps=2	cover=argv	max_load=4.0	out=/var/tmp/soleur-audit-reads-out.MqzSuxNe
+AUDIT_READS_HEADER	rev=8cc167c2e327157dce2c9fc9f089bd45dbd050f0	mode=check	netns=unshare	idmap=current	reps=2	cover=argv	max_load=4.0	out=<scratch>
 AUDIT_READS	label=tests/scripts/scratch-residue	verdict=unreliable	reason=rc	rc=1	files=-	dirs=-	cover=-	unresolved=-	load=3.81	rev=8cc167c2e327157dce2c9fc9f089bd45dbd050f0	mode=check	detail=win:1
 AUDIT_READS	label=tests/scripts/argv-bearer-sweep	verdict=unreliable	reason=rc	rc=2	files=-	dirs=-	cover=-	unresolved=-	load=3.93	rev=8cc167c2e327157dce2c9fc9f089bd45dbd050f0	mode=check	detail=win:2
 AUDIT_READS	label=scripts/test-affected-kb-consumers	verdict=unreliable	reason=contaminated	rc=0	files=-	dirs=-	cover=-	unresolved=-	load=3.93	rev=8cc167c2e327157dce2c9fc9f089bd45dbd050f0	mode=check	detail=dirty:.soleur/;win:3
