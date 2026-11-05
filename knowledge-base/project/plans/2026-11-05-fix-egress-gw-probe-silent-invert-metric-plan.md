@@ -213,6 +213,11 @@ Stack incidents API (the `send-failed-alert-probe-8097.sh` pagination and projec
 | `action_required` | 5 | after `earliest`: incident still open (fallback: build the poller), a newer production incident (recurrence), no canary incident (evaluator blind: build the poller, leave the production alert armed), or all verification held but the canary is still declared (delete it) |
 | xtrace refusal | 78 | #7797 |
 
+Incidents are matched on `.attributes.name ==` the exact alert name for both the production and the canary alert
+(the 8097 probe's `name or cause-prefix` match would count a canary cause as a production recurrence). The probe reads
+`BETTERSTACK_API_TOKEN` (bound in the sweeper); the post-merge run maps `BETTERSTACK_API_TOKEN_READONLY` (Doppler
+`prd_terraform`) into that name for one invocation, never on argv.
+
 The verdict line carries one field per condition so a caller can read any of them regardless of the overall
 verdict: `SOLEUR_EGRESS_GW_SILENT_SOAK verdict=<v> prod_incident=<open|resolved|unknown> resolved_age_s=<n>
 newer_prod_incident=<0|1> canary=<fired|absent|unknown> canary_declared=<0|1>`. The `canary=` field is what the
@@ -229,7 +234,17 @@ sweeper reads it as FAIL and may reopen a human-closed tracker). Output is proje
 
 1.1 Edit the G2 block of `apps/web-platform/test/infra/egress-gw-alert.test.sh` to the new canon (flattened
 heredoc equality, `higher_than`/`0`, `treat_as_zero`, unpaused, email, own exploration, both `-target` lines) and
-add a **G2b** block for the canary (see Guard Contract). Run it: RED against the unchanged `.tf`.
+add a **G2b** block for the canary (see Guard Contract). Run it: RED against the unchanged `.tf`. Specifics the
+review found in the existing file: (a) the byte-exact canon is a double-quoted `[ "$X" = "SELECT ..." ]` string, so a
+literal `${length(var.web_hosts)}` raises "bad substitution" and kills the suite; write the canon with `\${` or from
+single-quoted segments. (b) `sql_local` only extracts `<<[-]SQL` heredocs and returns empty for the canary's
+`replace()` local, so pin that line with an anchored whole-line `grep -cE` count of exactly 1 and compare it whole.
+(c) The existing mutation rows for the silent alert break on the new SQL and are REWRITTEN, not kept: the
+`count(DISTINCT ...)) AS value` anchor, the `value = length(var.web_hosts)` anchor, and the flip to `higher_than`
+(now a no-op). (d) The header prose ("All six resources"), the opener loop, the resource-header loop and the
+"no mute knob in any resource block" negative row (six blocks) all gain the canary blocks. (e) Add an exact-count
+row for resources named `egress_gw_probe_silent*` (4), because the structure suite's rows 1-4 are floors and rows
+9-10 pass for a second canary that has its own exploration.
 1.2 Write the probe suite `scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` (PATH-shimmed `curl`/`gh`
 fixtures, synthesized responses only) before the probe: RED with the probe absent.
 
@@ -443,10 +458,10 @@ that canary and production differ.
 | 7 | canary `replace()` target no longer matches (silent no-op, canary equals production) | RED |
 | 8 | canary identifier set to the real tag `egress-gw-probe` | RED (anti-collision row) |
 | 9 | canary alert `paused = true` or operator `lower_than` | RED |
-| 10 | either canary `-target` line deleted from the apply workflow | RED |
+| 10 | either canary `-target` line removed from the workflow's allowlist | RED |
 | 11 | `PRESENCE_ROWS` bumped one past the real count | RED (floor row, dispatch) |
 | 12 | the guard's own `run:` line removed from `infra-validation.yml` | RED (existing row kept) |
-| 13 | a SECOND canary-like resource added after the compliant first (`..._canary2`) | RED (resource-count and structure-suite census) |
+| 13 | a SECOND canary-like resource pair added after the compliant first (`..._canary2`) | RED (the guard's exact count of `egress_gw_probe_silent*` resources, plus `EXPECT_BLOCKS` in the ceiling suite) |
 
 **Harness rows.** (a) Suite edit that must RED: drop the canon comparison line for the production heredoc from a
 scratch copy of the suite and require the dispatch floor to fail (assertion count below the floor). (b) Must-PASS
@@ -595,6 +610,11 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
   so no special mode exists). `canary=absent` means the evaluator is blind for this shape: leave the production
   alert armed, build the poller (file the issue at once), and do not treat a green production alert as healthy.
   The tracker's sweeper probe (earliest at apply completion plus 4h30) is only the backstop for this check.
+- [ ] AC12b. A NEW production incident (`soleur-egress-gw-probe-silent-prd`) opening on a healthy fleet within 25
+  minutes of apply completion disproves the inverted shape just as an absent canary does: the evaluator may be
+  scanning an empty window, in which case production and canary both read 2. The canary cannot tell a genuinely
+  silent fleet from an empty evaluator window, so this is the disconfirming signal; the response is the same
+  (revert or build the poller, never hand-resolve).
 - [ ] AC13. Incident 1047829421 reaches resolved without a manual action and stays resolved for at least 4 hours
   with no newer `soleur-egress-gw-probe-silent-prd` incident. If not: fall back to the poller; hand-resolving the
   incident needs the user's explicit per-command go-ahead and is not part of this plan.
@@ -639,10 +659,17 @@ the exact-count suites and the structure suite) in Phase 5, because it is otherw
 - A user-brand section lacking its threshold fails `deepen-plan`; this one declares `aggregate pattern`.
 - **Evaluator-blind inversion.** If the evaluator reads 0 for every step, the inverted alert never fires. That is
   the case the canary detects; it is not covered by anything else until the poller exists.
+- **The canary shares the production query shape (`dt BETWEEN`, whole-window scalar), the shape of the two
+  alerts known to read 0.** Alerts known to evaluate (`monitor_send_failed`, `egress_gw_deny_spike`) use
+  `{{time}}`, `time BETWEEN` and `GROUP BY time`. A proven-shape canary would prove the evaluator works in general
+  and say nothing about this shape, so the canary deliberately stays on the production shape; AC12b covers the
+  empty-window case it cannot see.
 - **Evaluator errors read 0** under `treat_as_zero` (CTO residual, named in the comment, runbooks and ADR).
 - **Noise while the canary lives:** one email, one P1 `action-required` mirror issue, and a constant-fail input to
   any `post-deploy-incident-soak` enrolled meanwhile (none are enrolled; check with `gh issue list --label
-  follow-through` before merge). The canary is deleted as soon as AC12 holds (see AC14), not after the 4 hours.
+  follow-through` before merge), and the `soleur:postmerge` alert-channel sweep (Phase 3.9) will list the canary's
+  `ci/betterstack-incident` issue and open incident as rows; that phase is advisory and never blocks, and the
+  report names those rows as the expected canary. The canary is deleted as soon as AC12 holds (see AC14), not after the 4 hours.
 - **Count suites flip twice:** +1 here, -1 at deletion. The probe's `RETIREMENT:` line is the single list.
 - **Apply byte budget:** 282 bytes of headroom; do not add any comment to the workflow file.
 - **Free-tier cap:** an apply refusal on alert count fails the whole push apply; the fallback is pre-decided.

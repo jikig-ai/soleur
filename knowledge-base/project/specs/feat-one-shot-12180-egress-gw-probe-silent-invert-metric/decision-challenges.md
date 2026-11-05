@@ -21,3 +21,11 @@ reversible canary pair, poller as fallback only) is the default and is not re-as
 - The five technical rulings were obtained from one CTO consult with the evidence listed in the plan; no further
   technical fork arose. The placement of the canary local after the fail local (so the existing mutation anchors do
   not drift) and the exact-count bumps are mechanical consequences.
+- Plan-review (DHH, Kieran, code-simplicity) findings applied as mechanical edits: the canary executor and 25-minute
+  check were made explicit (the CTO rule F5 had no executor), the canary lifetime contradiction was resolved toward
+  early deletion (the 4-hour soak concerns only the production incident), the guard matrix was trimmed from 17 to 13
+  rows, probe incident matching became exact-name, and the empty-evaluator-window case was added as a disconfirming
+  signal (AC12b), which is the same response F5 prescribes for a silent canary. Kept against reviewer cuts, with the
+  reason: the soak probe (the brief's post-merge verification and the ship gate require it), the `infra-validation.yml`
+  and flip-silent comment edits (named in the brief or false after the change), the rollback dry run (sharp-edge
+  rule: a recipe first run during an incident), and the probe's tie to canary deletion (CTO ruling F4).

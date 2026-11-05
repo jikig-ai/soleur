@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 
 ## Phase 1: Tests first
 
-- 1.1 Rewrite the G2 block of `apps/web-platform/test/infra/egress-gw-alert.test.sh` to the new canon; add the G2b canary block and its mutation rows (Guard 1 matrix rows 1-17); confirm RED against the unchanged `.tf`.
+- 1.1 Rewrite the G2 block of `apps/web-platform/test/infra/egress-gw-alert.test.sh` to the new canon; add the G2b canary block and its mutation rows (Guard 1 matrix, 13 rows); confirm RED against the unchanged `.tf`.
 - 1.2 Write `scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` (PATH-shimmed `curl`/`gh`, synthesized fixtures, Guard 2 matrix); confirm RED with the probe absent.
 
 ## Phase 2: Production change
@@ -37,4 +37,5 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 
 ## Post-merge (probe-verified)
 
-- Canary incident within 20 minutes of apply completion; incident 1047829421 resolved on its own and clear for 4 hours; then the follow-up PR deletes the canary (RETIREMENT list in the probe header).
+- Apply completion plus 25 minutes: `soleur:postmerge` runs the probe once and reads `canary=`; `canary=absent` means build the poller (file the issue at once) and keep the production alert armed.
+- Once `canary=fired`, the follow-up PR (tracker #12189) deletes the canary (RETIREMENT list in the probe header); incident 1047829421 must resolve on its own and stay clear for 4 hours (sweeper probe, earliest at apply completion plus 4h30).
