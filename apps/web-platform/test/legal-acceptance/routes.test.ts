@@ -27,8 +27,11 @@ const h = vi.hoisted(() => ({
   ceiling: { value: null as unknown },
   failures: { value: null as unknown },
   clientFails: { value: false },
+  flush: vi.fn(),
 }));
 
+// Only `flush` is replaced: the decide route flushes the accepted event before it acknowledges the row (#12011 PR-D).
+vi.mock("@sentry/nextjs", async (orig) => ({ ...(await orig<typeof import("@sentry/nextjs")>()), flush: (...a: unknown[]) => h.flush(...a) }));
 vi.mock("@/server/request-auth", () => ({
   verifiedUserId: async () => h.verified.value,
   // The bounded helpers return the `data` of the underlying call (or null on a stall or a throw), like the real ones.
@@ -136,6 +139,8 @@ beforeEach(() => {
   h.ceiling.value = new AttemptCeiling();
   h.failures.value = new SendFailureMemory();
   h.clientFails.value = false;
+  h.flush.mockReset();
+  h.flush.mockResolvedValue(false);
 });
 
 describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
@@ -314,6 +319,47 @@ describe("decide", () => {
     expect(out).toEqual({ status: 200, body: { outcome: "recorded", choice: "accept", decidedAt: "2026-11-05T10:00:00Z", reauthAt: "2026-11-05T09:58:00Z" } });
     expect(h.userRpc).toHaveBeenCalledWith("record_legal_acceptance", { p_key: "fixture-terms", p_text_hash: HASH, p_choice: "accept", p_requested_edit: null });
     expect(h.serviceRpc).not.toHaveBeenCalled();
+  });
+
+  it("PR-D ack: a recorded decision is acknowledged AFTER the response, only once the flush returned true, with the user's id", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.body.outcome).toBe("recorded");
+    await vi.waitFor(() =>
+      expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: HASH }),
+    );
+    expect(h.flush).toHaveBeenCalledWith(2000);
+  });
+
+  it("PR-D ack: a flush that returns false writes no ack; a flush that never resolves does not delay the response", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(false);
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    await vi.waitFor(() => expect(h.flush).toHaveBeenCalledTimes(1));
+    h.flush.mockImplementation(() => new Promise<boolean>(() => {}));
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200); // returned although the flush is still pending
+    expect(h.serviceRpc).not.toHaveBeenCalledWith("ack_legal_acceptance", expect.anything());
+  });
+
+  it("PR-D ack: a flush that throws and an ack that errors leave the response unchanged and are reported as store_failed", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockRejectedValue(new Error("transport"));
+    const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(out.status).toBe(200);
+    await vi.waitFor(() => expect(h.report.mock.calls.some((c) => c[0] === "storeFailed")).toBe(true));
+    expect(h.report.mock.calls.some((c) => c[0] === "decideRejected")).toBe(false);
+  });
+
+  it("PR-D ack: already_recorded never flushes or acks", async () => {
+    h.userRpc.mockResolvedValue({ data: { outcome: "already_recorded", choice: "accept" }, error: null });
+    h.flush.mockResolvedValue(true);
+    await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.flush).not.toHaveBeenCalled();
+    expect(h.serviceRpc).not.toHaveBeenCalledWith("ack_legal_acceptance", expect.anything());
   });
 
   it("request_changes opens the intent (service) then records the trimmed note (user)", async () => {

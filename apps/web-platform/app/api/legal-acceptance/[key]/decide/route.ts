@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { rejectCsrf, validateOrigin } from "@/lib/auth/validate-origin";
@@ -9,6 +10,8 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { isApprovalQueueEnabled } from "@/server/approval/flag";
 import { reportLegalOp } from "@/server/approval/ops";
 import { decideLegal, LegalServiceError, normaliseNote, type LegalRpcClient } from "@/server/legal-acceptance/service";
+import { runOffRequestPath } from "@/server/legal-acceptance/off-path";
+import { ACK_FLUSH_TIMEOUT_MS } from "@/server/legal-acceptance/service";
 import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptance/reauth";
 
 /**
@@ -22,6 +25,10 @@ import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptanc
  *
  * The decision is recorded by `record_legal_acceptance` on the USER-context client (the actor is `auth.uid()`); the
  * service client only opens the intent for Decline and Request changes. Thin HTTP-only export.
+ *
+ * After a recorded decision, off the request path (`after()`), the route flushes the `accepted` event (2 s bound) and only
+ * if that returned true writes the acknowledgement. A flush or ack failure is a `store_failed` event, never a response
+ * change; `already_recorded` never acks.
  */
 
 export const dynamic = "force-dynamic";
@@ -43,7 +50,14 @@ async function decideHandler(req: Request, user: VerifiedUser): Promise<Response
     if (!n.ok) return NextResponse.json({ error: "Invalid body" }, { status: 400 });
 
     const out = await decideLegal(
-      { service: createServiceClient() as unknown as LegalRpcClient, user: supabase as unknown as LegalRpcClient },
+      {
+        service: createServiceClient() as unknown as LegalRpcClient,
+        user: supabase as unknown as LegalRpcClient,
+        // After a recorded decision the `accepted` event is flushed and, only if that succeeded, the row is acknowledged
+        // (the check endpoint's `row_without_event` reconciliation). Both run after the response and never change it.
+        flushEvents: () => Sentry.flush(ACK_FLUSH_TIMEOUT_MS),
+        runOffPath: runOffRequestPath,
+      },
       { userId: g.id.userId, sessionId: g.id.sessionId, entry: g.entry, choice, textHash, note: n.note },
     );
     // Contract with the dialog: the code check no longer counts, so it returns to the send step.

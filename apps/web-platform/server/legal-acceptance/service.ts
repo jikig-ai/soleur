@@ -49,12 +49,18 @@ async function callOnce(client: LegalRpcClient, fn: string, args: Record<string,
   }
 }
 
-async function call(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** One RPC with the shared serialization-failure retry. Returns the raw `data`; every wrapper validates its own shape. */
+async function rpcData(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<unknown> {
   let res = await callOnce(client, fn, args);
   if (res.error?.code === SERIALIZATION_FAILURE) res = await callOnce(client, fn, args);
   if (res.error) throw new LegalServiceError(fn, res.error.code);
-  if (!isObj(res.data) || typeof res.data.outcome !== "string") throw new LegalServiceError(fn, "bad_payload");
   return res.data;
+}
+
+async function call(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const data = await rpcData(client, fn, args);
+  if (!isObj(data) || typeof data.outcome !== "string") throw new LegalServiceError(fn, "bad_payload");
+  return data;
 }
 
 function oneOf<T extends string>(fn: string, out: Record<string, unknown>, allowed: readonly T[]): T {
@@ -166,6 +172,98 @@ export async function recordAcceptance(
   return { outcome: o };
 }
 
+// ── verify_legal_acceptance (service; read-only) ─────────────────────────────────────────────────────────────────
+
+export type VerifyStatus = "none" | "accepted" | "declined" | "changes_requested" | "invalid";
+export const VERIFY_STATUSES: readonly VerifyStatus[] = ["none", "accepted", "declined", "changes_requested", "invalid"];
+
+/** The four fields the check endpoint may return. The note (`requested_edit`) is not here and never will be. */
+export interface VerifyResult {
+  status: VerifyStatus;
+  text_hash: string;
+  decided_at: string | null;
+  row_ok: boolean | null;
+}
+
+const isTimestamp = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !Number.isNaN(Date.parse(v));
+
+/**
+ * The status of one founder's decision on one text. This RPC answers `{status, text_hash, decided_at, row_ok}` with NO
+ * `outcome` key, so it has its own strict validation instead of loosening `call()` (an unknown outcome is never success).
+ * Anything that does not match the documented shapes throws `bad_payload`:
+ *  - `none`: no row, so `decided_at` and `row_ok` are both null;
+ *  - `accepted | declined | changes_requested`: `row_ok` is exactly true and `decided_at` is a timestamp;
+ *  - `invalid`: the checksum failed, `row_ok` is exactly false (it is never collapsed into `none`);
+ *  - `text_hash` equals the hash that was asked about. Extra keys are dropped: the result is rebuilt from four fields.
+ */
+export async function verifyAcceptance(
+  service: LegalRpcClient,
+  a: { founderId: string; key: string; textHash: string },
+): Promise<VerifyResult> {
+  const fn = "verify_legal_acceptance";
+  const out = await rpcData(service, fn, { p_founder_id: a.founderId, p_key: a.key, p_text_hash: a.textHash });
+  if (!isObj(out)) throw new LegalServiceError(fn, "bad_payload");
+  const status = out.status;
+  if (typeof status !== "string" || !(VERIFY_STATUSES as readonly string[]).includes(status)) throw new LegalServiceError(fn, "bad_payload");
+  if (out.text_hash !== a.textHash) throw new LegalServiceError(fn, "bad_payload");
+  const bad = () => new LegalServiceError(fn, "bad_payload");
+  if (status === "none") {
+    if (out.decided_at !== null || out.row_ok !== null) throw bad();
+    return { status, text_hash: a.textHash, decided_at: null, row_ok: null };
+  }
+  if (!isTimestamp(out.decided_at)) throw bad();
+  if (status === "invalid") {
+    if (out.row_ok !== false) throw bad();
+    return { status, text_hash: a.textHash, decided_at: out.decided_at, row_ok: false };
+  }
+  if (out.row_ok !== true) throw bad();
+  return { status: status as VerifyStatus, text_hash: a.textHash, decided_at: out.decided_at, row_ok: true };
+}
+
+// ── ack_legal_acceptance / legal_acceptance_ack_state (service) ──────────────────────────────────────────────────
+
+/**
+ * A decision row that has no acknowledgement this many seconds after it was written is reported as `row_without_event`.
+ * The grace covers the normal gap between the commit and the ack (the response, the flush and the ack run right after
+ * it, bounded by ACK_FLUSH_TIMEOUT_MS), so a write that is still in progress is not mistaken for a gap. Inclusive: a row
+ * exactly this old is reported.
+ */
+export const ROW_WITHOUT_EVENT_GRACE_SECONDS = 120;
+
+/** The statuses the check endpoint can emit. Declared once; the route is typed against it and the tests assert it. */
+export const VERIFY_ENDPOINT_STATUSES = [200, 400, 401, 404, 502, 503] as const;
+export type VerifyEndpointStatus = (typeof VERIFY_ENDPOINT_STATUSES)[number];
+
+export type AckResult = "acked" | "not_found";
+
+/** Mark one decision row as reported (the `accepted` event was flushed). Idempotent in the database. */
+export async function ackAcceptance(
+  service: LegalRpcClient,
+  a: { founderId: string; key: string; textHash: string },
+): Promise<AckResult> {
+  const fn = "ack_legal_acceptance";
+  const out = await call(service, fn, { p_founder_id: a.founderId, p_key: a.key, p_text_hash: a.textHash });
+  return oneOf(fn, out, ["acked", "not_found"] as const);
+}
+
+export type AckStateResult = { outcome: "none" } | { outcome: "row"; acked: boolean; age_seconds: number };
+
+/** Whether the decision row was acknowledged and how old it is (database clock). Read-only. */
+export async function ackState(
+  service: LegalRpcClient,
+  a: { founderId: string; key: string; textHash: string },
+): Promise<AckStateResult> {
+  const fn = "legal_acceptance_ack_state";
+  const out = await call(service, fn, { p_founder_id: a.founderId, p_key: a.key, p_text_hash: a.textHash });
+  const o = oneOf(fn, out, ["none", "row"] as const);
+  if (o === "none") return { outcome: "none" };
+  const age = out.age_seconds;
+  if (typeof out.acked !== "boolean" || typeof age !== "number" || !Number.isInteger(age) || age < 0) {
+    throw new LegalServiceError(fn, "bad_payload");
+  }
+  return { outcome: "row", acked: out.acked, age_seconds: age };
+}
+
 // ── decide orchestration ─────────────────────────────────────────────────────────────────────────────────────────
 
 export type DecideOutcome =
@@ -179,6 +277,73 @@ export interface DecideDeps {
   service: LegalRpcClient;
   user: LegalRpcClient;
   now?: () => Date;
+  /**
+   * Flush pending Sentry events; resolves true only when they were sent. Absent means "no proof of delivery is
+   * possible", so nothing is acknowledged. The wait is bounded by ACK_FLUSH_TIMEOUT_MS here, whatever this does.
+   */
+  flushEvents?: () => Promise<boolean>;
+  /** Runs the post-response task. The default is a caught fire-and-forget promise; the route passes `after()`. */
+  runOffPath?: (task: () => Promise<void>) => void;
+}
+
+/** The longest the ack task waits for the event flush. A flush that has not answered by then counts as not flushed. */
+export const ACK_FLUSH_TIMEOUT_MS = 2000;
+
+/** Caught fire-and-forget: the task's own failures are already reported inside it, so a rejection here is dropped. */
+const fireAndForget = (task: () => Promise<void>): void => {
+  void task().catch(() => {});
+};
+
+function raceFlush(flush: () => Promise<boolean>): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(false), ACK_FLUSH_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+    let p: Promise<boolean>;
+    try {
+      p = flush();
+    } catch (err) {
+      clearTimeout(timer);
+      reject(err);
+      return;
+    }
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Off the request path: wait (bounded) for the `accepted` event to be flushed and, ONLY when the flush answered true,
+ * write the acknowledgement that the verify endpoint later looks for. Never throws: a failure is reported as `store_failed`
+ * (stage `ack`) and leaves the row unacknowledged, which the endpoint then surfaces as `row_without_event`.
+ */
+async function ackWhenFlushed(
+  deps: DecideDeps & { flushEvents: () => Promise<boolean> },
+  a: { userId: string; key: string; textHash: string },
+): Promise<void> {
+  const failed = (err: unknown, step: string, extra: Record<string, unknown> = {}): void =>
+    reportLegalOp("storeFailed", err, { userId: a.userId, tags: { stage: "ack" }, extra: { key: a.key, step, ...extra } });
+  let flushed: boolean;
+  try {
+    flushed = (await raceFlush(deps.flushEvents)) === true;
+  } catch (err) {
+    failed(err, "flush");
+    return;
+  }
+  if (!flushed) return;
+  try {
+    const res = await ackAcceptance(deps.service, { founderId: a.userId, key: a.key, textHash: a.textHash });
+    if (res !== "acked") failed(null, "ack", { outcome: res });
+  } catch (err) {
+    failed(err, "ack");
+  }
 }
 
 /** Why a decision was not recorded; a closed set, safe as a Sentry tag. */
@@ -261,6 +426,17 @@ export async function decideLegal(
 
   if (rec.outcome === "recorded") {
     reportLegalOp("accepted", null, { userId: a.userId, extra: { key: a.entry.key, choice: rec.choice, version: a.entry.version } });
+    // The ack runs after the response. Nothing from here on can reach the founder's result or `decideRejected`.
+    const flushEvents = deps.flushEvents;
+    if (flushEvents) {
+      try {
+        (deps.runOffPath ?? fireAndForget)(() =>
+          ackWhenFlushed({ ...deps, flushEvents }, { userId: a.userId, key: a.entry.key, textHash: a.entry.textHash }),
+        );
+      } catch (err) {
+        reportLegalOp("storeFailed", err, { userId: a.userId, tags: { stage: "ack" }, extra: { key: a.entry.key, step: "schedule" } });
+      }
+    }
     return { kind: "result", result: { outcome: "recorded", choice: rec.choice, decidedAt: rec.decidedAt, reauthAt: rec.reauthAt } };
   }
   if (rec.outcome === "already_recorded") {

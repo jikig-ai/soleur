@@ -271,6 +271,18 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
     level: "error",
   },
+  /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). */
+  recordInvalid: {
+    op: "record_invalid",
+    message: "Legal acceptance: a stored decision failed its integrity check",
+    level: "error",
+  },
+  /** A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is `verify`, `ack_state` or `ack`. No paging rule yet (#12195). */
+  storeFailed: {
+    op: "store_failed",
+    message: "Legal acceptance: a store call on the verify or acknowledge path failed",
+    level: "error",
+  },
 } as const satisfies Record<string, ApprovalOp>;
 
 export type LegalOpKey = keyof typeof LEGAL_OPS;

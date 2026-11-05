@@ -63,6 +63,12 @@ export const PUBLIC_PATHS = [
   // /login before the route's own loopback-Host, forwarding-header and constant-time bearer
   // gates run. NARROW exact path — do NOT broaden to /api/internal.
   "/api/internal/egress-audit-ingest",
+  // /api/internal/legal-acceptance/[key]: bearer-gated GET (LEGAL_ACCEPTANCE_VERIFY_TOKEN, a token separate from the
+  // Inngest one) from the ship hold evaluator on the operator's machine (#12011 PR-D, ADR-319). Cookieless caller —
+  // without PUBLIC_PATHS membership Supabase middleware 307s it to /login before the route's own token gate runs, and
+  // every web-acceptance hold would read "unreachable". The predicate is `p` or `p/...`, so this one NARROW entry covers
+  // the dynamic [key] route and not `/api/internal/legal-acceptance-foo` — do NOT broaden to /api/internal.
+  "/api/internal/legal-acceptance",
   "/ws",
   "/manifest.webmanifest",
   // /robots.txt: Next.js robots.ts metadata route (Disallow: /). Public-by-design,
