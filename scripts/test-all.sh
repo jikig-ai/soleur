@@ -261,7 +261,7 @@ _AFF_SCOPE_REQ=0
 # flag wins over the env var, matching the flag-over-env convention the other
 # mode flags follow. Parallel scheduling applies to the RUN path only —
 # selection (--affected, --print-selection, --enumerate) is untouched.
-# Launch order (#12013): conservative BACKFILL. A suite blocked on a token no longer idles the
+# SOLEUR_PJ_FIFO (#12013) — launch order of the parallel pool. Unset/0: conservative BACKFILL. A suite blocked on a token no longer idles the
 # free slots; a later suite launches iff it conflicts with no live suite and with nothing still
 # queued ahead of it (so suites that share a token keep registration order, and a queued `*`
 # blocks everything after it). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
@@ -1477,6 +1477,11 @@ export -n SOLEUR_TEST_JOBS
 # scripts/test-all-parallel-scheduler.test.sh (the demotion count and the nested-runner arm).
 export -n SOLEUR_PJ_PROVISIONAL_FILE
 
+# #12013: SOLEUR_PJ_FIFO is read once in _pj_resolve_run_mode (a shell read) and is the OUTER pool's A/B
+# control. Left exported, a suite that drives a nested/sandboxed runner (the scheduler suite's arms) would
+# inherit the control and run FIFO, turning its backfill arms red and mislabelling the control reading.
+export -n SOLEUR_PJ_FIFO
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -1951,14 +1956,21 @@ run_suite() {
 # The gate reads it only if its budget kills the run, so a red seen before the kill is not reported
 # as a deferral. Exactly two callers, one per run mode (_pj_fmt_done for the pool, the serial tail of
 # run_suite) so nothing is double-counted; _run_suite_verdict is NOT one (the pool reaches it at
-# drain too). rc 1..127 only: a 128+n status is unresolved (ADR-177), never a red. An interrupted
-# run (_pj_sig) records nothing. Fail-open by design: a missing/unwritable sidecar changes nothing.
+# drain too). `tee -a`, not `>>`: the sidecar path was already proven absolute, regular and writable by the
+# test below, and `tee` keeps the single append write; `>> "$f"` would add a site to the
+# fixture-relative-assert operand census for a path that census cannot see is already checked. A red that
+# finished but was not yet reaped when the budget killed the run is not recorded (lazy reap): that falls
+# back to the old deferral, the fail-safe direction. Only the runner's own `failed` class is recorded (a
+# named-signal status is unresolved, ADR-177, never a red). An interrupted run (_pj_sig) records nothing. Fail-open by design: a missing/unwritable sidecar changes nothing.
 _provisional_append() {  # _provisional_append <label> <rc>
   local f="${SOLEUR_PJ_PROVISIONAL_FILE:-}" rc="${2:-}"
   [[ "$f" == /* && -f "$f" && -w "$f" ]] || return 0
   [[ "$rc" =~ ^[0-9]+$ ]] || return 0
-  (( 10#$rc >= 1 && 10#$rc <= 127 )) || return 0
-  (( _pj_sig == 1 )) && return 0
+  # Exactly the runner's own `failed` class (suite_exit_class), so the sidecar and the drain verdict cannot
+  # disagree: 128, 193..255 and unnamed signals are reds the drain prints [FAIL] for; a named signal (the
+  # `killed` class, e.g. 130/137/143) is unresolved (ADR-177) and is never recorded. rc 0 is `ok`.
+  [[ "$(suite_exit_class "$rc")" == failed ]] || return 0
+  (( _pj_sig == 1 )) && return 0   # an interrupted run (INT/TERM) records nothing
   printf '%s\t%s\t%s\n' "${1//[[:cntrl:]]/?}" "$(( 10#$rc ))" "${EPOCHSECONDS:-$(date +%s)}" | tee -a -- "$f" >/dev/null 2>&1 || true
   return 0
 }
@@ -2173,10 +2185,11 @@ _PJ_HARD_CAP=$(( 10#${_PJ_HARD_CAP} ))
 # pair. The launcher (_pj_fill) walks the queue in registration order and starts a
 # job while (a) the pool has a free slot, (b) no token intersects a live job's set
 # and (c) none intersects a job still queued ahead of it (backfill; strict FIFO under
-# SOLEUR_PJ_FIFO=1) — `*` intersects everything and is the drain barrier. `wait -n -p` reaps in completion order; every verdict prints
-# at drain in index order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/
-# [TRIPWIRE]/[skip] lines, TEST_TIMING_LOG rows and the terminal marker are
-# produced by the same code as the serial path.
+# SOLEUR_PJ_FIFO=1) — `*` intersects everything and is the drain barrier.
+# `wait -n -p` reaps in completion order; every verdict prints at drain in index
+# order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/[TRIPWIRE]/[skip] lines,
+# TEST_TIMING_LOG rows and the terminal marker are produced by the same code as
+# the serial path.
 
 _pj_say_serial() {  # _pj_say_serial <reason> — one announced fallback line.
   printf '[parallel] serial fallback — reason=%s. Rerun serial explicitly with SOLEUR_TEST_JOBS=1 or --jobs=1.\n' "$1" >&2
@@ -2279,7 +2292,7 @@ _pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writ
   _provisional_append "${_pj_label[j]}" "$rc"
 }
 
-_pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.
+_pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set. FIFO-only form (SOLEUR_PJ_FIFO=1): the backfill pass in _pj_fill carries this rule inline.
   local idx="$1"
   (( _pj_live_n >= _pj_jobs )) && return 1
   local j
@@ -2348,6 +2361,8 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
     if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
     tok="${_pj_tok[idx]}"; ok=1
     if [[ " $tok " == *" * "* ]]; then
+      # any_q is implied by live==0 (the first candidate of a pass always launches when the pool is
+      # empty); kept explicit so the rule reads as stated above.
       (( _pj_live_n == 0 && any_q == 0 )) || ok=0
     else
       lane_tokens_conflict "$tok" "$live_tok" && ok=0
@@ -2355,9 +2370,12 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
     fi
     if (( ok == 1 )); then
       _pj_launch "$idx"
-      live_tok+=" $tok"
+      [[ " $live_tok " == *" $tok "* ]] || live_tok+=" $tok"
     else
-      rest+=("$idx"); skip_tok+=" $tok"; any_q=1
+      rest+=("$idx"); any_q=1
+      # Append-only union, de-duplicated so the string is bounded by the token vocabulary and not by the
+      # queue length (lane_tokens_conflict re-splits it on every call). A multi-token set is appended whole.
+      [[ " $skip_tok " == *" $tok "* ]] || skip_tok+=" $tok"
     fi
   done
   if ((${#rest[@]})); then _pj_queue=("${rest[@]}"); else _pj_queue=(); fi

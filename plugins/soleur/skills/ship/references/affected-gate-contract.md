@@ -52,7 +52,7 @@ gate probes registration, not presence.
 | rc | Meaning | Skill action |
 |----|---------|--------------|
 | 0 | Selected tests passed, or `NO_TESTS_AFFECTED` (all-inert diff) | proceed |
-| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) / the budget killed the runner AFTER it printed a red (`reason=failed-before-budget`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly; for `failed-before-budget`, re-run the suite named on the last provisional `done (rc=` line directly) |
+| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) / the budget killed the runner AFTER it printed a red (`reason=failed-before-budget`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly; for `failed-before-budget`, re-run directly the suite named on the last provisional `done (rc=` line (pool) or `[FAIL]` line (serial) |
 | 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|not-a-repo\|toolchain-missing\|runner-refused>` + a `remedy:` line | stop; fix the named cause — never retry blindly |
 | 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists AND the runner had recorded no red before the kill (with `content_trigger=deferred` the selected tests passed and only the content-trigger command is owed to CI) | proceed to CI; record CI as the authoritative gate; never label the run passed |
 | 7 | No test suite detected at all | proceed with the disclosed note; never label passed |

@@ -138,6 +138,7 @@ assert_fixture_dir() {
 }
 _h_dir="$(mktemp -d "${TMPDIR:-/tmp}/lanes-h.XXXXXX")"
 assert_fixture_dir "$_h_dir"
+trap 'rm -rf "$_h_dir"' EXIT
 printf '#!/usr/bin/env bash\n# drives a sandboxed copy of scripts/test-all.sh\ncp seed scripts/test-all.sh\n' > "$_h_dir/h2.test.sh"
 printf '#!/usr/bin/env bash\nbash scripts/test-all.sh\nxargs -P 4 true\n' > "$_h_dir/h3.test.sh"
 h_ok=1
@@ -146,7 +147,6 @@ arm_override_ok "" bash "$_h_dir/h2.test.sh" || h_ok=0                          
 [[ "$(_lane_derive bash "$_h_dir/h2.test.sh")" == "lock:test-all" ]] || h_ok=0     # H2 control: derived is exactly the token
 arm_override_ok "" bash "$_h_dir/h3.test.sh" && h_ok=0                             # a gained cpu:pool token reds an empty override
 arm_override_ok "cpu:pool" bash "$_h_dir/h3.test.sh" || h_ok=0
-rm -rf "$_h_dir"
 if (( h_ok == 1 )); then
   pass "replay-arm guard instrument: nonexistent input and a gained token red an empty override; the mention-only fixture passes"
 else
@@ -176,14 +176,33 @@ if (( arm_gate == 1 )); then
 else
   fail "replay arms: n=$arm_n (floor 3) violations: ${arm_bad[*]:-none}"
 fi
-# The suite file itself never takes the advisory lock (the premise of dropping the token).
+# The suite file itself never takes the advisory lock (the premise of dropping the token): no lock entry
+# point is named, and its scratch root is a distinct per-run `mktemp -d` (the other half of the premise).
 replay_file="plugins/soleur/test/ci-pr-affected-replay.test.sh"
-if [[ -r "$replay_file" ]] && ! grep -qE '(^|[^_[:alnum:]])tc_acquire([^_[:alnum:]]|$)' "$replay_file"; then
-  pass "replay suite file never calls tc_acquire (the arms never take the real advisory lock)"
+if [[ -r "$replay_file" ]] && ! grep -qE '(^|[^_[:alnum:]])(tc_acquire|_tc_queue_wait|_tc_ticket_mint|flock)([^_[:alnum:]]|$)' "$replay_file"; then
+  pass "replay suite file names no advisory-lock entry point (tc_acquire, queue wait, ticket mint, flock)"
 else
-  fail "replay suite file is unreadable or calls tc_acquire — the empty override is no longer justified"
+  fail "replay suite file is unreadable or names an advisory-lock entry point — the empty override is no longer justified"
+fi
+if [[ -r "$replay_file" ]] && grep -qE '^SANDBOX="\$\(mktemp -d "\$TMPDIR/' "$replay_file"; then
+  pass "replay suite scratch root is a distinct per-run mktemp -d (arms cannot share a sandbox path)"
+else
+  fail "replay suite no longer builds SANDBOX from a per-run mktemp -d — concurrent arms could collide"
+fi
+# The empty override is reserved for the replay arms: no OTHER label may carry an empty token set.
+empty_labels=""; arm_labels=""
+for (( i = 0; i < ${#LANE_OVERRIDE_LABELS[@]}; i++ )); do
+  [[ -z "${LANE_OVERRIDE_TOKENS[i]// /}" ]] && empty_labels+="${LANE_OVERRIDE_LABELS[i]}"$'\n'
+done
+for l in "${!arm_seen[@]}"; do arm_labels+="$l"$'\n'; done
+if [[ "$(sort <<<"$empty_labels")" == "$(sort <<<"$arm_labels")" && -n "$arm_labels" ]]; then
+  pass "the set of empty-token overrides equals the set of registered replay arms (no other suite lost its lane)"
+else
+  fail "empty-token overrides '$(tr '\n' ' ' <<<"$empty_labels")' != replay arms '$(tr '\n' ' ' <<<"$arm_labels")'"
 fi
 
+# Dispatch floor, reported directly (never through fail()): deleting a block of assertions lowers PASSES.
+(( PASSES < 11 )) && { printf '[FATAL] only %s assertions passed, expected at least 11\n' "$PASSES"; exit 1; }
 echo ""
 echo "=== test-suite-lanes: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1

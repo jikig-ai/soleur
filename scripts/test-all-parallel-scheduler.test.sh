@@ -43,6 +43,7 @@ REPO_ROOT="$(pwd)"
 export REPO_ROOT
 
 PASSES=0; FAILURES=0
+MIN_PASSES_FLOOR=60   # the full green count; raise it in the same edit that adds an arm
 pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
 fail() { FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n' "$1"; }
 dump() { sed 's/^/    /' <<<"${1:-}"; }
@@ -88,8 +89,8 @@ exit 1
 EOF
 cat > "$FIXTURES/sigred.sh" <<'EOF'
 #!/usr/bin/env bash
-# Interrupt the runner (TERM to its pid), then exit 1: a red reaped by an interrupted run.
-kill -TERM "$PPID"
+# Interrupt the RUNNER (TERM to the pid the sandbox exported), then exit 1: a red reaped by an interrupted run.
+kill -TERM "${SIGRED_TARGET:?}"
 sleep 0.3
 exit 1
 EOF
@@ -115,7 +116,8 @@ cat > "$FIXTURES/envprobe.sh" <<'EOF'
 # Records whether SOLEUR_TEST_JOBS is in this process's environment (#12013).
 if [ -n "${SOLEUR_TEST_JOBS+x}" ]; then own=set; else own=absent; fi
 if [ -n "${SOLEUR_PJ_PROVISIONAL_FILE+x}" ]; then pj=set; else pj=absent; fi
-printf '%s\n%s\n' "$own" "$pj" > "${PROBE_OUT:?PROBE_OUT is not set}"
+if [ -n "${SOLEUR_PJ_FIFO+x}" ]; then ff=set; else ff=absent; fi
+printf '%s\n%s\n%s\n' "$own" "$pj" "$ff" > "${PROBE_OUT:?PROBE_OUT is not set}"
 exit 0
 EOF
 cat > "$FIXTURES/ok.sh" <<'EOF'
@@ -153,6 +155,17 @@ mk_rel_fixture headY  0.3  -        none
 mk_rel_fixture xU     0.3  -        none
 mk_rel_fixture indA2  0.4  -        start      # independent that releases holdT/holdQ when it starts
 mk_rel_fixture holdQ  0.05 rel.indA2 none 20   # barrier arm: holds T; released by indA2 starting
+mk_rel_fixture holdX  0.05 rel.indA2 none 20   # accumulation arm: live holder of X
+mk_rel_fixture holdY  0.05 rel.indA2 none 20   # accumulation arm: live holder of Y
+mk_rel_fixture qA     0.3  -        none
+mk_rel_fixture qB     0.3  -        none
+mk_rel_fixture qC     0.3  -        none
+mk_exit_fixture() {  # <rc> — a suite that exits with exactly <rc>
+  assert_fixture_dir "$FIXTURES"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$FIXTURES/exit$1.sh"
+  chmod +x "$FIXTURES/exit$1.sh"
+}
+for _erc in 128 130 137 160 255; do mk_exit_fixture "$_erc"; done
 
 # tl_check "S:a<E:b" "E:x>=S:y" ... - every clause must hold over $FIXTURES/timeline.log (ns stamps).
 # A missing label is a FAILED clause, never a skipped one. Self-tested below.
@@ -226,6 +239,11 @@ lane_declare "holdQ" "artifact:bfT" "backfill fixture: holds T (barrier arm)"
 lane_declare "headT" "artifact:bfT" "backfill fixture: queued head blocked on T"
 lane_declare "headY" "artifact:bfT artifact:bfU" "backfill fixture: head on T and U"
 lane_declare "xU" "artifact:bfU" "backfill fixture: shares only U with headY"
+lane_declare "holdX" "artifact:bfX" "backfill fixture: live holder of X"
+lane_declare "holdY" "artifact:bfY" "backfill fixture: live holder of Y"
+lane_declare "qA" "artifact:bfX artifact:bfW" "backfill fixture: first queued, blocked by live X, owns W"
+lane_declare "qB" "artifact:bfY" "backfill fixture: second queued, blocked by live Y"
+lane_declare "qC" "artifact:bfW" "backfill fixture: conflicts ONLY with the queued qA (W), not with anything live"
 '''
 calls = {
     "clean":     [("indA","indA.sh"),("indB","indB.sh"),("indC","indC.sh")],
@@ -238,6 +256,9 @@ calls = {
     "envprobe":  [("envprobe","envprobe.sh")],
     "livered":   [("slowL","slowL.sh"),("bad","fail.sh")],
     "sigred":    [("sigred","sigred.sh"),("indA","indA.sh")],
+    "rcs":       [("bad","fail.sh"),("r128","exit128.sh"),("r255","exit255.sh"),("r160","exit160.sh"),("r130","exit130.sh"),("r137","exit137.sh")],
+    "couple":    [],
+    "bf6":       [("holdX","holdX.sh"),("holdY","holdY.sh"),("qA","qA.sh"),("qB","qB.sh"),("qC","qC.sh"),("indA","indA2.sh")],
     "bf1":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh")],
     "bf5":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh"),("indD","indD.sh"),("indE","indE.sh")],
     "bf2":       [("holdT","holdT.sh"),("headY","headY.sh"),("xU","xU.sh"),("indA","indA2.sh")],
@@ -246,6 +267,16 @@ calls = {
     "many":      [("starS","starS.sh")] + [(f"ok{i}","ok.sh") for i in range(60)],
 }[arm]
 extra = {
+    # The runner's own pid, so the sigred fixture really interrupts the RUNNER (not its worker wrapper).
+    "sigred": '''
+export SIGRED_TARGET=$$
+''',
+    # Drive the sidecar writer for a spread of rcs and print the runner's own class for each.
+    "couple": '''
+for _rc in 1 2 127 128 129 130 137 143 160 192 193 255; do
+  _provisional_append "rc$_rc" "$_rc"; echo "CLASS $_rc $(suite_exit_class "$_rc")"
+done
+''',
     # Simulate the torn reap of _pj_reap: wait -n returns with an EMPTY -p variable once (the job
     # left the table first). `rp` is the caller's local; bash scoping lets the shadowing function clear it.
     "torn": '''
@@ -282,8 +313,8 @@ run_arm() {  # <arm> [jobs-env] — an EMPTY second arg leaves the knob unset (s
   ARM_OUT=""; ARM_RC=-1
   rm -f "$FIXTURES/timeline.log"
   build_sandbox "$sb" "$arm" >/dev/null || { fail "sandbox build failed: $arm"; return 1; }
-  if ARM_OUT=$(cd "$REPO_ROOT" && env -u CI SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
-            TEST_TIMING_LOG="${TIMING_FILE:-/dev/null}" TEST_GROUP=all \
+  if ARM_OUT=$(cd "$REPO_ROOT" && env -u CI -u SOLEUR_PJ_FIFO SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            ${ARM_FIFO:+SOLEUR_PJ_FIFO="$ARM_FIFO"} TEST_TIMING_LOG="${TIMING_FILE:-/dev/null}" TEST_GROUP=all \
             ${jobs:+SOLEUR_TEST_JOBS="$jobs"} timeout 120 bash "$sb" 2>&1 | { if [[ "${ARM_TS:-}" == 1 ]]; then ts_filter; else cat; fi; }); then
     ARM_RC=0
   else
@@ -553,11 +584,37 @@ if [[ ! -s "$SC" ]]; then
 else
   fail "A9 — signal-shaped rc was recorded: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
 fi
+# Measured 2026-11-05: with the runner genuinely interrupted, the drain TERMs the worker, which exits as a NAMED
+# signal (the `killed` class, never recorded), so deleting the `_pj_sig == 1` line in _provisional_append survives
+# this arm. The line is kept as defense in depth; this arm pins the OBSERVABLE (nothing recorded, run non-zero).
 sidecar_run sigred 4
-if [[ ! -s "$SC" ]]; then
-  pass "A9 — a red reaped after the runner was interrupted (INT/TERM) is not recorded"
+if [[ ! -s "$SC" && "$ARM_RC" != "0" ]] && grep -q 'sigred done' <<<"$ARM_OUT"; then
+  pass "A9 — a red reaped after the RUNNER was interrupted (TERM to its pid) is not recorded, and the run is non-zero"
 else
-  fail "A9 — an interrupted run recorded: $(tr '\t\n' '>|' < "$SC")"; dump "$ARM_OUT"
+  fail "A9 — interrupted-run arm wrong (rc=$ARM_RC, sidecar: $(tr '\t\n' '>|' < "$SC"))"; dump "$ARM_OUT"
+fi
+# The writer records exactly the runner's `failed` class (suite_exit_class): 1, 128, 193..255 and an unnamed
+# signal (160 -> kill -l 32 has no name) are reds the drain prints [FAIL] for; a NAMED signal (130, 137) is not.
+sidecar_run rcs 4
+RC_LABELS="$(cut -f1 "$SC" | sort | tr '\n' ' ')"
+if [[ "$RC_LABELS" == "bad r128 r160 r255 " ]]; then
+  pass "A9 — rc 1, 128, 160 (unnamed signal) and 255 are recorded; named signals 130 and 137 are not"
+else
+  fail "A9 — recorded labels '$RC_LABELS' (want 'bad r128 r160 r255 ')"; dump "$ARM_OUT"
+fi
+# Coupling: for every rc the sidecar holds a line exactly when suite_exit_class says `failed`.
+sidecar_run couple 4
+couple_bad=0; couple_n=0
+while read -r _tag _rc _cls; do
+  [[ "$_tag" == CLASS ]] || continue
+  couple_n=$((couple_n + 1))
+  _has=0; cut -f2 "$SC" | grep -qx "$_rc" && _has=1
+  { [[ "$_cls" == failed ]] && (( _has == 1 )); } || { [[ "$_cls" != failed ]] && (( _has == 0 )); } || couple_bad=$((couple_bad + 1))
+done <<<"$ARM_OUT"
+if (( couple_n == 12 )) && (( couple_bad == 0 )); then
+  pass "A9 — the sidecar and suite_exit_class cannot disagree: 12 rcs, a line exactly for the failed class"
+else
+  fail "A9 — coupling broke: n=$couple_n disagreements=$couple_bad"; dump "$ARM_OUT"; dump "$(cat "$SC")"
 fi
 rm -f "$SC"; export SOLEUR_PJ_PROVISIONAL_FILE="$SC"; run_arm mixed 4 || true; unset SOLEUR_PJ_PROVISIONAL_FILE
 if [[ ! -e "$SC" ]]; then
@@ -576,11 +633,14 @@ else
 fi
 n_pdem="$(grep -c '^export -n SOLEUR_PJ_PROVISIONAL_FILE$' "$TARGET" || true)"
 n_pdef="$(grep -c '^_provisional_append() {' "$TARGET" || true)"
-n_pcall="$(grep -c '^[[:space:]]*\(.*&& \)\?_provisional_append "' "$TARGET" || true)"
-if [[ "$n_pdem" == "1" && "$n_pdef" == "1" && "$n_pcall" == "2" ]]; then
-  pass "A9 — one demotion, one definition, exactly two append sites (reap line + serial tail)"
+# every non-comment mention of the writer (definition + 2 calls) and of the variable (the demotion + the
+# one read inside the writer): a third caller or a raw writer written in any other shape changes a count
+n_pcall="$(sed -e 's/^[[:space:]]*#.*$//' "$TARGET" | grep -c '_provisional_append' || true)"
+n_pvar="$(sed -e 's/^[[:space:]]*#.*$//' "$TARGET" | grep -c 'SOLEUR_PJ_PROVISIONAL_FILE' || true)"
+if [[ "$n_pdem" == "1" && "$n_pdef" == "1" && "$n_pcall" == "3" && "$n_pvar" == "2" ]]; then
+  pass "A9 — one demotion, one definition, exactly two append sites (reap line + serial tail), two code mentions of the variable"
 else
-  fail "A9 — demotions=$n_pdem defs=$n_pdef call-sites=$n_pcall (want 1/1/2)"
+  fail "A9 — demotions=$n_pdem defs=$n_pdef writer-mentions=$n_pcall var-mentions=$n_pvar (want 1/1/3/2)"
 fi
 
 # --- A10: conservative backfill (#12013) -----------------------------------------------
@@ -627,7 +687,6 @@ if grep -E '(^|[[:space:]])holdT([[:space:]]|$)' "$TMP/timing.bf1" | grep -q 'tm
 else
   fail "A10 — holdT's timing row lacks tmp_delta=unattributed: $(grep -E 'holdT' "$TMP/timing.bf1" | head -2 | tr '\t' '>')"
 fi
-BF1_STARTS="$(started_order "$ARM_OUT")"
 # frozen from the strict-FIFO algorithm on main (recorded 2026-11-05; see the SOLEUR_PJ_FIFO arm below):
 FIFO_FROZEN_ORDER="holdT headT indA indB indC "
 
@@ -648,6 +707,16 @@ else
   fail "A10 — barrier arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
+# Several queued blockers: qC conflicts ONLY with the queued qA (token W), while qB (a different token) was skipped
+# between them. The skipped set must ACCUMULATE; an implementation that remembers only the latest skipped suite
+# (or looks one entry ahead) lets qC jump qA.
+run_arm bf6 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:qC>=E:qA" "S:qA>=E:holdX" "S:qB>=E:holdY" "S:indA2<E:holdX"; then
+  pass "A10 — the queued-ahead set accumulates: a suite sharing a token with an earlier queued suite waits for it behind other skips"
+else
+  fail "A10 — queued-ahead set did not accumulate"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
 # (No starvation arm: _pj_submit blocks while the pool is saturated, so the queue never holds an independent suite
 # beside a token-ready head when a slot frees - "head tried last" is observationally equivalent at the launcher.
 # Measured with an order-preserving head-last mutant on 2026-11-05: it survives, and is equivalent for that reason.
@@ -665,7 +734,7 @@ fi
 
 # The knob: SOLEUR_PJ_FIFO=1 reproduces strict FIFO exactly - independents wait behind the blocked head, and the
 # launch order equals the frozen order recorded from main.
-export SOLEUR_PJ_FIFO=1; run_arm bf1 4 || true; unset SOLEUR_PJ_FIFO
+ARM_FIFO=1 run_arm bf1 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2>=E:holdT" "S:indB>=S:headT"; then
   pass "A10 — SOLEUR_PJ_FIFO=1 restores strict FIFO (independents idle behind the blocked head)"
 else
@@ -677,6 +746,28 @@ else
   fail "A10 — FIFO launch order '$(started_order "$ARM_OUT")' != frozen '$FIFO_FROZEN_ORDER'"
 fi
 FIFO_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"; FIFO_RC="$ARM_RC"
+# 0 is backfill, not FIFO (the knob is 1-only), and an OUTER exported value never reaches the sandbox arms
+ARM_FIFO=0 run_arm bf1 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdT"; then
+  pass "A10 — SOLEUR_PJ_FIFO=0 is backfill (only the value 1 selects strict FIFO)"
+else
+  fail "A10 — FIFO=0 did not backfill"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+export SOLEUR_PJ_FIFO=1; run_arm bf1 4 || true; unset SOLEUR_PJ_FIFO
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdT"; then
+  pass "A10 — hermetic: an outer SOLEUR_PJ_FIFO=1 in the test's environment does not reach the sandboxed runner"
+else
+  fail "A10 — an inherited SOLEUR_PJ_FIFO leaked into a backfill arm"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+PROBE_FILE="$TMP/envprobe.fifo"; rm -f "$PROBE_FILE"
+export PROBE_OUT="$PROBE_FILE"; ARM_FIFO=1 run_arm envprobe 4 || true; unset PROBE_OUT
+if [[ "$(sed -n 3p "$PROBE_FILE" 2>/dev/null)" == "absent" ]] && grep -q '\[run\] envprobe started' <<<"$ARM_OUT"; then
+  pass "A10 — SOLEUR_PJ_FIFO is demoted from the environment of a suite the runner spawns"
+else
+  fail "A10 — SOLEUR_PJ_FIFO leaked into a spawned suite: $(tr '\n' '|' < "$PROBE_FILE" 2>/dev/null || echo '<no reading>')"
+fi
+n_fdem="$(grep -c '^export -n SOLEUR_PJ_FIFO$' "$TARGET" || true)"
+if [[ "$n_fdem" == "1" ]]; then pass "A10 — exactly one 'export -n SOLEUR_PJ_FIFO'"; else fail "A10 — found $n_fdem 'export -n SOLEUR_PJ_FIFO' (want 1)"; fi
 if [[ "$FIFO_VERDICTS" == "$BF1_ORDER" && "$FIFO_RC" == "0" ]]; then
   pass "A10 — replay parity: backfill and strict FIFO print identical verdicts in identical order, same exit"
 else
@@ -777,6 +868,8 @@ else
 fi
 
 # --- Done --------------------------------------------------------------------
+# Dispatch floor, reported directly (never through fail()): deleting a block of arms lowers PASSES.
+(( PASSES < MIN_PASSES_FLOOR )) && { printf '[FATAL] only %s assertions passed, expected at least %s\n' "$PASSES" "$MIN_PASSES_FLOOR"; exit 1; }
 echo ""
 echo "=== test-all-parallel-scheduler: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1

@@ -708,7 +708,7 @@ _run_gate() { # <PATH> <repo> <kind:gate|explain|selfcheck> [gate args…]
   RSEQ=$((RSEQ + 1))
   ( cd "$repo" && env -u CLAUDE_PLUGIN_ROOT ${RUN_UNSET_CI:+-u CI} \
       PATH="$p" \
-      FAKE_LOG="$CALLS" FAKE_DIR="$TESTROOT" \
+      FAKE_LOG="$CALLS" FAKE_DIR="$TESTROOT" ${RUN_TMPDIR:+TMPDIR="$RUN_TMPDIR"} \
       REAL_NODE="$REAL_NODE" REAL_PY="$REAL_PY" REAL_GIT="$REAL_GIT" \
       bash "$SUT" "$@" ) > "$TESTROOT/outs/$RSEQ.out" 2>&1
   RC=$?
@@ -2366,10 +2366,22 @@ want_rc 1 "F4b: control - a real red before the kill is a failure, not a deferra
 want_field "F4b: reason is failed-before-budget" reason 'failed-before-budget'
 f4_run "$R_F4" 'suite-a\t1\t@NOW\n' 137
 want_rc 1 "F4b2: the same holds for a 137 kill"
-f4_run "$R_F4" 'suite-a\t137\t@NOW\nsuite-b\t255\t@NOW\n'
-want_rc 6 "F4c: signal-shaped records only (rc >= 128) stay deferred"
-f4_run "$R_F4" 'suite-a\t137\t@NOW\nsuite-b\t2\t@NOW\n'
-want_rc 1 "F4d: mixed - a signal-shaped record first and a real red second is a failure"
+# The runner records only its own `failed` class (rc 128 and 193..255 are reds, a named signal never
+# reaches the file); the gate reader therefore accepts any numeric rc in 1..255.
+f4_run "$R_F4" 'suite-a\t255\t@NOW\n'
+want_rc 1 "F4c: a runner-classed failure above 127 (255) is a red"
+f4_run "$R_F4" 'suite-a\t128\t@NOW\n'
+want_rc 1 "F4c2: rc 128 (a plain failure under ADR-177) is a red"
+f4_run "$R_F4" 'suite-a\t1000\t@NOW\nsuite-b\t18446744073709551617\t@NOW\n'
+want_rc 6 "F4c3: an rc above 255 or too long for an exit status is malformed, never a red"
+f4_run "$R_F4" 'suite-a\t0\t@NOW\nsuite-b\t2\t@NOW\n'
+want_rc 1 "F4d: a benign record first and a real red second is a failure"
+f4_run "$R_F4" 'suite-a\t1\t@NOW\nsuite-b\t0\t@NOW\n'
+want_rc 1 "F4d2: a real red first and a benign record last is still a failure (not last-record-only)"
+f4_run "$R_F4" 'suite-a\t1\t@LATE\nsuite-b\t1\t@NOW\n'
+want_rc 1 "F4d3: a late record first does not disable a timely red after it"
+f4_run "$R_F4" 'suite-a\t1\t@NOW\nsuite-b\t1\t@LATE\n'
+want_rc 1 "F4d4: a timely red first is not cancelled by a late record after it"
 f4_run "$R_F4" 'suite-a\t1\t@LATE\n'
 want_rc 6 "F4e: a record stamped after the deadline (kill-induced exit) is ignored"
 f4_run "$R_F4" 'garbage line\nsuite-a\tabc\t@NOW\nsuite-b\t1\tnotanumber\nsuite-c\t\t@NOW\n'
@@ -2384,15 +2396,18 @@ f4_run "$R_F4" 'suite-a\t1\t@NOW\n' 1
 want_rc 1 "F4h2: a plain runner failure keeps rc 1"
 want_field "F4h2: with the ordinary reason" reason 'failed'
 # the stale-file arm: the gate reads ITS OWN fresh mktemp, never a guessable path.
+# The planted files must sit in the directory the gate's own mktemp uses (its TMPDIR), or the arm could
+# never fail: the gate is run with TMPDIR pointed at a directory holding the guessable names.
 assert_fixture_dir "$TESTROOT"
+_f4tmp="$TESTROOT/f4tmp"; mkdir -p "$_f4tmp"; assert_fixture_dir "$_f4tmp"
 _now="$(date +%s)"
-printf 'suite-a\t1\t%s\n' "$_now" > "$TESTROOT/affected-provisional"
-printf 'suite-a\t1\t%s\n' "$_now" > "$TESTROOT/affected-provisional.stale"
-printf 'suite-a\t1\t%s\n' "$_now" > "$TESTROOT/sidecar"
-printf 'suite-a\t1\t%s\n' "$_now" > "$TESTROOT/provisional"
-f4_run "$R_F4" ''
-want_rc 6 "F4i: a stale red left at a guessable path is never read"
-unset _now
+printf 'suite-a\t1\t%s\n' "$_now" > "$_f4tmp/affected-provisional"
+printf 'suite-a\t1\t%s\n' "$_now" > "$_f4tmp/affected-provisional.stale"
+printf 'suite-a\t1\t%s\n' "$_now" > "$_f4tmp/sidecar"
+printf 'suite-a\t1\t%s\n' "$_now" > "$_f4tmp/provisional"
+RUN_TMPDIR="$_f4tmp" f4_run "$R_F4" ''
+want_rc 6 "F4i: a stale red left at a guessable path in the gate's TMPDIR is never read"
+unset _now _f4tmp
 # hand-over: the gate sets the variable in BOTH branches of the delegated call, to its own path,
 # and removes that file afterwards (the gate owns it).
 f4_run "$R_F4" ''
@@ -2404,6 +2419,20 @@ RUN_UNSET_CI=1 f4_run "$R_F4P" 'suite-a\t1\t@NOW\n'
 want_rc 1 "F4k: the pool-width branch hands the path over too (red before kill -> 1)"
 if [[ -n "$(head -n 1 "$TESTROOT/sidecar-path.log")" ]]; then pass "F4k2: pool branch recorded a sidecar path"; else fail "F4k2: pool branch handed no sidecar path"; fi
 unset _p1
+# a caller's exported value never reaches an arm other than the delegated runner call (custom command here).
+R_F4E="$(mk_repo f4env)"; seed_js "$R_F4E"; mkdir -p "$R_F4E/scripts"
+cat > "$R_F4E/scripts/envprobe.sh" <<'FIX'
+#!/usr/bin/env bash
+printf '%s' "${SOLEUR_PJ_PROVISIONAL_FILE-unset}" > "${FAKE_DIR:?}/pj-env.txt"
+exit 0
+FIX
+chmod +x "$R_F4E/scripts/envprobe.sh"
+write_config "$R_F4E" '{"test_command": "bash scripts/envprobe.sh"}'
+seal_base "$R_F4E"; commit_chg "$R_F4E" src/util.ts 'export const u = 2;'
+reset_fakes; rm -f "$TESTROOT/pj-env.txt"
+export SOLEUR_PJ_PROVISIONAL_FILE=/caller/leaked-sidecar; run_gate "$R_F4E" gate; unset SOLEUR_PJ_PROVISIONAL_FILE
+if [[ "$(cat "$TESTROOT/pj-env.txt" 2>/dev/null)" == "unset" ]]; then pass "F4m: a caller's SOLEUR_PJ_PROVISIONAL_FILE is not inherited by the custom command"; else fail "F4m: custom command saw '$(cat "$TESTROOT/pj-env.txt" 2>/dev/null || echo '<no reading>')'"; fi
+unset R_F4 R_F4P R_F4E
 # header contract: the new reason is named where the other reasons are (parity with the code).
 if grep -q 'failed-before-budget' "$SUT"; then pass "F4l: the gate header documents failed-before-budget"; else fail "F4l: header lacks failed-before-budget"; fi
 if grep -q 'failed-before-budget' "$(dirname "$SUT")/lib/affected-tests/common.sh"; then pass "F4l2: the reason catalog lists failed-before-budget"; else fail "F4l2: catalog lacks failed-before-budget"; fi
@@ -2445,6 +2474,6 @@ unset _kind _rc _of _xfail _badword
 
 # Floor = the full count less a little slack for the rows that
 # depend on a host binary (jq): it is a floor, so a deleted block of rows reddens it.
-print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-488}"
+print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-494}"
 
 

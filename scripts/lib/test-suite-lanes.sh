@@ -133,7 +133,7 @@ lane_declare "scripts/test-all-parallel-benchmark" "lock:test-all" \
 # shared live tree, and these arms do neither: each arm builds a distinct `mktemp -d` sandbox
 # (ci-pr-affected-replay.test.sh, SANDBOX), the test-all.sh references in the file are planted fixture copies
 # or read-only reads of the real file, and the file never calls tc_acquire. Measured cost of the token: the
-# three arms hold 2227 s of pool time and ran one at a time while the pool idled (ADR-242, 2026-11-04). An
+# three arms cost 2227 s standalone (3281 s inside the contended measured run) and ran one at a time while the pool idled (ADR-242, 2026-11-04). An
 # override REPLACES the whole set, so the empty set here is derived minus lock:test-all. Pinned against the live
 # classifier by scripts/lib/test-suite-lanes.test.sh (override == _lane_derive minus the token, per label).
 # The other `lock:test-all` holders keep the token; narrowing the derivation itself is a separate decision.

@@ -33,7 +33,7 @@
 #      maps to 1 reason=runner-signal), or the content-trigger command failed
 #      (reason=content-trigger-failed); a failure seen before budget expiry
 #      wins over deferral: a budget kill (runner rc 124/137) after the runner
-#      recorded a red (rc 1..127, stamped before the deadline) in its
+#      recorded a red (a runner-classed `failed` rc, stamped before the deadline) in its
 #      SOLEUR_PJ_PROVISIONAL_FILE sidecar exits 1 reason=failed-before-budget
 #   4  AFFECTED_GATE_REFUSED — no-stack, bad-config key=<k>,
 #      vacuous-test-command, no-base-ref, not-a-repo (--self-check outside a
@@ -148,6 +148,11 @@ source "$GATE_DIR/lib/affected-tests/content-trigger.sh"
 trap 'affected_scratch_clean' EXIT
 trap 'affected_scratch_clean; exit 130' INT
 trap 'affected_scratch_clean; exit 143' TERM
+
+# (#12013) The sidecar channel belongs to the delegated-runner arm, which sets it itself on the runner
+# call. A value inherited from the caller's environment must never reach the custom-command arm, the
+# adapters or the content-trigger command, so it is dropped before any arm runs.
+unset SOLEUR_PJ_PROVISIONAL_FILE
 
 usage() {
   sed -n '1,20p' "$0" | grep -E '^#' | sed 's/^# \{0,1\}//'
@@ -607,10 +612,10 @@ if [[ -n "$RUNNER" ]]; then
     124|137)
       (( rc == 137 )) && echo "affected-tests: the runner exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
       if [[ "$AFFECTED_BUDGET_ACTIVE" == 1 && "$CI_NAME" != none ]]; then
-        # (#12013) A red the runner printed before the kill is still a red: rc 1..127, stamped
-        # strictly before the deadline (a worker that turns the kill's TERM into exit 1 lands after
-        # it). Signal-shaped rc (>= 128) is unresolved, not failed (ADR-177). Malformed or missing
-        # records resolve to nothing, so the deferral below is the unchanged default.
+        # (#12013) A red the runner printed before the kill is still a red: a non-zero rc the runner
+        # classed `failed` (it never records a named-signal exit, ADR-177), stamped strictly before the
+        # deadline (a worker that turns the kill's TERM into exit 1 lands after it). Malformed or
+        # missing records resolve to nothing, so the deferral below is the unchanged default.
         if affected_sidecar_red "$PROVISIONAL_FILE" "$AFFECTED_DEADLINE"; then
           finish 1 "$_dmode" failed-before-budget runner "$CI_NAME" - - -
         fi
