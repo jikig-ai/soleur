@@ -7,9 +7,10 @@
 #
 # HARD BLOCKERS:
 #   B1 fallback_pool_id = web-1 pool (so a disabled LB degrades to web-1, not NXDOMAIN).
-#   B2 web-2 is a DRAINED pool member (weight = 0): health-monitored but zero serving
-#      weight until the #6027 maintenance window flips 0→1 after the
-#      GIT_DATA_LUKS_CUTOVER_AT soak marker (the §(c) gate chain + runtime-bind probe).
+#   B2 web-2 is a DRAINED pool member (weight = var.web2_lb_weight, default 0):
+#      health-monitored but zero serving weight until the #6027 maintenance window flips
+#      0→1 after the GIT_DATA_LUKS_CUTOVER_AT soak marker (the §(c) gate chain +
+#      runtime-bind probe), via the ga-pool-update serve arm — its only feeder.
 #   B3 relay-is-safety: LB weight must not be flipped to web-2 before owner-side relay active.
 #
 # Zone plan is Free Website; Load Balancing is a separately-billed add-on (~$5/mo, approved).
@@ -60,11 +61,14 @@ resource "cloudflare_load_balancer_pool" "web_1" {
   # B2: drained member — weight 0 means health is still checked but no traffic is
   # routed (provider drained semantic). The 0→1 flip is the #6027 window act, gated
   # by the §(c) gate chain + lb-weight-gate-with-marker.sh — never a config edit.
+  # var.web2_lb_weight DEFAULTS to 0 (variables.tf), so every plan that does not name it
+  # keeps web-2 drained; only the cf-lb-overlay.yml `ga-pool-update mode=serve` arm passes 1,
+  # after its fail-closed gate-chain step. lb-weight-gate.test.sh C.3/C.4 pin all of this.
   origins {
     name    = "web-2"
     address = hcloud_server.web["web-2"].ipv4_address
     enabled = true
-    weight  = 0
+    weight  = var.web2_lb_weight
   }
 
   # CTO ruling 2026-11-01: origin-level steering is the real knob (LB-level

@@ -346,7 +346,7 @@ c3_scan_file() {
       # weight on the open line can only sit INLINE (after `origins {`), so the
       # right-anchored-0 pattern is applied unanchored here; inside-line weight
       # stays line-anchored below.
-      w0 = ($0 ~ /weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) ? 1 : 0
+      w0 = ($0 ~ /weight[[:space:]]*=[[:space:]]*(0([[:space:]]|#|$)|var\.web2_lb_weight[[:space:]]*(#|\}|$))/) ? 1 : 0
       line = $0
       depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
       if (depth <= 0) printf "%s|%s\n", w2, w0
@@ -362,7 +362,7 @@ c3_scan_file() {
     }
     depth > 0 {
       if ($0 ~ /name[[:space:]]*=[[:space:]]*"web-2"/ || $0 ~ /hcloud_server\.web\["web-2"\]/) w2 = 1
-      if ($0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*0([[:space:]]|#|$)/) w0 = 1
+      if ($0 ~ /^[[:space:]]*weight[[:space:]]*=[[:space:]]*(0([[:space:]]|#|$)|var\.web2_lb_weight[[:space:]]*(#|\}|$))/) w0 = 1
       line = $0
       depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
       if (depth <= 0) printf "%s|%s\n", w2, w0
@@ -501,7 +501,185 @@ c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
   }
 }'
 assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
+# Gated-variable weight term (serve-arm prep): web-2's weight may be the literal 0 OR exactly
+# var.web2_lb_weight (whose default is 0 and whose only feeder is the serve arm — C.4 below).
+# Any other expression is not a drained member.
+c3_fixture varok 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    weight  = var.web2_lb_weight
+  }
+}'
+assert_c3 "C.3-fixture: weight = var.web2_lb_weight scans clean (default-0 gated variable)" "0 1 0"
+c3_fixture varsuffix 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    weight  = var.web2_lb_weight + 1
+  }
+}'
+assert_c3 "C.3-fixture: weight = var.web2_lb_weight + 1 is NOT the gated variable → red" "1 1 0"
+c3_fixture varprefix 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    weight  = var.web2_lb_weight_extra
+  }
+}'
+assert_c3 "C.3-fixture: weight = var.web2_lb_weight_extra (prefix) → red" "1 1 0"
+c3_fixture varother 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins {
+    name    = "web-2"
+    weight  = var.some_other_weight
+  }
+}'
+assert_c3 "C.3-fixture: weight = var.<other> → red (only the gated variable is admitted)" "1 1 0"
+c3_fixture varoneline 'resource "cloudflare_load_balancer_pool" "web_1" {
+  origins { name = "web-2" weight = var.web2_lb_weight }
+}'
+assert_c3 "C.3-fixture: single-line web-2 member on the gated variable scans clean" "0 1 0"
 rm -rf "$C3_TMP"
+
+# =============================================================================
+# C.4 — the web-2 LB weight is a GATED VARIABLE (serve-arm prep).
+#
+# cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight so the cf-lb-overlay.yml
+# `ga-pool-update mode=serve` arm CAN succeed (a hard-coded 0 made the arm structurally unable to
+# flip). The invariants that keep this exactly as safe as the literal 0 was:
+#   V   the variable's DEFAULT is 0 (the default plan is a no-op) and it admits only {0,1};
+#   F   the ONLY feeder in the whole tree is the ga_pool_update plan step of cf-lb-overlay.yml, and
+#       its value is 1 only when mode=serve; every other path (routine apply, drift plan, laptop
+#       plan, drain mode) therefore sees 0;
+#   O   the serve value can only be planned AFTER the §(c) gate chain step passed (fail-closed
+#       step, `if: serve`, no continue-on-error), and the gate is evaluated on the SAME number
+#       that is planned (SOLEUR_WEB2_SERVING_WEIGHT=$WEB2_LB_WEIGHT);
+#   G   the gate, fed exactly what the arm injects, still refuses every unmet precondition.
+# =============================================================================
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+WF="$REPO_ROOT/.github/workflows/cf-lb-overlay.yml"
+c4_ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "  PASS: $1"; }
+c4_bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "  FAIL: $1"; }
+c4_assert() { # $1=desc $2=0|1 (1 = condition holds)
+  if [[ "$2" == "1" ]]; then c4_ok "$1"; else c4_bad "$1"; fi
+}
+# Comment-stripped text (a `#` comment line can neither satisfy nor trip a pin).
+c4_nocomment() { grep -vE '^[[:space:]]*#' "$1"; }
+
+# --- V: the variable declaration -------------------------------------------------------------
+VARS_TF="$SCRIPT_DIR/variables.tf"
+V_BLOCK=""
+[[ -f "$VARS_TF" ]] && V_BLOCK="$(awk '
+  /^variable[[:space:]]+"web2_lb_weight"[[:space:]]*\{/ { on = 1 }
+  on { print }
+  on && /^\}/ { exit }
+' "$VARS_TF")"
+c4_assert "C.4-V1: variables.tf declares variable \"web2_lb_weight\"" "$([[ -n "$V_BLOCK" ]] && echo 1 || echo 0)"
+c4_assert "C.4-V2: web2_lb_weight is type = number with default = 0 (default plan is a no-op)" \
+  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*0[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
+c4_assert "C.4-V3: web2_lb_weight has a validation admitting ONLY 0 or 1" \
+  "$(grep -qE 'validation[[:space:]]*\{' <<<"$V_BLOCK" && grep -qE 'condition[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*0[[:space:]]*\|\|[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
+c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf files" \
+  "$([[ "$(grep -hE '^variable[[:space:]]+"web2_lb_weight"' "$SCRIPT_DIR"/*.tf | wc -l)" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-V5: cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight" \
+  "$(grep -qE '^[[:space:]]*weight[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*$' "$SCRIPT_DIR/cloudflare-lb.tf" && echo 1 || echo 0)"
+c4_assert "C.4-V6: web-1's origin weight stays the literal 1 (no variable on the serving member)" \
+  "$(awk '/name[[:space:]]*=[[:space:]]*"web-1"/ {on=1} on && /weight/ {print; exit}' "$SCRIPT_DIR/cloudflare-lb.tf" | grep -qE 'weight[[:space:]]*=[[:space:]]*1[[:space:]]*$' && echo 1 || echo 0)"
+
+# --- F: the feeder census ---------------------------------------------------------------------
+# Every file in the live tree that names the variable, minus this test and the knowledge base.
+FEEDERS="$(cd "$REPO_ROOT" && grep -rIl 'web2_lb_weight' .github apps scripts plugins tests 2>/dev/null \
+  | grep -vE '(^|/)node_modules/' | grep -vE '^apps/web-platform/infra/lb-weight-gate\.test\.sh$' | LC_ALL=C sort | tr '\n' ' ' || true)"
+c4_assert "C.4-F1: only variables.tf, cloudflare-lb.tf and cf-lb-overlay.yml name web2_lb_weight (got: ${FEEDERS})" \
+  "$([[ "$FEEDERS" == ".github/workflows/cf-lb-overlay.yml apps/web-platform/infra/cloudflare-lb.tf apps/web-platform/infra/variables.tf " ]] && echo 1 || echo 0)"
+c4_assert "C.4-F2: no tfvars / auto.tfvars / TF_VAR_web2_lb_weight supplies the variable anywhere in the tree" \
+  "$([[ -z "$(cd "$REPO_ROOT" && grep -rIlE 'TF_VAR_web2_lb_weight|WEB2_LB_WEIGHT' .github apps scripts plugins tests 2>/dev/null | grep -vE '(^|/)node_modules/' | grep -vE '^(\.github/workflows/cf-lb-overlay\.yml|apps/web-platform/infra/lb-weight-gate\.test\.sh)$')" ]] && echo 1 || echo 0)"
+
+# The ga_pool_update job and its steps (2-space job key, 6-space `- name:` steps).
+JOB="$(awk '/^  ga_pool_update:/ {on=1; print; next} on && /^  [A-Za-z0-9_-]+:/ {exit} on {print}' "$WF" 2>/dev/null || true)"
+step_of() { # $1 = ERE matched against the step's `- name:` line
+  PAT="$1" awk '
+    /^      - / { if (on) exit; if ($0 ~ /^      - name:/ && $0 ~ ENVIRON["PAT"]) on = 1 }
+    on { print }
+  ' <<<"$JOB"
+}
+line_of() { # $1 = ERE on the `- name:` line -> line number inside $JOB (0 if absent)
+  local n; n="$(grep -nE "^      - name:.*($1)" <<<"$JOB" | head -1 | cut -d: -f1)"; echo "${n:-0}"
+}
+PIN_STEP="$(step_of 'Typo-guard' || true)"
+GATE_STEP="$(step_of '§\(c\) gate chain')"
+PLAN_STEP="$(step_of 'Terraform plan \(GA pool')"
+c4_assert "C.4-F3: ga_pool_update job and its pin / gate-chain / plan steps are all found (non-vacuity)" \
+  "$([[ -n "$JOB" && -n "$PIN_STEP" && -n "$GATE_STEP" && -n "$PLAN_STEP" ]] && echo 1 || echo 0)"
+c4_assert "C.4-F4: WEB2_LB_WEIGHT is 1 ONLY when mode=serve, else 0 (the pin step)" \
+  "$(grep -qE 'if \[\[ "\$MODE_RAW" == "serve" \]\]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi' <<<"$PIN_STEP" && grep -qE 'echo "WEB2_LB_WEIGHT=\$\{WEB2_LB_WEIGHT\}" >> "\$GITHUB_ENV"' <<<"$PIN_STEP" && echo 1 || echo 0)"
+c4_assert "C.4-F5: the plan step passes -var=web2_lb_weight from WEB2_LB_WEIGHT, exactly once" \
+  "$([[ "$(c4_nocomment <(printf '%s\n' "$PLAN_STEP") | grep -cE -- '-var="web2_lb_weight=\$\{WEB2_LB_WEIGHT\}"')" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-F6: web2_lb_weight appears on exactly ONE non-comment line of cf-lb-overlay.yml (no other arm / job feeds it)" \
+  "$([[ "$(c4_nocomment "$WF" | grep -c 'web2_lb_weight')" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans stay at default 0)" \
+  "$([[ -z "$(cd "$REPO_ROOT" && grep -lE 'web2_lb_weight|WEB2_LB_WEIGHT' .github/workflows/*.yml | grep -v 'cf-lb-overlay.yml')" ]] && echo 1 || echo 0)"
+
+# --- O: ordering / fail-closed chain ---------------------------------------------------------
+GATE_AT="$(line_of '§\(c\) gate chain')"; PLAN_AT="$(line_of 'Terraform plan \(GA pool')"
+c4_assert "C.4-O1: the §(c) gate chain step precedes the plan step that carries the variable" \
+  "$([[ "$GATE_AT" -gt 0 && "$PLAN_AT" -gt "$GATE_AT" ]] && echo 1 || echo 0)"
+c4_assert "C.4-O2: the gate chain step is serve-gated on the step itself" \
+  "$(grep -qE "^        if: inputs\.mode == 'serve'[[:space:]]*$" <<<"$GATE_STEP" && echo 1 || echo 0)"
+c4_assert "C.4-O3: no continue-on-error anywhere in the job (a tolerated gate failure would still reach the plan)" \
+  "$([[ -z "$(c4_nocomment <(printf '%s\n' "$JOB") | grep -E 'continue-on-error')" ]] && echo 1 || echo 0)"
+c4_assert "C.4-O4: the gate is evaluated on the SAME weight that is planned (SOLEUR_WEB2_SERVING_WEIGHT=\$WEB2_LB_WEIGHT)" \
+  "$(grep -qE 'SOLEUR_WEB2_SERVING_WEIGHT="\$WEB2_LB_WEIGHT"' <<<"$GATE_STEP" && echo 1 || echo 0)"
+c4_assert "C.4-O5: the gate chain still requires the requires_runtime_bind_probe=true marker and the wrapper (not the bare gate)" \
+  "$(grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_STEP" && grep -q 'lb-weight-gate-with-marker.sh' <<<"$GATE_STEP" && echo 1 || echo 0)"
+c4_assert "C.4-O6: the web-2 pool-health precondition (n>=2, all healthy) is still serve-gated and precedes the plan" \
+  "$([[ "$(line_of 'web-2 health precondition')" -gt 0 && "$(line_of 'web-2 health precondition')" -lt "$PLAN_AT" ]] && grep -qE "if \[\[ \"\\\$W2_N\" -lt 2 \]\]" <<<"$JOB" && echo 1 || echo 0)"
+
+# --- P: the synthetic per-host bind never leaves the gate's own check -------------------------
+BIND_VAL="$(grep -oE 'SOLEUR_PROXY_BIND="[^"]+"' <<<"$GATE_STEP" | head -1 | sed -E 's/^SOLEUR_PROXY_BIND="(.*)"$/\1/' || true)"
+ROT_VAL="$(grep -oE 'SOLEUR_SERVING_ROTATION="[^"]+"' <<<"$GATE_STEP" | head -1 | sed -E 's/^SOLEUR_SERVING_ROTATION="(.*)"$/\1/' || true)"
+c4_assert "C.4-P1: the gate chain injects a non-empty synthetic SOLEUR_PROXY_BIND and a rotation naming web-2 (got bind='${BIND_VAL}' rotation='${ROT_VAL}')" \
+  "$([[ -n "$BIND_VAL" && "$ROT_VAL" == *web-2* ]] && echo 1 || echo 0)"
+c4_assert "C.4-P2: SOLEUR_PROXY_BIND is named on exactly one non-comment line of the workflow (never exported to GITHUB_ENV, never written to Doppler)" \
+  "$([[ "$(c4_nocomment "$WF" | grep -c 'SOLEUR_PROXY_BIND')" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-P3: the ga_pool_update job never writes Doppler (no 'doppler secrets set|upload|delete')" \
+  "$([[ -z "$(c4_nocomment <(printf '%s\n' "$JOB") | grep -E 'doppler[[:space:]]+secrets[[:space:]]+(set|upload|delete)')" ]] && echo 1 || echo 0)"
+c4_assert "C.4-P4: the three injected inputs are assigned AFTER the doppler run (they override any ambient prd value)" \
+  "$([[ "$(grep -nE 'doppler run' <<<"$GATE_STEP" | head -1 | cut -d: -f1)" -lt "$(grep -nE 'SOLEUR_PROXY_BIND=' <<<"$GATE_STEP" | head -1 | cut -d: -f1)" ]] && echo 1 || echo 0)"
+
+# --- G: the gate, fed exactly what the arm injects, keeps every fail-closed condition ----------
+# Weight comes from the pin step's serve branch (1); rotation and bind from the gate-chain step.
+SERVE_W="$(grep -oE 'then WEB2_LB_WEIGHT=[0-9]+' <<<"$PIN_STEP" | head -1 | grep -oE '[0-9]+$' || true)"
+arm_env() { # the injected trio, as the workflow sets them in serve mode
+  reset_def
+  DEF[SOLEUR_WEB2_SERVING_WEIGHT]="${SERVE_W:-}"
+  DEF[SOLEUR_SERVING_ROTATION]="$ROT_VAL"
+  DEF[SOLEUR_PROXY_BIND]="$BIND_VAL"
+}
+arm_env; run_with_def
+assert_zero "C.4-G1: arm-injected trio + every precondition met → gate passes"
+assert_stdout_contains "C.4-G1b: …and prints the flip-authorization marker the step greps for" "requires_runtime_bind_probe=true"
+arm_env; DEF[GIT_DATA_STORE_ENABLED]='false'; run_with_def
+assert_rejects_with "C.4-G2: arm-injected trio + git-data store disabled → refused" "B_git_data_store_disabled"
+arm_env; unset 'DEF[GIT_DATA_LUKS_CUTOVER_AT]'; run_with_def
+assert_rejects_with "C.4-G3: arm-injected trio + GIT_DATA_LUKS_CUTOVER_AT absent → refused" "B_luks_cutover_marker_absent"
+arm_env; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$FRESH_CUTOVER"; run_with_def
+assert_rejects_with "C.4-G4: arm-injected trio + git-data soak not elapsed → refused" "B_luks_soak_not_elapsed"
+arm_env; unset 'DEF[WORKSPACES_LUKS_CUTOVER_AT]'; run_with_def
+assert_rejects_with "C.4-G5: arm-injected trio + WORKSPACES_LUKS_CUTOVER_AT absent (today's Doppler state) → refused" "B_workspaces_luks_marker_absent"
+arm_env; DEF[WORKSPACES_LUKS_CUTOVER_AT]="$FRESH_CUTOVER"; run_with_def
+assert_rejects_with "C.4-G6: arm-injected trio + workspaces soak not elapsed → refused" "B_workspaces_luks_soak_not_elapsed"
+arm_env; DEF[GIT_DATA_LUKS_SOAK_DAYS]='0'; run_with_def
+assert_rejects_with "C.4-G7: arm-injected trio + soak days 0 → refused (0 is rejected, not 'no soak')" "B_luks_soak_days_invalid"
+arm_env; DEF[WORKSPACES_LUKS_SOAK_DAYS]='0'; run_with_def
+assert_rejects_with "C.4-G8: arm-injected trio + workspaces soak days 0 → refused" "B_workspaces_luks_soak_days_invalid"
+arm_env; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10"}'; run_with_def
+assert_rejects_with "C.4-G9: arm-injected trio + roster omits web-2 → refused" "A_web2_not_in_roster"
+arm_env; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.10'; run_with_def
+assert_rejects_with "C.4-G10: arm-injected trio + web-2 addr not in allowlist → refused" "A_web2_addr_not_in_allowlist"
+# The drain value is NOT authorization: weight 0 without web-2 in rotation is the standby branch,
+# which prints the SHAPE-ONLY banner and NOT the marker the serve step requires.
+arm_env; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]=''; run_with_def
+assert_zero "C.4-G11: standby inputs pass the gate…"
+c4_assert "C.4-G11b: …but WITHOUT requires_runtime_bind_probe=true (the serve step would refuse it)" \
+  "$([[ "$GATE_OUT" != *requires_runtime_bind_probe=true* ]] && echo 1 || echo 0)"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
 MIN_CASES=72

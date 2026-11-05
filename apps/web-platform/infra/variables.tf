@@ -525,6 +525,24 @@ variable "terraform_version" {
   default     = ""
 }
 
+# web-2's serving weight in the GA LB pool (cloudflare-lb.tf, ADR-068 §(c)). DEFAULT 0 = the drained
+# shape: every plan that does not name this variable (routine apply, drift plan, laptop plan,
+# cf-lb-overlay `ga-pool-update mode=drain`) plans web-2 at weight 0, so merging the variable changes
+# nothing in production. The ONLY feeder is the `ga_pool_update` plan step of cf-lb-overlay.yml, which
+# passes 1 solely for mode=serve and only after its fail-closed §(c) gate-chain step passed
+# (lb-weight-gate.test.sh C.4 pins the feeder census, the ordering and the default). Never set this in
+# Doppler / tfvars: a TF_VAR_ route would bypass the gate chain. Only 0 and 1 are admitted.
+variable "web2_lb_weight" {
+  description = "web-2 origin weight in the GA LB pool (0 = drained, 1 = serving). Default 0; fed ONLY by the cf-lb-overlay.yml ga-pool-update serve arm after the §(c) gate chain passed. Do not set via Doppler or tfvars."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.web2_lb_weight == 0 || var.web2_lb_weight == 1
+    error_message = "web2_lb_weight must be 0 (drained) or 1 (serving)."
+  }
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string

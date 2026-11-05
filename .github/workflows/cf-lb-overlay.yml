@@ -726,6 +726,12 @@ jobs:
           [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=ga-pool-update, mode=${MODE_RAW}, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
           echo "POOL_UPDATE_MODE=${MODE_RAW}" >> "$GITHUB_ENV"
+          # web-2's LB weight for THIS dispatch: 1 only for mode=serve, else 0 (the variable's
+          # default). One number feeds both the gate (SOLEUR_WEB2_SERVING_WEIGHT) and the plan
+          # (-var), so the gate always evaluates exactly the weight that is planned. Serve still
+          # cannot plan before the gate-chain step below passes (it is an earlier, fail-closed step).
+          if [[ "$MODE_RAW" == "serve" ]]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi
+          echo "WEB2_LB_WEIGHT=${WEB2_LB_WEIGHT}" >> "$GITHUB_ENV"
       - name: §(c) gate chain (serve mode only — fail-closed BEFORE plan)
         if: inputs.mode == 'serve'
         env:
@@ -752,6 +758,18 @@ jobs:
           # The outer `env DOPPLER_TOKEN=` scopes the prd read; the inner `env` hands
           # the wrapper the marker config's own token.
           #
+          # THREE gate inputs are not in Doppler prd and are injected by the inner `env`
+          # (after `doppler run`, so they override any ambient value):
+          #   SOLEUR_WEB2_SERVING_WEIGHT  the weight this dispatch will plan (1 in serve).
+          #   SOLEUR_SERVING_ROTATION     the target rotation {web-1,web-2}.
+          #   SOLEUR_PROXY_BIND           a SYNTHETIC non-empty value for the gate's A.1
+          #     shape check ONLY. The real value is per-host (the host's own 10.0.1.x,
+          #     resolved on-host by ci-deploy.sh resolve_proxy_bind) and must never become
+          #     a fleet-wide Doppler value; this one reaches only the `env -i` gate child,
+          #     is never exported to GITHUB_ENV and never written to Doppler. It therefore
+          #     proves NOTHING about the real relay bind: A.1 is vacuous here.
+          #     requires_runtime_bind_probe=true is exactly the gate saying so.
+          #
           # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
           # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
           # weight-flip authorization" and exits 0 WITHOUT evaluating Conditions
@@ -763,6 +781,9 @@ jobs:
           GATE_OUT=""
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \
+              SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" \
+              SOLEUR_SERVING_ROTATION="web-1,web-2" \
+              SOLEUR_PROXY_BIND="synthetic-gate-shape-input-not-a-bind-address" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1
@@ -848,6 +869,7 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -var="web2_lb_weight=${WEB2_LB_WEIGHT}" \
               -target=cloudflare_load_balancer_pool.web_1 \
               -target=cloudflare_load_balancer.app \
               -target=cloudflare_notification_policy.web_lb_health 2>&1 | tf_redact_random_ids
