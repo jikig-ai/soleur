@@ -87,64 +87,59 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (ADR-309, sentinel discipline)", () => {
-  // Exactly ONE approval-required tool has a grant-wired cc builder (github_push_branch, registered through the gated
-  // registrar in cc-github-push.ts, never through this env route: readCcMcpAllowlist returns {} regardless of the names).
-  // Every OTHER required short name must still be REFUSED here as the backstop behind the cc fail-closed switch, in any
-  // position of a mixed list, and the permanent denylist stays checked first.
+  // The env route refuses EVERY approval-required short name, the grant-wired github_push_branch included: that tool reaches cc
+  // only through the gated registrar (cc-github-push.ts), never by naming it in CC_MCP_ALLOWLIST. This is the backstop behind
+  // the cc fail-closed switch, in any position of a mixed list, and the permanent denylist stays checked first.
   const P = "mcp__soleur_platform__";
-  const WIRED = new Set<string>(CC_GRANT_WIRED_APPROVAL_TOOLS);
+  const STATIC_MESSAGE = (short: string) =>
+    `CC_MCP_ALLOWLIST contains approval-required tool "${short}" \u2014 no cc tool builder is wired to execution grants (ADR-309)`;
   const shortOf = (fqn: string) => fqn.replace(P, "");
   const required = [...APPROVAL_REQUIRED_TOOLS];
-  const wired = required.filter((t) => WIRED.has(t));
-  const notWired = required.filter((t) => !WIRED.has(t));
 
-  it("is non-vacuous: exactly one grant-wired name, all of them required, and the rest of the required set is still refused", () => {
-    expect(wired).toEqual([`${P}github_push_branch`]);
-    expect([...WIRED].every((t) => isApprovalRequiredTool(t))).toBe(true);
-    expect(notWired.length).toBeGreaterThanOrEqual(7);
+  it("is non-vacuous: all 8 required names are covered, and the grant-wired name is one of them", () => {
+    expect(required).toHaveLength(8);
+    expect(required).toContain(`${P}github_push_branch`);
+    expect([...CC_GRANT_WIRED_APPROVAL_TOOLS].every((t) => isApprovalRequiredTool(t))).toBe(true);
   });
 
-  for (const fqn of notWired) {
+  for (const fqn of required) {
     const short = shortOf(fqn);
-    it(`CC_MCP_ALLOWLIST naming ${short} throws (static message, no env echo beyond the short name)`, () => {
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: short })).toThrow(/approval/i);
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `create_issue, ${short}` })).toThrow(/approval/i);
+    it(`CC_MCP_ALLOWLIST naming ${short} throws with the static message (no env echo beyond the short name)`, () => {
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: short })).toThrow(STATIC_MESSAGE(short));
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `create_issue, ${short}` })).toThrow(STATIC_MESSAGE(short));
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: ` ${short} ,create_issue` })).toThrow(STATIC_MESSAGE(short));
     });
   }
 
-  it("the grant-wired name does not throw, and the env route still returns {} (registration never reads the env)", () => {
-    expect(readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "github_push_branch" })).toEqual({});
-    expect(readCcMcpAllowlist({ CC_MCP_ALLOWLIST: " github_push_branch , create_issue " })).toEqual({});
-  });
-
-  it("a mixed list throws for any other required name in BOTH orders (a compliant grant-wired name does not shield the next one)", () => {
-    for (const fqn of notWired) {
+  it("a mixed list throws for every required name in BOTH orders around the grant-wired name", () => {
+    for (const fqn of required) {
       const short = shortOf(fqn);
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `github_push_branch,${short}` }), `wired first, then ${short}`).toThrow(/approval/i);
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `${short},github_push_branch` }), `${short} first, then wired`).toThrow(/approval/i);
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `github_push_branch,${short}` }), `push first, then ${short}`).toThrow(/approval-required/);
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `${short},github_push_branch` }), `${short} first, then push`).toThrow(/approval-required/);
     }
   });
 
-  it("the permanent Tier 3 denylist still throws, in any position around the grant-wired name", () => {
+  it("the permanent Tier 3 denylist is checked first per name: a denylist name before an approval name reports the denylist, after it the approval name is reported first", () => {
     expect(CC_ROUTER_TIER3_DENYLIST.size).toBeGreaterThan(0);
     for (const fqn of CC_ROUTER_TIER3_DENYLIST) {
       const short = shortOf(fqn);
       expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: short }), short).toThrow(/denylist/i);
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `github_push_branch,${short}` }), `wired then ${short}`).toThrow(/denylist/i);
-      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `${short},github_push_branch` }), `${short} then wired`).toThrow(/denylist/i);
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `${short},github_push_branch` }), `${short} then push`).toThrow(/denylist/i);
+      expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: `github_push_branch,${short}` }), `push then ${short}`).toThrow(/approval-required/);
     }
   });
 
-  it("the throw for an unwired required tool says it has no grant-wired cc builder (the sentence stays true now that one tool is wired)", () => {
-    expect(() => readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "email_send" })).toThrow(/no grant-wired cc builder/);
+  it("a name that is not approval-required still passes and the env route returns {}", () => {
+    expect(readCcMcpAllowlist({ CC_MCP_ALLOWLIST: "create_issue" })).toEqual({});
   });
 });
 
 /**
  * Guard 2 of the cc approval wiring: a registration sweep DERIVED from the cc registry function, not a hand-kept list.
  * `soleurPlatformToolsForTests` is the one place the cc dispatcher assembles its soleur_platform tool list (narration, c4,
- * and the CRM tools only for a crm-lead chat). Every tool it can register must be explicitly tiered, none may be an
- * approval-required tool, and every gated one must be exempt with a recorded reason.
+ * the gated push tool when the registrar registered it, and the CRM tools only for a crm-lead chat). Every tool it can
+ * register must be explicitly tiered; the ONLY approval-required tool allowed is the grant-wired push tool (and only from the
+ * registrar's output), and every other gated one must be exempt with a recorded reason.
  *
  * What this cannot see: a tool registered through some other route (a second MCP server in the cc options). The census
  * therefore also pins, over the comment-stripped dispatcher source, exactly one `createSdkMcpServer(` call and
@@ -171,24 +166,30 @@ describe("cc registration sweep (derived from the registry function)", () => {
     return { required, unexpectedRequired, notExplicitlyTiered, gatedNotExempt };
   }
 
-  function buildPushToolForSweep() {
-    return [
-      buildPushTool({
-        installationId: 1,
-        owner: "example-org",
-        repo: "example-repo",
-        defaultBranch: "main",
-        workspacePath: "/tmp/ws",
-        grants: new ExecutionGrants(),
-        requireGrant: true,
-      }),
-    ] as unknown as readonly { name: string }[];
-  }
+  // The REAL registrar output (every seam true: persona, repo, installation, entitlement, flag, default-branch lookup), not a
+  // hand-built fixture: the sweep sees exactly what the dispatcher would hand to the registry function.
+  let registration: Awaited<ReturnType<typeof import("@/server/cc-github-push").resolveCcGithubPushRegistration>>;
+  beforeAll(async () => {
+    const { resolveCcGithubPushRegistration } = await import("@/server/cc-github-push");
+    registration = await resolveCcGithubPushRegistration({
+      userId: "sweep-user",
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      persona: "command_center",
+      owner: "example-org",
+      repo: "example-repo",
+      installationId: 1,
+      workspacePath: "/tmp/ws",
+      webEgressEntitled: true,
+      grants: new ExecutionGrants(),
+      isEnabled: async () => true,
+      lookupDefaultBranch: async () => "main",
+    });
+  }, 120_000);
 
   /** Every name the cc registry function can produce, over BOTH crm-lead settings, with or without the registrar's tool. */
   function registeredNames(withPush = false): string[] {
     const c4 = buildC4ToolsForSweep();
-    const approvalTools = withPush ? buildPushToolForSweep() : undefined;
+    const approvalTools = withPush ? registration.tools : undefined;
     const names = new Set<string>();
     for (const crmLead of [true, false]) {
       for (const t of soleurPlatformToolsForTests({ userId: "sweep-user", crmLead, c4Tools: c4, ...(approvalTools ? { approvalTools } : {}) })) {
@@ -210,11 +211,16 @@ describe("cc registration sweep (derived from the registry function)", () => {
     }
   });
 
+  it("the real registrar output (all seams true) is registered with exactly the push FQN, one-to-one", () => {
+    expect(registration.registered).toBe(true);
+    expect(registration.toolNames).toEqual([PUSH]);
+    expect(registration.tools.map((t) => `${P}${t.name}`)).toEqual([PUSH]);
+  });
+
   it("non-vacuity floor with the registrar's tool: at least 10 names, and the push tool is among them", () => {
     const names = registeredNames(true);
     expect(names.length).toBeGreaterThanOrEqual(10);
     expect(names).toContain(PUSH);
-    expect(names.filter((n) => n === PUSH)).toHaveLength(1);
   });
 
   it("without the registrar's tool no approval-required tool is registered in cc (the dark path)", () => {

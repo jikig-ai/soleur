@@ -42,11 +42,31 @@ const log = createChildLogger("cc-github-push");
 const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
 
 /**
- * The approval-required tools a cc builder is wired for (grants-aware, registered through this module). Exactly one.
- * `readCcMcpAllowlist` skips its approval-required throw for these names only (the env route still returns `{}`: registration
- * never reads the env), and the census sweeps expect exactly this set. A weakening needs an edit here AND in the census.
+ * The approval-required tools a cc builder is wired for (grants-aware, registered ONLY through this module's registrar).
+ * Exactly one. The census sweeps expect exactly this set and `assertCcApprovalSetWired` enforces it at runtime on every
+ * registrar result; `readCcMcpAllowlist` does NOT exempt it (the env route refuses every approval-required name). A weakening
+ * needs an edit here AND in the census.
  */
 export const CC_GRANT_WIRED_APPROVAL_TOOLS = [PUSH_FQN] as const;
+
+/**
+ * Runtime guard on a registrar result, called by the dispatcher before it publishes the tools and names. Pure. Throws unless
+ * every `toolNames` entry is a grant-wired approval tool, every built tool's name is that FQN's `soleur_platform` short name,
+ * and the two arrays correspond one-to-one. A violation throws into the dispatcher's registration catch, which falls back to the
+ * empty set and mirrors `cc-push-registration-failed`: a foreign name can never reach `canUseTool`'s platform list. Static
+ * messages (no echo of a name).
+ */
+export function assertCcApprovalSetWired(tools: readonly { name: string }[], toolNames: readonly string[]): void {
+  if (tools.length !== toolNames.length) {
+    throw new Error("cc approval registration: tools and toolNames do not correspond one-to-one");
+  }
+  const wired: readonly string[] = CC_GRANT_WIRED_APPROVAL_TOOLS;
+  const prefix = "mcp__soleur_platform__";
+  toolNames.forEach((fqn, i) => {
+    if (!wired.includes(fqn)) throw new Error("cc approval registration: a tool name is not grant-wired");
+    if (`${prefix}${tools[i].name}` !== fqn) throw new Error("cc approval registration: a built tool does not match its registered name");
+  });
+}
 
 /** Upper bound of the flag read: a never-settling seam cannot hang Query construction. */
 export const CC_PUSH_FLAG_TIMEOUT_MS = 2_000;

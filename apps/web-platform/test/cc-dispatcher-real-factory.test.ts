@@ -56,7 +56,11 @@ const {
   mockApprovalFlag,
   mockGithubApiGet,
   mockHeadSha,
+  registrarOverride,
 } = vi.hoisted(() => ({
+  // #11636: a per-test replacement for the registrar (null = the REAL one). Lets a test hand the dispatcher a result the real
+  // registrar can never produce (a foreign name), to prove the dispatcher's own runtime assertion rejects it.
+  registrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
   // #11636: the github_push_branch registration. `pushBranch` is the handler's only side effect; the approval flag is a
   // per-test switch (default OFF = the dark path); the default-branch lookup and the workspace HEAD are canned.
   mockPushBranch: vi.fn(async (_o: Record<string, unknown>) => ({ branch: "feat-x", pushed: true })),
@@ -405,6 +409,16 @@ vi.mock("@/server/push-branch", async (importOriginal) => ({
   pushBranch: mockPushBranch,
 }));
 
+// #11636: the registrar, delegating to the REAL one unless a test installs `registrarOverride.fn`.
+vi.mock("@/server/cc-github-push", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/cc-github-push")>();
+  return {
+    ...actual,
+    resolveCcGithubPushRegistration: (a: Parameters<typeof actual.resolveCcGithubPushRegistration>[0]) =>
+      registrarOverride.fn ? registrarOverride.fn(a as unknown as Record<string, unknown>) : actual.resolveCcGithubPushRegistration(a),
+  };
+});
+
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
@@ -431,7 +445,7 @@ vi.mock("@/server/approval/gate", async (importOriginal) => {
   };
 });
 
-import { __resetDispatcherForTests, getCcRegisteredApprovalTools, realSdkQueryFactory } from "@/server/cc-dispatcher";
+import { __resetDispatcherForTests, CC_REGISTERED_PLATFORM_TOOL_NAMES, getCcRegisteredApprovalTools, realSdkQueryFactory } from "@/server/cc-dispatcher";
 import { CC_PUSH_PROMPT_ADDENDUM } from "@/server/cc-github-push";
 import { createApprovalGateDeps } from "@/server/approval/gate";
 import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
@@ -526,6 +540,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
+    registrarOverride.fn = null;
     mockApprovalFlag.mockReset().mockResolvedValue(false);
     mockGithubApiGet.mockReset().mockResolvedValue({ default_branch: "trunk" });
     mockHeadSha.mockReset().mockResolvedValue("d".repeat(40));
@@ -1031,6 +1046,18 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
     });
 
+    it.each([
+      ["a foreign toolName (not grant-wired)", { tools: [{ name: "github_push_branch" }], toolNames: ["mcp__soleur_platform__email_send"] }],
+      ["a built tool whose name does not match its registered name", { tools: [{ name: "email_send" }], toolNames: [PUSH_FQN] }],
+      ["tools and toolNames that do not correspond one-to-one", { tools: [], toolNames: [PUSH_FQN] }],
+    ])("the dispatcher's wired-set assertion rejects %s: the Query is built on the dark path, nothing is published, and it is reported", async (_n, bad) => {
+      eligible();
+      registrarOverride.fn = async () => ({ registered: true, reason: "registered", ...bad });
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
+    });
+
     it("persona support with every other precondition true: not registered", async () => {
       eligible();
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
@@ -1052,6 +1079,10 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(toolNames()).toEqual(["narrate", "summarize", "github_push_branch"]);
       expect(toolNames().filter((n) => n === "github_push_branch")).toHaveLength(1);
       expect(ccCtx().platformToolNames).toEqual([PUSH_FQN]);
+      // One server only (the sweep's blind spot, pinned on the live options), and what that server registers equals the base
+      // list plus exactly the push FQN: the base names are the always-on narration tools, canUseTool's list carries the rest.
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      expect(toolNames().map((n) => `mcp__soleur_platform__${n}`)).toEqual([...CC_REGISTERED_PLATFORM_TOOL_NAMES, PUSH_FQN]);
       expect(prompt()).toContain(CC_PUSH_PROMPT_ADDENDUM);
       expect(prompt().split(CC_PUSH_PROMPT_ADDENDUM)).toHaveLength(2);
       expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);

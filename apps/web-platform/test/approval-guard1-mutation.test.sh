@@ -177,6 +177,9 @@ GD = "server/approval/gate.ts"
 KBS = "server/kb-share-tools.ts"
 WSET = "server/workspace-settings-tools.ts"
 ACC = "server/account-delete.ts"
+CCP = "server/cc-github-push.ts"
+CCD = "server/cc-dispatcher.ts"
+GAUTH = "server/git-auth.ts"
 
 T_GF = "test/approval/gate-flow.test.ts"
 T_RES = "test/approval/gate-flow-resolver-snapshot.test.ts"
@@ -204,6 +207,10 @@ T_PAY = "test/approval/gate-flow-payload.test.ts"
 T_BGR = "test/approval/builder-grants-required.test.ts"
 T_PCGB = "test/approval/permission-callback-gated-branch.test.ts"
 T_AD = "test/account-delete.test.ts"
+T_CCP = "test/cc-github-push.test.ts"
+T_RF = "test/cc-dispatcher-real-factory.test.ts"
+T_HARD = "test/push-branch-hardened.test.ts"
+T_GAH = "test/git-auth-hardened-env.test.ts"
 STATIC = "static:probe"
 
 # Test-name fragments reused by several rows.
@@ -343,7 +350,7 @@ M("G1-X5d-grant-written-on-a-wait-timeout", GF, E('a.logDecision(a.toolName, "de
 M("G1-X6-push-handler-ignores-the-grant-commit", GHT, E('commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,', "commitSha: undefined,"), T_PUSHG, ["a grant pins the approved commit: pushBranch gets commitSha = the approved headSha"])
 M("G1-X7-push-handler-runs-without-a-grant", GHT, E('if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");', 'if (false) return grantRefusalResponse("grant_missing");'), T_PUSHG, ["enforcing and no grant: refuses with the grant-missing text and pushes nothing"])
 M("G1-X8-push-ignores-the-pinned-commit", PUSH, E('`${commitSha ?? "HEAD"}:refs/heads/${branch}`', '`HEAD:refs/heads/${branch}`'), T_PINNED, ["approve at A, HEAD moves to B: the remote branch ends at A, not B"])
-M("G1-X9-push-pinned-commit-not-verified", PUSH, E('execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });', "void 0;"), T_PINNED, ["a sha that is absent from the repository throws and the remote branch is not created"])
+M("G1-X9-push-pinned-commit-not-verified", PUSH, E('execFileSync("git", [...gitPrefix, "cat-file", "-e", `${commitSha}^{commit}`], {\n        cwd: workspacePath,\n        stdio: "pipe",\n        ...gitEnv,\n      });', "void 0;"), T_PINNED, ["a sha that is absent from the repository throws and the remote branch is not created"])
 M("G1-X10-check-grant-does-not-refuse-when-enforcing", GRANTS, E('if (!grants.enforcing) return { kind: "legacy" };', 'return { kind: "legacy" };'), T_GRANTS, ["checkGrant enforcing and no grant: refuse (the sticky flag fails closed)"])
 M("G1-X11-grant-is-not-one-shot", GRANTS, E("    if (!e) return null;\n    this.entries.delete(id);\n", "    if (!e) return null;\n"), T_GRANTS, ["ExecutionGrants take is one-shot"])
 M("G1-X12-grant-never-expires", GRANTS, E("return e.expiresAt > this.now() ? e.binding : null;", "return e.binding;"), T_GRANTS, ["ExecutionGrants a grant expires after 120 s and the expired read still consumes it"])
@@ -476,6 +483,16 @@ K_RG = ["buildGithubPushBranchTool (requireGrant: true, the cc registration) enf
 M("G1-RG1-cc-push-handler-runs-without-a-gate-grant", GHT, E('if (grant.kind === "legacy" && requireGrant) {', "if (false) {"), T_PUSHG, K_RG)
 M("G1-RG2-cc-push-handler-strict-refusal-unreported", GHT, E('reportGrantRefused(toolName, "grant_missing");', ""), T_PUSHG, K_RG)
 M("G1-RG3-grants-required-require-grant-optional", GHT, E("\n  requireGrant: boolean;", "\n  requireGrant?: boolean;"), T_BGR, ["the cc push builder takes a REQUIRED boolean `requireGrant` (a forgotten wiring does not compile)"])
+# ---- 12c. cc push registration (#11636): the dispatcher's wired-set assertion, the registrar's own gates, the hardened push -------
+K_WS1 = ["the dispatcher's wired-set assertion rejects a foreign toolName (not grant-wired): the Query is built on the dark path, nothing is published, and it is reported"]
+M("G1-CCR1-wired-set-assertion-call-dropped", CCD, E("        assertCcApprovalSetWired(pushRegistration.tools, pushRegistration.toolNames);\n", ""), T_RF, K_WS1)
+M("G1-CCR2-registrar-flag-off-still-registers", CCP, E('  if (!flagEnabled) return done("flag-off");\n', ""), T_CCP, ["'flag off' -> 'flag-off'; lookup and builder not called"])
+M("G1-CCR3-registrar-support-persona-registers", CCP, E('  if (args.persona === "support") return done("support-persona");\n', ""), T_CCP, ["-> 'support-persona'; lookup and builder not called"])
+M("G1-CCR4-platform-tool-names-drop-the-registrar-result", CCD, E("            ...approvalToolNames,\n", ""), T_RF, ["all preconditions true: the tool is registered ONCE"])
+M("G1-HD1-hardened-push-skips-the-git-dir-check", PUSH, E("  if (hardened) assertPlainGitDir(workspacePath);\n", ""), T_HARD, ["refuses (typed, static text, nothing pushed) when .git is a FILE"])
+M("G1-HD2-hardened-push-inherits-the-server-env", GAUTH, E("? buildHardenedGitEnv(execOpts.cwd as string, authEnv)", "? { ...process.env, ...authEnv }"), T_GAH, ["hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child"])
+M("G1-HD3-hardened-push-drops-the-hardening-args", GAUTH, E("...(hardened ? HARDENED_GIT_ARGS : []), ", ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
+M("G1-HD4-strict-builder-does-not-ask-for-the-hardened-push", GHT, E("...(requireGrant ? { hardened: true as const } : {}),", "...{},"), T_PUSHG, ["hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT"])
 M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
 M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
 M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
@@ -790,8 +807,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 228 rows today (round 3); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=227
+# 239 rows today (round 3 plus the #11636 rows); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=238
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -811,7 +828,7 @@ declare -A FLOOR=(
   ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
   ["test/approval/migration-180-approval-request.test.ts"]=91
-  ["test/approval/tools-census.test.ts"]=32
+  ["test/approval/tools-census.test.ts"]=33
   ["test/approval/runner-census.test.ts"]=17
   ["test/approval/flag.test.ts"]=5
   ["test/approval/decide-boundary.test.ts"]=52
@@ -822,7 +839,7 @@ declare -A FLOOR=(
   ["test/approval/execution-grant-handlers.test.ts"]=10
   ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=15
+  ["test/github-tools-push-grant.test.ts"]=16
   ["test/push-branch-pinned.test.ts"]=4
   ["test/approval/gate-deps.test.ts"]=29
   ["test/approval/approval-ops-real-sink.test.ts"]=13
@@ -831,6 +848,10 @@ declare -A FLOOR=(
   ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
+  ["test/cc-dispatcher-real-factory.test.ts"]=95
+  ["test/cc-github-push.test.ts"]=42
+  ["test/push-branch-hardened.test.ts"]=7
+  ["test/git-auth-hardened-env.test.ts"]=3
 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   if [ "$tf" = "static:probe" ]; then
@@ -956,7 +977,7 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=3
 EXPECT_RESID=2
-MIN_KILLED=222
+MIN_KILLED=233
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1

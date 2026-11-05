@@ -25,6 +25,7 @@ vi.mock("@/lib/feature-flags/server", async (importOriginal) => {
 });
 
 import {
+  assertCcApprovalSetWired,
   CC_GRANT_WIRED_APPROVAL_TOOLS,
   CC_PUSH_FLAG_TIMEOUT_MS,
   CC_PUSH_PROMPT_ADDENDUM,
@@ -307,6 +308,30 @@ describe("the real builder (lazy import of github-tools)", () => {
     const { GITHUB_PUSH_BRANCH_TOOL_FQN } = await import("@/server/github-tools");
     expect(GITHUB_PUSH_BRANCH_TOOL_FQN).toBe(FQN);
   }, 30_000);
+});
+
+describe("assertCcApprovalSetWired (the dispatcher's runtime guard on a registrar result)", () => {
+  it("accepts the empty set and the one wired tool, one-to-one", () => {
+    expect(() => assertCcApprovalSetWired([], [])).not.toThrow();
+    expect(() => assertCcApprovalSetWired([{ name: "github_push_branch" }], [FQN])).not.toThrow();
+  });
+
+  it.each([
+    ["a foreign toolName", [{ name: "github_push_branch" }], ["mcp__soleur_platform__email_send"]],
+    ["a foreign toolName whose built tool name matches it", [{ name: "email_send" }], ["mcp__soleur_platform__email_send"]],
+    ["a built tool whose name differs from the registered FQN", [{ name: "email_send" }], [FQN]],
+    ["a wired FQN with an extra foreign name", [{ name: "github_push_branch" }, { name: "email_send" }], [FQN, "mcp__soleur_platform__email_send"]],
+    ["more tools than names", [{ name: "github_push_branch" }, { name: "github_push_branch" }], [FQN]],
+    ["more names than tools", [], [FQN]],
+    ["a name outside the soleur_platform server", [{ name: "github_push_branch" }], ["mcp__other__github_push_branch"]],
+  ])("rejects %s with a static message that echoes no name", (_n, tools, names) => {
+    expect(() => assertCcApprovalSetWired(tools, names)).toThrow(/cc approval registration/);
+    try {
+      assertCcApprovalSetWired(tools, names);
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/email_send|other__/);
+    }
+  });
 });
 
 describe("the prompt addendum", () => {

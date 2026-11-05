@@ -307,7 +307,7 @@ import { isApprovalRequiredTool } from "./approval/tools";
 import { createApprovalGateDeps } from "./approval/gate";
 import { ExecutionGrants } from "./approval/grants";
 import {
-  CC_GRANT_WIRED_APPROVAL_TOOLS,
+  assertCcApprovalSetWired,
   CC_PUSH_PROMPT_ADDENDUM,
   resolveCcGithubPushRegistration,
 } from "./cc-github-push";
@@ -324,12 +324,11 @@ import {
  * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
  * tools — cross-tenant credentials by construction), or (b) an
  * approval-required tool (`isApprovalRequiredTool`; ADR-309: a promoted approval
- * tool could not be bound to an approval unless a cc builder is wired to the
- * execution grants). The ONE exception is `CC_GRANT_WIRED_APPROVAL_TOOLS`
- * (`github_push_branch`, #11636): it is registered through the gated registrar in
- * `cc-github-push.ts`, never through this env route (this function still returns
- * `{}`), so naming it here is accepted; every other approval-required name, in any
- * position of a mixed list, still throws. Phase 1 does NOT yet build a populated
+ * tool could not be bound to an approval through this route). EVERY approval-required
+ * name throws here, `github_push_branch` included (#11636): that tool is registered
+ * only through the gated registrar in `cc-github-push.ts`, never through this env
+ * route, so naming it in the env is a misconfiguration, not a way to enable it.
+ * Phase 1 does NOT yet build a populated
  * `soleur_platform` server even when valid names are present — promotion is
  * Phase 2 (#3722).
  *
@@ -358,12 +357,12 @@ export function readCcMcpAllowlist(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
       );
     }
-    // Only the grant-wired tool has a cc builder that reads a grant (and it registers through the gated registrar, not this
-    // route), so a promoted approval tool could not otherwise be bound to an approval. Refuse every OTHER approval-required
-    // name here as the backstop (static message; the short name is the only env echo). The denylist check above stays first.
-    if (isApprovalRequiredTool(fqn) && !(CC_GRANT_WIRED_APPROVAL_TOOLS as readonly string[]).includes(fqn)) {
+    // Env promotion is not how an approval tool reaches cc: the one grant-wired tool registers through the gated registrar
+    // (cc-github-push.ts), so every approval-required name is refused here as the backstop (static message; the short name is
+    // the only env echo). The denylist check above stays first.
+    if (isApprovalRequiredTool(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — this tool has no grant-wired cc builder (ADR-309)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309)`,
       );
     }
   }
@@ -2764,6 +2763,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           webEgressEntitled,
           grants: approvalGrants,
         });
+        // A violation throws into the catch below (empty set, reported), before anything is assigned or published.
+        assertCcApprovalSetWired(pushRegistration.tools, pushRegistration.toolNames);
         if (pushRegistration.registered) {
           approvalTools = pushRegistration.tools;
           approvalToolNames = pushRegistration.toolNames;
