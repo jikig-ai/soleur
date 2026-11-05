@@ -46,4 +46,4 @@ Issues: #12013, #12025. Draft PR: #12103. Follow-up filed: #12106.
 - [x] 6.1 ADR-242 amendment
 - [x] 6.2 `technical-ruling-gate.sh --branch` green; markdownlint runs in the commit hook
 - [x] 6.3 No derive-cache tracker (8 percent); next levers (the `lock:test-all` chain and the replay arms' edges, derive cache, budget kill hiding a provisional red) go in a comment on #12013
-- [ ] 6.4 PR body per the Closing Rules; post the table and the ledger on #12013 and #12025
+- [x] 6.4 PR body per the Closing Rules (closes #12025, references #12013); the table and the ledger were posted on #12013 and #12025

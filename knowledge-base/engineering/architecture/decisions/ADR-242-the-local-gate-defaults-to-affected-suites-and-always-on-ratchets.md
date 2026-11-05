@@ -855,7 +855,7 @@ re-pricing and measured weights for the slowest suites are tracked in #12025.
 
 ## Amendment — 2026-11-04 (#12013, #12025)
 
-The pool and the live red line (previous amendment) are merged. This amendment records the measurement #12013 asked for and the re-pricing #12025 deferred. Raw rows live in `knowledge-base/project/specs/feat-one-shot-12013-12025-affected-gate-reprice/measurements/`; every number below carries the file it came from. The gate readings were taken on 2026-11-04; the selection rates were recomputed on 2026-11-05 (see the pricing ledger).
+The pool and the live red line (previous amendment) are merged. This amendment records the measurement #12013 asked for and the re-pricing #12025 deferred. Raw rows live in `knowledge-base/project/specs/archive/20261105-094951-feat-one-shot-12013-12025-affected-gate-reprice/measurements/`; every number below carries the file it came from. The gate readings were taken on 2026-11-04; the selection rates were recomputed on 2026-11-05 (see the pricing ledger).
 
 **Outcome.** The 10-minute bar of #12013 is not met (cold gate about 6522 s). A red reported live and per-suite timings are met. All eight priced suites (the seven named in #12025 plus `image-cve-verdict`) are priced-and-kept, no edge array changed, #12025 is closed by this PR and #12013 stays open. Terms used below: *cold derive* is the first selection derivation in a fresh worktree (no derive cache); *warm derive* is the same with the per-worktree cache populated; *pool width* is how many suites the runner runs at once; *attributable* is a non-empty, evaluable first-parent commit that touches neither the runner nor the affected index; *runner-changed* is one that touches either and degrades the gate to the full battery.
 
