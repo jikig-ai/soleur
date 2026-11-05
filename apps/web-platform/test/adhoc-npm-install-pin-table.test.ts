@@ -84,7 +84,7 @@ type BareNpxBinding = string | "same-file-install";
 
 const PIN_TABLE: PinRow[] = [
   // ---- apps/web-platform/Dockerfile (cli-tools stage globals) ----
-  { kind: "literal", file: "apps/web-platform/Dockerfile", pkg: "@anthropic-ai/claude-code", expect: "2.1.293" },
+  { kind: "literal", file: "apps/web-platform/Dockerfile", pkg: "@anthropic-ai/claude-code", expect: "2.1.311" },
   { kind: "literal", file: "apps/web-platform/Dockerfile", pkg: "likec4", expect: "1.60.0" },
   { kind: "literal", file: "apps/web-platform/Dockerfile", pkg: "vitest", expect: "4.1.12" },
   { kind: "literal", file: "apps/web-platform/Dockerfile", pkg: "playwright", expect: "1.61.0-alpha-1778188671000" },

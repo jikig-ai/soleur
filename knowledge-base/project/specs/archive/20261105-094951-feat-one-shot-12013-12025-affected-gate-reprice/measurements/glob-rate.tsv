@@ -1,0 +1,12 @@
+suite	entries	duration_ms	src	existing_hits	glob_hits	total_hits	incremental_hits	units	runner_changed	not_evaluable	empty	deleted_path_units	rate_conservative	rate_excluded	ci_seconds_added	drained_pairs	tree_files	tree_missing	verdict	reason
+apps/web-platform/test/destroy-ask-mutation	0	-	missing	36	0	36	0	100	25	0	1	0	62/100	36/74	-	-	-	-	baselined	duration-missing
+plugins/soleur/test/ci-pr-affected-replay-a	0	1033094	measured	60	0	60	0	100	25	0	1	0	86/100	60/74	-	-	-	-	baselined	duration-over
+plugins/soleur/test/ci-pr-affected-replay-b	0	399378	measured	60	0	60	0	100	25	0	1	0	86/100	60/74	-	-	-	-	baselined	duration-over
+plugins/soleur/test/ci-pr-affected-replay-c	0	326172	measured	60	0	60	0	100	25	0	1	0	86/100	60/74	-	-	-	-	baselined	duration-over
+scripts/guard-vacuity-floor	0	44880	measured	57	0	57	0	100	25	0	1	0	83/100	57/74	-	-	-	-	baselined	rate-over-and-duration-over-30s
+scripts/image-cve-verdict	0	1223	floor	16	0	16	0	100	25	0	1	0	42/100	16/74	-	-	-	-	baselined	duration-floor
+scripts/lint-orphan-test-suites	0	27207	measured	56	0	56	0	100	25	0	1	0	82/100	56/74	-	-	-	-	baselined	always-on-over-fast-tier-cap
+scripts/lint-shell-trace-credential-refusal	0	108586	measured	56	0	56	0	100	25	0	1	0	82/100	56/74	-	-	-	-	baselined	duration-over
+scripts/test-affected-kb-consumers	0	91233	measured	67	0	67	0	100	25	0	1	0	93/100	67/74	-	-	-	-	baselined	duration-over
+tests/scripts/argv-bearer-sweep	0	47034	measured	44	0	44	0	100	25	0	1	0	70/100	44/74	-	-	-	-	baselined	rate-over-and-duration-over-30s
+tests/scripts/scratch-residue	0	26346	measured	46	0	46	0	100	25	0	1	0	72/100	46/74	-	-	-	-	baselined	always-on-over-fast-tier-cap

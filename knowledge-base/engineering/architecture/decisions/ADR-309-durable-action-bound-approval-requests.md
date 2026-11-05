@@ -186,6 +186,8 @@ channel the grep does not model. A prompt-injected agent that can only emit tool
 - **ADR-027 / ADR-068** (process-local state, multi-host): the in-process waiter is an optimisation; correctness never depends on it, because every wait re-reads the row.
 - **ADR-303**: the new public relation declares its Data API grants and is classified in `table-grants.ts`.
 
+**Legal acceptances (ADR-319).** A founder's decision on a legal text is not an `approval_request`: it is recorded in a separate write-once table from the authenticated web session (migration 184), because this table's 30-day text scrub and erasure scrub do not fit a legal record.
+
 ## Adding a gated tool
 
 This is the single source of the checklist; other sites point here. A new gated platform tool must either join the approval queue or be exempted with a reason; the census test fails until it is classified.

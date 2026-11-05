@@ -179,3 +179,6 @@ packages/opencode-plugin/scripts/
 packages/opencode-plugin/lib/
 packages/opencode-plugin/opencode/
 packages/opencode-plugin/.claude-plugin/
+
+# cloudflare-readonly.test.sh scratch (in-worktree by design; removed by its trap, ignored if a kill leaves one)
+.cf-readonly-test.*
