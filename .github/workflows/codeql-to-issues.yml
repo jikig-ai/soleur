@@ -1,9 +1,17 @@
-# Poll CodeQL code scanning alerts and create GitHub issues for new findings.
-# Integrates with auto-label-security.yml via "sec:" title prefix.
-# Deduplicates by checking for existing open issues with the alert number.
+# Daily sweep for open CodeQL code scanning alerts; delegates filing to
+# scripts/codeql-main-alert-gate.sh in SWEEP mode (one filer, two triggers — #12065,
+# CTO ruling on #12004). The push-time gate is the sibling trigger; this job is the
+# scheduled backstop for alerts that arrive without a push. Integrates with
+# auto-label-security.yml via "sec:" title prefix.
 #
 # Note: code_scanning_alert is NOT a valid GitHub Actions trigger event.
 # This workflow uses schedule + workflow_dispatch instead.
+#
+# Timing: timeout-minutes pairs with the script's DEADLINE_SECONDS below so the
+# script's own deadline (240 s) plus the bounded degraded upsert finishes inside
+# the job kill — the same deadline + 300 s invariant the gate wiring suite pins.
+# A kill before the script's degrade path would silence the durable
+# codeql-sweep-degraded page.
 
 name: CodeQL Alert to Issue
 
@@ -11,96 +19,53 @@ on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Evaluate and report, but file no issue (still exits 1 on a qualifying alert); the orphan reaper is skipped too."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
+  contents: read
   issues: write
   security-events: read
 
 jobs:
   check-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Process open CodeQL alerts
+      - name: Checkout the gate script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/codeql-main-alert-gate.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Sweep open CodeQL alerts (gate script, sweep mode)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          echo "Fetching open code scanning alerts..."
-          ALERTS=$(gh api --paginate repos/${GH_REPO}/code-scanning/alerts?state=open --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | {number, rule_id: .rule.id, rule_desc: .rule.description, severity: .rule.security_severity_level, tool: .tool.name, file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line, message: .most_recent_instance.message.text, html_url: .html_url, ref: .most_recent_instance.ref}' 2>&1) || true
-
-          if [ -z "$ALERTS" ]; then
-            echo "No open critical/high severity alerts found."
-            exit 0
-          fi
-
-          # Dedupe reads the open type/security issue titles ONCE; the per-alert match is
-          # anchored on "sec: CodeQL alert #<N> " (trailing space) so #5 cannot match a
-          # tracker for #50. codeql-main-alert-gate.sh files the same title shape, so one
-          # list dedupes both filers. The list is bot-scoped (--author) because
-          # auto-label-security.yml hands type/security to any ^sec: title — a public
-          # stranger could otherwise suppress a real tracker (PR #12000 review P1;
-          # sibling gate: scripts/codeql-main-alert-gate.sh). A fetch/parse failure
-          # skips the filing pass — a dedupe that silently reads empty is the
-          # duplicate-filing bug being replaced (fail-closed; mirrors close-orphans).
-          if ! gh issue list --label type/security --author app/github-actions --state open --limit 200 --json title \
-            > "${RUNNER_TEMP}/sec-issues.json" 2>"${RUNNER_TEMP}/sec-issues.err"; then
-            echo "::warning title=check-alerts::gh issue list failed: $(cat "${RUNNER_TEMP}/sec-issues.err")"
-            exit 0
-          fi
-          if ! jq -e 'type == "array"' "${RUNNER_TEMP}/sec-issues.json" >/dev/null 2>&1; then
-            echo "::warning title=check-alerts::Issue list returned non-JSON body — skipping filing pass."
-            exit 0
-          fi
-          if [ "$(jq 'length' "${RUNNER_TEMP}/sec-issues.json")" -ge 200 ]; then
-            echo "::warning title=check-alerts::the open type/security issue list reached its 200-row bound; a tracker evicted past the cap reads absent and a duplicate is possible"
-          fi
-
-          CREATED=0
-          SKIPPED=0
-
-          # Process-substitution keeps the loop in the parent shell so CREATED/
-          # SKIPPED counter increments survive past `done`. A piped `| while`
-          # subshells the loop and the final telemetry would always print 0/0.
-          while IFS= read -r alert; do
-            ALERT_NUMBER=$(echo "$alert" | jq -r '.number')
-            ALERT_RULE_ID=$(echo "$alert" | jq -r '.rule_id')
-            ALERT_RULE_DESC=$(echo "$alert" | jq -r '.rule_desc')
-            ALERT_SEVERITY=$(echo "$alert" | jq -r '.severity')
-            ALERT_TOOL=$(echo "$alert" | jq -r '.tool')
-            ALERT_FILE=$(echo "$alert" | jq -r '.file')
-            ALERT_LINE=$(echo "$alert" | jq -r '.line')
-            ALERT_MESSAGE=$(echo "$alert" | jq -r '.message')
-            ALERT_HTML_URL=$(echo "$alert" | jq -r '.html_url')
-            ALERT_REF=$(echo "$alert" | jq -r '.ref')
-
-            EXISTING=$(jq -r --arg p "sec: CodeQL alert #${ALERT_NUMBER} " \
-              '[.[] | .title | select(type == "string") | select(startswith($p))] | .[0] // empty' \
-              "${RUNNER_TEMP}/sec-issues.json")
-
-            if [ -n "$EXISTING" ]; then
-              echo "Issue already exists for CodeQL alert #${ALERT_NUMBER} — skipping"
-              SKIPPED=$((SKIPPED + 1))
-              continue
-            fi
-
-            TITLE="sec: CodeQL alert #${ALERT_NUMBER} — ${ALERT_RULE_DESC}"
-
-            { echo "## CodeQL Alert #${ALERT_NUMBER}"; echo ""; echo "**Rule:** \`${ALERT_RULE_ID}\` — ${ALERT_RULE_DESC}"; echo "**Severity:** ${ALERT_SEVERITY}"; echo "**Tool:** ${ALERT_TOOL}"; echo "**File:** \`${ALERT_FILE}:${ALERT_LINE}\`"; echo "**Ref:** \`${ALERT_REF}\`"; echo ""; echo "### Message"; echo ""; echo "${ALERT_MESSAGE}"; echo ""; echo "### Links"; echo ""; echo "- [View alert](${ALERT_HTML_URL})"; echo ""; echo "---"; echo "*Auto-created by codeql-to-issues.yml*"; } > "${RUNNER_TEMP}/issue-body-${ALERT_NUMBER}.md"
-
-            gh issue create --title "$TITLE" --body-file "${RUNNER_TEMP}/issue-body-${ALERT_NUMBER}.md" --label "type/security"
-            echo "Created issue for CodeQL alert #${ALERT_NUMBER} (severity: ${ALERT_SEVERITY})"
-            CREATED=$((CREATED + 1))
-          done < <(echo "$ALERTS" | jq -c '.')
-
-          echo "Done. Created: ${CREATED}, Skipped (existing): ${SKIPPED}"
+          SWEEP: 'true'
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          DEADLINE_SECONDS: '240'
+        run: bash scripts/codeql-main-alert-gate.sh
 
   close-orphans:
     # Auto-close open type/security issues whose referenced CodeQL alerts have
-    # all been dismissed. See knowledge-base/project/learnings/best-practices/
+    # all been dismissed or fixed (GitHub marks a remediated alert `fixed`, not
+    # `dismissed` — #12066). `fixed` is machine-derived, not a human decision: an
+    # analysis-scope change can flip an alert to `fixed` without a remediation, and
+    # the reaper inherits that blind spot (`keep-open` + reversible close mitigate).
+    # See knowledge-base/project/learnings/best-practices/
     # 2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md for context.
     needs: check-alerts
+    # A dry_run dispatch is the zero-write verification path (ruling on #12004,
+    # amended 2026-11-04): the reaper's issue closes are real writes, so it is
+    # gated on the typed inputs context — schedule evaluates null != true -> runs.
+    if: inputs.dry_run != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -174,7 +139,7 @@ jobs:
               continue
             fi
 
-            ALL_DISMISSED=1
+            ALL_RESOLVED=1
             REASONS=""
             for AN in $ALERTS; do
               # Per AGENTS.md cq-ci-steps-polling-json-endpoints-under: query
@@ -184,20 +149,20 @@ jobs:
               if [ -z "$STATE" ]; then
                 # Alert lookup failed — could be deleted, rate-limited, or
                 # the number was a false match. Skip without closing.
-                ALL_DISMISSED=0
+                ALL_RESOLVED=0
                 break
               fi
-              if [ "$STATE" != "dismissed" ]; then
-                ALL_DISMISSED=0
+              if [ "$STATE" != "dismissed" ] && [ "$STATE" != "fixed" ]; then
+                ALL_RESOLVED=0
                 break
               fi
-              REASONS="${REASONS}- alert #${AN}: dismissed"$'\n'
+              REASONS="${REASONS}- alert #${AN}: ${STATE}"$'\n'
             done
 
-            if [ "$ALL_DISMISSED" -eq 1 ]; then
-              { printf 'All referenced CodeQL alerts are now dismissed.\n\n'; \
+            if [ "$ALL_RESOLVED" -eq 1 ]; then
+              { printf 'All referenced CodeQL alerts are now dismissed or fixed.\n\n'; \
                 printf '%s\n' "$REASONS"; \
-                printf 'Closing as resolved by dismissal. Reopen with the `keep-open` label if this issue tracks something other than the alert state.\n'; \
+                printf 'Closing as resolved: every referenced alert is dismissed or fixed. Reopen with the `keep-open` label if this issue tracks something other than the alert state.\n'; \
               } > "${RUNNER_TEMP}/close-comment-${ISSUE_NUMBER}.md"
               gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/close-comment-${ISSUE_NUMBER}.md"
               gh issue close "$ISSUE_NUMBER" --reason completed

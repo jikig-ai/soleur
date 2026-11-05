@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-04T21:30:18Z
+# generated-at=2026-11-05T08:12:03Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -198,6 +198,7 @@ plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	7
 plugins/soleur/test/cloudflare-readonly.test.sh	5
 plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	7
 plugins/soleur/test/codeql-main-alert-gate.test.sh	8
+plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh	5
 plugins/soleur/test/collision-precheck.test.sh	4
 plugins/soleur/test/compaction-state-hook.test.sh	2
 plugins/soleur/test/concurrent-ship.test.sh	3
