@@ -18,7 +18,7 @@ Branch: `feat-one-shot-12102-ci-claude-cli-pins` | Draft PR 12136 | PR body uses
 ## Phase 2 - claude-code-action v1.0.263 (CTO F2)
 
 - 2.1 Re-resolve tag object `3b7e1a45ca6f231c62605aabcf79e6a41b08c7da` and CLI/Bun versions at v1.0.263.
-- 2.2 Diff `action.yml` inputs/outputs v1.0.236 to v1.0.263; confirm every `with:` key in the five files exists.
+- 2.2 Diff `action.yml` inputs/outputs v1.0.236 to v1.0.263 (plan-time result: input lists identical); re-confirm every `with:` key in the five files exists.
 - 2.3 Replace `20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236` in the four workflows and `constraint-scaffold/references/fix-constraints-stage-a.template`.
 - 2.4 Check `knowledge-base/legal/article-30-register.md` for a current-fact mention of the pinned version.
 - 2.5 Run `claude-code-action-auth.test.sh`, constraint-scaffold `parity.test.sh`, `audit-models.sh` section 2.

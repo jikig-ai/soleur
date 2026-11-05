@@ -10,6 +10,21 @@ lane: single-domain
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** Phase 2 (input-drift result pre-measured), Phase 3 (scratch regeneration measured), Sharp Edges, verification pass over every cited SHA, PR/issue number and label.
+**Method:** inline gate and verification pass (halt gates 4.6, 4.8, 4.12 and the Quality Checks list) plus one CTO ruling batch at plan time; the wide per-skill/per-agent fan-out was not run because the change is a three-site pin bump with measured evidence and CTO rulings F1-F4.
+
+### Key Improvements
+1. The claude-code-action input diff v1.0.236 to v1.0.263 was measured now: identical input lists, so the main risk of the 27-release bump (a renamed or removed `with:` key) is retired at plan time; the work phase only re-confirms.
+2. Every cited SHA was resolved live and length-checked (all 40 chars): tag object `3b7e1a45...` is an annotated tag for v1.0.263 peeling to commit `8041f1d1...`; the old pin `20f0b248...` is the v1.0.236 tag object.
+3. Labels `meta/machinery`, `domain/engineering`, `type/security`, `deferred-scope-out`, `semver:patch` all exist; PR 12073 is MERGED, #12026 CLOSED, PR 12136 is this branch's draft; PR 10926 is now CLOSED (still out of scope, no action).
+
+### New Considerations Discovered
+- The pen-cli regeneration was dry-run in a scratch copy under npm 11.20.0: only the nine SDK entries and the SDK's `engines.node` change; the work phase must still regenerate under npm 11.21.1 (CI's pin) before committing.
+- Halt gates: 4.6 pass (section present, threshold `aggregate pattern`), 4.8 pass (no PAT-shaped variables), 4.12 pass (one unfenced `## Scope Check`), 4.7 pass (Observability present; discoverability command `grep ...` is allowlisted, finishes well inside 15 s, expected output is a literal that works once Phase 1.3 lands), 4.9/4.10/4.11/4.13 not triggered (no UI surface, no store/connection, no new guard, no new autonomous task). No AGENTS rule IDs are cited in the plan body.
+
 ## Overview
 
 Issue #12102 tracks the claude runtime pins that PR 12073 deliberately left below the Bun 1.4.4 fix (CVE-2026-111497, a Brotli decoder flaw in Bun). Its dependency trigger (#12026) closed on 2026-11-05T00:52:09Z, so `scripts/followthroughs/ci-claude-cli-pins-bun-12073.sh` now reports ACTION REQUIRED (exit 5). This plan moves the remaining pins onto the shipped, already-verified pair (claude-code 2.1.311 / agent-sdk 0.3.311, Bun 1.4.4):
@@ -114,7 +129,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 ### Phase 2 - claude-code-action v1.0.263 (CTO F2)
 
 - 2.1 Re-resolve the target: `gh api repos/anthropics/claude-code-action/git/ref/tags/v1.0.263` must still return tag object `3b7e1a45ca6f231c62605aabcf79e6a41b08c7da`, and `base-action/action.yml` at that ref must still show `CLAUDE_CODE_VERSION="2.1.311"` and `bun-version: 1.4.4` (also in root `action.yml`). Keep the repo's tag-object SHA convention with comment `# v1.0.263`.
-- 2.2 Input-drift check (CTO condition): diff `action.yml` inputs/outputs between v1.0.236 and v1.0.263 and confirm every `with:` key used in the five files (`anthropic_api_key`, `prompt`, `claude_args`, `github_token`, `settings`, plugin inputs where present) still exists. A removed or renamed input means pin to the last release that has it and say so.
+- 2.2 Input-drift check (CTO condition): diff `action.yml` inputs/outputs between v1.0.236 and v1.0.263 and confirm every `with:` key used in the five files (measured at plan time: `anthropic_api_key`, `claude_args`, `prompt` in all; `plugins` and `plugin_marketplaces` in claude-code-review and test-pretooluse-hooks; `github_token` in fix-constraints-stage-a) still exists. Deepen-plan pre-ran this diff: the root `action.yml` input list is byte-identical between v1.0.236 and v1.0.263 (0 added, 0 removed), so the condition is expected to hold; re-run it at work time against the then-current tag. A removed or renamed input means pin to the last release that has it and say so.
 - 2.3 Replace the SHA in `claude-code-review.yml`, `test-pretooluse-hooks.yml`, `scheduled-machinery-drain.yml`, `fix-constraints-stage-a.yml` and `constraint-scaffold/references/fix-constraints-stage-a.template` (one `sed` over exact literal `20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236`; census: `git grep -c` must show zero remaining before and five replacements after). Leave the historical "measured at v1.0.236" comments in `scheduled-machinery-drain.yml` and `claude-code-action-auth.test.sh` as they are (dated measurements).
 - 2.4 Check `knowledge-base/legal/article-30-register.md` (it mentions `scheduled-machinery-drain.yml`): if it cites the pinned version as a current fact, update the number; if it cites it as a dated snapshot, leave it.
 - 2.5 Run `bash plugins/soleur/test/claude-code-action-auth.test.sh`, `bash plugins/soleur/skills/constraint-scaffold/test/parity.test.sh` and the model-launch-review pin-freshness audit (`plugins/soleur/skills/model-launch-review/scripts/audit-models.sh`, section 2 is flag-only) to confirm nothing else reads the old SHA.
@@ -163,7 +178,7 @@ None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowled
 - [ ] `grep -c 'CLI_VERSION: "2.1.311"' .github/workflows/scheduled-marketplace-drift.yml` returns 1 and the file contains no `2.1.228`.
 - [ ] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (output pasted in the PR body); the scratch binary reports `Bun v1.4.4` via the corrected probe.
 - [ ] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the five files carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
-- [ ] The v1.0.236-to-v1.0.263 input diff shows every `with:` key used in the five files still exists (noted in the PR body); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
+- [ ] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (noted in the PR body); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
 - [ ] `pen-cli/package.json` `overrides` has the exact `@anthropic-ai/claude-agent-sdk: 0.3.311` entry; the lock shows `node_modules/@anthropic-ai/claude-agent-sdk` and its eight platform packages at 0.3.311, regenerated under npm 11.21.1; `lockfile-sync` is green.
 - [ ] `engine-contract-probe.sh` passes against the regenerated lock (or Phase 3 is dropped with the stated reason and the PR body says so).
 - [ ] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
