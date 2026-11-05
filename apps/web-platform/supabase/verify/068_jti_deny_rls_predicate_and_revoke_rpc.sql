@@ -74,17 +74,17 @@ SELECT 'my_revocation_status_authenticated_grant_present',
               'EXECUTE'
             ) THEN 0 ELSE 1 END::int
 UNION ALL
--- (7) Exactly 28 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
+-- (7) Exactly 29 RESTRICTIVE jti_not_denied policies (21 base + workspace_activity
 --     + kb_files from mig 076/077 + beta_contacts/interview_notes/beta_contact_stage_transitions from mig 126
---     + beta_contact_access_log from mig 127 + approval_request from mig 180)
-SELECT 'jti_deny_policies_count_28',
-       CASE WHEN count(*) = 28 THEN 0 ELSE 1 END::int
+--     + beta_contact_access_log from mig 127 + approval_request from mig 180 + legal_acceptance from mig 184)
+SELECT 'jti_deny_policies_count_29',
+       CASE WHEN count(*) = 29 THEN 0 ELSE 1 END::int
   FROM pg_policies
  WHERE schemaname = 'public'
    AND policyname LIKE '%_jti_not_denied'
    AND permissive = 'RESTRICTIVE'
 UNION ALL
--- Per-table presence assertions (one row per tenant table; 28 total, one per jti_not_denied policy counted in (7))
+-- Per-table presence assertions (one row per tenant table; 29 total, one per jti_not_denied policy counted in (7))
 SELECT 'conversations_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='conversations'
@@ -232,6 +232,12 @@ SELECT 'approval_request_jti_not_denied_policy_present',
        CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
   FROM pg_policies WHERE schemaname='public' AND tablename='approval_request'
    AND policyname='approval_request_jti_not_denied' AND permissive='RESTRICTIVE'
+UNION ALL
+-- legal_acceptance (mig 184, #12011) — the 29th jti_not_denied policy.
+SELECT 'legal_acceptance_jti_not_denied_policy_present',
+       CASE WHEN count(*) = 1 THEN 0 ELSE 1 END::int
+  FROM pg_policies WHERE schemaname='public' AND tablename='legal_acceptance'
+   AND policyname='legal_acceptance_jti_not_denied' AND permissive='RESTRICTIVE'
 UNION ALL
 -- (34-36) anon-role REVOKE matrix: none of the three 068 functions
 -- must be EXECUTE-able by anon. Pre-fix, the sentinel asserted only

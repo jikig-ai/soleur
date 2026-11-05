@@ -114,6 +114,7 @@ export const EXCLUDED: Record<string, string> = {
   revoke_template_authorization: "template auths are founder-scoped by auth.uid(); no A-addressable param",
   authorize_template: "founder_id = auth.uid() → the fn writes the CALLER's OWN template_authorization row (a generic 'non-null ⇒ leaked' classifier is wrong here — B writing B's own row is legal). NOT in the generic ATTACK loop; the security property (a founder cannot back an authorization with a grant they do not own via the p_grant_id cross-ref) is fuzzed by the dedicated bespoke test in rls-rpc.integration.test.ts (#6307 Item 2)",
   crm_contact_upsert: "founder_id = auth.uid(); p_id resolves within the caller's own founder scope (insert-if-not-owned)",
+  record_legal_acceptance: "founder_id = auth.uid(); the actor is the verified session, there is no tenancy or user parameter to forge; cross-user denial (another user's challenge cannot back a Yes) is asserted in legal-acceptance.tenant-isolation.test.ts (mig 184, #12011)",
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",
   is_jti_denied_from_jwt: "reads the caller's own request.jwt.claims jti; no tenancy param",

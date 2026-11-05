@@ -67,3 +67,7 @@ No component is added, changed or removed, so no `.c4` file changes. The existin
 - Entitled sessions remain unable to push in-sandbox; the quickest route to a push capability is the cc approval gate (F1) then a cc push tool (F2), which do not depend on the broker (#11635, #11636).
 - The broker implementation (#11637, F3) starts from these measurements and from Decision 4; BYOK provider credentials for entitled sessions (#11638, F4) wait for #11637 and #11635.
 - The measurement suite stays in the repository as the harness a future SDK bump can re-run.
+
+## Addendum — 2026-11-04 (#12026): the SDK pin moved to 0.3.311
+
+The measurements in Decision 2 were taken on SDK 0.3.284. The pin is now `@anthropic-ai/claude-agent-sdk@0.3.311` (CLI 2.1.311; the embedded Bun is 1.4.4, CVE-2026-111497). `apps/web-platform/test/broker-mechanism-spike.test.ts` was re-run unchanged against the new pin on 2026-11-04 (its declared and installed SDK version assertions now name 0.3.311; its capture model is Haiku 5.5): all rows pass, so the mechanism choice stands. The 0.3.284 record above is not rewritten.
