@@ -362,7 +362,7 @@ export function readCcMcpAllowlist(
     // the only env echo). The denylist check above stays first.
     if (isApprovalRequiredTool(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — the env route cannot register approval-required tools; they register only through their gated registrar (ADR-309, ADR-311)`,
       );
     }
   }

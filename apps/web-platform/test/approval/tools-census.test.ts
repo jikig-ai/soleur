@@ -92,7 +92,7 @@ describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_
   // the cc fail-closed switch, in any position of a mixed list, and the permanent denylist stays checked first.
   const P = "mcp__soleur_platform__";
   const STATIC_MESSAGE = (short: string) =>
-    `CC_MCP_ALLOWLIST contains approval-required tool "${short}" \u2014 no cc tool builder is wired to execution grants (ADR-309)`;
+    `CC_MCP_ALLOWLIST contains approval-required tool "${short}" \u2014 the env route cannot register approval-required tools; they register only through their gated registrar (ADR-309, ADR-311)`;
   const shortOf = (fqn: string) => fqn.replace(P, "");
   const required = [...APPROVAL_REQUIRED_TOOLS];
 
