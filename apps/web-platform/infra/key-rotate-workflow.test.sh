@@ -764,7 +764,7 @@ if [[ "$1" == api ]]; then # the environment live verify (no --repo flag; the pa
     "api repos/acme/repo/environments/key-rotate-approval")
       [[ -f "$S/env_api_rc" ]] && exit "$(cat "$S/env_api_rc")"
       cat "$S/env_protection.json"; exit 0 ;;
-    "api repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies")
+    "api repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies"|"api --paginate repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies")
       [[ -f "$S/env_pol_api_rc" ]] && exit "$(cat "$S/env_pol_api_rc")"
       cat "$S/env_policies.json"; exit 0 ;;
     *) refuse "$@" ;;
