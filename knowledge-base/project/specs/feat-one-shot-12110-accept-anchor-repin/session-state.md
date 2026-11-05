@@ -20,3 +20,12 @@ None blocking. First `git commit` attempt denied by branch guard hook false-posi
 - soleur:plan, soleur:deepen-plan (read + run in-process per Devin contract)
 - scripts/cloud-detect.sh, scripts/collision-precheck.sh, ci-pr-affected-replay.py ratchet (live repro), gh issue/pr view, markdownlint-cli2
 - sequential-fallback disclosed: no agent sub-spawns on this harness
+
+## Review Phase
+- Panel: 1 seat (sequential-fallback, subagent_general report-only — class-baseline coverage merged per CTO ruling; SENSITIVE_PATH_RE not matched → no security-sentinel arm; tier `none`)
+- Risk tier: none — seats spawned: 1 (class baseline compressed to single seat + escalation 0)
+- Verdict: clean, no P1/P2; P3 x2
+- Dedup ledger:
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+| reason-text ambiguity ee8220c7499a row | reason-text-precision | panel-seat | review: disambiguate sentry-issue accept-row reason text (P3) |
+| anchors on 26-commit/90d file (latent re-stale exposure) | churn-latency (ruled trade-off, documented) | panel-seat | none — dissent recorded in CTO ruling |
