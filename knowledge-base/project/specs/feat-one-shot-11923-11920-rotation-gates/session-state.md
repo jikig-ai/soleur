@@ -23,3 +23,10 @@
 
 ### Pipeline tally
 - cto_spawns=1
+
+### Pipeline position (2026-11-05)
+- Work phase: 4 fan-out workstreams landed + integrated; commit d7ca5164b3 pushed.
+- Suites green: key-rotate-workflow.test.sh (628/1→B22e fixed via runbook wording), inngest-key-rotate-workflow.test.sh 475/0, ci-deploy.test.sh 743/0, terraform-target-parity.test.ts 364/0, c4 tests 35/0; fixture-relative-assert baseline regenerated (+6).
+- In flight: affected gate `bash scripts/test-all.sh` → /tmp/affected-gate.txt.
+- Next: soleur:review → resolve findings (+fix-round) → soleur:qa → soleur:compound → soleur:ship → postmerge → DONE.
+- Issues: #11923, #11920. Draft PR: #12153. Branch pushed.
