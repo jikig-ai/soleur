@@ -30,3 +30,4 @@
 - In flight: affected gate `bash scripts/test-all.sh` → /tmp/affected-gate.txt.
 - Next: soleur:review → resolve findings (+fix-round) → soleur:qa → soleur:compound → soleur:ship → postmerge → DONE.
 - Issues: #11923, #11920. Draft PR: #12153. Branch pushed.
+- Affected gate: killed per operator decision ("rely on CI instead") — all touched-file suites green individually; sole real FAIL lint-shell-capture-exit fixed+committed; CI is the authoritative gate at ship.
