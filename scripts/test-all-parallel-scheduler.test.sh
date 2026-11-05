@@ -43,7 +43,7 @@ REPO_ROOT="$(pwd)"
 export REPO_ROOT
 
 PASSES=0; FAILURES=0
-MIN_PASSES_FLOOR=60   # the full green count; raise it in the same edit that adds an arm
+MIN_PASSES_FLOOR=64   # the full green count; raise it in the same edit that adds an arm
 pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
 fail() { FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n' "$1"; }
 dump() { sed 's/^/    /' <<<"${1:-}"; }
@@ -159,6 +159,7 @@ mk_rel_fixture holdX  0.05 rel.indA2 none 20   # accumulation arm: live holder o
 mk_rel_fixture holdY  0.05 rel.indA2 none 20   # accumulation arm: live holder of Y
 mk_rel_fixture qA     0.3  -        none
 mk_rel_fixture qB     0.3  -        none
+mk_rel_fixture s1     0.3  -        none
 mk_rel_fixture qC     0.3  -        none
 mk_exit_fixture() {  # <rc> — a suite that exits with exactly <rc>
   assert_fixture_dir "$FIXTURES"
@@ -242,6 +243,7 @@ lane_declare "xU" "artifact:bfU" "backfill fixture: shares only U with headY"
 lane_declare "holdX" "artifact:bfX" "backfill fixture: live holder of X"
 lane_declare "holdY" "artifact:bfY" "backfill fixture: live holder of Y"
 lane_declare "qA" "artifact:bfX artifact:bfW" "backfill fixture: first queued, blocked by live X, owns W"
+lane_declare "s1" "artifact:bfX" "backfill fixture: skips on X alone (whole-set dedupe arm)"
 lane_declare "qB" "artifact:bfY" "backfill fixture: second queued, blocked by live Y"
 lane_declare "qC" "artifact:bfW" "backfill fixture: conflicts ONLY with the queued qA (W), not with anything live"
 '''
@@ -258,6 +260,7 @@ calls = {
     "sigred":    [("sigred","sigred.sh"),("indA","indA.sh")],
     "rcs":       [("bad","fail.sh"),("r128","exit128.sh"),("r255","exit255.sh"),("r160","exit160.sh"),("r130","exit130.sh"),("r137","exit137.sh")],
     "couple":    [],
+    "bf7":       [("holdX","holdX.sh"),("s1","s1.sh"),("qA","qA.sh"),("qC","qC.sh"),("indA","indA2.sh")],
     "bf6":       [("holdX","holdX.sh"),("holdY","holdY.sh"),("qA","qA.sh"),("qB","qB.sh"),("qC","qC.sh"),("indA","indA2.sh")],
     "bf1":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh")],
     "bf5":       [("holdT","holdT.sh"),("headT","headT.sh"),("indA","indA2.sh"),("indB","indB.sh"),("indC","indC.sh"),("indD","indD.sh"),("indE","indE.sh")],
@@ -550,8 +553,8 @@ fi
 
 # --- A9: the provisional-red sidecar (#12013) --------------------------------------
 # affected-tests.sh hands the runner SOLEUR_PJ_PROVISIONAL_FILE; the runner appends one
-# `label<TAB>rc<TAB>epoch` line per red at exactly two sites (the pool reap line, the serial tail), rc 1..127
-# only, and demotes the variable from the environment of every suite it spawns. The gate reads the file
+# `label<TAB>rc<TAB>epoch` line per red at exactly two sites (the pool reap line, the serial tail), only for
+# the runner's own `failed` class (suite_exit_class), and demotes the variable from the environment of every suite it spawns. The gate reads the file
 # only when its budget kills the run (plugins/soleur/scripts/affected-tests.test.sh F4).
 SC="$TMP/provisional.sidecar"
 sidecar_run() {  # <arm> <jobs> — fresh empty sidecar, run, leave the file for inspection
@@ -595,12 +598,27 @@ else
 fi
 # The writer records exactly the runner's `failed` class (suite_exit_class): 1, 128, 193..255 and an unnamed
 # signal (160 -> kill -l 32 has no name) are reds the drain prints [FAIL] for; a NAMED signal (130, 137) is not.
+# rc 160 = 128 + 32, and `kill -l 32` has no name on glibc but may on another host: derive the expectation.
+if [[ -z "$(kill -l 32 2>/dev/null)" ]]; then RC_WANT="bad r128 r160 r255 "; else RC_WANT="bad r128 r255 "; fi
 sidecar_run rcs 4
 RC_LABELS="$(cut -f1 "$SC" | sort | tr '\n' ' ')"
-if [[ "$RC_LABELS" == "bad r128 r160 r255 " ]]; then
-  pass "A9 — rc 1, 128, 160 (unnamed signal) and 255 are recorded; named signals 130 and 137 are not"
+if [[ "$RC_LABELS" == "$RC_WANT" ]]; then
+  pass "A9 — pool: rc 1, 128, 255 (and an unnamed signal) are recorded; named signals 130 and 137 are not"
 else
-  fail "A9 — recorded labels '$RC_LABELS' (want 'bad r128 r160 r255 ')"; dump "$ARM_OUT"
+  fail "A9 — pool recorded labels '$RC_LABELS' (want '$RC_WANT')"; dump "$ARM_OUT"
+fi
+if grep -qE '^\[run\] r255 done \(rc=255, [0-9]+ms\) — provisional' <<<"$ARM_OUT" \
+   && grep -qE '^\[run\] r130 done \(rc=130, [0-9]+ms\) — signal-shaped' <<<"$ARM_OUT"; then
+  pass "A9 — the live done line uses the same classifier: 255 is provisional, a named signal (130) is signal-shaped"
+else
+  fail "A9 — live done-line note disagrees with suite_exit_class"; dump "$ARM_OUT"
+fi
+sidecar_run rcs ""
+RC_LABELS="$(cut -f1 "$SC" | sort | tr '\n' ' ')"
+if [[ "$RC_LABELS" == "$RC_WANT" ]]; then
+  pass "A9 — serial tail: the same rc classes are recorded at the other append site"
+else
+  fail "A9 — serial recorded labels '$RC_LABELS' (want '$RC_WANT')"; dump "$ARM_OUT"
 fi
 # Coupling: for every rc the sidecar holds a line exactly when suite_exit_class says `failed`.
 sidecar_run couple 4
@@ -608,7 +626,7 @@ couple_bad=0; couple_n=0
 while read -r _tag _rc _cls; do
   [[ "$_tag" == CLASS ]] || continue
   couple_n=$((couple_n + 1))
-  _has=0; cut -f2 "$SC" | grep -qx "$_rc" && _has=1
+  _col="$(cut -f2 "$SC")"; _has=0; grep -qx "$_rc" <<<"$_col" && _has=1
   { [[ "$_cls" == failed ]] && (( _has == 1 )); } || { [[ "$_cls" != failed ]] && (( _has == 0 )); } || couple_bad=$((couple_bad + 1))
 done <<<"$ARM_OUT"
 if (( couple_n == 12 )) && (( couple_bad == 0 )); then
@@ -682,7 +700,8 @@ assert_fixture_dir "$TMP"
 TIMING_FILE="$TMP/timing.bf1"; : > "$TIMING_FILE"
 run_arm bf1 4 || true
 unset TIMING_FILE
-if grep -E '(^|[[:space:]])holdT([[:space:]]|$)' "$TMP/timing.bf1" | grep -q 'tmp_delta=unattributed'; then
+BF1_HOLD_ROW="$(grep -E '(^|[[:space:]])holdT([[:space:]]|$)' "$TMP/timing.bf1" || true)"
+if grep -q 'tmp_delta=unattributed' <<<"$BF1_HOLD_ROW"; then
   pass "A10 — solo attribution: the suite overlapped by a backfilled launch reports tmp_delta=unattributed"
 else
   fail "A10 — holdT's timing row lacks tmp_delta=unattributed: $(grep -E 'holdT' "$TMP/timing.bf1" | head -2 | tr '\t' '>')"
@@ -715,6 +734,15 @@ if [[ "$ARM_RC" == "0" ]] && tl_check "S:qC>=E:qA" "S:qA>=E:holdX" "S:qB>=E:hold
   pass "A10 — the queued-ahead set accumulates: a suite sharing a token with an earlier queued suite waits for it behind other skips"
 else
   fail "A10 — queued-ahead set did not accumulate"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# Whole-set dedupe: s1 skips on X alone; qA then skips on the SET {X, W}. The union must still gain W, or qC (which
+# conflicts only with the queued qA, through W) jumps it. A dedupe keyed on the first token only drops W.
+run_arm bf7 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:qC>=E:qA" "S:qA>=E:holdX" "S:s1>=E:holdX" "S:indA2<E:holdX"; then
+  pass "A10 — de-duplicated skip set never drops a word of a multi-token set (qC still waits for qA)"
+else
+  fail "A10 — whole-set dedupe arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
 # (No starvation arm: _pj_submit blocks while the pool is saturated, so the queue never holds an independent suite
@@ -758,6 +786,12 @@ if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdT"; then
   pass "A10 — hermetic: an outer SOLEUR_PJ_FIFO=1 in the test's environment does not reach the sandboxed runner"
 else
   fail "A10 — an inherited SOLEUR_PJ_FIFO leaked into a backfill arm"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+ARM_FIFO=yes run_arm bf1 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdT"; then
+  pass "A10 — any value other than 1 (yes) is backfill: the knob is 1-only"
+else
+  fail "A10 — SOLEUR_PJ_FIFO=yes selected FIFO"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 PROBE_FILE="$TMP/envprobe.fifo"; rm -f "$PROBE_FILE"
 export PROBE_OUT="$PROBE_FILE"; ARM_FIFO=1 run_arm envprobe 4 || true; unset PROBE_OUT

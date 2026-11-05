@@ -184,6 +184,11 @@ if [[ -r "$replay_file" ]] && ! grep -qE '(^|[^_[:alnum:]])(tc_acquire|_tc_queue
 else
   fail "replay suite file is unreadable or names an advisory-lock entry point — the empty override is no longer justified"
 fi
+if [[ -r "$replay_file" ]] && ! grep -qE 'test-contention' "$replay_file"; then
+  pass "replay suite file never references the lock library (test-contention) at all"
+else
+  fail "replay suite file references test-contention (or is unreadable) - the empty override is no longer justified"
+fi
 if [[ -r "$replay_file" ]] && grep -qE '^SANDBOX="\$\(mktemp -d "\$TMPDIR/' "$replay_file"; then
   pass "replay suite scratch root is a distinct per-run mktemp -d (arms cannot share a sandbox path)"
 else
@@ -202,7 +207,7 @@ else
 fi
 
 # Dispatch floor, reported directly (never through fail()): deleting a block of assertions lowers PASSES.
-(( PASSES < 11 )) && { printf '[FATAL] only %s assertions passed, expected at least 11\n' "$PASSES"; exit 1; }
+(( PASSES < 12 )) && { printf '[FATAL] only %s assertions passed, expected at least 12\n' "$PASSES"; exit 1; }
 echo ""
 echo "=== test-suite-lanes: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1

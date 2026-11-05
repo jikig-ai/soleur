@@ -232,8 +232,8 @@ affected_mktemp() { # <tag> — sets AFFECTED_TMP to a fresh registered scratch 
 }
 # affected_sidecar_red <file> <deadline-epoch> — 0 iff the runner's provisional-red sidecar holds a
 # record `label<TAB>rc<TAB>epoch` with a non-zero rc (1..255) and an epoch strictly before the deadline.
-# The runner decides what is a red (it records only its `failed` class and never a named-signal exit),
-# so the reader does not mirror that classification. Every other shape (missing/empty/unreadable file,
+# The runner decides what is a red (it records only its `failed` class and never a named-signal exit), so
+# the reader does not mirror that classification. Every other shape (missing/empty/unreadable file,
 # short or non-numeric fields, rc 0 or above 255, a late stamp) is "no red seen": the caller keeps its
 # deferral. Numbers are parsed with 10# so a leading
 # zero is decimal, never an octal arithmetic error.

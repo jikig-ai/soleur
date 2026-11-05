@@ -2344,9 +2344,9 @@ unset R_CTE1 R_A1 R_A4 R_A5 R_P1 R_P2 R_D1 R_I1 R_I2 R_U1 R_U2 R_U3 R_U4 R_X1 R_
 
 # ============================ F4: a budget kill reports a visible red (#12013) ===
 # The runner appends one `label<TAB>rc<TAB>epoch` record per provisional red to the sidecar the gate
-# hands it (SOLEUR_PJ_PROVISIONAL_FILE). On a budget kill (124/137) a record with rc 1..127 stamped
-# BEFORE the deadline means the run was already red: rc 1 reason=failed-before-budget. Anything else
-# stays rc 6. The expected pairs below are literals, independent of the implementation.
+# hands it (SOLEUR_PJ_PROVISIONAL_FILE). On a budget kill (124/137) a record with a non-zero rc (1..255)
+# stamped BEFORE the deadline means the run was already red: rc 1 reason=failed-before-budget. Anything
+# else stays rc 6. The expected pairs below are literals, independent of the implementation.
 mk_f4_repo() { # <name> [pool] — delegated runner, CI detected, 60 s budget
   local r; r="$(mk_repo "$1")"; write_runner_capable "$r"; seed_js "$r"; seed_ci "$r"
   write_config "$r" '{"budget_seconds": 60}'
@@ -2374,6 +2374,10 @@ f4_run "$R_F4" 'suite-a\t128\t@NOW\n'
 want_rc 1 "F4c2: rc 128 (a plain failure under ADR-177) is a red"
 f4_run "$R_F4" 'suite-a\t1000\t@NOW\nsuite-b\t18446744073709551617\t@NOW\n'
 want_rc 6 "F4c3: an rc above 255 or too long for an exit status is malformed, never a red"
+f4_run "$R_F4" 'suite-a\t256\t@NOW\n'
+want_rc 6 "F4c4: rc 256 (three digits, above an exit status) is not a red - the numeric bound is load-bearing"
+f4_run "$R_F4" 'suite-a\t1\t18446744073709551617\n'
+want_rc 6 "F4c5: a 20-digit epoch that would wrap in bash arithmetic is malformed - the length bound is load-bearing"
 f4_run "$R_F4" 'suite-a\t0\t@NOW\nsuite-b\t2\t@NOW\n'
 want_rc 1 "F4d: a benign record first and a real red second is a failure"
 f4_run "$R_F4" 'suite-a\t1\t@NOW\nsuite-b\t0\t@NOW\n'
@@ -2474,6 +2478,6 @@ unset _kind _rc _of _xfail _badword
 
 # Floor = the full count less a little slack for the rows that
 # depend on a host binary (jq): it is a floor, so a deleted block of rows reddens it.
-print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-494}"
+print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-496}"
 
 

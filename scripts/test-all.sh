@@ -261,8 +261,9 @@ _AFF_SCOPE_REQ=0
 # flag wins over the env var, matching the flag-over-env convention the other
 # mode flags follow. Parallel scheduling applies to the RUN path only —
 # selection (--affected, --print-selection, --enumerate) is untouched.
-# SOLEUR_PJ_FIFO (#12013) — launch order of the parallel pool. Unset/0: conservative BACKFILL. A suite blocked on a token no longer idles the
-# free slots; a later suite launches iff it conflicts with no live suite and with nothing still
+# SOLEUR_PJ_FIFO (#12013) — launch order of the parallel pool. Unset/0: conservative BACKFILL. A suite
+# blocked on a token no longer idles the free slots; a later suite launches iff it conflicts with no live
+# suite and with nothing still
 # queued ahead of it (so suites that share a token keep registration order, and a queued `*`
 # blocks everything after it). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
 # control of the measurement, not a tuning knob. Tests: scripts/test-all-parallel-scheduler.test.sh.
@@ -1965,7 +1966,10 @@ run_suite() {
 _provisional_append() {  # _provisional_append <label> <rc>
   local f="${SOLEUR_PJ_PROVISIONAL_FILE:-}" rc="${2:-}"
   [[ "$f" == /* && -f "$f" && -w "$f" ]] || return 0
-  [[ "$rc" =~ ^[0-9]+$ ]] || return 0
+  # An exit status: the bound makes "the writer records only what the reader accepts" hold by construction. It is
+  # unreachable today ($? and the worker's rc file are 0..255), so deleting it is an equivalent mutant: kept as
+  # defense in depth, not pinned by a row.
+  [[ "$rc" =~ ^[0-9]{1,3}$ ]] && (( 10#$rc >= 1 && 10#$rc <= 255 )) || return 0
   # Exactly the runner's own `failed` class (suite_exit_class), so the sidecar and the drain verdict cannot
   # disagree: 128, 193..255 and unnamed signals are reds the drain prints [FAIL] for; a named signal (the
   # `killed` class, e.g. 130/137/143) is unresolved (ADR-177) and is never recorded. rc 0 is `ok`.
@@ -2283,7 +2287,9 @@ _pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writ
   if [[ "$s" == *.* && "$e" == *.* ]]; then
     ms=$(( ( (${e%.*} * 1000000 + 10#${e#*.}) - (${s%.*} * 1000000 + 10#${s#*.}) ) / 1000 ))
   fi
-  if [[ "$rc" =~ ^[0-9]+$ ]] && (( rc >= 128 )); then
+  # Same classifier the drain verdict and the provisional-red sidecar use, so the three can never disagree:
+  # only a NAMED signal exit (the `killed` class) is "unresolved"; 128 and 193..255 are plain failures.
+  if [[ "$rc" =~ ^[0-9]+$ ]] && [[ "$(suite_exit_class "$rc")" == killed ]]; then
     note=" — signal-shaped, unresolved until drain"
   elif [[ "$rc" != 0 ]]; then
     note=" — provisional, verdict at drain"
@@ -2373,8 +2379,9 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
       [[ " $live_tok " == *" $tok "* ]] || live_tok+=" $tok"
     else
       rest+=("$idx"); any_q=1
-      # Append-only union, de-duplicated so the string is bounded by the token vocabulary and not by the
-      # queue length (lane_tokens_conflict re-splits it on every call). A multi-token set is appended whole.
+      # Append-only union, de-duplicated by whole token SET (a set already present as a word-bounded run is not
+      # appended again), so repeated identical sets do not grow the string that lane_tokens_conflict re-splits on
+      # every call. A multi-token set is appended whole: dedupe never drops a word, so no decision changes.
       [[ " $skip_tok " == *" $tok "* ]] || skip_tok+=" $tok"
     fi
   done
