@@ -112,8 +112,8 @@ Evidence: `plugins/soleur/skills/incident/SKILL.md` names the three scripts in t
 
 ```
 /plan — founder pull into the incident skill.
-Brainstorm: knowledge-base/project/brainstorms/2026-11-05-incident-investigate-entry-brainstorm.md.
-Spec: knowledge-base/project/specs/feat-incident-investigate-entry/spec.md.
+Brainstorm: knowledge-base/project/brainstorms/archive/20261105-151739-2026-11-05-incident-investigate-entry-brainstorm.md.
+Spec: knowledge-base/project/specs/archive/20261105-151739-feat-incident-investigate-entry/spec.md.
 Branch: feat-incident-investigate-entry.
 Worktree: .worktrees/feat-incident-investigate-entry/.
 PR: #12143 (draft). No tracking issue yet.

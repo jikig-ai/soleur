@@ -5,7 +5,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 status: specced
 pr: 12143
-brainstorm: knowledge-base/project/brainstorms/2026-11-05-incident-investigate-entry-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261105-151739-2026-11-05-incident-investigate-entry-brainstorm.md
 ---
 
 # Feature: founder pull into the incident skill

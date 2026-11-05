@@ -1,6 +1,6 @@
 # Tasks: founder pull into the incident skill
 
-Plan: `knowledge-base/project/plans/2026-11-05-feat-incident-investigate-entry-plan.md`
+Plan: `knowledge-base/project/plans/archive/20261105-151739-2026-11-05-feat-incident-investigate-entry-plan.md`
 Lane: cross-domain
 
 "Incident" means a production outage the founder is responding to, the sense of `plugins/soleur/skills/incident/SKILL.md`. It does not mean `.claude/hooks/lib/incidents.sh`.

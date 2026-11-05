@@ -254,7 +254,7 @@ discoverability_test:
 
 **Domains relevant:** Product, Legal, Engineering, Operations
 
-Carried forward from `knowledge-base/project/brainstorms/2026-11-05-incident-investigate-entry-brainstorm.md`. The plan does not change those rulings. No specialist was named for a further pass.
+Carried forward from `knowledge-base/project/brainstorms/archive/20261105-151739-2026-11-05-incident-investigate-entry-brainstorm.md`. The plan does not change those rulings. No specialist was named for a further pass.
 
 ### Product (CPO)
 
@@ -388,8 +388,8 @@ The founder sees a coverage card before answering the nineteen fields. A test fa
 
 ## References & Research
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-11-05-incident-investigate-entry-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-incident-investigate-entry/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261105-151739-2026-11-05-incident-investigate-entry-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261105-151739-feat-incident-investigate-entry/spec.md`
 - Draft PR: #12143
 - DPA tracker: #7529
 - Incident skill issue that shipped the sentinel: #2725
