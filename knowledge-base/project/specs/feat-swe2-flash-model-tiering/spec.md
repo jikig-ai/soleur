@@ -1,7 +1,7 @@
 ---
 title: "SWE-2 Flash adoption on the Devin harness — docs + routing"
 status: specified
-issue: none  # filing-gate refused: <=100 lines / <=4 files → inline delivery in PR #12135
+issue: none  # filing-gate refused at spec time on a docs-only estimate; scope grew at plan-review (harness.ts strings + pin suite) — inline delivery retained in PR #12135
 brainstorm: knowledge-base/project/brainstorms/2026-11-05-swe2-flash-devin-tiering-brainstorm.md
 branch: feat-swe2-flash-model-tiering
 pr: 12135
@@ -38,9 +38,9 @@ consumes it on Devin.
   and the promo expiry (2026-11-30, no published post-promo rate card).
 - **G5.** `model-launch-review` gains a Devin freshness-check item (third-vendor analog
   of Grok item 6): compare `devin models` output against Devin slugs Soleur references.
-- **G6.** `plugins/soleur/AGENTS.md` Model Selection Policy gains a Devin note: the five
-  `model: haiku` research agents map to `subagent_explore` + `agent.subagent_model` on
-  Devin; `model: haiku` frontmatter is inert there.
+- **G6.** `plugins/soleur/AGENTS.md` Model Selection Policy gains a Devin note: a tool-surface mapping — researchers stay
+  `subagent_general` (exec/MCP duties), ad-hoc read-only explores may use
+  `subagent_explore` + `agent.subagent_model`; `model: haiku` frontmatter is inert there.
 - **G7.** File the deferred machinery follow-up (`TIER_MAPS.devin` + generated Devin
   custom subagent profiles) as a `meta/machinery` issue naming its three measurement
   gates: plugin-profile registration on current CLI, forbidden-pin fail-vs-reroute
@@ -70,9 +70,7 @@ consumes it on Devin.
 
 ## Technical Requirements
 
-- **TR1.** Docs-only diff: `plugins/soleur/devin/INSTRUCTIONS.md`, one ADR file,
-  `plugins/soleur/skills/model-launch-review/SKILL.md`, `plugins/soleur/AGENTS.md`.
-- **TR2.** The filing-gate refusal for the tracking issue is recorded (this frontmatter)
+- **TR1. Mixed docs+code diff: INSTRUCTIONS.md, ADR-110 addendum, SKILL.md, AGENTS.md, README.md, audit-models.sh, harness.ts emitted strings, devin-harness.test.ts re-pin, new devin-instructions-routing.test.ts pin suite, go.md + skills/go/SKILL.md stale-contract sweep (review fixes).
   — no issue was created; delivery is inline in PR #12135.
 
 ## Open Questions

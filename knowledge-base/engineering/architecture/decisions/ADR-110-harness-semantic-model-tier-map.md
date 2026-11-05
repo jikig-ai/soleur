@@ -86,7 +86,7 @@ Decision 4 is unchanged: the Claude research agents stay `model: haiku` until a 
 
 Cognition released SWE-2 Flash on 2026-11-04 (~1/5 price, ~3x speed of SWE-2; free in
 Devin CLI/Desktop through 2026-11-30, no published post-promo rate card). Measured
-`devin models` on Devin CLI (authenticated, 2026-11-05): family `swe-2-flash` with
+`devin models` on Devin CLI (authenticated, CLI 3000.11.234, 2026-11-05): family `swe-2-flash` with
 `swe-2-flash-medium` / `-high` / `-max`, all tagged `Free, new`, 262K context; family
 `adaptive` and `swe-2` (medium/high/max free, `-lightning` paid) also listed; short
 family aliases (`swe`, `opus`, `sonnet`, `codex`, `gemini`, `gpt`) resolve to
@@ -113,16 +113,18 @@ this rule; a phrase-pin suite guards it.
 
 **Deferred to #12141** (unblocks on three measurements — plugin-profile registration,
 forbidden-pin fail-vs-reroute, post-promo Flash rate card): `TIER_MAPS.devin` +
-`sync-devin-agent-compat.ts` generated profiles. Recorded seams: the devin `agent:` arg
-in `formatAgentSpawn`/`spawnAgent` is a profile slot, never a Soleur registry id (the id
-travels in the prompt's definition path); the pre-change generated strings said
+`sync-devin-agent-compat.ts` generated profiles. Recorded seams: the devin `agent:` field
+in `spawnAgent` still carries the Soleur registry id today (an identity label consumed
+by tests, NOT the `run_subagent` arg — the arg is a profile slot; the id travels in
+the prompt's definition path). Rewiring the field is part of #12141; the pre-change generated strings said
 "Inherit the session model" unconditionally, which was false for explore. If Devin
 profiles ever register, `model: haiku` frontmatter on the five research agents must be
 translated (Grok #8604 precedent) — an unrecognized value could silently bill the
 session default or resolve to an Anthropic SKU inside a Devin session.
 
-This is the first non-Anthropic/non-xAI row; the title's "(Claude Code + Grok Build)"
-scope predates the OpenCode and Devin rows and is retained for continuity.
+This is the first non-Anthropic/non-xAI addendum; the title's "(Claude Code + Grok
+Build)" scope predates the opencode TIER_MAPS row (#10571) and this Devin addendum
+(which adds no row) and is retained for continuity.
 
 ## Alternatives considered
 

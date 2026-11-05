@@ -59,7 +59,7 @@ Two domain leaders (Engineering/CTO, Operations/COO) assessed independently and 
 
 - **Route read-only spawns to `subagent_explore`:** the five `model: haiku` research
   agents (`agents/engineering/research/*`) and other read-only fan-out should spawn as
-  `subagent_explore` on Devin — the profile lands on the router's default subagent model,
+  `subagent_explore` on Devin — the profile lands on the router's default subagent model,  <!-- amended at PR #12135 review: shipped mapping is rule-form — researchers stay subagent_general -->
   which the operator (or an org admin) can pin. `subagent_general` is reserved for
   write-capable work and always inherits the parent model. Ruled by CTO agent.
 - **Document `agent.subagent_model: "swe-2-flash-medium"` as an operator opt-in**, not a

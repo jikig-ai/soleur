@@ -262,8 +262,11 @@ Model semantics (docs.devin.ai/cli/subagents): `subagent_explore` lands on
 the router's *default subagent model* — operator- or admin-pinnable, never
 the parent picker's selection; `subagent_general` always inherits the parent
 model (write-capable fan-out multiplies the parent's rate — prefer explore
-for read-only work, which is also why a spawn tool's `profile` argument can
-never express "cheaper": pick the profile, not a model).
+for read-only work — on a Free plan the explore lane is a capability choice,
+not a saving — which is also why a spawn tool's `profile` argument can
+never express "cheaper": pick the profile, not a model). An explore-routed
+report comes from the router's default model, not the session model — weigh
+it accordingly).
 
 **Operator opt-in (documented, not required):** `agent.subagent_model` in
 `~/.config/devin/config.json` sets the router default — e.g.
@@ -277,6 +280,8 @@ the pin's effect is not verifiable in-session (verify via `devin models`
 allowlist, org policy, or observable spend). SWE-2 Flash is free in Devin
 through 2026-11-30 with no published post-promo rate card — re-verify the
 rate before relying on the saving; Free-plan accounts get SWE-1.6 only.
+Free-tier subagent models die at rate limits rather than retrying (measured
+2026-11-02) — verify a dead seat's on-disk work before respawning it.
 Local CLI/Desktop only — cloud sessions are unaffected either way.
 
 Model aliases (`opus`, `sonnet`, `swe`, `codex`, `gemini`, `gpt`) DO resolve
@@ -348,8 +353,8 @@ warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
 `BEHIND` (not when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it), and finish the prescribed postmerge checks before claiming success.
-Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
-watches** below) rather than burning foreground turns on `sleep`-and-poll
+Arm the watch as a background `run_subagent` (profile `subagent_general`)
+exit-coded loop (see **Polling / watches** below) rather than burning foreground turns on `sleep`-and-poll
 cycles.
 If a required capability cannot be mapped, report the exact unsupported gate
 and retain incomplete status instead of silently skipping it.

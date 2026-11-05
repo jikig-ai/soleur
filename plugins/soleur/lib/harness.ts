@@ -313,8 +313,9 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
     return (
       `Use the **run_subagent** tool — profile \`subagent_explore\` when the task ` +
       `needs read/grep/glob/web_search and nothing else (no exec/git/gh/webfetch), ` +
-      `otherwise \`subagent_general\` — passing the definition path for \`${agentId}\` ` +
-      `in this prompt:\n\n${prompt}`
+      `otherwise \`subagent_general\` — passing in this prompt the definition ` +
+      `path for \`${agentId}\` (agents/<domain>/<name>.md per devin/INSTRUCTIONS.md ` +
+      `§Domain agents):\n\n${prompt}`
     );
   }
 
@@ -391,6 +392,7 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
     return {
       harness,
       tool: "run_subagent",
+      // Identity label, NOT the run_subagent arg — the arg is a profile; rewiring deferred to #12141.
       agent: entry.id,
       prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the Devin compatibility instructions at ${resolve(PLUGIN_ROOT, "devin/INSTRUCTIONS.md")}.\n\n${prompt}`,
       instruction:
@@ -664,7 +666,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: Devin CLI**",
         "- Skills: **slash commands** — `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`).",
-        "- Agents: **run_subagent** with agent id.",
+        "- Agents: **run_subagent** with a profile — `subagent_explore` for read-only tasks (no exec/git/gh/webfetch), otherwise `subagent_general`; the agent id travels in the prompt's definition path.",
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
         "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke the slash command or subagent.",
         "- Read devin/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",

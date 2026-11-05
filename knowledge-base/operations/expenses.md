@@ -8,6 +8,7 @@ last_updated: 2026-11-01
 
 | Service | Provider | Category | Amount | Status | Renewal Date | Notes |
 |---------|----------|----------|--------|--------|--------------|-------|
+| Devin subagent-model pin (`swe-2-flash-medium`) | Cognition | dev-tools | 0.00 | active | - | Optional user-scope `agent.subagent_model` opt-in documented by PR #12135 (free in Devin through 2026-11-30, no published post-promo rate card). Re-verify the rate or drop the pin before relying on the saving. <!-- estimate verify_by=2026-11-30 owner=cfo source="devin models promo tag + post-promo rate card" --> |
 | Flagsmith | Flagsmith | saas | 45.00 | active | - | Monthly subscription upgraded after reaching the prior account limit; $45/month reported by the operator on 2026-09-22. Exact plan name, billing date, and first-invoice proration have not been supplied. Product feature-flag service. |
 | GitHub Copilot | GitHub | dev-tools | 10.00 | active | 2026-03-14 | Business plan |
 | GitHub Team (jikig-ai, 1 seat) | GitHub | dev-tools | 4.00 | active | - | Upgraded from Free on 2026-09-22; live GitHub organization API confirms `plan=team` and `filled_seats=1`. $4/user/month is the published Team price; actual first invoice, proration, tax, and renewal date are unverified. Standard GitHub-hosted runner minutes for public repos remain free; private-repo minutes beyond Team's 3,000/month allowance, larger runners, and storage overages are separate. Ref #8450 <!-- estimate verify_by=2026-10-22 owner=cfo source="GitHub Team invoice for jikig-ai organization" --> |
