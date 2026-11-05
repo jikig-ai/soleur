@@ -10,6 +10,8 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
 pr: 12143
+issue: 12162
+closes: 12162
 ---
 
 # feat: pull logs into the incident skill
@@ -20,7 +22,7 @@ The incident skill already names the three production log readers, then collects
 
 "Incident" means a production outage the founder is responding to, the sense of `plugins/soleur/skills/incident/SKILL.md`. It does not mean the rule-telemetry counter in `.claude/hooks/lib/incidents.sh`. The glossary has no entry for the word.
 
-Tracker until a sized issue exists: draft PR #12143.
+Tracking issue: #12162. Draft PR #12143.
 
 ## Problem Statement / Motivation
 
