@@ -96,3 +96,8 @@
 - Round 2: tenant-integration vitest x3 + model.c4 + sentry unrouted + EXECUTION_PLACEMENT (02b76c58da + dedup b37d19c2e2 + dup-row removal 5453f9dea8). GuardA drift red on deploy-script-tests is EXPECTED pre-merge state for carrier edits (#9081, non-required).
 - Advisory-only red: affected-index-ratchet (stale-accept, pre-existing main-side pairs).
 - PR state: BEHIND after latest main move; merge queue will re-evaluate. Operator step pending: #10136 zot accepted-risk owner confirmation. Residual #12092 filed.
+
+## Rebase #2 Complete + Merge Queue (2026-11-05)
+- Second main-move conflict set (same legal files; main gained #9066/#8211 correction entry). Rebase resolved by agent b1a20d08: 35 commits, union-merged Nov-5 head stays head (postdates main's Nov-4); commit-subject fragment hazards stripped again; LEGAL_DOC_SHAS re-pinned (df3509a5fc); mirror-drift + scope-block + sha + consistency + acceptance all green.
+- Force-pushed df3509a5fc. Merge queue evaluating head; only advisory affected-index-ratchet red.
+- Postmerge remaining: verify all targeted workflows dispatched + merge landed + postmerge checks (release envs readback, dedupe lint, systemd parity, legal gates from merged main). Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
