@@ -188,8 +188,20 @@ describe("buildGithubPushBranchTool (requireGrant: true, the cc registration)", 
       force: false,
       defaultBranch: "develop",
       commitSha: SHA,
+      hardened: true,
     });
     expect(m.reportGrantRefused).not.toHaveBeenCalled();
+  });
+
+  it("hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT", async () => {
+    const g = new ExecutionGrants();
+    g.enforcing = true;
+    putGrant(g, PUSH, { branch: "feat-x" }, { workspaceId: WS, headSha: SHA });
+    await strictTool(g).handler({ branch: "feat-x", force: false });
+    expect(m.pushBranch.mock.calls[0][0].hardened).toBe(true);
+    await pushTool(new ExecutionGrants()).handler({ branch: "feat-x", force: false });
+    await strictTool(new ExecutionGrants(), false).handler({ branch: "feat-x", force: false });
+    for (const c of m.pushBranch.mock.calls.slice(1)) expect("hardened" in c[0]).toBe(false);
   });
 
   it("the handler never reads a model-supplied owner/repo/workspacePath/installationId, and the schema is exactly {branch, force}", async () => {

@@ -28,6 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
+import { HARDENED_GIT_ARGS, buildHardenedGitEnv } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +131,12 @@ export function cleanupAskpassScript(scriptPath: string): void {
 export interface GitExecOptions {
   cwd?: string;
   timeout?: number;
+  /**
+   * Opt-in hardened form (#11636, the cc push only): the shared git hardening args, proxy / extra-header resets, an
+   * ALLOWLISTED child environment (never `process.env`) and a pinned `GIT_DIR`. Requires `cwd` (the workspace). Unset keeps
+   * the exact legacy argv and environment.
+   */
+  hardened?: true;
 }
 
 /**
@@ -290,12 +297,16 @@ export async function gitWithInstallationAuth(
     );
   }
 
+  const { hardened, ...execOpts } = opts;
+  if (hardened && !execOpts.cwd) {
+    throw new Error("hardened git invocation requires the workspace cwd");
+  }
+
   const scriptPath = writeAskpassScript();
 
   try {
-    const fullArgs = [...HELPER_RESET, ...args];
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const fullArgs = [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
+    const authEnv = {
       GIT_ASKPASS: scriptPath,
       GIT_INSTALLATION_TOKEN: token,
       GIT_USERNAME: "x-access-token",
@@ -307,6 +318,10 @@ export async function gitWithInstallationAuth(
       // unexpected `$HOME` sibling ever becomes writeable.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
+    // Hardened: an allowlisted environment, never the server's. Legacy: unchanged.
+    const env: NodeJS.ProcessEnv = hardened
+      ? buildHardenedGitEnv(execOpts.cwd as string, authEnv)
+      : { ...process.env, ...authEnv };
 
     // Async exec (non-blocking) — critical for Next.js route handlers
     // that invoke this helper on the request path (kb/upload pull,
@@ -314,7 +329,7 @@ export async function gitWithInstallationAuth(
     // A sync exec here would stall the Node event loop for the full
     // git RTT, queueing all other requests on the instance.
     const { stdout } = await execFileAsync("git", fullArgs, {
-      ...opts,
+      ...execOpts,
       env,
       // Cap stdout to prevent memory spikes on verbose git output.
       maxBuffer: 10 * 1024 * 1024,

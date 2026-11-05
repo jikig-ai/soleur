@@ -156,6 +156,8 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
             defaultBranch,
             // The exact commit the Owner approved (not whatever HEAD is now); undefined on the legacy path.
             commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,
+            // The strict (cc) builder pushes in the hardened form; the legacy runner's call is unchanged (key absent).
+            ...(requireGrant ? { hardened: true as const } : {}),
           });
         } catch (err) {
           // By name, not instanceof: the class lives in push-branch.ts and a module double of it must not break the refusal.
