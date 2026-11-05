@@ -614,3 +614,42 @@ Files to Edit/Create: zero matches).
 - Do not "simplify" the hunk-extent check to a whole-file path test: a path-level
   test lets a logic edit to `test-affected-paths.sh` take the lane — the exact
   free-pass the issue warns against.
+
+## Enhancement Summary
+
+Deepen-plan run 2026-11-05 (inline — subagent context, no Task spawn; halt gates
+executed mechanically):
+
+- Phase 4.6 User-Brand Impact: PASS — section present, `single-user incident`.
+- Phase 4.7 Observability: PASS — all 5 fields non-placeholder; probe
+  `grep -c 'oracle-selection:' .github/workflows/ci.yml` → `1` (allowlisted verb,
+  <15 s, literal expected_output).
+- Phase 4.8 PAT sweep: PASS — no hits.
+- Phase 4.9 UI-wireframe: SKIP — no UI-surface files.
+- Phase 4.10 Encryption Posture: SKIP — no persistent store or new connection.
+- Phase 4.11 Guard Contract: PASS — `lint-guard-contract.py` green over 4 guard
+  entries; adequacy read: assemblies name chokepoints (diff-listing loop,
+  aggregation loop, proof step, manifest runner), not member snapshots; every
+  matrix has a dispatch row, a second-member row, a harness row and a must-PASS
+  non-canonical row.
+- Phase 4.12 Scope Check: PASS — exactly one unfenced `## Scope Check`; all asks
+  mapped; every inferred item justified; split assessment derived from the file
+  lists (single PR).
+- Phase 4.13 Task Design: SKIP — no new workflow file, trigger block or task
+  surface (the new jobs fire on existing `pull_request`/`merge_group` triggers).
+- Phases 4.4/4.45/4.5/4.55: N/A — no scheduled-work pattern, no SSH/network
+  hypothesis, no downtime/cutover (the lane is additive and dark).
+
+### New Considerations Discovered
+
+- `CI_PR_AFFECTED` is unset (verified `gh variable list`) and `PR_AFFECTED_LOCKED=1`
+  still stands — S4 never activated; this lane is the first skip lever that can
+  actually fire, which raises the bar for the dark phase and the ADR amendment.
+- The `[full]` run-name marker is not on `main` yet (S4 PR C unshipped) — the
+  amendment records that oracle-lane runs must never carry it when it lands.
+- push-dedupe (already `on`) would elide the push run on an oracle merge_group
+  green unless the proof requires all five heavy legs `success` — now a named
+  deliverable (Guard 3), not a review-time surprise.
+- `oracle-index-check` joins `test`'s `needs:` and always runs (sub-minute no-op
+  off the lane) rather than being a second tolerated context — keeps the merge
+  queue's producer semantics per probe-merge-group-coverage.sh.
