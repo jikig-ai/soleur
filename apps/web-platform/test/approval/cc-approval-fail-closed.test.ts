@@ -143,6 +143,7 @@ describe("pre-gate allow sets", () => {
   });
 
   test("no approval-required tool is accepted by isSafeTool (SAFE_TOOLS is also checked before the platform branch)", () => {
+    expect(isSafeTool("TodoRead")).toBe(true); // positive control: the predicate can say yes
     for (const tool of APPROVAL_REQUIRED_TOOLS) expect(isSafeTool(tool), tool).toBe(false);
   });
 });

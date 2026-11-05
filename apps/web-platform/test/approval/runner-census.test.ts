@@ -21,6 +21,8 @@ const src = (rel: string) => stripComments(readFileSync(join(ROOT, rel), "utf8")
 const SHORT = APPROVAL_REQUIRED_TOOLS.map((t) => t.replace("mcp__soleur_platform__", ""));
 /** The wired grants argument: the identifier must END at `approvalGrants` (a different object named `approvalGrantsB` must not pass). */
 const GRANTS_ARG = /grants:\s*approvalGrants\s*[,}]/;
+/** The cc registration pattern: a quoted short name, or a quoted fully-qualified literal. Shared by the census and its self-test. */
+const ccRegistrationRe = (name: string) => new RegExp(`["'\`](?:mcp__soleur_platform__)?${name}["'\`]`);
 const BUILDERS = ["email-triage-tools", "github-tools", "kb-share-tools", "workspace-settings-tools"];
 
 function createCanUseToolBlock(file: string): string {
@@ -65,7 +67,7 @@ describe("runner registration census", () => {
 
   test("the cc runner registers no slice-1 tool and imports none of their builders (recorded reason above)", () => {
     const cc = src("server/cc-dispatcher.ts");
-    for (const name of SHORT) expect(cc, `cc-dispatcher registers ${name} without approval wiring`).not.toMatch(new RegExp(`["'\`](?:mcp__soleur_platform__)?${name}["'\`]`));
+    for (const name of SHORT) expect(cc, `cc-dispatcher registers ${name} without approval wiring`).not.toMatch(ccRegistrationRe(name));
     for (const b of BUILDERS) expect(cc, `cc-dispatcher imports ${b}`).not.toMatch(new RegExp(`/${b}["']`));
   });
 
@@ -109,7 +111,7 @@ describe("self-test: the census regexes see code, not comments (mutation list)",
   });
 
   test("the cc registration regex flags a quoted short name or fully-qualified literal, and not an unrelated or other-prefix string", () => {
-    const re = (name: string) => new RegExp(`["'\`](?:mcp__soleur_platform__)?${name}["'\`]`);
+    const re = ccRegistrationRe;
     expect(re("github_push_branch").test('const a = "github_push_branch";')).toBe(true);
     expect(re("github_push_branch").test('const a = "mcp__soleur_platform__github_push_branch";')).toBe(true);
     expect(re("github_push_branch").test('const a = "mcp__other__github_push_branch";')).toBe(false);
