@@ -19,6 +19,53 @@ observation-window probe and post the measurement, and verify the remaining
 #10859 entry conditions. The required-context flip itself is out of scope;
 #10859 stays held for the budget owner.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05 (inline deepen pass — no subagent fan-out
+capability in this session; halt gates and quality checks run mechanically)
+**Sections enhanced:** Observability (added), Phase 0 evidence packet
+(disqualifying facts), Phase 1b (precedents + precise edit targets),
+Files-to-Edit (corrected `ALWAYS_ON_SUITES` location)
+**Agents used:** none (halt gates 4.6–4.13 run inline; passes 4.6 / 4.7-fixed /
+4.8 / 4.9 / 4.10 / 4.11 / 4.12 / 4.13 recorded below)
+
+### Key improvements
+
+1. Stale-premise correction: `glob_decide` rejects `src=floor` durations
+   before the rate check, so the install arm needs a `measured` duration row
+   FIRST — and a ≤10 s measurement makes the policy verdict `always_on`, not
+   `glob`. The deferral's two-arm framing gained a documented third arm (a').
+2. The 1222 ms "duration" is the generated `default-weight` floor
+   placeholder, not a measurement — the suite's real runtime is unmeasured
+   and arm a' dies if it exceeds `LOCAL_FAST_CAP_MS=10000`.
+3. `ALWAYS_ON_SUITES` lives at `scripts/lib/test-affected-paths.sh:132`, not
+   `scripts/test-all.sh`; the #11648 demotion precedent shows a measured
+   `always_on` verdict can be re-priced and demoted later.
+
+### Gate results (all pass after the Observability fix)
+
+- 4.6 User-Brand Impact: present, threshold `none`, no sensitive-path diff.
+- 4.7 Observability: Files-to-Edit has non-docs paths → section added
+  (ratchet marker line is the liveness signal; `git grep` probe).
+- 4.8 PAT shapes: none. 4.9 UI wireframe: no UI-surface files. 4.10
+  Encryption Posture: no store/connection. 4.11 Guard Contract: deliverable
+  is a ruling + docs + selector data rows, no new guard. 4.12 Scope Check:
+  one unfenced section, all asks mapped, `Recommendation: single PR`.
+  4.13 Task Design: no new autonomous-task surface.
+
+### New considerations discovered
+
+- The rename-carry entry condition's ruled precondition is empty-set under
+  strict zero (baseline deleted by PR5z) — the condition needs re-rule or
+  dissolution, recorded as `pending - assumed` in decision-challenges.md.
+- Fresh probe read (this session): `units=115 wall_p95_s=269 wall_max_s=279`,
+  window paused on red merge_group run 42084778935 (`exit=1 new-pair`), no
+  bot PR, p95 over the 240 s ruled ceiling — another whole-population breach
+  data point for #12129.
+- The canary attribution was verified live: run 39937846319 job
+  `affected-index-ratchet` concluded `failure` 10:17:39→10:19:29Z (110 s),
+  matching the observation-log entry.
+
 ## Research Insights
 
 ### Premise Validation
@@ -96,8 +143,10 @@ Checked 2026-11-05 against live state:
   "$SCRIPTS_DIR"/lib/*.sh`, ~line 285) is the swept scope: 4 dir globs, ~164
   files.
 - `scripts/lib/test-affected-paths.sh` — `AFFECTED_*_PATHS` edge declarations;
-  the suite's current set is ~14 exact files + `^glob:.claude/hooks/*guardrails*.sh`
-  (PR5d `receipts/rows-post-edit.txt` line 381).
+  the suite's block `AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS`
+  (:4165) carries 8 exact `.claude/hooks/` files + `glob:.claude/hooks/*guardrails*.sh`
+  + the shared `_CLOSURE_LEAF_SCRATCH_ROOT` leaf + the `THIS FILE` row
+  (verified against the file, not only PR5d `receipts/rows-post-edit.txt` line 381).
 - `scripts/ci-pr-affected-replay.py` — `glob_decide` encodes PR4b row 6
   (`GLOB_MAX_MS=60000`, `GLOB_ALWAYS_POLICY_MS=30000`,
   `GLOB_ALWAYS_MAX_MS=10000`); `DECLARED LIMITS` documents that directory and
@@ -150,6 +199,33 @@ the window).
 - **Threshold decision (challengeable):** internal CI/test-index tooling and
   docs only; no sensitive-path diff (preflight Check 6 regex matches none of
   the planned files), no regulated-data surface, no user-visible artifact.
+
+## Observability
+
+The change rides the existing ratchet observability surface; the accepted-gap
+arm edits docs only, and the install arm edits selector data whose liveness
+signal is the ratchet job itself.
+
+```yaml
+liveness_signal:
+  what: "SOLEUR_PR_AFFECTED_RATCHET marker line from the affected-index-ratchet job"
+  cadence: "every pull_request and merge_group run (advisory until PR3b)"
+  alert_target: "PR check list plus job annotation"
+  configured_in: ".github/workflows/ci.yml job affected-index-ratchet"
+error_reporting:
+  destination: "job ::error annotation and step summary"
+  fail_loud: "::error title=affected-index-ratchet::exit=<1|2> reason=<token>"
+failure_modes:
+  - mode: "new-pair or stale-accept introduced by the edge/accept edits (install arm only)"
+    detection: "ratchet exit=1 marker on the next pull_request/merge_group run; local ratchet run before push"
+    alert_route: "PR check list (advisory while PR3a); author-of-pair repairs with #10448 owner as fallback per runbook section 7"
+logs:
+  where: "GitHub Actions job log for affected-index-ratchet"
+  retention: "GitHub-hosted runner default"
+discoverability_test:
+  command: "git grep -l AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX -- scripts/"
+  expected_output: "test-affected-paths.sh"
+```
 
 ## Implementation Phases
 
@@ -219,11 +295,17 @@ Record the ruling verbatim in `specs/feat-one-shot-10448-boundary-prefix-deferre
 2. Re-measure at work time per the runbook: record `origin/main` SHA, save
    `rows.txt`, run `glob-rate --candidates <4 dir-glob entries> --pairs
    <7-pair file> --commits 200 --base <sha> --spot-check 3`.
-3. Install per the measured verdict: `glob:`/`dir/` entries or an
-   `ALWAYS_ON_SUITES` entry in `scripts/lib/test-affected-paths.sh` /
-   `scripts/test-all.sh` as the ruling directs; reconcile the 7 pairs'
-   dispositions (accept rows stay unless the installed edge changes the
-   pairs' staleness; re-run the audit for `stale-accept`).
+3. Install per the measured verdict: `glob:`/`dir/` entries in
+   `AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS` or an
+   `ALWAYS_ON_SUITES` entry (both in `scripts/lib/test-affected-paths.sh` —
+   `ALWAYS_ON_SUITES` at :132) as the ruling directs. Precedents: #11648 —
+   a PR5 `always_on` verdict was DEMOTED when its re-priced median exceeded
+   `LOCAL_FAST_CAP_MS=10000` and replaced with a dir-anchored `glob:` edge
+   set, so an `always_on` install carries a re-pricing tail; and
+   grep-q-pipe-guard's whole-tree read set, which ships as dir-anchored
+   `glob:<top-dir>/**.<ext>` edges, the same shape the 4 dir globs would take.
+   Reconcile the 7 pairs' dispositions (accept rows stay unless the installed
+   edge changes the pairs' staleness; re-run the audit for `stale-accept`).
 4. Verify: ratchet `exit=0`, `scripts/test-affected-kb-consumers.test.sh`,
    `scripts/test-all-fast-tier-budget.test.sh` (if `always_on`), local selector
    spot check on a `.claude/hooks/` diff selecting the suite. Editing
@@ -265,8 +347,7 @@ Verify and post a dated status comment on #10859:
 
 - `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` — §7 residual/amendment record + observation-log note (always)
 - `knowledge-base/project/specs/feat-one-shot-10448-boundary-prefix-deferred/decision-challenges.md` — record the CTO ruling (always)
-- `scripts/lib/test-affected-paths.sh` — install arm only: swept-scope edges
-- `scripts/test-all.sh` — install arm only, if the ruling lands `always_on`
+- `scripts/lib/test-affected-paths.sh` — install arm only: swept-scope edges in `AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS` (:4165) and/or an `ALWAYS_ON_SUITES` entry (:132)
 - `scripts/suite-durations.tsv` — install arm only: regenerate for `measured` row
 - `scripts/ci-pr-affected-replay.py` — install arm (a) only: `glob_decide` constant amendment as ruled
 - `scripts/ci-pr-affected-audit.accept.tsv` — install arm only, only if re-audit surfaces `stale-accept`
