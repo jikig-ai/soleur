@@ -402,73 +402,6 @@ _flip_transition_dt() {
   printf '%s\n' "$dt"
 }
 
-# G3.7's off-host READ (#7462 review). The flush latch is a FILE on the dedicated host's
-# /mnt/data volume (inngest-cutover-flip.sh `flush_already_performed`), and this script may not
-# SSH — so the readable proxy is the marker the on-host FSM emits at the two moments that PROVE
-# a FLUSHALL has already been performed for this host:
-#
-#   "reason":"flip-complete"            the forward flip COMPLETED, i.e. FLUSHALL ran and
-#                                       record_flush_latch wrote the durable latch.
-#   "reason":"refuse-rearm-after-done"  the on-host latch has ALREADY refused a re-arm.
-#
-# Both are emitted by inngest-cutover-flip.sh `emit_state` as STRING LITERALS and both already
-# sit in _flip_transition_dt's pinned reason set above — this is the SAME no-SSH reader, asked a
-# different question, so no new transport, credential or fixture class is introduced.
-#
-# CORRECTED (#7674). This comment used to claim the read was "SCOPED TO THIS HOST BY THE TABLE"
-# because BS_TABLE's source "ships ONLY the dedicated inngest host's journald", and that a
-# hostname filter "would add nothing". That is FALSE, and the two sources that settle it are in
-# this repo: vector.toml says "ALL hosts multiplex into the ONE Logs source 2457081 — host_name
-# is the sole discriminator", and betterstack-query.sh defaults BS_TABLE to exactly that source.
-# Measured 2026-08-25: a default-table query returned rows carrying host_name=soleur-web-platform.
-#
-# It remains true that THIS latch reader does not strictly need the filter — its two `reason`
-# literals are emitted only by the on-host flip FSM, so in practice the reason terms are
-# themselves host-discriminating (measured 2026-08-25: 84/84 flip rows came from this host).
-# "In practice" is the honest strength: that is an argument from who RUNS the emitter, not a
-# property the query enforces, and #6616 is the open issue about identity fields not meaning what
-# they appear to. The liveness reader below therefore filters explicitly rather than inheriting
-# this reasoning — see its guard note 2, which supersedes any reading of this paragraph as
-# licensing an unfiltered read. The correction matters because the FALSE justification was
-# about to be inherited by the liveness reader below, where the terms are NOT host-discriminating
-# and an unfiltered read would count web-1's rows as this host's liveness — a fail-open.
-#
-# NO TRUNCATION GUARD, deliberately — and the asymmetry with _flip_transition_dt is the point.
-# That function needs the EARLIEST transition, so a full page can hide the row it must return and
-# it refuses rather than derive a narrower window. This one needs only EXISTENCE, which is
-# monotone in the page: a full page means n >= limit >= 1, i.e. latched, and the only way to read
-# 0 is that the window genuinely holds no such row. Truncation cannot manufacture an absence.
-#
-# THE WINDOW IS A PRE-FILTER'S WINDOW, not the latch's. The on-host latch is unbounded in time;
-# Better Stack retention is not. Neither error direction can authorise a flush: too WIDE costs a
-# refused dispatch on a legitimately-recut host (recoverable by narrowing FLUSH_LATCH_SINCE — the
-# reason it is a variable and not a literal), and too NARROW degrades to the pre-gate behaviour,
-# where the on-host latch still refuses. Deliberately NOT FSM_ANCHOR_SINCE: that constant bounds
-# how long a COEXISTENCE anchor stays derivable and is tuned for that; this one approximates a
-# MONOTONIC "has this host ever been flushed?" and wants the widest window it can get.
-FLUSH_LATCH_SINCE="${FLUSH_LATCH_SINCE:-365d}"
-_flush_latch_count() {
-  local rows rc=0 n
-  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-    --since "$FLUSH_LATCH_SINCE" \
-    --grep '"reason":"flip-complete"' \
-    --grep '"reason":"refuse-rearm-after-done"' \
-    --limit 5) || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    echo "::warning::G3.7 flush-latch read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the on-host latch) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
-    printf '%s' '__UNREADABLE__'
-    return 0
-  fi
-  # Count rows, never echo one: the standing purity contract of every Better Stack reader here.
-  n=$(printf '%s\n' "$rows" | grep -c '^{' || true)
-  # Explicit decimal predicate (#7674) rather than trusting bash arithmetic coercion downstream:
-  # an empty string compares FALSE under -gt, which is the documented destroy-guard bypass class.
-  case "$n" in
-    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
-  esac
-  printf '%s' "$n"
-}
-
 # ── GENERATION SCOPE for every write-gating liveness count (2026-09-24 host replace) ──────────────
 # "Audible" means audible from the server that exists NOW. The host filter below keys on
 # host + host_name, and BOTH are identical across a replace: `host` is Vector's OS hostname =
@@ -501,10 +434,10 @@ _flush_latch_count() {
 # A reboot or an in-place server_type change keeps `created`, which is correct: the question is
 # whether the server that exists can act on the write.
 #
-# SCOPE. Floored: _flip_liveness_count (resume G3, arm G3.7 H) and _luks_liveness_count (LUKS G3).
-# NOT floored, deliberately: _flush_latch_count (the latch lives on /mnt/data, which survives the
-# replace, so a predecessor's flip-complete row is valid PRESENCE evidence — flooring it would be a
-# fail-open), the confirm readers (anchored on this dispatch's own write instant), and the execute
+# SCOPE. Floored: _flip_liveness_count (resume G3). (The retired op=arm's flush-latch reader was NOT
+# floored, deliberately: the latch lives on /mnt/data, which survives the replace, so a predecessor's
+# flip-complete row was valid PRESENCE evidence — flooring it would have been a fail-open.)
+# NOT floored, deliberately: the confirm readers (anchored on this dispatch's own write instant), and the execute
 # 2.0 / registry-probe gates. Those two gate NO write: their `dark` verdict joins a probe row and a
 # heartbeat on one boot (tests/scripts/lib/inngest-host-dark-gate.sh) bounded by --hb-max-age 900,
 # so for up to ~15 min after a replace it can rest on the destroyed server's rows — acceptable only
@@ -767,11 +700,9 @@ _generation_scoped_count() {
 # DELIBERATELY A LITERAL, not an env override (#7674 review). Two reasons, and either alone
 # settles it. (1) It is not mapped into cutover-inngest.yml's step env, and GitHub does not
 # export repo vars to a step unless the workflow names them — so an override here would be an
-# unperformable remediation, the exact #6617 dead-remediation class this file's sibling comment
-# at `FLUSH_LATCH_SINCE` already names. (2) `FLUSH_LATCH_SINCE` earns its override because the
-# `latched` message TELLS the operator to narrow it; widening THIS window is the FAIL-OPEN
-# direction (more rows -> more likely `clear`), so an operator-reachable knob whose only effect
-# is to weaken the gate is not a knob worth shipping.
+# unperformable remediation (the #6617 dead-remediation class). (2) Widening THIS window is the
+# FAIL-OPEN direction (more rows -> more likely `clear`), so an operator-reachable knob whose only
+# effect is to weaken the gate is not a knob worth shipping.
 FLIP_LIVENESS_SINCE="15m"
 _flip_liveness_count() {
   local rows rc=0 n floor
@@ -796,86 +727,6 @@ _flip_liveness_count() {
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
   printf '%s' "$n"
-}
-
-# ── #6894: the LUKS cutover FSM's own liveness + confirm readers ────────────────────────────────
-# Keyed on the CUTOVER unit's tag, NOT the flip's. They are two units with two timers, and the
-# question these gates ask is "can the host act on this write?" — which for a write to
-# INNGEST_LUKS_CUTOVER is answered only by inngest-luks-cutover.service. Using the flip's rows
-# would report audible on a host where the cutover trio never installed (the install_missing arm
-# in inngest-bootstrap.sh), i.e. exactly the silently-dead-delivery case this estate has paid for.
-LUKS_LIVENESS_SINCE="15m"
-_luks_liveness_count() {
-  local rows rc=0 n floor
-  floor="$(_inngest_server_created_epoch)"
-  case "$floor" in
-    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
-  esac
-  rows=$(_bs_query_rows "$LUKS_LIVENESS_SINCE" inngest-luks-cutover 50) || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    echo "::warning::LUKS liveness read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the host) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
-    printf '%s' '__UNREADABLE__'
-    return 0
-  fi
-  n="$(printf '%s\n' "$rows" | _generation_scoped_count "$floor" "inngest-luks-cutover liveness" "inngest-luks-cutover")"
-  case "$n" in
-    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
-  esac
-  printf '%s' "$n"
-}
-
-# confirm_luks_state <since-space-timestamp> — the terminal flag the on-host FSM reached, or
-# `timeout`. Keys on the emitter's `flag` field, never `reason`. Never echoes a raw row.
-# `aborted` is tested FIRST so a window containing both terminals reports the unsafe one.
-# The window is generous because this FSM COPIES the store before it swaps.
-confirm_luks_state() {
-  local since="$1" i rows own rc jrc
-  for i in $(seq 1 60); do   # 60 x 15s = 900s, matching the unit's TimeoutStartSec plus shipping lag
-    rc=0
-    rows=$(_bs_query_rows "$since" inngest-luks-cutover 100) || rc=$?
-    if [[ "$rc" -ne 0 ]]; then
-      echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
-    fi
-    # Only the LUKS FSM's OWN rows on the dedicated host pair are graded (_fsm_own_rows): the flip
-    # FSM emits flag=done exit_code=0 too, and the event log can quote either. A local decode
-    # failure confirms nothing this attempt (fail closed) and keeps polling.
-    jrc=0
-    own=$(printf '%s\n' "$rows" | _fsm_own_rows inngest-luks-cutover) || jrc=$?
-    if [[ "$jrc" -ne 0 ]]; then
-      own=""
-      echo "::warning::confirm: the local row filter failed (jq rc=$jrc) — nothing confirmed this attempt; a local jq fault, not an FSM state" >&2
-    fi
-    # TRANSITION ROWS ONLY — never the heartbeat. G1 deliberately permits arming from `aborted` and
-    # from `rolled-back` (the documented abort -> fix -> re-dispatch loop), and in those states the
-    # host emits `{"flag":"aborted","reason":"noop-aborted"}` on its own cadence. Those rows are
-    # OLDER than this write but land inside the window, so keying on the flag alone made the first
-    # iteration report "the FSM aborted" while the copy was still running — the dispatch asserting
-    # an outcome the host never produced. The `reason` field is what separates the two.
-    _transitions() { printf '%s\n' "$own" | jq -e -s --arg f "$1" \
-      'any(.[]; .flag == $f and ((.reason | type) != "string" or (.reason | startswith("noop-") | not)) and ($f != "done" or .exit_code == 0))' >/dev/null 2>&1; }
-    if _transitions aborted; then echo "aborted"; return 0; fi
-    if _transitions rolled-back; then echo "rolled-back"; return 0; fi
-    if _transitions done; then echo "done"; return 0; fi
-    echo "confirm: awaiting a terminal LUKS FSM flag (attempt $i/60 since $since)" >&2
-    sleep 15
-  done
-  echo "timeout"; return 0
-}
-
-# _luks_pointer_state — `present`, `absent`, or `unreadable`. The pointer is what makes the
-# encrypted volume canonical, so "is this host already cut over?" is answered by it, never by the
-# flag. ABSENCE IS READ FROM THE NAME LIST, never from a failed `get`: a get failure is equally
-# consistent with a dead token, and treating that as "absent" would authorise a second cutover on
-# a host that already has one.
-_luks_pointer_state() {
-  local names rc=0
-  names=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null) || rc=$?
-  if [[ "$rc" -ne 0 || -z "$names" ]]; then printf '%s' 'unreadable'; return 0; fi
-  if printf '%s' "$names" | jq -e 'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")' >/dev/null 2>&1; then
-    printf '%s' 'present'
-  else
-    printf '%s' 'absent'
-  fi
 }
 
 # #6178 — the doublefire probe's STARTED_AT lower bound, forwarded as ?from=.
@@ -976,111 +827,15 @@ doublefire_from() {
   printf '%s %s\n' "$(date -u -d "@$from_e" +%Y-%m-%dT%H:%M:%SZ)" "$src"
 }
 
-# G3 arm-decision (#7462). PURE: no I/O, no globals read or written, no input value
-# echoed — it returns one outcome TOKEN and the caller acts on it. That is what makes the
-# decision executable by a test: every other assertion over this file greps its TEXT, and
-# a text grep cannot see WHICH BRANCH a comparison takes.
-#
-#   $1  the prod value about to be written (G2 has already proven it non-empty)
-#   $2  the value currently in place on soleur-inngest/prd
-#
-# Outcomes: refuse-empty-dark | refuse-txn-pooler | refuse-not-session-pooler
-#           | refuse-not-prod-project | skip-already-current | write
-#
-# WHY THE EQUALITY ARM SKIPS RATHER THAN REFUSING (#7462). It used to `exit 1` when the
-# prod value already equalled the dark one. But G4 writes the prod DSN and op=rollback has
-# NO inverse for that write, so after the first successful arm (2026-07-23T15:46Z) the
-# dark slot holds the prod DSN permanently and the equality refusal fires FOREVER — the
-# cutover could never be re-armed after a rollback, which defeats rollback's purpose.
-#
-# Dropping the refusal costs no safety. The hazard its own message named ("would flip onto
-# the DARK backend") is fully held by the prod project-ref pin below: the dark backend is a
-# DISTINCT Supabase project (ADR-100 addendum 2026-07-15) and cannot carry the prod ref.
-# The FLUSHALL hazard is held by the monotonic latch in inngest-cutover-flip.sh (#7228
-# P0-5) — recorded AT the flush and fatal if unrecordable — never by this comparison.
-# Equality therefore means only "this write would change nothing", which is a fact to
-# record, not a reason to abort.
-#
-# EXTRACTION CONTRACT: cutover-inngest-workflow.test.sh sources this function by awk range
-# `/^g3_decide\(\) \{$/,/^\}$/`. Keep the signature and the closing brace at column 0, and do
-# not introduce a column-0 `}` inside the body, or the extraction truncates.
-
-# G3.6's decision, extracted for the same reason g3_decide is (#7462 review): the first
-# revision of that gate inlined a `case` in the arm body and was covered only by greps for
-# its message strings — adding '1' to the pass-arm, i.e. arming while the diagnostic flag is
-# SET, left the whole suite green. A guard whose decision cannot be driven RED is not a guard.
-#
-#   $1  the raw INNGEST_DIAGNOSTIC_BOOT value, or __UNREADABLE__ when the read failed
-# Outcomes: clear | set | unreadable
-#
-# Same extraction contract as g3_decide: signature and closing brace at column 0.
-diag_boot_decide() {
-  case "$1" in
-    '__UNREADABLE__') printf '%s' 'unreadable'; return 0 ;;
-    ''|'0'|'false') printf '%s' 'clear'; return 0 ;;
-    *) printf '%s' 'set'; return 0 ;;
-  esac
-}
-
-# G3.7's decision (#7462 review), extracted for the same reason g3_decide and diag_boot_decide
-# are: a guard whose decision cannot be driven RED is not a guard. The first revisions of BOTH
-# of those inlined a `case` in the arm body and were covered only by greps for their message
-# strings — which cannot see which branch a comparison takes.
-#
-#   $1  L — the row count from _flush_latch_count, or __UNREADABLE__ when the read failed
-#   $2  H — the row count from _flip_liveness_count, or __UNREADABLE__ when the read failed
-# Outcomes: clear | latched | unreadable | silent
-#
-# ANYTHING that is not a decimal count is `unreadable`, and the caller treats that as
-# fail-closed — the same direction G1/G3/G3.6 take. It is the safe one here because the question
-# this gate asks is "has a FLUSHALL EVER been performed for this host?", and an UNANSWERED
-# question must never read as "no".
-#
-# `silent` (#7674) is a DISTINCT fourth outcome rather than being folded into `unreadable`,
-# because the forward actions differ: `unreadable` points at BETTERSTACK_QUERY_* credentials in
-# prd_terraform; `silent` points at the dedicated host having gone dark. Collapsing them prints
-# the wrong remediation at the worst possible moment. That is also exactly why a non-decimal H
-# routes to `unreadable` and NOT to `silent`: __UNREADABLE__ is emitted only when a READ failed
-# (the Better Stack query, the Hetzner generation anchor, or the local row filter — each with its
-# own ::warning::), so routing it to `silent` would print the host-dark remediation for a read fault —
-# committing the very mis-remediation the outcome split exists to prevent.
-#
-# L dominates H: a recorded flush is decisive regardless of whether the host is currently audible.
-#
-# Same extraction contract as g3_decide: signature and closing brace at column 0, and no
-# column-0 `}` inside the body.
-flush_latch_decide() {
-  case "$1" in
-    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
-  esac
-  # L's VALUE is decisive before H is even consulted (#7674 review). A recorded flush is a refusal
-  # regardless of whether the host is currently audible, and ordering it after H's readability
-  # check meant (L>=1, H unreadable) printed the CREDENTIAL remediation for a state where a latch
-  # had actually been detected — reintroducing, in one cell, the mis-remediation the silent/
-  # unreadable split exists to prevent. No refuse/proceed decision changes; only the message.
-  case "$1" in
-    0) : ;;
-    *) printf '%s' 'latched'; return 0 ;;
-  esac
-  case "$2" in
-    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
-  esac
-  case "$2" in
-    0) printf '%s' 'silent'; return 0 ;;
-    *) printf '%s' 'clear';  return 0 ;;
-  esac
-}
-
-# op=resume's G3 decision (#7674, CTO ruling). Same extraction contract as g3_decide and
-# flush_latch_decide: signature and closing brace at column 0, no column-0 `}` in the body.
+# op=resume's G3 decision (#7674, CTO ruling). Extraction contract (the suite awk-extracts it):
+# signature and closing brace at column 0, no column-0 `}` in the body.
 #
 #   $1  H — the row count from _flip_liveness_count, or __UNREADABLE__ when the read failed
 # Outcomes: audible | silent | unreadable
 #
-# DELIBERATELY NOT flush_latch_decide. L's POLARITY INVERTS between the two verbs: at op=arm
-# `L >= 1` means REFUSE (a flush already happened), while at op=resume that same fact is the G2
-# precondition being SATISFIED. Reusing the function would force the caller to invert two of four
-# arms and would leave the token `latched` meaning opposite things at its two call sites.
+# (The retired op=arm had a sibling decision, flush_latch_decide, deleted with it in #9927. Its L
+# polarity was the INVERSE of this verb's: there `L >= 1` meant REFUSE, here that same fact is the
+# G2 precondition being satisfied.)
 resume_liveness_decide() {
   case "$1" in
     ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
@@ -1122,98 +877,6 @@ resume_bootstrap_decide() {
   esac
 }
 
-# G3's terminal ACTION, separated from its message text (#7462 review). The dispatcher used to
-# carry `exit 1` inside each refusal arm, which meant nothing tested that a refusal actually
-# aborts: stripping `exit 1` from all four arms turned G3 into a pure logger — every refusal
-# printed its ::error:: and fell through to the prod write — with the whole suite green. Now the
-# arms only choose the MESSAGE and a single gate below decides abort-vs-proceed, so the decision
-# is drivable by a test and there is one exit to pin instead of four.
-#
-#   $1  an outcome token from g3_decide
-# Outcomes: abort | proceed   (unknown tokens abort — fail-closed)
-#
-# Same extraction contract as g3_decide: signature and closing brace at column 0.
-g3_action() {
-  case "$1" in
-    skip-already-current|write) printf '%s' 'proceed'; return 0 ;;
-    *) printf '%s' 'abort'; return 0 ;;
-  esac
-}
-
-g3_decide() {
-  local pg="$1" pg_dark="$2"
-
-  # FAIL-CLOSED on an unreadable dark value. The ORIGINAL rationale for this arm is now
-  # obsolete and must not be restated: it was that an empty value makes the equality
-  # comparison false and so SILENTLY passes. That cannot happen once the equality arm no
-  # longer gates anything. The arm is retained on different, still-valid grounds — G1 has
-  # already proven the config readable, so an empty read here is anomalous and most
-  # plausibly a token-scope or wrong-project fault. Refusing costs one dispatch;
-  # proceeding on an anomalous read is how a surprise gets armed.
-  if [[ -z "$pg_dark" ]]; then printf '%s' 'refuse-empty-dark'; return 0; fi
-
-  case "$pg" in
-    *:6543*) printf '%s' 'refuse-txn-pooler'; return 0 ;;
-  esac
-  case "$pg" in
-    *:5432*) : ;;
-    *) printf '%s' 'refuse-not-session-pooler'; return 0 ;;
-  esac
-  # Positive prod-project pin (C3/D3). This is the SOLE remaining guard against arming onto
-  # a non-prod Postgres now that equality no longer refuses — mutation-tested accordingly.
-  #
-  # Pin the DESTINATION by parsing the AUTHORITY (#7462 review, third revision). Three earlier
-  # forms were each defeated, all measured against the shipped function:
-  #   1. a bare `*<ref>*` substring — accepted the ref in a password, dbname or query param;
-  #   2. pinning the pooler USERNAME — accepted `postgres.<prod-ref>` in front of ANY host,
-  #      including `db.<dev-ref>.supabase.co`, i.e. armed onto the dev project;
-  #   3. globbing the whole DSN for `*@*.pooler.supabase.com:5432/*` — the `*` after `@` spans
-  #      the host AND the path, so the tail matched inside the PATH or QUERY while the real host
-  #      was attacker-controlled (`…@attacker.example.com/x.pooler.supabase.com:5432/postgres`).
-  #
-  # A glob over the whole string cannot express "the authority is X", because every wildcard can
-  # cross the delimiters that define it. So extract the authority and match THAT, whole. Pure
-  # bash, no subprocesses, no I/O. Every predicate below was MEASURED against the live
-  # prd_terraform value so none of them refuses the legitimate DSN.
-  local _rest _auth _user _hostport _low
-  _low="${pg,,}"
-  # Connection-parameter overrides relocate the destination AFTER any authority check. Matched
-  # case-insensitively and in percent-encoded form, because `?HOST=` and `%3d` both reach libpq.
-  case "$_low" in
-    *host=*|*host%3d*|*options=*|*service=*) printf '%s' 'refuse-not-prod-project'; return 0 ;;
-  esac
-  case "$pg" in
-    postgresql://*|postgres://*) : ;;
-    *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
-  esac
-  _rest="${pg#*://}"
-  _auth="${_rest%%/*}"        # authority ends at the first '/'
-  _auth="${_auth%%\?*}"       # ...or at the first '?' when there is no path
-  # Exactly one '@' INSIDE the authority. Go's net/url splits userinfo at the last '@' and
-  # permits '@' within it, so a second one relocates the host past any prefix match.
-  if [[ "${_auth//[!@]/}" != "@" ]]; then printf '%s' 'refuse-not-prod-project'; return 0; fi
-  _user="${_auth%@*}"
-  _hostport="${_auth##*@}"
-  # A comma in the authority is a multi-host list; the first entry wins.
-  case "$_hostport" in *,*) printf '%s' 'refuse-not-prod-project'; return 0 ;; esac
-  # Accept exactly two destinations, matched whole against the extracted host:port.
-  #   - session pooler: user must carry the prod ref, host must be a Supabase pooler on :5432
-  #   - direct host:    the prod ref IS the host, so the username is irrelevant
-  case "$_hostport" in
-    *.pooler.supabase.com:5432)
-      case "$_user" in
-        postgres.pigsfuxruiopinouvjwy:*) : ;;
-        *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
-      esac ;;
-    db.pigsfuxruiopinouvjwy.supabase.co:5432) : ;;
-    *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
-  esac
-
-  if [[ "$pg" == "$pg_dark" ]]; then printf '%s' 'skip-already-current'; return 0; fi
-  printf '%s' 'write'
-  return 0
-}
-
 # #6939 — op=verify's missed-tick report. OFF by default: it prints one pointer to the runbook's
 # recovery procedure and no per-function line. ON (the missed_tick_candidates dispatch input)
 # prints UNVERIFIED candidates that are deliberately not command-shaped. The old output was a
@@ -1223,7 +886,7 @@ g3_decide() {
 # Called with a plain call (no || / &&): bash ignores set -e inside a function called as the
 # non-final part of an &&/|| list, in an if/while condition, or after `!`. A `return 1` here
 # therefore ends the run through set -e; there is no exit at the call site.
-# Same extraction contract as g3_decide: signature and closing brace at column 0, and no column-0 `}`
+# Extraction contract: signature and closing brace at column 0, and no column-0 `}`
 # inside the body (the suite awk-extracts it). The UPPERCASE locals are kept from the inline block
 # this replaced.
 # args: $1 gate ("true" = ON)  $2 body-json  $3 cron-period-s  $4 win-from  $5 win-until
@@ -2192,7 +1855,7 @@ case "$OP" in
           if [[ "$ERG_RC" -ne 0 ]]; then
             echo "::error::2.0 REFUSED: the dark-host gate printed dark but exited rc=$ERG_RC — token and exit code disagree. This is a defect in the gate, not a host state — file an issue with this run URL; do not proceed."; exit 1
           fi
-          echo "::notice::2.0 dark-host arm PASSED — the dedicated host is positively dark on boot_id=$ERG_BOOT: probe row ${ERG_ROW_AGE}s old with flag=$ERG_FLAG, FSM heartbeat ${ERG_HB_AGE}s old with flag=$ERG_HB_FLAG. The dedicated host is intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault. No registry can double-fire from a host that cannot start — pre-flight clear." ;;
+          echo "::notice::2.0 dark-host arm PASSED — the dedicated host is positively dark on boot_id=$ERG_BOOT: probe row ${ERG_ROW_AGE}s old with flag=$ERG_FLAG, FSM heartbeat ${ERG_HB_AGE}s old with flag=$ERG_HB_FLAG. The dedicated host is intentionally refusing to start until the flip is armed (op=arm is retired; a re-cutover needs a reviewed re-introduction of that verb); a non-200 loopback with the server not active is the correct pre-flip posture, not a fault. No registry can double-fire from a host that cannot start — pre-flight clear." ;;
         unreadable)
           if [[ "$PROBE_RC" -ne 0 ]]; then
             _bs_read_remedy probe "$PROBE_RC" "$PROBE_ERR" "$PROBE_ROWS"
@@ -2256,7 +1919,7 @@ case "$OP" in
         # keeps from starting — an unperformable remedy. This path never runs the gate, so no
         # ERG_* value exists here (under set -u an interpolation would abort with no remedy
         # printed): the replacement names a read the OPERATOR performs.
-        echo "::error::Remediation (P1-6): (1) read INNGEST_POSTGRES_URI on soleur-inngest/prd and record which backend it targets — do NOT assume it is non-prod: a successful op=arm writes the PROD DSN there and op=rollback has no inverse for that write, so since the first arm (2026-07-23) it holds the prod value as its documented steady state (ADR-100 addendum 2026-08-20); (2) read the cutover flag from the latest health run — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep -oE \"cutover_flag='?[a-z-]+\". If it is done, the cutover already completed — dispatch op=verify; if armed/flipping, an arm is in flight — read that run, do not re-dispatch execute; if flushed, dispatch op=resume; (3) if the flag is pre-arm and the registry is still non-empty, the dedicated server started outside the guard — dispatch op=doublefire-probe -f cron_period_seconds=1200, then op=rollback. Do NOT proceed to the flip."
+        echo "::error::Remediation (P1-6): (1) read INNGEST_POSTGRES_URI on soleur-inngest/prd and record which backend it targets — do NOT assume it is non-prod: a successful (since-retired) op=arm wrote the PROD DSN there and op=rollback has no inverse for that write, so since the first arm (2026-07-23) it holds the prod value as its documented steady state (ADR-100 addendum 2026-08-20); (2) read the cutover flag from the latest health run — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep -oE \"cutover_flag='?[a-z-]+\". If it is done, the cutover already completed — dispatch op=verify; if armed/flipping, an arm is in flight — read that run, do not re-dispatch execute; if flushed, dispatch op=resume; (3) if the flag is pre-arm and the registry is still non-empty, the dedicated server started outside the guard — dispatch op=doublefire-probe -f cron_period_seconds=1200, then op=rollback. Do NOT proceed to the flip."
         exit 1
       fi
       echo "::notice::2.0 registry-probe: dark registry EMPTY (function_count=$REG_COUNT) — pre-flight clear"
@@ -2459,296 +2122,13 @@ case "$OP" in
     # The remaining true operator seam is 2.4 (app-repoint). 2.2a is a statement, not a step,
     # and it is the ONE authoritative web-2 statement in this file — every other site points here.
     # This block still echoes only step text; no secrets / bodies / connection strings (AC-NOBODY).
-    echo "::notice::SEAM — operator maintenance-window steps (2.4 app-repoint is operator; 2.2a web-2 needs no step; 2.2b/2.3 arm-flip is now the no-SSH op=arm dispatch):"
+    echo "::notice::SEAM — operator maintenance-window steps (2.4 app-repoint is operator; 2.2a web-2 needs no step; 2.2b/2.3 arm-flip: the op=arm verb was retired in #9927 — its cutover completed — so a re-cutover needs a reviewed re-introduction of it, i.e. a revert of the retiring PR):"
     echo "  2.2a WEB-2 — NO STEP. web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false: it has no inngest-server.service and holds no local reminders, so there is nothing on it to quiesce, capture or re-arm. The peer fan-outs still reach it and are tolerated, not no-ops: op=quiesce-web's stop+disable finds an absent unit, and op=rollback's enable on the absent unit reports inngest_enable_failed on web-2's OWN deploy-status slot, which CI does not read (CI polls web-1's slot — the deploy tunnel origin). There is no web-2 freeze or recreate step before arming the flip."
-    echo "  2.2b+2.3 ARM THE FLIP — NO LONGER a manual Doppler write. Dispatch the no-SSH op=arm verb: it writes the 3 values on soleur-inngest/prd (INNGEST_POSTGRES_URI + INNGEST_HEARTBEAT_URL read-through from prd_terraform, then INNGEST_CUTOVER_FLIP=armed LAST — the enabled 30s poll timer picks it up), then CONFIRMS the on-host FSM reached done (exit_code:0) via Better Stack. No secret is echoed (AC-NOBODY; #6369). Run: gh workflow run cutover-inngest.yml --field op=arm  (then APPROVE the inngest-cutover environment required-reviewer gate — that approval IS the prod-write ack)."
+    echo "  2.2b+2.3 ARM THE FLIP — op=arm was RETIRED (epic #9927 item 8): the cutover it drove completed (INNGEST_CUTOVER_FLIP=done) and its Doppler write path was deleted with it. A re-cutover therefore needs a reviewed re-introduction of the verb (a revert of the retiring PR), not a dispatch. No secret is echoed (AC-NOBODY)."
     echo "  2.4 APP-REPOINT — point INNGEST_BASE_URL at the dedicated host http://10.0.1.40:8288 (ci-deploy.sh INNGEST_LINK_HTTP_URL, which both docker run sites expand as \$INNGEST_BASE_URL_RESOLVED; the cloud-init.yml first-boot literal; the watchdog INNGEST_HOST_FALLBACK — parity-pinned) and redeploy so functions re-sync onto the dedicated host."
     echo "  THEN: op=rearm (re-arm the Σ=$SIGMA_CAPTURED captured reminders; gated on registry-non-empty) → op=verify (exactly-once)."
-    echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) dispatch op=rollback — it now writes INNGEST_CUTOVER_FLIP=rollback on soleur-inngest/prd NO-SSH (via the inngest-cutover environment token, value on stdin), confirms rolled-back via Better Stack, THEN runs the SINGLE no-SSH 'enable inngest _ _' fan-out that re-enables (restores the [Install] symlink the 2.2 disable removed) AND starts the web scheduler across [$CUTOVER_HOSTS] in one flock-held handler, polling deploy-status for the 'enabled' verdict; (2) git revert the 2.4 app-repoint PR (all four places: ci-deploy.sh canary + prod, cloud-init.yml, the watchdog fallback) back to http://host.docker.internal:8288 + redeploy — pre-stage that revert green BEFORE step (1), since sends are refused until it deploys. No operator Doppler write or systemctl step is needed (op=arm/op=rollback/op=quiesce-web are the no-SSH arm/reverse/quiesce verbs)."
+    echo "  ROLLBACK / aborted-recovery (P0-1/P0-3/P1-13): (1) dispatch op=rollback — it now writes INNGEST_CUTOVER_FLIP=rollback on soleur-inngest/prd NO-SSH (via the inngest-cutover environment token, value on stdin), confirms rolled-back via Better Stack, THEN runs the SINGLE no-SSH 'enable inngest _ _' fan-out that re-enables (restores the [Install] symlink the 2.2 disable removed) AND starts the web scheduler across [$CUTOVER_HOSTS] in one flock-held handler, polling deploy-status for the 'enabled' verdict; (2) git revert the 2.4 app-repoint PR (all four places: ci-deploy.sh canary + prod, cloud-init.yml, the watchdog fallback) back to http://host.docker.internal:8288 + redeploy — pre-stage that revert green BEFORE step (1), since sends are refused until it deploys. No operator Doppler write or systemctl step is needed (op=rollback/op=quiesce-web are the no-SSH reverse/quiesce verbs)."
     echo "::notice::execute complete — SEAM emitted. CI performed NO prod-write; the flip + app-repoint are the operator's maintenance-window steps."
-    ;;
-
-  arm)
-    # op=arm (#6369) — the no-SSH arm-flip: the three Doppler writes on soleur-inngest/prd
-    # that were op=execute's 2.2b/2.3 operator SEAM (:607-611). FORWARD-ONLY — the reverse
-    # INNGEST_CUTOVER_FLIP=rollback write lives in op=rollback (ADR-100 Decision 6b keeps the
-    # symmetric forward/reverse pair as SEPARATE verbs). A prod-write behind explicit
-    # dispatch (same trust model as op=quiesce-web/op=rollback) PLUS the inngest-cutover
-    # environment required-reviewer gate. The two SOURCE values are read read-through from
-    # soleur/prd_terraform via the existing read-only DOPPLER_TOKEN (CTO 2026-07-12 /
-    # ADR-100 6b: the prod DSN is already CI-readable there, SHA-identical to canonical prd;
-    # no operator seed). Writes go to the ISOLATED soleur-inngest/prd via the read/write
-    # DOPPLER_TOKEN_INNGEST_ARM. AC-NOBODY: no value is EVER echoed — every source value is
-    # ::add-mask::'d on its own capture line and every write reads from stdin (never argv,
-    # which /proc/<pid>/cmdline exposes).
-    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-      echo "::error::op=arm: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch; if it is still empty, the per-merge apply has not yet published the token — check 'gh secret list | grep DOPPLER_TOKEN_INNGEST_ARM'). Refusing to arm."; exit 1
-    fi
-
-    # G1 — pre-write FSM-state guard (DI-C2, P1 — prevents PROD-Redis re-FLUSHALL data loss).
-    # Re-arming over armed/flipping/flushed/done re-drives the on-host FSM stop -> FLUSHALL
-    # against the now-PROD Redis, wiping the live cron sorted-set + in-flight jobs. FAIL-CLOSED
-    # on a read error (user-impact F1 / DI): a swallowed read must NOT be mistaken for a safe
-    # `unset`. First PROVE the config is readable via a Doppler built-in (DOPPLER_PROJECT,
-    # always present, not a secret) — if THAT read fails it is a read/API failure, refuse. Only
-    # then read the flip; a missing flip on a proven-readable config is a genuine safe first-arm.
-    # The deploy-inngest-restart concurrency group (cancel-in-progress:false) serializes
-    # dispatches, so this read is TOCTOU-safe. The flip state is a public enum (not a secret).
-    if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
-      echo "::error::op=arm: G1 — cannot read soleur-inngest/prd (config-readability probe failed: read/API/auth failure). A swallowed read must NOT be treated as a safe pre-arm state; refusing FAIL-CLOSED. Retry once the read path is healthy. Do NOT SSH the host."; exit 1
-    fi
-    CUR_FLIP=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "unset")
-    case "$CUR_FLIP" in
-      ""|unset|aborted|rolled-back)
-        echo "::notice::op=arm: G1 pre-write FSM-state guard passed (config readability proven; INNGEST_CUTOVER_FLIP is a safe pre-arm state: '${CUR_FLIP:-unset}')" ;;
-      *)
-        echo "::error::op=arm: G1 REFUSING — INNGEST_CUTOVER_FLIP is already '$CUR_FLIP' on soleur-inngest/prd (armed/flipping/flushed/reflush/done). Re-arming would re-drive stop -> FLUSHALL against the PROD Redis and wipe the live cron queue (DI-C2). If a prior arm is mid-flight, let it reach done; if it aborted, drive it via op=rollback to rolled-back before re-arming. If a flush already ran and a SECOND flush is the intent, the verb is op=reflush (#7777), never a re-arm. Do NOT SSH the host."; exit 1 ;;
-    esac
-
-    # G2 — read the two SOURCE values read-through from prd_terraform (existing DOPPLER_TOKEN),
-    # masking EACH on its OWN capture line (security F7 — never batch; a mid-sequence set -e
-    # exit must not leave an unmasked captured value in scope before its mask lands). Every mask
-    # line is shape-checked FIRST (_mask_ok: no control character, so a value cannot end the directive
-    # and start a forged one) and keeps `-n`, so an empty read never prints a bare `::add-mask::`.
-    PG=$(doppler secrets get INNGEST_POSTGRES_URI --plain 2>/dev/null || true)
-    [[ -n "$PG" ]] && _mask_ok "$PG" && printf '::add-mask::%s\n' "$PG"
-    HB=$(doppler secrets get INNGEST_HEARTBEAT_URL --plain 2>/dev/null || true)
-    [[ -n "$HB" ]] && _mask_ok "$HB" && printf '::add-mask::%s\n' "$HB"
-    if [[ -z "$PG" || -z "$HB" ]]; then
-      echo "::error::op=arm: a source value (INNGEST_POSTGRES_URI / INNGEST_HEARTBEAT_URL) is empty or unreadable from prd_terraform via DOPPLER_TOKEN. Refusing to arm (no value echoed)."; exit 1
-    fi
-
-    # G3 — positive prod-URI assertion (DI-C3, P1 — the :5432/:6543 guard alone MISSES the
-    # dark backend; both dark and prod DSNs use :5432). Read the CURRENT (dark)
-    # INNGEST_POSTGRES_URI from soleur-inngest/prd via the arm token, mask it, and assert the
-    # value we are about to write targets the prod session pooler on the prod project.
-    #
-    # It does NOT require that value to DIFFER from dark (#7462). It used to, and after the
-    # first successful arm that condition is permanently false — op=rollback has no inverse
-    # for the G4 write — so the refusal fired forever and the cutover could never be re-armed
-    # after a rollback. Equality is now informational. All comparisons value-silent (only
-    # booleans/tokens reach the log).
-    PG_DARK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_POSTGRES_URI -p soleur-inngest -c prd --plain 2>/dev/null || true)
-    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf '::add-mask::%s\n' "$PG_DARK"
-    # FAIL-CLOSED on an empty/failed dark read (observability F1 / user-impact / DI): the
-    # config is proven readable by G1, so an empty PG_DARK is anomalous — most plausibly a
-    # token-scope or wrong-project fault. Refusing costs one dispatch; proceeding on an
-    # anomalous read is how a surprise gets armed.
-    #
-    # The ORIGINAL rationale for this arm is OBSOLETE and must not be restated (#7462): it
-    # was that an empty PG_DARK makes the equality comparison false and so SILENTLY passes.
-    # That cannot happen now the equality arm no longer gates anything — it yields an
-    # informational `skip-already-current`. What distinguishes prod from dark is the positive
-    # prod project-ref pin in g3_decide, NOT the equality.
-    # The decision itself lives in g3_decide (a pure function, defined above) so it can be
-    # driven RED by a test. This case is the SINGLE call site — the Assembly contract in the
-    # plan's Guard Contract — and no G3 predicate may be evaluated inline here.
-    G3_OUTCOME="$(g3_decide "$PG" "$PG_DARK")"
-    case "$G3_OUTCOME" in
-      refuse-empty-dark)
-        echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). G1 already proved the config readable, so an empty read here is anomalous — most plausibly a token-scope or wrong-project fault. Refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host." ;;
-      refuse-txn-pooler)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)." ;;
-      refuse-not-session-pooler)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)." ;;
-      refuse-not-prod-project)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)." ;;
-      skip-already-current)
-        # NOT a refusal (#7462), and NOT a skipped write — the token is INFORMATIONAL only.
-        # The value is already in place: the expected steady state after any previous
-        # successful arm, because op=rollback has no inverse for the G4 DSN write. G4 below
-        # still writes it unconditionally (see the comment there for why branching on this
-        # outcome was removed). The arm proceeds.
-        #
-        # POST-FLUSH RE-ARM. If a FLUSHALL has already been performed for this host, the
-        # on-host monotonic latch (/mnt/data, #7228 P0-5) refuses the re-arm and drives
-        # INNGEST_CUTOVER_FLIP to terminal `aborted`. Two corrections to an earlier draft of
-        # this comment, both MEASURED rather than reasoned (#7462 review):
-        #
-        #  - This job does NOT report success. confirm_flip_state matches "flag":"aborted"
-        #    first, and G6 exits 1 on that arm. The failure is loud in the run.
-        #  - `INNGEST_CUTOVER_FLIP=flushed` is NOT reachable from `aborted`. op=resume is the
-        #    only verb that writes it and its G1 accepts `done` ONLY, so once a re-arm has
-        #    driven the flag to `aborted` there is no dispatchable path forward. The safe
-        #    post-flush resume must be dispatched BEFORE re-arming, while the flag is still
-        #    `done`. Naming an unreachable remedy is worse than naming none.
-        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value (expected after any prior arm; op=rollback has no inverse for that write). Proceeding; G4 rewrites it unconditionally. NOTE: if a FLUSHALL already ran for this host, the on-host latch refuses this arm into terminal 'aborted' and G6 below fails the job. Recovery from 'aborted' is NOT op=resume (its G1 accepts 'done' only) — dispatch op=resume BEFORE re-arming a flushed host." ;;
-      write)
-        : ;;
-      *)
-        echo "::error::op=arm: G3 — g3_decide returned an unrecognised outcome. Refusing FAIL-CLOSED (no value echoed)." ;;
-    esac
-    # SINGLE abort gate. The arms above choose only the message; this decides. Keeping the
-    # exit out of the arms is what makes "a refusal actually aborts" testable rather than
-    # a property of four separate lines nothing exercises.
-    if [[ "$(g3_action "$G3_OUTCOME")" == "abort" ]]; then exit 1; fi
-    echo "::notice::op=arm: G3 positive prod-URI assertion passed (:5432 session pooler, prod project-ref present, dark value readable — all value-silent; outcome=${G3_OUTCOME})"
-
-    # G3.5 — CHANNEL-KEY PARITY HARD GATE (#6178 durability). INNGEST_EVENT_KEY +
-    # INNGEST_SIGNING_KEY are a SHARED app<->host CHANNEL auth token, NOT an
-    # isolation-sensitive per-host secret (ADR-100 §4 Amendment). The app (soleur/prd)
-    # and the dedicated host (soleur-inngest/prd) MUST hold BYTE-IDENTICAL values or
-    # every app-originated inngest.send() to 10.0.1.40:8288 is rejected. The #6178
-    # cutover 502 was exactly this: the host-repoint minted FRESH host keys (Decision 4)
-    # but NEVER reconciled them into soleur/prd, so post-2.4 the app kept sending the
-    # STALE event key -> op=rearm returned HTTP 502. This gate makes the divergence a
-    # HARD PRE-FLIP failure instead of a silent post-cutover 502. The app value is read
-    # read-through from prd_terraform via the read-only DOPPLER_TOKEN (exactly as G2
-    # reads INNGEST_POSTGRES_URI); the host value via the arm token on soleur-inngest/prd.
-    # AC-NOBODY: every value is ::add-mask::'d and compared by sha256 ONLY — never echoed;
-    # only MATCH/MISMATCH per key reaches the log.
-    PARITY_FAIL=0
-    for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
-      APP_CK=$(doppler secrets get "$CK" --plain 2>/dev/null || true)
-      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf '::add-mask::%s\n' "$APP_CK"
-      HOST_CK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$CK" -p soleur-inngest -c prd --plain 2>/dev/null || true)
-      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf '::add-mask::%s\n' "$HOST_CK"
-      if [[ -z "$APP_CK" || -z "$HOST_CK" ]]; then
-        echo "::error::op=arm: G3.5 channel-key parity FAIL-CLOSED — $CK unreadable (app$([[ -n "$APP_CK" ]] && echo '=set' || echo '=empty') host$([[ -n "$HOST_CK" ]] && echo '=set' || echo '=empty')). Cannot prove app<->host channel parity; refusing to arm (no value echoed)."; PARITY_FAIL=1; continue
-      fi
-      APP_CK_H=$(printf '%s' "$APP_CK" | sha256sum | cut -d' ' -f1)
-      HOST_CK_H=$(printf '%s' "$HOST_CK" | sha256sum | cut -d' ' -f1)
-      if [[ "$APP_CK_H" == "$HOST_CK_H" ]]; then
-        echo "::notice::op=arm: G3.5 channel-key parity — $CK MATCH (soleur/prd == soleur-inngest/prd, sha256-verified, value-silent)"
-      else
-        echo "::error::op=arm: G3.5 channel-key parity — $CK MISMATCH: the app (soleur/prd) key differs from the dedicated host (soleur-inngest/prd) key. This is the #6178 cutover-502 condition — post-repoint every app inngest.send() to 10.0.1.40:8288 is rejected (op=rearm 502). RECONCILE the app to the host's SHARED channel key, then redeploy: the host key is TF-owned in soleur-inngest/prd (fresh, no ignore_changes); the app key in soleur/prd carries lifecycle ignore_changes=[value] (inngest.tf), so a naive 'terraform apply' does NOT propagate it. Copy the host value INTO soleur/prd out-of-band (supported by ignore_changes): read it (DOPPLER_TOKEN=\$DOPPLER_TOKEN_INNGEST_ARM doppler secrets get $CK -p soleur-inngest -c prd --plain) and pipe it on STDIN into 'doppler secrets set $CK -p soleur -c prd' (never argv/log), THEN REDEPLOY web-platform (ci-deploy regenerates env each deploy) so the app bakes the shared key. Re-run op=arm. See runbook §2.4 + ADR-100 §4 Amendment. Do NOT SSH the host."; PARITY_FAIL=1
-      fi
-    done
-    if [[ "$PARITY_FAIL" -ne 0 ]]; then
-      echo "::error::op=arm: G3.5 CHANNEL-KEY PARITY GATE FAILED — refusing to arm the flip while the app<->host channel keys diverge (the #6178 durability gate). Reconcile + redeploy per the per-key remediation above, then re-run op=arm. Do NOT SSH the host."; exit 1
-    fi
-    echo "::notice::op=arm: G3.5 channel-key parity gate PASSED — app (soleur/prd) and host (soleur-inngest/prd) share both channel keys (sha256-verified). The post-2.4 app->host channel will authenticate."
-
-    # G3.6 — DIAGNOSTIC-BOOT HARD GATE (#7462). inngest-bootstrap.sh states this precondition
-    # in prose and NOTHING enforced it: "This is NOT a cutover state: clear
-    # INNGEST_DIAGNOSTIC_BOOT before arming." Measured 2026-08-20 — op=arm contained ZERO
-    # references to it while the flag was live at "1" on soleur-inngest/prd.
-    #
-    # Why it must refuse BEFORE the writes. With the flag set, the host's ExecStart renders the
-    # diagnostic arm: `unset INNGEST_POSTGRES_URI` (SQLite-only) with --sdk-url pointed at a
-    # closed loopback port, so it adopts NO function registry. Arming in that state runs the
-    # whole FSM to `done` — quiescing the web scheduler and cutting over to a host that serves
-    # nothing. The cutover reports success and production crons simply stop. That is a strictly
-    # worse instance of the failure G3 exists to prevent: arming onto no Postgres at all.
-    #
-    # Fail-closed on an unreadable value for the same reason G3 does: the config is proven
-    # readable by G1, so an unreadable read here is anomalous, and proceeding would arm blind.
-    DIAG_BOOT=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd --plain 2>/dev/null || printf '%s' '__UNREADABLE__')
-    case "$(diag_boot_decide "$DIAG_BOOT")" in
-      clear) echo "::notice::op=arm: G3.6 diagnostic-boot gate passed (INNGEST_DIAGNOSTIC_BOOT is clear; the host will render its durable-backend ExecStart)." ;;
-      unreadable)
-        echo "::error::op=arm: G3.6 — could not read INNGEST_DIAGNOSTIC_BOOT from soleur-inngest/prd despite a G1-readable config. Refusing FAIL-CLOSED: arming while that flag is set cuts over to a host that serves no registry. Do NOT SSH the host."; exit 1 ;;
-      set)
-        echo "::error::op=arm: G3.6 REFUSING — INNGEST_DIAGNOSTIC_BOOT is set on soleur-inngest/prd. A diagnostic boot renders an SQLite-only ExecStart with --sdk-url on a closed loopback port, so the host adopts NO function registry; arming now would quiesce the web scheduler and complete the cutover onto a host that serves nothing, reporting success. Clear INNGEST_DIAGNOSTIC_BOOT on soleur-inngest/prd, then REPLACE the host (apply_target=inngest-host-replace) so it re-renders its ExecStart, then re-run op=arm. CORRECTED #7674: clearing the flag alone does NOT re-render a RUNNING host — inngest-bootstrap.sh consumes it in runcmd, at FIRST BOOT only, so a cleared flag changes nothing until the host boots again. The previous wording here told operators to wait for a re-render that cannot happen. Do NOT SSH the host."; exit 1 ;;
-      *)
-        echo "::error::op=arm: G3.6 — diag_boot_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
-    esac
-
-
-    # G3.7 — PRE-FLUSH-LATCH GATE (#7462 review). Refuses a DOOMED arm before ANY prod write.
-    #
-    # THE HAZARD IT CLOSES, precisely. Once a flip has completed, the monotonic latch on
-    # /mnt/data (inngest-cutover-flip.sh `flush_already_performed`, #7228 P0-5) refuses every
-    # subsequent re-arm and drives the flag to terminal `aborted`. That refusal is correct and is
-    # NOT what this gate second-guesses. What it fixes is everything op=arm did on the way there:
-    # G4 wrote both prod secrets and G5 wrote `armed`, and for the ~30-60s until the on-host 30s
-    # timer fired, INNGEST_CUTOVER_FLIP sat at `armed` — a value INSIDE
-    # inngest-server-flip-guard.sh's prod-start allowlist {armed,flipping,flushed,done} — while
-    # op=rollback had already re-enabled the co-located web schedulers. A reboot inside that
-    # window starts a SECOND prod scheduler: a double-fire, not data loss.
-    #
-    # THIS PR OWNS IT. Before #7462 that window was unreachable, but only incidentally: G3's
-    # equality refusal blocked the re-arm outright once the prod DSN was in the dark slot. Making
-    # op=arm idempotent removed that accidental block, so the window is PR-introduced and is
-    # closed here rather than deferred.
-    #
-    # IT ALSO IMPLEMENTS A PRECONDITION THAT WAS ONLY EVER DOCUMENTED. op=resume's header has
-    # named a "G2 the durable flush latch must EXIST" precondition since #7228 — to be answered
-    # off-host, never by SSH — and nothing enforced it. This is that predicate, read from the same
-    # side, applied at the verb that can act on it, over the same betterstack-query.sh reader
-    # _flip_transition_dt already uses: no new transport, credential or fixture class.
-    # (The literal name of the off-host read path is deliberately not spelled here: a sibling
-    # assertion greps this arm body for it to prove op=arm adds no polling hook, and a bare-token
-    # grep cannot tell a comment from code — cq-assert-anchor-not-bare-token.)
-    #
-    # PRE-FILTER, NOT THE AUTHORITY. The on-host latch remains the guard that actually prevents a
-    # second FLUSHALL; this gate can only ever ADD a refusal, never remove one. That is why the
-    # remediation below is allowed to narrow its window: doing so returns to the pre-gate
-    # behaviour, in which the on-host latch still refuses.
-    FLUSH_LATCH_N="$(_flush_latch_count)"
-    FLIP_LIVENESS_N="$(_flip_liveness_count)"
-    FL_OUTCOME="$(flush_latch_decide "$FLUSH_LATCH_N" "$FLIP_LIVENESS_N")"
-    case "$FL_OUTCOME" in
-      clear)
-        echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
-      latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch records can never be deleted, but a SECOND flush can be deliberately authorized: op=reflush (#7777) appends a cleared_at authorization record to the latch ledger — the prior flushed_at is NOT erased — and the on-host FSM then re-enters the flush path and re-engages the latch. Use op=reflush when the operator intent is 'this host may be flushed again'; use op=luks-cutover for the ADDITIVE path that preserves the store (no apply_target recuts the volume: inngest-volume-recut was retired by #8285). CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). If a recut has ALREADY happened (the volume was recreated outside this repo's dispatches), set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
-      silent)
-        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time; an earlier server with the same name does not count; the generation ::notice:: above gives the server's age, and any ::warning:: under it says whether it is young, clock-skewed or shipping malformed rows) within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND SYSLOG_IDENTIFIER=inngest-cutover-flip (the FSM's own emitter tag, #8846), so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) or that the shipper renamed or dropped the SYSLOG_IDENTIFIER field — check both before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
-      unreadable)
-        echo "::error::op=arm: G3.7 — could not read the flip-FSM markers, or could not identify the current $INNGEST_HOST server (the ::warning:: above names which read failed: Better Stack, the Hetzner generation anchor — including no server named $INNGEST_HOST, a replace in flight — or the local row filter). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix the read the ::warning:: names (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, or the Hetzner token) and re-dispatch. Do NOT SSH the host." ;;
-      *)
-        echo "::error::op=arm: G3.7 — flush_latch_decide returned an unrecognised outcome. Refusing FAIL-CLOSED." ;;
-    esac
-    # ONE gate, and it is a positive allowlist rather than a blocklist of refusals: a future
-    # outcome token then fails CLOSED by construction instead of falling through to the prod
-    # write. That fall-through is exactly how G3 became a pure logger at 381/0 green.
-    if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi
-
-    # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
-    # before the next. Order is a correctness invariant: the URIs must land before `armed`.
-    # UNCONDITIONAL, including on `skip-already-current` (#7462 review). An earlier revision
-    # branched this write on the G3 outcome and skipped it when the value was already current.
-    # That was wrong twice over. It bought nothing — writing a secret to the value it already
-    # holds is a no-op — and it introduced a branch whose INVERSION is catastrophic and which
-    # no behavioural test covered: flipping the guard's polarity skipped the write on the
-    # FIRST-arm transition, so the host booted against the DARK backend and the cutover
-    # reported success, with the whole suite green. It was also asymmetric with the
-    # INNGEST_HEARTBEAT_URL write immediately below, which has always been unconditional and
-    # is equally redundant on a re-arm.
-    #
-    # Writing unconditionally is strictly stronger: the arm ESTABLISHES the invariant rather
-    # than observing it, so a dark value that drifted into the slot between G3's read and this
-    # write is overwritten rather than trusted. Idempotence comes from G3 no longer REFUSING,
-    # never from skipping the write.
-    printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
-    echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
-    printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
-    echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
-    # #7228: op=arm deliberately does NOT touch betteruptime_heartbeat.inngest_consumer, the
-    # consumer-side monitor its symmetric op=rollback pauses. Unpausing here would arm a monitor
-    # BEFORE the FSM has run, i.e. before any beat exists — the green-but-inert state ADR-117
-    # forbids and #6537 spent nine days in. The ONLY unpause path is the measured-beat arm gate in
-    # apply-web-platform-infra.yml, which PATCHes paused=false, polls for a REAL beat, and rolls
-    # back to paused if none lands. It is self-clearing: the first apply after this host actually
-    # serves will arm it. Nothing to do here — stated because the ASYMMETRY with op=rollback is
-    # deliberate and a future edit "restoring symmetry" would reintroduce the inert monitor.
-    echo "::notice::op=arm: consumer heartbeat left PAUSED by design — the ADR-117 measured-beat gate arms it on the first apply after the host serves (never armed ahead of a real beat)."
-
-    # G5 — arm LAST. The enabled 30s on-host .timer picks up `armed` and drives the FSM
-    # armed -> flipping -> flushed -> done (ADR-100 Decision 6a). `armed` is a literal, not a
-    # secret, but use the same stdin form for a uniform (test-asserted) write shape.
-    ARM_TS=$(date +%s)
-    printf '%s' 'armed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G5 — writing INNGEST_CUTOVER_FLIP=armed FAILED (both URIs already landed). Re-dispatch op=arm — G1 will allow re-arm from a non-terminal state. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=arm: G5 armed — INNGEST_CUTOVER_FLIP=armed written LAST to soleur-inngest/prd. The on-host 30s timer now drives the flip FSM."
-
-    # G6 — confirm the on-host FSM reached `done` via Better Stack (AC9; security F1 + DI-Q4).
-    # TIME-BOUND to >= the armed-write moment (ARM_TS captured just before G5) so a stale
-    # terminal line from a prior run/dry-run on the SAME source cannot false-succeed. The
-    # shared confirm_flip_state keys on the emitter's `flag` field (done/aborted/rolled-back),
-    # NOT `reason` (which is a cause string, never `done`) — and uses the space-timestamp form
-    # betterstack-query.sh's ClickHouse cast accepts. It never echoes a raw row.
-    ARM_ISO=$(date -u -d "@$ARM_TS" +'%Y-%m-%d %H:%M:%S')
-    G6_STATE=$(confirm_flip_state "$ARM_ISO")
-    case "$G6_STATE" in
-      done)
-        echo "::notice::op=arm: G6 — FSM confirmed done (flag:done exit_code:0) via Better Stack (since $ARM_ISO)" ;;
-      aborted|rolled-back)
-        echo "::error::op=arm: G6 — the on-host FSM reached terminal '$G6_STATE' (NOT done) since $ARM_ISO. Two DIFFERENT causes land here and the remediation differs (#7462): (a) reason=refuse-rearm-after-done means the monotonic flush latch refused this arm because the host has ALREADY been flushed — nothing was flushed again and nothing is broken; do NOT re-arm, and note op=resume is only reachable while the flag is still 'done', so from terminal 'aborted' there is no dispatchable path forward. (b) reason=dbsize-nonzero / FLUSHALL-failed / unexpected-exit is a genuine flip fault — confirm DBSIZE + backend via op=inventory. Read the reason field on the inngest-cutover-flip Better Stack line before acting; do NOT proceed to 2.4 (app-repoint). Do NOT SSH the host."; exit 1 ;;
-      *)  # timeout — could be the FSM OR the confirm path (a ::warning:: fired above if the query failed)
-        echo "::error::op=arm: G6 — no terminal FSM flag (done/aborted) within 600s since $ARM_ISO (armed WAS written). If the on-host 30s timer looks healthy, re-run scripts/betterstack-query.sh manually (runbook §3) to rule out a confirm-path failure (a betterstack-query.sh ::warning:: above names that case). Do NOT proceed to 2.4. Do NOT SSH the host."; exit 1 ;;
-    esac
-    echo "::notice::op=arm complete — arm-flip written no-SSH (3 values, armed last) + FSM confirmed done. Remaining cutover steps: op=rearm (re-arm captured reminders) -> op=verify (exactly-once), plus the operator 2.4 app-repoint. NO secret value was echoed (AC-NOBODY)."
     ;;
 
   quiesce-web)
@@ -3277,7 +2657,7 @@ case "$OP" in
     # not just "transient error". Safe: delete only ever handled the secret NAME, never a
     # value, so the stderr tail carries no secret.
     if DELETE_ERR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes 2>&1 >/dev/null); then
-      echo "::notice::op=rollback: deleted INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of op=arm G4) — the dedicated heartbeat dark arm now skips its ping; one pusher per monitor restored (no value echoed)."
+      echo "::notice::op=rollback: deleted INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of the retired op=arm's G4 heartbeat write) — the dedicated heartbeat dark arm now skips its ping; one pusher per monitor restored (no value echoed)."
     else
       ERR_TAIL=$(printf '%s' "$DELETE_ERR" | tr -d '\r' | tr '\n' ' ' | tail -c 300)
       echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error: ${ERR_TAIL:-<no stderr>}). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
@@ -3482,7 +2862,7 @@ case "$OP" in
       armed|flipping|flushed)
         echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '$RS_CUR', an IN-FLIGHT state. The on-host FSM is mid-flip; writing 'flushed' now would race it. Let it reach a terminal state, then re-dispatch."; exit 1 ;;
       *)
-        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. Use op=arm for a fresh cutover — its monotonic-latch refusal is the correct answer if a flush already occurred."; exit 1 ;;
+        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. A fresh cutover needs a reviewed re-introduction of the retired op=arm verb; the on-host monotonic latch is the guard against a second flush."; exit 1 ;;
     esac
     # G2 (the latch must EXIST) stays deferred here, and its absence is NOT the #7674 hole:
     # op=arm's PERMITTING condition is an ABSENCE (L=0), which a dark host manufactures for free,
@@ -3506,7 +2886,7 @@ case "$OP" in
       audible)
         echo "::notice::op=resume: G3 — host is audible ($RS_LIVE_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
       silent)
-        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Only rows the flip FSM itself emitted count (#8846): if the shipper renamed or dropped SYSLOG_IDENTIFIER, a live host reads as silent here — the generation ::notice:: above shows rows=N with host_pair=0 in that case. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, skew_suspect > 0 means it IS shipping with a clock behind, and malformed > 0 is a schema change — in each of those, follow the ::warning:: above rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-cutover-flip, stamped and ingested after its Hetzner created time) within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. Only rows the flip FSM itself emitted count (#8846): if the shipper renamed or dropped SYSLOG_IDENTIFIER, a live host reads as silent here — the generation ::notice:: above shows rows=N with host_pair=0 in that case. Rows from an earlier server with the same name do not count (the generation ::notice:: above gives counted/pre_floor and the server's age). 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (the retired op=arm is not a dispatchable alternative). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward, then re-dispatch op=resume; a younger server has simply not shipped yet, skew_suspect > 0 means it IS shipping with a clock behind, and malformed > 0 is a schema change — in each of those, follow the ::warning:: above rather than replace it (a replace resets its created time). Do NOT SSH the host."; exit 1 ;;
       unreadable)
         echo "::error::op=resume: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
       *)
@@ -3551,201 +2931,6 @@ case "$OP" in
 
     printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
     echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
-    ;;
-
-  reflush)
-    # --- #7777: the AUTHORIZED second FLUSHALL — the append-only latch clear ------------------
-    # WHY THIS VERB EXISTS. The monotonic latch on /mnt/data correctly refuses a second
-    # FLUSHALL, and the recut gate's `redis_keys > 0` refusal told the operator to empty the
-    # store — through a FLUSHALL the latch then refused. Both were right; what was missing is a
-    # way to record a NEW authorization WITHOUT erasing the record of the old one. The latch is
-    # an append-only LEDGER: this verb writes `reflush,run=<gha-run-id>,by=<actor>` to
-    # INNGEST_CUTOVER_FLIP; the on-host FSM's `reflush` arm validates the evidence, APPENDS a
-    # `cleared_at` record (the authorization — the prior `flushed_at` is never removed), then
-    # re-enters the normal flush path, which appends a fresh `flushed_at` and re-engages the
-    # latch. A second flush is therefore deliberately authorized, never merely inconvenient.
-    #
-    # THE EVIDENCE RIDES THE FLAG VALUE, NOT A SECOND KEY. soleur-inngest/prd's boot-isolation
-    # self-check is an EXACT-SET match on the config — any new secret name FATALs every
-    # re-provision (the same constraint that kept the done-owner marker out of Doppler). The
-    # flag is the one no-SSH channel that already exists, so the authorization rides inside it.
-    #
-    # GATED, because reflush authorizes the SAME irreversible FLUSHALL as arm:
-    #  G1 the flag must be TERMINAL (done/aborted/rolled-back). A reflush over an in-flight
-    #     flip races the running FSM; a bare `reflush` parked in the flag is in-flight too.
-    #  G2 the latch must EXIST off-host (L>=1 flip-complete/refuse-rearm-after-done rows) —
-    #     the INVERSE of op=arm's G3.7. A reflush with no recorded flush is the wrong verb:
-    #     that is a FIRST flush, and its verb is op=arm.
-    #  G3 the host must be audible — `reflush` is consumed ONLY by the on-host 30s timer, so
-    #     writing it to a dark host strands the flag in a state every consumer refuses.
-    #  G4 the authorization evidence must be well-formed: run=<digits>, by=<token>, both
-    #     supplied by this dispatch's GitHub environment — the host stamps cleared_at + its own
-    #     boot_id; it can never fabricate who authorized.
-    # then ONE stdin-fed write, then a Better Stack confirm that the FSM reached `done` —
-    # identical in shape to op=arm's G6.
-    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-      echo "::error::op=reflush: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the authorized-clear write."; exit 1
-    fi
-    RF_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
-    case "$RF_CUR" in
-      __READ_FAILED__)
-        echo "::error::op=reflush: cannot read INNGEST_CUTOVER_FLIP from soleur-inngest/prd. Refusing FAIL-CLOSED — a swallowed read must not be mistaken for a terminal state. Do NOT SSH the host."; exit 1 ;;
-      done|aborted|rolled-back)
-        echo "::notice::op=reflush: G1 — flag is '$RF_CUR', a terminal state; the authorized re-flush may be dispatched." ;;
-      armed|flipping|flushed|reflush|reflush,*)
-        echo "::error::op=reflush: G1 REFUSING — INNGEST_CUTOVER_FLIP is '$RF_CUR', an IN-FLIGHT state. The on-host FSM is mid-flip; writing another reflush now would race it. Let it reach a terminal state, then re-dispatch."; exit 1 ;;
-      *)
-        echo "::error::op=reflush: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RF_CUR:-unset}', not a terminal state. op=reflush exists for ONE case: a host whose durable latch correctly refuses a second FLUSHALL that an operator has deliberately authorized. From unset, op=arm is the verb for a first cutover."; exit 1 ;;
-    esac
-    # G2 — the latch must EXIST (inverse of arm's G3.7, which requires it absent). Reuse the
-    # same off-host reader and the same decide function: `latched` is THIS verb's pass —
-    # evidence a FLUSHALL was already recorded for this host. `clear`/`silent`/`unreadable`
-    # each refuse with their own remediation.
-    RF_LATCH_N="$(_flush_latch_count)"
-    RF_LIVE_N="$(_flip_liveness_count)"
-    case "$(flush_latch_decide "$RF_LATCH_N" "$RF_LIVE_N")" in
-      latched)
-        echo "::notice::op=reflush: G2 — $RF_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE evidence a recorded flush; the durable latch stands, which is exactly the state this verb exists to supersede." ;;
-      clear)
-        echo "::error::op=reflush: G2 REFUSING — ZERO flip-complete / refuse-rearm-after-done rows within $FLUSH_LATCH_SINCE, while the host IS audible: no FLUSHALL is recorded for this host, so there is nothing to clear and nothing to re-flush. A reflush is a SECOND flush; the verb for a first one is op=arm. If a recut already wiped the evidence and you still need a flush, narrow FLUSH_LATCH_SINCE is NOT the answer here — the on-host latch remains the authority and an empty window would have authorised an UNNEEDED second verb anyway. Do NOT SSH the host."; exit 1 ;;
-      silent)
-        echo "::error::op=reflush: G2 REFUSING — the latch window is empty AND the host's liveness window is empty (ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server within $FLIP_LIVENESS_SINCE). A silent host proves nothing either way; writing 'reflush' to it strands the flag in a state every reader refuses. Do NOT SSH the host."; exit 1 ;;
-      unreadable)
-        echo "::error::op=reflush: G2 REFUSING FAIL-CLOSED — the latch READ PATH failed (the ::warning:: above names which read: Better Stack, the Hetzner generation anchor, or the local row filter). An unanswered 'has this host been flushed?' must never be read as 'yes'. Fix the read and re-dispatch. Do NOT SSH the host."; exit 1 ;;
-      *)
-        echo "::error::op=reflush: G2 — flush_latch_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
-    esac
-    # G3 — HOST-AUDIBILITY GATE (same shape as op=resume's G3; the count was already read for
-    # G2's decide, and resume_liveness_decide is the honest mapping of it for this verb).
-    case "$(resume_liveness_decide "$RF_LIVE_N")" in
-      audible)
-        echo "::notice::op=reflush: G3 — host is audible ($RF_LIVE_N inngest-cutover-flip row(s) from the current $INNGEST_HOST server within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
-      silent)
-        echo "::error::op=reflush: G3 REFUSING — ZERO inngest-cutover-flip rows from the CURRENT $INNGEST_HOST server within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED. 'reflush' is acted on ONLY by the on-host 30s timer, so writing it now authorizes nothing AND parks the flag in a state G1 of every verb refuses. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
-      unreadable)
-        echo "::error::op=reflush: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names the failed read. Fix it, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
-      *)
-        echo "::error::op=reflush: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
-    esac
-    # G4 — the authorization evidence, stamped by THIS dispatch. `run` ties the clear to the
-    # GitHub run that authorized it; `by` names the dispatching actor. The host stamps
-    # cleared_at and its own boot_id at append time. Both fields are VALIDATED here — the
-    # on-host arm refuses a malformed value anyway, and catching it before the write keeps
-    # the flag out of a state that only this verb can leave.
-    RF_RUN="${GITHUB_RUN_ID:-}"
-    RF_BY="${GITHUB_TRIGGERING_ACTOR:-${GITHUB_ACTOR:-}}"
-    if ! [[ "$RF_RUN" =~ ^[0-9]+$ ]]; then
-      echo "::error::op=reflush: G4 REFUSING — GITHUB_RUN_ID is '${RF_RUN:-unset}', not a run id. The authorization evidence is mandatory: without a run id the clear cannot name which run authorized the second FLUSHALL. This should be impossible under workflow_dispatch — file an issue with this run URL."; exit 1
-    fi
-    if ! [[ "$RF_BY" =~ ^[A-Za-z0-9._-]+$ ]]; then
-      echo "::error::op=reflush: G4 REFUSING — the dispatching actor is '${RF_BY:-unset}', not a usable token. The authorization evidence is mandatory: without an actor the clear cannot name who authorized the second FLUSHALL. This should be impossible under workflow_dispatch — file an issue with this run URL."; exit 1
-    fi
-    RF_TS=$(date +%s)
-    printf '%s' "reflush,run=$RF_RUN,by=$RF_BY" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=reflush: writing INNGEST_CUTOVER_FLIP=reflush FAILED. Re-dispatch op=reflush. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=reflush: wrote INNGEST_CUTOVER_FLIP=reflush,run=$RF_RUN,by=$RF_BY to soleur-inngest/prd. The on-host FSM's reflush arm appends a cleared_at authorization record to the append-only latch ledger — the prior flushed_at is NOT removed — then re-enters the normal stop -> FLUSHALL -> assert -> flushed -> start -> done path, which appends a fresh flushed_at and re-engages the latch."
-    # Confirm the on-host FSM reached `done` via Better Stack — same confirm shape as op=arm's
-    # G6, anchored at the write moment so a stale terminal row cannot false-succeed.
-    RF_ISO=$(date -u -d "@$RF_TS" +'%Y-%m-%d %H:%M:%S')
-    RF_STATE=$(confirm_flip_state "$RF_ISO")
-    case "$RF_STATE" in
-      done)
-        echo "::notice::op=reflush: confirm — FSM reached done (flag:done) since $RF_ISO. The latch ledger now reads cleared_at superseded by a fresh flushed_at; the re-flush latch is re-engaged." ;;
-      aborted|rolled-back)
-        echo "::error::op=reflush: confirm — the on-host FSM reached terminal '$RF_STATE' (NOT done) since $RF_ISO. Read the reason field on the inngest-cutover-flip Better Stack line: latch-unrecordable means the clear could not be durably appended; dbsize-nonzero / FLUSHALL-failed / unexpected-exit is a genuine flip fault; verify-* means the post-flush serve check failed. Do NOT proceed. Do NOT SSH the host."; exit 1 ;;
-      *)
-        echo "::error::op=reflush: confirm — no terminal FSM flag (done/aborted) within the window since $RF_ISO (the reflush WAS written and the cleared_at authorization may already be appended — it is idempotent on the same run id). If the timer looks healthy, re-run scripts/betterstack-query.sh to rule out a confirm-path failure. Do NOT SSH the host."; exit 1 ;;
-    esac
-    echo "::notice::op=reflush complete — authorized clear recorded + FSM confirmed done. The store is empty again and the latch stands against any further flush. NO secret value was echoed (AC-NOBODY)."
-    ;;
-
-  luks-cutover)
-    # --- #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
-    # volume. It is ONE Doppler write to INNGEST_LUKS_CUTOVER on soleur-inngest/prd; every byte of
-    # work happens on-host, in inngest-luks-cutover.service. (Its reverse, op=luks-rollback, was
-    # retired by #8285 PR B: the plaintext volume it would have copied back to no longer exists.)
-    #
-    # THE FLAG IS NOT THE FLIP'S. INNGEST_CUTOVER_FLIP owns the one authorized FLUSHALL; this flag
-    # owns a copy that PRESERVES data. Sharing them would put a destructive verb and a preserving
-    # one behind one value, and the wrong terminal state would authorise the wrong action.
-    #
-    # Four guards, in this order, every one fail-closed and every one BEFORE the write:
-    #   G1 the flag is not in-flight and not already `done`
-    #   G2 the durable pointer says whether this host is already cut over — required ABSENT
-    #   G3 the host is audible ON THIS UNIT'S OWN TAG, so the write can actually be acted on
-    #   G4 the write itself is stdin-fed and stdout-discarded
-    # then a Better Stack confirm that the on-host FSM reached the expected terminal flag.
-    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-      echo "::error::op=$OP: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing before any write."; exit 1
-    fi
-    LK_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain 2>/dev/null || echo "__UNSET_OR_UNREADABLE__")
-    # An absent name and a failed read are the same CLI outcome, so they are separated by the name
-    # list — the same reasoning as _luks_pointer_state. Unset is a legitimate pre-cutover state.
-    if [[ "$LK_CUR" == "__UNSET_OR_UNREADABLE__" ]]; then
-      LK_NAMES=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null || true)
-      if [[ -z "$LK_NAMES" ]]; then
-        echo "::error::op=$OP: G1 REFUSING FAIL-CLOSED — soleur-inngest/prd could not be read at all (token or network), so the current FSM state is UNKNOWN. This is NOT a statement about the host. Nothing was written."; exit 1
-      fi
-      if printf '%s' "$LK_NAMES" | jq -e 'has("INNGEST_LUKS_CUTOVER")' >/dev/null 2>&1; then
-        echo "::error::op=$OP: G1 REFUSING FAIL-CLOSED — INNGEST_LUKS_CUTOVER EXISTS but its value could not be read. A swallowed read must never be treated as unset. Nothing was written."; exit 1
-      fi
-      LK_CUR=""
-    fi
-    LK_WANT=armed;      LK_EXPECT=done
-    case "$LK_CUR" in
-      ''|aborted)
-        echo "::notice::op=luks-cutover: G1 — flag is '${LK_CUR:-unset}', a non-terminal-for-this-verb state; arming is permitted." ;;
-      rolled-back)
-        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'rolled-back', a state the on-host FSM can no longer reach (the plaintext volume it reverse-copied to was destroyed 2026-10-09, #8285). Treat the flag as a production incident and follow runbook inngest-luks-cutover-6894.md section 5a. Nothing was written."; exit 1 ;;
-      done)
-        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'done': this host has ALREADY been cut over to the encrypted volume. Re-arming would re-copy the live store over itself. There is no reverse verb: op=luks-rollback was retired by #8285 PR B along with the plaintext volume it copied back to."; exit 1 ;;
-      *)
-        echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is '$LK_CUR', an IN-FLIGHT state. The on-host FSM is mid-cutover (it re-fires every 30s and resumes from its own state); writing 'armed' now would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
-    esac
-    # G2 — the DURABLE pointer. It outlives the host (Doppler), unlike the root-disk marker whose
-    # loss on a replace is #7228, so it is the authority on "which volume holds the store".
-    LK_PTR="$(_luks_pointer_state)"
-    case "$LK_PTR:$OP" in
-      unreadable:*)
-        echo "::error::op=$OP: G2 REFUSING FAIL-CLOSED — the INNGEST_LUKS_ACTIVE_VOLUME_ID pointer could not be read. Nothing was written."; exit 1 ;;
-      present:luks-cutover)
-        echo "::error::op=luks-cutover: G2 REFUSING — the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID is SET, so this host already serves from the encrypted volume, whatever the flag says. Arming would copy the live encrypted store onto the staging volume and swap again."; exit 1 ;;
-      *)
-        echo "::notice::op=$OP: G2 — pointer is $LK_PTR, as this verb requires." ;;
-    esac
-    # G3 — HOST-AUDIBILITY, on inngest-luks-cutover rows specifically (#7674's ruling, applied to
-    # this unit). A write to a host that is not running THIS timer recovers nothing and parks the
-    # flag in a state G1 then refuses. Refusing forfeits nothing the write would have achieved.
-    LK_LIVE_N="$(_luks_liveness_count)"
-    case "$(resume_liveness_decide "$LK_LIVE_N")" in
-      audible)
-        echo "::notice::op=$OP: G3 — host is audible ($LK_LIVE_N inngest-luks-cutover row(s) from the current $INNGEST_HOST server within $LUKS_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
-      silent)
-        echo "::error::op=$OP: G3 REFUSING — ZERO inngest-luks-cutover rows from the CURRENT $INNGEST_HOST server (host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME SYSLOG_IDENTIFIER=inngest-luks-cutover, stamped and ingested after its Hetzner created time) within $LUKS_LIVENESS_SINCE, while the read path itself SUCCEEDED. Only rows the LUKS FSM itself emitted count (#8846): a shipper that renamed or dropped SYSLOG_IDENTIFIER reads as silent here too (the generation ::notice:: above then shows rows=N with host_pair=0). Rows from an earlier server with the same name do not count, and a server under 600s old may simply not have shipped yet (the generation ::notice:: above gives its age). Either the host is dark, or the cutover trio never installed — inngest-bootstrap.sh emits reason=install_missing on that path, and the unit polls every 30s once it is installed, so silence here is a real finding. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
-      unreadable)
-        echo "::error::op=$OP: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). The ::warning:: above names which read failed: the Better Stack query (verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform), the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named $INNGEST_HOST, i.e. a replace in flight), or the local row filter. Fix it, then re-dispatch. Nothing was changed."; exit 1 ;;
-      *)
-        echo "::error::op=$OP: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
-    esac
-    # G4 — the write. Captured BEFORE it so the confirm window cannot admit a terminal row from an
-    # earlier run of the same FSM. Value on STDIN, never argv (/proc is world-readable), stdout
-    # discarded (`doppler secrets set` prints every remaining secret of the config).
-    LK_TS=$(date -u +%s)
-    printf '%s' "$LK_WANT" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=$OP: writing INNGEST_LUKS_CUTOVER=$LK_WANT FAILED. Nothing on the host has changed — re-dispatch. Do NOT SSH the host."; exit 1; }
-    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify. On this host the plaintext backstop no longer exists (destroyed 2026-10-09), so a failed post-swap verification leaves the swap landed: the on-host rollback refuses with rollback-no-backstop and the flag ends aborted with the pointer set (runbook section 5a)."
-    LK_ISO=$(date -u -d "@$LK_TS" +'%Y-%m-%d %H:%M:%S')
-    LK_STATE=$(confirm_luks_state "$LK_ISO")
-    if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
-      echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on the ENCRYPTED volume, proven byte-identical before the swap."
-    else
-      case "$LK_STATE" in
-        rolled-back)
-          echo "::error::op=luks-cutover: the FSM reported rolled-back. This was written for the pre-2026-10-09 layout, where a failed post-swap verification reverse-copied to the plaintext volume; that volume no longer exists, so on this host treat the row as a production incident (the on-host rollback refuses with rollback-no-backstop) and follow runbook inngest-luks-cutover-6894.md section 5a. Read the reason field on the inngest-luks-cutover rows. Do NOT SSH the host."; exit 1 ;;
-        aborted)
-          echo "::error::op=$OP: the FSM aborted. A pre-swap refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch; an abort with the pointer SET is a post-swap failure (the swap stayed landed, the on-host rollback refuses with rollback-no-backstop): treat it as an incident, runbook section 5a. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
-        *)
-          echo "::error::op=$OP: no terminal LUKS FSM flag within 900s since $LK_ISO (the write DID land). That is not itself a statement about the store: the confirm path may have failed (a betterstack-query.sh ::warning:: above names that case). The on-host FSM holds a flock and resumes from its own state on the next 30s tick, so do NOT re-dispatch blind — read the inngest-luks-cutover rows first. Do NOT SSH the host."; exit 1 ;;
-      esac
-    fi
     ;;
 
   *)

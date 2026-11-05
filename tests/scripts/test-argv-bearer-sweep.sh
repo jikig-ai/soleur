@@ -2522,24 +2522,18 @@ HB_MUTANTS
 if [[ -z "$hb_bad" ]]; then row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" ok
 else row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" fail "$hb_bad"; fi
 # =====================================================================================
-# #9757 review leads (a), (b) and (g) of scripts/cutover-inngest.sh, each driven through a recording curl / doppler and the script's own text:
+# #9757 review leads (a) and (g) of scripts/cutover-inngest.sh (lead (b), the five op=arm mask sites, was retired with op=arm by #9927), each driven through a recording curl / doppler and the script's own text:
 #   (a1) _inngest_server_created_epoch judges its token with _bearer_ok BEFORE it masks it or feeds it to `-H @-`: a refusal takes the empty-token arm's verdict
 #        class (one ::warning::, `__UNREADABLE__`, rc 0), prints the marker on stderr, and makes zero requests;
 #   (a2) the op=verify zero-run discovery call judges $SIG and both Cloudflare Access values before its own `--config -`;
-#   (b)  the six `::add-mask::` sites of op=arm / _inngest_server_created_epoch shape-check first (no control character: a newline would end the directive and
-#        start a forged one) and mask second, and keep `-n` (an empty read never prints a bare directive);
 #   (g)  the four response-body echoes print a bounded (160), scrubbed (printable ASCII) FIRST line, mid-line in the arm's own ::error:: text, never the raw body.
 # The text under test is EXTRACTED from the real script; mutants doctor exactly one clause (text_mut refuses a replacement that changes more than one line).
 # =====================================================================================
-LD_REAL="$TMPD/ldreal"; LD_BIN="$TMPD/ldbin"
-for d in "$LD_REAL" "$LD_BIN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+LD_REAL="$TMPD/ldreal"
+for d in "$LD_REAL"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
 for t in bash cat grep sed tr awk head cut sha256sum jq mktemp rm mkdir env wc sort true false printf; do
   p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$LD_REAL/$t"
 done
-# doppler stub for the op=arm reads: `doppler secrets get NAME ...` prints $BK_A_NAME (the read-through app config) or $BK_H_NAME when the call names
-# the soleur-inngest project (the host config); an unset variable prints an empty line, like an empty secret.
-printf '#!%s\nname="$3"; scope=A\nfor a in "$@"; do [[ "$a" == soleur-inngest ]] && scope=H; done\nv="BK_${scope}_${name}"\nprintf "%%s\\n" "${!v:-}"\n' "$BASH_BIN" > "$LD_BIN/doppler"
-chmod +x "$LD_BIN/doppler"
 LD_MARK='SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape'
 LD_RC=0; LD_BAD=""
 ld_caught() { # <bad clauses string> <must-name clause> -> rc 0 when the mutant was caught AND the named clause is among the failures
@@ -2680,102 +2674,6 @@ DC_MUTANTS
 [[ "$ld_n" == 5 ]] || ld_bad+=" [ran $ld_n of 5 mutants]"
 if [[ -z "$ld_bad" ]]; then row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" ok
 else row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" fail "$ld_bad"; fi
-
-# ---- (b) the five op=arm `::add-mask::` sites -------------------------------------------------------------------
-# G2 (PG, HB) and the G3 dark read (PG_DARK) as one extracted chunk, and the G3.5 channel-key loop (APP_CK, HOST_CK) as another. Every value is a synthesized
-# stand-in; the control values carry `:`, `@`, `?` and `&` (a DSN and a URL), which a bearer-shape check would have refused and left UNMASKED.
-ar_g2="$(awk '/^    PG=\$\(doppler secrets get INNGEST_POSTGRES_URI/{f=1} f{print} f&&/^    \[\[ -n "\$PG_DARK" \]\]/{exit}' "$CUT")"
-ar_g35="$(awk '/^    PARITY_FAIL=0$/{f=1} f{print} f&&/^    echo "::notice::op=arm: G3.5 channel-key parity gate PASSED/{exit}' "$CUT")"
-[[ "$ar_g2" == *'_mask_ok "$PG"'* && "$ar_g2" == *'_mask_ok "$HB"'* && "$ar_g2" == *'_mask_ok "$PG_DARK"'* && "$ar_g35" == *'_mask_ok "$APP_CK"'* && "$ar_g35" == *'_mask_ok "$HOST_CK"'* ]] || fatal "lead (b): the op=arm mask sites were not extracted from $CUT"
-ar_run() { # <row> <chunk text> <NAME=value>...: the chunk under the script's own _mask_ok, DOPPLER_TOKEN_INNGEST_ARM set, doppler stubbed by NAME and scope
-  local row="$ROWS/$1" txt="$2"; shift 2
-  assert_fixture_dir "$row"; mkdir -p "$row/shim"
-  { printf 'set -euo pipefail\nDOPPLER_TOKEN_INNGEST_ARM=armtoken\n'; grep -m1 '^_mask_ok() {' "$CUT"; printf '%s\n' "$txt"; printf 'echo DRV-AFTER\n'; } > "$row/drv.sh"
-  ( cd "$row" && env -i PATH="$LD_BIN:$LD_REAL" "$@" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/stdout" 2> "$row/stderr" )
-  LD_RC=$?
-}
-AR_SCHEME=postgresql; AR_PW1=synth-pass; AR_DSN="${AR_SCHEME}://synth_user:${AR_PW1}@aws-0.pooler.example.test:5432/postgres?sslmode=require&x=1"
-AR_URL='https://uptime.example.test/api/v1/heartbeat/synthetic-heartbeat-path'
-AR_PW2=dark-pass; AR_DARK="${AR_SCHEME}://dark_user:${AR_PW2}@dark.example.test:5432/postgres"
-AR_KEY="evt-synthetic-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-AR_FORGED="SYNTHMARK0001"$'\n'"::error::forged-by-the-value"
-# ar_env <chunk g2|g35> <mode>: sets AR_ENV (the NAME=value assignments the doppler stub serves) and AR_WANT_MASKS (the values that must be masked, in read order).
-#   modes: ok | hostile-<which> (that ONE read is AR_FORGED: a value holding a newline and a forged ::error:: line) | empty (g2: the DSN; g35: every key)
-ar_env() {
-  local pg="$AR_DSN" hb="$AR_URL" dk="$AR_DARK" ea="$AR_KEY" sa="$AR_KEY" eh="$AR_KEY" sh="$AR_KEY"
-  case "$1:$2" in
-    g2:hostile-pg) pg="$AR_FORGED" ;; g2:hostile-hb) hb="$AR_FORGED" ;; g2:hostile-dark) dk="$AR_FORGED" ;; g2:empty) pg="" ;;
-    g35:hostile-app) ea="$AR_FORGED" ;; g35:hostile-host) eh="$AR_FORGED" ;; g35:empty) ea=""; sa=""; eh=""; sh="" ;;
-  esac
-  AR_ENV=(BK_A_INNGEST_POSTGRES_URI="$pg" BK_A_INNGEST_HEARTBEAT_URL="$hb" BK_H_INNGEST_POSTGRES_URI="$dk"
-          BK_A_INNGEST_EVENT_KEY="$ea" BK_A_INNGEST_SIGNING_KEY="$sa" BK_H_INNGEST_EVENT_KEY="$eh" BK_H_INNGEST_SIGNING_KEY="$sh")
-  AR_WANT_MASKS=()
-  if [[ "$1" == g2 ]]; then
-    [[ "$pg" == "$AR_FORGED" || -z "$pg" ]] || AR_WANT_MASKS+=("$pg"); [[ "$hb" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$hb"); [[ "$dk" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$dk")
-    [[ "$2" == empty ]] && AR_WANT_MASKS=("$hb")
-  else
-    [[ "$ea" == "$AR_FORGED" || -z "$ea" ]] || AR_WANT_MASKS+=("$ea"); [[ "$eh" == "$AR_FORGED" || -z "$eh" ]] || AR_WANT_MASKS+=("$eh")
-    AR_WANT_MASKS+=("$sa" "$sh"); [[ "$2" == empty ]] && AR_WANT_MASKS=()
-  fi
-}
-ar_check() { # <row> <chunk> <mode> -> LD_BAD: the mask lines are EXACTLY the wanted values, one line each, in read order; a hostile value is printed nowhere
-  local o="$ROWS/$1/stdout" chunk="$2" mode="$3" want="" v; LD_BAD=""
-  for v in ${AR_WANT_MASKS[@]+"${AR_WANT_MASKS[@]}"}; do want+="::add-mask::$v"$'\n'; done
-  [[ "$(grep '^::add-mask::' "$o" || true)"$'\n' == "$want" || ( -z "$want" && -z "$(grep '^::add-mask::' "$o" || true)" ) ]] || LD_BAD+=" mask-lines"
-  [[ "$(grep -c '^::add-mask::$' "$o" || true)" == 0 ]] || LD_BAD+=" bare-directive"
-  case "$mode" in
-    ok) [[ "$LD_RC" -eq 0 && "$(bk_count "$o" DRV-AFTER)" == 1 ]] || LD_BAD+=" rc=$LD_RC" ;;
-    hostile-*)
-      [[ "$(grep -c '^::error::forged-by-the-value' "$o" || true)" == 0 ]] || LD_BAD+=" forged-directive"
-      [[ "$(bk_count "$o" SYNTHMARK0001)" == 0 ]] || LD_BAD+=" value-in-output" ;;
-    empty) [[ "$LD_RC" -eq 1 && "$(bk_count "$o" DRV-AFTER)" == 0 ]] || LD_BAD+=" rc=$LD_RC"
-      [[ "$chunk" != g2 || "$(bk_count "$o" '::error::op=arm: a source value')" == 1 ]] || LD_BAD+=" existing-refusal" ;;
-  esac
-}
-ar_drive() { # <row> <chunk g2|g35> <mode> [chunk text override]
-  local txt="$ar_g2"; [[ "$2" == g35 ]] && txt="$ar_g35"; [[ -n "${4:-}" ]] && txt="$4"
-  ar_env "$2" "$3"; ar_run "$1" "$txt" "${AR_ENV[@]}"; ar_check "$1" "$2" "$3"
-}
-ar_drive ar-g2-ok g2 ok
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" ok
-else row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" fail "$LD_BAD"; fi
-ld_bad=""
-for ld_m in hostile-pg hostile-hb hostile-dark; do ar_drive "ar-g2-$ld_m" g2 "$ld_m"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
-if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" ok
-else row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" fail "$ld_bad"; fi
-ar_drive ar-g2-empty g2 empty
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" ok
-else row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" fail "$LD_BAD"; fi
-ar_drive ar-g35-ok g35 ok
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" ok
-else row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" fail "$LD_BAD"; fi
-ld_bad=""
-for ld_m in hostile-app hostile-host; do ar_drive "ar-g35-$ld_m" g35 "$ld_m"; [[ "$LD_RC" -eq 1 ]] || LD_BAD+=" rc=$LD_RC"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
-if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" ok
-else row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" fail "$ld_bad"; fi
-ar_drive ar-g35-empty g35 empty
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" ok
-else row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" fail "$LD_BAD"; fi
-ld_bad=""; ld_n=0
-while IFS='|' read -r ld_name ld_chunk ld_mode ld_from ld_to ld_must; do
-  [[ -n "$ld_name" ]] || continue
-  if [[ "$ld_chunk" == g2 ]]; then ld_txt="$ar_g2"; else ld_txt="$ar_g35"; fi
-  text_mut "$ld_txt" "$ld_from" "$ld_to"
-  ar_drive "ar-mut-$ld_name" "$ld_chunk" "$ld_mode" "$TM_OUT"
-  ld_n=$((ld_n + 1)); ld_caught "$LD_BAD" "$ld_must" || ld_bad+=" [$ld_name: got '${LD_BAD:-<none>}' wanted a failure naming '$ld_must']"
-done <<'AR_MUTANTS'
-pg-unchecked|g2|hostile-pg|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && printf|forged-directive
-hb-unchecked|g2|hostile-hb|    [[ -n "$HB" ]] && _mask_ok "$HB" && printf|    [[ -n "$HB" ]] && printf|forged-directive
-pgdark-unchecked|g2|hostile-dark|    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf|    [[ -n "$PG_DARK" ]] && printf|forged-directive
-pg-bare-on-empty|g2|empty|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    printf|bare-directive
-pg-bearer-shaped|g2|ok|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && _bearer_ok "$PG" && printf|mask-lines
-app-unchecked|g35|hostile-app|      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf|      [[ -n "$APP_CK" ]] && printf|forged-directive
-host-unchecked|g35|hostile-host|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      [[ -n "$HOST_CK" ]] && printf|forged-directive
-host-bare-on-empty|g35|empty|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      printf|bare-directive
-AR_MUTANTS
-[[ "$ld_n" == 8 ]] || ld_bad+=" [ran $ld_n of 8 mutants]"
-if [[ -z "$ld_bad" ]]; then row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" ok
-else row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" fail "$ld_bad"; fi
 
 # ---- (g) the four response-body echoes ------------------------------------------------------------------------
 # Each statement is taken verbatim from the script and run with a BODY whose first line is hostile (an ESC sequence, a CR, a forged `::error::` start, 300
@@ -8341,7 +8239,9 @@ SELFTEST_PASSES=0
 # (+1, main 825): net floor stays 824.
 # 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
 # 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
-EXPECTED_TESTS=837
+# 837 -> 831 at #9927 item 8 (this PR): lead (b), the op=arm mask battery (the G2/G3 control, hostile and empty drives, the G3.5 control, hostile and empty drives, and the
+#   mutants row: seven rows), left with op=arm; the tree measured 838 rows before (floor 837, one row of slack) and 831 after (831 passed, 0 failed), so the floor is now the exact measured count.
+EXPECTED_TESTS=831
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

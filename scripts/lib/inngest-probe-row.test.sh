@@ -457,17 +457,19 @@ while IFS= read -r line; do
     bad_calls+="$line"$'\n'
   fi
 done <<<"$CALLS"
-if [[ "$n_calls" -ge 2 && -z "$bad_calls" ]]; then
+if [[ "$n_calls" -ge 1 && -z "$bad_calls" ]]; then
   pass "every _generation_scoped_count call ($n_calls) passes a literal FSM emitter tag"
 else
   fail "_generation_scoped_count calls without a literal FSM tag (n=$n_calls):"$'\n'"$bad_calls"
 fi
 flip_ok="$(grep -cE "_generation_scoped_count .*\"${FLIP_TAG}\"" <<<"$CALLS" || true)"
 luks_ok="$(grep -cE "_generation_scoped_count .*\"${LUKS_TAG}\"" <<<"$CALLS" || true)"
-if [[ "$flip_ok" -ge 1 && "$luks_ok" -ge 1 ]]; then
-  pass "both FSM tags are passed by some caller (flip=$flip_ok luks=$luks_ok)"
+# The luks caller (op=luks-cutover) was retired by #9927 item 8, so only the flip tag must still be passed;
+# luks_ok is reported, not required (the literal stays accepted above for any re-introduction).
+if [[ "$flip_ok" -ge 1 ]]; then
+  pass "the flip FSM tag is passed by some caller (flip=$flip_ok luks=$luks_ok)"
 else
-  fail "an FSM tag is never passed (flip=$flip_ok luks=$luks_ok) — a counter reads the other FSM's rows"
+  fail "the flip FSM tag is never passed (flip=$flip_ok luks=$luks_ok) — a counter reads the other FSM's rows"
 fi
 inner="$(grep -vE '^[[:space:]]*#' "$CUT" | grep -cE '_current_instance_row_counts[[:space:]]+"\$floor"[[:space:]]+"\$tag"' || true)"
 if [[ "$inner" -eq 1 ]]; then

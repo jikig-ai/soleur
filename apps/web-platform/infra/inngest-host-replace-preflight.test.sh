@@ -143,6 +143,7 @@ meta_get() { sed -n "s/^$2=//p" "$1/meta" | head -1; }
 LAST_OUT=""; LAST_SUMMARY=""; LAST_LOG=""; RUN_RC=""
 run_step() {
   local od="$1" pth="$2" tok="$3" names="$4" get="$5" val="$6" sopts="${7:-}"
+  assert_fixture_dir "$od"; assert_fixture_dir "$SANDBOX"
   LAST_OUT="$od/out.$ROWS_RUN"; LAST_SUMMARY="$od/summary.$ROWS_RUN"; LAST_LOG="$od/stub.$ROWS_RUN"
   : > "$LAST_SUMMARY"; : > "$LAST_LOG"
   ROWS_RUN=$((ROWS_RUN + 1)); printf x >> "$SANDBOX/rows.count"

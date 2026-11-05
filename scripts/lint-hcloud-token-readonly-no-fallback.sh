@@ -56,8 +56,8 @@
 #    `secrets --json`, `substitute`, `secrets download`, `run -- printenv`, the Doppler REST API,
 #    Terraform `data "doppler_secrets"`, and the loader-delivered `$HCLOUD_TOKEN` env
 #    (`<<<"${HCLOUD_TOKEN:-}"` in .github/workflows/git-data-cutover.yml; git-data-wipe.sh `rw)`
-#    reads a stdin line; `HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"` at scripts/cutover-inngest.sh:1902,
-#    the #9755 op=backup arm reading the loader export).
+#    reads a stdin line; `HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"` in the `backup)` arm of scripts/cutover-inngest.sh
+#    (anchored on that text, not a line number), the #9755 op=backup arm reading the loader export).
 #  - Excluded classes production can execute: *.md (agents and runbooks copy-paste; 1 live bare read
 #    remains in knowledge-base runbooks: the infra-credential-tiers-8209.md O2 row — the #9755 review
 #    rewrote the other three to HCLOUD_TOKEN_READONLY), test-class files CI runs (`test-*`, `*.test.*`, a test dir
