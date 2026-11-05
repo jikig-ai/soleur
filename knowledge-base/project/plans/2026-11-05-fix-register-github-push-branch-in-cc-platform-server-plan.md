@@ -18,6 +18,24 @@ closes: []
 
 Ref #11636. Ref #11635. Epic Ref #9601 (agent security hardening). The PR closes nothing: `closingIssuesReferences` must be `[]`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Passes run:** plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow; named-panel CPO and CLO advisories; CTO rulings on 10 forks), sharp-edges verification pass (15 findings, all applied), deepen halts 4.6, 4.7, 4.8, 4.11, 4.12 (all pass; 4.9, 4.10, 4.13 not triggered: no UI file, no store or migration, no new autonomous task), `soleur:gdpr-gate` (no findings), verify-the-negative and post-edit self-audit sweeps, institutional-learnings search.
+
+### Key improvements
+
+1. Strict cc handler (`requireGrant`) so an allow that bypasses the gate cannot push; legacy runner byte-identical.
+2. Fail-closed default-branch lookup, bounded flag read, distinct reasons, and a Sentry-visible outcome event (the log shipper drops info, so pino alone would have been dark).
+3. Test plan corrected against the real code: literal expectations instead of a self-referential baseline, the mocks the cc-dispatcher suite needs, mutant-anchor protection for `approval-guard1-mutation.test.sh`, and isolation tests (sandbox hook matcher, cross-Query grants, cross-conversation consume).
+4. Hard flip precondition recorded for the pre-existing `.git` hook and config exposure on the approved push (ADR flip-checklist item 9), plus the registration-policy statement for entitlement and repo.
+
+### New considerations discovered
+
+- The sandbox env drops the git token variables under open web egress, so the "no credential in the sandbox" claim is about what this tool adds, not about every path.
+- The gate approves before the handler's protected-branch check, so a push to a protected branch consumes an approval and is then refused (pre-existing, recorded, not folded).
+- The CTO asked for a tracking issue for the hook exposure; the brief forbids filing issues in this run, so the row in `decision-challenges.md` carries it for `soleur:ship` to file.
+
 ## Overview
 
 Concierge sessions that hold the workspace web-egress grant run in the cc dispatcher
@@ -74,7 +92,7 @@ Addendum names this exact PR as the one that must settle the pending-approval qu
 
 1. P1. A cc session can push a feature branch only after the workspace Owner approved that exact action.
 2. P2. The commit pushed is the commit the Owner saw (grant carries `headSha`; `pushBranch` takes `commitSha`).
-3. P3. No GitHub credential enters the sandbox (push runs in the dispatch process through `gitWithInstallationAuth`).
+3. P3. The push tool adds no credential to the sandbox: the push runs in the dispatch process through `gitWithInstallationAuth`, whose askpass script is token-free and whose token lives only in the child process environment. (The existing in-sandbox `GIT_INSTALLATION_TOKEN`/askpass path for non-entitled sessions is separate and unchanged; under open web egress the sandbox env drops those variables, which is exactly why entitled sessions need this tool.)
 4. P4. With the flag off, unreadable, or any other precondition false, the cc tool set is byte-identical to today.
 5. P5. The tool is never registered without the gate dependency and the same grants object.
 6. P6. The handler refuses without a gate-written grant, even if the gate never ran.
@@ -240,7 +258,7 @@ precondition (ADR item 6 above).
 ### Legal (CLO)
 
 **Status:** reviewed
-**Assessment:** No new personal-data field, store or subprocessor; no new processing activity (a commit pushed to the
+**Assessment:** `soleur:gdpr-gate` was run against this plan at deepen time (trigger: brand-survival threshold `single-user incident`): no Critical or Important finding (no schema, FK, vendor or special-category change). No new personal-data field, store or subprocessor; no new processing activity (a commit pushed to the
 user's own repo). The toggle copy becomes inaccurate at flag-on: do not edit in this PR (operator hold), record as a
 flip precondition. Compliance-posture addendum and PA-38 wording check are flip preconditions, not changes now.
 
@@ -371,7 +389,7 @@ outcomes `refuse`, `legacy`, `granted`; the commit checks (`headSha` absent, `Ap
 | 5 | Legacy builder passes `requireGrant: true` | legacy-parity test (enforcing false, no grant => HEAD push as before) |
 
 **Harness rows.** Edit to the suite: delete the strict-path assertion, the mutation battery row 1 must then survive
-(proves the row is load-bearing, so add a mutant row to `approval-guard1-mutation.test.sh` and run it with `--only`).
+(proves the row is load-bearing, so add mutant rows to `approval-guard1-mutation.test.sh` (three, listed in 2.4) and run them with `--only`).
 Must-PASS: a granted call with a valid 40-hex commit pushes exactly `<sha>:refs/heads/<branch>`.
 
 **Anchor.** Grants are written only by the gate (`putGrant` after consume); the handler cannot mint one, and the model
@@ -403,6 +421,7 @@ no owner/repo; no installation; default-branch lookup throws; lookup times out; 
 Asserts the machine `reason`, that the lookup is NOT called when an earlier precondition is false (no extra round trip
 on the dark path), that `flagEnabled` is read with the same `{userId, workspaceId}` identity as the gate, and that the
 returned tool's `toolNames` is exactly `["mcp__soleur_platform__github_push_branch"]`.
+One case runs the registrar with NO `isEnabled` override and `getRuntimeFlag` mocked true / false / throwing, so the production default path is exercised and not only the injected seam (learning 2026-07-17, test-only override seam).
 1.2 `test/github-tools-push-grant.test.ts` (edit): add `buildGithubPushBranchTool` cases: `requireGrant: true`,
 `enforcing: false`, no grant => refused, `pushBranch` not called, `approval-grant-refused` reported (reason
 `grant_missing`); granted with a valid commit => `pushBranch` called with `commitSha` and the closed-over
@@ -499,7 +518,7 @@ registers the push tool, still dark), then the three C4 checks named above.
 
 ### Phase 4 - Verify and probe
 
-4.1 Re-run all Phase 0/1 files green; `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and the repo lint scripts that CI runs for
+4.1 Re-run all Phase 0/1 files green, plus every test that exercises the factory (`git grep -l "realSdkQueryFactory" -- apps/web-platform/test`; a new cold-start import broke a sibling suite that targeted runs missed, learning 2026-06-03), and sweep by claim subject for statements the registration falsifies (`git grep -n "cc-dispatcher\|no approval wiring\|registers no" -- apps/web-platform/test apps/web-platform/server`; learning 2026-11-05 on census blind spots such as `deps: ccDeps`); `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` and the repo lint scripts that CI runs for
 `apps/web-platform` (use `package.json` scripts; do not invent flags).
 4.2 Real-SDK approval-gate probe (ADR-309 §"Adding a gated tool" item 6): `NODE_ENV=test doppler run -p soleur -c ci --
 bun run apps/web-platform/scripts/dev-probe-approval-gate.ts` (ci config only, never prd; reads no GitHub, Supabase or
@@ -581,7 +600,7 @@ stays deferred regardless).
 | Fail-closed default-branch lookup | "closes over owner, repo, installation id, workspace path and default branch" | asked (default branch is named; failure behaviour ruled Fork 1) |
 | C4 edge description extension | "Add a dated ADR-309 addendum" | inferred - justification: an architecture decision's C4 edge must not lag it (plan Phase 2.10); one sentence, no new element |
 | Flip-checklist item 8 + archived handover mirror | "do NOT change toggle copy, privacy copy or legal text" | inferred - justification: the CPO/CLO advisories make the copy drift a flip precondition; recording it in the ADR is the only compliant way to carry it without changing the copy or filing an issue |
-| Two mutation-battery rows | "Handler refuses when grants absent or commit mismatched" | inferred - justification: the existing Guard 1 battery pins the push handler's mutants; the new strict branch must be pinned the same way |
+| Three mutation-battery rows | "Handler refuses when grants absent or commit mismatched" | inferred - justification: the existing Guard 1 battery pins the push handler's mutants; the new strict branch must be pinned the same way |
 | Builder-grants test pairing change | "update the census and sweep tests" | asked (row 8; forced by the second builder) |
 
 ### Split Assessment
@@ -603,7 +622,7 @@ stays deferred regardless).
 - [ ] AC5 Deny path and user-visible text: pending, rejected, expired, unavailable and aborted verdicts return the static texts, contain no tool input, and the durable surfaces (frame, row, notify) are exercised; the addendum test pins the no-success-claim wording (tests 1.3, 1.8).
 - [ ] AC6 Workspace capture: gate `workspaceId`, `repoSlug`, `workspacePath` equal the tool closure's values; a mid-Query workspace switch does not split them; `activeWorkspaceId` is never reassigned (tests 1.6, 1.8).
 - [ ] AC7 Allow-source pin green with canary and floor (test 1.4); ADR addendum states what it does not see.
-- [ ] AC8 `builder-grants-required` and `approval-guard1-mutation.test.sh --check-anchors` green; two new mutant rows landed and killed.
+- [ ] AC8 `builder-grants-required` and `approval-guard1-mutation.test.sh --check-anchors` green; three new mutant rows landed and killed (strict branch removed, strict report removed, `requireGrant` made optional).
 - [ ] AC9 ADR-309 addendum dated 2026-11-05 with workspace capture marked **verified** with the evidence, probe result line, #11534 trigger statement, and flip-checklist item 8 (also in the archived handover copy); `bash scripts/markdown-lint.sh --repo-sweep` clean; C4 checks green after the one edge-description edit.
 - [ ] AC10 Real-SDK approval-gate probe re-run and its `RESULT:` line recorded (a CANT-RUN is recorded as CANT-RUN).
 - [ ] AC11 No file outside the lists above, the plan file and the files under `knowledge-base/project/specs/feat-one-shot-11636-cc-github-push-branch/`; no flag, environment, migration, toggle or legal text change; `closingIssuesReferences` is `[]`; the guarded grep from Phase 4.4 prints nothing.
