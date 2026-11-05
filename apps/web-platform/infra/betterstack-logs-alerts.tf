@@ -1408,8 +1408,12 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
 # green. The count is DISTINCT host_name over the whole window (ADR-218's
 # amendment): a source-multiplexed aggregate where one host's rows keep the
 # sum above threshold while the other host is dark is exactly the failure this
-# alert exists for, so it pages when the emitting-host count drops below the
-# fleet roster (length(var.web_hosts)).
+# alert exists for. Since 2026-11-05 (#12180) the alert reports the number of
+# roster hosts that did NOT emit (length(var.web_hosts) minus the distinct
+# emitting hosts, floored at 0) and pages on higher_than 0, so an evaluator
+# step that reads 0 reads healthy instead of paging (INFERRED mechanism, see
+# the alert block); a throwaway canary alert runs the same query against an
+# identifier no host emits and must fire.
 #
 # egress_gw_probe_fail is the verdict detector: result=fail rows (allow leg
 # refused, deny leg bypassed) are security-relevant on first sight, and
@@ -1437,12 +1441,19 @@ locals {
   SQL
 
   # Whole-window scalar (ADR-218's host-mask amendment): one value per window =
-  # how many DISTINCT hosts shipped a probe row in it. count(*) would let one
-  # healthy host's ~3 beats keep a 2-host fleet above a row threshold while the
-  # other host ships nothing. `host_name` is Vector's injected per-host field
-  # (`soleur-web-platform` / `soleur-web-2`).
+  # how many roster hosts did NOT ship a probe row in it (0 healthy, 1 one dark
+  # host, length(var.web_hosts) fully dark). An aggregate without GROUP BY always
+  # returns one row, so a fully dark window yields the roster size, not "no data".
+  # count(*) would let one healthy host's ~3 beats keep a 2-host fleet above a
+  # row threshold while the other host ships nothing. toInt64 on both operands:
+  # ClickHouse count() is unsigned and an unsigned subtraction wraps when more
+  # hosts emit than the roster names; greatest(..., 0) floors that surplus.
+  # `host_name` is Vector's injected per-host field (`soleur-web-platform` /
+  # `soleur-web-2`). Accepted residual: this compares a distinct-host COUNT to
+  # the roster size, not set identity, so an extra or renamed emitter could mask
+  # a dead host.
   egress_gw_probe_silent_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(DISTINCT JSONExtractString(raw, 'host_name')) AS value
+    SELECT toDateTime({{end_time}}) AS time, greatest(toInt64(${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, 'host_name'))), 0) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
@@ -1462,6 +1473,11 @@ locals {
       AND (position(JSONExtractString(raw, 'message'), 'result=fail') > 0
         OR position(JSONExtractString(raw, 'message'), 'reason=gw_absent') > 0)
   SQL
+
+  # THROWAWAY positive control (#12180): the production query against an identifier no
+  # host emits, so it reads length(var.web_hosts) and must fire. Derived, never copied:
+  # the guard pins this line whole and the replace() target occurring once in the source.
+  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, "'egress-gw-probe'", "'egress-gw-probe-canary-absent'")
 
   egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
 }
@@ -1547,13 +1563,22 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   exploration_id = logtail_exploration.egress_gw_probe_silent.id
   name           = "soleur-egress-gw-probe-silent-prd"
 
-  # Fewer emitting HOSTS than the fleet roster in 15 min (each host's probe
-  # emits every 5 min when due). count(DISTINCT host_name) — a multiplexed row
-  # count would let web-1's beats mask a dead web-2 probe pipeline (the
-  # pre-amendment defect). treat_as_zero makes a fully-dark window read as 0.
+  # At least one roster HOST missing in 15 min (each host's probe emits every 5
+  # min when due). The value is the missing-host count, not the emitting count:
+  # a lower_than alert over treat_as_zero paged on a healthy fleet (incident
+  # 1047829421, #12180; the older 1031046761 stayed open 24 days with data
+  # present), and the INFERRED mechanism is that an evaluator step it cannot
+  # evaluate is read as 0 and compared against the threshold. Under higher_than
+  # 0 that zero reads healthy. The query is proven (healthy 0, one host 1,
+  # unknown identifier 2); the evaluator is not, which is what the canary below
+  # is for. A green alert is not evidence of health until the canary has fired.
+  # Residual: an evaluator error or timeout also reads 0 under treat_as_zero, so
+  # that failure is quiet here (the sibling detectors cover host death; #12190
+  # tracks the heartbeat-poller mitigation). treat_as_zero stays so a fully-dark
+  # window still evaluates (the aggregate returns the roster size).
   alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = length(var.web_hosts)
+  operator            = "higher_than"
+  value               = 0
   check_period        = 300
   query_period        = 900
   confirmation_period = 0
@@ -1568,7 +1593,69 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "Fewer than the expected ${length(var.web_hosts)} web hosts emitted an egress_gw_probe heartbeat in 15+ min — a resolver timer, Vector pipeline (stale Source-4 allowlist on one host is a measured failure mode), or host journal is dead. The gateway's allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "Current value is the number of the expected ${length(var.web_hosts)} web hosts that did NOT emit an egress_gw_probe heartbeat in 15+ min (1 = one host dark, ${length(var.web_hosts)} = all dark) — a resolver timer, Vector pipeline (stale Source-4 allowlist on one host is a measured failure mode), or host journal is dead. The gateway's allow/deny verification is dark on the silent host(s). If both hosts show rows in the window, suspect the evaluator, not the fleet. Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# THROWAWAY CANARY (#12180). Same shape and windows as egress_gw_probe_silent, run
+# against an identifier no host emits, so it reads length(var.web_hosts) and must
+# fire. Its incident never recovers (the query is constant): that, its mirrored P1
+# issue and the email are expected and last until the follow-up PR deletes the two
+# resources (RETIREMENT line in scripts/followthroughs/egress-gw-probe-silent-12180.sh).
+# If it NEVER fires, the evaluator is blind for this query shape and the production
+# alert cannot be trusted; leave it armed and build the heartbeat poller (#12190).
+# The canary shares the production query shape, so it proves non-zero delivery on an
+# empty count, not general evaluator health.
+resource "logtail_exploration" "egress_gw_probe_silent_canary" {
+  name      = "soleur-egress-gw-probe-silent-canary-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_probe_silent_canary_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
+  exploration_id = logtail_exploration.egress_gw_probe_silent_canary.id
+  name           = "soleur-egress-gw-probe-silent-canary-prd"
+
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "THROWAWAY CANARY (#12180): expected to fire and NOT an outage. It runs the egress_gw_probe_silent query against an identifier no host emits, so the value is the roster size. Fires = the evaluator delivers a non-zero value for this query shape (good). Never firing = the evaluator is blind for this shape; keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }
