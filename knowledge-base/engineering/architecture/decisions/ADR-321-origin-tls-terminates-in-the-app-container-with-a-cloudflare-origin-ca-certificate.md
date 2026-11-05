@@ -106,6 +106,13 @@ here and this change must not touch it.
   restart, which is acceptable because under `strict` users would already be getting 525/526 and the canary rolls the
   deploy back.
 - Rotation is a re-mint plus a container restart, never an apply side effect.
+- **Per-host proof before PR-2.** The edge probe reaches only `web-1` (`web-2` is weight 0), so it cannot prove a listener
+  bound on `web-2`. Until PR-2's `origin-tls-handshake` hook exists, an agent verifies each host from the startup line:
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep 'origin-tls: listening'`,
+  decoded with `jq -r '.raw | fromjson | "\(.host_name) \(.message)"'` (one line per host per start; absence on a host
+  after its deploy means no listener there), and a rejected certificate shows in Sentry as `feature:origin_tls`. Do not
+  claim per-host proof before this has been read. `apps/web-platform/.env.example` carries no `ORIGIN_TLS_*` entry
+  (editing it is blocked for agents); the variable table in decision 2 is the contract.
 - Idle keep-alive is set above Cloudflare's reuse window (905 s, `headersTimeout` 910 s) on BOTH servers, from one shared
   constant. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
   conservative if the real window is lower. The canary is a health gate and does not exercise Cloudflare's connection

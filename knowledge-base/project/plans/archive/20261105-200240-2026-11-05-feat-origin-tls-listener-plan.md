@@ -195,8 +195,12 @@ logs:
   where: "container stdout to journald to Better Stack Logs (host_name tagged); Sentry for errors"
   retention: "Better Stack Logs retention as configured for the web sources; Sentry project retention"
 discoverability_test:
-  command: "bash apps/web-platform/infra/origin-tls-probe.sh"
-  expected_output: "origin-tls-probe:"
+  # PR-1 (review of #12181): the probe is a FLIP GATE, not a monitored signal, and with the default
+  # flags it also prints a result on a revert of this PR (PLAIN-ORIGIN-HOP). The test that fails on a
+  # revert is `--require-tls`, which exits 3 until the strict flip and canary rule land; the real
+  # per-host discoverability test is PR-2's origin-tls-handshake hook.
+  command: "bash apps/web-platform/infra/origin-tls-probe.sh --require-tls"
+  expected_output: "result=NO-TLS-ON-ORIGIN-HOP (exit 3) before the flip; result=TLS-ON-ORIGIN-HOP (exit 0) after it"
 ```
 
 ## Encryption Posture
