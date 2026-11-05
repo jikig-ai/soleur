@@ -1,0 +1,3 @@
+pair-or-state	disposition	evidence
+stale-accept x11 (main-side, #12110)	sequence-after-12128	CTO ruling decision-challenges row 13; gh pr view 12128 OPEN MERGEABLE 2026-11-05
+live pairs x3 (plugins/soleur->sentry-issue.sh, tests/hooks/emissions->betterstack-query.sh+sentry-issue.sh, components.test.ts:987-992)	sequence-after-12128	mention-class per drain rubric; absorbed post-merge only if #12128 leaves them uncovered

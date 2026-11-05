@@ -36,3 +36,10 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 
 ### Pipeline
 - cto_spawns=1 (technical-ruling gate batch, decision-challenges rows 9-16; 7 CONFIRM + 1 OVERRIDE)
+
+### Work Phase (2026-11-05)
+- Phase 0: s4-drain claimed on #12127 + #10448 mirror; BASE=f06b595420; audit suites=731 stale=11 gap_refs=3; ratchet exit=1 stale-accept live=3 baseline=0 (main red, #12110 → sequence after #12128 per CTO row 13; watch armed agent 1dc0deea)
+- Phase 1 commit c09185c5e0: baseline-reintroduced arm + git rm baseline + 42 accept rows + .gitattributes + test rework + DECLARED_TOTAL 599 + test-all range 387-599
+- Phase 2/3 commit 49a7b7f623: ci.yml comment, ADR-276 closing line, runbook strict-zero
+- suite -c arm v1: 8 fails — 3 stale-expectation rows repointed at baseline-reintroduced (row_rt_oracle, bl-link-in, bl-big); v2 verify running
+- Remaining: v2 green -> receipts commit -> #12128 merge -> rebase -> strict-zero assert -> review -> qa -> compound -> ship -> close-out
