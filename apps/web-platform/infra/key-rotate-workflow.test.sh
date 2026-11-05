@@ -93,7 +93,7 @@ egress_audit_ingest_token|soleur|prd|EGRESS_AUDIT_INGEST_TOKEN
 github_webhook_secret|soleur|prd|GITHUB_APP_WEBHOOK_SECRET"
 # the four secrets that carry lifecycle.ignore_changes=[value] (their rows are replace-both); the other three update in place
 IGNORE_SET="doppler_secret.inngest_manual_trigger_secret_dev doppler_secret.inngest_manual_trigger_secret_prd doppler_secret.inngest_signing_key_dev doppler_secret.inngest_event_key_dev doppler_secret.egress_audit_ingest_token_previous"
-TOKENS="guard_ok ref_refused inputs_invalid actor_refused actor_not_owner rerun_refused confirm_mismatch quiet_window_missing approval_environment_unprotected webhook_patch_not_ready owner_step_open kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed vector_restarted previous_not_cleared owner_step_pending issue_unfiled rotate_ok job_cancelled internal_error"
+TOKENS="guard_ok ref_refused inputs_invalid actor_refused actor_not_owner rerun_refused confirm_mismatch quiet_window_missing approval_environment_unprotected webhook_patch_not_ready owner_step_open kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed vector_restarted previous_not_cleared previous_not_staged owner_step_pending issue_unfiled rotate_ok job_cancelled internal_error"
 # tokens only the SOURCED code emits (the script reaches them through kr_chk_attempt, kr_chk_quiet and kr_tf_prepare)
 TOKENS_SOURCED_ONLY="rerun_refused quiet_window_missing credential_absent"
 PROJECTED_FIELDS="address actions action_reason before_null after_unknown_value"
@@ -211,14 +211,13 @@ def expr(cond, var, fn):
 def run(scn):
     res = {}; outs = {}
     for j in ORDER:
-        extra_used = set()
         needs = jobs[j].get("needs", []); needs = [needs] if isinstance(needs, str) else list(needs)
         def var(name):
             if name == "github.event_name": return scn["event"]
             if name == "github.run_id": return "RUNID"
             if name in ("true", "false"): return name == "true"
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.result", name)
-            if m: extra_used.add("result"); return res.get(m.group(1), "skipped")
+            if m: return res.get(m.group(1), "skipped")
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.outputs\.([a-z_0-9]+)", name)
             if m: return outs.get(m.group(1), {}).get(m.group(2), "")
             raise ValueError("unknown context " + name)
@@ -228,8 +227,10 @@ def run(scn):
             if name == "success": return all(res.get(n) == "success" for n in needs)
             raise ValueError("unknown function " + name)
         ok, used = expr(jobs[j]["if"], var, fn)
-        used |= extra_used
-        if not (used & STATUS) and "result" not in used and not all(res.get(n) == "success" for n in needs): ok = False
+        # GitHub semantics: a job-level if: with no status-check function is implicitly success() && <expr>; a SKIPPED need
+        # makes success() false, and a needs.<job>.result READ does not suppress the implicit gate (only a status function
+        # such as !cancelled() does) — plan's apply1/apply run because they pair the mode disjunct with !cancelled().
+        if not (used & STATUS) and not all(res.get(n) == "success" for n in needs): ok = False
         if j == "guard": res[j] = scn.get("guard_result", "success") if ok else "skipped"
         else: res[j] = scn.get("force", {}).get(j, "success") if ok else "skipped"
         if j == "guard" and res[j] != "skipped": outs[j] = scn["gout"]
@@ -288,7 +289,10 @@ wf_variant no_redaction '.jobs.apply.if |= sub(" && needs.guard.outputs.redactio
 wf_variant notify_plan '.jobs.notify.if |= sub(" && needs.guard.outputs.mode == '"'"'rotate'"'"'"; "")'
 wf_variant no_dispatch '.jobs.guard.if = "${{ true }}"'
 wf_variant redeploy_nosuccess '.jobs.redeploy.if |= sub(" && needs.apply.result == '"'"'success'"'"'"; "")'
-for v in if_always no_redaction notify_plan no_dispatch redeploy_nosuccess; do
+# P1-1: without !cancelled() the implicit success() gate (a needs.<job>.result read does NOT suppress it) sees the
+# skipped approve job and plan's apply never runs — the mutant flips plan's apply to skipped
+wf_variant no_cancelled '.jobs.apply.if |= sub("!cancelled\\(\\) && "; "")'
+for v in if_always no_redaction notify_plan no_dispatch redeploy_nosuccess no_cancelled; do
   [[ "$(matrix_of "$TMP/wfv-$v.json")" != "$MATRIX_NOW" ]] && ok "A21 matrix mutant $v changes the evaluated matrix" || bad "A21 matrix mutant $v is invisible to the evaluated matrix"
 done
 eq "A22 timeouts are the literals of the budget (guard 15/25, approve 1/11, apply 40/50, redeploy 85/120 +vector 15, clear 40/50, notify 5/15 minutes)" \
@@ -419,7 +423,7 @@ eq "B20 the plan projection keeps exactly these five fields (the full plan JSON 
 PRINTED="$(env -i PATH=/usr/bin:/bin bash "$BODY" --print-contract 2>&1)"
 eq "B21 --print-contract prints the key-rotate header" "$(head -1 <<<"$PRINTED")" 'key-rotate verdict-tokens'
 eq "B22 the printed token set equals the literal 35 (set equality, no duplicates)" "$(tail -n +2 <<<"$PRINTED" | sort | tr '\n' ' ')|$(tail -n +2 <<<"$PRINTED" | sort | uniq -d | wc -l | tr -d ' ')" "$(tr ' ' '\n' <<<"$TOKENS" | sort | tr '\n' ' ')|0"
-eq "B22b there are exactly 36 tokens" "$(wc -w <<<"$TOKENS" | tr -d ' ')" '36'
+eq "B22b there are exactly 37 tokens" "$(wc -w <<<"$TOKENS" | tr -d ' ')" '37'
 RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/key-rotation.md"
 # a token counts only when it is a backticked cell of a table row in the Refusals / Verdicts sections (prose elsewhere does not count)
 rb_rows() { sed -n '/^## Refusals (nothing written)/,/^## The GitHub webhook owner step/p' "$1" | grep '^|'; }
@@ -517,7 +521,7 @@ eq "B38 N6 the redeploy wait (480 s) plus one poll iteration (five run lists at 
 printf '\n=== C0. --print-contract: offline, credential-free, fast ===\n'
 T0=$SECONDS
 PC_OUT="$(env -i PATH=/usr/bin:/bin bash "$BODY" --print-contract 2>&1)"; PC_RC=$?
-eq "C0.1 --print-contract exits 0 under an empty environment, prints the header and 36 snake_case tokens, one per line, within 15 s" "$PC_RC|$(tail -n +2 <<<"$PC_OUT" | grep -Ec '^[a-z][a-z0-9]*(_[a-z0-9]+)+$')|$(( SECONDS - T0 < 15 ? 1 : 0 ))" '0|36|1'
+eq "C0.1 --print-contract exits 0 under an empty environment, prints the header and 37 snake_case tokens, one per line, within 15 s" "$PC_RC|$(tail -n +2 <<<"$PC_OUT" | grep -Ec '^[a-z][a-z0-9]*(_[a-z0-9]+)+$')|$(( SECONDS - T0 < 15 ? 1 : 0 ))" '0|37|1'
 
 # ---------------------------------------------------------------------------------------------------------------------------
 printf '\n=== C. behaviour against stubs: the world ===\n'
@@ -541,7 +545,9 @@ make_world() {
   done <<<"$COPIES_LIT"
   printf '[{"name":"action-required"},{"name":"owner_step_pending"}]' > "$d/state/labels.json"
   # the live environment verify (kk_chk_approval): protected by default; scenarios overwrite for unprotected arms
-  printf '%s' '{"protection_rules":[{"type":"required_reviewers"},{"type":"branch_policy"}]}' > "$d/state/env_protection.json"
+  printf '%s' '{"protection_rules":[{"type":"required_reviewers","reviewers":[{"type":"User","reviewer":{"login":"rev-user","id":54279}}]},{"type":"branch_policy"}]}' > "$d/state/env_protection.json"
+  # the deployment-branch-policies endpoint: main-only by default
+  printf '%s' '{"count":1,"branch_policies":[{"id":1,"name":"main","type":"branch"}]}' > "$d/state/env_policies.json"
   # the PREVIOUS secret exists (created by the merge apply, value ""); the apply-A replace fills it, the clear empties it
   : > "$d/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"
   printf '%s' "${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN" > "$d/state/old_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN"
@@ -753,10 +759,16 @@ echo "gh $*" >> "$STUB/gh.log"
 S="$STUB/state"
 refuse() { echo "gh REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 arg_after() { local k="$1" prev=""; shift; for a in "$@"; do [[ "$prev" == "$k" ]] && { printf '%s' "$a"; return 0; }; prev="$a"; done; return 1; }
-if [[ "$1" == api ]]; then # the environment live verify (no --repo flag; the path is exact)
-  [[ "$*" == "api repos/acme/repo/environments/key-rotate-approval" ]] || refuse "$@"
-  [[ -f "$S/env_api_rc" ]] && exit "$(cat "$S/env_api_rc")"
-  cat "$S/env_protection.json"; exit 0
+if [[ "$1" == api ]]; then # the environment live verify (no --repo flag; the paths are exact)
+  case "$*" in
+    "api repos/acme/repo/environments/key-rotate-approval")
+      [[ -f "$S/env_api_rc" ]] && exit "$(cat "$S/env_api_rc")"
+      cat "$S/env_protection.json"; exit 0 ;;
+    "api repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies")
+      [[ -f "$S/env_pol_api_rc" ]] && exit "$(cat "$S/env_pol_api_rc")"
+      cat "$S/env_policies.json"; exit 0 ;;
+    *) refuse "$@" ;;
+  esac
 fi
 [[ "$(arg_after --repo "$@")" == acme/repo ]] || refuse "$@"
 case "$1 $2" in
@@ -992,6 +1004,11 @@ fresh; run_g guard g_rotate egress_audit_ingest_token; guard_pass && ok "C2.12b 
 fresh; set_state env_protection.json '{"protection_rules":[{"type":"branch_policy"}]}'; guard_row C2.12c "a branch-policy-only environment (no required_reviewers) is unprotected" approval_environment_unprotected egress_audit_ingest_token
 fresh; set_state env_protection.json '{"protection_rules":[{"type":"required_reviewers"}]}'; guard_row C2.12d "a reviewers-only environment (no branch policy) is unprotected" approval_environment_unprotected egress_audit_ingest_token
 fresh; set_state env_api_rc 1; guard_row C2.12e "the environment API read fails (fail closed)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_protection.json '{"protection_rules":[{"type":"required_reviewers","reviewers":[]},{"type":"branch_policy"}]}'; guard_row C2.12f "a required_reviewers rule with an EMPTY reviewer list (type-presence is not protection)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":2,"branch_policies":[{"id":1,"name":"main","type":"branch"},{"id":2,"name":"release/*","type":"branch"}]}'; guard_row C2.12g "a deployment branch policy that admits a non-main ref" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":1,"branch_policies":[{"id":1,"name":"v1.0","type":"tag"}]}'; guard_row C2.12h "a deployment branch policy that admits a TAG instead of main" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_pol_api_rc 1; guard_row C2.12i "the deployment-branch-policies read fails (fail closed)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":0,"branch_policies":[]}'; guard_row C2.12j "an EMPTY branch policy list (main is not even allowed)" approval_environment_unprotected egress_audit_ingest_token
 for k in inngest_manual_trigger_secret_prd kb_drift_ingest_signing_key github_webhook_secret; do
   fresh; set_state env_protection.json '{"protection_rules":[]}'; guard_row C2.13 "$k on an unprotected key-rotate-approval environment (#11923)" approval_environment_unprotected "$k"
   fresh; run_g guard g_rotate "$k"; guard_pass && ok "C2.13b $k passes with the protected environment" || bad "C2.13b $k refused: $(verdict_of)"
@@ -1477,6 +1494,19 @@ fresh; run_g apply a_env rotate egress_audit_ingest_token
 CUR="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN")"; PRV="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")"
 eq "C9.5 apply-A: CURRENT is new and PREVIOUS carries the old CURRENT" \
   "$([[ "$CUR" != "${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN" ]] && echo new)|$PRV" "new|${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN"
+# the post-apply PREVIOUS verify (P2-3): apply-A staged nothing or the wrong value -> previous_not_staged, apply still counted done
+fresh; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous"; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5d an apply that leaves PREVIOUS empty reports previous_not_staged (the old token is accepted nowhere - the lossy direction), not a green apply" \
+  "$RC|$(verdict_of)|$(tfapplied)|$(grep -c 'accepted nowhere' <<<"$OUT")" '1|previous_not_staged|1|2'
+fresh; printf 'stale-previous-value' > "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous"; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5e an apply that leaves a STALE value in PREVIOUS (not the staged old CURRENT) reports previous_not_staged" \
+  "$RC|$(verdict_of)" '1|previous_not_staged'
+fresh; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous" "get_rc_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; set_state "get_rc_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS" 1; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5f an unreadable PREVIOUS read-back is post_hash_unreadable (the value is unknown, not unstaged)" \
+  "$RC|$(verdict_of)" '1|post_hash_unreadable'
+fresh; run_g notify n_env egress_audit_ingest_token rotate failure true previous_not_staged skipped ""
+eq "C9.5g notify on a failed apply with verdict previous_not_staged files the action-required issue" \
+  "$RC|$(cut -d'|' -f1 "$D/issues_created.log" 2>/dev/null | grep -c previous_not_staged)" '0|1'
 run_script "redeploy vector" "${VEC_ENV[@]}"
 eq "C9.5b the vector leg confirms every host after the redeploy" "$RC" '0'
 run_g clear a_env rotate egress_audit_ingest_token
@@ -1679,7 +1709,7 @@ BASE_BODY=""
 # --- Review round 1: the guards added by the fix pass. Each mutant is a COPY with one landing-checked edit; the scenario must turn.
 BASE_BODY=""; BASE_SIB=""
 sc_apply_nolift() { NOLIFT=1 sc_apply "$1" st_none; }
-M D5.1 "M7 neuter kk_chk_approval's live verify (it passes unconditionally): an unprotected env proceeds at the guard" "sc_guard_unprot inngest_manual_trigger_secret_prd" body approval_environment_unprotected guard_ok $'kk_chk_approval() {\n  local out\n' $'kk_chk_approval() {\n  return 0\n  local out\n' kk_chk_approval
+M D5.1 "M7 neuter kk_chk_approval's live verify (it passes unconditionally): an unprotected env proceeds at the guard" "sc_guard_unprot inngest_manual_trigger_secret_prd" body approval_environment_unprotected guard_ok $'kk_chk_approval() {\n  local out pol\n' $'kk_chk_approval() {\n  return 0\n  local out pol\n' kk_chk_approval
 sc_apply_badkey() { fresh; mapfile -t _e < <(a_env rotate tunnel_secret); run_script apply "${_e[@]}"; a_out; }
 M D5.2 "M2 remove kk_valid_inputs at apply (an API dispatch bypasses the choice list): a key outside the seven reaches the plan" "sc_apply_badkey" body inputs_invalid plan_gate_refused $'  kk_valid_inputs "$mode" "$key" || return 1\n  kr_init || return 1\n  if [[ "$mode" == rotate ]]; then\n    kk_require_attempt || return 1' $'  kr_init || return 1\n  if [[ "$mode" == rotate ]]; then\n    kk_require_attempt || return 1' kk_cmd_apply
 M D5.3 "M2 remove the EFF_MODE==rotate check at the redeploy re-checks: plan passes as if it were a rotate" "sc_redeploy_recheck $DEVK NONE EFF_MODE=plan" body internal_error passed $'  [[ "${EFF_MODE:-}" == rotate ]] || { kr_refuse internal_error "redeploy runs for rotate only"; return 1; }\n' ''
@@ -1938,7 +1968,7 @@ mut_ok "$TMP/m/ret4.body" "$BODY" 'KK_RETRIES=3' 'KK_RETRIES=4' && eq "D6.10a mu
 POSTWRITE_TOKENS="$(comm -23 <(tr ' ' '\n' <<<"$TOKENS" | sort) <(tr ' ' '\n' <<<"$PREWRITE_TOKENS" | sort) | tr '\n' ' ')"
 pw_rc() { env -i PATH="$PATH" bash -c 'source "$1"; kk_prewrite_token "$2"; echo $?' _ "$1" "$2"; }
 pw_neg_bad() { local t r=""; for t in $POSTWRITE_TOKENS; do [[ "$(pw_rc "$1" "$t")" == 1 ]] || r="$r $t"; done; printf '%s' "$r"; }
-eq "D6.11 N10 every token that is NOT one of the 14 pre-write tokens (the other 22 of the 36, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '22|'
+eq "D6.11 N10 every token that is NOT one of the 14 pre-write tokens (the other 23 of the 37, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '23|'
 mut_ok "$TMP/m/pw.body" "$BODY" '|approval_environment_unprotected) return 0 ;;' '|approval_environment_unprotected|apply_failed) return 0 ;;' && eq "D6.11a mutant: apply_failed added to the pre-write list is seen" "$(pw_neg_bad "$(ptree pw "$TMP/m/pw.body")")" ' apply_failed'
 # N10: the confirm neutralizer is scoped to the stop sentence
 # D6.12 drives the REAL scan_streams (V3), in a subshell with its own TMP so the suite's scan/run census (D9.1) and leak log are untouched:
@@ -1968,7 +1998,7 @@ eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=629
+FLOOR=639
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

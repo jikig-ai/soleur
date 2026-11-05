@@ -161,6 +161,28 @@ jobs:
     outputs:
       approval_epoch: ${{ steps.approve.outputs.approval_epoch }}
     steps:
+      # Live verify of THIS environment, run after the reviewer click and before the stamp (the sha256-pinned script
+      # cannot carry it; mirrored from scripts/key-rotate.sh kk_chk_approval). A referenced-but-absent or drifted
+      # environment auto-creates UNPROTECTED, so fail closed with approval_environment_unprotected on an unreadable
+      # read, a missing required_reviewers/branch_policy type, an EMPTIED reviewer list, or a branch policy that
+      # admits anything but refs/heads/main. Failing here keeps apply1 (the first write job) from ever running.
+      - name: Verify the approval environment is protected
+        id: envverify
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out="$(gh api "repos/${GITHUB_REPOSITORY}/environments/key-rotate-approval")" \
+            || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the environment could not be read; fail closed)" >&2; exit 1; }
+          jq -e '[.protection_rules[]? | .type] | index("required_reviewers") and index("branch_policy")' <<<"$out" >/dev/null \
+            || { echo "inngest-key-rotate verdict=approval_environment_unprotected (protection_rules lack required_reviewers or a branch policy)" >&2; exit 1; }
+          jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$out" >/dev/null \
+            || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the required_reviewers rule lists no reviewer)" >&2; exit 1; }
+          pol="$(gh api "repos/${GITHUB_REPOSITORY}/environments/key-rotate-approval/deployment-branch-policies")" \
+            || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the deployment-branch-policies read failed; fail closed)" >&2; exit 1; }
+          jq -e '.branch_policies as $p | ($p | length) > 0 and all($p[]; .type == "branch" and .name == "main")' <<<"$pol" >/dev/null \
+            || { echo "inngest-key-rotate verdict=approval_environment_unprotected (the branch policy does not restrict deployments to refs/heads/main alone)" >&2; exit 1; }
+          echo "inngest-key-rotate: approval environment verified (non-empty required_reviewers, main-only branch policy)"
       - name: Stamp the approval time
         id: approve
         timeout-minutes: 1
@@ -168,7 +190,9 @@ jobs:
 
   apply1:
     needs: [guard, approve]
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply1 == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
+    # !cancelled(): a job-level if: without a status-check function is implicitly success() && <expr>, and a SKIPPED need
+    # (approve, under mode=plan) makes success() false — a needs.<job>.result read does NOT suppress it (reboot/apply2/redeploy convention).
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply1 == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KR_APPLY_STEP_S + KR_JOB_SLACK_S) / 60.

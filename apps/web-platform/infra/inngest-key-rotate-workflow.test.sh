@@ -118,7 +118,25 @@ printf '\n=== A. static: the workflow (parsed YAML) ===\n'
 [[ "$(yq 'any("${{" in str(j.get("if","")) and "inputs." in str(j.get("if","")) for j in jobs.values())')" == False ]] && ok "A18 no job condition reads a dispatch input (conditions read the guard's validated outputs)" || bad "A18 input in if:"
 [[ "$(yq '[s.get("run","").strip() for s in jobs["guard"]["steps"] if s.get("id") == "guard"]')" == "['bash scripts/inngest-key-rotate.sh guard']" ]] && ok "A19 the guard step is exactly: bash scripts/inngest-key-rotate.sh guard" || bad "A19 guard run"
 [[ "$(yq '[s["run"].strip() for s in jobs["apply1"]["steps"] if "run" in s]')" == "['bash scripts/inngest-key-rotate.sh apply1']" && "$(yq '[s["run"].strip() for s in jobs["apply2"]["steps"] if "run" in s]')" == "['bash scripts/inngest-key-rotate.sh apply2']" && "$(yq '[s["run"].strip() for s in jobs["redeploy"]["steps"] if "run" in s]')" == "['bash scripts/inngest-key-rotate.sh redeploy']" ]] && ok "A20 apply1, apply2 and redeploy each run exactly one script subcommand and nothing else" || bad "A20 run bodies"
-check "A21 no terraform, doppler, curl or gh command in the workflow text (the script is the only caller), including at the end of a line" bash -c "! grep -Eq '(^|[^-a-zA-Z_/])(terraform|doppler|curl|gh)( |\$)' < <(grep -v '^ *#' '$WF' | grep -v 'description:')"
+# A21: the script is the only terraform/doppler/curl/gh caller - EXCEPT the approve job's envverify step, which replicates
+# kk_chk_approval's two `gh api` environment reads inline (the sha256-pinned script cannot run them). The scan runs on the
+# parsed workflow with that ONE step removed: a tool in ANY field or step anywhere else still flags (same regex).
+A21_STRIPPED="$(python3 - "$WF" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["approve"]["steps"]
+assert any(s.get("id") == "envverify" for s in steps), "envverify step missing"
+d["jobs"]["approve"]["steps"] = [s for s in steps if s.get("id") != "envverify"]
+sys.stdout.write(yaml.safe_dump(d, width=100000))
+PY
+)"
+[[ "$(grep -Ec '(^|[^-a-zA-Z_/])(terraform|doppler|curl|gh)( |$)' <<<"$A21_STRIPPED" || true)" == 0 ]] && ok "A21 no terraform, doppler, curl or gh command outside the approve job's envverify step (the script is the only caller; envverify replicates kk_chk_approval's two gh api reads inline), including at the end of a line" || bad "A21 foreign tool in workflow text" "$(grep -nE '(^|[^-a-zA-Z_/])(terraform|doppler|curl|gh)( |$)' <<<"$A21_STRIPPED" | head -3)"
+ENVV_RUN="$(yq 'next(s["run"] for s in jobs["approve"]["steps"] if s.get("id") == "envverify")')"
+[[ "$(yq '[s.get("id") for s in jobs["approve"]["steps"]]')" == "['envverify', 'approve']" \
+ && "$ENVV_RUN" == *'environments/key-rotate-approval"'* && "$ENVV_RUN" == *'deployment-branch-policies'* \
+ && "$ENVV_RUN" == *'.reviewers[]?'* && "$ENVV_RUN" == *'name == "main"'* && "$ENVV_RUN" == *'exit 1'* \
+ && "$(grep -c 'approval_environment_unprotected' <<<"$ENVV_RUN")" == 5 ]] \
+  && ok "A21b the approve job runs envverify BEFORE the stamp: both environment endpoints, a non-empty reviewers check, the main-only policy check, and approval_environment_unprotected printed on every failure arm" || bad "A21b envverify pin" "$ENVV_RUN"
 check "A22 nothing is uploaded (no upload-artifact or cache step: a public repo's artifacts are readable by any account)" bash -c "! grep -Eq 'upload-artifact|actions/cache|step-summary-upload' '$WF'"
 check "A23 the workflow never names the standalone restart workflow or the restart verb (that lever cannot reach 10.0.1.40)" bash -c "! grep -Eiq 'restart-inngest-server|restart inngest' '$WF' '$BODY'"
 check "A24 no test seam (KR_*) is set anywhere in the workflow" bash -c "! grep -Eq 'KR_(SLEEP|NOW|HZ_BASE|TRACK|HOST_STATE|BS_QUERY|INFRA_DIR)' '$WF'"
@@ -1530,12 +1548,11 @@ def run_matrix(scn):
     res = {}; outs = {}
     for j in ORDER:
         needs = jobs[j].get("needs", []); needs = [needs] if isinstance(needs, str) else list(needs)
-        extra_used = set()
         def var(name, _n=needs):
             if name == "github.event_name": return scn["event"]
             if name in ("true", "false"): return name == "true"
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.result", name)
-            if m: extra_used.add("result"); return res.get(m.group(1), "skipped")
+            if m: return res.get(m.group(1), "skipped")
             m = re.fullmatch(r"needs\.([a-z0-9]+)\.outputs\.([a-z_0-9]+)", name)
             if m: return outs.get(m.group(1), {}).get(m.group(2), "")
             raise ValueError("unknown context " + name)
@@ -1554,10 +1571,10 @@ def run_matrix(scn):
                 p = P(tokenize(m.group(1) if m else src), {"var": var, "fn": fn}); ok = bool(p.parse()); used = p.used
         except Exception as e:
             viol.append("unevaluable:%s:%s" % (j, e)); ok, used = False, set()
-        # an if: that reads needs.<job>.result is still evaluated when the need is skipped (apply1's plan disjunct runs
-        # although approve was skipped; a result reference suppresses the implicit success() gate — GitHub semantics)
-        used |= extra_used
-        implicit = not (used & STATUS) and "result" not in used
+        # GitHub semantics: a job-level if: with no status-check function is implicitly success() && <expr>; a SKIPPED need
+        # makes success() false, and a needs.<job>.result READ does not suppress the implicit gate — only a status function
+        # does. apply1's plan disjunct runs although approve was skipped because the if: pairs it with !cancelled().
+        implicit = not (used & STATUS)
         if implicit and not all(res.get(n) == "success" for n in needs): ok = False
         if j == "guard" and scn.get("guard_result"): res[j] = scn["guard_result"] if ok else "skipped"
         else: res[j] = scn.get("force", {}).get(j, "success") if ok else "skipped"
@@ -1628,6 +1645,12 @@ ENV = {
  ("redeploy", "redeploy"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_ROTATED_AT=G("rotated_at"), EFF_BOOT_PRE="${{ needs.reboot.outputs.boot_pre }}", EFF_BOOT_NEW="${{ needs.reboot.outputs.boot_new }}", EFF_POST_EPOCH="${{ needs.reboot.outputs.post_epoch }}", EFF_VERIFIED_AT="${{ needs.reboot.outputs.verified_at }}", GH_TOKEN=TOK, WEBHOOK_DEPLOY_SECRET="${{ secrets.WEBHOOK_DEPLOY_SECRET }}", CF_ACCESS_CLIENT_ID="${{ secrets.CF_ACCESS_CLIENT_ID }}", CF_ACCESS_CLIENT_SECRET="${{ secrets.CF_ACCESS_CLIENT_SECRET }}"),
  ("notify", "notify"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_RESULT_APPLY1="${{ needs.apply1.result }}", EFF_RESULT_REBOOT="${{ needs.reboot.result }}", EFF_RESULT_APPLY2="${{ needs.apply2.result }}", EFF_RESULT_REDEPLOY="${{ needs.redeploy.result }}", GH_TOKEN=TOK),
 }
+# the approve job's envverify step (P2-2, #11923 follow-up): kk_chk_approval's live environment verify inlined in the
+# workflow because the sha256-pinned script cannot carry it. It must exist and bind GH_TOKEN only (the job token under
+# contents: read; no secret values may reach the reviewer-gated environment).
+_envv = next((s for s in jobs["approve"]["steps"] if s.get("id") == "envverify"), None)
+if _envv is None: viol.append("envverify-missing")
+else: ENV[("approve", _envv["run"].strip().split("inngest-key-rotate.sh")[-1].strip())] = {"GH_TOKEN": TOK}
 COMMON = "PATH HOME RUNNER_TEMP GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_REPOSITORY GITHUB_SERVER_URL GH_TOKEN".split()
 ALLOW = {
  ("reboot", "admit"): set(COMMON + "DOPPLER_TOKEN BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD EFF_MODE EFF_KEYS EFF_SERVER_ID EFF_ROTATED_AT EFF_REBOOT_POST".split()),
@@ -1731,8 +1754,13 @@ wfm no_go 'jobs["apply1"]["if"] = jobs["apply1"]["if"].replace("needs.guard.outp
 wfrow WM4 "an apply1 whose condition reads neither the guard's go output nor the approval gate runs when the guard succeeded but said go=false" no_go "matrix:guard-ok-no-go"
 wfm no_dispatch 'jobs["guard"]["if"] = "${{ true }}"'
 wfrow WM5 "a guard that lost its workflow_dispatch gate runs on the registration push" no_dispatch "matrix:push"
-# always() is not the only thing that keeps notify evaluable after a failure: needs.redeploy.result is also a result
-# read, which suppresses the implicit success() gate — the mutant must drop BOTH for the gate to re-engage
+# P1-1: without !cancelled() the implicit success() gate (a needs.<job>.result read does NOT suppress it) sees the
+# skipped approve job and plan's apply1 never runs — the mutant flips plan's apply1 to skipped
+wfm no_cancelled 'jobs["apply1"]["if"] = jobs["apply1"]["if"].replace("!cancelled() && ", "")'
+wfrow WM5b "an apply1 that dropped !cancelled() is skipped under mode=plan although its mode disjunct is true" no_cancelled "matrix:plan"
+# always() is the only status function in notify's if: — a needs.<job>.result READ does NOT suppress the implicit
+# success() gate (GitHub semantics), so with always() gone the gate re-engages on its own; the mutant drops the
+# redeploy-result read too so the surviving condition still differs from a mere skip
 wfm notify_noalways 'jobs["notify"]["if"] = jobs["notify"]["if"].replace("always() && ", "").replace(" && needs.redeploy.result != '"'"'success'"'"'", "")'
 wfrow WM6 "a notify job carrying neither always() nor a needs.<job>.result read falls under the implicit success() gate and never runs after a failed or cancelled job" notify_noalways "matrix:rotate/apply1-fails"
 wfm notify_plan 'jobs["notify"]["if"] = jobs["notify"]["if"].replace(" && needs.guard.outputs.mode != '"'"'plan'"'"'", "")'
@@ -1793,7 +1821,9 @@ for pair in "reboot:EFF_SERVER_ID:$ALLOW_POST:post" "reboot:GITHUB_OUTPUT:$ALLOW
 done
 a21_hits() { grep -Ec '(^|[^-a-zA-Z_/])(terraform|doppler|curl|gh)( |$)' < <(grep -v '^ *#' "$1" | grep -v 'description:') || true; }
 printf '    steps:\n      - run: gh\n' > "$TMP/a21-eol.yml"; printf '    steps:\n      - run: echo ok\n' > "$TMP/a21-clean.yml"
-[[ "$(a21_hits "$TMP/a21-eol.yml")" == 1 && "$(a21_hits "$TMP/a21-clean.yml")" == 0 && "$(a21_hits "$WF")" == 0 ]] && ok "WM30 (harness) the A21 scan flags a bare 'gh' at the end of a line (the trailing-space blind spot) and passes the real workflow" || bad "WM30 A21 scan"
+[[ "$(a21_hits "$TMP/a21-eol.yml")" == 1 && "$(a21_hits "$TMP/a21-clean.yml")" == 0 && "$(grep -Ec '(^|[^-a-zA-Z_/])(terraform|doppler|curl|gh)( |$)' <<<"$A21_STRIPPED" || true)" == 0 ]] && ok "WM30 (harness) the A21 scan flags a bare 'gh' at the end of a line (the trailing-space blind spot) and passes the real workflow minus the envverify step" || bad "WM30 A21 scan"
+wfm no_envverify 'jobs["approve"]["steps"] = [s for s in jobs["approve"]["steps"] if s.get("id") != "envverify"]'
+wfrow WM30b "the approve job without its envverify step (the live environment verify silently gone)" no_envverify "envverify-missing"
 H5_RE='gh (issue (comment|edit)|api|gist|release|pr (comment|review|merge))|--method POST'
 printf 'gh gist create x\n' > "$TMP/h5-gist.sh"; printf 'gh release create v1\n' > "$TMP/h5-rel.sh"
 [[ "$(grep -Ec "$H5_RE" "$TMP/h5-gist.sh")" == 1 && "$(grep -Ec "$H5_RE" "$TMP/h5-rel.sh")" == 1 && "$(grep -v '^ *#' "$BODY" | grep -Ec "$H5_RE")" == 0 ]] && ok "WM32 (harness) the H5 scan also bans gh gist and gh release, and the script has none" || bad "WM32 H5 scan"
@@ -1810,7 +1840,7 @@ REFUSED_ANY=""; for ((i = 1; i <= NONMUT_N; i++)); do [[ -s "$TMP/s$i/refusals.l
 [[ -z "$(ls -d "$TMP"/s*/rt/inngest-key-rotate.* 2>/dev/null)" ]] && ok "J2 no scenario left its private temp dir (and so no plan JSON) behind" || bad "J2 leftover temp dir"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=475
+FLOOR=478
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

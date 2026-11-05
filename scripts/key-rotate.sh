@@ -76,7 +76,7 @@ KR_VERDICT_TOKENS=(
   kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent
   authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed
   apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed vector_restarted previous_not_cleared
-  owner_step_pending issue_unfiled
+  previous_not_staged owner_step_pending issue_unfiled
   rotate_ok job_cancelled internal_error
 )
 KR_INFLIGHT_WORKFLOWS=(apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml web-platform-release.yml inngest-key-rotate.yml inngest-link-flip.yml cutover-inngest.yml deploy-inngest-image.yml)
@@ -127,9 +127,10 @@ KK_KEYS=(inngest_manual_trigger_secret_dev inngest_manual_trigger_secret_prd inn
 # apply-on-merge needs it), so the typed confirm is derivable from public inputs: a fat-finger guard, not an authorization.
 # The authorization is now TWO mechanisms: both actors must be in this committed, exact-match allowlist (the CODEOWNERS
 # owner), AND every rotate dispatch waits at the reviewer-gated `key-rotate-approval` environment in front of the first
-# production-mutating job (#11923). kk_chk_approval below is the LIVE verify of that environment's protection_rules (a
-# referenced-but-absent environment auto-creates UNPROTECTED, the #6780 class): an unreadable read or a missing
-# required_reviewers/branch_policy refuses approval_environment_unprotected. An owner PAT can still dispatch, but the
+# production-mutating job (#11923). kk_chk_approval below is the LIVE verify of that environment's protection (a
+# referenced-but-absent environment auto-creates UNPROTECTED, the #6780 class): an unreadable read, a missing
+# required_reviewers/branch_policy type, an EMPTY reviewer list or a branch policy admitting anything but
+# refs/heads/main refuses approval_environment_unprotected. An owner PAT can still dispatch, but the
 # reviewer's approval remains a distinct human act (residual, bounded by the gate).
 KK_OWNER_LOGINS=(deruelle)
 KK_APPROVAL_ENV_BOUND=true
@@ -304,6 +305,7 @@ kk_state_row() {
   case "$1" in
     apply_failed) printf 'Doppler: per-copy classification printed in the run log. Terraform state: possibly partial (a replace may have destroyed and not created). Running containers: old. Next safe action: a fresh rotate; if any copy is absent it is urgent, because a container restart now starts without the secret.' ;;
     previous_not_cleared) printf 'Doppler: CURRENT is new; EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS is still set (the old token stays accepted - the lossless direction). Terraform state: PREVIOUS populated. Running containers: new. Next safe action: re-dispatch the rotate (the clear leg re-runs); if it refuses again, clear EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS by hand in Doppler soleur/prd.' ;;
+    previous_not_staged) printf 'Doppler: CURRENT is new; EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS is absent or empty (the old token is accepted NOWHERE - the LOSSY direction: every host still on the old env is rejected). Terraform state: PREVIOUS empty. Running containers: old. Next safe action: redeploy the web fleet NOW so hosts pick up the new CURRENT; if old-env hosts must be served first, set EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS in Doppler soleur/prd to the prior token value (recoverable from a running host env or the Doppler audit log - drift-free under ignore_changes), then re-dispatch the rotate to land the clear.' ;;
     post_hash_unreadable) printf 'Doppler: unknown. Terraform state: new. Running containers: old. Next safe action: a fresh rotate; the value is unknown, not unchanged.' ;;
     value_unchanged) printf 'Doppler: OLD value. Terraform state: new random_id. Running containers: old. Next safe action: stop and read the ADR item on the ignore_changes premise before re-dispatching; a repeat means the premise is false.' ;;
     copies_differ) printf 'Doppler: both copies present but unequal. Terraform state: new. Running containers: old. Next safe action: a fresh rotate outside the cron window.' ;;
@@ -336,6 +338,7 @@ kk_degrade() {
     rotated_redeploy_failed:kb_drift_ingest_signing_key) printf 'Until a redeploy lands, the next 03:00 UTC kb-drift walker run is rejected.' ;;
     rotated_redeploy_failed:inngest_manual_trigger_secret_prd) printf 'Until a redeploy lands, soleur:trigger-cron and the internal routes answer 401 on hosts still on the old value.' ;;
     rotated_redeploy_failed:inngest_*_dev) printf 'No production container reads the soleur/dev keys; the production redeploy was a rehearsal of the route'"'"'s last leg.' ;;
+    previous_not_staged:*) printf 'Consequence: every egress send from a host still on the old env is rejected (the old token is accepted nowhere) until the fleet redeploys onto the new CURRENT or PREVIOUS is set by hand.' ;;
     apply_failed:*|post_hash_unreadable:*|value_unchanged:*|copies_differ:*|partial_absent_state:*|job_cancelled:*) kk_consequence "$k" ;;
     *) printf 'Consequence: depends on the verdict; read it before restarting anything.' ;;
   esac
@@ -434,10 +437,12 @@ kk_chk_actors() {
 # kk_chk_approval (CTO H2/G6, #11923): the LIVE verify of the reviewer-gated environment the rotate waits at. A
 # referenced-but-absent or drifted key-rotate-approval environment auto-creates UNPROTECTED (the #6780 vacuous-gate
 # class), so the workflow binding alone is not proof — every rotate reads protection_rules once, for every key (the
-# approve job gates mode=rotate for all keys). Fail closed twice: an unreadable API read refuses, and an environment
-# whose protection_rules lack EITHER required_reviewers OR a branch policy refuses approval_environment_unprotected.
+# approve job gates mode=rotate for all keys). Fail closed at every rung: an unreadable API read refuses, an
+# environment whose protection_rules lack EITHER required_reviewers OR a branch policy refuses, a required_reviewers
+# rule whose reviewer list is EMPTY refuses (type-presence alone is not protection), and a deployment branch policy
+# that admits anything other than refs/heads/main refuses approval_environment_unprotected.
 kk_chk_approval() {
-  local out
+  local out pol
   if [[ "$KK_APPROVAL_ENV_BOUND" != true ]]; then
     KR_CHECK_TOKEN=approval_environment_unprotected
     KR_CHECK_DETAIL="KK_APPROVAL_ENV_BOUND is not true: the workflow's approve job is not bound to the reviewer-gated environment"
@@ -448,6 +453,19 @@ kk_chk_approval() {
   if ! jq -e '[.protection_rules[]? | .type] | index("required_reviewers") and index("branch_policy")' <<<"$out" >/dev/null 2>&1; then
     KR_CHECK_TOKEN=approval_environment_unprotected
     KR_CHECK_DETAIL="the key-rotate-approval environment's protection_rules lack required_reviewers or a branch policy"
+    return 1
+  fi
+  # content level (a type that names no reviewer protects nobody)
+  if ! jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$out" >/dev/null 2>&1; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="the key-rotate-approval environment's required_reviewers rule lists no reviewer (a review nobody can give is no gate)"
+    return 1
+  fi
+  pol="$(gh api "repos/${GITHUB_REPOSITORY:-}/environments/key-rotate-approval/deployment-branch-policies" 2>/dev/null)" \
+    || { KR_CHECK_TOKEN=approval_environment_unprotected; KR_CHECK_DETAIL="the key-rotate-approval deployment-branch-policies read failed (an unreadable read is an unprotected environment, fail closed)"; return 1; }
+  if ! jq -e '.branch_policies as $p | ($p | length) > 0 and all($p[]; .type == "branch" and .name == "main")' <<<"$pol" >/dev/null 2>&1; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="the key-rotate-approval deployment branch policy does not restrict deployments to refs/heads/main alone"
     return 1
   fi
 }
@@ -936,6 +954,29 @@ kk_cmd_apply() {
   if kk_has_post present-unchanged; then kr_post_write_failure value_unchanged "a copy did not change (new_differs_from_prior=false)" "The apply reported success but a copy did not change."; return 1; fi
   if [[ "${#KK_POST_H[@]}" -gt 1 && "$(printf '%s\n' "${KK_POST_H[@]}" | sort -u | wc -l | tr -d ' ')" != 1 ]]; then
     kr_post_write_failure copies_differ "copies_equal=false after the apply" "The apply finished but the copies of the key are not equal."; return 1
+  fi
+  # post-apply PREVIOUS verify (egress only, #11920): the grace window exists only when PREVIOUS reads back the value the
+  # feed staged - the old CURRENT (absent or empty reads as the LOSSY direction: hosts still on the old env are rejected
+  # until the redeploy). The recovery rotate (KK_ABSENT_ALL, nothing old left to preserve) legitimately reads absent or
+  # empty. Value-silent through kk_copy_state; the same retry shape as the post-state read covers Doppler lag. A read that
+  # cannot prove the staged value is previous_not_staged; a read that fails outright is post_hash_unreadable.
+  if [[ "$key" == egress_audit_ingest_token ]]; then
+    local pvs pvc=unread try
+    for ((try = 1; try <= KK_RETRIES; try++)); do
+      pvs="$(kk_copy_state soleur prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS)"
+      case "$pvs" in
+        "present "*) [[ "$KK_ABSENT_ALL" != true && "$pvs" == "present ${KK_PRE_H[0]:-none}" ]] && pvc=ok || pvc=fail ;;
+        absent|unknown:read_empty|unknown:listing_empty) [[ "$KK_ABSENT_ALL" == true ]] && pvc=ok || pvc=fail ;;
+        *) pvc=unread ;;
+      esac
+      [[ "$pvc" == ok ]] && break
+      (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+    done
+    case "$pvc" in
+      unread) kr_post_write_failure post_hash_unreadable "EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS could not be read back after the apply" "The apply landed but the PREVIOUS read-back failed."; return 1 ;;
+      fail) kr_post_write_failure previous_not_staged "after the apply, EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads ${pvs:-unknown} - the old token is accepted nowhere (hosts on the old env are rejected until the redeploy)" "The apply landed but the PREVIOUS staging did not take."; return 1 ;;
+    esac
+    kk_say "key-rotate: post-apply verify - EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads the staged old value"
   fi
   kk_say "key-rotate: apply done for key=${key}; every copy changed and the copies are equal; the redeploy leg is next"
   [[ "$KK_ABSENT_ALL" == true ]] && { kk_say "key-rotate: recovery path - the old value survives only in running containers; the redeploy is mandatory and urgent"; }

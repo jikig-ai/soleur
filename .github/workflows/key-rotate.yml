@@ -165,7 +165,9 @@ jobs:
 
   apply:
     needs: [guard, approve]
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply == 'true' && needs.guard.outputs.redaction_ok == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
+    # !cancelled(): a job-level if: without a status-check function is implicitly success() && <expr>, and a SKIPPED need
+    # (approve, under mode=plan) makes success() false — a needs.<job>.result read does NOT suppress it (reboot/redeploy/clear convention).
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply == 'true' && needs.guard.outputs.redaction_ok == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KK_APPLY_STEP_S + KR_JOB_SLACK_S) / 60 of the script's BUDGET TABLE.
