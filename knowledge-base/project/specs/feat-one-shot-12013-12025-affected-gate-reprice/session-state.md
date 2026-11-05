@@ -27,3 +27,17 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x3, learnings-researche
 
 ## Review Phase
 - Design pass (simplicity + architecture) found no P1. CTO ruling 2026-11-05 (binding): drop the `suite-rate` subcommand, its test, manifest rows and data; recompute the rates with `glob-rate` and a blank-entry candidates file at the base. Done in the review phase.
+
+### Review dedup ledger (PR #12103, panel SHA 4df02bee84; 11 raw findings across 8 seats -> 9 unique)
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| warm derive counted twice (6630 vs 6522 s) | arithmetic in the cold-gate total | quality | fix commit (review: correct the cold-gate arithmetic) |
+| rc 6 hides a printed red; CI stays authoritative | missing operator instruction for rc 6 | security, userimpact | same |
+| lever list contradicts the serial-chain finding; remedies live only on the closing issue | next-lever coherence and tracker carry-over | userimpact | same |
+| load, suite-phase, edge-set, queue-wait figures cite no committed evidence | claims without committed evidence | quality, pattern, history | same |
+| private clone / 1 s lock timeouts could be copied | measurement-only caveat | userimpact | same |
+| #12025 comment names the dropped tool; #12013 comment mixes bases | stale posted comments | pattern, userimpact | issue comments edited |
+| glob-rate command missing --out; amendment date | command and date accuracy | pattern, history | same |
+| 459 s label, eligibility wording, overstatements, missing outcome lead | wording and clarity | quality | same |
+| deviation (one reading) not surfaced in decision-challenges | missing decision row | pattern | follow-up commit (mechanical row) |
