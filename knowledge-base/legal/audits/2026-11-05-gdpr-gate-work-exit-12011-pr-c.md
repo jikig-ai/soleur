@@ -14,7 +14,7 @@ Scan completion: 3 path matches examined, 0 findings of severity Critical.
 | `GDPR-Art-5e` retention | Not triggered: no new table. Retention of the record is unchanged and still awaits counsel (PA-40 item 17); the card-level notice carries the placeholder `[period to be confirmed by counsel]`. |
 | `GDPR-Art-17` erasure | Not triggered: no new foreign key to `users`. The deletion and redaction path for a retained row is still not built and is tracked in #12080. |
 | `GDPR-Art-17-caller` | Not triggered: no new `ON DELETE RESTRICT` key and no new anonymisation function. |
-| `GDPR-Chapter-V` cross-border | Not triggered: no new vendor package and no new vendor credential. The email code goes through the existing auth service (Supabase, already listed as a processor). Sentry receives event tags only. |
+| `GDPR-Chapter-V` cross-border | Not triggered: no new vendor package and no new vendor credential. The email code goes through the existing auth service (Supabase, already listed as a processor) and its mail relay (Resend, already listed). Sentry receives event tags only. |
 | `GDPR-Art-9` special category | Not triggered: no new column. The free-text note is not special-category by design, but a founder can type anything into it; see finding F-1. |
 
 ## Layer checks run against the diff
@@ -24,11 +24,11 @@ Scan completion: 3 path matches examined, 0 findings of severity Critical.
 - The founder id and email come from the auth service's `getUser()` on the user-context client only. They are never read from the request body or from an unverified token.
 - The web session id is read from the verified token exactly as the database reads it (`session_id`, else `ses_id`, empty meaning absent). A token whose audience is not `authenticated` is refused before any intent is issued.
 - The code is checked on a throwaway client with no cookies and no persistence, and that session is discarded, so the founder's own session id does not change.
-- Attempts are counted before the auth service is asked (5 per challenge in the database) and a per-user ceiling (10 per 15 minutes, per host) sits in front of it.
+- Attempts are counted before the auth service is asked (5 per challenge in the database) and a per-user ceiling (10 per 15 minutes) sits in front of it; that ceiling is in-process, per host and resets on restart, so it is a soft brake and the database bounds are the hard limit.
 
 ### `AP-` API layer: no findings
 
-- Both routes are cookie-session routes: origin check that fails closed on an absent Origin, JSON content type required, per-user rate limit, key validated against the registry pattern, unknown and malformed keys answer the same 404, the `approval-queue` flag read per user.
+- Both routes are cookie-session routes: origin check that fails closed on an absent Origin, JSON content type required, per-user rate limit, key validated against the registry pattern, unknown and malformed keys answer the same 404, the `approval-queue` flag read per user (corrected: the flag is read with `workspaceId: null` and is effectively global, see the review round addendum).
 - The auth service answers 422 for an unknown address and 200 for a known one. The route returns the same body for both, so the route is not an account-enumeration oracle.
 
 ### `T-` data in transit and `DT-EU-CB`: no findings
