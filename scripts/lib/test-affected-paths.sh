@@ -578,6 +578,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGH_VARQ_BAN_PATHS=(
   "scripts/betterstack-query.sh"  # scripts/lint-followthrough-varq-ban.test.sh:441
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
   "scripts/lint-followthrough-varq-ban.test.sh"
+  "knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md"  # plugin-delivery-canary-7490.sh:123 [[ -r ]]; :128 grep -c
 )
 AFFECTED_SCRIPTS_INFRA_DRIFT_AUTOCLOSE_PATHS=(
   ".github/workflows/apply-deploy-pipeline-fix.yml"  # scripts/infra-drift-autoclose.test.sh:24
@@ -1247,6 +1248,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "README.md"  # plugins/soleur/scripts/admin-merge-ready.test.sh:344
   "apps/web-platform/.dockerignore"
   "apps/web-platform/app/layout.tsx"
+  # terraform-target-parity.test.ts:8353 asserts the apply workflow's arm step points a reader at this gate script (wiring pin).
+  "apps/web-platform/infra/arm-heartbeats.sh"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
   "apps/web-platform/infra/cat-infra-config-state.sh"
@@ -1257,6 +1260,11 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   # heartbeat-reprovision-parity.test.ts existsSync/readFileSync's it through checkFeeders' evidence file (timer feeder).
   # terraform-target-parity.test.ts readFileSync's it for the doppler_secret/betteruptime address census.
   "apps/web-platform/infra/cloud-init-registry.yml"
+  # ship-deploy-pipeline-fix-gate.test.ts:586/581 assert the deploy workflow's trigger set carries these members (wiring pins).
+  "apps/web-platform/infra/cron-egress-nftables.sh"
+  "apps/web-platform/infra/cron-egress-postapply-assert.sh"
+  # terraform-target-parity.test.ts:9302 FLAG_WRITERS_ALLOWED: the only paths permitted to write the store flag (wiring pin).
+  "apps/web-platform/infra/git-data-flag-precheck.sh"
   "apps/web-platform/infra/git-data-luks.tf"  # plugins/soleur/test/terraform-target-parity.test.ts:6763
   "apps/web-platform/infra/git-data.tf"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
@@ -1292,6 +1300,13 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/server/watchdog-dispatch-table.ts"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "apps/web-platform/test/broker-mechanism-spike.test.ts"
+  # same trigger-set wiring pin as its cron-egress siblings (ship-deploy-pipeline-fix-gate.test.ts:580);
+  # exact-file spelling reveals 2 rows for cron-egress-allowlist.txt anchored on this file at 11 commits/90d — refused
+  "glob:apps/web-platform/infra/*cron-egress-resolve.sh"
+  "glob:scripts/*betterstack-query.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-agents-rule-budget.py"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-workflows.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*prod-version-drift-b9-probe.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:tests/scripts/*test-infra-privileged-tier-census*.sh"  # real read; exact-file spelling would reveal 50 accept rows; anchor churn 26 commits/90d
   "glob:apps/web-platform/lib/*types*.ts"  # real read; anchor churn 9 commits/90d
   "knowledge-base/engineering/architecture/decisions/"
@@ -1305,6 +1320,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "lefthook.yml"  # plugins/soleur/test/gdpr-gate-glob-liveness.test.sh:8
   "packages/opencode-plugin/"
   "scripts/check-adr-ordinals.sh"
+  # repo-hook-launchers.test.ts:31 devinBaseline pins it in the real hook-command set (wiring pin).
+  "scripts/ensure-kb-index.sh"
   # #11294: terraform-target-parity.test.ts SOURCES scripts/key-rotate.sh and the sibling it sources to read their gate tables (Guard 5).
   "scripts/inngest-key-rotate.sh"
   "scripts/key-rotate.sh"
@@ -1318,6 +1335,8 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/setup-cursor.sh"
   "scripts/setup-devin.sh"
   "scripts/ship-incident-pir-gate.sh"
+  # web-host-escrow-preflight-census.test.ts:50,203 PREFLIGHT_RUN: the census asserts every rebirth-shaped workflow runs exactly this command (wiring pin).
+  "scripts/web-host-escrow-preflight.sh"
   "tests/scripts/lib/destroy-guard-filter-web-platform.jq"  # plugins/soleur/test/token-drift-workflow-causes.test.sh:1218
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
@@ -1541,6 +1560,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
+  "glob:knowledge-base/engineering/operations/runbooks/*git-data-birth.md"  # names-as-data mention; anchor tests/scripts/lib/git-data-birth-readiness-gate.sh churned 15 commits/90d — accept row refused, declared-not-scanned
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
@@ -1673,6 +1693,13 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
+  # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
+  # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
+  "scripts/betterstack-ingest-probe.sh"
+  "scripts/ensure-doppler.sh"
+  "scripts/kb-drift-walker.sh"
+  "scripts/supabase-advisor-scan.sh"
+  "scripts/supabase-logs-query.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
   # S9 (#9757 item 2): the stage extracts and EXECUTES the rehearsal workflow's two terraform destroy step bodies under stubs and pins the
@@ -3091,6 +3118,16 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   "tests/scripts/_git_fixture_env.py"
   "tests/scripts/test-scratch-residue.sh"
   "tests/scripts/test-weakness-miner.sh"
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"  # test-weakness-miner.sh:1196 awk/cmp guard reads
+  ".github/workflows/build-inngest-bootstrap-image.yml"  # cloud-init-inngest-bootstrap.test.sh:1430 [[ -r ]]; :1565 git show; zot-pull-mutation.test.sh:92 cp -a
+  ".github/workflows/scheduled-vinngest-digest-freshness.yml"  # cloud-init-inngest-bootstrap.test.sh:512 [[ -r ]]; zot-pull-mutation.test.sh:97 cp -a
+  ".github/workflows/weakness-miner.yml"  # test-weakness-miner.sh:192 [[ -f ]]; :193 awk add-paths
+  "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md"  # git-data-wipe-assert.test.sh:2611 python3-read; :2639 cmp -s
+  "scripts/dogfood/assert-ollama-loopback.sh"  # grok-gpu-bootstrap.test.sh:17 [[ -f ]]; :20 bash -n
+  "scripts/dogfood/grok-gpu-bootstrap.sh"  # grok-gpu-bootstrap.test.sh:16 [[ -f ]]; :20 bash -n; :27 grep -qE
+  "glob:.github/workflows/*git-data-rung2-rehearsal.yml"  # names-as-data mention; anchor tests/scripts/lib/git-data-birth-readiness-gate.sh churned 15 commits/90d — accept row refused, declared-not-scanned
+  "glob:knowledge-base/engineering/operations/runbooks/*git-data-birth.md"  # names-as-data mention; anchor tests/scripts/lib/git-data-birth-readiness-gate.sh churned 15 commits/90d — accept row refused, declared-not-scanned
+  "glob:knowledge-base/engineering/operations/runbooks/*git-data-rung2-rehearsal.md"  # names-as-data mention; anchor tests/scripts/lib/git-data-birth-readiness-gate.sh churned 15 commits/90d — accept row refused, declared-not-scanned
 )
 
 # plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime — the browser-lifetime guard contract.
@@ -3267,6 +3304,57 @@ AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
   "tests/scripts/fixtures/battery-tag-bare-fetch.sh"
   "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"
   "tests/scripts/test-plan-gate-preamble.sh"  # scripts/battery-tag-authorship.test.sh:672
+  "tests/scripts/lib/plan-gate-preamble.sh"  # test-plan-gate-preamble.sh:32 source LIB
+  "glob:*.nvmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*AGENTS.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*AGENTS.rules.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*CLAUDE.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*package-lock.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*package.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/actions/cf-tunnel-ssh-bridge/*action.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*apply-deploy-pipeline-fix.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*apply-web-platform-infra.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*ci.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*git-data-cutover.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*scheduled-terraform-drift.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*workspaces-luks-cutover.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*workspaces-luks-verify.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*.npmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*.nvmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*package-lock.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*package.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*tsconfig.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*vitest.config.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/infra/*cloud-init.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/infra/*doppler-config-inventory.txt"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/scripts/*vitest-related.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*global-setup-git-tripwire.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*repo-wide-containment.test.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*repo-wide-suites.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*setup-dom.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*setup-node.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*vitest.canary.config.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:plugins/soleur/scripts/*generate-c4-from-components.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:plugins/soleur/test/*c4-from-components.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:plugins/soleur/test/*test-helpers.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*cf-tunnel-liveness-gate-mutations.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*check-cloudflare-token-drift.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*check-cloudflare-token-drift.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*guard-vacuity-floor.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*lint-orphan-test-suites.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*lint-orphan-test-suites.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*registry-pull-path-health.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*registry-restore-from-ghcr.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*suite-shard-legs-heavy.tsv"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*suite-shard-legs.tsv"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*test-all-affected.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*zot-mirror-diagnosis.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/lib/*affected-glob.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/lib/*rows-range.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-gate-mutation-battery.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-pull-path-health.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-restore-from-ghcr.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/lib/*restore-engine-header.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
 )
 
 # scripts/test-all-fast-tier-budget (#9763) — the fast-tier budget ratchet. Its verdict reads the
@@ -3561,6 +3649,61 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FANOUT_SUITE_SCOPE_TEST_SH_PATHS=(
   "plugins/soleur/skills/review/SKILL.md"  # plugins/soleur/test/fanout-suite-scope.test.sh:35
   "plugins/soleur/test/"
   "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/scripts/lib/session-state.sh"  # test-contention.sh:1324 [[ -f ]]; :1352 source
+  "glob:*.nvmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*AGENTS.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*AGENTS.rules.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*CLAUDE.md"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*package-lock.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:*package.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/actions/cf-tunnel-ssh-bridge/*action.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/scripts/test/*run-all.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*apply-deploy-pipeline-fix.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*apply-web-platform-infra.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*ci.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*git-data-cutover.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*scheduled-terraform-drift.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*workspaces-luks-cutover.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*workspaces-luks-verify.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*.npmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*.nvmrc"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*package-lock.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*package.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*tsconfig.json"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/*vitest.config.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/infra/*cloud-init.yml"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/infra/*doppler-config-inventory.txt"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/infra/*run-registered-suites.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/scripts/*vitest-related.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*global-setup-git-tripwire.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*repo-wide-containment.test.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*repo-wide-suites.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*setup-dom.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*setup-node.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:apps/web-platform/test/*vitest.canary.config.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:plugins/soleur/scripts/*generate-c4-from-components.ts"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*battery-tag-authorship-mutations.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*battery-tag-authorship.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*cf-tunnel-liveness-gate-mutations.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*check-cloudflare-token-drift.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*check-cloudflare-token-drift.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*guard-vacuity-floor.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*lint-orphan-test-suites.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*lint-orphan-test-suites.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*registry-pull-path-health.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*registry-restore-from-ghcr.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*suite-exit-class-parity.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*suite-shard-legs-heavy.tsv"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*suite-shard-legs.tsv"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*test-all-affected.test.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*zot-mirror-diagnosis.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-plan-gate-preamble.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-gate-mutation-battery.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-pull-path-health.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/*test-registry-restore-from-ghcr.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/fixtures/*battery-tag-bare-fetch.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/fixtures/*battery-tag-marker-no-ledger.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
+  "glob:tests/scripts/lib/*restore-engine-header.sh"  # names-as-data mention; anchor scripts/lib/test-relevance-paths.sh churned 13 commits/90d — accept row refused, declared-not-scanned
 )
 
 # plugins/soleur/test/fixture-env-adoption — census of fixture-env adoption across the test corpus.
@@ -3618,6 +3761,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PREFLIGHT_CHECK10_SUITE_INTEGRITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js"  # plugins/soleur/test/harness-model-map.test.ts:20
   "plugins/soleur/skills/preflight/SKILL.md"
   "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/skills/plan/references/plan-issue-templates.md"  # observability-schema-parity.test.ts:101 read(TEMPLATES)
+  "glob:*package.json"  # names-as-data mention; anchor plugins/soleur/test/preflight-discoverability-test.test.ts churned 111 commits/90d — accept row refused, declared-not-scanned
 )
 
 # scripts/lint-shell-trace-credential-refusal (#9763 demotion) — tree-wide *.sh scan for
@@ -3800,6 +3945,27 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/zot-restart-loop-alarm.sh"  # scripts/lint-betterstack-emitter-read.test.sh:298
+  "apps/web-platform/infra/betterstack-logs-alerts.tf"  # send-failed-alert-probe-8097.sh:117 [[ -f ]]; probe-inngest-524-count.sh:34 awk
+  "apps/web-platform/infra/server.tf"  # check-deploy-script-parity.sh:113 assert_host_name_mapping_stable
+  "apps/web-platform/infra/variables.tf"  # check-deploy-script-parity.sh:112 parse_host_keys
+  "apps/web-platform/infra/zot-registry.tf"  # registry-replace-preflight.sh:142 [[ -r ]]; :147 grep -E
+  "scripts/followthroughs/inngest-soak-6178.function-ids.txt"  # inngest-soak-6178.sh:248 [[ -r ]]; :249 grep -vE
+  "scripts/inngest-dedicated-host-classify.sh"  # inngest-probe-heartbeat-feeder.sh:166 source _ic_lib
+  "scripts/lib/inngest-probe-row.sh"  # inngest-probe-heartbeat-feeder.sh:150 source _ipr_lib
+  "glob:.github/workflows/*apply-deploy-pipeline-fix.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*build-inngest-bootstrap-image.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*git-data-cutover.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*inngest-config-drift.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*reusable-release.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*scheduled-inngest-health.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:.github/workflows/*scheduled-zot-restart-loop.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:knowledge-base/engineering/architecture/decisions/*ADR-027-process-local-state-for-runners.md"  # names-as-data mention; anchor apps/web-platform/infra/ci-deploy.sh churned 40 commits/90d — accept row refused, declared-not-scanned
+  "glob:knowledge-base/engineering/architecture/decisions/*ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*ci-pr-affected-audit.accept.tsv"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*image-cve-triage.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/*inngest-key-rotate.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/followthroughs/*inngest-hostmetrics-trim-11602.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
+  "glob:scripts/followthroughs/*inngest-luks-keeper-dark-11265.sh"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned
 )
 
 # scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
@@ -3905,6 +4071,16 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
   "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/test-all.sh"
+)
+
+# plugins/soleur/test/affected-tests-pool-default.test.sh — the #12013 pool-width default suite. It
+# drives plugins/soleur/scripts/affected-tests.sh against a stub runner in its own mktemp world and
+# builds mutants from a copy of that script plus its sourced libs (plugins/soleur/scripts/lib/affected-tests/),
+# so the SUT and those libs are its subject; the stub runner is synthesized, not scripts/test-all.sh.
+AFFECTED_PLUGINS_SOLEUR_TEST_AFFECTED_TESTS_POOL_DEFAULT_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/affected-tests.sh"
+  "plugins/soleur/scripts/lib/affected-tests/"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
 # plugins/soleur/skills/verification-scaffold/test/generator.test.sh — the corpus-walk
@@ -4293,6 +4469,9 @@ AFFECTED_SCRIPTS_GIT_DATA_REPLICATION_SIGNAL_11704_PATHS=(
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
   "apps/web-platform/infra/cloud-init-git-data.yml"  # tests/scripts/test-git-data-birth-readiness-gate.sh:392
   "apps/web-platform/infra/git-data.tf"
+  # real read; sed-extracts the canonical PATTERN at test-git-data-birth-readiness-gate.sh:2970;
+  # exact-file spelling would reveal ~142 pairs anchored on a 71-commits/90d file — doubly refused
+  "glob:.claude/hooks/*grep-q-pipe-guard.test.sh"
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

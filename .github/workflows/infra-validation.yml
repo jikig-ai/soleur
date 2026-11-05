@@ -705,8 +705,12 @@ jobs:
     # cost (ADR-238's objection, measured at ~60 s per leg: checkout + terraform +
     # cloud-init + nftables + docker assert). The 403 s is the SERIAL bound on a
     # leg's suite sum — at -P4 the realized wall clock lands lower.
-    # 15 min = ~2.2x the measured worst leg — the same convention the old 1.4x serial
-    # ceiling used, held against a MEASURED leg rather than a projected whole.
+    # 15 min was ~2.2x the 6.7-min worst leg measured here — the same convention the old
+    # 1.4x serial ceiling used, held against a MEASURED leg rather than a projected whole.
+    # Re-measured 2026-11-04 (10 latest green pull_request runs, 40 legs): worst 14.0 min,
+    # p95 13.4 min, so the ceiling is now ~1.07x the worst leg. p95 is past the 12-minute
+    # raise-to-20 trigger (recorded in the 2026-11-04 CI runner-minute audit); the raise
+    # is #12091.
     # Per-suite stalls are bounded INSIDE the leg by the runner's `timeout` wrapper
     # (default 360 s; the nine override entries in the runner's bound map carry the
     # step-level `timeout-minutes` forward plus headroom for the two ~200 s suites

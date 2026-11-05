@@ -143,7 +143,6 @@ plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	knowledg
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base
 plugins/soleur/test/ux-design-lead-output-path-guard.test.sh	knowledge-base/product/design
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
-scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md

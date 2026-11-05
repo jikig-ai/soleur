@@ -483,3 +483,7 @@ Criterion 1 alone justifies Part 1. It does not touch Part 2.
 **Part 2 (not built).** The synthetic hosted-ask canary (a production write that would observe arrival of the lane's pino line and
 Sentry event in the production sinks) is NOT built. It lives in #10111 under an `Operator-reserved:` hold. This amendment ships nothing
 that emits into a production sink and records no operator authorisation or acceptance.
+
+## Addendum 2026-11-04 (#12026): SDK / bundled-CLI bump to 0.3.311 / 2.1.311
+
+Re-eval criterion 1 ("any SDK, bundled-CLI or sandbox-option bump lands") **fires again** for this bump. What was and was not measured: the real-SDK sandbox suites (credential-deny, wrapped-command, masked-`/proc`) pass at 0.3.311 under `C4_BWRAP_REQUIRED=1`, but they do not exercise the must-ask lane's hook ordering, and the ordering measurement cited in `server/sandbox-hook.ts` (#10054) was taken on SDK 0.3.284. No pre-merge probe of the lane was run at 0.3.311. The evidence is the paid `scheduled-real-sdk-ask-probe` run on the merge, which by this ADR's own rule cannot discharge a Flip criterion without a `build_sha` match against the deployed build. Until that run is read green, the lane is unverified at the new pin; a red or absent run keeps #12026 open per its Phase 4.3 step. No other part of this ADR changes.
