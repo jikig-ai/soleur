@@ -1,19 +1,25 @@
-# Legal acceptance: read a Request changes note
+# Legal acceptance: read a Request changes note, reconcile a row, triage the signals
 
 Pull-only (ADR-319, amendment 2026-11-05). The note lives only in `legal_acceptance.requested_edit`; nothing pushes it
 anywhere (no email, issue or chat). The operator reads it personally, never an agent session: the verify endpoint returns
-`status`, `text_hash`, `decided_at` and `row_ok` only.
+`status`, `text_hash`, `decided_at` and `row_ok` only. The note is not readable through the endpoint or through any
+`service_role` path. This is a rule for you to follow, not a technical block: a database-owner credential could read it, and
+you hold that credential. Never paste the note into an agent session.
 
-## Read
+Every query below runs in the SQL editor of the **production Supabase project** (prd), signed in with your own login: no ssh,
+no service key. Dev and prd are distinct projects; a row in dev is not a row in prd. Every query is scoped to the one founder id
+the endpoint is configured with, `LEGAL_ACCEPTANCE_FOUNDER_ID`, because the flag is global and the key is
+`(founder_id, key, text_hash)`.
 
-Sign in to the Supabase dashboard with your own login and open the SQL editor of the project that holds the decision (no ssh,
-no service key). List the rows (no note text), then read one by key and hash:
+## Read a note
+
+List the rows (no note text), then read one by key and hash:
 
 ```sql
-select key, version, text_hash, created_at from public.legal_acceptance
- where choice = 'request_changes' order by created_at desc;
+select founder_id, key, version, text_hash, created_at from public.legal_acceptance
+ where founder_id = '<LEGAL_ACCEPTANCE_FOUNDER_ID>' and choice = 'request_changes' order by created_at desc;
 select requested_edit from public.legal_acceptance
- where choice = 'request_changes' and key = '<key>' and text_hash = '<64 hex>';
+ where founder_id = '<LEGAL_ACCEPTANCE_FOUNDER_ID>' and choice = 'request_changes' and key = '<key>' and text_hash = '<64 hex>';
 ```
 
 Do not forward, quote or paste the note into a ticket, pull request, chat or agent session; describe any change in your own
@@ -25,15 +31,75 @@ A decision is final for its text hash. Edit `apps/web-platform/server/legal-acce
 new `text_hash`, so the founder is asked again and a new row is written. A Decline needs the same. A hold that named the old
 hash stays held until its gate names the new one.
 
-## A row whose acknowledgement was lost
+## Rows with no acknowledgement
 
-A Sentry event `op=row_without_event` means the web route recorded no acknowledgement for that row. Confirm with the founder
-that the decision was theirs, then add it in the same SQL editor:
+List the decision rows that have no acknowledgement (the endpoint only looks at a row when it is asked about it, so this is the
+way to see them all):
+
+```sql
+select l.id, l.key, l.text_hash, l.choice, l.created_at
+  from public.legal_acceptance l
+  left join public.legal_acceptance_ack a on a.acceptance_id = l.id
+ where l.founder_id = '<LEGAL_ACCEPTANCE_FOUNDER_ID>' and a.acceptance_id is null
+ order by l.created_at desc;
+```
+
+## A Sentry event `op=row_without_event`
+
+It means the web route recorded no acknowledgement for that row; the event carries the key and the text hash. A row that is
+less than two minutes old is not yet reported (the grace). It is alert-only (if the reconciliation read itself fails, the endpoint answers 503 or 502, never a partial 200). Confirm with the founder that
+the decision was theirs, then add the acknowledgement:
 
 ```sql
 insert into public.legal_acceptance_ack (acceptance_id)
-select id from public.legal_acceptance where key = '<key>' and text_hash = '<64 hex>'
+select id from public.legal_acceptance
+ where founder_id = '<LEGAL_ACCEPTANCE_FOUNDER_ID>' and key = '<key>' and text_hash = '<64 hex>'
 on conflict do nothing;
 ```
 
-If the founder does not recognise the decision, leave the row as it is and escalate; the record is evidence.
+The `acked_at` of a row you insert is the time you inserted it, not the time the event was flushed. Then **resolve** the Sentry
+issue (never archive it, so that a recurrence reopens it). If the founder does not recognise the decision, leave the row as it
+is and escalate; the record is evidence.
+
+A missing `row_without_event` is not proof that the `accepted` event was delivered: a `true` result from the event flush means
+the flush completed without an error, not that Sentry received and kept the event (it can also be `true` when no DSN is
+configured, or when the event was dropped before sending). The signal proves only the converse, that the web route did not
+acknowledge a row.
+
+## Triage: `record_invalid` and `store_failed`
+
+`record_invalid`: a stored row failed its checksum (the endpoint passed it through as `invalid`, `row_ok` false; the gate keeps
+the hold). Do not edit the row. Treat it as a possible integrity incident: escalate to the CLO and CTO and assess it against
+`knowledge-base/legal/breach-register.md`. The event carries the key and the text hash.
+
+`store_failed`: read the tag `stage`.
+
+| stage | What failed | What to do |
+|---|---|---|
+| `verify` | The lookup call in the endpoint | Check that migrations 184 and 185 are applied in prd and that Supabase is up; the gate shows "not available right now" and retries cleanly. |
+| `ack_state` | The reconciliation read in the endpoint | Same check; a "function not found" answer means the migration or the schema cache; the endpoint answered 503 and no 200. |
+| `ack` | The decide path could not write the acknowledgement (the flush threw, or the write failed) | The decision itself is recorded. The row will show as `row_without_event` when verified; reconcile it as above. |
+| `registry` | The legal text file could not be read | The text directory is missing from the image or unreadable; redeploy a build that contains `server/legal-acceptance/texts`. No data is at risk. |
+| `config` | The token or the founder id is set but malformed (once per process; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
+
+After you have dealt with an event, resolve (never archive) its Sentry issue.
+
+A flush that is slow or answers false is not a Sentry event: it writes one warning log line (`legal acceptance ack skipped:
+flush not confirmed`), the row stays unacknowledged, and the next verify surfaces it.
+
+## Before the `approval-queue` flag is on in prd
+
+There is no backfill migration, so check once, in the production project, before the flag is on for anyone:
+
+```sql
+select count(*) from public.legal_acceptance;
+```
+
+It must be 0. If it is not, insert the acknowledgement rows for those rows first (the insert above, once per row, scoped by
+founder id), or each of them raises a false `row_without_event` when verified.
+
+When the secrets (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`, `LEGAL_ACCEPTANCE_FOUNDER_ID`) are applied (#12196): the container receives them
+through an env file that is frozen when the container is created, so a restart is not enough and a redeploy is needed. While the
+endpoint is dark the probe expects the body `{"error":"Not available"}` with `cache-control: no-store`, not just a 503. Schedule
+a pull of `store_failed`, `record_invalid`, `row_without_event` and the unacknowledged-rows query above at +1 hour and +24 hours
+after the redeploy.

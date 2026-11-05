@@ -38,6 +38,8 @@ Design properties, as ADR-319 states them. Each is a property of the **design as
 | 12 | (PR-C) A Yes needs an emailed code confirmed within 5 minutes on a throwaway client; the email address comes from the session only, never the request, so the send step has no address-enumeration surface; a per-user attempt ceiling applies on top of the 5 per challenge (in-process, per host, resets on restart; the database bounds (5 per challenge, 3 challenges per 15 minutes) are the hard limit); the session id used is the one the recording function reads. | the reauth and decide routes in `apps/web-platform/app/api/legal-acceptance/` |
 | 13 | (PR-C) The card states that an answer is final and that changing it needs a new text version; it has no undo. | the card copy |
 
+> **Superseded 2026-11-05 (#12187, PR-D; fires on its merge), as to design property 9 ("Nothing in the product reads the table to enforce anything"):** from that merge the check endpoint and the ship hold gate read the table. Property 9 describes the state at PR-B and PR-C. The re-evaluation trigger is met and recorded in the LIA Addendum 2026-11-05; the sign-off block stays blank.
+
 Property 3 of the CTO ruling (a holder of production credentials can mint a founder session) is carried as a residual (section 3), not a property.
 
 ## 2. What is NOT attested

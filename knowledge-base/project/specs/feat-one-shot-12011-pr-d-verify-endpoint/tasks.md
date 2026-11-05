@@ -11,29 +11,29 @@ Scope: the check endpoint, its own bearer token, the `web-acceptance` hold gate,
 
 ## 2. Failing tests first
 
-- [ ] 2.1 `migration-185-legal-acceptance-ack.test.ts` (static shape, mirrors 184) and the tenant-isolation extension
-- [ ] 2.2 `verify-service.test.ts` (strict payload, every status, `bad_payload`)
-- [ ] 2.3 `verify-route.test.ts` (Guard 2 rows 1 to 9, closed status set, middleware predicate for `PUBLIC_PATHS`, no note in any payload)
-- [ ] 2.4 `ack-reconciliation.test.ts` (Guard 3: flush true/false/throws/never resolves, ack error, `already_recorded`, grace, two hashes)
-- [ ] 2.5 `cross-layer-limits.test.ts` (key and hash shapes extracted from source; fails on empty extraction)
-- [ ] 2.6 `canonical.ts` `read_failed` versus `unknown_key` unit test
-- [ ] 2.7 `hold-gate-eval.test.sh` additions with `doppler` and `curl` PATH stubs (Guard 1 rows 1 to 11 and the closed reason table) and `plugins/soleur/scripts/lib/bearer-curl.sh` test
+- [x] 2.1 `migration-185-legal-acceptance-ack.test.ts` (static shape, mirrors 184) and the tenant-isolation extension
+- [x] 2.2 `verify-service.test.ts` (strict payload, every status, `bad_payload`)
+- [x] 2.3 `verify-route.test.ts` (Guard 2 rows 1 to 9, closed status set, middleware predicate for `PUBLIC_PATHS`, no note in any payload)
+- [x] 2.4 `ack-reconciliation.test.ts` (Guard 3: flush true/false/throws/never resolves, ack error, `already_recorded`, grace, two hashes)
+- [x] 2.5 `cross-layer-limits.test.ts` (key and hash shapes extracted from source; fails on empty extraction)
+- [x] 2.6 `canonical.ts` `read_failed` versus `unknown_key` unit test
+- [x] 2.7 `hold-gate-eval.test.sh` additions with `doppler` and `curl` PATH stubs (Guard 1 rows 1 to 11 and the closed reason table) and `plugins/soleur/scripts/lib/bearer-curl.sh` test
 
 ## 3. Core implementation
 
-- [ ] 3.1 Migration 185 (+ down, + `verify/185`), annotations, `DSAR_TABLE_EXCLUSIONS` entry (Phase D1)
-- [ ] 3.2 `canonical.ts` split; `internal-auth.ts` closed-union name; `lib/routes.ts` narrow entry; `.env.example` comments (Phase D2)
-- [ ] 3.3 `service.ts` `verifyAcceptance`, `ackAcceptance`, `ackState`; the endpoint route (Phase D2)
-- [ ] 3.4 `ops.ts` `record_invalid`, `store_failed`; `decideLegal` injected flush and off-path ack; contract test exempt list naming #12195 (Phase D4)
-- [ ] 3.5 `bearer-curl.sh` helper; `hold-gate-eval.sh` kind, `PERSON` result, no-delegation classification, closed reason table; `trigger.sh` adopts the helper only if its suite is unchanged (Phase D3)
-- [ ] 3.6 `operator-holds.md` and `standing-delegation.md` section 3 (Phase D3)
+- [x] 3.1 Migration 185 (+ down, + `verify/185`), annotations, `DSAR_TABLE_EXCLUSIONS` entry (Phase D1)
+- [ ] 3.2 `canonical.ts` split; closed-union name in the new `lib/internal-auth-named.ts` (`lib/internal-auth.ts` stays byte-identical, CTO ruling D2); `lib/routes.ts` prefix entry; `.env.example` comments (Phase D2). Not complete: `.env.example` cannot be edited in this environment (Read deny rule); the two comment lines are left for the operator
+- [x] 3.3 `service.ts` `verifyAcceptance`, `ackAcceptance`, `ackState`; the endpoint route (Phase D2)
+- [x] 3.4 `ops.ts` `record_invalid`, `store_failed`; `decideLegal` injected flush and off-path ack; contract test exempt list naming #12195 (Phase D4)
+- [x] 3.5 `bearer-curl.sh` helper; `hold-gate-eval.sh` kind, `PERSON` result, no-delegation classification, closed reason table; `trigger.sh` adopts the helper only if its suite is unchanged (not adopted) (Phase D3)
+- [x] 3.6 `operator-holds.md` and `standing-delegation.md` section 3 (Phase D3)
 
 ## 4. Records and docs
 
-- [ ] 4.1 Runbook `legal-acceptance-note-read.md` (Phase D5)
-- [ ] 4.2 PA-40 addendum (merge-conditioned wording) and attestation narrowing with `Superseded` marker (Phase D6)
-- [ ] 4.3 ADR-319 amendment, ADR-320 scope note, `legal-acceptance/README.md` (Phase D7)
-- [ ] 4.4 C4 edits, `scripts/regenerate-c4-model.sh`, C4 tests including freshness and count parity (Phase D7)
+- [x] 4.1 Runbook `legal-acceptance-note-read.md` (Phase D5)
+- [x] 4.2 PA-40 addendum (merge-conditioned wording) and attestation narrowing with `Superseded` marker (Phase D6)
+- [x] 4.3 ADR-319 amendment, ADR-320 scope note, `legal-acceptance/README.md` (Phase D7)
+- [x] 4.4 C4 edits, `scripts/regenerate-c4-model.sh`, C4 tests including freshness and count parity (Phase D7)
 
 ## 5. Gate and ship
 

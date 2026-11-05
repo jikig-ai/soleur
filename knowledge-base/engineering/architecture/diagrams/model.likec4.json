@@ -1128,7 +1128,7 @@
 },
 "technology": "Supabase (legal_acceptance, legal_reauth_event; mig 184; legal_acceptance_ack; mig 185)",
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration, and can never read the note (code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it and only the operator holds one; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
 },
 "title": "Legal Acceptances",
 "kind": "database",
@@ -1487,6 +1487,17 @@
 },
 "id": "1535lse94kiah",
 "title": "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; an absent or malformed pin refuses the dial (#5914)"
+},
+"15chxlqosi117": {
+"technology": "HTTPS (bearer)",
+"source": {
+"model": "platform.plugin.ship"
+},
+"target": {
+"model": "platform.webapp"
+},
+"id": "15chxlqosi117",
+"title": "Hold evaluator (web-acceptance gate) asks the legal-acceptance check endpoint whether the founder decided a given text hash: GET /api/internal/legal-acceptance/[key]?hash= over HTTPS with a bearer token, no redirects. Read-only; the answer is status, text_hash, decided_at and row_ok, never the note. Dark (503) until the token and founder id are configured (#12196)"
 },
 "15jcg8gdjqck": {
 "technology": "HTTPS (GitHub REST API via gh)",
@@ -2248,17 +2259,6 @@
 "id": "2d9pjgz6mt8ye",
 "title": "ADOPTING #10136 (ADR-294): the same sends over TLS 1.2+ to a host-local stunnel terminator that forwards to 127.0.0.1:8288; Node verifies a Terraform-minted pinned cert through NODE_EXTRA_CA_CERTS, selected per deploy by the INNGEST_LINK_TLS flag (absent means the legacy edge). Inert until the host replace and the flag flip"
 },
-"2df4z304blzik": {
-"technology": "Doppler CLI (secrets get)",
-"source": {
-"model": "platform.plugin.ship"
-},
-"target": {
-"model": "doppler"
-},
-"id": "2df4z304blzik",
-"title": "Reads the one check-endpoint token (LEGAL_ACCEPTANCE_VERIFY_TOKEN, soleur/prd) per evaluation; the value never reaches argv or output"
-},
 "2dhzc21wqmurs": {
 "technology": "HTTPS via CF edge",
 "source": {
@@ -2410,17 +2410,6 @@
 "id": "2mxax9b4p3nnd",
 "title": "CI Claude turns (claude-code-action, ci.yml real-turn gates) on the soleur-ci-eval workspace key — spend-limited, never a prd key (ADR-244); the non-blocking real-SDK ask probe (ADR-284)"
 },
-"2onz6r52zhl8u": {
-"technology": "HTTPS (bearer)",
-"source": {
-"model": "platform.plugin.ship"
-},
-"target": {
-"model": "platform.webapp"
-},
-"id": "2onz6r52zhl8u",
-"title": "Hold evaluator (web-acceptance gate) asks the legal-acceptance check endpoint whether the founder decided a given text hash: GET /api/internal/legal-acceptance/[key]?hash= over HTTPS with a bearer token, no redirects. Read-only; the answer is status, text_hash, decided_at and row_ok, never the note"
-},
 "2pdvbpkpcib7q": {
 "technology": "systemd unit dependency",
 "source": {
@@ -2442,17 +2431,6 @@
 },
 "id": "2q69o0kgcwqkr",
 "title": "promptfoo eval grids on the soleur-ci-eval workspace key (Doppler ci; ADR-244)"
-},
-"2qexs2flrxhhx": {
-"technology": "Supabase SQL editor (owner login)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "platform.infra.legalAcceptanceStore"
-},
-"id": "2qexs2flrxhhx",
-"title": "The operator (the first founder) personally reads a Request changes note with an owner-level query in their own database login, following the legal-acceptance-note-read runbook. Pull-only: nothing pushes the note anywhere. Operator-only and not agent-reachable"
 },
 "2qpqjo6rm4u14": {
 "technology": "curl POST (private-net, plain-HTTP /v0/gql)",
@@ -2629,6 +2607,17 @@
 },
 "id": "34wi5wsojzgx9",
 "title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
+},
+"34xsbrxtph8mt": {
+"technology": "Supabase SQL editor (owner login)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "platform.infra.legalAcceptanceStore"
+},
+"id": "34xsbrxtph8mt",
+"title": "The operator (the first founder) personally reads a Request changes note with an owner-level query in their own database login, following the legal-acceptance-note-read runbook. Pull-only: nothing pushes the note anywhere. Operator-only by policy: not readable through the endpoint or any service_role path; a database-owner credential could read it and only the operator holds one"
 },
 "351viohfkymya": {
 "technology": "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)",
@@ -2974,6 +2963,17 @@
 },
 "id": "3osbltichpca8",
 "title": "Gates adapter creation"
+},
+"3ppguetoti2i": {
+"technology": "Doppler CLI (secrets get)",
+"source": {
+"model": "platform.plugin.ship"
+},
+"target": {
+"model": "doppler"
+},
+"id": "3ppguetoti2i",
+"title": "Once the token exists (#12196), reads the one check-endpoint token (LEGAL_ACCEPTANCE_VERIFY_TOKEN, soleur/prd) per evaluation; the value never reaches argv or output"
 },
 "3q20kgm5yx0v": {
 "technology": "HTTPS (REST + GraphQL)",
@@ -5641,8 +5641,8 @@
 "parent": null,
 "relations": [
 "23n87bgtkt6pf",
-"2qexs2flrxhhx",
 "2s7aers5b5t5n",
+"34xsbrxtph8mt",
 "3s4uhwwcpdu6u"
 ],
 "color": "gray",
@@ -6828,8 +6828,8 @@
 },
 "parent": null,
 "relations": [
-"2df4z304blzik",
-"2tyh43wl29dea"
+"2tyh43wl29dea",
+"3ppguetoti2i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -12015,8 +12015,8 @@
 },
 "parent": "platform",
 "relations": [
+"15chxlqosi117",
 "1iehv9mtlcvv",
-"2onz6r52zhl8u",
 "t0fnv29j13ql"
 ],
 "color": "gray",
@@ -13896,14 +13896,14 @@
 "id": "jp2v42",
 "source": "platform.plugin",
 "target": "doppler",
-"label": "Reads the one check-endpoint token \n(LEGAL_ACCEPTANCE_VERIFY_TOKEN, \nsoleur/prd) per evaluation; the value \nnever reaches argv or output",
+"label": "Once the token exists (#12196), reads \nthe one check-endpoint token \n(LEGAL_ACCEPTANCE_VERIFY_TOKEN, \nsoleur/prd) per evaluation; the value \nnever reaches argv or output",
 "points": [
 [
 1713,
 1662
 ],
 [
-1750,
+1751,
 1633
 ],
 [
@@ -13928,11 +13928,11 @@
 ],
 [
 4642,
-1632
+1634
 ],
 [
-5077,
-1692
+5078,
+1693
 ],
 [
 5318,
@@ -13941,13 +13941,13 @@
 ],
 "labelBBox": {
 "x": 3298,
-"y": 1478,
+"y": 1470,
 "width": 276,
-"height": 90
+"height": 106
 },
 "parent": null,
 "relations": [
-"2df4z304blzik"
+"3ppguetoti2i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -17956,7 +17956,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration, and can never read the note (code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it and only the operator holds one; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
 },
 "tags": [],
 "notation": "Data store",
@@ -20606,7 +20606,7 @@
 },
 "parent": null,
 "relations": [
-"2qexs2flrxhhx"
+"34xsbrxtph8mt"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29014,7 +29014,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 2335,
-"y": 2723,
+"y": 2724,
 "width": 360,
 "height": 180,
 "labelBBox": {
@@ -29055,7 +29055,7 @@
 "technology": "Orchestrator",
 "kind": "component",
 "x": 1545,
-"y": 3647,
+"y": 3648,
 "width": 379,
 "height": 180,
 "labelBBox": {
@@ -29090,7 +29090,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "x": 3099,
-"y": 2723,
+"y": 2724,
 "width": 377,
 "height": 180,
 "labelBBox": {
@@ -29125,7 +29125,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "x": 3123,
-"y": 2321,
+"y": 2322,
 "width": 330,
 "height": 180,
 "labelBBox": {
@@ -29163,7 +29163,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 2329,
-"y": 3504,
+"y": 3505,
 "width": 371,
 "height": 180,
 "labelBBox": {
@@ -29200,7 +29200,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 3855,
-"y": 3705,
+"y": 3706,
 "width": 383,
 "height": 180,
 "labelBBox": {
@@ -29237,7 +29237,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 2323,
-"y": 3214,
+"y": 3215,
 "width": 384,
 "height": 180,
 "labelBBox": {
@@ -29275,7 +29275,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 3882,
-"y": 3995,
+"y": 3996,
 "width": 330,
 "height": 180,
 "labelBBox": {
@@ -29313,7 +29313,7 @@
 "technology": "Workflow",
 "kind": "component",
 "x": 2340,
-"y": 2407,
+"y": 2408,
 "width": 350,
 "height": 180,
 "labelBBox": {
@@ -29351,7 +29351,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "x": 3093,
-"y": 3013,
+"y": 3014,
 "width": 390,
 "height": 180,
 "labelBBox": {
@@ -29388,7 +29388,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "x": 3101,
-"y": 3303,
+"y": 3304,
 "width": 374,
 "height": 180,
 "labelBBox": {
@@ -29425,7 +29425,7 @@
 "technology": "Validation Gate",
 "kind": "component",
 "x": 4596,
-"y": 3995,
+"y": 3996,
 "width": 355,
 "height": 180,
 "labelBBox": {
@@ -29546,7 +29546,7 @@
 "technology": "Documentation",
 "kind": "component",
 "x": 3869,
-"y": 3303,
+"y": 3304,
 "width": 355,
 "height": 180,
 "labelBBox": {
@@ -29639,7 +29639,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "x": 4600,
-"y": 3494,
+"y": 3495,
 "width": 348,
 "height": 200,
 "labelBBox": {
@@ -29999,56 +29999,56 @@
 ],
 [
 1326,
-3642
+3643
 ],
 [
 1673,
-3485
+3486
 ],
 [
 1985,
-3390
+3391
 ],
 [
 2105,
-3353
+3355
 ],
 [
 2177,
-3428
+3429
 ],
 [
 2263,
-3336
+3337
 ],
 [
 2289,
-3307
+3308
 ],
 [
 2270,
-3196
+3197
 ],
 [
 2283,
-3159
+3160
 ],
 [
 2317,
-3068
+3069
 ],
 [
 2379,
-2977
+2978
 ],
 [
 2430,
-2911
+2912
 ]
 ],
 "labelBBox": {
 "x": 1657,
-"y": 3388,
+"y": 3389,
 "width": 157,
 "height": 18
 },
@@ -30072,7 +30072,7 @@
 ],
 [
 1247,
-3790
+3791
 ],
 [
 1409,
@@ -30080,7 +30080,7 @@
 ],
 [
 1536,
-3759
+3760
 ]
 ],
 "labelBBox": {
@@ -30105,24 +30105,24 @@
 "points": [
 [
 1925,
-3702
+3703
 ],
 [
 2044,
-3680
+3681
 ],
 [
 2198,
-3652
+3653
 ],
 [
 2319,
-3630
+3631
 ]
 ],
 "labelBBox": {
 "x": 2102,
-"y": 3618,
+"y": 3619,
 "width": 44,
 "height": 18
 },
@@ -30142,24 +30142,24 @@
 "points": [
 [
 1925,
-3742
+3743
 ],
 [
 2355,
-3753
+3754
 ],
 [
 3404,
-3779
+3780
 ],
 [
 3845,
-3790
+3791
 ]
 ],
 "labelBBox": {
 "x": 2878,
-"y": 3742,
+"y": 3743,
 "width": 44,
 "height": 18
 },
@@ -30179,36 +30179,36 @@
 "points": [
 [
 1886,
-3647
+3648
 ],
 [
 1919,
-3628
+3629
 ],
 [
 1953,
-3608
+3609
 ],
 [
 1985,
-3590
+3591
 ],
 [
 2100,
-3525
+3526
 ],
 [
 2231,
-3454
+3455
 ],
 [
 2334,
-3399
+3400
 ]
 ],
 "labelBBox": {
 "x": 2102,
-"y": 3418,
+"y": 3419,
 "width": 44,
 "height": 18
 },
@@ -30228,36 +30228,36 @@
 "points": [
 [
 1925,
-3768
+3769
 ],
 [
 1945,
-3771
+3772
 ],
 [
 1965,
-3774
+3775
 ],
 [
 1985,
-3777
+3778
 ],
 [
 2684,
-3885
+3886
 ],
 [
 3517,
-4008
+4009
 ],
 [
 3871,
-4060
+4061
 ]
 ],
 "labelBBox": {
 "x": 2878,
-"y": 3875,
+"y": 3876,
 "width": 44,
 "height": 18
 },
@@ -30277,48 +30277,48 @@
 "points": [
 [
 1809,
-3647
+3648
 ],
 [
 1846,
-3599
+3600
 ],
 [
 1891,
-3537
+3538
 ],
 [
 1925,
-3478
+3479
 ],
 [
 2122,
-3137
+3138
 ],
 [
 2038,
-2975
+2976
 ],
 [
 2283,
-2668
+2669
 ],
 [
 2305,
-2641
+2642
 ],
 [
 2332,
-2616
+2617
 ],
 [
 2360,
-2593
+2594
 ]
 ],
 "labelBBox": {
 "x": 2102,
-"y": 2682,
+"y": 2683,
 "width": 44,
 "height": 18
 },
@@ -30338,24 +30338,24 @@
 "points": [
 [
 2695,
-2880
+2881
 ],
 [
 2811,
-2924
+2925
 ],
 [
 2963,
-2981
+2982
 ],
 [
 3083,
-3026
+3027
 ]
 ],
 "labelBBox": {
 "x": 2827,
-"y": 2893,
+"y": 2894,
 "width": 146,
 "height": 18
 },
@@ -30375,48 +30375,48 @@
 "points": [
 [
 2654,
-3504
+3505
 ],
 [
 2673,
-3488
+3489
 ],
 [
 2692,
-3469
+3470
 ],
 [
 2707,
-3449
+3450
 ],
 [
 2752,
-3388
+3389
 ],
 [
 2713,
-3343
+3344
 ],
 [
 2767,
-3290
+3291
 ],
 [
 2852,
-3206
+3207
 ],
 [
 2977,
-3160
+3161
 ],
 [
 3083,
-3134
+3135
 ]
 ],
 "labelBBox": {
 "x": 2819,
-"y": 3128,
+"y": 3129,
 "width": 161,
 "height": 18
 },
@@ -30436,24 +30436,24 @@
 "points": [
 [
 3483,
-3177
+3178
 ],
 [
 3599,
-3222
+3223
 ],
 [
 3745,
-3278
+3279
 ],
 [
 3859,
-3322
+3323
 ]
 ],
 "labelBBox": {
 "x": 3580,
-"y": 3183,
+"y": 3184,
 "width": 178,
 "height": 18
 },
@@ -30473,24 +30473,24 @@
 "points": [
 [
 2695,
-2813
+2814
 ],
 [
 2813,
-2813
+2814
 ],
 [
 2967,
-2813
+2814
 ],
 [
 3089,
-2813
+2814
 ]
 ],
 "labelBBox": {
 "x": 2827,
-"y": 2791,
+"y": 2792,
 "width": 146,
 "height": 18
 },
@@ -30510,48 +30510,48 @@
 "points": [
 [
 2618,
-2723
+2724
 ],
 [
 2647,
-2697
+2698
 ],
 [
 2678,
-2669
+2670
 ],
 [
 2707,
-2642
+2643
 ],
 [
 2734,
-2617
+2618
 ],
 [
 2735,
-2603
+2604
 ],
 [
 2767,
-2584
+2585
 ],
 [
 2874,
-2519
+2520
 ],
 [
 3008,
-2475
+2476
 ],
 [
 3113,
-2448
+2449
 ]
 ],
 "labelBBox": {
 "x": 2827,
-"y": 2451,
+"y": 2452,
 "width": 146,
 "height": 18
 },
@@ -30571,36 +30571,36 @@
 "points": [
 [
 2707,
-3329
+3330
 ],
 [
 2727,
-3331
+3332
 ],
 [
 2747,
-3333
+3334
 ],
 [
 2767,
-3336
+3337
 ],
 [
 2874,
-3348
+3349
 ],
 [
 2993,
-3362
+3363
 ],
 [
 3091,
-3372
+3373
 ]
 ],
 "labelBBox": {
 "x": 2833,
-"y": 3314,
+"y": 3315,
 "width": 134,
 "height": 18
 },
@@ -30620,24 +30620,24 @@
 "points": [
 [
 3475,
-3393
+3394
 ],
 [
 3592,
-3393
+3394
 ],
 [
 3742,
-3393
+3394
 ],
 [
 3859,
-3393
+3394
 ]
 ],
 "labelBBox": {
 "x": 3596,
-"y": 3371,
+"y": 3372,
 "width": 146,
 "height": 18
 },
@@ -30657,24 +30657,24 @@
 "points": [
 [
 4211,
-4085
+4086
 ],
 [
 4323,
-4085
+4086
 ],
 [
 4470,
-4085
+4086
 ],
 [
 4586,
-4085
+4086
 ]
 ],
 "labelBBox": {
 "x": 4302,
-"y": 4046,
+"y": 4047,
 "width": 225,
 "height": 35
 },
@@ -30694,26 +30694,26 @@
 "points": [
 [
 4848,
-3995
+3996
 ],
 [
 4897,
-3930
+3931
 ],
 [
 4960,
-3839
+3840
 ],
 [
 4998,
-3749
+3750
 ],
 [
-5332,
+5333,
 2960
 ],
 [
-5454,
+5455,
 1915
 ],
 [
@@ -30725,7 +30725,7 @@
 "x": 5019,
 "y": 2891,
 "width": 241,
-"height": 72
+"height": 73
 },
 "parent": null,
 "relations": [
@@ -30906,36 +30906,36 @@
 "points": [
 [
 2695,
-2739
+2740
 ],
 [
 2892,
-2667
-],
-[
-3216,
-2583
-],
-[
-3483,
 2668
 ],
 [
+3216,
+2584
+],
+[
+3483,
+2669
+],
+[
 3992,
-2831
+2832
 ],
 [
 4470,
-3278
+3279
 ],
 [
 4672,
-3486
+3487
 ]
 ],
 "labelBBox": {
 "x": 3609,
-"y": 2667,
+"y": 2668,
 "width": 121,
 "height": 18
 },
@@ -30955,24 +30955,24 @@
 "points": [
 [
 2700,
-3594
+3595
 ],
 [
 3125,
-3594
+3595
 ],
 [
 4164,
-3594
+3595
 ],
 [
 4588,
-3594
+3595
 ]
 ],
 "labelBBox": {
 "x": 3595,
-"y": 3572,
+"y": 3573,
 "width": 149,
 "height": 18
 },
@@ -30992,24 +30992,24 @@
 "points": [
 [
 4238,
-3742
+3743
 ],
 [
 4346,
-3712
+3713
 ],
 [
 4481,
-3675
+3676
 ],
 [
 4589,
-3645
+3646
 ]
 ],
 "labelBBox": {
 "x": 4334,
-"y": 3643,
+"y": 3644,
 "width": 160,
 "height": 18
 },
@@ -31029,36 +31029,36 @@
 "points": [
 [
 4207,
-3995
+3996
 ],
 [
 4302,
-3939
+3940
 ],
 [
 4425,
-3864
+3865
 ],
 [
 4530,
-3791
+3792
 ],
 [
 4570,
-3762
+3763
 ],
 [
 4612,
-3730
+3731
 ],
 [
 4649,
-3699
+3700
 ]
 ],
 "labelBBox": {
 "x": 4321,
-"y": 3752,
+"y": 3753,
 "width": 186,
 "height": 35
 },
@@ -31078,24 +31078,24 @@
 "points": [
 [
 4224,
-3442
+3443
 ],
 [
 4335,
-3473
+3474
 ],
 [
 4477,
-3512
+3513
 ],
 [
 4589,
-3543
+3544
 ]
 ],
 "labelBBox": {
 "x": 4328,
-"y": 3442,
+"y": 3443,
 "width": 173,
 "height": 18
 },
@@ -31159,35 +31159,35 @@
 ],
 [
 4372,
-4296
+4297
 ],
 [
 4530,
-4112
+4113
 ],
 [
 4583,
-4051
+4052
 ],
 [
 4558,
-4014
+4015
 ],
 [
 4590,
-3940
+3941
 ],
 [
 4625,
-3859
+3860
 ],
 [
 4672,
-3771
+3772
 ],
 [
 4709,
-3704
+3705
 ]
 ],
 "labelBBox": {
@@ -31544,7 +31544,7 @@
 "points": [
 [
 4087,
-3303
+3304
 ],
 [
 4212,
@@ -31563,7 +31563,7 @@
 "x": 4299,
 "y": 2239,
 "width": 230,
-"height": 89
+"height": 90
 },
 "parent": null,
 "relations": [
@@ -31581,12 +31581,12 @@
 "label": "Hold evaluator (web-acceptance gate) \nasks the legal-acceptance check endpoint \nwhether the founder decided a given text \nhash: GET \n/api/internal/legal-acceptance/[key]?hash= ",
 "points": [
 [
-2353,
-2407
+2354,
+2408
 ],
 [
 2230,
-2329
+2330
 ],
 [
 2067,
@@ -31597,7 +31597,7 @@
 2045
 ],
 [
-1859,
+1860,
 1805
 ],
 [
@@ -31629,7 +31629,7 @@
 },
 "parent": null,
 "relations": [
-"2onz6r52zhl8u"
+"15chxlqosi117"
 ],
 "color": "gray",
 "line": "dashed",
@@ -31922,52 +31922,52 @@
 ],
 [
 3160,
-2035
+2036
 ],
 [
 3483,
-2266
+2267
 ],
 [
-3848,
-2527
+3847,
+2528
 ],
 [
 3908,
-2631
+2632
 ],
 [
 4238,
-2935
+2936
 ],
 [
 4370,
-3056
+3057
 ],
 [
 4416,
-3075
+3076
 ],
 [
 4530,
-3214
+3215
 ],
 [
 4600,
-3299
+3300
 ],
 [
 4666,
-3406
+3407
 ],
 [
 4712,
-3484
+3485
 ]
 ],
 "labelBBox": {
 "x": 3275,
-"y": 1997,
+"y": 1998,
 "width": 25,
 "height": 18
 },
@@ -32082,31 +32082,31 @@
 "id": "i9q86m",
 "source": "platform.plugin.ship",
 "target": "doppler",
-"label": "Reads the one check-endpoint token \n(LEGAL_ACCEPTANCE_VERIFY_TOKEN, \nsoleur/prd) per evaluation; the value \nnever reaches argv or output",
+"label": "Once the token exists (#12196), reads \nthe one check-endpoint token \n(LEGAL_ACCEPTANCE_VERIFY_TOKEN, \nsoleur/prd) per evaluation; the value \nnever reaches argv or output",
 "points": [
 [
 2339,
-2545
+2553
 ],
 [
 2226,
-2565
+2577
 ],
 [
 2082,
-2568
+2584
 ],
 [
 1985,
-2488
+2504
 ],
 [
-1883,
-2402
+1877,
+2415
 ],
 [
-2004,
-2301
+2008,
+2307
 ],
 [
 1925,
@@ -32129,11 +32129,11 @@
 "x": 1986,
 "y": 2395,
 "width": 276,
-"height": 89
+"height": 106
 },
 "parent": null,
 "relations": [
-"2df4z304blzik"
+"3ppguetoti2i"
 ],
 "color": "gray",
 "line": "dashed",
