@@ -76,11 +76,13 @@ Run this fence from the worktree root that contains `scripts/`, as one shell. Cr
 # Paste the Phase 6 SENTINEL assignment above the readability check before running this fence.
 # Each fence is its own shell, so the later assignment does not survive. Do not add a second copy of the sentinel path to this file.
 set +e
-set -u
-if [[ -z "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+# Exact token only. A default arm is banned, and nounset aborts before this halt.
+set +u
+if [[ -z "${CLAUDE_PLUGIN_ROOT}" ]]; then
   echo "SOLEUR_INCIDENT_HALT reason=plugin-root-unverified"
   exit 2
 fi
+set -u
 bs_out="$(mktemp -p /tmp)"
 sb_out="$(mktemp -p /tmp)"
 sb2_out="$(mktemp -p /tmp)"

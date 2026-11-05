@@ -507,17 +507,22 @@ import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
 a = "ref=ifsccnjhymdmidffkzhl"
 b = "ref=pigsfuxruiopinouvjwy"
+lines = text.splitlines()
 ok = False
-for ln in text.splitlines():
-    if a not in ln or b not in ln:
-        continue
-    ia = ln.find(a)
-    ib = ln.find(b, ia + len(a))
-    if ib == -1:
-        continue
-    mid = ln[ia + len(a):ib]
-    if "\\n" in mid:
-        ok = True
+for i, ln in enumerate(lines):
+    if a in ln and b in ln:
+        ia = ln.find(a)
+        ib = ln.find(b, ia + len(a))
+        if ib != -1 and "\\n" in ln[ia + len(a):ib]:
+            # Bash 5.3 keeps the traced newline as a one-line \n escape.
+            ok = True
+    elif a in ln and b not in ln and i + 1 < len(lines):
+        # Bash 5.2 prints that newline raw, so the assignment spans two trace
+        # lines and the opening quote is still open. A finished line (even
+        # quote count) is a separate command; a space join stays one line.
+        nxt = lines[i + 1]
+        if b in nxt and a not in nxt and ln.count("'") % 2 == 1:
+            ok = True
 sys.exit(0 if ok else 1)
 PY
 if [[ $? -eq 0 ]]; then
