@@ -68,7 +68,7 @@ bash scripts/ci-demand-census.sh --start 2026-11-03T20:30:00Z --end 2026-11-03T2
 - `main-health-monitor.yml`: 376.8 job-minutes per run, 16 jobs, 4 runs a day (`0 */6 * * *`), about 1,500 job-minutes a day (about 3%).
 - `infra-validation.yml` pull_request run: success 55.6 job-minutes (`deploy-script-tests` 4 legs 41.9, `deploy-script-tests-fixed` 9.2), failure 53.9, cancelled 17.4 mean; about 73 PR runs a day, 41% cancelled.
 - `tenant-integration.yml` pull_request run: success 2.2 job-minutes, cancelled 0.5 (a cheap `detect-changes` job gates the heavy suite).
-- `infra-validation.yml` `deploy-script-tests` leg time, re-measured over the 10 most recent green pull_request runs (40 legs; reproduce with `gh run list --workflow infra-validation.yml --event pull_request --status success -L 10`, then each run's jobs filtered to `deploy-script-tests (N/4)`, `completed_at - started_at`): minimum 5.9 min, median 10.1, p95 13.4, worst 14.0 min. The workflow comment still records the 6.7-minute figure it was set against; the 15-minute ceiling is now about 1.07x the worst leg. The p95 is above the plan's 12-minute raise-to-20 trigger, so the raise is tracked in #12091.
+- `infra-validation.yml` `deploy-script-tests` leg time, re-measured over the 10 most recent green pull_request runs (40 legs; reproduce with `gh run list --workflow infra-validation.yml --event pull_request --status success -L 10`, then each run's jobs filtered to `deploy-script-tests (N/4)`, `completed_at - started_at`): minimum 5.9 min, median 10.1, p95 13.4, worst 14.0 min. The workflow comment still records the 6.7-minute figure it was set against; the 15-minute ceiling was about 1.07x the worst leg (raised to 20 minutes by #12091 on 2026-11-05). The p95 is above the plan's 12-minute raise-to-20 trigger, so the raise is tracked in #12091.
 
 ### 3.4 Cancelled pull_request run lifetime
 
@@ -105,5 +105,5 @@ Rulings by the CTO agent, 2026-11-04 (rows in `knowledge-base/project/specs/arch
 ## 5. Follow-ups
 
 - #12090 (`deferred-scope-out`): larger hosted runners for the `test` aggregator and tail gate jobs, and a GitHub support ticket about under-assignment. Re-evaluation triggers: ADR-276 amendment 2026-11-04. The support-portal attempt was blocked by a locked browser profile (tool failure, not a human gate).
-- #12091: raise `deploy-script-tests` `timeout-minutes` 15 to 20; its trigger (p95 over 12 minutes) is already met.
+- #12091: raise `deploy-script-tests` `timeout-minutes` 15 to 20; its trigger (p95 over 12 minutes) is already met. Shipped 2026-11-05.
 - Epic #11556: PR-run-cost finding handed over (comment posted 2026-11-04).

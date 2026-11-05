@@ -699,18 +699,22 @@ jobs:
     # fail-fast: false — a RED leg must not cancel its siblings; every leg's verdict is
     # needed for attribution (mirrors ci.yml's test-scripts matrix).
     #
-    # timeout-minutes: measured on this branch before shipping — worst leg ~6.7 min
-    # (403 s total = 343 s serial-suite-sum bound + ~60 s fixed), K=4 chosen because
-    # K=2 projected ~12.4 min and K=8 buys ~2.3 min for +4 min of duplicated fixed
+    # timeout-minutes, design-time model (SUPERSEDED by the measurements below): worst leg
+    # ~6.7 min (403 s total = 343 s serial-suite-sum bound + ~60 s fixed), K=4 chosen
+    # because K=2 projected ~12.4 min and K=8 buys ~2.3 min for +4 min of duplicated fixed
     # cost (ADR-238's objection, measured at ~60 s per leg: checkout + terraform +
-    # cloud-init + nftables + docker assert). The 403 s is the SERIAL bound on a
-    # leg's suite sum — at -P4 the realized wall clock lands lower.
-    # 15 min was ~2.2x the 6.7-min worst leg measured here — the same convention the old
-    # 1.4x serial ceiling used, held against a MEASURED leg rather than a projected whole.
+    # cloud-init + nftables + docker assert). The 403 s was the SERIAL bound on a
+    # leg's suite sum; the expectation that the realized wall clock at -P4 lands lower
+    # did not hold (measured legs run well above it, see below).
+    # The original 15-min ceiling was ~2.2x that 6.7-min modelled leg — the same convention
+    # the old 1.4x serial ceiling used, held against a MEASURED leg rather than a projected
+    # whole.
     # Re-measured 2026-11-04 (10 latest green pull_request runs, 40 legs): worst 14.0 min,
-    # p95 13.4 min, so the 15-min ceiling was ~1.07x the worst leg. p95 was past the
-    # 12-minute raise-to-20 trigger (recorded in the 2026-11-04 CI runner-minute audit), so
-    # the ceiling is now 20 min (~1.4x the worst leg), raised by #12091.
+    # p95 13.4 min. Over the 30 latest green pull_request runs as of 2026-11-05 the worst
+    # passing leg was 14.98 min (median 9.3), i.e. the 15-min ceiling had ~1.0x headroom.
+    # p95 was past the 12-minute raise-to-20 trigger (recorded in the 2026-11-04 CI
+    # runner-minute audit), so the ceiling is now 20 min (~1.3x that worst leg), raised by
+    # #12091.
     # Per-suite stalls are bounded INSIDE the leg by the runner's `timeout` wrapper
     # (default 360 s; the nine override entries in the runner's bound map carry the
     # step-level `timeout-minutes` forward plus headroom for the two ~200 s suites
@@ -853,8 +857,9 @@ jobs:
   # `apps/web-platform/infra/**.test.sh` glob suite — the three privileged `sudo bash`
   # loopback suites (derive-but-do-not-execute, #7076), the five
   # apps/web-platform/test/infra/ alert-guard suites, the terraform validates, the
-  # fixture/sandbox/provenance checks. Kept serial and named — these are dozens of
-  # seconds, not the tail latency the matrix exists to cut.
+  # fixture/sandbox/provenance checks. Kept serial and named. Measured over the 30 latest
+  # green pull_request runs as of 2026-11-05: 7.1-11.4 min (median 9.9), about 1.3x
+  # headroom under the 15-min cap below; no raise trigger is met, so the cap stays.
   deploy-script-tests-fixed:
     needs: detect-changes
     if: needs.detect-changes.outputs.pr_duplicate != 'true'
@@ -1110,7 +1115,8 @@ jobs:
       # SIGPIPE class at all. ~1.2s + ~2.6s.
       # (#6665 removed the slack figure that used to close this note: it was
       # written against a job that no longer exists. The ceiling rationale and
-      # its measurements now live in one place, on timeout-minutes above.)
+      # its measurements now live in one place, in the comment on the
+      # `deploy-script-tests` matrix job's timeout-minutes.)
       - name: Run sigpipe guard triage-feasibility probe
         run: bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh
 
