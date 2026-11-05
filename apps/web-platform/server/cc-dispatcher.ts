@@ -3052,7 +3052,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     }),
     connectedRepoSlug,
     // The durable approval flow's dependency, built from the same factory the legacy runner uses. Construction touches no
-    // database, flag or network: everything is closure-only until an approval-required tool reaches the gate.
+    // database, flag or network: it only captures bindings, and the flow runs when an approval-required tool reaches the gate.
+    // Since #11636 exactly one such tool can (github_push_branch, via the registrar above, flag-gated and dark by default),
+    // and it shares `approvalGrants` with this dependency.
     approval: createApprovalGateDeps({
       userId: args.userId,
       workspaceId: activeWorkspaceId,

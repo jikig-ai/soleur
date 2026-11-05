@@ -3148,17 +3148,6 @@
 "id": "8p9oloc4osac",
 "title": "Phase 0.5 assessment"
 },
-"afhnkmz4ncnt": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "afhnkmz4ncnt",
-"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal; no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
-},
 "ajv7s70947f": {
 "technology": "Slack push",
 "source": {
@@ -3565,6 +3554,17 @@
 },
 "id": "z47jvim9cbvr",
 "title": "Writes learnings, promotes to constitution"
+},
+"zl0mktm3txay": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "zl0mktm3txay",
+"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher now reaches the gate too and registers the github_push_branch tool behind it, still dark behind the approval-queue flag); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
 },
 "zwq65c0ft453": {
 "technology": "HTTPS",
@@ -26407,7 +26407,7 @@
 "id": "s955hc",
 "source": "platform.engine",
 "target": "platform.infra.approvalStore",
-"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal; no decide \npath is imported by the agent tool ",
+"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal (the \nConcierge cc dispatcher now reaches the ",
 "points": [
 [
 2084,
@@ -26458,7 +26458,7 @@
 },
 "parent": null,
 "relations": [
-"afhnkmz4ncnt"
+"zl0mktm3txay"
 ],
 "color": "gray",
 "line": "dashed",

@@ -29,7 +29,8 @@ import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGra
 // promotion (closure-bound to `userId`; the Tier-3 cross-tenant-credential
 // rationale does not apply). The SET tool CANNOT be promoted that way: it is
 // approval-required (ADR-309), no cc tool builder is wired to the execution
-// grants, and `readCcMcpAllowlist` throws on any approval-required name.
+// grants for it (only `github_push_branch` is, #11636), and `readCcMcpAllowlist`
+// throws on every approval-required name except that one.
 // Promoting it needs a grant-reading builder in the cc runner first. Until that promotion lands, the HTTP
 // route + UI is the user's path and these tools are the leader-surface agent
 // equivalent.
