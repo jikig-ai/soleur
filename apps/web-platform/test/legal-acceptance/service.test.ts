@@ -18,6 +18,7 @@ vi.mock("@/server/approval/ops", async (orig) => ({
 import { parseLegalText } from "@/server/legal-acceptance/canonical";
 import {
   AttemptCeiling,
+  createThrowawayAuthClient,
   resolveIdentity,
   sendReauthCode,
   tokenFacts,
@@ -25,7 +26,7 @@ import {
   type Identity,
   type ThrowawayAuthClient,
 } from "@/server/legal-acceptance/reauth";
-import { decideLegal, LegalServiceError, normaliseNote, type LegalRpcClient } from "@/server/legal-acceptance/service";
+import { decideLegal, LegalServiceError, normaliseNote, recordAcceptance, type LegalRpcClient } from "@/server/legal-acceptance/service";
 
 const USER = "00000000-0000-4000-8000-0000000000aa";
 const EMAIL = "founder.fixture@example.invalid";
@@ -54,7 +55,11 @@ function fakeRpc(log: string[], results: Record<string, Array<{ data?: unknown; 
 
 function fakeAuth(
   log: string[],
-  o: { send?: () => { error: unknown } | Promise<{ error: unknown }>; verify?: () => { error: unknown } | Promise<{ error: unknown }> } = {},
+  o: {
+    send?: () => { error: unknown } | Promise<{ error: unknown }>;
+    verify?: () => { error: unknown } | Promise<{ error: unknown }>;
+    signOut?: () => { error: unknown } | Promise<{ error: unknown }>;
+  } = {},
 ) {
   const spies = {
     signInWithOtp: vi.fn(async (_a: unknown) => {
@@ -67,7 +72,7 @@ function fakeAuth(
     }),
     signOut: vi.fn(async (_a: unknown) => {
       log.push("auth:signOut");
-      return { error: null };
+      return (o.signOut ? await o.signOut() : { error: null }) as { error: null };
     }),
   };
   const client = { auth: spies } as unknown as ThrowawayAuthClient;
@@ -91,7 +96,7 @@ describe("session id and audience: derived exactly as the SQL reads them", () =>
   const client = (token: string | null, user: { id: string; email?: string } | null = { id: USER, email: EMAIL }) => ({
     auth: {
       getUser: async () => ({ data: { user }, error: null }),
-      getSession: async () => ({ data: { session: token ? { access_token: token } : null } }),
+      getSession: async () => ({ data: { session: token ? { access_token: token } : null }, error: null }),
     },
   });
 
@@ -101,7 +106,8 @@ describe("session id and audience: derived exactly as the SQL reads them", () =>
   });
 
   it("refuses (403) a token whose audience is not exactly 'authenticated': a runtime token never opens an intent", async () => {
-    for (const aud of ["runtime", "Authenticated", ["authenticated"], undefined]) {
+    // "soleur-runtime" is the real agent-token audience (lib/supabase/tenant.ts JWT_AUDIENCE)
+    for (const aud of ["soleur-runtime", "Authenticated", ["authenticated"], undefined]) {
       const id = await resolveIdentity(client(jwt({ sub: USER, aud, session_id: SESSION })), USER);
       expect(id, JSON.stringify(aud)).toMatchObject({ ok: false, status: 403 });
     }
@@ -114,6 +120,23 @@ describe("session id and audience: derived exactly as the SQL reads them", () =>
     expect(await resolveIdentity(client(jwt({ sub: USER, aud: "authenticated", session_id: SESSION })), "someone-else")).toMatchObject({ ok: false, status: 401 });
     // token sub disagreeing with getUser
     expect(await resolveIdentity(client(jwt({ sub: "other", aud: "authenticated", session_id: SESSION })), USER)).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it("a rejecting or stalled auth service is a 401 (the bounded helpers), never a throw and never a hang", async () => {
+    vi.stubEnv("SOLEUR_AUTH_GETUSER_TIMEOUT_MS", "25");
+    try {
+      const token = jwt({ sub: USER, aud: "authenticated", session_id: SESSION });
+      const base = client(token);
+      const rejectUser = { auth: { ...base.auth, getUser: async () => { throw new Error("down"); } } };
+      const stallUser = { auth: { ...base.auth, getUser: () => new Promise<never>(() => {}) } };
+      const rejectSession = { auth: { ...base.auth, getSession: async () => { throw new Error("down"); } } };
+      const stallSession = { auth: { ...base.auth, getSession: () => new Promise<never>(() => {}) } };
+      for (const c of [rejectUser, stallUser, rejectSession, stallSession]) {
+        expect(await resolveIdentity(c as unknown as Parameters<typeof resolveIdentity>[0], USER)).toMatchObject({ ok: false, status: 401 });
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -137,6 +160,16 @@ describe("per-user verify ceiling", () => {
     expect(c.consume("u")).toBe(false);
     t = 1001; // the first hit has left the window
     expect(c.consume("u")).toBe(true);
+  });
+  it("crosses the sweep threshold: idle users' entries are dropped, live ones kept (the map does not grow without bound)", () => {
+    let t = 0;
+    const store = new Map<string, number[]>();
+    for (let i = 0; i < 5_000; i++) store.set(`idle-${i}`, [1]);
+    const c = new AttemptCeiling(10, 1000, () => t, store);
+    t = 10_000;
+    expect(c.consume("live")).toBe(true); // size is now 5001: over the threshold, so the sweep runs
+    expect(store.size).toBe(1);
+    expect(store.has("live")).toBe(true);
   });
 });
 
@@ -177,37 +210,86 @@ describe("send", () => {
     expect(auth.spies.signInWithOtp).not.toHaveBeenCalled();
   });
 
-  it("the auth service's 422 for an unknown address is returned identically to a successful send, and nothing is reported", async () => {
-    const run = async (send: () => { error: unknown }) => {
-      const log: string[] = [];
-      const svc = fakeRpc(log, { issue_legal_reauth: [issued] });
-      return sendReauthCode({ service: svc.client, authClient: fakeAuth(log, { send }).factory }, { id: ID, entry: ENTRY, resend: false });
-    };
-    const known = await run(() => ({ error: null }));
-    const unknown = await run(() => ({ error: { name: "AuthApiError", status: 422, code: "otp_disabled", message: EMAIL } }));
+  const sendWith = async (
+    send: () => { error: unknown },
+    o: { reused?: boolean; resend?: boolean; id?: Identity & { ok: true } } = {},
+  ) => {
+    const log: string[] = [];
+    const row = { data: { outcome: "issued", reused: o.reused === true, event_id: EVENT, expires_at: "2099-01-01T00:00:00Z" } };
+    const svc = fakeRpc(log, { issue_legal_reauth: [row] });
+    const auth = fakeAuth(log, { send });
+    const r = await sendReauthCode(
+      { service: svc.client, authClient: auth.factory },
+      { id: o.id ?? ID, entry: ENTRY, resend: o.resend === true },
+    );
+    return { r, auth };
+  };
+  const unknownUser = () => ({ error: { name: "AuthApiError", status: 422, code: "otp_disabled", message: EMAIL } });
+
+  it("the auth service's 422 otp_disabled (unknown address) is returned identically to a successful send, and reported at warn level with its class only", async () => {
+    const known = (await sendWith(() => ({ error: null }))).r;
+    h.report.mockReset();
+    const unknown = (await sendWith(unknownUser)).r;
     expect(unknown).toEqual(known);
     expect(unknown).toEqual({ ok: true, state: "sent" });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(
+      "reauthFailed",
+      null,
+      expect.objectContaining({ level: "warn", extra: { stage: "send_422", errorClass: "AuthApiError:422:otp_disabled" } }),
+    );
+    expect(JSON.stringify(h.report.mock.calls)).not.toContain(EMAIL);
+  });
+
+  it("any other 422 is NOT a sent: unavailable, reported at error level (no level override) with its class", async () => {
+    const { r } = await sendWith(() => ({ error: { name: "AuthApiError", status: 422, code: "validation_failed", message: EMAIL } }));
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    const ctx = h.report.mock.calls[0][2];
+    expect(ctx.level).toBeUndefined();
+    expect(ctx.extra.errorClass).toBe("AuthApiError:422:validation_failed");
+    expect(JSON.stringify(h.report.mock.calls)).not.toContain(EMAIL);
+  });
+
+  it("the auth service's 429 is rate_limited and is NOT reported as an error-level reauth_failed", async () => {
+    const { r } = await sendWith(() => ({ error: { name: "AuthApiError", status: 429, code: "over_email_send_rate_limit", message: EMAIL } }));
+    expect(r).toEqual({ ok: false, reason: "rate_limited" });
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it("a real send failure (5xx, 429, a throw) is unavailable and reported with a class, never the address", async () => {
+  it("a real send failure (5xx, a throw) is unavailable and reported with a class, never the address", async () => {
     for (const send of [
       () => ({ error: { name: "AuthRetryableFetchError", status: 503, message: `down for ${EMAIL}` } }),
-      () => ({ error: { name: "AuthApiError", status: 429, code: "over_email_send_rate_limit", message: EMAIL } }),
       () => {
         throw new Error(`network ${EMAIL}`);
       },
     ]) {
       h.report.mockReset();
-      const log: string[] = [];
-      const svc = fakeRpc(log, { issue_legal_reauth: [issued] });
-      const r = await sendReauthCode({ service: svc.client, authClient: fakeAuth(log, { send }).factory }, { id: ID, entry: ENTRY, resend: false });
+      const { r } = await sendWith(send);
       expect(r).toEqual({ ok: false, reason: "unavailable" });
       expect(h.report).toHaveBeenCalledTimes(1);
       expect(h.report.mock.calls[0][0]).toBe("reauthFailed");
       expect(JSON.stringify(h.report.mock.calls[0])).not.toContain(EMAIL);
       expect(JSON.stringify(h.report.mock.calls[0])).toMatch(/errorClass/);
     }
+  });
+
+  it("a reused intent without a resend is 'sent' and sends NO email (the earlier code is still valid); a resend does email", async () => {
+    const reusedNoResend = await sendWith(() => ({ error: null }), { reused: true, resend: false });
+    expect(reusedNoResend.r).toEqual({ ok: true, state: "sent" });
+    expect(reusedNoResend.auth.spies.signInWithOtp).not.toHaveBeenCalled();
+    const reusedResend = await sendWith(() => ({ error: null }), { reused: true, resend: true });
+    expect(reusedResend.r).toEqual({ ok: true, state: "sent" });
+    expect(reusedResend.auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
+    const fresh = await sendWith(() => ({ error: null }), { reused: false, resend: false });
+    expect(fresh.auth.spies.signInWithOtp).toHaveBeenCalledTimes(1);
+  });
+
+  it("no address on the session: unavailable, reported (stage send_no_address), nothing is emailed", async () => {
+    const { r, auth } = await sendWith(() => ({ error: null }), { id: { ...ID, email: null } });
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    expect(auth.spies.signInWithOtp).not.toHaveBeenCalled();
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", null, expect.objectContaining({ extra: expect.objectContaining({ stage: "send_no_address" }) }));
   });
 });
 
@@ -271,6 +353,98 @@ describe("verify", () => {
       expect(h.report.mock.calls[0][0]).toBe("reauthFailed");
       expect(log).not.toContain("rpc:mark_legal_reauth_verified");
     }
+  });
+
+  it("the OTP code never appears in any reported event (auth outage, a 5xx, a throw that echoes it)", async () => {
+    const CODE = "918273";
+    for (const verify of [
+      () => ({ error: { name: "AuthRetryableFetchError", status: 502, message: `bad gateway for ${CODE}` } }),
+      () => {
+        throw new Error(`network ${CODE}`);
+      },
+      () => ({ error: { name: "AuthApiError", status: 400, code: "validation_failed", message: CODE } }),
+    ]) {
+      h.report.mockReset();
+      const log: string[] = [];
+      const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+      await verifyReauthCode({ service: svc.client, authClient: fakeAuth(log, { verify }).factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: CODE });
+      expect(h.report).toHaveBeenCalled();
+      expect(JSON.stringify(h.report.mock.calls)).not.toContain(CODE);
+      expect(JSON.stringify(h.report.mock.calls)).not.toContain(EMAIL);
+    }
+  });
+
+  it("a 400 or 422 from the auth service is wrong_code but is made visible with a warn-level report (class only)", async () => {
+    for (const status of [400, 422]) {
+      h.report.mockReset();
+      const log: string[] = [];
+      const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+      const auth = fakeAuth(log, { verify: () => ({ error: { name: "AuthApiError", status, code: "validation_failed" } }) });
+      const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
+      expect(r).toEqual({ ok: false, reason: "wrong_code" });
+      expect(h.report).toHaveBeenCalledWith(
+        "reauthFailed",
+        null,
+        expect.objectContaining({ level: "warn", extra: { stage: "verify_rejected", errorClass: `AuthApiError:${status}:validation_failed` } }),
+      );
+    }
+  });
+
+  it("a client factory that throws (anon key missing) is unavailable and reported, not a thrown 500 after the claim", async () => {
+    const log: string[] = [];
+    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+    const factory = vi.fn(() => {
+      throw new Error("anon key is not configured");
+    });
+    const r = await verifyReauthCode({ service: svc.client, authClient: factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", expect.any(Error), expect.objectContaining({ extra: expect.objectContaining({ stage: "verify_client" }) }));
+  });
+
+  it("the throwaway client refuses to be built without an anon key (no silent empty-key fallback)", () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "");
+    try {
+      expect(() => createThrowawayAuthClient()).toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("a signOut that rejects or errors never turns a good verify into a throw: the verify still succeeds and the failure is reported", async () => {
+    for (const signOut of [
+      () => {
+        throw new Error("revoke blew up");
+      },
+      () => ({ error: { name: "AuthApiError", status: 500 } }),
+    ]) {
+      h.report.mockReset();
+      const log: string[] = [];
+      const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed], mark_legal_reauth_verified: [{ data: { outcome: "verified" } }] });
+      const auth = fakeAuth(log, { signOut });
+      const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" });
+      expect(r).toEqual({ ok: true });
+      expect(h.report.mock.calls.some((c) => c[0] === "reauthFailed" && c[2].extra.stage === "discard")).toBe(true);
+    }
+  });
+
+  it("the session is discarded even when mark_legal_reauth_verified throws", async () => {
+    const log: string[] = [];
+    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed], mark_legal_reauth_verified: [{ error: { message: "x", code: "XX000" } }] });
+    const auth = fakeAuth(log);
+    await expect(
+      verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: ID, entry: ENTRY, code: "123456" }),
+    ).rejects.toBeInstanceOf(LegalServiceError);
+    expect(auth.spies.signOut).toHaveBeenCalledWith({ scope: "local" });
+  });
+
+  it("no address on the session: unavailable after the claim, reported (stage verify_no_address), the auth service is never asked", async () => {
+    const log: string[] = [];
+    const svc = fakeRpc(log, { claim_legal_reauth_attempt: [allowed] });
+    const auth = fakeAuth(log);
+    const r = await verifyReauthCode({ service: svc.client, authClient: auth.factory, ceiling: new AttemptCeiling() }, { id: { ...ID, email: null }, entry: ENTRY, code: "123456" });
+    expect(r).toEqual({ ok: false, reason: "unavailable" });
+    expect(auth.spies.verifyOtp).not.toHaveBeenCalled();
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", null, expect.objectContaining({ extra: expect.objectContaining({ stage: "verify_no_address" }) }));
   });
 
   it.each([
@@ -352,10 +526,10 @@ describe("decide", () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it("42501 (no live intent, or email code required) is forbidden, not code_expired, and is reported as no_intent", async () => {
+  it("42501 (no live intent, or email code required) is forbidden, not code_expired, and is reported as denied_42501", async () => {
     const t = mk({}, { record_legal_acceptance: [{ error: { message: "x", code: "42501" } }] });
     expect(await decideLegal(t.deps, { ...base, choice: "accept" })).toEqual({ kind: "forbidden" });
-    expect(h.report).toHaveBeenCalledWith("decideRejected", expect.any(LegalServiceError), expect.objectContaining({ tags: { reason: "no_intent" } }));
+    expect(h.report).toHaveBeenCalledWith("decideRejected", expect.any(LegalServiceError), expect.objectContaining({ tags: { reason: "denied_42501" } }));
   });
 
   it("any other database error propagates (the route answers 500); a rate-limited intent is 429 and nothing is recorded", async () => {
@@ -380,6 +554,32 @@ describe("decide", () => {
     expect(JSON.stringify(h.report.mock.calls)).not.toContain("PRIVATE-NOTE-TEXT");
   });
 
+  it("the note never appears in the decide_rejected event (hash mismatch, a replaced text, a rejection from the database)", async () => {
+    const NOTE = "PRIVATE-NOTE-TEXT";
+    const t = mk({ issue_legal_reauth: [{ data: { outcome: "issued", reused: false, event_id: EVENT, expires_at: "x" } }] }, { record_legal_acceptance: [rec("replaced")] });
+    await decideLegal(t.deps, { ...base, choice: "request_changes", note: NOTE, textHash: "f".repeat(64) });
+    await decideLegal(t.deps, { ...base, choice: "request_changes", note: NOTE });
+    const rejected = h.report.mock.calls.filter((c) => c[0] === "decideRejected");
+    expect(rejected).toHaveLength(2);
+    expect(JSON.stringify(h.report.mock.calls)).not.toContain(NOTE);
+  });
+
+  it("a recorded reply whose text_hash is not the hash that was sent is a bad_payload, never success", async () => {
+    const t = mk({}, { record_legal_acceptance: [rec("recorded", { choice: "accept", text_hash: "e".repeat(64), decided_at: "2026-11-05T10:00:00Z", reauth_at: null })] });
+    await expect(decideLegal(t.deps, { ...base, choice: "accept" })).rejects.toMatchObject({ code: "bad_payload" });
+    const u = fakeRpc([], { record_legal_acceptance: [rec("recorded", { choice: "accept", decided_at: "2026-11-05T10:00:00Z", reauth_at: null })] });
+    await expect(recordAcceptance(u.client, { key: "fixture-terms", textHash: ENTRY.textHash, choice: "accept", note: null })).rejects.toMatchObject({ code: "bad_payload" });
+  });
+
+  it("a serialization failure (40001) is retried once; a second one propagates", async () => {
+    const ok = mk({}, { record_legal_acceptance: [{ error: { message: "x", code: "40001" } }, recorded("accept")] });
+    expect((await decideLegal(ok.deps, { ...base, choice: "accept" })).kind).toBe("result");
+    expect(ok.u.calls).toHaveLength(2);
+    const bad = mk({}, { record_legal_acceptance: [{ error: { message: "x", code: "40001" } }, { error: { message: "x", code: "40001" } }] });
+    await expect(decideLegal(bad.deps, { ...base, choice: "accept" })).rejects.toMatchObject({ code: "40001" });
+    expect(bad.u.calls).toHaveLength(2);
+  });
+
   it("an unknown outcome from the database is an error, never success", async () => {
     const t = mk({}, { record_legal_acceptance: [rec("maybe")] });
     await expect(decideLegal(t.deps, { ...base, choice: "accept" })).rejects.toMatchObject({ code: "bad_payload" });
@@ -397,16 +597,23 @@ describe("note rules", () => {
     expect(normaliseNote("decline", "x")).toEqual({ ok: false });
     expect(normaliseNote("accept", 5)).toEqual({ ok: false });
   });
+  it("rejects a NUL (Postgres text cannot hold it) and a lone surrogate (not valid UTF-8); a valid surrogate pair is fine", () => {
+    expect(normaliseNote("request_changes", "a\u0000b")).toEqual({ ok: false });
+    expect(normaliseNote("request_changes", "bad \uD800 half")).toEqual({ ok: false });
+    expect(normaliseNote("request_changes", "bad \uDC00 half")).toEqual({ ok: false });
+    expect(normaliseNote("request_changes", "ok \uD83D\uDE00 pair")).toMatchObject({ ok: true });
+  });
 });
 
 describe("Sentry feature tag (the alert rules match feature=legal-acceptance plus the op)", () => {
-  it("the four legal ops are reported under feature legal-acceptance with their op literals and unique messages; the gate's ops keep approval-queue", async () => {
+  it("the five legal ops are reported under feature legal-acceptance with their op literals and unique messages; the gate's ops keep approval-queue", async () => {
     const real = await vi.importActual<typeof import("@/server/approval/ops")>("@/server/approval/ops");
     for (const [key, op, sink] of [
       ["accepted", "accepted", h.warnSink],
       ["decideRejected", "decide_rejected", h.warnSink],
       ["reauthFailed", "reauth_failed", h.errSink],
       ["rowWithoutEvent", "row_without_event", h.errSink],
+      ["pageReadFailed", "page_read_failed", h.errSink],
     ] as const) {
       sink.mockReset();
       real.reportLegalOp(key, null, { userId: USER, tags: { reason: "x" } });
@@ -427,5 +634,16 @@ describe("Sentry feature tag (the alert rules match feature=legal-acceptance plu
     real.reportLegalOp("reauthFailed", Object.assign(new Error(`leak ${EMAIL}`), { code: "42501", fn: "x" }), {});
     expect(JSON.stringify(h.errSink.mock.calls)).not.toContain(EMAIL);
     expect(h.errSink.mock.calls[0][1].extra).toMatchObject({ code: "42501", fn: "x", errName: "Error" });
+  });
+
+  it("a level override lowers (or keeps) the severity of one report; the op's own level is the default", async () => {
+    const real = await vi.importActual<typeof import("@/server/approval/ops")>("@/server/approval/ops");
+    h.errSink.mockReset();
+    h.warnSink.mockReset();
+    real.reportLegalOp("reauthFailed", null, { level: "warn", extra: { stage: "x" } });
+    expect(h.warnSink).toHaveBeenCalledTimes(1);
+    expect(h.errSink).not.toHaveBeenCalled();
+    real.reportLegalOp("reauthFailed", null, {});
+    expect(h.errSink).toHaveBeenCalledTimes(1);
   });
 });

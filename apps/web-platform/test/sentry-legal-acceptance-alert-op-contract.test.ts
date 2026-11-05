@@ -158,7 +158,8 @@ const filterOf = (block: string, key: string): { match: string; value: string } 
 };
 
 // Emitter facts, derived from the server source of the web card (comment-stripped, tests excluded).
-// The op registry lives in server/approval/ops.ts (APPROVAL_OPS); the legal ops are in it, so it is scanned too.
+// The legal op registry is LEGAL_OPS in server/approval/ops.ts (NOT APPROVAL_OPS: the gate's ops keep another feature),
+// so that file is scanned too.
 const emitter = [
   sourceOf("server/legal-acceptance"),
   sourceOf("app/api/legal-acceptance"),
@@ -169,9 +170,12 @@ describe("legal-acceptance alert op contract", () => {
   it("the server source emits feature legal-acceptance and each paged op as a string literal", () => {
     // The tag KEY and VALUE together: a bare literal elsewhere (a path, a log label) must not satisfy this.
     expect(emitter).toMatch(/\bfeature:\s*["']legal-acceptance["']/);
-    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted"]) {
-      expect(emitter, `op ${op} emitted`).toMatch(new RegExp(`["']${op}["']`));
+    // The op KEY and VALUE together (`op: "x"` in the registry), so a stray literal elsewhere cannot satisfy it.
+    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted", "page_read_failed"]) {
+      expect(emitter, `op ${op} emitted`).toMatch(new RegExp(`\\bop:\\s*["']${op}["']`));
     }
+    // Every emitted op is reported through the legal helper, never the gate's (which would tag feature=approval-queue).
+    expect(emitter).toMatch(/\bexport function reportLegalOp\(/);
   });
 
   it("both rules filter on exactly the emitted feature value", () => {
@@ -187,6 +191,8 @@ describe("legal-acceptance alert op contract", () => {
     expect((burst?.value ?? "").split(",").sort()).toEqual(["decide_rejected", "reauth_failed"]);
     expect(filterOf(ROWEV, "op")).toEqual({ match: "eq", value: "row_without_event" });
     for (const block of [BURST, ROWEV]) expect(block).not.toMatch(/accepted/);
+    // page_read_failed (a page could not read the founder's rows) is a recorded signal, not paged by either rule.
+    for (const block of [BURST, ROWEV]) expect(block).not.toMatch(/page_read_failed/);
   });
 
   it("the burst rule counts a threshold of events (a single failure is not a page); the row rule fires on every event", () => {

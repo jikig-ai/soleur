@@ -5,16 +5,18 @@
 //
 // Honesty rules (single-user-incident class):
 //   - No choice is pre-selected and Enter alone answers nothing: Yes opens the email check, No asks to confirm, Request
-//     changes opens a text box. Only an explicit "Record No", "Send my request" or the dialog's "Confirm and record Yes"
+//     changes opens a text box. Only an explicit "Record No", "Save my request" or the dialog's "Confirm and record Yes"
 //     sends anything.
 //   - Yes stays locked (aria-disabled, reason announced in an aria-live region) until the text is confirmed: a text that
 //     fits its viewport unlocks at once, otherwise the reader scrolls to the end AND ticks the box. Before the first
-//     measurement the card is locked, so a slow hydration never exposes an unlocked Yes.
+//     measurement the card is locked, so a slow hydration never exposes an unlocked Yes. The reading latches only on a
+//     real scroll to the bottom; if the text later stops fitting (resize, reflow) the reading and the tick are reset.
 //   - The card changes state only from the server's answer; a failed, lost or unreadable answer is an error, never
 //     success. An answer is final: there is no undo here (task 6.10); a new version of the text is the way to change it.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
 import {
   LEGAL_COPY,
@@ -23,8 +25,9 @@ import {
   formatLegalUtc,
   legalTextLabel,
 } from "@/lib/legal-acceptance-copy";
-import { REQUEST_CHANGES_MAX, type LegalCardStateWire, type LegalChoiceWire } from "@/lib/legal-acceptance-wire";
-import { LegalReauthDialog, interpretDecide, postLegalDecide, type LegalRowFacts } from "@/components/approvals/legal-reauth-dialog";
+import { interpretDecide, postLegalDecide, type LegalRowFacts } from "@/lib/legal-acceptance-client";
+import { REQUEST_CHANGES_MAX, codePointLength, truncateCodePoints, type LegalCardStateWire, type LegalChoiceWire } from "@/lib/legal-acceptance-wire";
+import { LegalReauthDialog } from "@/components/approvals/legal-reauth-dialog";
 
 export type { LegalRowFacts };
 
@@ -46,6 +49,8 @@ export interface LegalAcceptanceCardProps {
   email: string | null;
   /** The registry's current version, for the replaced card. */
   currentVersion: string;
+  /** False when the page does not render the current version's card (flag off, no answer yet): a replaced card then links nowhere. Default true. */
+  currentVisible?: boolean;
 }
 
 const BOX = "rounded-xl border-2 p-4 md:p-6";
@@ -62,7 +67,7 @@ const STATE_STYLE: Record<LegalCardStateWire, { box: string; badge: string }> = 
 };
 
 export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
-  const { keyName, version, body, textHash, validUntil, flagEnabled, email, currentVersion } = props;
+  const { keyName, version, body, textHash, validUntil, flagEnabled, email, currentVersion, currentVisible = true } = props;
   const label = legalTextLabel(keyName);
 
   // The server's last word about this card. After a recorded answer the same pure derivation gives the new state.
@@ -100,7 +105,16 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
           onRecorded={onRecorded}
         />
       ) : (
-        <ResolvedBody state={state} label={label} version={version} body={body} row={row} currentVersion={currentVersion} already={local?.already ?? false} />
+        <ResolvedBody
+          state={state}
+          label={label}
+          version={version}
+          body={body}
+          row={row}
+          currentVersion={currentVersion}
+          currentVisible={currentVisible}
+          already={local?.already ?? false}
+        />
       )}
     </article>
   );
@@ -149,6 +163,7 @@ function ResolvedBody({
   body,
   row,
   currentVersion,
+  currentVisible,
   already,
 }: {
   state: Exclude<LegalCardStateWire, "pending">;
@@ -157,6 +172,7 @@ function ResolvedBody({
   body: string;
   row: LegalRowFacts | null;
   currentVersion: string;
+  currentVisible: boolean;
   already: boolean;
 }) {
   let title: string;
@@ -210,7 +226,7 @@ function ResolvedBody({
       {already && <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.alreadyAnswered}</p>}
       {closing && <p className="text-sm text-soleur-text-secondary">{closing}</p>}
 
-      {state === "replaced" && (
+      {state === "replaced" && currentVisible && (
         <>
           <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.replaced.needsOwnAnswer(currentVersion)}</p>
           <a href="#current-version" className="inline-block text-sm text-soleur-accent-gold-fg underline">
@@ -263,19 +279,44 @@ function PendingBody({
   const [mode, setMode] = useState<Mode>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
   const [error, setError] = useState<{ message: string; reload: boolean } | null>(null);
+  // Whether the last measurement said the whole text is on screen. A ref, so a measurement can tell "was fitting, now
+  // overflows" without a state updater with side effects.
+  const fitsRef = useRef(false);
 
+  // Pending state for the No and Request changes submits: one shared flag, errors rendered below (inner flow never throws).
+  const { run: runSubmit, pending: busy, error: submitCrash } = usePendingAction(
+    async (choice: Exclude<LegalChoiceWire, "accept">, payloadNote?: string) => {
+      setError(null);
+      const post = await postLegalDecide(keyName, { choice, textHash, ...(payloadNote !== undefined ? { note: payloadNote } : {}) });
+      const out = interpretDecide(post, { choice, note: payloadNote, version }, false);
+      if (out.kind === "recorded") onRecorded(out.row, out.already);
+      else setError({ message: out.message, reload: out.reload });
+    },
+  );
+
+  // Measures the text viewport. It only ever tracks "does the whole text fit"; it never marks the end as reached.
   const measure = useCallback(() => {
     const el = regionRef.current;
     if (!el) return;
-    const overflow = el.scrollHeight - el.clientHeight;
-    const noScroll = overflow <= 1;
-    setFits(noScroll);
-    // Reaching the end latches: scrolling back up does not take the reading away.
-    setAtEnd((prev) => prev || noScroll || el.scrollTop + el.clientHeight >= el.scrollHeight - 2);
+    const fitsNow = el.scrollHeight - el.clientHeight <= 1;
+    const wasFitting = fitsRef.current;
+    fitsRef.current = fitsNow;
+    setFits(fitsNow);
+    if (wasFitting && !fitsNow) {
+      // The text stopped fitting (a resize or a reflow): any earlier reading is void and must be earned again.
+      setAtEnd(false);
+      setTicked(false);
+    }
   }, []);
+
+  // Scrolling is the only way to reach the end. The reading latches: scrolling back up does not take it away.
+  const onScroll = useCallback(() => {
+    const el = regionRef.current;
+    if (!el) return;
+    measure();
+    if (el.scrollHeight - el.clientHeight > 1 && el.scrollTop + el.clientHeight >= el.scrollHeight - 2) setAtEnd(true);
+  }, [measure]);
 
   useLayoutEffect(() => {
     if (flagEnabled) measure();
@@ -296,19 +337,6 @@ function PendingBody({
   const lockText = confirmed ? LEGAL_COPY.lock.open : atEnd ? LEGAL_COPY.lock.needsTick : LEGAL_COPY.lock.atEnd;
   const lockId = `${uid}-lock`;
   const trimmed = note.trim();
-
-  async function submit(choice: Exclude<LegalChoiceWire, "accept">, payloadNote?: string) {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusy(true);
-    setError(null);
-    const post = await postLegalDecide(keyName, { choice, textHash, ...(payloadNote !== undefined ? { note: payloadNote } : {}) });
-    busyRef.current = false;
-    setBusy(false);
-    const out = interpretDecide(post, { choice, note: payloadNote, version }, false);
-    if (out.kind === "recorded") onRecorded(out.row, out.already);
-    else setError({ message: out.message, reload: out.reload });
-  }
 
   return (
     <div className="mt-4 space-y-5">
@@ -348,7 +376,7 @@ function PendingBody({
           role="region"
           aria-labelledby={`${uid}-text`}
           tabIndex={0}
-          onScroll={flagEnabled ? measure : undefined}
+          onScroll={flagEnabled ? onScroll : undefined}
           className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-soleur-border-default bg-soleur-bg-base p-4 text-sm text-soleur-text-primary"
         >
           {body}
@@ -428,7 +456,7 @@ function PendingBody({
               <h3 className="text-sm font-semibold text-soleur-text-primary">{LEGAL_COPY.decline.heading}</h3>
               <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.decline.body}</p>
               <div className="flex gap-2">
-                <Button variant="outlined" loading={busy} loadingLabel="Recording" onClick={() => void submit("decline")}>
+                <Button variant="outlined" loading={busy} loadingLabel="Recording" onClick={() => runSubmit("decline")}>
                   {LEGAL_COPY.decline.confirm}
                 </Button>
                 <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>
@@ -447,21 +475,20 @@ function PendingBody({
               <textarea
                 id={`${uid}-note`}
                 value={note}
-                maxLength={REQUEST_CHANGES_MAX}
                 rows={5}
                 placeholder={LEGAL_COPY.changes.placeholder}
                 aria-describedby={`${uid}-note-count`}
-                onChange={(e) => setNote(e.target.value.slice(0, REQUEST_CHANGES_MAX))}
+                onChange={(e) => setNote(truncateCodePoints(e.target.value, REQUEST_CHANGES_MAX))}
                 className="w-full rounded-lg border border-soleur-accent-gold-fg bg-soleur-bg-base p-3 text-sm text-soleur-text-primary"
               />
               <div className="flex flex-wrap justify-between gap-2 text-xs">
                 <span className="text-soleur-accent-gold-fg">{trimmed.length === 0 ? LEGAL_COPY.changes.required : ""}</span>
                 <span id={`${uid}-note-count`} className="text-soleur-text-muted">
-                  {LEGAL_COPY.changes.counter(note.length, REQUEST_CHANGES_MAX)}
+                  {LEGAL_COPY.changes.counter(codePointLength(note), REQUEST_CHANGES_MAX)}
                 </span>
               </div>
               <div className="flex gap-2">
-                <Button variant="outlined" disabled={trimmed.length === 0} loading={busy} loadingLabel="Sending" onClick={() => void submit("request_changes", trimmed)}>
+                <Button variant="outlined" disabled={trimmed.length === 0} loading={busy} loadingLabel="Saving" onClick={() => runSubmit("request_changes", trimmed)}>
                   {LEGAL_COPY.changes.send}
                 </Button>
                 <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>
@@ -472,10 +499,10 @@ function PendingBody({
             </div>
           )}
 
-          {error && (
+          {(error || submitCrash) && (
             <div role="alert" className="rounded-lg border border-red-500/60 bg-red-950/30 p-3 text-sm text-soleur-text-primary">
-              <p>{error.message}</p>
-              {error.reload && (
+              <p>{error ? error.message : LEGAL_COPY.errors.unknownResult}</p>
+              {(error ? error.reload : true) && (
                 <Button variant="outlined" className="mt-2 px-3 py-1.5" onClick={() => window.location.reload()}>
                   {LEGAL_COPY.errors.reload}
                 </Button>

@@ -38,13 +38,20 @@ export class LegalServiceError extends Error {
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-async function call(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  let res: LegalRpcResult;
+/** SQLSTATE of a serialization failure: the transaction rolled back whole, so one retry is safe for every RPC here. */
+const SERIALIZATION_FAILURE = "40001";
+
+async function callOnce(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<LegalRpcResult> {
   try {
-    res = await client.rpc(fn, args);
+    return await client.rpc(fn, args);
   } catch {
     throw new LegalServiceError(fn, "rpc_threw");
   }
+}
+
+async function call(client: LegalRpcClient, fn: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  let res = await callOnce(client, fn, args);
+  if (res.error?.code === SERIALIZATION_FAILURE) res = await callOnce(client, fn, args);
   if (res.error) throw new LegalServiceError(fn, res.error.code);
   if (!isObj(res.data) || typeof res.data.outcome !== "string") throw new LegalServiceError(fn, "bad_payload");
   return res.data;
@@ -151,7 +158,8 @@ export async function recordAcceptance(
   const o = oneOf(fn, out, ["recorded", "already_recorded", "replaced", "expired", "code_expired"] as const);
   if (o === "recorded") {
     const choice = asChoice(out.choice);
-    if (!choice || typeof out.decided_at !== "string") throw new LegalServiceError(fn, "bad_payload");
+    // The reply must be about the text that was sent: a different hash is never treated as a recorded decision.
+    if (!choice || typeof out.decided_at !== "string" || out.text_hash !== a.textHash) throw new LegalServiceError(fn, "bad_payload");
     return { outcome: "recorded", choice, decidedAt: out.decided_at, reauthAt: typeof out.reauth_at === "string" ? out.reauth_at : null };
   }
   if (o === "already_recorded") return { outcome: "already_recorded", choice: asChoice(out.choice) };
@@ -174,16 +182,22 @@ export interface DecideDeps {
 }
 
 /** Why a decision was not recorded; a closed set, safe as a Sentry tag. */
-export type DecideRejectReason = "hash_mismatch" | "text_expired" | "replaced" | "expired" | "code_expired" | "no_intent" | "rate_limited" | "db_error";
+export type DecideRejectReason = "hash_mismatch" | "text_expired" | "replaced" | "expired" | "code_expired" | "denied_42501" | "rate_limited" | "db_error" | "unexpected";
 
 /**
  * Validate the choice/note pair. Returns the note to send (trimmed for request_changes, null otherwise) or null when
- * the pair is malformed. The database CHECK counts characters of the UNTRIMMED value, so the cap is applied to what the
- * client sent.
+ * the pair is malformed. The trimmed value is what is sent, and the cap is applied to the UNTRIMMED length in UTF-16
+ * units: trimmed is never longer than untrimmed and a unit count is never smaller than the database's character
+ * count, so anything accepted here satisfies the SQL CHECK (the cap here is deliberately conservative).
+ * A NUL (not storable in Postgres text) and a lone surrogate (not valid UTF-8) are refused.
  */
+/** A UTF-16 surrogate with no partner (escapes only, so the pattern is unambiguous). */
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const notStorable = (text: string): boolean => text.includes("\u0000") || LONE_SURROGATE_RE.test(text);
+
 export function normaliseNote(choice: LegalChoiceWire, note: unknown): { ok: true; note: string | null } | { ok: false } {
   if (choice === "request_changes") {
-    if (typeof note !== "string" || note.length > REQUEST_CHANGES_MAX) return { ok: false };
+    if (typeof note !== "string" || note.length > REQUEST_CHANGES_MAX || notStorable(note)) return { ok: false };
     const trimmed = note.trim();
     return trimmed.length === 0 ? { ok: false } : { ok: true, note: trimmed };
   }
@@ -239,7 +253,7 @@ export async function decideLegal(
     rec = await recordAcceptance(deps.user, { key: a.entry.key, textHash: a.entry.textHash, choice: a.choice, note: a.note });
   } catch (err) {
     if (err instanceof LegalServiceError && err.code === "42501") {
-      reject("no_intent", err);
+      reject("denied_42501", err);
       return { kind: "forbidden" };
     }
     throw err;

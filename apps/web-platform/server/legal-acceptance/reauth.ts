@@ -11,9 +11,15 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
-import type { LegalReauthSendResult, LegalReauthVerifyResult } from "@/lib/legal-acceptance-wire";
+import {
+  LEGAL_CODE_MAX_DIGITS,
+  LEGAL_CODE_MIN_DIGITS,
+  type LegalReauthSendResult,
+  type LegalReauthVerifyResult,
+} from "@/lib/legal-acceptance-wire";
 import { reportLegalOp } from "@/server/approval/ops";
 import { serverUrl } from "@/lib/supabase/service";
+import { boundedAuthGetSession, boundedAuthGetUser } from "@/server/request-auth";
 import { isCurrent, KEY_RE, getLegalText, LegalTextError, type LegalTextEntry } from "./canonical";
 import { claimAttempt, issueIntent, markVerified, type LegalRpcClient } from "./service";
 
@@ -62,8 +68,8 @@ export function tokenFacts(accessToken: string): TokenFacts {
 /** The slice of the user-context Supabase client the identity step uses. */
 export interface IdentityClient {
   auth: {
-    getUser(): PromiseLike<{ data: { user: { id: string; email?: string | null } | null }; error: unknown }>;
-    getSession(): PromiseLike<{ data: { session: { access_token: string } | null } }>;
+    getUser(): Promise<{ data: { user: { id: string; email?: string | null } | null }; error: unknown }>;
+    getSession(): Promise<{ data: { session: { access_token: string } | null }; error: unknown }>;
   };
 }
 
@@ -72,27 +78,17 @@ export type Identity =
   | { ok: false; status: 401 | 403; error: string };
 
 /**
- * Founder id and email come from `getUser()` (verified by the auth service) on the user-context client only. The web
+ * Founder id and email come from `getUser()` (checked by the auth service) on the user-context client only. The web
  * session id comes from the same session's access token. A runtime-audience token is refused: an agent-minted token
  * must never open an intent. An absent session id issues nothing.
  */
 export async function resolveIdentity(supabase: IdentityClient, wrapperUserId: string): Promise<Identity> {
   const unauth: Identity = { ok: false, status: 401, error: "Unauthorized" };
-  let user: { id: string; email?: string | null } | null;
-  try {
-    const res = await supabase.auth.getUser();
-    user = res.error ? null : res.data.user;
-  } catch {
-    return unauth;
-  }
+  // Both reads are remote-capable legs of the auth service: the bounded helpers turn a stall or a throw into null (a 401).
+  const user = (await boundedAuthGetUser(supabase))?.user ?? null;
   if (!user || user.id !== wrapperUserId) return unauth;
 
-  let token: string | undefined;
-  try {
-    token = (await supabase.auth.getSession()).data.session?.access_token;
-  } catch {
-    return unauth;
-  }
+  const token = (await boundedAuthGetSession(supabase))?.session?.access_token;
   if (!token) return unauth;
   const facts = tokenFacts(token);
   if (facts.sub !== user.id) return unauth;
@@ -106,8 +102,12 @@ export async function resolveIdentity(supabase: IdentityClient, wrapperUserId: s
 /**
  * Per-USER ceiling on code-verify calls, in addition to the 5 per challenge the database enforces. Without it a founder
  * (or a stolen session) could open challenges on many keys and multiply the guesses. 10 per 15 minutes per user: two full
- * challenges' worth of attempts, which no honest flow needs. In-process and per host (best effort: a restart or a second
- * host resets it); the database counter stays the hard bound per challenge. The clock and the store are injectable.
+ * challenges' worth of attempts, which no honest flow needs.
+ *
+ * IN-PROCESS and PER HOST: a restart, a deploy or a second host resets it, so it is a best-effort second fence. The
+ * database counter (5 per challenge, claimed before the auth service is asked) stays the hard bound. Kept as its own
+ * small class rather than `SlidingWindowCounter` (server/rate-limiter.ts) because that one reads `Date.now()` directly
+ * (no injectable clock for the window tests) and has no sweep of its own. The clock and the store are injectable.
  */
 export const VERIFY_CEILING_MAX = 10;
 export const VERIFY_CEILING_WINDOW_MS = 15 * 60_000;
@@ -162,7 +162,10 @@ export interface ThrowawayAuthClient {
 
 /** A fresh anon client with no cookies and no session persistence: nothing it does can touch the founder's session. */
 export function createThrowawayAuthClient(): ThrowawayAuthClient {
-  return createClient(serverUrl(), process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "", {
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // No empty-key fallback: a missing key must fail loudly into `unavailable` (reported), not build a client that 401s.
+  if (!anonKey) throw new Error("auth anon key is not configured");
+  return createClient(serverUrl(), anonKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   }) as unknown as ThrowawayAuthClient;
 }
@@ -180,15 +183,30 @@ export interface ReauthDeps {
   ceiling?: AttemptCeiling;
 }
 
-const reportFailed = (stage: string, err: unknown, userId: string): void =>
-  reportLegalOp("reauthFailed", null, { userId, extra: { stage, errorClass: errorClass(err) } });
+/**
+ * Report one failed step: the stage and the error CLASS only (never a message, the address or the code). `warn` is for
+ * states that are abnormal but not a failed founder action. `thrown` hands the caught value to the helper, which keeps
+ * only its code, fn and class name.
+ */
+const reportFailed = (stage: string, err: unknown, userId: string, o: { level?: "warn"; thrown?: boolean } = {}): void =>
+  reportLegalOp("reauthFailed", o.thrown ? err : null, {
+    userId,
+    ...(o.level ? { level: o.level } : {}),
+    extra: { stage, errorClass: errorClass(err) },
+  });
 
 // ── send ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Open (or reuse) the intent, then email the code. The auth service answers 422 for an address it does not know and 200
- * for one it does; both come back as the identical `{ok:true,state:"sent"}` here. A real failure (network, 5xx, 429) is
- * `unavailable` and is reported with its class only.
+ * Open (or reuse) the intent, then email the code.
+ *
+ * - A REUSED intent without a resend means the earlier code is still valid: answer `sent` and send nothing (a second send
+ *   inside the auth service's window would only trip its 429).
+ * - The auth service answers 422 `otp_disabled` for an address it does not know and 200 for one it does; both come back as
+ *   the identical `{ok:true,state:"sent"}`. For a signed-in founder that 422 is abnormal, so it is reported at warn level
+ *   (class only). Any OTHER 422 is a real failure.
+ * - The auth service's 429 is `rate_limited` (the founder asked again too soon): not a fault, not reported.
+ * - Anything else (network, 5xx) is `unavailable`, reported with its class only.
  */
 export async function sendReauthCode(
   deps: ReauthDeps,
@@ -198,6 +216,7 @@ export async function sendReauthCode(
   const issued = await issueIntent(deps.service, { userId: a.id.userId, entry: a.entry, sessionId: a.id.sessionId, resend: a.resend });
   if (issued.outcome === "already_recorded") return { ok: false, reason: "already_recorded" };
   if (issued.outcome === "rate_limited") return { ok: false, reason: "rate_limited" };
+  if (issued.reused && !a.resend) return { ok: true, state: "sent" };
 
   if (!a.id.email) {
     reportFailed("send_no_address", null, a.id.userId);
@@ -205,18 +224,31 @@ export async function sendReauthCode(
   }
   try {
     const { error } = await deps.authClient().auth.signInWithOtp({ email: a.id.email, options: { shouldCreateUser: false } });
-    if (!error || error.status === 422) return { ok: true, state: "sent" };
+    if (!error) return { ok: true, state: "sent" };
+    if (error.status === 429) return { ok: false, reason: "rate_limited" };
+    if (error.status === 422) {
+      if (error.code === OTP_DISABLED_CODE) {
+        reportFailed("send_422", error, a.id.userId, { level: "warn" });
+        return { ok: true, state: "sent" };
+      }
+      reportFailed("send", error, a.id.userId);
+      return { ok: false, reason: "unavailable" };
+    }
     reportFailed("send", error, a.id.userId);
     return { ok: false, reason: "unavailable" };
   } catch (err) {
-    reportFailed("send", err, a.id.userId);
+    reportFailed("send", err, a.id.userId, { thrown: true });
     return { ok: false, reason: "unavailable" };
   }
 }
 
+/** The auth service's error code for "no such user / signups not allowed for otp" (`shouldCreateUser: false`). */
+const OTP_DISABLED_CODE = "otp_disabled";
+
 // ── verify ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export const CODE_RE = /^[0-9]{6,8}$/;
+/** ASCII digits only; the range is defined once in the wire module (6 in production, up to 8 in dev). */
+export const CODE_RE = new RegExp(`^[0-9]{${LEGAL_CODE_MIN_DIGITS},${LEGAL_CODE_MAX_DIGITS}}$`);
 
 /**
  * Verify the emailed code. Order is load-bearing: the attempt is counted in the database BEFORE the auth service is
@@ -240,25 +272,42 @@ export async function verifyReauthCode(
     return { ok: false, reason: "unavailable" };
   }
 
-  const client = deps.authClient();
+  let client: ThrowawayAuthClient;
   let error: AuthErrorLike | null;
+  try {
+    client = deps.authClient();
+  } catch (err) {
+    // The client could not even be built (a missing key): nothing was asked of the auth service.
+    reportFailed("verify_client", err, a.id.userId, { thrown: true });
+    return { ok: false, reason: "unavailable" };
+  }
   try {
     ({ error } = await client.auth.verifyOtp({ email: a.id.email, token: a.code, type: "email" }));
   } catch (err) {
     await discard(client, a.id.userId);
-    reportFailed("verify", err, a.id.userId);
+    reportFailed("verify", err, a.id.userId, { thrown: true });
     return { ok: false, reason: "unavailable" };
   }
-  await discard(client, a.id.userId);
 
   if (error) {
-    // The auth service answers a wrong or expired code with 403 (and 400/422 for a malformed one).
-    if (error.status === 400 || error.status === 403 || error.status === 422) return { ok: false, reason: "wrong_code" };
+    await discard(client, a.id.userId);
+    // The auth service answers a wrong or expired code with 403. A 400/422 means the code was not even well formed for
+    // it (our own check passed): the founder is told it was wrong, and the event shows the budget is being spent on it.
+    if (error.status === 403) return { ok: false, reason: "wrong_code" };
+    if (error.status === 400 || error.status === 422) {
+      reportFailed("verify_rejected", error, a.id.userId, { level: "warn" });
+      return { ok: false, reason: "wrong_code" };
+    }
     reportFailed("verify", error, a.id.userId);
     return { ok: false, reason: "unavailable" };
   }
 
-  const marked = await markVerified(deps.service, { userId: a.id.userId, eventId: claim.eventId, entry: a.entry, sessionId: a.id.sessionId });
+  // The throwaway session is revoked in parallel with the mark. `discard` never throws, so a failed revoke cannot turn a
+  // good check into an error, and a throwing mark still leaves the revoke running.
+  const [, marked] = await Promise.all([
+    discard(client, a.id.userId),
+    markVerified(deps.service, { userId: a.id.userId, eventId: claim.eventId, entry: a.entry, sessionId: a.id.sessionId }),
+  ]);
   if (marked === "verified") return { ok: true };
   if (marked === "not_claimed") {
     reportFailed("mark_not_claimed", null, a.id.userId);
@@ -267,13 +316,17 @@ export async function verifyReauthCode(
   return { ok: false, reason: marked === "not_found" ? "replaced" : marked };
 }
 
-/** Revoke the session the auth service minted for the throwaway client. Always runs; a failure is reported, never thrown. */
+/** Revoke the session the auth service minted for the throwaway client. Always runs; a failure is reported, NEVER thrown. */
 async function discard(client: ThrowawayAuthClient, userId: string): Promise<void> {
   try {
     const { error } = await client.auth.signOut({ scope: "local" });
     if (error) reportFailed("discard", error, userId);
   } catch (err) {
-    reportFailed("discard", err, userId);
+    try {
+      reportFailed("discard", err, userId, { thrown: true });
+    } catch {
+      // Observability must never turn a good check into a throw.
+    }
   }
 }
 
@@ -286,6 +339,34 @@ export type Guarded =
 /** The key segment of `/api/legal-acceptance/<key>/<action>` (the rate-limit wrapper does not thread Next's params). */
 export function keyFromUrl(url: string): string {
   return new URL(url).pathname.split("/").filter(Boolean).at(-2) ?? "";
+}
+
+/** Largest request body either route reads: a note is at most 1000 characters, so 8 KiB is generous. */
+export const MAX_BODY_BYTES = 8 * 1024;
+
+/**
+ * The request body as text, or null when it is over `max` bytes. A declared Content-Length over the cap is refused without
+ * reading; otherwise the stream is read chunk by chunk and cancelled the moment the cap is crossed, so an undeclared
+ * (chunked) body cannot be buffered whole before the check.
+ */
+export async function readCappedBody(req: Request, max: number): Promise<string | null> {
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) return null;
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export interface GuardDeps {
@@ -313,7 +394,14 @@ export async function guardLegalRequest(req: Request, userId: string, deps: Guar
   if (!/^application\/json(\s*;|$)/i.test(req.headers.get("content-type") ?? "")) {
     return { ok: false, status: 415, error: "Content-Type must be application/json" };
   }
-  const body = (await req.json().catch(() => null)) as unknown;
+  const text = await readCappedBody(req, MAX_BODY_BYTES);
+  if (text === null) return { ok: false, status: 413, error: "Payload too large" };
+  let body: unknown = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, status: 400, error: "Invalid body" };
 
   const id = await resolveIdentity(deps.supabase, userId);

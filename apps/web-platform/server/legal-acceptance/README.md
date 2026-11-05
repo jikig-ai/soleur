@@ -21,15 +21,18 @@ COPY --from=builder /app/server/legal-acceptance/texts ./server/legal-acceptance
 and `resolveTextsDir` in `canonical.ts` reads `<cwd>/server/legal-acceptance/texts` when the directory next to the
 module does not exist (the container working directory is `/app`, the same convention as `infra/egress-forwarder.mjs`).
 Copying keeps the bytes untouched, so `sha256sum <file>` equals the recorded `text_hash`; an embedded string module would
-need a generated file and a build step in two bundlers. `.dockerignore` keeps `*.md` out of the build context in general
-and re-includes this directory.
+need a generated file and a build step in two bundlers. `.dockerignore`'s `*.md` rule matches only at the context root, so
+it does not drop this directory today; the `!server/legal-acceptance/texts/*.md` re-include is belt-and-braces.
 
 `test/legal-acceptance/registry-embedding.test.ts` builds a bundle with the production esbuild flags, lays it out like
 the image (bundle at `dist/server`, texts under `server/legal-acceptance/texts`, cwd at the app root), runs it with
-node and compares the hash with `sha256sum`. It also asserts the Dockerfile COPY and the `.dockerignore` re-include.
+node and compares the hash with `sha256sum`. It also asserts the Dockerfile COPY and the `.dockerignore` re-include. That
+covers the esbuild bundle layout; the Next-compiled routes and pages rely on the same cwd convention (`WORKDIR /app`,
+`node dist/server/index.cjs`). A post-deploy smoke that loads a key from inside the container is a PR-D or ship follow-up.
 
 ## Sentry ops
 
 Registered in `server/approval/ops.ts` with `feature: "legal-acceptance"`: `accepted` (once per recorded row),
-`decide_rejected` (tag `reason`), `reauth_failed` (extra `errorClass`, never the address) and `row_without_event`
-(reconciliation, reported by the verify endpoint). Nothing logs the note, the code, the address or the text.
+`decide_rejected` (tag `reason`), `reauth_failed` (extra `errorClass`, never the address), `page_read_failed` (a founder page
+could not read its rows; not paged) and `row_without_event` (reconciliation, to be reported by the PR-D verify endpoint; no
+emitter exists before then, so its page-severity alert is inert until PR-D). Nothing logs the note, the code, the address or the text.

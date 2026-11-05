@@ -9,21 +9,21 @@ Scope: web screens and the in-place email-code check, behind `approval-queue`. N
 - [x] A1 Failing tests first: `service.test.ts`, `routes.test.ts`, texts-in-image test (`registry-embedding.test.ts`)
 - [x] A2 Texts reach the production image (6.7); test the deployed path before any card exists
 - [x] A3 `server/legal-acceptance/service.ts` and `reauth.ts`: issue, claim, mark, record; session id as the SQL reads it (6.5, 6.8, 6.9)
-- [x] A4 Reauth route (send, verify): same response for known and unknown address (6.6); per-user attempt ceiling (6.8)
-- [x] A5 Decide route: intent for every choice, never for a runtime token; typed outcomes (6.5, 6.9)
-- [x] A6 Sentry ops events (`op=accepted`, `decide_rejected`, `reauth_failed`, `row_without_event`)
+- [x] A4 Reauth route (send, verify): address from the session only, no enumeration surface (6.6); per-user attempt ceiling (6.8)
+- [x] A5 Decide route: an intent for every choice (Decline and Request changes open it at decision time, a Yes relies on the send step's), never for a runtime token; typed outcomes (6.5, 6.9)
+- [x] A6 Sentry ops events (`op=accepted`, `decide_rejected`, `reauth_failed`, `row_without_event`, `page_read_failed`)
 
 ## UI (workstream B)
 
 - [x] B1 Failing tests first: `card.test.tsx`, copy test (forbidden wording), state derivation test
-- [x] B2 `lib/legal-acceptance-copy.ts` (PROVISIONAL, CLO gate) with the (c) and (c-2) notices word for word, undo of a Decline (6.10)
+- [x] B2 `lib/legal-acceptance-copy.ts` (PROVISIONAL, CLO gate) with the (c) and (c-2) notices word for word; no undo of a Decline, a new text version replaces it (6.10)
 - [x] B3 State derivation in `lib/approval-card-state.ts`: pending, accepted, declined, changes requested, replaced, expired
 - [x] B4 `legal-acceptance-card.tsx`, `legal-reauth-dialog.tsx`, page `approvals/legal/[key]`, index page
 
 ## Infra and records (workstream C)
 
 - [x] C1 Sentry issue alert in `apps/web-platform/infra/sentry` (6.4) with its test
-- [x] C2 ADR-319 amendment: session id derivation, texts in image, undo of Decline, retention/redaction left to counsel (6.9, 6.10)
+- [x] C2 ADR-319 amendment: session id derivation, texts in image, no undo of a Decline (a new text version replaces it), retention/redaction left to counsel (6.9, 6.10)
 - [x] C3 Legal records: LIA, attestation and register note the web screen and the notices; compliance-posture row
 
 ## Gate and ship

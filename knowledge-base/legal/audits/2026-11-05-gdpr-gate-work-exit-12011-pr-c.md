@@ -71,3 +71,14 @@ Scan completion: 3 path matches examined, 0 findings of severity Critical.
 ## Result
 
 No Critical finding, no Important finding. Two Suggestions, both already covered by existing controls. Open conditions before the first real row are unchanged and are listed in the counsel review audit and the attestation record: counsel's decision on the retention period and on item 17, and the matching update of the three published privacy documents before any founder other than the operator is admitted.
+
+## Review round addendum (2026-11-05)
+
+Appended after the review round; the body above is unchanged. The cumulative diff was re-read against the same checks.
+
+- The two legal pages now report a failed page read under the feature tag `legal-acceptance` (op `page_read_failed`, not paged) instead of the approval landing tag. Event content is unchanged: the user id as a pseudonymous tag, no address, code, note or text.
+- F-1 (free-text note) stays a Suggestion. The note now also rejects NUL characters and lone surrogates at validation (the P3 note validation), which is input hygiene and does not change the F-1 reasoning.
+- The `approval-queue` flag is read with `workspaceId: null`, which keys on role only, so it is effectively global, not per user. This corrects the `AP-` line above ("flag read per user"). Enabling the card means enabling the flag for every workspace; the ADR-319 amendment lists the enabling conditions.
+- The per-user attempt ceiling is in-process, per host, and resets on restart; the database bounds are the hard limit. The send step takes the address from the session only, so there is no enumeration surface to test.
+
+No new Critical finding and no new Important finding.

@@ -248,7 +248,7 @@ COPY --from=builder /app/dist/server ./dist/server
 # Founder legal-text registry (#12011 PR-C, ADR-319). The bundle above holds no texts: dist/server is only the esbuild output, and
 # server/legal-acceptance/canonical.ts resolves `<cwd>/server/legal-acceptance/texts` when the directory next to the module
 # does not exist (cwd is /app). Copied byte for byte, so `sha256sum <file>` stays equal to the recorded text_hash.
-# Proved by test/legal-acceptance/registry-embedding.test.ts.
+# Asserted by test/legal-acceptance/registry-embedding.test.ts.
 COPY --from=builder /app/server/legal-acceptance/texts ./server/legal-acceptance/texts
 
 # Faithful sandbox canary payload + captured-argv fixture (#5875 / ADR-079).

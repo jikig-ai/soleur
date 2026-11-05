@@ -3113,8 +3113,9 @@ resource "sentry_alert" "art17_approval_anonymise_failed" {
 # (#12011, PR-C; ADR-319) The founder legal-acceptance card's failure signals. The web card
 # (server/legal-acceptance/**, app/api/legal-acceptance/**) emits Sentry events tagged feature=legal-acceptance with an
 # `op` of accepted (an accepted row was written; liveness, never paged), decide_rejected (the decide RPC refused;
-# `reason` tag), reauth_failed (the email code send or verify failed; provider error class tag) or row_without_event
-# (a legal_acceptance row with no matching accepted event; reconciliation). Two rules route them, and neither matches the
+# `reason` tag), reauth_failed (the email code send or verify failed; provider error class tag), page_read_failed (a
+# founder page could not read its rows; not matched by either rule, not paged) or row_without_event (a legal_acceptance
+# row with no matching accepted event; reconciliation). Two rules route them, and neither matches the
 # feature alone (that would email on every accepted row): test/sentry-legal-acceptance-alert-op-contract.test.ts derives
 # the op set from the server source and refuses a rule that omits or adds one.
 #
@@ -3152,7 +3153,8 @@ resource "sentry_alert" "legal_acceptance_failure_burst" {
   }
 }
 
-# legal_acceptance_row_without_event: PAGE severity. A legal_acceptance row exists with no matching op=accepted event, so
+# legal_acceptance_row_without_event: PAGE severity, but INERT until the PR-D verify endpoint exists: nothing emits
+# op=row_without_event before then, so this rule cannot fire. A legal_acceptance row exists with no matching op=accepted event, so
 # the write path and the observability disagree about a recorded acceptance of a legal text. Any single event matters,
 # and the event is a message event with a static message (one Sentry issue for its whole life), so the three transition
 # triggers alone would email once and then stay silent while the issue is open; `event_frequency_count {1h, 0}` fires on

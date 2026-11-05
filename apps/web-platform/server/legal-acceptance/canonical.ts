@@ -24,7 +24,8 @@
  * to `/app/server/legal-acceptance/texts`, and `resolveTextsDir` falls back to `<cwd>/server/legal-acceptance/texts` when
  * the module-relative directory does not exist (cwd is /app in the image, the same convention as
  * `infra/egress-forwarder.mjs`). Bytes are copied untouched, so `sha256sum <file>` still equals the hash.
- * Proved by test/legal-acceptance/registry-embedding.test.ts (builds the real bundle layout).
+ * Asserted by test/legal-acceptance/registry-embedding.test.ts for the esbuild bundle layout; the Next-compiled routes and
+ * pages rely on the same cwd convention (WORKDIR /app).
  */
 
 import { createHash } from "node:crypto";

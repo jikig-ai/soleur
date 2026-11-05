@@ -13,7 +13,8 @@ The server is bundled with esbuild into `dist/server/index.cjs`, and the route h
 directory next to the compiled module does not contain `texts/`. The Dockerfile therefore copies this directory, byte
 for byte, to `/app/server/legal-acceptance/texts`, and `resolveTextsDir` in `../canonical.ts` reads
 `<cwd>/server/legal-acceptance/texts` when the module-relative directory is absent (the container working directory is
-`/app`). Bytes are never rewritten, so `sha256sum <file>` equals the recorded `text_hash`. The `.dockerignore` keeps
-`*.md` out of the build context in general and re-includes this directory.
+`/app`). Bytes are never rewritten, so `sha256sum <file>` equals the recorded `text_hash`. The `.dockerignore` `*.md` rule
+matches only at the context root, so it does not drop this directory today; the re-include is belt-and-braces.
 `test/legal-acceptance/registry-embedding.test.ts` builds a bundle with the production flags, lays it out like the
-image and checks that a fixture text loads and hashes to the known value.
+image and asserts that a fixture text loads and hashes to the known value. That covers the esbuild bundle layout; the
+Next-compiled routes and pages rely on the same cwd convention.

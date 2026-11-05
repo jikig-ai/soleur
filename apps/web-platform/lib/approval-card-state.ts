@@ -179,7 +179,11 @@ export interface LegalCardStateInput {
   now: Date;
 }
 
-/** True once the whole of the `valid_until` day (UTC) has passed. Same rule as `isCurrent` in the server registry. */
+/**
+ * True once the whole of the `valid_until` day (UTC) has passed. Same rule as `isCurrent` in the server registry
+ * (`server/legal-acceptance/canonical.ts`), duplicated on purpose: that module imports node:fs and node:crypto, so this
+ * client-safe file cannot import it. Change the two together.
+ */
 export function legalValidUntilPassed(validUntil: string | null, now: Date): boolean {
   if (validUntil === null) return false;
   const start = Date.parse(`${validUntil}T00:00:00Z`);

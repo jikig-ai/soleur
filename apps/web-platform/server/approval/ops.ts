@@ -185,6 +185,8 @@ export interface ApprovalOpContext {
   /** Extra low-cardinality Sentry TAGS (searchable), merged after `approval_id`. Static enum values only, never user content. */
   tags?: Record<string, string>;
   extra?: Record<string, unknown>;
+  /** `reportLegalOp` only: sets the severity of ONE report (default: the op's own level). Ignored by `reportApprovalOp`. */
+  level?: "error" | "warn";
 }
 
 /**
@@ -245,7 +247,7 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: a founder decision was recorded",
     level: "warn",
   },
-  /** A decision was not recorded; `tags.reason` is one of DecideRejectReason (hash_mismatch, replaced, expired, no_intent, db_error, ...). */
+  /** A decision was not recorded; `tags.reason` is one of DecideRejectReason (hash_mismatch, replaced, expired, denied_42501, db_error, unexpected, ...). */
   decideRejected: {
     op: "decide_rejected",
     message: "Legal acceptance: a founder decision was not recorded",
@@ -263,12 +265,19 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: a recorded decision has no matching accepted event",
     level: "error",
   },
+  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  pageReadFailed: {
+    op: "page_read_failed",
+    message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
+    level: "error",
+  },
 } as const satisfies Record<string, ApprovalOp>;
 
 export type LegalOpKey = keyof typeof LEGAL_OPS;
 
 export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
   const def: ApprovalOp = LEGAL_OPS[key];
+  const level = ctx.level ?? def.level;
   const options = {
     feature: "legal-acceptance",
     op: def.op,
@@ -281,7 +290,7 @@ export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpCont
     },
   };
   try {
-    if (def.level === "error") reportSilentFallback(null, options);
+    if (level === "error") reportSilentFallback(null, options);
     else warnSilentFallback(null, options);
   } catch {
     // Observability must never turn a deny into a throw.

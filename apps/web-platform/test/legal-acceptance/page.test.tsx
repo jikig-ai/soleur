@@ -4,7 +4,8 @@
  *   - a malformed key and an unknown key are the SAME not-found;
  *   - the text on the card is the registry body, and its hash is the registry hash (what is shown is what is hashed);
  *   - the founder's rows give the state; older rows render as "replaced" cards;
- *   - with the approval-queue flag off an existing row still renders and a pending card is read-only;
+ *   - the approval-queue flag is read first (userId, workspaceId null); with it off the pages return not-found unless the
+ *     founder has a recorded row for that key, and a pending card or an unreleased key never renders;
  *   - a failed or malformed read is reported and throws, never an empty page.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +52,7 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/server/approval/flag", () => ({ isApprovalQueueEnabled: (...a: unknown[]) => h.flag(...a) }));
 vi.mock("@/server/approval/ops", async (orig) => ({
   ...(await orig<typeof import("@/server/approval/ops")>()),
-  reportApprovalOp: (...a: unknown[]) => h.report(...a),
+  reportLegalOp: (...a: unknown[]) => h.report(...a),
 }));
 
 const RAW = "---\nversion: 3\nvalid_until: 2099-12-31\n---\nCUSTOMER TERMS\n\n1. Who these terms are between.\n\nEnd of version 3.\n";
@@ -74,6 +75,7 @@ import IndexPage from "@/app/(dashboard)/dashboard/approvals/legal/page";
 const HASH = createHash("sha256").update(RAW).digest("hex");
 const OLD = "d".repeat(64);
 const row = (over: Record<string, unknown> = {}) => ({
+  key: "customer-terms",
   text_hash: HASH,
   version: "3",
   choice: "accept",
@@ -137,16 +139,42 @@ describe("what the card shows", () => {
     expect(screen.getByRole("heading", { name: LEGAL_COPY.replaced.title("2", "3") })).toBeInTheDocument();
   });
 
-  it("flag off: an existing row still renders, and a pending card is read-only with a plain 'not available yet'", async () => {
+  it("flag off: an existing recorded row still renders (read-only, no actions)", async () => {
     h.flag.mockResolvedValue(false);
     h.rows.value = [row({ choice: "decline", reauth_at: null })];
-    const { unmount } = render(await call("customer-terms"));
+    render(await call("customer-terms"));
     expect(screen.getByText(LEGAL_COPY.declined.badge)).toBeInTheDocument();
-    unmount();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("flag off and no recorded row: not-found, and no pending card or registry text is rendered", async () => {
+    h.flag.mockResolvedValue(false);
+    h.rows.value = [];
+    await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
+  });
+
+  it("flag off with only an OLDER text's row: the older answer renders, the current pending text and its link do not", async () => {
+    h.flag.mockResolvedValue(false);
+    h.rows.value = [row({ text_hash: OLD, version: "2", choice: "decline", reauth_at: null })];
+    const { container } = render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.replaced.badge)).toBeInTheDocument();
+    expect(screen.queryByText(LEGAL_COPY.pending.badge)).toBeNull();
+    expect(container.textContent).not.toContain("CUSTOMER TERMS");
+    expect(container.querySelector("#current-version")).toBeNull();
+    expect(container.querySelector('a[href="#current-version"]')).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("reads the flag first, for the signed-in user with no workspace (effectively global)", async () => {
     h.rows.value = [];
     render(await call("customer-terms"));
-    expect(screen.getByText(LEGAL_COPY.pending.notAvailable)).toBeInTheDocument();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(h.flag).toHaveBeenCalledWith({ userId: "00000000-0000-4000-8000-000000000007", workspaceId: null });
+  });
+
+  it("flag on: the pending card is open for answers", async () => {
+    render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
+    expect(screen.queryByText(LEGAL_COPY.pending.notAvailable)).toBeNull();
   });
 });
 
@@ -154,7 +182,7 @@ describe("a failed read is reported and throws", () => {
   it("a read error", async () => {
     h.rowsError.value = { code: "XX000" };
     await expect(call("customer-terms")).rejects.toThrow("legal acceptance read failed");
-    expect(h.report).toHaveBeenCalledWith("landingReadFailed", expect.anything(), expect.objectContaining({ extra: { read: "legal_acceptance" } }));
+    expect(h.report).toHaveBeenCalledWith("pageReadFailed", expect.anything(), expect.objectContaining({ extra: { read: "legal_acceptance" } }));
   });
 
   it("a malformed row (unknown choice) is not rendered as an empty or pending card", async () => {
@@ -172,15 +200,36 @@ describe("index page", () => {
     expect(link).toHaveTextContent(LEGAL_COPY.index.state.pending);
   });
 
-  it("shows the answer once a row exists, and 'not available yet' for a pending text with the flag off", async () => {
-    h.rows.value = [{ key: "customer-terms", text_hash: HASH, choice: "decline" }];
-    const { unmount } = render(await IndexPage());
+  it("shows the answer once a row exists", async () => {
+    h.rows.value = [row({ choice: "decline" })];
+    render(await IndexPage());
     expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.state.declined);
-    unmount();
+  });
+
+  it("flag off and no recorded row: not-found, no key is listed", async () => {
     h.rows.value = [];
+    h.flag.mockResolvedValue(false);
+    await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
+  });
+
+  it("flag off with a recorded row: only the keys the founder has a row for are listed", async () => {
+    h.rows.value = [row({ choice: "accept" })];
+    h.flag.mockResolvedValue(false);
+    render(await IndexPage());
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.state.accepted);
+  });
+
+  it("flag off with a row only for an older text: listed, and the current pending text is 'not available yet'", async () => {
+    h.rows.value = [row({ text_hash: OLD, version: "2", choice: "decline" })];
     h.flag.mockResolvedValue(false);
     render(await IndexPage());
     expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.notAvailable);
+  });
+
+  it("reads the flag first, for the signed-in user with no workspace", async () => {
+    render(await IndexPage());
+    expect(h.flag).toHaveBeenCalledWith({ userId: "00000000-0000-4000-8000-000000000007", workspaceId: null });
   });
 
   it("signed out redirects; a failed read throws", async () => {
@@ -189,5 +238,6 @@ describe("index page", () => {
     h.user.value = { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" };
     h.rowsError.value = { code: "XX000" };
     await expect(IndexPage()).rejects.toThrow("legal acceptance read failed");
+    expect(h.report).toHaveBeenCalledWith("pageReadFailed", expect.anything(), expect.objectContaining({ extra: { read: "legal_acceptance_index" } }));
   });
 });

@@ -21,8 +21,8 @@ import {
  *
  * Body: {step:"send", resend?:boolean} or {step:"verify", code}. Responses (wire types in lib/legal-acceptance-wire.ts):
  * 200 LegalReauthSendResult | LegalReauthVerifyResult · 400 malformed body · 401 unauthenticated or no web session ·
- * 403 CSRF (absent or foreign Origin) or a non-web (runtime-audience) token · 404 flag off or unknown key · 415 not JSON ·
- * 429 (wrapper) · 500.
+ * 403 CSRF (absent or foreign Origin) or a non-web (runtime-audience) token · 404 flag off or unknown key · 413 body over
+ * 8 KiB · 415 not JSON · 429 (wrapper) · 500.
  *
  * Auth posture: cookie session (NOT a PUBLIC_PATHS entry). The founder id and address come from `getUser()` on the
  * user-context client; the body never carries an identity. The code is sent and verified on a throwaway anon client, so
@@ -54,8 +54,13 @@ async function reauthHandler(req: Request, user: VerifiedUser): Promise<Response
     }
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   } catch (err) {
-    // A database failure: nothing was recorded. Static message; the SQLSTATE and RPC name only.
-    reportLegalOp("reauthFailed", err instanceof LegalServiceError ? err : null, { userId: user.id, extra: { stage: "route" } });
+    // Nothing was recorded. Static message; the helper keeps only the code, RPC name and class of the caught value.
+    // `reason` separates a database failure from anything else (a throw in the auth client, the flag read, ...).
+    reportLegalOp("reauthFailed", err, {
+      userId: user.id,
+      tags: { reason: err instanceof LegalServiceError ? "db_error" : "unexpected" },
+      extra: { stage: "route" },
+    });
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }

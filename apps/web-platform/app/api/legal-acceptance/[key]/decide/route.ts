@@ -16,8 +16,9 @@ import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptanc
  *
  * Body: {choice, textHash, note?}. `textHash` is the hash the page showed; the route compares it with the registry and
  * never accepts text. Responses: 200 LegalDecideResult (recorded, already_recorded, replaced, expired, code_expired:
- * the last three mean nothing was recorded) · 400 malformed body · 401 · 403 CSRF, a non-web token, or no live intent /
- * email code required (SQLSTATE 42501) · 404 flag off or unknown key · 415 · 429 · 500.
+ * the last three mean nothing was recorded) · 400 malformed body · 401 · 403 `{error:"reverify"}` when no live intent /
+ * email code counts (SQLSTATE 42501), 403 `{error:"Forbidden"}` for CSRF or a non-web token · 404 flag off or unknown
+ * key · 413 body over 8 KiB · 415 · 429 · 500.
  *
  * The decision is recorded by `record_legal_acceptance` on the USER-context client (the actor is `auth.uid()`); the
  * service client only opens the intent for Decline and Request changes. Thin HTTP-only export.
@@ -45,12 +46,17 @@ async function decideHandler(req: Request, user: VerifiedUser): Promise<Response
       { service: createServiceClient() as unknown as LegalRpcClient, user: supabase as unknown as LegalRpcClient },
       { userId: g.id.userId, sessionId: g.id.sessionId, entry: g.entry, choice, textHash, note: n.note },
     );
-    if (out.kind === "forbidden") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // Contract with the dialog: the code check no longer counts, so it returns to the send step.
+    if (out.kind === "forbidden") return NextResponse.json({ error: "reverify" }, { status: 403 });
     if (out.kind === "rate_limited") return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     return NextResponse.json(out.result);
   } catch (err) {
-    // A database failure on the decision path: nothing was recorded. Routed by the legal-acceptance failure alert.
-    reportLegalOp("decideRejected", err instanceof LegalServiceError ? err : null, { userId: user.id, tags: { reason: "db_error" } });
+    // Nothing was recorded. Routed by the legal-acceptance failure alert. The helper keeps only the code, RPC name and
+    // class of the caught value; `reason` separates a database failure from anything else.
+    reportLegalOp("decideRejected", err, {
+      userId: user.id,
+      tags: { reason: err instanceof LegalServiceError ? "db_error" : "unexpected" },
+    });
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }

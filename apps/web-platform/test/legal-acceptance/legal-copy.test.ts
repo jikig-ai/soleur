@@ -103,6 +103,27 @@ describe("wording that must not claim more than happened", () => {
     expect(all.join("\n")).not.toMatch(/\bundo\b(?! it)/i);
   });
 
+  it("never promises a delivery of the note or a reply that nothing in the product performs yet", () => {
+    const joined = all.join("\n");
+    expect(joined).not.toMatch(/goes to your team|will come back to you|back to you for a fresh answer|your note to your team/i);
+    expect(copy.LEGAL_COPY.changesRow.body).toMatch(/saved with your decision/i);
+    expect(copy.LEGAL_COPY.changesRequested.body).not.toMatch(/will come back|new version will/i);
+    // the ban bites
+    expect(/goes to your team|will come back to you/i.test("Your note goes to your team.")).toBe(true);
+  });
+
+  it("the locked wording is neutral: it does not say a new code helps right away (the per-user ceiling also answers locked)", () => {
+    const t = copy.LEGAL_COPY.dialog.verifyError.locked;
+    expect(t).toMatch(/15 minutes/);
+    expect(t).not.toMatch(/send a new code/i);
+  });
+
+  it("has copy for a code that no longer counts and for the resend wait", () => {
+    expect(copy.LEGAL_COPY.dialog.reverify).toMatch(/new code/i);
+    expect(copy.LEGAL_COPY.dialog.reverify).toMatch(/nothing was recorded/i);
+    expect(copy.LEGAL_COPY.dialog.resendWait).toBeTruthy();
+  });
+
   it("format helpers", () => {
     expect(copy.legalTextLabel("customer-terms")).toBe("Customer terms");
     expect(copy.formatLegalUtc("not a date")).toBe("");

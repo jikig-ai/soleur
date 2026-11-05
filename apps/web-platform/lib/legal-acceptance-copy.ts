@@ -88,7 +88,7 @@ export const LEGAL_COPY = {
   noRow: { label: "If you say No", body: "Nothing changes. The current terms stay in place." },
   changesRow: {
     label: "If you ask for changes",
-    body: "Your note goes to your team. Nothing is accepted until a new version comes back to you.",
+    body: "Your note is saved with your decision. Nothing is accepted by asking for changes.",
   },
 
   answerHeading: "Your answer",
@@ -96,7 +96,7 @@ export const LEGAL_COPY = {
   choices: {
     yes: { label: "Yes", hint: "Final once recorded. We check it is you first with an email code." },
     no: { label: "No", hint: "Nothing changes." },
-    changes: { label: "Request changes", hint: "Tell your team what to change first." },
+    changes: { label: "Request changes", hint: "Say what you want changed first." },
   },
 
   scroll: {
@@ -114,12 +114,12 @@ export const LEGAL_COPY = {
 
   changes: {
     label: "What should change? (required)",
-    placeholder: "Tell your team what you want changed, in your own words.",
-    required: "Required. Write what you want changed. We cannot send an empty request.",
+    placeholder: "Say what you want changed, in your own words.",
+    required: "Required. Write what you want changed. We cannot save an empty request.",
     counter: (used: number, max: number) => `${used} / ${max} characters`,
-    send: "Send my request",
+    send: "Save my request",
     cancel: "Cancel",
-    footer: "Nothing is accepted by sending this. Your team will send a new version back to you.",
+    footer: "Nothing is accepted by saving this. Your note is saved with your decision.",
   },
 
   decline: {
@@ -150,8 +150,8 @@ export const LEGAL_COPY = {
   changesRequested: {
     badge: "Waiting for revision",
     title: "You asked for changes",
-    noteHeading: "Your note to your team",
-    body: "Nothing is accepted. A new version will come back to you for a fresh answer. This answer is final: to change it, your team sends a new version of the text.",
+    noteHeading: "Your note",
+    body: "Nothing is accepted. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
   },
   replaced: {
     badge: "Replaced by a new version",
@@ -168,9 +168,9 @@ export const LEGAL_COPY = {
   },
 
   errors: {
-    /** A response that proves nothing was written (a 4xx or 5xx from our own route). */
+    /** A genuine 4xx from our own route: the request was refused, so nothing was written. Never used for a 5xx, a 429 or a lost reply. */
     nothingRecorded: "Nothing was recorded. Try again shortly, or ask your team for help if this keeps happening.",
-    /** A lost or unreadable reply: the answer may or may not have been written, so the card does not guess. */
+    /** A 5xx, a 429, a timeout or a lost or unreadable reply: a row can be committed behind any of them, so the card does not guess. */
     unknownResult: "We could not confirm what happened. Reload this page to see whether your answer was recorded before you try again.",
     replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",
     expired: "This text is no longer open for answers. Nothing was recorded.",
@@ -189,6 +189,7 @@ export const LEGAL_COPY = {
     answerDetail: (label: string, version: string) => `Accept the updated ${label}, version ${version}. Nothing is recorded until your code is accepted.`,
     sendCode: "Send me a code",
     sendNewCode: "Send me a new code",
+    resendWait: "You can ask for a new code in about a minute.",
     sendingCode: "Sending",
     cannotGetCode: "I cannot get the code",
     help: "If the code does not arrive, check your spam folder, then ask your team for help. There is no other way to confirm it is you from this card, and nothing has been recorded.",
@@ -209,12 +210,14 @@ export const LEGAL_COPY = {
     },
     verifyError: {
       wrong_code: "That code is wrong or has expired. Codes only work for a few minutes. Check it, or send a new one. Nothing was recorded.",
-      locked: "Too many wrong tries, so this code no longer works. Nothing was recorded. Send a new code, or go back and try again later.",
+      locked: "Too many tries. Wait about 15 minutes, then ask for a new code. Nothing was recorded.",
       expired: "That code has expired. Send a new one. Nothing was recorded.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",
       code_stale: "The confirmation is too old. Send a new code. Nothing was recorded.",
       unavailable: "We could not check the code. Nothing was recorded, try again shortly.",
     },
+    /** The server no longer counts the email check (HTTP 403 reverify): back to the first step. */
+    reverify: "The email check no longer counts, so nothing was recorded. Ask for a new code to try again.",
     decideError: {
       code_expired: "The confirmation is too old. Send a new code. Nothing was recorded.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",

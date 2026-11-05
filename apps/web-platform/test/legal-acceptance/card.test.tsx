@@ -3,10 +3,11 @@
  * The card is a client component fed plain props by the page; every network call is a mocked fetch.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LegalAcceptanceCard, type LegalAcceptanceCardProps, type LegalRowFacts } from "@/components/approvals/legal-acceptance-card";
 import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import type { LegalChoiceWire, LegalDecideResult, LegalReauthSendResult, LegalReauthVerifyResult } from "@/lib/legal-acceptance-wire";
 
 const HASH = "c".repeat(64);
@@ -41,6 +42,7 @@ afterEach(() => {
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight;
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 const longText = () => (layout = { scrollHeight: 1000, clientHeight: 200 });
 
@@ -313,6 +315,19 @@ describe("Request changes (AC9)", () => {
     expect(screen.getByText(LEGAL_COPY.changes.counter(1000, 1000))).toBeInTheDocument();
   });
 
+  it("counts and truncates the note by character (code point), so an emoji is one character and is never cut in half", async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(changesButton());
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await user.click(box);
+    await user.paste("\u{1F600}".repeat(1200));
+    expect(Array.from(box.value)).toHaveLength(1000);
+    expect(box.value.endsWith("\u{1F600}")).toBe(true);
+    expect(screen.getByText(LEGAL_COPY.changes.counter(1000, 1000))).toBeInTheDocument();
+    expect(box.getAttribute("maxlength")).toBeNull();
+  });
+
   it("sends the trimmed note with the shown hash, as JSON, and then reads the server's answer", async () => {
     const f = mockFetch({ decide: { body: { outcome: "recorded", choice: "request_changes", decidedAt: "2026-11-04T10:42:00Z" } } });
     const user = userEvent.setup();
@@ -349,9 +364,15 @@ describe("a failed or malformed decide never shows success (AC11)", () => {
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.changes.send }));
   }
 
+  // Contract: only a genuine 4xx proves nothing was written. A committed row can sit behind a 5xx or a lost reply, so
+  // 5xx, 429 and a network error all say "reload to check", never "Nothing was recorded".
   it.each([
-    ["HTTP 500", { status: 500, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
+    ["HTTP 400", { status: 400, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
     ["HTTP 403", { status: 403, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
+    ["HTTP 409", { status: 409, body: { error: "x" } }, LEGAL_COPY.errors.nothingRecorded],
+    ["HTTP 500", { status: 500, body: { error: "x" } }, LEGAL_COPY.errors.unknownResult],
+    ["HTTP 503", { status: 503, body: {} }, LEGAL_COPY.errors.unknownResult],
+    ["HTTP 429", { status: 429, body: { error: "slow down" } }, LEGAL_COPY.errors.unknownResult],
     ["a network failure", "throw" as const, LEGAL_COPY.errors.unknownResult],
     ["a 200 with a malformed body", { body: { nope: true } }, LEGAL_COPY.errors.unknownResult],
     ["a 200 with an unknown outcome", { body: { outcome: "banana", choice: "request_changes" } }, LEGAL_COPY.errors.unknownResult],
@@ -520,12 +541,16 @@ describe("the in-place email check (AC10, AC11)", () => {
     expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
   });
 
-  it("Send me a new code sends with resend:true", async () => {
+  it("Send me a new code sends with resend:true (once the cooldown has passed)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const f = mockFetch({ send: { body: SENT } });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderCard();
     await openDialogAndSendCode(user);
-    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendNewCode }));
+    act(() => {
+      vi.advanceTimersByTime(OTP_RESEND_COOLDOWN_MS + 1_000);
+    });
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendNewCode }));
     await waitFor(() => expect(f.reauths()).toHaveLength(2));
     expect(f.reauths()[1].body).toEqual({ step: "send", resend: true });
   });
@@ -567,7 +592,10 @@ describe("the in-place email check (AC10, AC11)", () => {
     await openDialogAndSendCode(user);
     await enterCode(user);
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.errors.nothingRecorded);
+    // A 500 may hide a committed row: the wording asks for a reload instead of claiming nothing was written.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
+    expect(alert).not.toHaveTextContent("Nothing was recorded");
     expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
     await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
@@ -611,5 +639,207 @@ describe("the in-place email check (AC10, AC11)", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByLabelText(LEGAL_COPY.dialog.codeLabel)).toBeNull();
     expect(f.decides()).toHaveLength(0);
+  });
+});
+
+// =====================================================================================================================
+describe("the email code no longer counts: 403 reverify (contract 1)", () => {
+  it("returns to the send step, asks for a new code, and the next confirm verifies again", async () => {
+    let n = 0;
+    const f = mockFetch({
+      send: { body: SENT },
+      verify: { body: VERIFIED },
+      decide: () => (++n === 1 ? { status: 403, body: { error: "reverify" } } : { body: RECORDED_YES }),
+    });
+    const user = userEvent.setup();
+    renderCard();
+    await openDialogAndSendCode(user);
+    await enterCode(user);
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(LEGAL_COPY.dialog.reverify);
+    expect(alert).not.toHaveTextContent(LEGAL_COPY.errors.unknownResult);
+    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    // Back on the send step: the code box is gone and a fresh code is the only way forward.
+    expect(screen.queryByLabelText(LEGAL_COPY.dialog.codeLabel)).toBeNull();
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
+    await screen.findByLabelText(LEGAL_COPY.dialog.codeLabel);
+    expect(screen.getByLabelText(LEGAL_COPY.dialog.codeLabel)).toHaveValue("");
+    await enterCode(user, "123456");
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    expect(f.calls.filter((c) => c.body.step === "verify")).toHaveLength(2);
+  });
+
+  it("code_expired from the decide answer also needs a new check before the next try", async () => {
+    let n = 0;
+    const f = mockFetch({
+      send: { body: SENT },
+      verify: { body: VERIFIED },
+      decide: () => (++n === 1 ? { body: { outcome: "code_expired" } } : { body: RECORDED_YES }),
+    });
+    const user = userEvent.setup();
+    renderCard();
+    await openDialogAndSendCode(user);
+    await enterCode(user);
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.dialog.decideError.code_expired);
+    // The used code is cleared: a new code has to be entered and checked.
+    expect(screen.getByLabelText(LEGAL_COPY.dialog.codeLabel)).toHaveValue("");
+    expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord })).toBeDisabled();
+    await enterCode(user, "654321");
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    expect(f.calls.filter((c) => c.body.step === "verify")).toHaveLength(2);
+  });
+});
+
+// =====================================================================================================================
+describe("a decide in flight cannot be discarded (Go back, Escape)", () => {
+  it("Go back is disabled and Escape does nothing while the decide is pending; the outcome then shows", async () => {
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => (release = r));
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+        calls.push(`${url.split("/").pop()}:${String(body.step ?? body.choice)}`);
+        if (url.endsWith("/decide")) {
+          await gate;
+          return { ok: true, status: 200, json: async () => RECORDED_YES };
+        }
+        return { ok: true, status: 200, json: async () => (body.step === "send" ? SENT : VERIFIED) };
+      }),
+    );
+    const user = userEvent.setup();
+    renderCard();
+    await openDialogAndSendCode(user);
+    await enterCode(user);
+    await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
+    await waitFor(() => expect(calls).toContain("decide:accept"));
+    expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.goBack })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => {
+      release(null);
+      await gate;
+    });
+    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("Escape closes the dialog when nothing is in flight", async () => {
+    mockFetch({});
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(yesButton());
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+// =====================================================================================================================
+describe("Send me a new code: client cooldown and the rate_limited reason (contract 4)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("is disabled for OTP_RESEND_COOLDOWN_MS after a send, then sends with resend:true", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const f = mockFetch({ send: { body: SENT } });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCard();
+    await openDialogAndSendCode(user);
+    const again = screen.getByRole("button", { name: LEGAL_COPY.dialog.sendNewCode });
+    expect(again).toBeDisabled();
+    expect(screen.getByText(LEGAL_COPY.dialog.resendWait)).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(OTP_RESEND_COOLDOWN_MS - 1_000);
+    });
+    expect(again).toBeDisabled();
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    await waitFor(() => expect(again).toBeEnabled());
+    expect(screen.queryByText(LEGAL_COPY.dialog.resendWait)).toBeNull();
+    await user.click(again);
+    await waitFor(() => expect(f.reauths()).toHaveLength(2));
+    expect(f.reauths()[1].body).toEqual({ step: "send", resend: true });
+    // A fresh send starts a fresh cooldown.
+    await waitFor(() => expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendNewCode })).toBeDisabled());
+  });
+
+  it("a rate_limited answer to a resend shows its wording and keeps the cooldown running", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let n = 0;
+    mockFetch({ send: () => (++n === 1 ? { body: SENT } : { body: { ok: false, reason: "rate_limited" } satisfies LegalReauthSendResult }) });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderCard();
+    await openDialogAndSendCode(user);
+    act(() => {
+      vi.advanceTimersByTime(OTP_RESEND_COOLDOWN_MS + 1_000);
+    });
+    await user.click(await screen.findByRole("button", { name: LEGAL_COPY.dialog.sendNewCode }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.dialog.sendError.rate_limited);
+    expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendNewCode })).toBeDisabled();
+  });
+});
+
+// =====================================================================================================================
+describe("Yes lock is not a one-way latch against a later reflow", () => {
+  const fireResize = () =>
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+
+  it("a text that fitted and later overflows (resize) relocks Yes and asks for the scroll and the tick again", async () => {
+    layout = { scrollHeight: 200, clientHeight: 200 };
+    renderCard();
+    expect(yesButton()).toHaveAttribute("aria-disabled", "false");
+    longText();
+    fireResize();
+    await waitFor(() => expect(yesButton()).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByRole("status")).toHaveTextContent(LEGAL_COPY.lock.atEnd);
+    const box = screen.getByRole("checkbox");
+    expect(box).toHaveAttribute("aria-disabled", "true");
+    expect(box).not.toBeChecked();
+  });
+
+  it("a resize that never scrolled to the bottom cannot count as reaching the end", async () => {
+    longText();
+    renderCard();
+    fireResize();
+    await waitFor(() => expect(screen.getByRole("checkbox")).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByRole("status")).toHaveTextContent(LEGAL_COPY.lock.atEnd);
+  });
+
+  it("scrolled to the end and ticked, then the text reflows to fit and grows again: the reading and the tick are gone", async () => {
+    longText();
+    const user = userEvent.setup();
+    renderCard();
+    scrollToEnd();
+    const box = screen.getByRole("checkbox");
+    await waitFor(() => expect(box).toHaveAttribute("aria-disabled", "false"));
+    await user.click(box);
+    await waitFor(() => expect(yesButton()).toHaveAttribute("aria-disabled", "false"));
+    layout = { scrollHeight: 200, clientHeight: 200 };
+    fireResize();
+    await waitFor(() => expect(screen.queryByRole("checkbox")).toBeNull());
+    longText();
+    fireResize();
+    await waitFor(() => expect(yesButton()).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("checkbox")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("status")).toHaveTextContent(LEGAL_COPY.lock.atEnd);
+  });
+
+  it("scrolling back up after reaching the end keeps the reading (a real scroll latches)", async () => {
+    longText();
+    renderCard();
+    scrollToEnd();
+    const region = screen.getByRole("region", { name: new RegExp(LEGAL_COPY.exactTextHeading, "i") });
+    region.scrollTop = 0;
+    fireEvent.scroll(region);
+    expect(screen.getByRole("checkbox")).toHaveAttribute("aria-disabled", "false");
   });
 });

@@ -4,8 +4,8 @@
  * getUser() only, a runtime-audience token never opens an intent, the decision is recorded on the USER client only, and
  * the unknown-address 422 looks exactly like a send.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -24,9 +24,16 @@ const h = vi.hoisted(() => ({
   throwaway: { send: vi.fn(), verify: vi.fn(), signOut: vi.fn() },
   report: vi.fn(),
   texts: { dir: "" },
+  ceiling: { value: null as unknown },
+  clientFails: { value: false },
 }));
 
-vi.mock("@/server/request-auth", () => ({ verifiedUserId: async () => h.verified.value }));
+vi.mock("@/server/request-auth", () => ({
+  verifiedUserId: async () => h.verified.value,
+  // The bounded helpers return the `data` of the underlying call (or null on a stall or a throw), like the real ones.
+  boundedAuthGetUser: async (c: { auth: { getUser: () => Promise<{ data: unknown }> } }) => (await c.auth.getUser()).data,
+  boundedAuthGetSession: async (c: { auth: { getSession: () => Promise<{ data: unknown }> } }) => (await c.auth.getSession()).data,
+}));
 vi.mock("@/server/with-user-rate-limit", async () => {
   const { verifiedUserId } = await import("@/server/request-auth");
   return {
@@ -38,13 +45,16 @@ vi.mock("@/server/with-user-rate-limit", async () => {
   };
 });
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => ({
+  createClient: async () => {
+    if (h.clientFails.value) throw new TypeError("not a database problem");
+    return {
     rpc: (...a: unknown[]) => h.userRpc(...a),
     auth: {
       getUser: async () => ({ data: { user: h.getUserUser.value }, error: null }),
-      getSession: async () => ({ data: { session: h.token.value ? { access_token: h.token.value } : null } }),
+      getSession: async () => ({ data: { session: h.token.value ? { access_token: h.token.value } : null }, error: null }),
     },
-  }),
+    };
+  },
 }));
 vi.mock("@/lib/supabase/service", () => ({
   serverUrl: () => "https://fixture.supabase.invalid",
@@ -64,6 +74,15 @@ vi.mock("@/server/approval/ops", async (orig) => ({
   ...(await orig<typeof import("@/server/approval/ops")>()),
   reportLegalOp: (...a: unknown[]) => h.report(...a),
 }));
+// The per-user verify ceiling is injected per test (a fresh one in beforeEach), not reached into through a private field.
+vi.mock("@/server/legal-acceptance/reauth", async (orig) => {
+  const real = await orig<typeof import("@/server/legal-acceptance/reauth")>();
+  return {
+    ...real,
+    verifyReauthCode: (deps: Parameters<typeof real.verifyReauthCode>[0], a: Parameters<typeof real.verifyReauthCode>[1]) =>
+      real.verifyReauthCode({ ...deps, ceiling: h.ceiling.value as InstanceType<typeof real.AttemptCeiling> }, a),
+  };
+});
 // The registry directory is a fixture dir (the real one holds no legal text yet).
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
@@ -73,7 +92,7 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
 import { POST as reauth } from "@/app/api/legal-acceptance/[key]/reauth/route";
 import { POST as decide } from "@/app/api/legal-acceptance/[key]/decide/route";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
-import { defaultVerifyCeiling } from "@/server/legal-acceptance/reauth";
+import { AttemptCeiling } from "@/server/legal-acceptance/reauth";
 
 const jwt = (payload: Record<string, unknown>) =>
   `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
@@ -83,6 +102,7 @@ const dir = mkdtempSync(path.join(tmpdir(), "legal-routes-"));
 mkdirSync(dir, { recursive: true });
 writeFileSync(path.join(dir, "fixture-terms.md"), "---\nversion: fx-1\n---\nSynthesized fixture text.\n");
 h.texts.dir = dir;
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const HASH = getLegalText("fixture-terms").textHash;
 
 function req(action: "reauth" | "decide", body: unknown, o: { key?: string; origin?: string | null; ct?: string | null; raw?: string } = {}) {
@@ -100,6 +120,7 @@ const issued = { data: { outcome: "issued", reused: false, event_id: EVENT, expi
 
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key-fixture");
   h.verified.value = USER;
   h.flag.value = true;
   h.token.value = webToken();
@@ -109,8 +130,8 @@ beforeEach(() => {
   h.throwaway.verify.mockResolvedValue({ error: null });
   h.throwaway.signOut.mockResolvedValue({ error: null });
   h.serviceRpc.mockResolvedValue(issued);
-  // a fresh per-user ceiling for every test
-  (defaultVerifyCeiling as unknown as { hits: Map<string, number[]> }).hits.clear();
+  h.ceiling.value = new AttemptCeiling();
+  h.clientFails.value = false;
 });
 
 describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
@@ -149,7 +170,7 @@ describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
 
   it("a runtime-audience token is 403 and nothing is issued; no session id is 401 and nothing is issued", async () => {
     const post = action === "reauth" ? reauth : decide;
-    h.token.value = jwt({ sub: USER, aud: "runtime", session_id: SESSION });
+    h.token.value = jwt({ sub: USER, aud: "soleur-runtime", session_id: SESSION });
     expect((await json(await post(req(action, ok)))).status).toBe(403);
     h.token.value = jwt({ sub: USER, aud: "authenticated", session_id: "" });
     expect((await json(await post(req(action, ok)))).status).toBe(401);
@@ -175,7 +196,10 @@ describe("reauth", () => {
     h.throwaway.send.mockResolvedValue({ error: { name: "AuthApiError", status: 422, code: "otp_disabled", message: EMAIL } });
     const unknown = await (await reauth(req("reauth", { step: "send" }))).text();
     expect(unknown).toBe(known);
-    expect(h.report).not.toHaveBeenCalled();
+    // reported once at warn level (an abnormal state for a signed-in founder), class only, never the address
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith("reauthFailed", null, expect.objectContaining({ level: "warn" }));
+    expect(JSON.stringify(h.report.mock.calls)).not.toContain(EMAIL);
   });
 
   it("send: a real failure is {ok:false,reason:'unavailable'} and the address is never reported", async () => {
@@ -189,6 +213,27 @@ describe("reauth", () => {
     h.serviceRpc.mockResolvedValue({ data: { outcome: "rate_limited" }, error: null });
     expect((await json(await reauth(req("reauth", { step: "send" })))).body).toEqual({ ok: false, reason: "rate_limited" });
     expect(h.throwaway.send).not.toHaveBeenCalled();
+  });
+
+  it("send: the auth service's 429 is {ok:false,reason:'rate_limited'} and is not an error-level report", async () => {
+    h.throwaway.send.mockResolvedValue({ error: { name: "AuthApiError", status: 429, code: "over_email_send_rate_limit", message: EMAIL } });
+    expect(await json(await reauth(req("reauth", { step: "send" })))).toEqual({ status: 200, body: { ok: false, reason: "rate_limited" } });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it("send: a reused intent without a resend answers sent and emails nothing", async () => {
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "issued", reused: true, event_id: EVENT, expires_at: "2099-01-01T00:00:00Z" }, error: null });
+    expect(await json(await reauth(req("reauth", { step: "send" })))).toEqual({ status: 200, body: { ok: true, state: "sent" } });
+    expect(h.throwaway.send).not.toHaveBeenCalled();
+    await reauth(req("reauth", { step: "send", resend: true }));
+    expect(h.throwaway.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("verify: a session with no address is unavailable and the auth service is not asked", async () => {
+    h.getUserUser.value = { id: USER, email: "" };
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "allowed", event_id: EVENT, attempts: 1 }, error: null });
+    expect((await json(await reauth(req("reauth", { step: "verify", code: "123456" })))).body).toEqual({ ok: false, reason: "unavailable" });
+    expect(h.throwaway.verify).not.toHaveBeenCalled();
   });
 
   it("verify: claims first, verifies on the throwaway client, signs it out locally, marks with the claimed event id", async () => {
@@ -244,6 +289,11 @@ describe("reauth", () => {
     h.serviceRpc.mockResolvedValue({ data: null, error: { message: `db says ${EMAIL}`, code: "XX000" } });
     const out = await json(await reauth(req("reauth", { step: "send" })));
     expect(out).toEqual({ status: 500, body: { error: "Internal error" } });
+    expect(h.report).toHaveBeenCalledWith(
+      "reauthFailed",
+      expect.objectContaining({ name: "LegalServiceError", code: "XX000" }),
+      expect.objectContaining({ tags: { reason: "db_error" }, extra: { stage: "route" } }),
+    );
     expect(JSON.stringify(h.report.mock.calls)).not.toContain(EMAIL);
   });
 });
@@ -292,9 +342,10 @@ describe("decide", () => {
     expect(h.serviceRpc).not.toHaveBeenCalled();
   });
 
-  it("42501 from the database is HTTP 403 {error}, not a 200 code_expired", async () => {
+  it("42501 from the database is HTTP 403 {error:'reverify'}, not a 200 code_expired, and is labelled denied_42501", async () => {
     h.userRpc.mockResolvedValue({ data: null, error: { message: "legal acceptance: no live intent", code: "42501" } });
-    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual({ status: 403, body: { error: "Forbidden" } });
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual({ status: 403, body: { error: "reverify" } });
+    expect(h.report).toHaveBeenCalledWith("decideRejected", expect.anything(), expect.objectContaining({ tags: { reason: "denied_42501" } }));
   });
 
   it.each(["already_recorded", "replaced", "expired", "code_expired"])("SQL outcome %s is a 200 result", async (outcome) => {
@@ -309,5 +360,46 @@ describe("decide", () => {
     const out = await json(await decide(req("decide", { choice: "request_changes", textHash: HASH, note: "PRIVATE-NOTE" })));
     expect(out).toEqual({ status: 500, body: { error: "Internal error" } });
     expect(JSON.stringify(h.report.mock.calls)).not.toContain("PRIVATE-NOTE");
+  });
+
+  it("the catch reports the caught error and labels a database failure db_error", async () => {
+    h.serviceRpc.mockResolvedValue({ data: null, error: { message: "boom", code: "XX000" } });
+    await decide(req("decide", { choice: "decline", textHash: HASH }));
+    const call = h.report.mock.calls.find((c) => c[0] === "decideRejected");
+    expect(call?.[1]).toMatchObject({ name: "LegalServiceError", code: "XX000" });
+    expect(call?.[2]).toMatchObject({ tags: { reason: "db_error" } });
+  });
+
+  it("a non-database failure is reported with the error and a non-db_error reason (decide and reauth)", async () => {
+    h.clientFails.value = true;
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).status).toBe(500);
+    const d = h.report.mock.calls.find((c) => c[0] === "decideRejected");
+    expect(d?.[1]).toBeInstanceOf(TypeError);
+    expect(d?.[2]).toMatchObject({ tags: { reason: "unexpected" } });
+
+    h.report.mockReset();
+    expect((await json(await reauth(req("reauth", { step: "send" })))).status).toBe(500);
+    const r = h.report.mock.calls.find((c) => c[0] === "reauthFailed");
+    expect(r?.[1]).toBeInstanceOf(TypeError);
+    expect(r?.[2]).toMatchObject({ tags: { reason: "unexpected" }, extra: { stage: "route" } });
+  });
+
+  it("a body over the cap is 413 before it is parsed (content-length and a streamed body without one)", async () => {
+    const big = JSON.stringify({ choice: "decline", textHash: HASH, pad: "x".repeat(9000) });
+    expect((await json(await decide(req("decide", null, { raw: big })))).status).toBe(413);
+    const streamed = new Request("https://app.soleur.ai/api/legal-acceptance/fixture-terms/decide", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://app.soleur.ai" },
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(big));
+          c.close();
+        },
+      }),
+      // @ts-expect-error duplex is required by undici for a stream body
+      duplex: "half",
+    });
+    expect((await json(await decide(streamed))).status).toBe(413);
+    expect(h.serviceRpc).not.toHaveBeenCalled();
   });
 });

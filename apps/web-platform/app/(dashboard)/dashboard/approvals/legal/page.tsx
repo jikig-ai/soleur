@@ -1,15 +1,18 @@
 // Index of the founder's legal texts (#12011 PR-C, wireframe 17 style): one plain line per registry key with its state in
 // plain words, each linking to its card. Server component with the same auth gate as the card page.
+//
+// The `approval-queue` flag is read first (effectively global: `workspaceId: null`). With it off the page lists only the
+// keys the founder already has a recorded row for, and is not-found when there is none: an unreleased key is never listed.
 
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { reportApprovalOp } from "@/server/approval/ops";
+import { reportLegalOp } from "@/server/approval/ops";
 import { isApprovalQueueEnabled } from "@/server/approval/flag";
 import { loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { NavLink } from "@/components/ui/nav-link";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
 import { LEGAL_COPY, legalTextLabel } from "@/lib/legal-acceptance-copy";
-import { isLegalChoice } from "@/lib/legal-acceptance-wire";
+import { LEGAL_ROW_COLUMNS, parseLegalRows } from "@/lib/legal-acceptance-wire";
 
 export const dynamic = "force-dynamic";
 
@@ -20,28 +23,30 @@ export default async function LegalAcceptanceIndexPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent("/dashboard/approvals/legal")}`);
 
+  // Flag first: it decides what this page may show at all.
+  const flagOn = await isApprovalQueueEnabled({ userId: user.id, workspaceId: null });
+
   let entries;
   try {
     entries = [...loadLegalTexts().values()].sort((a, b) => a.key.localeCompare(b.key));
   } catch (err) {
-    reportApprovalOp("landingReadFailed", err, { userId: user.id, extra: { read: "legal_text" } });
+    reportLegalOp("pageReadFailed", err, { userId: user.id, extra: { read: "legal_text" } });
     throw new Error("legal text read failed");
   }
 
-  const { data, error } = await supabase.from("legal_acceptance").select("key, text_hash, choice");
-  const raw = error ? null : data;
-  const rows = Array.isArray(raw)
-    ? (raw as Record<string, unknown>[]).every((r) => r && typeof r.key === "string" && typeof r.text_hash === "string" && isLegalChoice(r.choice))
-      ? (raw as { key: string; text_hash: string; choice: "accept" | "decline" | "request_changes" }[])
-      : null
-    : null;
+  const { data, error } = await supabase.from("legal_acceptance").select(LEGAL_ROW_COLUMNS);
+  const rows = error ? null : parseLegalRows(data);
   if (error || rows === null) {
-    reportApprovalOp("landingReadFailed", error ?? null, { userId: user.id, extra: { read: "legal_acceptance_index" } });
+    reportLegalOp("pageReadFailed", error ?? null, { userId: user.id, extra: { read: "legal_acceptance_index" } });
     throw new Error("legal acceptance read failed");
   }
 
+  // Flag off: only the founder's own recorded keys; nothing recorded means there is nothing to show.
+  const visible = flagOn ? entries : entries.filter((e) => rows.some((r) => r.key === e.key));
+  if (!flagOn && visible.length === 0) notFound();
+
   const now = new Date();
-  const items = entries.map((e) => ({
+  const items = visible.map((e) => ({
     key: e.key,
     version: e.version,
     state: deriveLegalCardState({
@@ -52,8 +57,6 @@ export default async function LegalAcceptanceIndexPage() {
       now,
     }),
   }));
-  const anyPending = items.some((i) => i.state === "pending");
-  const flagEnabled = anyPending ? await isApprovalQueueEnabled({ userId: user.id, workspaceId: null }) : true;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-6 md:px-6 md:py-10">
@@ -72,7 +75,7 @@ export default async function LegalAcceptanceIndexPage() {
                   {legalTextLabel(i.key)}, version {i.version}
                 </span>
                 <span className="text-sm text-soleur-text-secondary">
-                  {i.state === "pending" && !flagEnabled ? LEGAL_COPY.index.notAvailable : LEGAL_COPY.index.state[i.state]}
+                  {i.state === "pending" && !flagOn ? LEGAL_COPY.index.notAvailable : LEGAL_COPY.index.state[i.state]}
                 </span>
               </NavLink>
             </li>

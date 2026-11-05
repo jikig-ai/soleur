@@ -1,6 +1,9 @@
 /**
  * #12011 PR-C task 6.7: the text registry must be readable in the DEPLOYED image, not only in the source tree.
  *
+ * Scope: this asserts the esbuild bundle layout (dist/server/index.cjs). The Next-compiled routes and pages rely on the
+ * same cwd convention (WORKDIR /app, checked in the "image build wiring" block below); they are not bundled here.
+ *
  * The production server is `esbuild --bundle` into dist/server/index.cjs and the Dockerfile copies only that directory
  * plus (since this PR) server/legal-acceptance/texts. A test that reads the source tree proves nothing, so this one
  * builds a real bundle with the production esbuild flags, lays it out like /app (bundle at dist/server, texts under
