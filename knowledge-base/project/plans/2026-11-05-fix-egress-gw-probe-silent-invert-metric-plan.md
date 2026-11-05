@@ -224,7 +224,7 @@ last until the follow-up deletes the pair (incidents close minutes after their a
 `scripts/followthroughs/egress-gw-probe-silent-12180.sh` is enrolled on one tracker issue. It reads the Better
 Stack incidents API (the `send-failed-alert-probe-8097.sh` pagination and projection pattern), the Telemetry alert
 listing (does the canary alert exist live) and, for the discriminating field, `scripts/betterstack-query.sh`. The
-credentials `BETTERSTACK_API_TOKEN`, `GH_TOKEN` and the three `BETTERSTACK_QUERY_*` names are already bound in the
+credentials `BETTERSTACK_API_TOKEN` and the three `BETTERSTACK_QUERY_*` names are already bound in the
 sweeper. **Pre-step (UNVERIFIED host):** Better Stack's current public docs describe the incidents API at
 `https://incidents.betterstack.com/api/v3/incidents` (fields `name`, `cause`, `started_at`, `resolved_at`, `status`;
 newest first; `pagination.next`), while both repo scripts call `https://uptime.betterstack.com/api/v2/incidents`.
@@ -270,7 +270,7 @@ sweeper reads it as FAIL and may reopen a human-closed tracker). Output is proje
 | 1047829421 still open, `rows_in_window` shows rows on both hosts | empty-window read or vendor never auto-resolving (the 24-day incident 1031046761 precedent) | poller #12190, or a pause; a manual resolve is a Better Stack write needing the user's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
 | 1047829421 still open, a host has no rows | real silence | the existing runbook ladder (host repair); the alert is right |
 | new production incident while 1047829421 is already open | cannot be observed: Better Stack keeps one open incident per alert, so AC12b is read from the open incident's state, not from a second incident | as the rows above |
-| evaluator error or timeout reads 0 | false silence; undetectable by this alert | accepted residual of the CTO ruling; sibling detectors cover host death; #12190 is the tracked mitigation |
+| evaluator error or timeout reads 0 | false silence; undetectable by this alert | accepted residual of the CTO ruling; the sibling detectors cover only a fleet-wide dead resolver timer and a failing probe (a Vector or journal break on one host has no independent detector); #12190 is the tracked mitigation |
 
 ## Implementation Phases
 
@@ -420,7 +420,10 @@ same `team_name = "Your team"`, `local.vector_prd_source_id` and escalation tern
 ### Apply path
 
 Per-merge push apply (`apply-web-platform-infra.yml`, active). The change is update-in-place for the two existing
-resources and create for the pair. Expected plan: `2 added, 1 or 2 changed, 0 destroyed`. **UNVERIFIED:** whether a
+resources and create for the pair. Expected plan: `2 added, 1 or 2 changed, 0 destroyed`. **RESOLVED at work time (2026-11-06):** the provider source at the pinned tag v11.2.0 carries `ForceNew` exactly once across
+`resource_exploration.go`, `resource_exploration_alert.go` and `alert_shared.go`: on the alert's `exploration_id`. So a
+`sql_query` change on `logtail_exploration` and an `operator`/`value` change on the alert are UPDATE-IN-PLACE (a read-only
+plan could not be taken: the R2 backend needs Terraform >= 1.10 and this host has 1.9.8). Previously unverified: whether a
 `sql_query` change on `logtail_exploration` (and `operator`/`value` on the alert) is update-in-place or ForceNew;
 the pinned provider binary (11.2.0) only carries generic `ForceNew`/`RequiresReplace` strings and the repo records
 no per-attribute result. The precedent that changed the same fields is #10133 (commit dff05deff5): cite its apply
@@ -479,7 +482,7 @@ failure_modes:
     alert_route: tracker comment (exit 5); response is the poller (#12190) or a pause, each needing the user's per-command go-ahead for any Better Stack write
   - mode: evaluator error or timeout reads 0 under treat_as_zero (false silence)
     detection: no layer covers this; accepted residual of the CTO ruling, the failure direction moved from false page to false silence
-    alert_route: not alerted; the sibling detectors (Sentry op egress_gw_probe_fail, the resolver's cron check-in) cover host death independently, and #12190 is the tracked mitigation
+    alert_route: not alerted; the sibling detectors (Sentry cron check-in without a host dimension, op egress_gw_probe_fail on result=fail rows) cover only a fleet-wide dead timer and a failing probe, and #12190 is the tracked mitigation
 
 logs:
   where: Better Stack Logs source 2457081 (rows tagged egress-gw-probe, one per 5 minutes per host); incident history via the uptime API
@@ -654,7 +657,7 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
   (reports this plan's two guards).
 - [ ] AC6. The probe and its suite are registered like the 8097 probe, and the probe header has a `RETIREMENT:`
   line listing every site to touch when the canary is deleted: the two resources, both `-target` lines (kept one
-  apply; the structure suite's rows 21-22 tolerate a bare `-target` for a deleted address only when the address is listed in `INTENDED_DESTROYS` of `tests/scripts/test-infra-privileged-tier-census.sh`, so the deletion PR adds the two logtail addresses there and a later PR removes them with the targets, the #11631 then #11672 sequence; the deletion plan shows `2 destroyed` (alert first) and needs a standalone `[ack-destroy]` line in the merge commit; rows 21-22 and the census must be re-run to confirm they accept a `logtail_*` row, which is unverified today), `EXPECT_BLOCKS` 19 to 18, `MIN_PASSES`,
+  apply; the structure suite's rows 21-22 tolerate a bare `-target` for a deleted address only when the address is listed in `INTENDED_DESTROYS` of `tests/scripts/test-infra-privileged-tier-census.sh`, so the deletion PR adds the two logtail addresses there and a later PR removes them with the targets, the #11653 then #11785 sequence; the deletion plan shows `2 destroyed` (alert first) and needs a standalone `[ack-destroy]` line in the merge commit; rows 21-22 and the census must be re-run to confirm they accept a `logtail_*` row, which is unverified today), `EXPECT_BLOCKS` 19 to 18, `MIN_PASSES`,
   `count == 19` to `18`, the guard's G2b block and rows, the runbook canary section, the ADR note.
 - [ ] AC7. ADR-218 amendment appended, with the live alert count and the INFERRED label.
 - [ ] AC8. Both runbooks and the `.tf` comment state: the evaluator zero-fill is an inference; the query is proven
@@ -665,15 +668,15 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
 - [ ] AC10. Tracker issue #12189 carries the `follow-through` label and an unfenced column-0 directive
   `<!-- soleur:followthrough script=scripts/followthroughs/egress-gw-probe-silent-12180.sh earliest=<apply
   completion + 30 minutes, ISO-8601 Z>
-  secrets=BETTERSTACK_API_TOKEN,GH_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`; the sweeper is dry-run once
+  secrets=BETTERSTACK_API_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`; the sweeper is dry-run once
   (`dry_run=true`) and its `exit=` line read.
 
 ### Post-merge (verified by the probe and `soleur:postmerge`; no manual step)
 
 - [ ] AC11. The per-merge apply succeeds and its plan matches the expected counts.
-- [ ] AC12. A canary incident exists within 20 minutes of apply completion. The executor is the `soleur:postmerge`
-  step, which runs the probe once at apply completion plus 25 minutes with read credentials from Doppler
-  (`prd_terraform`) and reads the `canary=` field of its verdict line (the probe prints one field per condition,
+- [ ] AC12. A canary incident exists within 20 minutes of apply completion. The executor is whoever merges (the
+  session that owns the merge-to-deploy verification; `soleur:postmerge` itself is not changed by this PR), who runs the
+  probe once at apply completion plus 25 minutes with read credentials from Doppler (`prd_terraform`) and reads the `canary=` field of its verdict line (the probe prints one field per condition,
   so no special mode exists). `canary=absent` with `canary_alert_live=1` means the evaluator is blind for this shape: leave the production
   alert armed, build the poller (#12190 holds the deferral; start it at once), and do not treat a green production
   alert as healthy.

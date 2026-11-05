@@ -325,19 +325,21 @@ Live standing alarms over this source:
   (healthy 0, one host dark 1, all dark `length(var.web_hosts)`), so a dead timer, dead Vector
   pipeline (a stale birth-frozen vector.toml allowlist is a measured failure mode) or dead host
   journal pages, and one host's beats cannot mask the other's silence. The metric was inverted
-  because the old `lower_than` shape paged on a healthy fleet (incident 1047829421) and stayed open
-  for 24 days with data present (1031046761). **The zero-fill mechanism is an INFERENCE** (a step the
+  because the old `lower_than` shape paged on a healthy fleet (incident 1047829421), and its earlier
+  incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
   evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
   unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
   read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, runs the same
   query against an identifier no host emits; it must fire. Until it has fired, a green production
-  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here).
+  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here; the
+  sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
+  or journal).
   Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary decision
   table:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
   An open incident does not by itself mean a host is silent: read `rows_in_window` from
-  `scripts/followthroughs/egress-gw-probe-silent-12180.sh`, or run `betterstack-query.sh`, and check
-  that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
+  `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (via `doppler run -p soleur -c prd_terraform`,
+  see the runbook), or run `betterstack-query.sh`, and check that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
   `var.web_hosts`) shows an `egress-gw-probe` row. Rows on both hosts point at the evaluator, not the
   fleet. Resolving a Better Stack incident by hand is a vendor write that needs the owner's explicit
   per-command go-ahead.

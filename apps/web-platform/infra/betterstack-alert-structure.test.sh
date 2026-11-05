@@ -11,7 +11,7 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 18 alerts and 18 explorations, every enumerated header yields a block (a header
+#   1-4   census: at least 19 alerts and 19 explorations (CENSUS_FLOOR_*; 18 once the canary pair is deleted), every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
@@ -78,7 +78,7 @@
 # Usage: bash apps/web-platform/infra/betterstack-alert-structure.test.sh [--presence-only | --census-only]
 #   --presence-only skips the mutation battery (the inner runs use it).
 #   --census-only runs ONLY enumeration + the census floors (rows 1-4, a few seconds) and prints a final
-#   `N passed, 0 failed` line; it exits 1 when fewer than 18 alerts are enumerated. This is the cheap
+#   `N passed, 0 failed` line; it exits 1 when fewer than CENSUS_FLOOR_ALERTS alerts are enumerated. This is the cheap
 #   discoverability probe; --presence-only measured 12-19 s on a loaded host.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"

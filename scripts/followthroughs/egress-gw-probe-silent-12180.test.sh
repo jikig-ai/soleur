@@ -75,6 +75,11 @@ for (( i = 0; i < ${#args[@]}; i++ )); do
   esac
 done
 rc_file="$cfg/curl.rc"; [[ -f "$rc_file" ]] && { rc="$(<"$rc_file")"; [[ "$rc" != "0" ]] && exit "$rc"; }
+# curl.term: signal the PROBE's main shell (this stub's grandparent: probe -> $( ) subshell -> curl), then keep it waiting
+if [[ -f "$cfg/curl.term" ]]; then
+  kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d ' ')" 2>/dev/null
+  sleep 1
+fi
 page="$(printf '%s' "$url" | sed -nE 's/.*[?&]page=([0-9]+).*/\1/p')"
 code=200
 case "$url" in
@@ -110,13 +115,14 @@ MOCKEOF
 chmod 0755 "$MOCK"
 
 # ── fixture builders (jq-built, so the JSON is always well-formed) ────────────────────────────
-inc() { # <id> <name> <started_epoch> [resolved_epoch-or-empty] [cause]
+inc() { # <id> <name> <started_epoch> [resolved_epoch-or-empty] [cause] [resolved_by: none|actor]
   local r=""; [[ -n "${4:-}" ]] && r="$(iso "$4")"
-  jq -nc --arg id "$1" --arg n "$2" --arg s "$(iso "$3")" --arg r "$r" --arg c "${5:-HTTP 503}" \
-    '{id:$id,type:"incident",attributes:{name:$n,cause:$c,started_at:$s,resolved_at:(if $r=="" then null else $r end),status:(if $r=="" then "Started" else "Resolved" end),acknowledged_by:"SECRETISH_PERSON",screenshot_url:"https://x/SECRETISH_SHOT"}}'
+  jq -nc --arg id "$1" --arg n "$2" --arg s "$(iso "$3")" --arg r "$r" --arg c "${5:-HTTP 503 SECRETISH_CAUSE}" --arg by "${6:-none}" \
+    '{id:$id,type:"incident",attributes:{name:$n,cause:$c,started_at:$s,resolved_at:(if $r=="" then null else $r end),status:(if $r=="" then "Started" else "Resolved" end),acknowledged_by:"SECRETISH_PERSON",resolved_by:(if $by=="actor" then "SECRETISH_RESOLVER" else null end),screenshot_url:"https://x/SECRETISH_SHOT"}}'
 }
-alert() { # <name> <paused>
-  jq -nc --arg n "$1" --argjson p "${2:-false}" '{id:"1",type:"alert",attributes:{name:$n,paused:$p}}'
+alert() { # <name> <paused> [operator] [value] [created_epoch]
+  jq -nc --arg n "$1" --argjson p "${2:-false}" --arg op "${3:-higher_than}" --argjson v "${4:-0}" --arg ca "$(iso "${5:-$((NOW - 100000))}")" \
+    '{id:"1",type:"alert",attributes:{name:$n,paused:$p,operator:$op,value:$v,created_at:$ca}}'
 }
 
 reset_defaults() {
@@ -126,7 +132,11 @@ reset_defaults() {
   CANARY_INC=1                   # a canary incident exists
   CANARY_AGE=20000               # ... that started this many seconds before NOW
   NEWER=0                        # no later production incident
-  ALERT_LIVE=1                   # canary alert is in the live listing
+  ALERT_LIVE=0                   # canary alert is NOT in the live listing (the real end state: deleted after it fired)
+  CANARY_PAUSED=false            # when the canary alert is listed, is it paused
+  CANARY_ALERT_AGE=100000        # ... and how old is it
+  PROD_ALERT=ok                  # ok | absent | paused | shape (operator/value reverted)
+  RBY=none                       # who resolved the anchor: none (the alert) | actor
   DECLARED=0                     # canary no longer declared in the .tf
   ROSTER_BQ='[]'
   PAGES=1
@@ -146,7 +156,7 @@ write_tf() { # <declared 0|1>
 
 build_fixtures() {
   local objs=() old_id=1031046761
-  objs+=("$(inc "$ANCHOR_ID" "$PROD_NAME" "$A_START" "$([[ "$A_RES" == open ]] && echo '' || echo "$A_RES")")")
+  objs+=("$(inc "$ANCHOR_ID" "$PROD_NAME" "$A_START" "$([[ "$A_RES" == open ]] && echo '' || echo "$A_RES")" "HTTP 503 SECRETISH_CAUSE" "$RBY")")
   objs+=("$(inc "$old_id" "$PROD_NAME" $((A_START - 1728000)) $((A_START - 600)))")
   objs+=("$(inc 7001 "soleur apex" $((NOW - 13000)) "" "HTTP 503")")
   # exact-name decoys: a name that merely CONTAINS the prod name, and a cause that quotes it.
@@ -163,16 +173,21 @@ build_fixtures() {
     jq -nc --argjson d "$all" '{data:$d[:3],pagination:{next:"https://uptime.betterstack.com/api/v2/incidents?page=2"}}' > "$WORK/incidents.json"
     jq -nc --argjson d "$all" '{data:$d[3:],pagination:{next:"https://uptime.betterstack.com/api/v2/incidents?page=3"}}' > "$WORK/incidents.p2.json"
   fi
-  jq -nc --argjson d "$(inc "$ANCHOR_ID" "$PROD_NAME" "$A_START" "$([[ "$A_RES" == open ]] && echo '' || echo "$A_RES")")" '{data:$d}' > "$WORK/single.json"
+  jq -nc --argjson d "$(inc "$ANCHOR_ID" "$PROD_NAME" "$A_START" "$([[ "$A_RES" == open ]] && echo '' || echo "$A_RES")" "HTTP 503 SECRETISH_CAUSE" "$RBY")" '{data:$d}' > "$WORK/single.json"
   {
     alert "Output utilization high" true
-    alert "$PROD_NAME" false
+    case "$PROD_ALERT" in
+      ok) alert "$PROD_NAME" false ;;
+      paused) alert "$PROD_NAME" true ;;
+      shape) alert "$PROD_NAME" false lower_than 2 ;;
+      absent) : ;;
+    esac
     alert "${CANARY_NAME}-old" false
-    [[ "$ALERT_LIVE" == 1 ]] && alert "$CANARY_NAME" false
+    [[ "$ALERT_LIVE" == 1 ]] && alert "$CANARY_NAME" "$CANARY_PAUSED" higher_than 0 $((NOW - CANARY_ALERT_AGE))
   } | jq -sc '{data:.,pagination:{next:null}}' > "$WORK/alerts.json"
   printf '%s' "$ROSTER_BQ" | jq -r '.[] | tojson' > "$WORK/bq.json"
   : > "$CALLS"; : > "$WORK/stdin.log"
-  rm -f "$WORK/curl.rc" "$WORK/bq.rc" "$WORK/alerts.code" "$WORK/single.code" "$WORK/incidents.code" "$WORK"/incidents.p3.json
+  rm -f "$WORK/curl.rc" "$WORK/curl.term" "$WORK/bq.rc" "$WORK/alerts.code" "$WORK/single.code" "$WORK/incidents.code" "$WORK"/incidents.p3.json
   write_tf "$DECLARED"
 }
 
@@ -211,9 +226,9 @@ reset_defaults; A_RES=$((NOW - H4 - 3601)); build_fixtures
 run_case "compliant fixture -> PASS" 0
 verdict_is pass
 expect_out "PASS verdict line has every field in the pinned order" \
-  '^SOLEUR_EGRESS_GW_SILENT_SOAK verdict=pass prod_incident=resolved resolved_age_s=[0-9]+ newer_prod_incident=0 canary=fired canary_alert_live=(1|0) canary_declared=0 rows_in_window=[^ ]+$'
+  '^SOLEUR_EGRESS_GW_SILENT_SOAK verdict=pass prod_incident=resolved resolved_age_s=[0-9]+ newer_prod_incident=0 canary=fired canary_alert_live=0 canary_declared=0 prod_alert=ok anchor_resolved_by=none rows_in_window=[^ ]+$'
 field_is "prod_incident=resolved"; field_is "resolved_age_s=$((H4 + 3601))"; field_is "newer_prod_incident=0"
-field_is "canary=fired"; field_is "canary_alert_live=1"; field_is "canary_declared=0"; field_is "rows_in_window=na"
+field_is "canary=fired"; field_is "canary_alert_live=0"; field_is "canary_declared=0"; field_is "rows_in_window=na"; field_is "prod_alert=ok"; field_is "anchor_resolved_by=none"
 expect_not_out "output never reprints raw incident fields (public comment)" 'SECRETISH_'
 expect_not_out "output never carries the credentials" 'dummy-(token|user|pass)'
 expect_no_calls "no warehouse read when the production incident is resolved and nothing is newer" "BQ "
@@ -223,10 +238,15 @@ expect_calls "the single-incident read targets the anchor id" "/api/v2/incidents
 expect_calls "the live alert listing is read from the telemetry host" "telemetry.betterstack.com/api/v2/alerts"
 expect_no_calls "no request leaves the two pinned hosts" "OFFHOST"
 
-# PASS with the canary alert already deleted (the real end state): canary_alert_live=0 must not matter once the canary incident was seen.
-reset_defaults; ALERT_LIVE=0; build_fixtures
-run_case "canary alert deleted after the canary incident was seen -> PASS" 0
-field_is "canary=fired"; field_is "canary_alert_live=0"
+# The canary alert still LIVE after its incident was seen and the declaration is gone: the deletion did not apply -> action_required.
+reset_defaults; ALERT_LIVE=1; build_fixtures
+run_case "canary incident seen, declaration gone, but the canary alert is still live -> action_required (the deletion did not apply)" 5
+field_is "canary_alert_live=1"; expect_out "the message says to delete the canary" 'ACTION REQUIRED:.*delete the canary'
+# The soak is measured from the apply, not from an earlier resolve: a canary incident younger than 4 h -> not_yet even with an old resolve.
+reset_defaults; CANARY_AGE=$((H4 - 1000)); build_fixtures
+run_case "anchor resolved long ago but the canary incident is 4 h minus 1000 s old -> not_yet" 2
+reset_defaults; CANARY_AGE=$H4; build_fixtures
+run_case "canary incident exactly 4 h old, everything else true -> PASS" 0
 
 # ── Guard 2 row 1/2 + must-PASS non-canonical: window boundary on non-collinear points ──────
 reset_defaults; A_START=$((NOW - 55555)); A_RES=$((NOW - H4 + 1)); CANARY_AGE=33333; build_fixtures
@@ -252,7 +272,7 @@ field_is "rows_in_window=soleur-web-2:39,soleur-web-platform:41"
 expect_calls "open incident -> warehouse read keyed on the emitter tag" "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'"
 expect_calls "rows read groups by host_name" "JSONExtractString(raw, 'host_name') AS host"
 expect_calls "rows read spans hot window UNION archive" "s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1"
-expect_calls "rows read is bounded to the incident start" "$(date -u -d "@$A_START" '+%Y-%m-%d %H:%M:%S')"
+expect_calls "rows read is the trailing 15 minutes (the alert's own window)" "dt >= '$(date -u -d "@$((NOW - 900))" '+%Y-%m-%d %H:%M:%S')' AND dt <= '$(date -u -d "@$NOW" '+%Y-%m-%d %H:%M:%S')'"
 expect_not_out "rows_in_window prints counts, never row content" 'raw|message'
 
 # row 11: open incident, one roster host has no rows -> the field names it; verdict stays action_required
@@ -388,37 +408,83 @@ run_case "harness (a): healthy case with the incident payload replaced by [] -> 
 if [[ "$LAST_RC" -ne 0 ]]; then pass "harness (a): the healthy verdict is NOT reproduced on an empty payload"; else fail "harness (a): empty payload still PASSes (vacuous harness or probe)"; fi
 # ... and the same property on the alerts side and the single read: neither may be skippable.
 reset_defaults; build_fixtures; printf '{"data":[],"pagination":{"next":null}}' > "$WORK/alerts.json"
-run_case "harness (a): empty alert listing on an otherwise healthy fixture, canary seen -> still PASS (alert listing only disambiguates an absent canary)" 0
-field_is "canary_alert_live=0"
+run_case "harness (a): empty alert listing on an otherwise healthy fixture -> action_required (the production alert is not in it)" 5
+field_is "canary_alert_live=0"; field_is "prod_alert=absent"
 reset_defaults; CANARY_INC=0; build_fixtures; printf '{"data":[],"pagination":{"next":null}}' > "$WORK/alerts.json"
-run_case "harness (a): empty alert listing with the canary incident absent -> canary_alert_live=0 path" 5
-field_is "canary_alert_live=0"
+run_case "harness (a): empty alert listing with the canary incident absent -> action_required, production alert absent" 5
+field_is "canary_alert_live=0"; field_is "prod_alert=absent"
 
-# ── never-exit-1 sweep and never-a-silent-0 sweep across the whole fixture family ────────────
-# Row 6: every distinct fixture shape above ran through run_case, which FAILS on exit 1. Here the
-# complementary sweep: every non-pass shape must carry a verdict line (no path exits without one).
-for shape in "A_RES=open" "NEWER=1" "CANARY_INC=0" "DECLARED=1" "ALERT_LIVE=0 CANARY_INC=0"; do
-  reset_defaults; eval "$shape"; build_fixtures
-  run_case "sweep [$shape]: ran" any
-  rc="$LAST_RC"
-  case "$rc" in 0|2|3|5) pass "sweep [$shape]: exit $rc is a contract code" ;; *) fail "sweep [$shape]: exit $rc is outside the contract" ;; esac
-  expect_out "sweep [$shape]: a SOLEUR_EGRESS_GW_SILENT_SOAK line is present" '^SOLEUR_EGRESS_GW_SILENT_SOAK verdict=(pass|not_yet|unknown|action_required) '
+# ── production alert state, canary pause/age, resolver, soak-from-apply, EARLIEST, hygiene ──
+for st in absent paused shape; do
+  reset_defaults; PROD_ALERT=$st; build_fixtures
+  run_case "production alert $st -> action_required (never a PASS over an alert that is not running)" 5
+  verdict_is action_required; field_is "prod_alert=$st"
 done
+expect_out "a reverted shape names the old operator problem, not a revert recommendation" "ACTION REQUIRED:.*higher_than 0.*revert"
+reset_defaults; PROD_ALERT=ok; ALERT_LIVE=1; CANARY_INC=0; CANARY_PAUSED=true; build_fixtures
+run_case "canary alert live but PAUSED, no canary incident -> action_required that is NOT an evaluator finding" 5
+field_is "canary_alert_live=1"; expect_out "the paused-canary message says PAUSED" 'PAUSED'; expect_not_out "the paused-canary message does not call the evaluator blind" 'blind'
+reset_defaults; ALERT_LIVE=1; CANARY_INC=0; CANARY_ALERT_AGE=300; build_fixtures
+run_case "canary alert created 300 s ago, no incident yet -> not_yet (one evaluation cycle has not passed)" 2
+verdict_is not_yet
+reset_defaults; ALERT_LIVE=1; CANARY_INC=0; CANARY_ALERT_AGE=1300; build_fixtures
+run_case "canary alert created 1300 s ago, still no incident -> action_required (blind)" 5
+expect_out "the aged-canary message names the blind evaluator" 'blind'
+reset_defaults; RBY=actor; build_fixtures
+run_case "anchor resolved by an actor (not by the alert recovering) -> action_required" 5
+field_is "anchor_resolved_by=actor"; expect_not_out "the resolving actor is never printed" 'SECRETISH_RESOLVER'
+reset_defaults; A_RES=open; CANARY_AGE=3000; build_fixtures
+run_case "SOLEUR_FT_EARLIEST 4 h + 1 s ago and the anchor open -> action_required (the forwarded clock drives staleness)" 5 "SOLEUR_FT_EARLIEST=$(iso $((NOW - H4 - 1)))"
+run_case "SOLEUR_FT_EARLIEST 4 h minus 1 s ago and the anchor open -> not_yet" 2 "SOLEUR_FT_EARLIEST=$(iso $((NOW - H4 + 1)))"
+reset_defaults; build_fixtures
+jq -c '.data |= map(if .id == "7001" then .attributes.started_at = null else . end)' "$WORK/incidents.json" > "$WORK/incidents.tmp" && mv "$WORK/incidents.tmp" "$WORK/incidents.json"
+run_case "a null started_at on a listed incident -> unknown (never read as epoch 0)" 3
+reset_defaults; build_fixtures
+jq -c '.data |= map(if .id == "1047829421" then .attributes.started_at = "2026-01-01T00:00:00.000Z" else . end)' "$WORK/incidents.json" > "$WORK/incidents.tmp" && mv "$WORK/incidents.tmp" "$WORK/incidents.json"
+run_case "the listed anchor disagrees with the single read on its start time -> unknown" 3
+# off-host decoys: userinfo and suffix tricks, a relative next, and what the refusal may print
+for nxt in "https://uptime.betterstack.com@evil.example/api/v2/incidents?page=2" "https://uptime.betterstack.com.evil.example/api/v2/incidents?page=2" "/api/v2/incidents?page=2&x=SECRETISH_Q"; do
+  reset_defaults; build_fixtures
+  jq -c --arg n "$nxt" '.pagination.next = $n' "$WORK/incidents.json" | jq -c '.data |= map(select(.id != "1047829421" and .id != "1031046761"))' > "$WORK/incidents.tmp" && mv "$WORK/incidents.tmp" "$WORK/incidents.json"
+  run_case "off-host next [$nxt] is refused -> unknown" 3
+  expect_no_calls "the bearer never rides to [$nxt]" "evil.example"
+  expect_no_calls "no unexpected URL was requested for [$nxt]" "OFFHOST"
+  expect_not_out "the refusal never prints a query string or path for [$nxt]" 'page=2|SECRETISH_Q|/api/v2'
+done
+# rows_in_window: untrusted host names are folded, credentials missing is said out loud
+reset_defaults; A_RES=open; CANARY_AGE=3000; ROSTER_BQ='[{"host":"soleur-web-platform","n":"4"},{"host":"evil <b>@mention</b>","n":"2"},{"host":"","n":"3"}]'; build_fixtures
+run_case "an untrusted host_name in the warehouse rows -> folded into other, never printed" 2
+field_is "rows_in_window=other:5,soleur-web-2:0,soleur-web-platform:4"; expect_not_out "the hostile host_name is not printed" 'evil|mention|<b>'
+reset_defaults; A_RES=open; CANARY_AGE=3000; build_fixtures
+run_case "warehouse credentials unbound while the incident is open -> verdict unchanged, skip is said out loud" 2 BETTERSTACK_QUERY_PASSWORD=
+field_is "rows_in_window=unknown"; expect_out "the skipped read is announced on stderr" 'rows_in_window skipped'
+# the EXIT trap and the signal trap: a stray abort and a SIGTERM both end in a verdict line and exit 3, never 1
+reset_defaults; build_fixtures; : > "$WORK/curl.term"
+run_case "SIGTERM mid-run (signal trap) -> exit 3 with an unknown verdict line" 3
+# (the stderr TRANSIENT line is lost here: the signal lands inside http_get, whose stderr is redirected to a scratch
+# file; the verdict line on stdout is the contract)
+verdict_is unknown; field_is "prod_alert=unknown"
+reset_defaults; build_fixtures
+# BASH_ENV reaches EVERY bash the probe starts (the curl stub is one): gate the DEBUG trap on being the probe itself.
+printf '%s\n' "if [[ \$0 == *egress-gw-probe-silent-12180.sh ]]; then n=0; trap 'n=\$((n+1)); [[ \$n -eq 90 ]] && exit 1' DEBUG; fi" > "$WORK/abort.env"
+run_case "a stray exit 1 in the main shell (EXIT trap) -> exit 3 with an unknown verdict line, never 1" 3 BASH_ENV="$WORK/abort.env"
+verdict_is unknown; expect_out "the stray-abort path reports the probe ended without a verdict" 'ended without a verdict'
 
 # ── source-level pins on the SUT (cheap, and they catch a refactor that drops a safeguard) ───
 sut_code="$(grep -vE '^[[:space:]]*#' "$SUT")"
-if printf '%s' "$sut_code" | grep -qE '^[[:space:]]*exit[[:space:]]+1([[:space:]]|$)'; then fail "the SUT contains a literal 'exit 1'"; else pass "the SUT contains no literal 'exit 1'"; fi
+if grep -qE '^[[:space:]]*exit[[:space:]]+1([[:space:]]|$)' <<<"$sut_code"; then fail "the SUT contains a literal 'exit 1'"; else pass "the SUT contains no literal 'exit 1'"; fi
 if grep -qE '^# RETIREMENT:' "$SUT"; then pass "the SUT header carries a RETIREMENT: line"; else fail "the SUT header lacks a RETIREMENT: line"; fi
-for site in egress_gw_probe_silent_canary betterstack-logs-alerts.tf apply-web-platform-infra.yml EXPECT_BLOCKS MIN_PASSES betterstack-send-failed-alert-mutation.test.sh egress-gw-alert.test.sh cron-egress-blocked.md ADR-218 INTENDED_DESTROYS ack-destroy; do
-  if sed -n '/^# RETIREMENT:/,/^[^#]/p' "$SUT" | grep -qF -- "$site"; then pass "RETIREMENT header lists: $site"; else fail "RETIREMENT header lacks: $site"; fi
+retire_block="$(sed -n '/^# RETIREMENT:/,/^[^#]/p' "$SUT")"
+for site in egress_gw_probe_silent_canary betterstack-logs-alerts.tf apply-web-platform-infra.yml EXPECT_BLOCKS MIN_PASSES betterstack-send-failed-alert-mutation.test.sh egress-gw-alert.test.sh cron-egress-blocked.md ADR-218 INTENDED_DESTROYS ack-destroy CENSUS_FLOOR_ALERTS betterstack-log-query.md infra-validation.yml; do
+  if grep -qF -- "$site" <<<"$retire_block"; then pass "RETIREMENT header lists: $site"; else fail "RETIREMENT header lacks: $site"; fi
 done
-if printf '%s' "$sut_code" | grep -qE 'attributes\.name[[:space:]]*==' ; then pass "incident matching is exact .attributes.name equality"; else fail "incident matching is not exact .attributes.name equality"; fi
-if printf '%s' "$sut_code" | grep -qE 'startswith|test\(|contains\(|ascii_downcase'; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
+if grep -qE 'attributes\.name[[:space:]]*==' <<<"$sut_code"; then pass "incident matching is exact .attributes.name equality"; else fail "incident matching is not exact .attributes.name equality"; fi
+if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
 
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=160
+MIN_ASSERTIONS=203
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1

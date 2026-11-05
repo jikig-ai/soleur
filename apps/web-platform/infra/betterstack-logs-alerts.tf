@@ -1565,17 +1565,29 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
 
   # At least one roster HOST missing in 15 min (each host's probe emits every 5
   # min when due). The value is the missing-host count, not the emitting count:
-  # a lower_than alert over treat_as_zero paged on a healthy fleet (incident
-  # 1047829421, #12180; the older 1031046761 stayed open 24 days with data
-  # present), and the INFERRED mechanism is that an evaluator step it cannot
-  # evaluate is read as 0 and compared against the threshold. Under higher_than
-  # 0 that zero reads healthy. The query is proven (healthy 0, one host 1,
-  # unknown identifier 2); the evaluator is not, which is what the canary below
-  # is for. A green alert is not evidence of health until the canary has fired.
+  # the earlier lower_than shape opened incident 1047829421 on a healthy fleet
+  # (#12180), and incident 1031046761 of the same alert stayed open for 24 days
+  # (it began as a true positive, web-2 dark; rows were measured arriving on
+  # 2026-11-02; nothing resolved it until we did). The INFERRED mechanism is that
+  # an evaluator step it cannot evaluate is read as 0 and compared against the
+  # threshold; under higher_than 0 that zero reads healthy. Not excluded:
+  # partial visibility of one host's rows in the evaluator's window (hot window
+  # about an hour, archive lag about 66 minutes) reads 1 under either operator,
+  # and a vendor that never auto-resolves incidents cannot be fixed by inverting
+  # the metric. The query is proven (healthy 0, one host 1, unknown identifier 2);
+  # the evaluator is not, which is what the canary below is for. A green alert is
+  # not evidence of health until the canary has fired.
   # Residual: an evaluator error or timeout also reads 0 under treat_as_zero, so
-  # that failure is quiet here (the sibling detectors cover host death; #12190
-  # tracks the heartbeat-poller mitigation). treat_as_zero stays so a fully-dark
-  # window still evaluates (the aggregate returns the roster size).
+  # that failure is quiet here. The sibling detectors cover only a fleet-wide dead
+  # resolver timer (the Sentry cron check-in has no host dimension) and a probe
+  # that runs and returns result=fail (op=egress_gw_probe_fail needs such a row);
+  # a Vector, allowlist or journal break on ONE host has no independent detector
+  # until the heartbeat poller (#12190). treat_as_zero is kept per the CTO ruling:
+  # it is NOT what detects a fully dark window (the aggregate always returns one
+  # row, the roster size) and it is the source of the quiet residual above. The
+  # count is compared with the roster size, not set identity: an extra or renamed
+  # emitter, or a row with an empty host_name, counts as a host and could mask a
+  # dead one.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -1593,7 +1605,7 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "Current value is the number of the expected ${length(var.web_hosts)} web hosts that did NOT emit an egress_gw_probe heartbeat in 15+ min (1 = one host dark, ${length(var.web_hosts)} = all dark) — a resolver timer, Vector pipeline (stale Source-4 allowlist on one host is a measured failure mode), or host journal is dead. The gateway's allow/deny verification is dark on the silent host(s). If both hosts show rows in the window, suspect the evaluator, not the fleet. Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "Value = roster hosts NOT emitting an egress_gw_probe row in 15+ min (1 = one dark, ${length(var.web_hosts)} = all dark). Rows on both hosts in the window => suspect the evaluator, not the fleet. Cause: resolver timer, Vector (stale Source-4 allowlist is a measured failure mode) or host journal; allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }
@@ -1655,7 +1667,7 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "THROWAWAY CANARY (#12180): expected to fire and NOT an outage. It runs the egress_gw_probe_silent query against an identifier no host emits, so the value is the roster size. Fires = the evaluator delivers a non-zero value for this query shape (good). Never firing = the evaluator is blind for this shape; keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "THROWAWAY CANARY (#12180): expected to fire and NOT an outage. It runs the egress_gw_probe_silent query against an identifier no host emits, so the value is the roster size. Fires = the evaluator delivers a non-zero value for this query shape (good). Never firing = the evaluator is blind for this shape; keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired; do NOT close its mirror issue (the mirror files a new one every 15 minutes). Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }

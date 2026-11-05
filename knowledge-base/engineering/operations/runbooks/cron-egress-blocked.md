@@ -927,48 +927,72 @@ allow/deny verification is dark.
 
 **Why the metric is inverted (2026-11-05, #12180).** The previous shape was
 `lower_than` the roster size over the emitting-host count. It opened incident
-1047829421 on a healthy fleet, and incident 1031046761 stayed open for 24 days
-with probe rows present. The probe rows were proven present with a read-only
-query each time; the vendor does not expose the value its evaluator computed.
-**The mechanism is an inference, not a measurement:** an evaluator step that
-cannot be evaluated is read as 0 (`treat_as_zero` is kept so a fully dark window
-still evaluates), and 0 against `lower_than 2` is a false page, while 0 against
-`higher_than 0` reads healthy. What IS proven (read-only, counts only) is the
-query: it returned 0 on healthy data, 1 with one host excluded and 2 for an
-identifier no host emits. The vendor evaluator is not proven.
+1047829421 on a healthy fleet. Incident 1031046761 of the same alert stayed open
+for 24 days: it began as a true positive (web-2 dark), probe rows were measured
+arriving on 2026-11-02, and nothing resolved it until we did. The vendor's incident
+object carries no evaluated value (checked 2026-11-06: no `value`/`current_value`
+key among its attributes), so the mechanism is **an inference, not a measurement**:
+an evaluator step that cannot be evaluated is read as 0, and 0 against `lower_than 2`
+is a false page while 0 against `higher_than 0` reads healthy. Two alternatives are
+NOT excluded and the canary cannot separate them: partial visibility of one host's
+rows in the evaluator's window (hot window about an hour, archive lag about 66
+minutes) reads 1 under either operator, and a vendor that never auto-resolves
+incidents is not fixed by inverting the metric. What IS proven (read-only, counts
+only) is the query: it returned 0 on healthy data, 1 with one host excluded and 2 for
+an identifier no host emits. The vendor evaluator is not proven. `treat_as_zero` is
+kept per the CTO ruling; it is not what detects a fully dark window (the aggregate
+always returns one row, the roster size), and it is the source of the quiet residual
+below.
 
 **Two limits that follow.**
 
 - A green alert is not evidence of health until the canary below has fired.
 - An evaluator error or timeout also reads 0 under `treat_as_zero`, so that failure
   is quiet here: the old shape would have paged and this one does not. The sibling
-  detectors (Sentry `op=egress_gw_probe_fail`, the resolver's cron check-in)
-  cover host death independently; the heartbeat poller tracked in #12190 is the
-  mitigation.
+  detectors cover less than "host death": the Sentry cron check-in
+  (`cron-egress-resolve`) has no host dimension, so it covers only a fleet-wide dead
+  resolver timer, and `op=egress_gw_probe_fail` fires only on a probe that ran and
+  returned `result=fail`. A Vector, allowlist or journal break on ONE host (the
+  measured failure mode above) has no independent detector until the heartbeat
+  poller tracked in #12190. The count also compares to the roster size, not host
+  identity, so an extra or renamed emitter, or a row with an empty `host_name`,
+  counts as a host and could mask a dead one.
 
 **Canary (throwaway, #12180).** `soleur-egress-gw-probe-silent-canary-prd` runs the
 same query against `egress-gw-probe-canary-absent`, an identifier no host emits, so
 it reads the roster size and MUST open an incident that never recovers. That
 incident, its mirrored P1 `action-required` issue and one email are expected until
-the follow-up PR (tracker #12189) deletes the canary pair. Read the verdict, not
-the dashboard: `bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`
-prints one `SOLEUR_EGRESS_GW_SILENT_SOAK` line with `canary=`, `canary_alert_live=`,
-`prod_incident=` and `rows_in_window=`. The canary shares the production query
-shape, so it proves non-zero delivery on an empty count, not general evaluator
-health.
+the follow-up PR (tracker #12189) deletes the canary pair. The mirror also posts a
+"Still open" comment on that issue every 15 minutes (about 96 a day), and files a
+fresh issue if you close it: do NOT close the canary's mirror issue, delete the pair
+instead. Read the verdict, not the dashboard:
+`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`
+(the probe wants `BETTERSTACK_API_TOKEN`; Doppler holds it as
+`BETTERSTACK_API_TOKEN_READONLY`, so map it in, together with the three
+`BETTERSTACK_QUERY_*` names that `rows_in_window` reads) prints one
+`SOLEUR_EGRESS_GW_SILENT_SOAK` line with `canary=`, `canary_alert_live=`,
+`prod_incident=`, `prod_alert=`, `anchor_resolved_by=` and `rows_in_window=` (the
+trailing 15 minutes of rows per host). Whoever merges the change runs it once at
+apply completion + 25 minutes; the daily sweeper (tracker #12189, `earliest` set after
+the apply) is the backstop, so an evaluator-blind finding waits up to a day without
+that run. The canary shares the production query shape, so it proves non-zero
+delivery on an empty count, not general evaluator health.
 
 | Observation | Reading | Response |
 |---|---|---|
-| canary incident exists and 1047829421 resolves | the evaluator delivers a non-zero value for this shape | delete the canary pair (tracker #12189) |
-| `canary=absent`, `canary_alert_live=1` after 25 minutes | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
-| `canary=absent`, `canary_alert_live=0` | the apply did not create it (alert-count cap or a failed create) | hotfix PR; not an evaluator finding |
-| 1047829421 still open and `rows_in_window` shows rows on both hosts | evaluator or vendor never auto-resolving | poller (#12190) or a pause; never a revert (a revert restores the shape that misfired) |
-| 1047829421 still open and one host has no rows | real silence | the decode ladder below; the alert is right |
+| `canary=fired` and 1047829421 resolved by the alert (`anchor_resolved_by=none`) | the evaluator delivers a non-zero value for this shape | wait out the 4 h soak, then delete the canary pair (tracker #12189) |
+| `canary=absent`, `canary_alert_live=1`, alert older than 20 minutes | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
+| `canary=absent`, `canary_alert_live=1` but paused | someone paused it | not an evaluator finding; unpausing is a Better Stack write |
+| `canary=absent`, `canary_alert_live=0` | the apply has not created it yet, or never did (alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
+| `prod_alert` is `absent`, `paused` or `shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
+| 1047829421 still open and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
+| 1047829421 still open and one host has no rows now | real silence | the decode ladder below; the alert is right |
 
 A Better Stack write (resolving or pausing an incident by hand) needs the owner's
-explicit per-command go-ahead.
+explicit per-command go-ahead, and so does deleting the canary (a Better Stack
+destroy, which also needs the standalone `[ack-destroy]` merge-commit line below).
 
-**Deleting the canary** (also the rollback recipe for this change). Remove the two
+**Deleting the canary** (also the undo recipe for this change; it is a deletion, not a revert of the inverted shape). Remove the two
 `egress_gw_probe_silent_canary` resources from `betterstack-logs-alerts.tf`, but keep
 their two `-target` lines in `apply-web-platform-infra.yml` for one apply (a bare
 `-target` on an address with no configuration plans its DELETE), and put
