@@ -226,3 +226,33 @@ on merge.
   pad the count. Under this shape that route is structurally closed (a token can only assert a
   config Terraform minted it against), and `configs_unread` remains the discriminator.
 - The rung-2 orphan sweep's scratch-config probe stays unsatisfiable — see #7233.
+- **Amendment 2026-11-04 (#11857): the inventory grew from 13 to 16 names.** `prd_git_data`,
+  `prd_workspaces_luks_marker` and `prd_workspaces_luks_web` are now listed, so the per-merge apply mints
+  three more read tokens (16 in all) and republishes `DOPPLER_TOKEN_DRIFT_MAP` with 16 entries. The
+  declared floor (`DOPPLER_CONFIGS_FLOOR`), its run-time re-assertion, `RUNG2_CONFIGS_FLOOR` and the
+  suite's `FLOOR_MINIMUM` moved to 16 together, the number typed by hand after counting the name lines.
+  Between the merge and the republish the scan reads 13 of 16 and grades `degraded`, an expected,
+  self-closing transient. `doppler_service_token.token_drift` now carries
+  `depends_on = [doppler_config.workspaces_luks_web, doppler_config.workspaces_luks_marker]`, because a
+  string `config = each.key` builds no ordering edge to a Terraform-declared config. It deliberately has
+  NO edge to `doppler_config.git_data_prd`, which the earlier inventory-header text and the issue
+  asked for: that config is a per-merge `OPERATOR_APPLIED_EXCLUSION` (#9438), and an edge from this
+  per-merge-targeted token would pull it into every merge's plan, where a state lacking it would fail
+  each merge with HTTP 400 "Name is already in use". A row in `terraform-target-parity.test.ts` pins both
+  halves. Flip evidence for adding the edge later: a state listing that shows
+  `doppler_config.git_data_prd` present. The body above and ADR-164 stay as point-in-time history.
+
+  **Revoking a token (read from the ratchets, 2026-11-04).** Deleting a token means removing its name
+  from the inventory (the token is a `for_each` instance), and CI makes that one coordinated change,
+  so it is not a quick edit mid-incident. In one reviewed PR: (1) name each removed config in
+  `INVENTORY_REMOVALS_ACK` in `plugins/soleur/test/token-drift-workflow-causes.test.sh`, or the F4b
+  set ratchet reds (its baseline is the merge base, so a revert PR needs the entry too); (2) lower
+  `DOPPLER_CONFIGS_FLOOR`, the run-time `< 16` re-assertion and its warning text, and
+  `RUNG2_CONFIGS_FLOOR` in `scheduled-terraform-drift.yml` to the new name count (F3 pins floor equal
+  to the inventory count; S4 pins `RUNG2_CONFIGS_FLOOR` equal to the main floor); (3) lower
+  `FLOOR_MINIMUM` in the same suite (F2 pins floor `>=` minimum) and the `configs_floor` fixtures and
+  the T6/T17/T20 expectations that carry it, or the raised assertion re-grades them; (4) the merge
+  commit message must carry `[ack-destroy]` on its own line, because the destroy guard counts the
+  planned token deletes. There is no dispatch rotation route (#7263), so a token cannot be revoked
+  from a workflow run, only by this merge and its apply. Revoking stops future reads; it cannot
+  un-read a LUKS value that already leaked, which needs a header re-key or a volume cutover.

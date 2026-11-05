@@ -263,9 +263,10 @@ jobs:
           # `degraded` — a credential is absent — rather than the malformed-map arm, whose
           # remedy says the Doppler identity is not at fault.
           #
-          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. Do NOT "fix" a red by lowering it:
-          # that is the floor-edited-down-to-match-a-narrowed-grant shape, and the runtime
-          # `configs_floor < 13` assertion below forces `degraded` anyway.
+          # DOPPLER_CONFIGS_FLOOR is pinned equal to the inventory's name count by F2/F3 in
+          # plugins/soleur/test/token-drift-workflow-causes.test.sh. Do NOT "fix" a red by
+          # lowering it: that is the floor-edited-down-to-match-a-narrowed-grant shape, and
+          # the runtime `configs_floor` assertion below forces `degraded` anyway.
           DOPPLER_TOKEN_MAP: ${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}
           DOPPLER_PROJECT: soleur
           # NO DOPPLER_CONFIG, and no bare DOPPLER_TOKEN. The detector reads each config
@@ -283,14 +284,15 @@ jobs:
           # Three places move together when the project's config set changes: this
           # literal, the name count in apps/web-platform/infra/doppler-config-inventory.txt,
           # and the pin in plugins/soleur/test/token-drift-workflow-causes.test.sh, which
-          # asserts this parses, is >= 13, and equals the inventory's name count.
+          # asserts this parses, is at or above its pinned minimum, and equals the
+          # inventory's name count.
           #
           # THE INVENTORY NOW ALSO DETERMINES REACH, not just the printed denominator: it is
           # the `for_each` list the per-config tokens are minted from. So shrinking it
           # DESTROYS tokens, which the destroy guard catches — the one layer that fires
-          # ABOVE 13, where the three literals above only bound it from below. The
+          # ABOVE the floor, where the three literals above only bound it from below. The
           # inventory's own header carries the full floor-raising checklist.
-          DOPPLER_CONFIGS_FLOOR: 13
+          DOPPLER_CONFIGS_FLOOR: 16
         run: |
           set -uo pipefail
           # ── FLOOR GUARD: WRITE THE OUTPUTS, *THEN* FAIL ────────────────────────────
@@ -482,7 +484,7 @@ jobs:
           # what this step demands, but a number cannot catch its own reduction: a floor
           # edited DOWN in the same change that narrows the grant would hold the scan at
           # `at-floor` while coverage regressed. So the value the detector echoed back is
-          # re-checked here against the literal 13, and a failure downgrades to
+          # re-checked here against the literal 16, and a failure downgrades to
           # `degraded`. (The PR-time half of this pin lives in
           # plugins/soleur/test/token-drift-workflow-causes.test.sh.)
           #
@@ -494,8 +496,8 @@ jobs:
           # `(( ))` errors, and — because an arithmetic error in an `if` condition is not
           # fatal under `set -e` — control falls through to the CONFIDENT state.
           if [[ "$coverage" != "unknown" ]] \
-             && { [[ ! "$cfg_floor" =~ ^[0-9]+$ ]] || (( 10#$cfg_floor < 13 )); }; then
-            echo "::warning::Cloudflare token drift ran against a declared coverage floor of '${cfg_floor}', below the pinned minimum of 13. A floor lowered alongside a narrowed credential would report healthy while coverage regressed, so this run is downgraded to coverage: degraded regardless of what it read."
+             && { [[ ! "$cfg_floor" =~ ^[0-9]+$ ]] || (( 10#$cfg_floor < 16 )); }; then
+            echo "::warning::Cloudflare token drift ran against a declared coverage floor of '${cfg_floor}', below the pinned minimum of 16. A floor lowered alongside a narrowed credential would report healthy while coverage regressed, so this run is downgraded to coverage: degraded regardless of what it read."
             coverage=degraded
           fi
           {
@@ -523,7 +525,7 @@ jobs:
             echo "token-drift coverage caveat: the committed config inventory is ${inv_age} days old, so the denominator in '${cov_ratio}' may not reflect the project's current config set. Regenerate it with the command in the file's own '# command:' header."
           fi
           # TWO ARMS, matching the two non-healthy rungs. The retired `single-config` arm
-          # is gone with the state: at a floor of 13 it collapses into `degraded`.
+          # is gone with the state: at the floor it collapses into `degraded`.
           if [[ "$coverage" == "degraded" ]]; then
             echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential set is DOPPLER_TOKEN_DRIFT_MAP, one config-scoped read token per config; at ${cov_ratio} either the whole secret is missing or empty (0/N — including the window between merging a credential change and the infra apply that publishes it), or the individual tokens for the unread configs are revoked, expired or were never minted. The unread list names exactly which. This is per-config, so a partial number is actionable: it names the tokens to re-mint, not a grant to widen."
           elif [[ "$coverage" == "unknown" ]]; then
@@ -2527,7 +2529,7 @@ jobs:
           # the committed inventory; see the ratchet note in
           # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-164's Known
           # limitations. Three literals, one number.
-          RUNG2_CONFIGS_FLOOR: 13
+          RUNG2_CONFIGS_FLOOR: 16
         run: |
           set -euo pipefail
           # The token reaches curl on its stdin config through the shared library (ADR-280); a library that cannot be loaded ends the sweep with no verdict.
