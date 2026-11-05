@@ -39,12 +39,203 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 
 ## Headless / Dry-run modes
 
-- `--headless`: suppress interactive prompts. On any blocking ack, exit non-zero with a structured error message instead of waiting. Phase 8 still requires `status: resolved`.
-- `--dry-run <fixture.json>`: read fields from a synthetic JSON fixture instead of operator prompts. Used by [scripts/dry-run.sh](./scripts/dry-run.sh) to drive AC8-AC13 against fixtures under `test/fixtures/`. Dry-run never writes to `post-mortems/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
+- `--headless`: do not perform a live pull. Print three `SOLEUR_INCIDENT_PULL` lines with `verdict=never-ran` and no log body, then suppress interactive prompts. On any blocking ack, exit non-zero with a structured error message instead of waiting. Write no post-mortem. Phase 8 still requires `status: resolved`.
+- `--dry-run <fixture.json>`: do not perform a live pull. [scripts/dry-run.sh](./scripts/dry-run.sh) prints three `SOLEUR_INCIDENT_PULL` lines with `verdict=never-ran` and fills fields only from the fixture. It does not implement `--headless`. Dry-run never writes to `post-mortems/` and never invokes `compound-capture`; it emits the would-be PIR to stdout.
 
 ## Phase 0 — Capture facts
 
-> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. Also pull Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`). Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `soleur:trigger-cron`, **Supabase platform logs (postgres/auth/postgrest/supavisor) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref <project-ref> --source <src> --since <window>` — never emits a zero row count without a coverage verdict; runbook `supabase-log-query.md`**, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
+Skip the fence below on `--dry-run` and `--headless`. Those modes print three `SOLEUR_INCIDENT_PULL` lines with `verdict=never-ran` and no log body, and they do not call Doppler or the readers. `--dry-run` fills the nineteen fields only from the fixture.
+
+On a live run, the founder may supply an optional window, an optional Sentry issue id, and an optional complaint sentence. The complaint is a claim. It is never passed as `--grep`. Scan it with the sentinel the Phase 6 fence assigns to `SENTINEL` before it is printed or copied onto the card. Copy that one assignment into this shell. Do not add a second copy of the path to this file. If the complaint matches, omit that sentence, print no offset line, still show the rest of the card, and start the nineteen-field interview. A match is not Phase 6's iterate-until-clean loop.
+
+Skill-side window allowlist. A supplied window is one quoted word and the only `--since` for Better Stack and Supabase. Better Stack accepts `^[0-9]+[hmd]$`, `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`, or `^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$` (the space form only as that one quoted word). Supabase accepts `^[0-9]+[mhd]$` or `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`. A refused window does not exec: that source is `verdict=never-ran` `reason=usage`. When the window is omitted, Better Stack runs `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h`. Supabase runs `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --since 24h`. Sentry has no `--since`. Its card line says `window=n/a`.
+
+An issue id must match `^[A-Za-z0-9_-]+$`. An id outside that grammar is not executed (`verdict=never-ran` `reason=usage`). With no issue id, the card contains `sentry: not-queried reason=no-issue-id` and `doppler run -p soleur -c prd -- scripts/sentry-issue.sh` is not executed. Do not pass `--redact`, `--host-events`, or `--liveness`.
+
+The `prd_terraform` Doppler config is the wrong config for Sentry and for Supabase.
+
+The application ref `ifsccnjhymdmidffkzhl` is always the Supabase command. A second Supabase command, with the same `--since` and `-c prd`, runs only when the founder gives the project name `soleur-inngest-prd` or the ref `pigsfuxruiopinouvjwy`: `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref pigsfuxruiopinouvjwy --since <the same window>`. The word inngest alone does not add this second command. Do not replace the application query. The card names the ref that was queried and says the other ref was not queried.
+
+Better Stack names table `t520508_soleur_inngest_vector_prd_3_logs` and `limit=100`. Do not decode `.raw`. Do not pass `--no-archive`. Exit 3 is `verdict=never-ran`. Exit 2 and exit 78 are `verdict=unverified` `reason=credential-refused`. Do not print stderr. Exit 0 with an empty body is `exit=0` and `stdout-empty`. That does not say the table or the archive had no rows. It is not health and it is not disproof of the complaint. Exit 0 with a body counts lines containing `"raw"`, and `truncated=true` only when that count is 100. Any other Better Stack exit is `verdict=unverified` `reason=reader-exit-N`, and the body is not rows.
+
+Supabase copies the stdout `verdict=` and `reason=` pair and does not copy `rows=`. Do not count stdout log lines. Exit 0 is marker `verdict=queried` together with that reason. Exit 1 is marker `verdict=unverified`, the script's pair is copied once, and this skill does not run the command again. Exit 2 is `verdict=unverified` with the script's `reason=`. Exit 3 keeps the script's data verdict on the card and the marker `verdict=queried`. `reason=ZERO_SOURCE_COVERAGE_UNESTABLISHED` is not disproof of the complaint.
+
+Sentry exit 77 is `verdict=unverified` `reason=401`. Exit 78 is `verdict=unverified` `reason=credential-refused`. Exit 1 is `verdict=unverified` `reason=reader-exit-1`. No retry, the body is not shown, and the skill does not halt. Any reader exit this section does not name is `verdict=unverified` `reason=reader-exit-N`.
+
+Each source gets a line. One failure does not skip the others or the nineteen-field interview. If the `doppler` binary is missing, all three are `verdict=never-ran` `reason=wrapper`. If `prd` cannot be read and `prd_terraform` can, Better Stack still runs and Sentry and Supabase are `verdict=never-ran` `reason=wrapper`. Do not parse wrapper stdout as rows. Do not start `doppler login`. Do not run `scripts/ensure-doppler.sh`. Do not re-exec.
+
+Print one stdout marker per source, with no log body: `SOLEUR_INCIDENT_PULL source=<betterstack|sentry|supabase> verdict=<queried|not-queried|unverified|never-ran>`. A `reason=` suffix is allowed. The verdict set does not grow.
+
+The card is those coverage lines plus at most one hypothesis sentence assembled only from coverage fields (source, window, table or ref, exit, the Better Stack line count, truncated, and the Supabase `verdict=` and `reason=`). It does not rank causes, name a service, an error, or a user count, or say the complaint is false, or say what would disprove the complaint. If nothing can be said that way, the card says `hypotheses=none`. Three source lines and `hypotheses=none` are shown. The card does not assign `affected_user_count`, `data_categories_breached`, `risk_to_subjects`, `revenue_impact`, `detected_at`, `detection_method`, or `monitoring_detected_at`. Do not infer a user count from a line count, and do not print a pull time or offer one for `monitoring_detected_at`. The pull does not feed the `mttd-transposed` halt.
+
+The card is not written under `post-mortems/`. When the founder confirms the card, copy its one coverage sentence into the root-cause field. `hypotheses=none` copies nothing. Do not copy into the 5-whys, the breach fields, or the Art. 33 tokens. Confirming the card is not `ACK-ART33`, not `ACK-ART34`, and not `COMMIT-PIR`.
+
+Run this fence from the worktree root that contains `scripts/`, as one shell. Create each stdout temp with `mktemp` outside the repository, mode `0600`, and remove it on `EXIT INT TERM HUP`. Redirect stdout on the reader command and discard stderr. Do not print the temp path on the pass path or the fail path. Do not `Read` or `cat` the temp. `pull-card.sh` is the only reader of that temp. Show the card only when the sentinel exits 0. A zero-byte card emits `SOLEUR_INCIDENT_PULL` with `reason=card-empty`, shows nothing, does not print `SOLEUR_INCIDENT_HALT`, and starts the nineteen-field interview. Sentinel exit 1 on the card emits `SOLEUR_INCIDENT_PULL` with `reason=card-redaction-failed`, prints no offset line, does not print the temp path, does not print `SOLEUR_INCIDENT_HALT`, does not enter Phase 6's iterate-until-clean loop, and still starts the interview. Phase 6's loop is unchanged. Exit 2 prints `SOLEUR_INCIDENT_HALT` and shows nothing.
+
+```bash
+set +e
+set -u
+bs_out="$(mktemp)"
+sb_out="$(mktemp)"
+sb2_out="$(mktemp)"
+sy_out="$(mktemp)"
+card="$(mktemp)"
+complaint_out="$(mktemp)"
+chmod 0600 "$bs_out" "$sb_out" "$sb2_out" "$sy_out" "$card" "$complaint_out"
+trap 'rm -f "$bs_out" "$sb_out" "$sb2_out" "$sy_out" "$card" "$complaint_out"' EXIT INT TERM HUP
+if [[ -z "${SENTINEL:-}" || ! -r "${SENTINEL}" ]]; then
+  echo "SOLEUR_INCIDENT_HALT reason=sentinel-unreadable"
+  exit 2
+fi
+window="${INCIDENT_WINDOW:-}"
+issue_id="${INCIDENT_SENTRY_ISSUE_ID:-}"
+sb_project="${INCIDENT_SUPABASE_PROJECT:-}"
+complaint="${INCIDENT_COMPLAINT:-}"
+bs_since="1h"
+sb_since="24h"
+bs_skip=""
+sb_skip=""
+if [[ -n "$window" ]]; then
+  if [[ "$window" =~ ^[0-9]+[hmd]$ || "$window" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ || "$window" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+    bs_since="$window"
+  else
+    bs_skip="usage"
+  fi
+  if [[ "$window" =~ ^[0-9]+[mhd]$ || "$window" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    sb_since="$window"
+  else
+    sb_skip="usage"
+  fi
+fi
+tf_ok=0
+prd_ok=0
+if ! command -v doppler >/dev/null 2>&1; then
+  tf_ok=0
+  prd_ok=0
+else
+  doppler run -p soleur -c prd_terraform -- true >/dev/null 2>&1
+  tf_rc=$?
+  doppler run -p soleur -c prd -- true >/dev/null 2>&1
+  prd_rc=$?
+  if [[ "$tf_rc" -eq 0 ]]; then tf_ok=1; fi
+  if [[ "$prd_rc" -eq 0 ]]; then prd_ok=1; fi
+fi
+bs_line=""
+sb_line=""
+sy_line=""
+if [[ -n "$bs_skip" ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=never-ran reason=usage"
+  bs_line="betterstack verdict=never-ran reason=usage"
+elif [[ "$tf_ok" -ne 1 ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=never-ran reason=wrapper"
+  bs_line="betterstack verdict=never-ran reason=wrapper"
+else
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since "$bs_since" >"$bs_out" 2>/dev/null
+  bs_rc=$?
+  bs_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" betterstack "$bs_rc" "$bs_out")"
+  if [[ "$bs_rc" -eq 0 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=queried"
+  elif [[ "$bs_rc" -eq 3 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=never-ran"
+  elif [[ "$bs_rc" -eq 2 || "$bs_rc" -eq 78 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=unverified reason=credential-refused"
+  else
+    echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=unverified reason=reader-exit-${bs_rc}"
+  fi
+fi
+if [[ -n "$sb_skip" ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=supabase verdict=never-ran reason=usage"
+  sb_line="supabase verdict=never-ran reason=usage"
+elif [[ "$prd_ok" -ne 1 ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=supabase verdict=never-ran reason=wrapper"
+  sb_line="supabase verdict=never-ran reason=wrapper"
+else
+  doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --since "$sb_since" >"$sb_out" 2>/dev/null
+  sb_rc=$?
+  sb_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" supabase "$sb_rc" "$sb_out")"
+  sb_reason=""
+  case "$sb_line" in
+    *reason=*) sb_reason="${sb_line##*reason=}" ;;
+  esac
+  if [[ "$sb_rc" -eq 0 || "$sb_rc" -eq 3 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=supabase verdict=queried reason=${sb_reason}"
+  elif [[ "$sb_rc" -eq 1 || "$sb_rc" -eq 2 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=supabase verdict=unverified reason=${sb_reason}"
+  else
+    echo "SOLEUR_INCIDENT_PULL source=supabase verdict=unverified reason=reader-exit-${sb_rc}"
+  fi
+  if [[ "$sb_project" == "soleur-inngest-prd" || "$sb_project" == "pigsfuxruiopinouvjwy" ]]; then
+    doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref pigsfuxruiopinouvjwy --since "$sb_since" >"$sb2_out" 2>/dev/null
+    sb2_rc=$?
+    sb2_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" supabase "$sb2_rc" "$sb2_out")"
+    sb_line="${sb_line} other-ref=pigsfuxruiopinouvjwy ${sb2_line}"
+  else
+    sb_line="${sb_line} ref=ifsccnjhymdmidffkzhl other-ref=not-queried"
+  fi
+fi
+if [[ -z "$issue_id" ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=sentry verdict=not-queried reason=no-issue-id"
+  sy_line="sentry: not-queried reason=no-issue-id window=n/a"
+elif [[ ! "$issue_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=sentry verdict=never-ran reason=usage"
+  sy_line="sentry verdict=never-ran reason=usage window=n/a"
+elif [[ "$prd_ok" -ne 1 ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=sentry verdict=never-ran reason=wrapper"
+  sy_line="sentry verdict=never-ran reason=wrapper window=n/a"
+else
+  doppler run -p soleur -c prd -- scripts/sentry-issue.sh "$issue_id" >"$sy_out" 2>/dev/null
+  sy_rc=$?
+  sy_line="$(bash "${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/pull-card.sh" sentry "$sy_rc" "$sy_out")"
+  if [[ "$sy_rc" -eq 0 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=sentry verdict=queried"
+  elif [[ "$sy_rc" -eq 77 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=401"
+  elif [[ "$sy_rc" -eq 78 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=credential-refused"
+  else
+    echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=reader-exit-${sy_rc}"
+  fi
+fi
+{
+  printf '%s\n' "$bs_line"
+  printf '%s\n' "$sb_line"
+  printf '%s\n' "$sy_line"
+  if [[ -n "$complaint" ]]; then
+    printf '%s\n' "$complaint" > "$complaint_out"
+    bash "$SENTINEL" "$complaint_out" >/dev/null 2>&1
+    complaint_rc=$?
+    if [[ "$complaint_rc" -eq 0 ]]; then
+      printf 'complaint: %s\n' "$complaint"
+    elif [[ "$complaint_rc" -ne 1 ]]; then
+      echo "SOLEUR_INCIDENT_HALT reason=sentinel-exit-2"
+      exit 2
+    fi
+  fi
+  printf '%s\n' "hypotheses=none"
+} > "$card"
+if [[ ! -s "$card" ]]; then
+  echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=unverified reason=card-empty"
+  echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=card-empty"
+  echo "SOLEUR_INCIDENT_PULL source=supabase verdict=unverified reason=card-empty"
+else
+  bash "$SENTINEL" "$card" >/dev/null 2>&1
+  sent_rc=$?
+  if [[ "$sent_rc" -eq 0 ]]; then
+    cat "$card"
+  elif [[ "$sent_rc" -eq 1 ]]; then
+    echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=unverified reason=card-redaction-failed"
+    echo "SOLEUR_INCIDENT_PULL source=sentry verdict=unverified reason=card-redaction-failed"
+    echo "SOLEUR_INCIDENT_PULL source=supabase verdict=unverified reason=card-redaction-failed"
+  else
+    echo "SOLEUR_INCIDENT_HALT reason=sentinel-exit-2"
+    exit 2
+  fi
+fi
+```
+
+Before the sentinel, replace the single `hypotheses=none` line only when one sentence can be built from the coverage fields above. Leave `hypotheses=none` otherwise.
+
+> **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism*. The pull at the start of this phase is the only live read. Do not run a second pull from this note. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
 
 <!-- -->
 > **Unreachable host with no log-shipping — READ before you MUTATE (`hr-no-dashboard-eyeball-pull-data-yourself` extended to diagnosis).** When the failing surface is a host that answers nothing (no SSH, no Vector/journald shipping, no Sentry emit), the self-serve read path is the **provider API + rescue mode** — it is NOT an operator-console task. Ladder, in order: (1) **Provider API reads** — `GET /servers/{id}` (status, `private_net`), `/metrics?type=cpu,disk,network`, `/actions`. Query the **BOOT window**, not the current window: an unreachable-but-idle host reads `net=0/disk=0` and looks "dead" when it merely has no clients. (2) **Rescue-mode disk read** (Hetzner: `enable_rescue` with `{"type":"linux64","ssh_keys":[<id>]}` to inject a registered key whose private half is in your agent → key auth, no `sshpass`; scope SSH in by `set_rules` allowing ONLY your egress IP on `:22` and restore `{"rules":[]}` immediately after; `reboot` → SSH → `lsblk` (the OS disk is NOT necessarily `sda` — an attached volume can take it) → mount the boot partition → read `/var/log/cloud-init-output.log`, `grep -iE 'error|fail' /var/log/cloud-init.log`, `/var/lib/cloud/data/status.json`). (3) **Only then mutate**, and only via the sanctioned destroy-guarded dispatch (`apply-web-platform-infra.yml apply_target=…`) — **never a hand-rolled `terraform apply`**: an out-of-band apply on an unverified hypothesis diverges prod from `main` and makes the guarded recovery abort `out_of_scope=1`, blocking the real fix. Guard aborts are information — read their counters (`out_of_scope=`, `server_replaced=`, `volume_created=`) to learn which recovery path actually fits. And `Apply complete` is not proof: `GET` the resource to confirm the provider's reality. **Why:** #6400 — four hypotheses (credential → firewall → store OOM → boot) were mutated-then-tested over hours; a rescue read of `cloud-init.log` named the real cause (a transient IMDS failure left the host with no private NIC) in one shot, and a hypothesis-driven firewall apply blocked the sanctioned recreate three times. See [[2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies]].
@@ -222,7 +413,7 @@ Selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim (SpecFlow Imp
 | `{{DETECTION_METHOD}}` | Phase 0 `detection_method` enum: `monitoring \| external \| manual` |
 | `{{MTTD}}` | Computed locally; `Unknown (external/manual report)` when not monitoring-detected |
 | `{{TRIGGERED_BY}}` | Phase 0 `triggered_by` enum: `user \| system \| market \| provider` |
-| `{{ROOT_CAUSE_HYPOTHESIS}}` | TBD (operator fills in Phase 7 review) |
+| `{{ROOT_CAUSE_HYPOTHESIS}}` | The one coverage sentence copied when the founder confirms the pull card. `hypotheses=none` leaves `TBD` for the Phase 7 review. The 5-whys stay founder-written. |
 | `{{RESOLUTION}}` | Phase 0 `resolution` (operator prose; default `TBD`) |
 | `{{ROOT_CAUSE_5WHYS}}` | Phase 7 review (operator fills; default `TBD`) |
 | `{{VERSION_TRIGGERED}}` | Phase 0 `version_triggered` (repo + version/PR/SHA; default `TBD`) |
