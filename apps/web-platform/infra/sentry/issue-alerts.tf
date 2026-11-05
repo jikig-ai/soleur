@@ -3110,6 +3110,86 @@ resource "sentry_alert" "art17_approval_anonymise_failed" {
   }
 }
 
+# (#12011, PR-C; ADR-319) The founder legal-acceptance card's failure signals. The web card
+# (server/legal-acceptance/**, app/api/legal-acceptance/**) emits Sentry events tagged feature=legal-acceptance with an
+# `op` of accepted (an accepted row was written; liveness, never paged), decide_rejected (the decide RPC refused;
+# `reason` tag), reauth_failed (the email code send or verify failed; provider error class tag) or row_without_event
+# (a legal_acceptance row with no matching accepted event; reconciliation). Two rules route them, and neither matches the
+# feature alone (that would email on every accepted row): test/sentry-legal-acceptance-alert-op-contract.test.ts derives
+# the op set from the server source and refuses a rule that omits or adds one.
+#
+# legal_acceptance_failure_burst: decide_rejected and reauth_failed, 3 events in one hour on one issue. Only a BURST pages:
+# one stale hash or one mistyped-code provider error is expected on a card a single founder uses, so the transition
+# triggers are deliberately absent. The threshold of 3 in 1h is PROVISIONAL (the card ships behind the approval-queue flag
+# and no baseline exists): recalibrate from the first 14 days of data after the flag is enabled. The email is the existing
+# approval alerts' route (issue_owners, ActiveMembers fallthrough). `frequency_minutes = 45` is unused elsewhere in the root.
+resource "sentry_alert" "legal_acceptance_failure_burst" {
+  organization      = var.sentry_org
+  name              = "legal-acceptance-failure-burst"
+  enabled           = true
+  frequency_minutes = 45
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 3 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "legal-acceptance" } },
+        { tagged_event = { key = "op", match = "in", value = "decide_rejected,reauth_failed" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# legal_acceptance_row_without_event: PAGE severity. A legal_acceptance row exists with no matching op=accepted event, so
+# the write path and the observability disagree about a recorded acceptance of a legal text. Any single event matters,
+# and the event is a message event with a static message (one Sentry issue for its whole life), so the three transition
+# triggers alone would email once and then stay silent while the issue is open; `event_frequency_count {1h, 0}` fires on
+# every event, as approval_gate_unanswered does. `frequency_minutes = 46` (unused elsewhere in the root) is the per-issue
+# throttle. Resolve the Sentry issue after the row has been reconciled, never archive it (an archived issue fires no trigger).
+resource "sentry_alert" "legal_acceptance_row_without_event" {
+  organization      = var.sentry_org
+  name              = "legal-acceptance-row-without-event"
+  enabled           = true
+  frequency_minutes = 46
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "legal-acceptance" } },
+        { tagged_event = { key = "op", match = "eq", value = "row_without_event" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # (#10914, Ref #8211) The git-data erasure re-drive's paging rules. server/inngest/functions/
 # cron-git-data-erasure-redrive.ts (feature=cron-git-data-erasure-redrive, op=git-data-erasure-redrive)
 # raises a Sentry ERROR event when the oldest pending erasure whose owner is GONE reaches 20 days

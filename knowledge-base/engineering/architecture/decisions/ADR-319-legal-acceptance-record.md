@@ -152,3 +152,47 @@ None. No NFR register row changes tier.
 
 C4: `platform.infra.legalAcceptanceStore` ("Legal Acceptances") with `webapp -> legalAcceptanceStore`, included in the `containers` view. There is deliberately no edge from
 the engine.
+
+## Amendment 2026-11-05 (PR-C)
+
+PR-C ships the web card and the in-place email-code check behind the `approval-queue` flag. The decisions above are unchanged; this amendment records what PR-C decided on top of them, how each
+precondition carried from PR-B's review (the "PR-C preconditions" bullet under Consequences, numbered 6.5 to 6.10 in the PR-C task list) was closed, and what stays open. Status stays
+`adopting`: nothing here is a measured production claim and no real row has been recorded.
+
+### Decisions
+
+- **Every choice carries a server-issued intent.** The decide route asks `issue_legal_reauth` for the intent (30 minutes) before the card is usable and sends the choice with the text hash the founder was shown. Yes, No and Request changes are all
+  refused by `record_legal_acceptance` without a live intent for the same user, key, text hash and web session; a refusal with no live intent is reported as a typed outcome, not as a server error.
+- **Yes needs an email code confirmed within five minutes.** The founder asks for the code on the card; the server verifies it on a throwaway client whose session is discarded, so the founder's own session (and its id) is unchanged, and then calls
+  `mark_legal_reauth_verified` bound to the event id that `claim_legal_reauth_attempt` returned. Password and provider confirmation are not built (#12031).
+- **Web session id, derived exactly as the SQL reads it.** The server takes the `session_id` claim of the founder's access token, else `ses_id`, and treats an empty value as absent, the same order `record_legal_acceptance` uses. A request with no web
+  session id never opens an intent, and a runtime token is refused before any RPC is called.
+- **Same send response for a known and an unknown address**, success or failure, so the route cannot be used to test whether an address has an account. The address comes from the authenticated session only, never from the request.
+- **A per-user ceiling on verify attempts**, in addition to the five per challenge, so opening new challenges does not reset the budget for a user.
+- **The card says an answer is final.** It states that changing an answer means a new text version sent by the team. There is no undo button.
+- **The two notices are shown on the card** (the card-level notice and the notice for the free-text note), word for word as drafted. The retention period inside the card-level notice is still marked "to be confirmed by counsel", so the card is
+  PROVISIONAL and ships behind the flag until counsel decides.
+- **Failure signals.** The card emits Sentry events tagged `feature=legal-acceptance` with `op` in `accepted` (one per accepted row, liveness, never paged), `decide_rejected` (reason tag), `reauth_failed` (provider error class) and
+  `row_without_event` (a row with no matching `accepted` event). Two issue alerts in `apps/web-platform/infra/sentry` route them to the existing approval recipients: a burst rule for the first two and a per-event rule for the last.
+
+### Carry-over items from PR-B's review, and how each was closed
+
+| Item | How it was closed |
+| --- | --- |
+| 6.4 Alerting for the card's failure modes | Two Sentry issue alerts (`legal-acceptance-failure-burst`, `legal-acceptance-row-without-event`) with a contract test that derives the op set from the server source and pins the committed alert reference. The burst threshold is provisional. |
+| 6.5 Web session required, never an intent for a runtime token; session id as the SQL reads it | Closed in the service layer: the session id is derived by the SQL's own rule (`session_id`, else `ses_id`, empty meaning absent); no session id or a runtime token means no intent. |
+| 6.6 Same response for a known and an unknown address | Closed in the reauth route: the send response is identical for both, and for success and failure of the send. |
+| 6.7 Texts reach the production image | The registry reads `<cwd>/server/legal-acceptance/texts`; the runtime image carries that directory (the choice and its test are documented in `apps/web-platform/server/legal-acceptance/README.md`). The deployed path is tested before any card exists. |
+| 6.8 A per-user attempt ceiling across keys | Closed in the reauth route in addition to the five attempts per challenge counted in SQL. |
+| 6.9 Typed outcomes for the RPC results | The service maps `recorded`, `already_recorded`, `replaced`, `expired`, `code_expired` and the no-live-intent refusal to typed results that the route returns and the card renders as one of six states; an unexpected outcome fails closed and is reported to Sentry. |
+| 6.10 A way to recover from a mistaken answer | By design there is no undo button. The card tells the founder an answer is final and that changing it means a new text version sent by their team (a new text hash is a new row, as in the Decision section). |
+
+The numbering follows the PR-C task list in `knowledge-base/project/specs/feat-founder-approval-cards-pr-c/tasks.md`; each item is also identified here by what it requires, so it does not depend on the number.
+
+### Still open
+
+- **Retention and redaction.** The retention period (life of the instrument plus five years, capped at ten) remains unconfirmed by counsel (counsel item 17), and the deletion or redaction path for a retained row, in particular the free-text note,
+  is not built (#12080). The card ships PROVISIONAL behind the flag for this reason; the first real row waits for counsel.
+- **Password and provider confirmation** as further strength checks: #12031.
+- **Counsel review** of the card wording and both notices. Nothing in this amendment says counsel has reviewed anything.
+- **PR-D:** the check endpoint and the hold evaluator that read the record.
