@@ -1301,8 +1301,12 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "apps/web-platform/test/broker-mechanism-spike.test.ts"
   # same trigger-set wiring pin as its cron-egress siblings (ship-deploy-pipeline-fix-gate.test.ts:580);
-  # exact-file spelling reveals cron-egress-allowlist.txt anchored on this file at 11 commits/90d — refused
+  # exact-file spelling reveals 2 rows for cron-egress-allowlist.txt anchored on this file at 11 commits/90d — refused
   "glob:apps/web-platform/infra/*cron-egress-resolve.sh"
+  "glob:scripts/*betterstack-query.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-agents-rule-budget.py"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*lint-workflows.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*prod-version-drift-b9-probe.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:tests/scripts/*test-infra-privileged-tier-census*.sh"  # real read; exact-file spelling would reveal 50 accept rows; anchor churn 26 commits/90d
   "glob:apps/web-platform/lib/*types*.ts"  # real read; anchor churn 9 commits/90d
   "knowledge-base/engineering/architecture/decisions/"

@@ -54,10 +54,17 @@ Phase 2 (21 deferred-sweep): per-edge patched-rows trial-declares (audit models 
 
 Phase 3 (mega-edge): `glob:.claude/hooks/*grep-q-pipe-guard.test.sh` installed in git-data-birth array (dir class verified via _affected_glob_split; tasks.md literal was malformed head-mid-slash).
 
-Phase 4 (boundary-prefix 7): recorder unreliable x2 (host load 13-17 > 4.0 max, both reps refused) -> static line kinds per tasks 4.1 fallback: 9 message: rows + 3 code-line rows (.settings.json, gitleaks :619/:911, rule-metrics-constants); no suite-scope glob (CTO DEFER ruling honored).
+Phase 4 (boundary-prefix 7): recorder unreliable x2 (host load 13-17 > 4.0 max, both reps refused) -> static line kinds per tasks 4.1 fallback: 9 message: rows + 4 code-line rows installed (.settings.json :60, gitleaks :619, gitleaks :911 — the 4th row is the second .gitleaks.toml boundary line — rule-metrics-constants.sh via incidents.sh:71); no suite-scope glob (CTO DEFER ruling honored).
 
 Phase 6: post-edit selector regen + real audit -> `SOLEUR_PR_AFFECTED_AUDIT suites=730 always_on=116 audited=614 unaudited=0 gap_suites=0 gap_refs=0 accepted=1555 stale=0 refs=4374 files_read=1232`; ratchet `--print-baseline` emitted 0 lines (empty baseline file kept per contract); committed ratchet `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0`.
 
 Deviation vs plan: the brief's "edge-or-glob for all 21" resolved per-pair by evidence — pairs that are pure mentions (fixture literals, classifier inputs, JSDoc cite, exec-seam default) took accept rows rather than edges (the ratchet remedy bars declaring files the suite does not read); verdict-input wiring pins took edges per PR5b precedent (push-infra-config). Recorded per-pair in receipts/sweep-decisions.tsv.
 
 explicit-calls.tsv: NONE — all 29 pairs drained.
+
+## Review fix round (2026-11-05, PR #12116)
+
+- P1 hot anchors: 11 accept rows for 4 `plugins/soleur` mention pairs deleted (betterstack-query.sh, lint-agents-rule-budget.py, lint-workflows.sh, prod-version-drift-b9-probe.sh — 10 anchored on preflight-discoverability-test.test.ts at 111 commits/90d + 1 cold row on inngest-key-rotate.sh:135); 4 narrow `dir`-class globs installed in AFFECTED_PLUGINS_SOLEUR_PATHS in member-string order — each covers exactly 1 tracked file, justification comment per member ("mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused").
+- Comment precision: the cron-egress-resolve glob comment now records the 2 reveal rows for cron-egress-allowlist.txt (receipts/sweep-decisions.tsv).
+- Receipts: selector-rows-work.txt (byte-dup of rows.txt) deleted; receipts/trials/ (21 full audit dumps) replaced by receipts/reveal-trials.tsv (per-trial new-pair counts + anchor churns + dispositions); recorder-runs/run2 events + enum.out xz'd (run was host-load-refused; decision facts live in table.tsv); receipts/drift-accepts.tsv records outside-29 accept-row provenance; decision-challenges.md gained the boundary-prefix mention-adjudication row; Phase-4 line-kind count corrected to 9 message: + 4 code-line rows (the 4th is the second .gitleaks.toml boundary line :911).
+- Re-verify on the fix tree: `SOLEUR_PR_AFFECTED_AUDIT suites=730 always_on=116 audited=614 unaudited=0 gap_suites=0 gap_refs=0 accepted=1551 stale=0 refs=4374 files_read=1232` (accepted 1555->1551 = the 4 pairs moving accept-row -> glob edge); `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0`; lint-orphan 0 orphans and all 4 new globs classify `dir` via _affected_glob_split; shellcheck clean; accept data rows LC_ALL=C sorted; test-affected-kb-consumers 31/31.
