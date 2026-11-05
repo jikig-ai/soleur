@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=596   # top-level `^mutate ` (470) + `^ow_mutate ` (126) call sites; ctl-* controls run ungated
+DECLARED_TOTAL=599   # top-level `^mutate ` (473) + `^ow_mutate ` (126) call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -2282,7 +2282,7 @@ rt_b_oracle() { :; }; rt_p_oracle() { printf 'ci2\n' >> .github/workflows/ci.yml
 rt_b_renamed() { rt_variants; printf '\ndel baseline_at\n' >> plugins/soleur/scripts/lint-ratchet.py; }
 rt_b_raises() { rt_variants; printf '\ndef baseline_at(root, sha, path, env=None):\n    raise RuntimeError("boom")\n' >> plugins/soleur/scripts/lint-ratchet.py; }
 rt_b_weak() { rt_b_grow; }
-rt_p_weak() { rt_p_grow; printf '\ndef baseline_at(root, sha, path, env=None):\n    return None\n\ndef resolve_base(root, ref, env=None):\n    return "HEAD"\n' >> plugins/soleur/scripts/lint-ratchet.py; }   # a PR-tree helper that always reports "adoption"
+rt_p_weak() { rt_p_grow; printf '\ndef baseline_at(root, sha, path, env=None):\n    return None\n\ndef resolve_base(root, ref, env=None):\n    return "HEAD"\n' >> plugins/soleur/scripts/lint-ratchet.py; }   # a PR-tree helper that always reports "baseline-reintroduced"
 rt_b_nolint() { rt_variants; rm -f plugins/soleur/scripts/lint-ratchet.py; }; rt_p_nolint() { cp "$RT_LINT" plugins/soleur/scripts/lint-ratchet.py; }   # the base has no helper; the PR adds it
 rt_b_badlint() { rt_variants; printf '\ndef (\n' >> plugins/soleur/scripts/lint-ratchet.py; }; rt_p_badlint() { cp "$RT_LINT" plugins/soleur/scripts/lint-ratchet.py; }   # the base copy does not compile; the PR repairs it
 rt_b_noclass() { rt_variants; printf '#!/bin/sh\n' > scripts/test-all.sh; }
@@ -2470,8 +2470,8 @@ row_rt_floors_census() {   # every shape the generator knows is listed once, and
 }
 
 # ---- the baseline-state table and the growth rule (HEAD^1 is the base) -----------------------------------------
-row_rt_adopt() { rt_in std adopt 0 pass --baseline scripts/bl-ok.tsv && rt_in good adopt 0 pass --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present, live equals it
-row_rt_adopt_unequal() { rt_in std adopt 1 new-pair --baseline scripts/bl-empty.tsv; }
+row_rt_reintroduced() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-ok.tsv && ! grep -q '^grown' <<<"$ROUT" && grep -qxF -- $'baseline-reintroduced\tscripts/bl-ok.tsv\ta baseline file absent at the base cannot be adopted: strict zero retired it' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && rt_in good adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present: exit 1 unconditionally — strict zero retired the file, even an empty re-add; the !grown assertion keeps the reintroduced marker from masking a co-firing grown; the detail text and the absent regenerate-remedy pin the arm's output
+row_rt_reintroduced_newpair() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv && grep -qxF -- $'new-pair\tscripts/bad\tdata/gap.txt\tscripts/bad.test.sh:1' <<<"$ROUT"; }   # live-pair detail co-fires under the reintroduced marker
 row_rt_deleted() { rt_in std del 1 baseline-deleted --baseline scripts/bl-ok.tsv && grep -qxF -- 'remedy: restore it from main: git checkout origin/main -- scripts/bl-ok.tsv' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL"; }   # the deleted baseline is restored, never regenerated   # base present, HEAD absent, pairs still live
 row_rt_deleted_end() { rt_in good del 0 pass --baseline scripts/bl-ok.tsv; }   # the PR5 end state: nothing live
 row_rt_absent_both() { rt_in std none 1 new-pair --baseline scripts/bl-ok.tsv; }   # strict zero
@@ -2500,7 +2500,7 @@ row_rt_fault_enoent() { rt_fault ENOENT scripts/bad.test.sh --root "$RT/ok" --li
 row_rt_fault_census() { rt_fault EIO @census --root "$RT/ok" --list "$RT/L-std" --baseline scripts/bl-ok.tsv; [[ "$RC" -eq 2 ]] && rt_marker 2 floor-unreadable; }   # a raw OSError out of the census
 row_rt_baseline_symlink() {   # a symlinked baseline that leaves the tree is refused (its text never printed); one inside the tree is read
   ln -sf "$RT/outside.tsv" "$RT/ok/scripts/bl-link-out.tsv"; ln -sf bl-ok.tsv "$RT/ok/scripts/bl-link-in.tsv"
-  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 0 pass --baseline scripts/bl-link-in.tsv
+  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 1 baseline-reintroduced --baseline scripts/bl-link-in.tsv   # the in-tree symlink resolves — then the uncommitted path is a re-add: baseline-reintroduced, never adopted
 }
 row_rt_big_baseline() {   # a 150000-line baseline with a duplicate: the duplicate check is linear (list.count was quadratic and outlived the 30 s the harness allows on any runner: 60000 lines took under 25 s on a fast CI runner and the quadratic mutant survived there)
   python3 - > "$RT/ok/scripts/bl-big.tsv" <<'PY'
@@ -2508,11 +2508,11 @@ lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(150000))
 lines.append(lines[0])
 print("\n".join(lines))
 PY
-  local t0=$SECONDS r; rt_is 1 stale-line --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && return "$r"; return 1
+  local t0=$SECONDS r; rt_is 1 baseline-reintroduced --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && [[ "$r" -eq 0 ]] && grep -q '^baseline-dup'$'\t' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && return 0; return 1   # uncommitted-at-base: reintroduced is the marker; the dup/stale checks still run (and the restore/regenerate remedy stays out) inside the budget
 }
 row_rt_baseline_dir() { rt_in std ok 2 baseline-unreadable --baseline scripts; }
 row_rt_helper_renamed() { rt_in std renamed 2 internal --baseline scripts/bl-ok.tsv && grep -q 'lint-ratchet.py has no baseline_at' <<<"$RERR"; }
-row_rt_helper_pr_tree_ignored() { rt_in swp grow 1 grown --baseline scripts/g-swap.tsv && rt_in swp weak 1 grown --baseline scripts/g-swap.tsv; }   # the control, then a PR whose helper always reports "adoption" and whose baseline swaps a pair
+row_rt_helper_pr_tree_ignored() { rt_in swp grow 1 grown --baseline scripts/g-swap.tsv && rt_in swp weak 1 grown --baseline scripts/g-swap.tsv; }   # the control, then a PR whose helper always reports "baseline-reintroduced" and whose baseline swaps a pair
 row_rt_helper_base_missing() { rt_in std nolint 2 internal --baseline scripts/bl-ok.tsv && grep -q 'the merge base has no plugins/soleur/scripts/lint-ratchet.py: a PR that moves that helper must land the move first' <<<"$RERR"; }
 row_rt_helper_base_uncompilable() { rt_in std badlint 2 internal --baseline scripts/bl-ok.tsv && grep -q 'does not load (SyntaxError): a PR that moves that helper must land the move first' <<<"$RERR"; }
 row_rt_precedence() {   # unaudited, then a new pair, then a stale line: the marker names the first, the text keeps the order
@@ -2678,9 +2678,9 @@ row_rt_marker_fields() {   # exactly the pinned field list, on a pass, a verdict
   rt_sel_is "$RT/fl-below.txt" 2 floor-rows-vs-of && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=2\ reason=floor-rows-vs-of\ live=[0-9]+\ baseline=[0-9]+$ ]]
 }
 row_rt_usage() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv || return 1; rt_go --root "$RT/ok" --no-such-flag; [[ "$RC" -eq 2 ]] && ! grep -q SOLEUR_PR_AFFECTED_RATCHET <<<"$ROUTALL"; }   # a usage error prints no marker (the control: a run does)
-row_rt_oracle() {
+row_rt_oracle() {   # the oracle fixture writes a baseline at the canonical path absent at base: baseline-reintroduced since strict zero, and the notice still names all three oracle inputs
   rt_go --root "$RT/oracle" --list "$RT/L-std" --baseline scripts/ci-pr-affected-audit.baseline.tsv
-  [[ "$RC" -eq 0 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 0 pass
+  [[ "$RC" -eq 1 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 1 baseline-reintroduced
 }
 row_rt_oracle_each() {   # each oracle input alone, in a diff, is named (the PR-tree helper, the path library, the runner, ci.yml, the replay script)
   local ot; for ot in "${RT_OTOUCH[@]}"; do rt_in std "ot_${ot%%:*}" 0 pass --baseline scripts/bl-ok.tsv && grep -qxF -- "oracle-inputs-changed: ${ot#*:}" <<<"$ROUT" || return 1; done
@@ -2896,8 +2896,8 @@ chk "ratchet floor: a selector exit code other than 0 is selector-failed (exit 2
 chk "ratchet floor: a selector that outlives PR_AFFECTED_REPLAY_SELECT_TIMEOUT is selector-timeout (exit 2)" row_rt_sel_hang
 chk "ratchet floor: an unreadable --list file is selector-failed (exit 2)" row_rt_list_missing
 chk "ratchet floor: the selector stub is strict (exit 64 on any argv but the exact pair), so a mutant that changes the argument is killed" row_rt_argv_strict
-chk "ratchet state table: base absent / HEAD present is adoption (passes when live equals the baseline, live empty or not)" row_rt_adopt
-chk "ratchet state table: adoption with a baseline that is not live is a new pair (exit 1)" row_rt_adopt_unequal
+chk "ratchet state table: base absent / HEAD present is baseline-reintroduced (exit 1 unconditionally — a re-added baseline never adopts, even an empty file)" row_rt_reintroduced
+chk "ratchet state table: a re-introduced baseline still prints each live pair as new-pair detail under the reintroduced marker" row_rt_reintroduced_newpair
 chk "ratchet state table: base present / HEAD absent with pairs still live is baseline-deleted (exit 1)" row_rt_deleted
 chk "ratchet state table: base present / HEAD absent with nothing live passes (the PR5 end state)" row_rt_deleted_end
 chk "ratchet state table: absent at both is strict zero (a live pair is exit 1)" row_rt_absent_both
@@ -2967,7 +2967,7 @@ chk "ratchet oracle: each of the helper, the path library, the runner, ci.yml an
 chk "ratchet oracle: a diff that only adds the accept file (and so exempts a new pair) is named" row_rt_oracle_accept_only
 chk "ratchet oracle: every RATCHET_* path constant of the SUT is in RATCHET_ORACLE" row_rt_oracle_constants
 chk "ratchet oracle: in --print-baseline mode the notice goes to stderr" row_rt_oracle_stderr
-chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports adoption changes no verdict)" row_rt_helper_pr_tree_ignored
+chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports baseline-reintroduced changes no verdict)" row_rt_helper_pr_tree_ignored
 chk "ratchet helpers: a merge base without lint-ratchet.py is exit 2 internal, naming the remedy" row_rt_helper_base_missing
 chk "ratchet helpers: a merge-base copy that does not compile is exit 2 internal, though the PR tree repairs it" row_rt_helper_base_uncompilable
 
@@ -4886,7 +4886,10 @@ mutate ratchet-growth-dropped '    if base_text is not None and head_text is not
 # Guard 1 M7: the baseline-state table
 mutate ratchet-deleted-baseline-tolerated '    if new and head_text is None and base_text is not None:' '    if False:' row_rt_deleted
 mutate ratchet-deleted-baseline-always-refused '    if new and head_text is None and base_text is not None:' '    if head_text is None and base_text is not None:' row_rt_deleted_end
-mutate ratchet-adoption-refused '    if base_text is not None and head_text is not None:' '    if head_text is not None:' row_rt_adopt
+mutate ratchet-adoption-refused '    if base_text is not None and head_text is not None:' '    if head_text is not None:' row_rt_reintroduced
+mutate ratchet-reintroduced-tolerated '    if head_text is not None and base_text is None:' '    if False:' row_rt_reintroduced
+mutate ratchet-reintroduced-live-gated '    if head_text is not None and base_text is None:' '    if new and head_text is not None and base_text is None:' row_rt_reintroduced
+mutate ratchet-reintroduced-content-weakened '    if head_text is not None and base_text is None:' '    if head_text and base_text is None:' row_rt_reintroduced
 # Guard 1 M8: the base
 mutate ratchet-base-is-merge-base-with-origin-main '"rev-parse", "--verify", "--end-of-options", ref + "^{commit}"]' '"merge-base", "origin/main", "HEAD"]' row_rt_grow_stack
 mutate ratchet-unresolved-base-is-an-adoption '    if not sha:

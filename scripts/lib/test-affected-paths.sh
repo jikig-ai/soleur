@@ -516,6 +516,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_MAIN_ALERT_GATE_WORKFLOW_WIRING_TEST_SH_PATH
   "plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS=(
+  ".github/workflows/codeql-to-issues.yml"  # plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh:25
+  "plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_ARM_TEST_SH_PATHS=(
   ".github/workflows/web-platform-release.yml"  # plugins/soleur/test/deploy-arm.test.sh:29
   "plugins/soleur/test/deploy-arm.test.sh"
@@ -1314,6 +1319,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "glob:scripts/*lint-agents-rule-budget.py"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:scripts/*lint-workflows.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:scripts/*prod-version-drift-b9-probe.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
+  "glob:scripts/*sentry-issue.sh"  # mention pair; every boundary line anchored on >8-commits/90d file — accept rows refused (tasks.md 1.2)
   "glob:tests/scripts/*test-infra-privileged-tier-census*.sh"  # real read; exact-file spelling would reveal 50 accept rows; anchor churn 26 commits/90d
   "glob:apps/web-platform/lib/*types*.ts"  # real read; anchor churn 9 commits/90d
   "knowledge-base/engineering/architecture/decisions/"
