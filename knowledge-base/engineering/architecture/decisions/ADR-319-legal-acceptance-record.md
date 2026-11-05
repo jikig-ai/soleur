@@ -191,7 +191,7 @@ precondition carried from PR-B's review (the "PR-C preconditions" bullet under C
 | 6.9 Typed outcomes for the RPC results | The service maps `recorded`, `already_recorded`, `replaced`, `expired` and `code_expired` to typed results that the route returns and the card renders as one of six states; an unexpected outcome fails closed and is reported to Sentry. A no-live-intent refusal is the exception: it is HTTP 403 `{ "error": "reverify" }`, outside `LegalDecideOutcome`. |
 | 6.10 A way to recover from a mistaken answer | By design there is no undo button. The card tells the founder an answer is final and that changing it means a new text version sent by their team (a new text hash is a new row, as in the Decision section). |
 
-The numbering follows the PR-C task list in `knowledge-base/project/specs/feat-founder-approval-cards-pr-c/tasks.md`; each item is also identified here by what it requires, so it does not depend on the number.
+The numbering follows the PR-C task list in `knowledge-base/project/specs/archive/20261105-131233-feat-founder-approval-cards-pr-c/tasks.md`; each item is also identified here by what it requires, so it does not depend on the number.
 
 ### Flag scope
 
