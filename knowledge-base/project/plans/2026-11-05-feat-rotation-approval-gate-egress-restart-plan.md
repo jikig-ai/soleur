@@ -415,13 +415,9 @@ at_rest:
     does_not_defend: the value also lands in the web-platform `terraform.tfstate` (Tier-A `prd_terraform`-readable — the same exposure the CURRENT token already carries per egress-audit.tf's own disclosure; a same-host hop credential, ADR-288) and is readable by any holder of a prd-scoped Doppler token
     disclosed_as:   not-publicly-claimed (internal posture; the .tf header documents it)
     live_verification: available (`doppler secrets get` + `terraform state show` reads)
-  - store:          GitHub environment `key-rotate-approval` — holds NO secrets (the approve job is credential-free)
-    mechanism:      plaintext-exception: configuration surface only
-    evidence:       apps/web-platform/infra/key-rotate-approval-environment.tf
-    defends_against: nothing to encrypt — no secret material lands on it
-    does_not_defend: its protection_rules are API-visible metadata (by design)
-    disclosed_as:   not-publicly-claimed
-    live_verification: available (`gh api .../environments/key-rotate-approval`)
+# Note: the `key-rotate-approval` GitHub environment is a configuration surface holding
+# NO secret material (the approve job is credential-free), so it is not a data store
+# and carries no at_rest row.
 in_transit:
   - connection:     key-rotate workflow → deploy.soleur.ai `/hooks/deploy` + `/hooks/deploy-status` (per web host, fan-out over private net host→host)
     enforced_at:    apps/web-platform/infra/hooks.json.tmpl (payload-hmac-sha256 trigger-rule) + scripts/lib/bearer-curl.sh (CF Access + HMAC headers)
@@ -824,3 +820,24 @@ Doppler, Hetzner web hosts, adnanh/webhook, Better Stack.
 
 - Issues: #11923, #11920 (this PR), #11294, #10205 (parents), #11922, #11927, #11928, #9294 (sibling residuals), #7098 (acknowledged overlap)
 - This branch's draft PR: #12153
+
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** Encryption Posture (dropped the non-store `key-rotate-approval` row — a plaintext-exception row would have required a spurious exception block); discoverability probe verified against the real `--print-contract` invocation.
+**Agents used:** none — `Reviewed-Coverage: sequential-fallback` (depth-1 planning subagent, no spawn tool); every prescribed fan-out (repo/learnings research, functional-overlap, domain leaders, per-section research, review panel, scoped advisor) ran inline sequentially or is recorded as pending-assumed in `decision-challenges.md`.
+**Halt gates verified inline (deepen-plan §4):** 4.5 network-outage (Hypotheses emitted; resource-shape trigger evaluated — no apply driven on a provisioner-bearing resource) · 4.55 Downtime & Cutover (section present, zero-downtime default argued) · 4.6 User-Brand Impact (`single-user incident`, `requires_cpo_signoff: true`) · 4.7 Observability (5-field schema; probe `bash scripts/key-rotate.sh --print-contract` — allowlisted verb, offline, <15s, literal `rotate_ok`) · 4.8 PAT-shaped vars (repo grep: zero hits; the new var ends `_previous`) · 4.9 UI-wireframe (no UI-surface files — skip) · 4.10 Encryption Posture (fires on `.tf`; fields filled, no `plaintext-exception`/`cert_verification: off` row) · 4.11 Guard Contract (3 guards; `lint-guard-contract.py` clean) · 4.12 Scope Check (4 asks all mapped; inferred rows justified) · 4.13 Task Design (no new workflow file, no `schedule:`/`on:` trigger added — does not fire).
+
+### Key Improvements
+
+- The no-SSH restart lever reuses the already-live `DROPIN_TRY_RESTART` sudoers grant (`/usr/bin/systemctl try-restart vector.service`) — no sudoers change, so nothing SSH-delivered is needed (the sudoers file is root-managed; infra-config-apply.sh:217).
+- The approval gate is a dedicated no-secret `approve` job, not a rebind of `apply`'s environment — avoids the environment-secret seeding the TF App cannot perform (ADR-100 fix-forward).
+- `kk_chk_approval` becomes a live `protection_rules` read rather than a removed rung, closing the #6780 auto-create-unprotected window structurally.
+- PREVIOUS uses the in-repo `ignore_changes=[value]` + `-replace`-to-write idiom, so routine applies can neither drift-flag nor early-clear the grace token.
+
+### New Considerations Discovered
+
+- `authorization_stale` (KK_AUTH_MAX_AGE_S=3600, measured from `guard_epoch`) would self-refuse after a slow approval — `approval_epoch` emitted by the approve job re-baselines it.
+- `fan_out_to_peers` is wired on `deploy`/`quiesce`/`enable` but NOT on the `restart` action today — the vector arm must add it explicitly.
+- `scripts/ci-deploy.sh` (issue-cited) does not exist; the real path is `apps/web-platform/infra/ci-deploy.sh`.
+- Six technical forks are pending-assumed in `specs/feat-one-shot-11923-11920-rotation-gates/decision-challenges.md` (no CTO spawn available); the work phase may upgrade them.
