@@ -42,3 +42,10 @@ soleur:plan, soleur:deepen-plan (inline), collision-precheck.sh, ratchet-observa
 - Deviation analyst: 3 plan deviations, all recorded — (a) glob-rate receipt is post-install basis (annotated; verdict rests on PR5d readings per ruling); (b) ops.ts rider re-dispositioned accept→delete-sensitive edge (security P2); (c) surgical suite-durations promotion instead of full regen (~40 unrelated floor promotions avoided; receipt documents why).
 - Workflow proposal (not corpus-edited here — scoped PR): "evidence receipts for a selection-rate verdict must be generated before the install they evidence; a queued/background measurement reads the tree it lands on, not the tree it was launched against." Candidate for the activation runbook or drain rubric.
 - Review tally: 10 seats, 1 P2 (fixed), ~10 P3 (all fixed or recorded advisories). Ratchet exit=0 live=0 on final HEAD. QA PASS 5/5.
+
+## Ship Phase
+- Rebased onto origin/main (conflict: suite-durations generated-at stamp only; resolved), force-pushed.
+- Review trailer superseded to `Reviewed-Coverage: full 10/10 agents` + `Reviewed-Risk-Tier: none`.
+- Gates passed: technical-ruling (3 rows), merge-base lints (rule-bodies, skill-body-budget), no ADR files, CMO skip trailer, KB-archive (plan+spec dir -> archive/20261105-222236-*), net-issue-flow net=-1 (closes #10448, files 0), operator-step gate (no post-merge bullets).
+- PR #12199: body written (Closes #10448, Changelog patch), titled, ready, auto-merge armed 21:23:16Z (merge queue).
+- Incident: two hook rejections blocked chained exec calls, silently skipping the preceding push in each — CMO trailer and KB-archive each needed a separate push call. Lesson: run `git push` in its own exec before any gated gh call.
