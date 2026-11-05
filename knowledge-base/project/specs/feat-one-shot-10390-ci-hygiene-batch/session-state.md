@@ -78,3 +78,15 @@
 - All gates green post-rebase: legal-doc-shas 0, mirror-drift 0, scope-block 0, registers 11/11, vitest 43/43, dedupe-shape 62/62.
 - Force-pushed (--force-with-lease) at cf6477dc4f. PR body closes list correct: Closes 10 issues, Ref #10136 #10390.
 - Remaining: soleur:qa -> soleur:compound -> soleur:ship -> postmerge. Operator step pending: #10136 zot accepted-risk owner confirmation (issue stays open; PR does NOT auto-close it).
+
+## QA Phase (2026-11-05)
+- No UI surfaces in this batch (CI/infra/legal only) — no dev server, no .pen needed (plan declared no-UI at expansion).
+- AC evidence mapping (all verified in implementation/review rounds):
+  - AC-A1..A6: terraform-target-parity 363/363 pins env resources, policies, job↔env bindings, -target= list; ADR-241 amendment committed.
+  - AC-B1..B3: lint-gh-dedupe-shape.py registered in test-all.sh + ALWAYS_ON_SUITES + justifications; battery 62/62; live unclassified:0.
+  - AC-C1..C3: 5 probe units conditioned, webhook/vector designed-loud + named receivers; infra-config-apply 266, observability 136, fresh-boot-parity 225; EF≡CX set-identity pins + SHA pin regenerated.
+  - AC-D1..D6: probe_schema=9 data_luks emit + phone-home + all consumers (dark-gate 185, inngest 621); #8013 comment retracted + #7978 corrective comment + ulid_rows=0 live evidence; RestartSec=300 + expenses.md row; cron-agent-spawn-stale-settle registered (manifest/census/budgets, negative-pin tests, spawn-lifecycle 42); git-data-cutover D5 liveness predicate (cutover-workflow 1158, heartbeat-feeder 176); followthrough script + test 9/9.
+  - AC-E1..E3: ledger rows — inngest leg-1 measured TLS, leg-2 A7 exception verbatim + expires_on; zot x2 ruled decision records + expires_on 2027-01-31; record posted on #10136 (comment 6645392554, owner confirmation pending); lint-encryption-posture 139/139.
+  - AC-F1..F3: DPD §2.3(o) all-three-bearing + count fix canonical+mirror; PA-13(f)/PA-21/PA-22 superseded markers; PA-14 dated-marker amendment + ledger records entries; LUKS qualifier on all surfaces; legal-doc-shas re-pinned; legal gates green (sha/mirror-drift/scope-block/registers/consistency 43).
+- Affected gate queued behind sibling worktree run (advisory lock) — see /tmp/gate-final.log.
+- Next: gate green -> soleur:compound -> soleur:ship -> postmerge. Operator step: #10136 zot accepted-risk owner confirmation.
