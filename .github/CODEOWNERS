@@ -264,6 +264,8 @@
 /plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh @deruelle
 /plugins/soleur/test/fixtures/codeql-main-alert-gate/   @deruelle
 /plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/ @deruelle
+/plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh @deruelle
+/plugins/soleur/test/fixtures/codeql-to-issues-sweep-wiring/ @deruelle
 /scripts/merge-queue-cla-verify.sh                      @deruelle
 /scripts/merge-queue-jump.sh                          @deruelle
 /scripts/probe-merge-group-coverage.sh                  @deruelle
