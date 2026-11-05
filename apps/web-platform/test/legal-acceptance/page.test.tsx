@@ -1,0 +1,193 @@
+/**
+ * #12011 PR-C (AC13, AC14): the legal-acceptance pages (server components).
+ *   - signed out: sign-in redirect that returns to the same path, and the registry is not consulted first;
+ *   - a malformed key and an unknown key are the SAME not-found;
+ *   - the text on the card is the registry body, and its hash is the registry hash (what is shown is what is hashed);
+ *   - the founder's rows give the state; older rows render as "replaced" cards;
+ *   - with the approval-queue flag off an existing row still renders and a pending card is read-only;
+ *   - a failed or malformed read is reported and throws, never an empty page.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { createHash } from "node:crypto";
+import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+
+const h = vi.hoisted(() => ({
+  user: { value: { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" } as { id: string; email: string } | null },
+  rows: { value: [] as unknown },
+  rowsError: { value: null as unknown },
+  flag: vi.fn(),
+  report: vi.fn(),
+  lookups: [] as string[],
+  from: [] as string[],
+}));
+
+class NotFound extends Error {}
+class Redirect extends Error {
+  constructor(public to: string) {
+    super(to);
+  }
+}
+vi.mock("next/navigation", () => ({
+  notFound: () => {
+    throw new NotFound("notFound");
+  },
+  redirect: (to: string) => {
+    throw new Redirect(to);
+  },
+}));
+vi.mock("next/link", () => ({ default: (p: { href: string; children: unknown }) => <a href={p.href}>{p.children as never}</a> }));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    auth: { getUser: async () => ({ data: { user: h.user.value } }) },
+    from: (table: string) => {
+      h.from.push(table);
+      const result = async () => ({ data: h.rows.value, error: h.rowsError.value });
+      return { select: () => Object.assign(result(), { eq: () => ({ order: result }) }) };
+    },
+  }),
+}));
+vi.mock("@/server/approval/flag", () => ({ isApprovalQueueEnabled: (...a: unknown[]) => h.flag(...a) }));
+vi.mock("@/server/approval/ops", async (orig) => ({
+  ...(await orig<typeof import("@/server/approval/ops")>()),
+  reportApprovalOp: (...a: unknown[]) => h.report(...a),
+}));
+
+const RAW = "---\nversion: 3\nvalid_until: 2099-12-31\n---\nCUSTOMER TERMS\n\n1. Who these terms are between.\n\nEnd of version 3.\n";
+vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
+  const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
+  return {
+    ...real,
+    getLegalText: (key: string) => {
+      h.lookups.push(key);
+      if (key !== "customer-terms") throw new real.LegalTextError("unknown_key", "no such legal text");
+      return real.parseLegalText(key, RAW);
+    },
+    loadLegalTexts: () => new Map([["customer-terms", real.parseLegalText("customer-terms", RAW)]]),
+  };
+});
+
+import Page from "@/app/(dashboard)/dashboard/approvals/legal/[key]/page";
+import IndexPage from "@/app/(dashboard)/dashboard/approvals/legal/page";
+
+const HASH = createHash("sha256").update(RAW).digest("hex");
+const OLD = "d".repeat(64);
+const row = (over: Record<string, unknown> = {}) => ({
+  text_hash: HASH,
+  version: "3",
+  choice: "accept",
+  requested_edit: null,
+  reauth_at: "2026-11-04T10:42:00Z",
+  created_at: "2026-11-04T10:42:10Z",
+  ...over,
+});
+const call = (key: string) => Page({ params: Promise.resolve({ key }) });
+
+beforeEach(() => {
+  h.user.value = { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" };
+  h.rows.value = [];
+  h.rowsError.value = null;
+  h.flag.mockReset().mockResolvedValue(true);
+  h.report.mockReset();
+  h.lookups.length = 0;
+  h.from.length = 0;
+});
+afterEach(cleanup);
+
+describe("auth gate and key handling", () => {
+  it("signed out: redirects to sign-in with this path, reads no registry text and no rows", async () => {
+    h.user.value = null;
+    await expect(call("customer-terms")).rejects.toMatchObject({ to: "/login?redirectTo=%2Fdashboard%2Fapprovals%2Flegal%2Fcustomer-terms" });
+    expect(h.lookups).toEqual([]);
+    expect(h.from).toEqual([]);
+  });
+
+  it("a malformed key and an unknown key end in the same not-found", async () => {
+    await expect(call("Bad Key!")).rejects.toBeInstanceOf(NotFound);
+    await expect(call("../etc/passwd")).rejects.toBeInstanceOf(NotFound);
+    await expect(call("no-such-text")).rejects.toBeInstanceOf(NotFound);
+    expect(h.from).toEqual([]);
+  });
+});
+
+describe("what the card shows", () => {
+  it("renders the registry body and the registry hash is the hash of the raw bytes that end in that body", async () => {
+    render(await call("customer-terms"));
+    const region = screen.getByRole("region", { name: /exact text/i });
+    expect(region.textContent).toBe("CUSTOMER TERMS\n\n1. Who these terms are between.\n\nEnd of version 3.\n");
+    expect(RAW.endsWith(region.textContent as string)).toBe(true);
+    expect(createHash("sha256").update(RAW).digest("hex")).toBe(HASH);
+    expect(screen.getByRole("button", { name: /^Yes/ })).toBeInTheDocument();
+    expect(h.from).toEqual(["legal_acceptance"]);
+  });
+
+  it("the current row gives the state: accepted", async () => {
+    h.rows.value = [row()];
+    render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument();
+    expect(screen.getByText("Confirmed with an email code, Wed 4 Nov 2026, 10:42 UTC")).toBeInTheDocument();
+  });
+
+  it("an older text's row renders as a replaced card next to the current pending card", async () => {
+    h.rows.value = [row({ text_hash: OLD, version: "2", choice: "request_changes", requested_edit: "shorter", reauth_at: null })];
+    render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
+    expect(screen.getByText(LEGAL_COPY.replaced.badge)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: LEGAL_COPY.replaced.title("2", "3") })).toBeInTheDocument();
+  });
+
+  it("flag off: an existing row still renders, and a pending card is read-only with a plain 'not available yet'", async () => {
+    h.flag.mockResolvedValue(false);
+    h.rows.value = [row({ choice: "decline", reauth_at: null })];
+    const { unmount } = render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.declined.badge)).toBeInTheDocument();
+    unmount();
+    h.rows.value = [];
+    render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_COPY.pending.notAvailable)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("a failed read is reported and throws", () => {
+  it("a read error", async () => {
+    h.rowsError.value = { code: "XX000" };
+    await expect(call("customer-terms")).rejects.toThrow("legal acceptance read failed");
+    expect(h.report).toHaveBeenCalledWith("landingReadFailed", expect.anything(), expect.objectContaining({ extra: { read: "legal_acceptance" } }));
+  });
+
+  it("a malformed row (unknown choice) is not rendered as an empty or pending card", async () => {
+    h.rows.value = [row({ choice: "maybe" })];
+    await expect(call("customer-terms")).rejects.toThrow("legal acceptance read failed");
+    expect(h.report).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("index page", () => {
+  it("lists each key with its state in plain words and links to its card", async () => {
+    render(await IndexPage());
+    const link = screen.getByRole("link", { name: /Customer terms, version 3/ });
+    expect(link).toHaveAttribute("href", "/dashboard/approvals/legal/customer-terms");
+    expect(link).toHaveTextContent(LEGAL_COPY.index.state.pending);
+  });
+
+  it("shows the answer once a row exists, and 'not available yet' for a pending text with the flag off", async () => {
+    h.rows.value = [{ key: "customer-terms", text_hash: HASH, choice: "decline" }];
+    const { unmount } = render(await IndexPage());
+    expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.state.declined);
+    unmount();
+    h.rows.value = [];
+    h.flag.mockResolvedValue(false);
+    render(await IndexPage());
+    expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.notAvailable);
+  });
+
+  it("signed out redirects; a failed read throws", async () => {
+    h.user.value = null;
+    await expect(IndexPage()).rejects.toMatchObject({ to: "/login?redirectTo=%2Fdashboard%2Fapprovals%2Flegal" });
+    h.user.value = { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" };
+    h.rowsError.value = { code: "XX000" };
+    await expect(IndexPage()).rejects.toThrow("legal acceptance read failed");
+  });
+});
