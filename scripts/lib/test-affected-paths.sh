@@ -2009,6 +2009,19 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
   "scripts/test-all.sh"
 )
 
+# scripts/ci-oracle-lane (#12156, ADR-276 amendment) — the suite EXECUTES the oracle-lane driver against throwaway git
+# fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the activation lock and the
+# fail-closed defaults) and asserts manifest↔registration parity for scripts/ci-oracle-lane-suites.txt. ci.yml is an
+# edge because the suite pins the oracle-selection/oracle-index-check wiring and the ORACLE-ONLY-SKIP arm. Declared
+# edge set, not always-on; self-includes this file per the SELF-INCLUSION rule.
+AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-oracle-lane-suites.txt"
+  "scripts/ci-oracle-lane.sh"
+  "scripts/ci-oracle-lane.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
 # ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
 # is .github/workflows. Declared from the repo paths its suite file names.

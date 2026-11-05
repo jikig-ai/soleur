@@ -104,6 +104,24 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # exact `on` compare stays in the driver's bash and this term only tests "non-empty" (an undefined variable reads as an empty string).
 PRSEL_VAR="vars.CI_PR_AFFECTED != ''"
 PRSEL_IF="$PRSEL_EV && $PRSEL_VAR"
+# ADR-276 oracle-only lane (#12156): the five heavy legs additionally carry `oracle-selection` in `needs:` and an
+# event-agnostic skip conjunct appended AFTER every earlier term — the same `!(…)` shape the S4 legs carry, with the
+# head bound via `github.event.pull_request.head.sha || github.event.merge_group.head_sha`. `shard-totality-mutations`
+# carries the lane's other gating: `needs.oracle-selection.outputs.oracle_only != 'true'`, and oracle-selection in
+# `needs:`. Written ONCE here; chk.py's canon, the truth table and the census derive from it. CONTRACT NOTE: the
+# conjunct text below is the plan's documented shape; if the implementation spells it differently this pin is where
+# the reconciliation happens.
+OR_GATED_PINNED="test-webplat test-bun test-scripts test-scripts-heavy web-platform-build"
+OR_T_AC="needs.oracle-selection.outputs.active == 'true' && "
+OR_T_HE="needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && "
+OR_TERM_PRE="!($OR_T_AC$OR_T_HE"
+or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
+ORACLE_ONLY_TERM="needs.oracle-selection.outputs.oracle_only != 'true'"
+SHARD_GATED="shard-totality-mutations"
+# the oracle-selection job's own condition, mirroring the pr-selection pin: var-gated, both lane events.
+ORASEL_EV="(github.event_name == 'pull_request' || github.event_name == 'merge_group')"
+ORASEL_VAR="vars.CI_ORACLE_LANE != ''"
+ORASEL_IF="$ORASEL_EV && $ORASEL_VAR"
 # sha256 of the `test` aggregator job minus its `needs` and `if`, as json.dumps(sort_keys=True), measured
 # on the unmodified tree before this stage (the aggregator body, env, timeout and runner must not move). Re-measured at ADR-276 S3
 # (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them), and again at
@@ -115,7 +133,7 @@ PRSEL_IF="$PRSEL_EV && $PRSEL_VAR"
 AGG_DIGEST="461f40243a0399f27826d0abe6e12db5c129b4a51809dd22b6e1db0714223394"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+UNGATED_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard oracle-index-check oracle-selection plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -156,10 +174,18 @@ CANON = {"test": "${{ always() && " + TAIL + " }}"}
 CANON_DEFAULT = "${{ !cancelled() && " + TAIL + " }}"
 CANON_DL = "${{ !cancelled() && " + TAIL + " && " + CLAUSE + " }}"
 def pr_term(leg): return PRPRE + leg + ",'))"
+ORGATED = os.environ.get("OR_GATED_PINNED", "").split()
+SHARDG = os.environ.get("SHARD_GATED", "").split()
+ORPRE = os.environ.get("OR_TERM_PRE", "")
+ORONLY = os.environ.get("ORACLE_ONLY_TERM", "")
+ORASEL_IF = os.environ.get("ORASEL_IF", "")
+def or_term(leg): return ORPRE + "contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" % leg
 def canon(n):
     parts = ["!cancelled()" if n != "test" else "always()", TAIL]
     if n in DLGATED: parts.append(CLAUSE)
     if n in PRGATED: parts.append(pr_term(n))
+    if n in ORGATED: parts.append(or_term(n))
+    if n in SHARDG: parts.append(ORONLY)
     return "${{ " + " && ".join(parts) + " }}"
 ENV_KEYS = {"GH_TOKEN", "GH_REPO", "SHA", "EVENT_NAME", "REF", "RUN_ATTEMPT", "SWITCH"}
 
@@ -180,7 +206,8 @@ class CI(str):
     def __ne__(self, o): return not self.__eq__(o)
     __hash__ = str.__hash__
 
-def ev(expr, event, elide, need, cancelled=False, light="", active="", sk="", hs="", ph="", prr="", var=""):
+def ev(expr, event, elide, need, cancelled=False, light="", active="", sk="", hs="", ph="", prr="", var="",
+       oac="", osk="", ohs="", ooo="", mgh="", ovar=""):
     e = str(expr).strip()
     if not (e.startswith("${{") and e.endswith("}}")):
         return None
@@ -188,13 +215,17 @@ def ev(expr, event, elide, need, cancelled=False, light="", active="", sk="", hs
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
     e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in "," + SK + ",")' % m.group(1), e)
-    e = e.replace("needs.pr-selection.result", "PRR").replace("vars.CI_PR_AFFECTED", "VAR")
-    e = e.replace("needs.pr-selection.outputs.active", "AC").replace("needs.pr-selection.outputs.head_sha", "HS").replace("github.event.pull_request.head.sha", "PH")
+    e = re.sub(r"contains\(format\(',\{0\},', needs\.oracle-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in "," + OSK + ",")' % m.group(1), e)
+    e = e.replace("needs.pr-selection.result", "PRR").replace("vars.CI_PR_AFFECTED", "VAR").replace("vars.CI_ORACLE_LANE", "OVAR")
+    e = e.replace("github.event.pull_request.head.sha || github.event.merge_group.head_sha", "(PH or MGH)")
+    e = e.replace("needs.oracle-selection.outputs.active", "OAC").replace("needs.oracle-selection.outputs.head_sha", "OHS").replace("needs.oracle-selection.outputs.oracle_only", "OOO")
+    e = e.replace("needs.pr-selection.outputs.active", "AC").replace("needs.pr-selection.outputs.head_sha", "HS").replace("github.event.pull_request.head.sha", "PH").replace("github.event.merge_group.head_sha", "MGH")
     e = re.sub(r"!(?=\()", " not ", e)
     e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
     try:
-        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "LT": light, "NEEDOK": need == "success", "AC": active, "SK": sk, "HS": hs, "PH": ph, "PRR": CI(prr), "VAR": CI(var)}))
+        val = bool(eval(e, {"__builtins__": {}}, {"CANC": cancelled, "EV": event, "EL": elide, "LT": light, "NEEDOK": need == "success", "AC": active, "SK": sk, "HS": hs, "PH": ph, "PRR": CI(prr), "VAR": CI(var),
+                                               "OAC": oac, "OSK": osk, "OHS": ohs, "OOO": ooo, "MGH": mgh, "OVAR": CI(ovar)}))
     except Exception:
         return None
     if not has_status:
@@ -446,7 +477,19 @@ if mode == "gated":
         if (n in PRGATED or n == "test") != ("pr-selection" in needs(j)): tags.append("G-PRNEEDS:" + n)
         if n != "test" and (n in DLGATED) != ("draft-light" in needs(j)): tags.append("G-DLNEEDS:" + n)
         if n == "test" and "draft-light" not in needs(j): tags.append("G-DLNEEDS:" + n)
+        if (n in ORGATED or n in SHARDG or n == "test") != ("oracle-selection" in needs(j)): tags.append("G-ORNEEDS:" + n)
+        if n == "test" and "oracle-index-check" not in needs(j): tags.append("G-ORIDXNEEDS:" + n)
         if j.get("continue-on-error"): tags.append("G-COE:" + n)
+    # the oracle-lane jobs themselves: oracle-index-check always()s over a skipped oracle-selection (needs-skip
+    # propagation would wedge `test`'s needs: loudly while CI_ORACLE_LANE is unset).
+    oic = jobs.get("oracle-index-check")
+    if oic is None: tags.append("G-OIC-MISSING")
+    else:
+        if str(oic.get("if", "")).replace(" ", "") != "${{always()&&!cancelled()&&(github.event_name=='pull_request'||github.event_name=='merge_group')}}": tags.append("G-OIC-IF")
+        if needs(oic) != ["oracle-selection"]: tags.append("G-OIC-NEEDS")
+    osel = jobs.get("oracle-selection")
+    if osel is None: tags.append("G-ORSEL-MISSING")
+    elif str(osel.get("if", "")) != ORASEL_IF: tags.append("G-ORSEL-IF")
     for n, j in jobs.items():
         if n not in GATED and n != "push-dedupe" and "push-dedupe" in needs(j): tags.append("G-EXTRANEED:" + n)
         if n not in GATED and n != "push-dedupe" and n not in UNGATED: tags.append("G-UNCLASSIFIED:" + n)
@@ -454,9 +497,69 @@ if mode == "gated":
         # pr-selection may be needed ONLY by the three PR-gated jobs and the `test` aggregator: any other job that needs it would be an
         # ungated required job that reads the (red-only, skip-only) selection outputs, or one that waits on it without being skippable
         if n != "pr-selection" and n not in PRGATED and n != "test" and "pr-selection" in needs(j): tags.append("G-PRNEEDS-EXTRA:" + n)
+        # oracle-selection may be needed ONLY by the five lane-gated legs, shard-totality-mutations, `test` and
+        # oracle-index-check: any other reader of its outputs reads a dark-launch verdict as if it gated.
+        if n not in ORGATED and n not in SHARDG and n not in ("test", "oracle-index-check") and "oracle-selection" in needs(j): tags.append("G-ORNEEDS-EXTRA:" + n)
         if n != "push-dedupe" and "push-dedupe" in json.dumps((j or {}).get("outputs", {})): tags.append("G-REEXPORT:" + n)
     for n in UNGATED:
         if n not in jobs: tags.append("G-GONE:" + n)
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "ocensus":
+    # Every expression reference to the oracle-selection job's outputs, by location. Allowed: each lane-gated leg's
+    # `if:` (3 refs: active, head_sha, skip_legs), shard-totality-mutations' `if:` (1: oracle_only), the aggregator's
+    # oracle env entries. A step-level `if:`, a matrix `exclude`, a job `env:` or any other consumer inside a gated
+    # job could skip work while the job still concludes `success`.
+    d, jobs = load()
+    def census2(pat, root):
+        found = {}
+        def walk(node, loc):
+            if isinstance(node, dict):
+                for k, v in node.items(): walk(v, loc + (str(k),))
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    nm = v.get("name") if isinstance(v, dict) and isinstance(v.get("name"), str) else None
+                    walk(v, loc + ("[%s]" % (nm if nm is not None else i),))
+            else:
+                n = len(pat.findall(str(node)))
+                if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
+        walk(root, ())
+        return found
+    found = census2(re.compile(r"needs\s*\.\s*oracle-selection\b|needs\s*\[\s*['\"]oracle-selection['\"]\s*\]", re.I), d.get("jobs") or {})
+    want = {"%s.if" % n: 3 for n in ORGATED}
+    want["shard-totality-mutations.if"] = 1
+    tags = []
+    for n in list(ORGATED) + ["shard-totality-mutations"]:
+        if found.get("%s.if" % n, 0) != want["%s.if" % n]: tags.append("O-REF:%s.if:%d" % (n, found.get("%s.if" % n, 0)))
+    for loc, c in found.items():
+        if loc.endswith(".if"): continue
+        if not loc.startswith("test.steps."): tags.append("O-REF-EXTRA:%s:%d" % (loc, c))
+    foundidx = census2(re.compile(r"needs\s*\.\s*oracle-index-check\b|needs\s*\[\s*['\"]oracle-index-check['\"]\s*\]", re.I), d.get("jobs") or {})
+    if sum(foundidx.values()) < 1 or any(not k.startswith("test.steps.") for k in foundidx): tags.append("O-IDXREF:%s" % ",".join(sorted(foundidx)))
+    # the switch itself: exactly two CI_ORACLE_LANE reads may exist — the job `if:` and one step env (SWITCH:).
+    foundv = census2(re.compile(r"CI_ORACLE_LANE", re.I), d)
+    sw = [k for k in foundv if k.endswith(".env.SWITCH")]
+    if len(sw) != 1 or set(foundv) != {"jobs.oracle-selection.if", sw[0]} or any(v != 1 for v in foundv.values()):
+        for k in sorted(foundv): tags.append("O-VARS:%s:%d" % (k, foundv[k]))
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "orasel":
+    d, jobs = load()
+    tags = []
+    job = jobs.get("oracle-selection")
+    if job is None:
+        print("OSEL-JOB-MISSING"); sys.exit(0)
+    if str(job.get("if", "")) != ORASEL_IF: tags.append("OSEL-JOBIF")
+    if job.get("continue-on-error") is not True: tags.append("OSEL-JOBCOE")
+    if "needs" in job: tags.append("OSEL-NEEDS")
+    if job.get("permissions") != {"contents": "read"}: tags.append("OSEL-PERM")
+    outs = job.get("outputs") or {}
+    if set(outs) != {"oracle_only", "active", "skip_legs", "head_sha", "base_sha"}: tags.append("OSEL-OUTPUTS")
+    steps = job.get("steps") or []
+    runlines = [str(s.get("run", "")).strip() for s in steps if isinstance(s, dict)]
+    if not any(r == "bash scripts/ci-oracle-lane" + ".sh" for r in runlines): tags.append("OSEL-RUN")
+    cos = [s for s in steps if isinstance(s, dict) and "uses" in s and "checkout" in str(s.get("uses"))]
+    if len(cos) != 1 or str((cos[0].get("with") or {}).get("fetch-depth")) != "0": tags.append("OSEL-FETCH")
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "truth":
@@ -468,19 +571,32 @@ if mode == "truth":
         acts = ("", "false", "true") if n in PRGATED else ("",)
         sks = ("", n, "test-webplat,test-bun,test-scripts-heavy", "test-scripts", "test-scripts-heavy,x") if n in PRGATED else ("",)
         hss = (("a" * 40, "a" * 40), ("a" * 40, "b" * 40), ("", ""), ("", "a" * 40)) if n in PRGATED else (("", ""),)
+        # oracle dims: active x skip_legs x head-bound; for the shard leg the oracle_only dim alone.
+        oacs = ("", "true") if n in ORGATED else ("",)
+        osks = ("", n, "x," + n, "test-scripts") if n in ORGATED else ("",)
+        ohss = ("bound", "unbound") if n in ORGATED else ("",)
+        ooos = ("", "true") if n in SHARDG else ("",)
         for event in ("push", "pull_request", "merge_group", "workflow_dispatch"):
             for elide in ("", "false", "true"):
               for light in ("", "false", "true"):
                for active in acts:
                 for sk in sks:
                  for hs, ph in hss:
-                  needs_ = ("success", "failure") if event == "push" else ("skipped",)
-                  for need in needs_:
-                    got = ev(j.get("if"), event, elide, need, light=light, active=active, sk=sk, hs=hs, ph=ph)
-                    prskip = n in PRGATED and event == "pull_request" and active == "true" and hs != "" and hs == ph and ("," + n + ",") in ("," + sk + ",")
-                    want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true") and not prskip
-                    if got is None: tags.append("TT-ERR:%s" % n)
-                    elif got != want: tags.append("TT:%s:%s:%s:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty", active or "empty", sk or "empty", "m" if hs and hs == ph else "x"))
+                  for oac in oacs:
+                   for osk in osks:
+                    for ob in ohss:
+                     for ooo in ooos:
+                      needs_ = ("success", "failure") if event == "push" else ("skipped",)
+                      for need in needs_:
+                        bound = ph if event == "pull_request" else ("c" * 40)
+                        got = ev(j.get("if"), event, elide, need, light=light, active=active, sk=sk, hs=hs, ph=ph,
+                                 oac=oac, osk=osk, ohs=(bound if ob == "bound" else "d" * 40), ooo=ooo, mgh="c" * 40)
+                        prskip = n in PRGATED and event == "pull_request" and active == "true" and hs != "" and hs == ph and ("," + n + ",") in ("," + sk + ",")
+                        orskip = n in ORGATED and event in ("pull_request", "merge_group") and oac == "true" and ob == "bound" and ("," + n + ",") in ("," + osk + ",")
+                        want = not (event == "push" and elide == "true") and not (n in DLGATED and light == "true") and not prskip and not orskip
+                        if n in SHARDG and ooo == "true" and event in ("pull_request", "merge_group"): want = False
+                        if got is None: tags.append("TT-ERR:%s" % n)
+                        elif got != want: tags.append("TT:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % (n, event, elide or "empty", need, light or "empty", active or "empty", sk or "empty", "m" if hs and hs == ph else "x", oac or "empty", ob))
         if ev(j.get("if"), "push", "false", "success", cancelled=True) is not False and "always()" not in str(j.get("if")):
             tags.append("TT-CANCEL:" + n)
     print(" ".join(sorted(set(tags)))); sys.exit(0)
@@ -554,7 +670,7 @@ if mode == "aggbody":
 sys.stderr.write("unknown mode\n"); sys.exit(2)
 PY
 
-chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" PRSEL_IF="$PRSEL_IF" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" DRIVER_SH="${DRIVER_SH-}" python3 "$SANDBOX/chk.py" "$@"; }
+chk() { ELIDE_TAIL="$ELIDE_TAIL" GATED_PINNED="$GATED_PINNED" DL_GATED_PINNED="$DL_GATED_PINNED" PR_GATED_PINNED="$PR_GATED_PINNED" PR_TERM_PRE="$PR_TERM_PRE" PRSEL_IF="$PRSEL_IF" LIGHT_CLAUSE="$LIGHT_CLAUSE" UNGATED_PINNED="$UNGATED_PINNED" AGG_DIGEST="$AGG_DIGEST" DRIVER_SH="${DRIVER_SH-}" OR_GATED_PINNED="$OR_GATED_PINNED" SHARD_GATED="$SHARD_GATED" OR_TERM_PRE="$OR_TERM_PRE" ORACLE_ONLY_TERM="$ORACLE_ONLY_TERM" ORASEL_IF="$ORASEL_IF" python3 "$SANDBOX/chk.py" "$@"; }
 # The driver is read by the leg-parity row only. Its path is assembled from parts on purpose (the kb-consumer census otherwise follows a whole
 # path literal into the driver and charges this suite with the knowledge-base strings the driver names).
 DRV_STEM="scripts/ci-pr-selection"
@@ -619,7 +735,10 @@ fx_jobs() {
   for pair in "$@"; do n="${pair%%:*}"; c="${pair#*:}"; args+=("$n" "$c"); done
   printf '%s\n' "${args[@]}" | jq -Rn '[inputs] as $a | {jobs: [range(0; ($a|length); 2) | {name: $a[.], conclusion: (if $a[.+1]=="null" then null else $a[.+1] end)}]}' > "$FXD/jobs-$id.json"
 }
-GOOD_JOBS=(test-webplat:success test-bun:success test:success e2e:success)
+# The canonical jobs list: every leg the oracle lane can skip must conclude `success` for the proof
+# to hold (#12156, Guard 3) — the five heavy legs plus shard-totality-mutations — alongside `test`.
+SIX_LEGS=(test-webplat test-bun test-scripts test-scripts-heavy web-platform-build shard-totality-mutations)
+GOOD_JOBS=(test-webplat:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success test:success e2e:success)
 QB="gh-readonly-queue/main/pr-1-$SHA_A"
 fx_canonical() {
   fx_new "$1"
@@ -760,7 +879,7 @@ battery() {
   jq -s '{workflow_runs: (. | reverse)}' "$d/runs.ndjson" > "$d/runs.json"
   set_env_defaults; row R15-two-runs-reverse-order true true ok
   fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
-  fx_jobs "$MG_ID" lint-bot-statuses:skipped e2e:success test:success test-webplat:success advisory:skipped; fx_flush
+  fx_jobs "$MG_ID" lint-bot-statuses:skipped e2e:success test:success test-webplat:success test-bun:success test-scripts:success test-scripts-heavy:success web-platform-build:success shard-totality-mutations:success advisory:skipped; fx_flush
   set_env_defaults; row R15-job-order-extra-advisory true true ok
   fx_canonical "$d"; set_env_defaults; E[SWITCH]=on; row R15-switch-on-canonical-again true true ok
   # R16 the proof is evaluated for the dark phase: variable unset, canonical, would be elided
@@ -768,6 +887,56 @@ battery() {
   # R17 a run id that is not digits never reaches a URL (it would add path segments to the jobs read)
   fx_new "$d"; jq -nc --arg sha "$SHA_A" --arg br "$QB" --arg repo "$REPO_SLUG" '{id:"111/../../../../repos/x",event:"merge_group",status:"completed",conclusion:"success",head_sha:$sha,head_branch:$br,path:".github/workflows/ci.yml",head_repository:{full_name:$repo}}' >> "$d/runs.ndjson"
   fx_flush; set_env_defaults; row R17-nonnumeric-run-id false false proof_error
+  # R18 the oracle-lane six-leg proof (#12156, Guard 3): an oracle-reduced merge_group green must NOT elide the
+  # push run — every leg the lane can skip (the five heavy legs + shard-totality-mutations) must conclude
+  # `success`. A `skipped`, absent or malformed leg entry fails closed. CONTRACT NOTE: the reason token for
+  # "a required leg did not conclude success" is pinned to `no_test_job` (the existing leg-evidence reason);
+  # if the implementation introduces a distinct token this expectation is the reconciliation point.
+  six_ok() {  # $1=fxdir $2=omit-leg|"" $3=override name:conclusion|""
+    local fx="$1" omit="$2" over="${3:-}" j=()
+    for _l in "${SIX_LEGS[@]}"; do
+      [ "$_l" = "$omit" ] && continue
+      if [ -n "$over" ] && [ "${over%%:*}" = "$_l" ]; then j+=("$over"); else j+=("$_l:success"); fi
+    done
+    j+=(test:success e2e:success)
+    fx_new "$fx"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
+    fx_jobs "$MG_ID" "${j[@]}"; fx_flush
+  }
+  local _l
+  for _l in "${SIX_LEGS[@]}"; do
+    six_ok "$d" "" "$_l:skipped"; set_env_defaults; row "R18-leg-skipped-$_l" false false no_test_job
+    six_ok "$d" "$_l"; set_env_defaults; row "R18-leg-absent-$_l" false false no_test_job
+  done
+  # malformed/absent conclusions on a required leg: failure, null, cancelled, and a case variant
+  for _v in failure null cancelled Success; do
+    six_ok "$d" "" "test-webplat:$_v"; set_env_defaults; row "R18-leg-conclusion-$_v" false false no_test_job
+  done
+  # matrix member rows name the leg with a ` (N/M)` suffix: they satisfy the leg only when ALL succeed;
+  # a skipped matrix member fails closed; a `test-scripts-heavy` matrix row can never satisfy `test-scripts`.
+  six_ok "$d" "test-scripts"; set_env_defaults
+  jq '.jobs += [{"name":"test-scripts (1/4)","conclusion":"success"},{"name":"test-scripts (2/4)","conclusion":"success"},{"name":"test-scripts (3/4)","conclusion":"success"},{"name":"test-scripts (4/4)","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  row R18-matrix-members-all-success true true ok
+  six_ok "$d" "test-scripts"; set_env_defaults
+  jq '.jobs += [{"name":"test-scripts (1/2)","conclusion":"success"},{"name":"test-scripts (2/2)","conclusion":"skipped"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  row R18-matrix-member-skipped false false no_test_job
+  six_ok "$d" "test-scripts"; set_env_defaults
+  jq '.jobs += [{"name":"test-scripts-heavy (1/2)","conclusion":"success"},{"name":"test-scripts-heavy (2/2)","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  row R18-prefix-trap-heavy-not-scripts false false no_test_job
+  # a name that merely SHARES a prefix is not the leg
+  six_ok "$d" "test-webplat"; set_env_defaults
+  jq '.jobs += [{"name":"test-webplatx","conclusion":"success"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  row R18-prefix-trap-webplatx false false no_test_job
+  # e2e is NOT in the required set (the lane never skips it, so the proof does not demand it); unknown
+  # extra legs do not matter either way
+  six_ok "$d" "" "e2e:skipped"; set_env_defaults; row R18-e2e-not-required true true ok
+  six_ok "$d" ""; set_env_defaults
+  jq '.jobs += [{"name":"future-leg","conclusion":"skipped"}]' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  row R18-unknown-extra-leg true true ok
+  # Guard 3 row 4 (must-PASS non-canonical): all six legs + test success in a different job order
+  fx_new "$d"; fx_run "$MG_ID" merge_group completed success "$SHA_A" "$QB" "$REPO_SLUG" .github/workflows/ci.yml
+  fx_jobs "$MG_ID" shard-totality-mutations:success test:success web-platform-build:success e2e:success test-scripts-heavy:success test-scripts:success test-bun:success test-webplat:success
+  fx_flush; set_env_defaults; row R18-all-success-reordered true true ok
+  unset -f six_ok
 }
 
 # ── Extract the live body ────────────────────────────────────────────────────
@@ -818,7 +987,25 @@ live_check "PR-SELECTION OUTPUT CENSUS" prcensus
 live_check "LEG PARITY" legparity
 live_check "TRUTH TABLE" truth
 live_check "DARK EQUIVALENCE (model, not verified live)" darkequiv
+live_check "ORACLE-SELECTION OUTPUT CENSUS" ocensus
+live_check "ORACLE-SELECTION JOB" orasel
 live_check AGGREGATOR agg
+
+# Guard 3 bi-directional leg-name pin (#12156): the proof's required set is EXACTLY the six skippable
+# legs (the five heavy legs + shard-totality-mutations) plus `test`. A NEW skippable leg must edit the
+# driver allowlist, the aggregator regex AND this proof in the same diff — the sentinel pins all three.
+for _l in "${SIX_LEGS[@]}"; do
+  if grep -qF -- "\"$_l\"" "$SANDBOX/pristine-body.sh"; then pass; else fail "SIX-LEG PIN: the proof body never names '$_l' — the leg the oracle lane can skip is absent from the elide proof"; fi
+done
+unset _l
+if grep -qE 'oracle-selection|oracle_only' "$SANDBOX/pristine-body.sh" || true; then :; fi
+# the five-name allowlist the aggregator tolerates (ORACLE-ONLY-SKIP) must equal SIX_LEGS minus
+# shard-totality-mutations — assert each name appears in the extracted aggregator body.
+chk aggbody "$WF" "$SANDBOX/live" 2>/dev/null
+for _l in test-webplat test-bun test-scripts test-scripts-heavy web-platform-build; do
+  if [ -s "$SANDBOX/live/agg.sh" ] && grep -qF -- "$_l" "$SANDBOX/live/agg.sh"; then pass; else fail "FIVE-LEG PARITY: the aggregator never names '$_l' — the ORACLE-ONLY-SKIP allowlist and the proof's required set drifted apart"; fi
+done
+unset _l
 
 # ── The release workflow's CI budget (ADR-276 S4 PR B) ───────────────────────────────────────────────────────────────────────
 # web-platform-release.yml sums the longest declared `needs:` path through ci.yml and hard-fails above a cap (75 minutes; 73 today). A
@@ -928,6 +1115,14 @@ mutate_body m-echo-branch "printf '::notice title=ci-push-dedupe::sha=%s" "print
 mutate_body m-reorder-true 'mg="$id"' 'mg="$id"; emit "elide=true"' R12
 mutate_body m-default-after-gh 'emit "elide=false"' ':' R12
 mutate_body m-mgid-unchecked '[[ "$id" =~ ^[0-9]+$ ]] || finish' 'true' R17
+# Guard 3 mutants: dropping each required leg name from the proof must turn an R18 (or the canonical)
+# row red — the replaced name is a job that never exists, so the canonical fixture fails the proof.
+for _l in "${SIX_LEGS[@]}"; do
+  mutate_body "m-leg-dropped-${_l}" "\"$_l\"" "\"zz-not-a-job\"" R18
+done
+unset _l
+# and the whole six-leg requirement gone (only `test` checked again): every R18 row must go red.
+mutate_body m-six-leg-check-gone 'shard-totality-mutations' 'test' R18
 
 # EQUIVALENT mutants, recorded rather than hidden: each removes a guard that a LATER guard repeats, so no verdict
 # changes (a failed runs read leaves the listing empty, which the array check, then the id extraction, both refuse).
