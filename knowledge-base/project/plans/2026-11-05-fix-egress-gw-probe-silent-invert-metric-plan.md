@@ -16,6 +16,26 @@ lane: cross-domain
 
 `lane:` defaulted to `cross-domain` (TR2 fail-closed): no `spec.md` exists for this one-shot branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** Proposed Solution (probe fields, Post-apply decision table), Apply path, Observability, ADR text, Guard 2, ACs
+**Agents used:** soleur:engineering:cto (five rulings, before drafting), plan-review panel (DHH, Kieran, code-simplicity), then architecture-strategist, observability-coverage-reviewer, terraform-architect, framework-docs-researcher, learnings-researcher
+
+### Key Improvements
+
+1. A Post-apply decision table covers every evaluator shape (zero-fill, empty window, error-reads-0, canary never created, incident not clearing); "revert" was removed as a response because it restores the shape that misfired.
+2. The probe gained the discriminating fields `rows_in_window` and `canary_alert_live`, exits 5 early on a blind canary, and has an explicit exit path when the poller (#12190) replaces it.
+3. The Apply path now states the unverified ForceNew question, the `[ack-destroy]` consequence and the alert-id check that stops a replacement from confounding the soak.
+4. The Observability block cites layers per failure mode and names the one mode no layer covers.
+5. Gate results: 4.6, 4.7, 4.8, 4.11, 4.12 pass; 4.9 and 4.13 do not apply; 4.10 (Encryption Posture) was deliberately skipped: the `.tf` trigger regex matches but the plan adds no persistent store and no cross-component connection (the plan/SKILL skip clause).
+
+### New Considerations Discovered
+
+- The Better Stack docs describe the incidents API on a v3 host while both repo scripts use v2; the probe's first step is one read-only GET against each.
+- The canary shares the production query shape, so it cannot distinguish an empty evaluator window; the plan claims only non-zero delivery on an empty count.
+- Tracker #12189 and the deferred poller #12190 are filed; the PR links both with `Ref`.
+
 ## Overview
 
 The Better Stack Logs alert `soleur-egress-gw-probe-silent-prd` opened incident 1047829421 at
@@ -400,9 +420,18 @@ same `team_name = "Your team"`, `local.vector_prd_source_id` and escalation tern
 ### Apply path
 
 Per-merge push apply (`apply-web-platform-infra.yml`, active). The change is update-in-place for the two existing
-resources and create for the pair. Expected plan: `2 added, 1 or 2 changed, 0 destroyed`. Watch whether the
-exploration update forces a replacement of the alert (the provider's behavior on a `sql_query` change is not
-documented here); a replacement would also reset the alert, which the post-merge check tolerates. No downtime.
+resources and create for the pair. Expected plan: `2 added, 1 or 2 changed, 0 destroyed`. **UNVERIFIED:** whether a
+`sql_query` change on `logtail_exploration` (and `operator`/`value` on the alert) is update-in-place or ForceNew;
+the pinned provider binary (11.2.0) only carries generic `ForceNew`/`RequiresReplace` strings and the repo records
+no per-attribute result. The precedent that changed the same fields is #10133 (commit dff05deff5): cite its apply
+output, or take a read-only plan from a session with backend access, before merge and record the counts here.
+Two consequences if the exploration is replaced: (1) the push apply's destroy-guard counts it (`resource_deletes`)
+and demands `[ack-destroy]` on its own line in the merge commit, so a plan showing a destroy needs that line or the
+merge is refused; (2) `exploration_id` parents the alert, so the alert is replaced too, and deleting the old alert
+closes incident 1047829421 for a reason unrelated to the evaluator, which confounds the 4-hour soak (P5). The
+postmerge step therefore reads the alert id before and after (Telemetry alert listing, names and ids only) and the
+soak counts the resolution only if the id is unchanged; on a replacement the 4-hour clock restarts from the new
+alert's first healthy evaluation. No downtime.
 
 ### Host fan-out
 
@@ -625,7 +654,7 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
   (reports this plan's two guards).
 - [ ] AC6. The probe and its suite are registered like the 8097 probe, and the probe header has a `RETIREMENT:`
   line listing every site to touch when the canary is deleted: the two resources, both `-target` lines (kept one
-  apply and removed through the census protocol of #11631/#11672), `EXPECT_BLOCKS` 19 to 18, `MIN_PASSES`,
+  apply; the structure suite's rows 21-22 tolerate a bare `-target` for a deleted address only when the address is listed in `INTENDED_DESTROYS` of `tests/scripts/test-infra-privileged-tier-census.sh`, so the deletion PR adds the two logtail addresses there and a later PR removes them with the targets, the #11631 then #11672 sequence; the deletion plan shows `2 destroyed` (alert first) and needs a standalone `[ack-destroy]` line in the merge commit; rows 21-22 and the census must be re-run to confirm they accept a `logtail_*` row, which is unverified today), `EXPECT_BLOCKS` 19 to 18, `MIN_PASSES`,
   `count == 19` to `18`, the guard's G2b block and rows, the runbook canary section, the ADR note.
 - [ ] AC7. ADR-218 amendment appended, with the live alert count and the INFERRED label.
 - [ ] AC8. Both runbooks and the `.tf` comment state: the evaluator zero-fill is an inference; the query is proven
