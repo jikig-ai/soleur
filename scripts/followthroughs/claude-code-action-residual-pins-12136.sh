@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Follow-through for the two items PR 12136 (Closes #12102) leaves open after moving every claude-code-action
+# Follow-through for the items PR 12136 (Closes #12102) leaves open after moving every claude-code-action
 # pin in this repository to v1.0.263: (1) a real dispatched run of the operator-digest workflow in the private
 # operator-digest repository after the updated asset is re-provisioned there (copies already provisioned keep
 # the old pin until then; the lockstep guard cannot see them), and (2) a refresh path for repositories that
-# already ran soleur:constraint-scaffold (the script refuses to overwrite). The tracking issue (#12146) carries
-# one checklist box per item; this probe fires only once #12102 has closed and never auto-closes the issue
-# while a box is unticked, because the two items are independent and fixing one must not close the tracker.
+# already ran soleur:constraint-scaffold (the script refuses to overwrite), and (3) stripping the action version
+# tags from the Art. 30 register so they cannot go stale again (CLO ruling 2026-11-05). The tracking issue
+# (#12146) carries one checklist box per item; this probe fires only once #12102 has closed and never auto-closes the issue
+# while a box is unticked, because the items are independent and fixing one must not close the tracker.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       every checklist box in the tracking issue is ticked (sweeper closes)
