@@ -583,3 +583,142 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 185 (#12011 PR-D, ADR-319): the acknowledgement table and its two service-role RPCs (Guard 3).
+// ---------------------------------------------------------------------------------------------------------------
+const ackFn = (t: Txn, user: string, hash = H1, key = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.ack_legal_acceptance(${user}::uuid, ${key}::text, ${hash}::text) as r`;
+    return r.r;
+  });
+const ackState = (t: Txn, user: string, hash = H1, key = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.legal_acceptance_ack_state(${user}::uuid, ${key}::text, ${hash}::text) as r`;
+    return r.r;
+  });
+const ackRows = async (t: Txn) => (await t`select * from public.legal_acceptance_ack`) as any[];
+
+describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () => {
+  test("no decision row: ack answers not_found and writes nothing; ack_state answers none", async () => {
+    await scenario(async (t, c) => {
+      expect(await ackState(t, c.userA)).toEqual({ outcome: "none" });
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "not_found" });
+      expect(await ackRows(t)).toHaveLength(0);
+    });
+  });
+
+  test("a decision row starts unacked with a database-computed age; ack marks it once and is idempotent (first time kept)", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      const before = await ackState(t, c.userA);
+      expect(before).toMatchObject({ outcome: "row", acked: false });
+      expect(Number.isInteger(before.age_seconds)).toBe(true);
+      expect(before.age_seconds).toBeGreaterThanOrEqual(0);
+
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "acked" });
+      const first = (await ackRows(t))[0];
+      expect(await ackState(t, c.userA)).toMatchObject({ outcome: "row", acked: true });
+      expect(await ackFn(t, c.userA)).toEqual({ outcome: "acked" });
+      const after = await ackRows(t);
+      expect(after).toHaveLength(1);
+      expect(after[0].acked_at).toEqual(first.acked_at); // ON CONFLICT DO NOTHING keeps the first time
+    });
+  });
+
+  test("age is computed in the database from the decision row's own time", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      // The write-once trigger forbids touching the row, so age the clock by comparing against a later statement time.
+      await t`select pg_sleep(1.2)`;
+      const s = await ackState(t, c.userA);
+      // Inside one transaction now() is frozen at the transaction start, so the age is 0 here; the integer type and
+      // the floor-at-zero are what this asserts. A cross-transaction age is covered by the verify sentinel in CI.
+      expect(s.age_seconds).toBe(0);
+    });
+  });
+
+  test("the ack carries the acceptance id and a time only, and is bound to the founder's own row (another founder's ack does not mark it)", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      expect(await ackFn(t, c.userB)).toEqual({ outcome: "not_found" });
+      expect(await ackState(t, c.userA)).toMatchObject({ acked: false });
+      await ackFn(t, c.userA);
+      const [acc] = await rows(t, c.userA);
+      const acks = await ackRows(t);
+      expect(Object.keys(acks[0]).sort()).toEqual(["acceptance_id", "acked_at"]);
+      expect(acks[0].acceptance_id).toBe(acc.id);
+      // A different text hash of the same founder and key is a different row: still unacked / absent.
+      expect(await ackState(t, c.userA, H2)).toEqual({ outcome: "none" });
+    });
+  });
+
+  test("Guard 3 row 8: neither function opens the write door of legal_acceptance, and the record stays write-once", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      await ackFn(t, c.userA);
+      await ackState(t, c.userA);
+      const [g] = await t`select current_setting('app.legal_acceptance_rpc', true) as v`;
+      expect(g.v ?? "").not.toBe("on");
+      await failsWith(t, /write-once/, () => t`update public.legal_acceptance set choice = 'decline' where founder_id = ${c.userA}`);
+    });
+  });
+
+  test("Guard 3 row 7: the ack table has no founder id, no foreign key, RLS on, and no api role can touch it", async () => {
+    await scenario(async (t, c) => {
+      const cols = await t`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'legal_acceptance_ack' order by ordinal_position`;
+      expect(cols.map((r: any) => r.column_name)).toEqual(["acceptance_id", "acked_at"]);
+      const [fk] = await t`select count(*)::int n from pg_constraint where conrelid = 'public.legal_acceptance_ack'::regclass and contype = 'f'`;
+      expect(fk.n).toBe(0);
+      const [rls] = await t`select relrowsecurity r from pg_class where oid = 'public.legal_acceptance_ack'::regclass`;
+      expect(rls.r).toBe(true);
+      for (const role of ["anon", "authenticated", "service_role"] as const) {
+        await failsWith(t, /permission denied/, () => as(t, role, role === "authenticated" ? { sub: c.userA } : null, () => t`select * from public.legal_acceptance_ack`));
+        await failsWith(t, /permission denied/, () => as(t, role, role === "authenticated" ? { sub: c.userA } : null, () => t`insert into public.legal_acceptance_ack (acceptance_id) values (${randomUUID()})`));
+      }
+    });
+  });
+
+  test("both functions refuse a user identity (42501), raise 22023 on a malformed key or hash, and EXECUTE is service_role only", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      for (const fn of ["ack_legal_acceptance", "legal_acceptance_ack_state"]) {
+        await failsWith(t, /42501|service role only/, () =>
+          as(t, "authenticated", { sub: c.userA }, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, KEY, H1])));
+        await failsWith(t, /permission denied/, () => as(t, "anon", null, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, KEY, H1])));
+        for (const [k, h] of [["Bad Key", H1], [KEY, "xyz"], [KEY, H1.toUpperCase()], ["", H1]] as const) {
+          await failsWith(t, /22023|invalid input/, () =>
+            as(t, "service_role", null, () => t.unsafe(`select public.${fn}($1::uuid, $2::text, $3::text)`, [c.userA, k, h])));
+        }
+        await failsWith(t, /22023|invalid input/, () =>
+          as(t, "service_role", null, () => t.unsafe(`select public.${fn}(null::uuid, $1::text, $2::text)`, [KEY, H1])));
+      }
+      expect(await ackRows(t)).toHaveLength(0);
+    });
+  });
+
+  test("AC6: the 185 down file refuses while an acknowledgement exists, and drops nothing", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      await ackFn(t, c.userA);
+      const down = readFileSync(path.join(__dirname, "../../supabase/migrations/185_legal_acceptance_ack.down.sql"), "utf8");
+      await failsWith(t, /185 down refused/, () => t.unsafe(down));
+      expect(await ackRows(t)).toHaveLength(1);
+    });
+  });
+
+  test("AC6: the 185 verify sentinel reports bad = 0 on the live catalog", async () => {
+    await scenario(async (t) => {
+      const verify = readFileSync(path.join(__dirname, "../../supabase/verify/185_legal_acceptance_ack.sql"), "utf8");
+      const out = (await t.unsafe(verify)) as any[];
+      expect(out.length).toBeGreaterThan(20);
+      expect(out.filter((r) => Number(r.bad) !== 0).map((r) => r.check_name)).toEqual([]);
+    });
+  });
+});

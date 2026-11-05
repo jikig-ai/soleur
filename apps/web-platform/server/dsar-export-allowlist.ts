@@ -619,6 +619,16 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "the personal data), RPC-only, not a " +
     "record of any decision. Excluded from the self-serve export for the same reason " +
     "as legal_acceptance.",
+  // #12011 PR-D (ADR-319, migration 185): the acknowledgement marker behind the row_without_event reconciliation.
+  legal_acceptance_ack:
+    "Migration 185 table (#12011, ADR-319): one marker per legal_acceptance row whose " +
+    "accepted event the web route reported. Holds a random acceptance uuid and a " +
+    "timestamp only: NO founder id, no foreign key, no decision field, so it is not " +
+    "personal data on its own and is not linkable to a person without the legal_acceptance " +
+    "row. Kept with that row (Art. 17(3)(e) carve-out, same LIA and PA-40); no erasure " +
+    "scrub touches it. RPC-only (service_role holds no table privilege), so a worker " +
+    "read would fail every export; Art. 15 access to the record itself is answered " +
+    "through legal@jikigai.com as for legal_acceptance.",
 };
 
 /**
