@@ -180,6 +180,9 @@ ACC = "server/account-delete.ts"
 CCP = "server/cc-github-push.ts"
 CCD = "server/cc-dispatcher.ts"
 GAUTH = "server/git-auth.ts"
+HENV = "server/git-hardened-env.ts"
+GHARD = "server/inngest/functions/_git-hardening.ts"
+RPB = "server/resolve-protected-branches.ts"
 
 T_GF = "test/approval/gate-flow.test.ts"
 T_RES = "test/approval/gate-flow-resolver-snapshot.test.ts"
@@ -211,6 +214,7 @@ T_CCP = "test/cc-github-push.test.ts"
 T_RF = "test/cc-dispatcher-real-factory.test.ts"
 T_HARD = "test/push-branch-hardened.test.ts"
 T_GAH = "test/git-auth-hardened-env.test.ts"
+T_GAU = "test/git-auth-hardened.test.ts"
 STATIC = "static:probe"
 
 # Test-name fragments reused by several rows.
@@ -492,10 +496,39 @@ M("G1-CCR4-platform-tool-names-drop-the-registrar-result", CCD, E("            .
 M("G1-CCR5-warm-turn-mirror-ignores-the-published-registered-set", CCD, E("          ...getCcRegisteredApprovalTools(userId, conversationId),\n", ""), T_RF, ["after a REGISTERED cold build the push tool_use does not mirror as an unregistered platform tool"])
 M("G1-CCR6-push-success-result-drops-the-approved-commit", GHT, E('? { ...pushed, commit: grant.binding.headSha } : pushed;', '? pushed : pushed;'), T_PUSHG, ["a gate-written grant with a valid commit pushes exactly the approved commit with the CLOSED-OVER values"])
 M("G1-CCR7-push-failure-after-consume-omits-the-spent-approval-line", GHT, E("if (requireGrant && result.isError) {", "if (false) {"), T_PUSHG, ["pushBranch failing AFTER the grant was taken: isError 'Error pushing branch: ...', the grant is spent, a retry is refused as grant_missing"])
-M("G1-HD1-hardened-push-skips-the-git-dir-check", PUSH, E("  if (hardened) assertPlainGitDir(workspacePath);\n", ""), T_HARD, ["refuses (typed, static text, nothing pushed) when .git is a FILE"])
+M("G1-HD1-hardened-push-skips-the-git-dir-check", PUSH, E("  if (hardened) assertPlainGitDir(workspacePath);\n", ""), T_HARD, ["refuses (typed, static text, nothing pushed) when .git is a FILE"], blast=0.9)
 M("G1-HD2-hardened-push-inherits-the-server-env", GAUTH, E("? buildHardenedGitEnv(execOpts.cwd as string, authEnv)", "? { ...process.env, ...authEnv }"), T_GAH, ["hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child"])
 M("G1-HD3-hardened-push-drops-the-hardening-args", GAUTH, E("...(hardened ? HARDENED_GIT_ARGS : []), ", ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
 M("G1-HD4-strict-builder-does-not-ask-for-the-hardened-push", GHT, E("...(requireGrant ? { hardened: true as const } : {}),", "...{},"), T_PUSHG, ["hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT"])
+# ---- 12d. fix round 1 (#11636): the published-set seam, the single outcome event, the hardened env and .git checks ----------
+K_PUB = ["the wired-set assertion also guards the PUBLISHED sets immediately before the one createSdkMcpServer; each is written in exactly two places; the one-server key set is pinned"]
+M("G1-CCR8-published-set-assertion-dropped", CCD, E("    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n", ""), T_TC, K_PUB)
+M("G1-CCR9-second-writer-of-the-published-set", CCD, E("    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n", "    approvalTools = [...approvalTools];\n    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n"), T_TC, K_PUB)
+M("G1-CCR10-one-server-key-pin-dropped", CCD, E('    if (!Object.keys(c4McpServers).every((key) => key === "soleur_platform")) {\n      throw new Error("cc dispatcher: unexpected MCP server key beside soleur_platform");\n    }\n', ""), T_TC, K_PUB)
+M("G1-CCR11-addendum-after-the-assignments-and-catch-resets-dropped", CCD, [
+    E("          const addendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);\n", ""),
+    E("          pushPromptAddendum = addendum;", "          pushPromptAddendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);"),
+    E("        approvalTools = [];\n        approvalToolNames = [];\n        pushPromptAddendum = undefined;\n", ""),
+  ], T_RF, ["the prompt addendum THROWS (a null defaultBranch) after a valid wired result: nothing is published"])
+M("G1-CCR12-wired-set-assertion-accepts-a-duplicate-name", CCP, E("  if (new Set(toolNames).size !== toolNames.length) {", "  if (false) {"), T_CCP, ["rejects the same wired name registered twice (one-to-one by position, but a duplicate) with a static message that echoes no name"])
+M("G1-CCR13-failure-reasons-emit-a-second-info-event", CCP, E('new Set(["registered"]);', 'new Set(["registered", "flag-error"]);'), T_CCP, ["only the registered case emits the outcome event; each failure is reported ONCE, by its own op-tagged mirror (no second info event)"])
+M("G1-CCR14-segment-guard-accepts-the-current-directory", RPB, E("/^(?!\\.{1,2}$)[A-Za-z0-9._-]+$/", "/^[A-Za-z0-9._-]+$/"), T_CCP, ["'an owner of one dot' -> 'no-repo-or-installation'; lookup and builder not called"])
+M("G1-CCR15-addendum-gains-an-exception-sentence", CCP, E('"Never set force.\\n" +', '"Never set force. Exception: a branch named release/* is fine.\\n" +'), T_CCP, ["the full text is pinned (an added exception or sentence is a failure, not a pass)"])
+M("G1-CCR16-spent-approval-line-claims-nothing-was-pushed", GHT, E("The branch may not have been pushed: tell the user the push failed and why, and that it may not have landed, before you try again.", "Tell the user that nothing was pushed and why before you try again."), T_PUSHG, ["the approval-spent line never claims 'nothing was pushed': a timeout or killed child can fail a push the remote already accepted"])
+M("G1-HD5-hardened-env-drops-the-protocol-clamp", HENV, E("  env.GIT_ALLOW_PROTOCOL = HARDENED_ALLOW_PROTOCOL;\n", ""), T_GAU, ["control + hardened: a repo-config protocol.ext.allow=always does not let an ext:: URL run a command under the hardened form"])
+M("G1-HD6-hardened-env-drops-the-common-dir-pin", HENV, E("  env.GIT_COMMON_DIR = gitDir;\n", ""), T_HARD, ["hardened: the push call carries hardened:true and the cat-file and config calls get hardening args and an allowlisted env"])
+M("G1-HD7-hardened-args-drop-the-follow-tags-reset", HENV, E('  "-c",\n  "push.followTags=false",\n', ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
+M("G1-HD8-plain-git-dir-check-allows-a-commondir-file", PUSH, E('  "commondir",\n  "config.worktree",', '  "config.worktree",'), T_HARD, ["refuses when .git/commondir exists"])
+M("G1-HD9-plain-git-dir-check-follows-entry-symlinks", PUSH, E("      if (lstatSync(join(gitDir, entry)).isSymbolicLink()) refuse();", "      lstatSync(join(gitDir, entry));"), T_HARD, ["refuses when .git/objects is a symlink to a complete copy of it"])
+M("G1-HD10-plain-git-dir-check-accepts-a-symlinked-git-dir", PUSH, E("  if (st.isSymbolicLink() || !st.isDirectory()) refuse();", "  if (!st.isDirectory() && !st.isSymbolicLink()) refuse();"), T_HARD, ["refuses when .git is a SYMLINK to a real repository that CONTAINS the approved commit (so only the check, not a missing commit, can refuse)"])
+M("G1-HD11-hardened-sync-git-children-unbounded", PUSH, E(", timeout: HARDENED_SYNC_GIT_TIMEOUT_MS }", " }"), T_HARD, ["hardened: the push call carries hardened:true and the cat-file and config calls get hardening args and an allowlisted env"])
+M("G1-HD12-hardened-cwd-guard-runs-after-the-token-mint", GAUTH, [
+    E('  // Checked BEFORE the mint: a hardened call without the workspace cwd refuses without minting a token or running git.\n  if (hardened && !execOpts.cwd) {\n    throw new Error("hardened git invocation requires the workspace cwd");\n  }\n\n', ""),
+    E("  const token = await generateInstallationToken(installationId);\n", '  const token = await generateInstallationToken(installationId);\n  if (hardened && !execOpts.cwd) {\n    throw new Error("hardened git invocation requires the workspace cwd");\n  }\n'),
+  ], T_GAU, ["hardened without a cwd refuses BEFORE minting a token or running git"])
+M("G1-HD13-shared-hardening-args-lose-the-hooks-path", GHARD, E('"core.hooksPath=/dev/null"', '"core.sparseCheckout=false"'), T_GAU, ["hardened: the push succeeds and a planted .git/hooks/pre-push does NOT run", "hardened: pushing to a remote that REJECTS the push fails and the planted pre-push hook does NOT run"])
+M("G1-HD14-hardened-env-allowlist-gains-a-server-secret", HENV, E('  "SSL_CERT_DIR",\n];', '  "SSL_CERT_DIR",\n  "ANTHROPIC_API_KEY",\n];'), T_GAH, ["hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring"])
+M("G1-HD15-hardened-env-drops-the-object-directory-pin", HENV, E("  env.GIT_OBJECT_DIRECTORY = `${gitDir}/objects`;\n", ""), T_HARD, ["hardened: the push call carries hardened:true and the cat-file and config calls get hardening args and an allowlisted env"])
 M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
 M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
 M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
@@ -810,8 +843,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 242 rows today (round 3 plus the #11636 rows); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=241
+# 262 rows today (round 3 plus the #11636 rows and fix round 1); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=261
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -831,7 +864,7 @@ declare -A FLOOR=(
   ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
   ["test/approval/migration-180-approval-request.test.ts"]=91
-  ["test/approval/tools-census.test.ts"]=33
+  ["test/approval/tools-census.test.ts"]=34
   ["test/approval/runner-census.test.ts"]=17
   ["test/approval/flag.test.ts"]=5
   ["test/approval/decide-boundary.test.ts"]=52
@@ -842,7 +875,7 @@ declare -A FLOOR=(
   ["test/approval/execution-grant-handlers.test.ts"]=10
   ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=18
+  ["test/github-tools-push-grant.test.ts"]=19
   ["test/push-branch-pinned.test.ts"]=4
   ["test/approval/gate-deps.test.ts"]=29
   ["test/approval/approval-ops-real-sink.test.ts"]=13
@@ -851,10 +884,11 @@ declare -A FLOOR=(
   ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
-  ["test/cc-dispatcher-real-factory.test.ts"]=104
-  ["test/cc-github-push.test.ts"]=55
-  ["test/push-branch-hardened.test.ts"]=7
-  ["test/git-auth-hardened-env.test.ts"]=3
+  ["test/cc-dispatcher-real-factory.test.ts"]=106
+  ["test/cc-github-push.test.ts"]=61
+  ["test/push-branch-hardened.test.ts"]=19
+  ["test/git-auth-hardened-env.test.ts"]=4
+  ["test/git-auth-hardened.test.ts"]=9
 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   if [ "$tf" = "static:probe" ]; then
@@ -980,7 +1014,7 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=3
 EXPECT_RESID=2
-MIN_KILLED=236
+MIN_KILLED=256
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1

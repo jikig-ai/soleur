@@ -279,4 +279,18 @@ describe("cc registration sweep (derived from the registry function)", () => {
     expect(text.match(/createSdkMcpServer\(/g)).toHaveLength(1);
     expect(text).toMatch(/pluginMcpServerNames:\s*\[\]/);
   });
+
+  it("the wired-set assertion also guards the PUBLISHED sets immediately before the one createSdkMcpServer; each is written in exactly two places; the one-server key set is pinned", () => {
+    const text = stripComments(readFileSync(join(__dirname, "../../server/cc-dispatcher.ts"), "utf8"));
+    // A second registrar (or any later writer) appended after the registrar block still passes through this call.
+    expect(text).toMatch(/assertCcApprovalSetWired\(approvalTools, approvalToolNames\);\s*const platformServer = createSdkMcpServer\(/);
+    expect(text.match(/assertCcApprovalSetWired\(/g)).toHaveLength(2);
+    // Writers: the registered assignment and the catch reset, nothing else. A third is a new writer the assertion must be
+    // re-reviewed against (declarations carry a type annotation and are not assignments of this shape).
+    expect(text.match(/\bapprovalTools\s*=(?!=)/g)).toHaveLength(2);
+    expect(text.match(/\bapprovalToolNames\s*=(?!=)/g)).toHaveLength(2);
+    // The addendum is computed before the first assignment, so a throw there can never leave a half-published set.
+    expect(text).toMatch(/const addendum = ccPushPromptAddendum\([^)]*\);\s*approvalTools = pushRegistration\.tools;/);
+    expect(text).toMatch(/Object\.keys\(c4McpServers\)\.every\(\(key\) => key === "soleur_platform"\)/);
+  });
 });

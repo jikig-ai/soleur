@@ -208,6 +208,12 @@ describe("buildGithubPushBranchTool (requireGrant: true, the cc registration)", 
     expect(PUSH_FAILED_APPROVAL_SPENT).not.toMatch(/feat-x|\/|git /);
   });
 
+  it("the approval-spent line never claims 'nothing was pushed': a timeout or killed child can fail a push the remote already accepted", () => {
+    expect(PUSH_FAILED_APPROVAL_SPENT).toMatch(/may not have been pushed/);
+    expect(PUSH_FAILED_APPROVAL_SPENT).toMatch(/may not have landed/);
+    expect(PUSH_FAILED_APPROVAL_SPENT).not.toMatch(/nothing was pushed/i);
+  });
+
   it("hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT", async () => {
     const g = new ExecutionGrants();
     g.enforcing = true;

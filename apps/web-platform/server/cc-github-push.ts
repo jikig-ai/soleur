@@ -19,8 +19,10 @@
  * With any condition false the cc tool set, `platformToolNames` and the published registered set are byte-identical to a
  * build that never heard of this module. The checks run cheapest first: persona, repo and entitlement cost nothing, the flag
  * read is bounded (one read, `CC_PUSH_FLAG_TIMEOUT_MS`) and only reached when those held, and the default-branch lookup (a
- * network round trip) runs last, only when the flag is on. The dispatcher call site already resolves a repo, an installation
- * and a non-support persona before it calls here, so those three arms are defensive for any other caller.
+ * network round trip) runs last, only when the flag is on. The dispatcher call site already resolves a repo and an installation
+ * before it calls here, so the `no-repo-or-installation` arm is defensive for any other caller. The persona arm is NOT: the
+ * dispatcher passes `args.persona` through unchanged, so `support-persona` is the live guard that keeps this write tool off a
+ * support dispatch (ADR-113); do not remove it or reorder it behind the network lookup.
  *
  * The tool is built with `requireGrant: true` and the SAME `ExecutionGrants` object the gate writes to, so a call that
  * reaches the handler without a gate-written grant carrying the approved commit is refused (see `github-tools.ts`).
@@ -55,11 +57,12 @@ const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
 export const CC_GRANT_WIRED_APPROVAL_TOOLS = [PUSH_FQN] as const;
 
 /**
- * Runtime guard on a registrar result, called by the dispatcher before it publishes the tools and names. Pure. Throws unless
- * every `toolNames` entry is a grant-wired approval tool, every built tool's name is that FQN's `soleur_platform` short name,
- * and the two arrays correspond one-to-one. A violation throws into the dispatcher's registration catch, which falls back to the
- * empty set and mirrors `cc-push-registration-failed`: a foreign name can never reach `canUseTool`'s platform list. Static
- * messages (no echo of a name).
+ * Runtime guard on the approval-required tool set, called by the dispatcher TWICE: on the registrar result before it is published
+ * (a violation throws into the registration catch, which falls back to the empty set and mirrors `cc-push-registration-failed`),
+ * and again on the PUBLISHED `approvalTools` / `approvalToolNames` immediately before `createSdkMcpServer`, so a later writer of
+ * either variable cannot bypass it. Pure. Throws unless every `toolNames` entry is a grant-wired approval tool, appears once,
+ * every built tool's name is that FQN's `soleur_platform` short name, and the two arrays correspond one-to-one. A foreign name can
+ * never reach `canUseTool`'s platform list. Static messages (no echo of a name).
  */
 export function assertCcApprovalSetWired(tools: readonly { name: string }[], toolNames: readonly string[]): void {
   if (tools.length !== toolNames.length) {
@@ -67,6 +70,9 @@ export function assertCcApprovalSetWired(tools: readonly { name: string }[], too
   }
   const wired: readonly string[] = CC_GRANT_WIRED_APPROVAL_TOOLS;
   const prefix = "mcp__soleur_platform__";
+  if (new Set(toolNames).size !== toolNames.length) {
+    throw new Error("cc approval registration: a tool name is registered more than once");
+  }
   toolNames.forEach((fqn, i) => {
     if (!wired.includes(fqn)) throw new Error("cc approval registration: a tool name is not grant-wired");
     if (`${prefix}${tools[i].name}` !== fqn) throw new Error("cc approval registration: a built tool does not match its registered name");
@@ -76,7 +82,11 @@ export function assertCcApprovalSetWired(tools: readonly { name: string }[], too
 /** Upper bound of the flag read: a never-settling seam cannot hang Query construction. */
 export const CC_PUSH_FLAG_TIMEOUT_MS = 2_000;
 
-/** Machine reasons: one per way the tool can be absent, so one Sentry event separates every cause of "the tool is missing". */
+/**
+ * Machine reasons: one per way the tool can be absent. The reason is returned to the caller; only `registered` emits the
+ * `cc-push-registration` outcome event. Every failure reason is already reported once by its own op-tagged mirror
+ * (`cc-push-flag-resolve`, `cc-push-default-branch-resolve`, `cc-push-default-branch-unsafe`), and the normal dark states are silent.
+ */
 export type CcPushRegistrationReason =
   | "registered"
   | "support-persona"
@@ -170,13 +180,13 @@ function failureExtra(err: unknown): { errName?: string; status?: number } {
   };
 }
 
-/** The reasons that emit a Sentry outcome event: the registered case and the two failures a flag-on operator must see. */
-const OUTCOME_EVENT_REASONS: ReadonlySet<CcPushRegistrationReason> = new Set([
-  "registered",
-  "flag-error",
-  "default-branch-unresolved",
-  "default-branch-unsafe",
-]);
+/**
+ * The reasons that emit a Sentry outcome event: only the registered case. A failure already produces ONE op-tagged error event
+ * at its own arm (a second info event for the same occurrence would double the volume per cold Query while GitHub is degraded).
+ * `registered` is the registrar's verdict: the dispatcher can still reject the result afterwards and report
+ * `cc-push-registration-failed`, so the info event alone is not proof the tool was published.
+ */
+const OUTCOME_EVENT_REASONS: ReadonlySet<CcPushRegistrationReason> = new Set(["registered"]);
 
 export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushArgs): Promise<CcPushRegistration> {
   const isEnabled = args.isEnabled ?? isApprovalQueueEnabled;
@@ -191,9 +201,9 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
 
   const done = (reason: CcPushRegistrationReason, tools: { name: string }[] = [], defaultBranch: string | null = null): CcPushRegistration => {
     const registered = reason === "registered";
-    // Dark paths that are the NORMAL state (support persona, no repo, not entitled, flag off) stay silent: an event per cold
-    // Query would be the dominant volume of this feature while it is dark. Sentry carries the registered case and the failures;
-    // `reason` is a low-cardinality tag.
+    // Only the registered case emits here (see OUTCOME_EVENT_REASONS): the normal dark states (support persona, no repo, not
+    // entitled, flag off) stay silent, and each failure is reported once by its own op-tagged mirror. `reason` is a
+    // low-cardinality tag.
     if (OUTCOME_EVENT_REASONS.has(reason)) {
       infoSilentFallback(null, {
         feature: "cc-push-registration",

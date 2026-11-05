@@ -1084,6 +1084,26 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
     });
 
+    it.each([
+      ["a null defaultBranch", null],
+      ["an unsafe defaultBranch", "a b"],
+    ])("the prompt addendum THROWS (%s) after a valid wired result: nothing is published (no tool, no name, no Map entry, no addendum), the Query is built on the dark path, reported", async (_n, defaultBranch) => {
+      eligible();
+      registrarOverride.fn = async () => ({
+        registered: true,
+        reason: "registered",
+        tools: [{ name: "github_push_branch" }],
+        toolNames: [PUSH_FQN],
+        defaultBranch,
+      });
+      await realSdkQueryFactory(makeArgs());
+      // The addendum is computed BEFORE the first assignment, so the failed registration leaves no half-published set.
+      expectDarkPath();
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-push-registration-failed")!;
+      expect(call[0]).toBeNull();
+    });
+
     it("a registrar that throws is reported with a null first argument and the class name, never the Error (its message may embed a repo path)", async () => {
       eligible();
       registrarOverride.fn = async () => {

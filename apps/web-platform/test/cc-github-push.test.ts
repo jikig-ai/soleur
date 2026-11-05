@@ -157,6 +157,11 @@ describe("does not register, and says why", () => {
     { name: "no installation", over: { installationId: null }, reason: "no-repo-or-installation", flagRead: false },
     { name: "an owner that is not a safe path segment", over: { owner: "a/b" }, reason: "no-repo-or-installation", flagRead: false },
     { name: "a repo that is not a safe path segment", over: { repo: "r?x=1" }, reason: "no-repo-or-installation", flagRead: false },
+    // Built, not spelled (a literal parent-directory segment in a test file trips the repo-containment guard).
+    { name: "an owner of one dot", over: { owner: "." }, reason: "no-repo-or-installation", flagRead: false },
+    { name: "an owner of two dots", over: { owner: String.fromCharCode(46, 46) }, reason: "no-repo-or-installation", flagRead: false },
+    { name: "a repo of one dot", over: { repo: "." }, reason: "no-repo-or-installation", flagRead: false },
+    { name: "a repo of two dots", over: { repo: String.fromCharCode(46, 46) }, reason: "no-repo-or-installation", flagRead: false },
     { name: "not entitled to web egress", over: { webEgressEntitled: false }, reason: "not-entitled", flagRead: false },
     {
       name: "flag off",
@@ -187,7 +192,7 @@ describe("does not register, and says why", () => {
     expect((await resolveCcGithubPushRegistration(b.args)).reason).toBe("not-entitled");
   });
 
-  it("only registered, flag-error, default-branch-unresolved and default-branch-unsafe emit the outcome event", async () => {
+  it("only the registered case emits the outcome event; each failure is reported ONCE, by its own op-tagged mirror (no second info event)", async () => {
     const reasonsEmitted = async (over: Partial<ResolveCcGithubPushArgs>, seams: Seams = {}) => {
       h.infoSilentFallback.mockReset();
       await resolveCcGithubPushRegistration(make(over, seams).args);
@@ -197,9 +202,15 @@ describe("does not register, and says why", () => {
     expect(await reasonsEmitted({ persona: "support" })).toEqual([]);
     expect(await reasonsEmitted({ webEgressEntitled: false })).toEqual([]);
     expect(await reasonsEmitted({}, { isEnabled: vi.fn(async () => false) })).toEqual([]);
-    expect(await reasonsEmitted({}, { isEnabled: vi.fn(async () => { throw new Error("x"); }) })).toEqual(["flag-error"]);
-    expect(await reasonsEmitted({}, { lookupDefaultBranch: vi.fn(async () => { throw new Error("x"); }) })).toEqual(["default-branch-unresolved"]);
-    expect(await reasonsEmitted({}, { lookupDefaultBranch: vi.fn(async () => "a b") })).toEqual(["default-branch-unsafe"]);
+    for (const [seams, op] of [
+      [{ isEnabled: vi.fn(async () => { throw new Error("x"); }) }, "cc-push-flag-resolve"],
+      [{ lookupDefaultBranch: vi.fn(async () => { throw new Error("x"); }) }, "cc-push-default-branch-resolve"],
+      [{ lookupDefaultBranch: vi.fn(async () => "a b") }, "cc-push-default-branch-unsafe"],
+    ] as Array<[Seams, string]>) {
+      h.reportSilentFallback.mockReset();
+      expect(await reasonsEmitted({}, seams)).toEqual([]);
+      expect(h.reportSilentFallback.mock.calls.map((c) => c[1].op)).toEqual([op]);
+    }
   });
 });
 
@@ -291,7 +302,7 @@ describe("the default branch is looked up fail-closed, only after every other pr
       extra: { userId: USER, errName: "GitHubApiError", status: 404 },
     });
     expect(JSON.stringify(h.reportSilentFallback.mock.calls[0][1])).not.toContain("example-repo");
-    expect(h.infoSilentFallback.mock.calls[0][1].extra).toMatchObject({ reason: "default-branch-unresolved", defaultBranchResolved: false });
+    expect(h.infoSilentFallback).not.toHaveBeenCalled();
   });
 
   it("lookup never settles -> bounded by the 3 s resolve timeout, signal aborted, not registered", async () => {
@@ -329,7 +340,7 @@ describe("the default branch is looked up fail-closed, only after every other pr
     expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
     expect(h.reportSilentFallback.mock.calls[0][0]).toBeNull();
     expect(h.reportSilentFallback.mock.calls[0][1]).toMatchObject({ op: "cc-push-default-branch-unsafe" });
-    expect(h.infoSilentFallback.mock.calls[0][1]).toMatchObject({ tags: { reason: "default-branch-unsafe" } });
+    expect(h.infoSilentFallback).not.toHaveBeenCalled();
   });
 
   it("the default lookup (no seam override) calls the GitHub API with the installation id, /repos/<owner>/<repo> in that order, and an AbortSignal", async () => {
@@ -395,6 +406,7 @@ describe("assertCcApprovalSetWired (the dispatcher's runtime guard on a registra
     ["a wired FQN with an extra foreign name", [{ name: "github_push_branch" }, { name: "email_send" }], [FQN, "mcp__soleur_platform__email_send"]],
     ["more tools than names", [{ name: "github_push_branch" }, { name: "github_push_branch" }], [FQN]],
     ["more names than tools", [], [FQN]],
+    ["the same wired name registered twice (one-to-one by position, but a duplicate)", [{ name: "github_push_branch" }, { name: "github_push_branch" }], [FQN, FQN]],
     ["a name outside the soleur_platform server", [{ name: "github_push_branch" }], ["mcp__other__github_push_branch"]],
   ])("rejects %s with a static message that echoes no name", (_n, tools, names) => {
     expect(() => assertCcApprovalSetWired(tools, names)).toThrow(/cc approval registration/);
@@ -424,6 +436,19 @@ describe("the prompt addendum (ccPushPromptAddendum)", () => {
     ["never claim a push unless the result says so", /Never claim a push happened unless the result says it was pushed\./],
   ])("%s", (_n, re) => {
     expect(text).toMatch(re);
+  });
+
+  // The anchored phrases above fail alone when an obligation is weakened; this snapshot is what catches an ADDED sentence (for
+  // example an exception for some branch), which no necessary-not-sufficient phrase can see. The text is a pure function of the name.
+  it("the full text is pinned (an added exception or sentence is a failure, not a pass)", () => {
+    expect(text).toMatchInlineSnapshot(`
+      "## Pushing a branch
+      The \`github_push_branch\` tool is the only way to push a branch from this workspace; do not run \`git push\` in Bash. It pushes the workspace HEAD commit after the workspace Owner approves it.
+      Push to a feature branch only. NEVER push to main, master or trunk: a refusal for a protected branch still spends the Owner's approval. Never set force.
+      Commit your work first, and do not change HEAD (no commit, checkout or reset) while an approval is pending: the Owner approves one specific commit.
+      If the result says the approval is pending or was denied, tell the user in plain words that nothing was pushed and why, and follow the retry or no-retry instruction inside the result; do not paste the raw result.
+      Never claim a push happened unless the result says it was pushed."
+    `);
   });
 
   it("starts with its own heading and is short enough to stay an addendum", () => {

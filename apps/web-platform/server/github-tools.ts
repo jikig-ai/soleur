@@ -57,10 +57,11 @@ export interface BuildGithubPushBranchToolOpts {
 
 /**
  * Appended (strict cc path only) to a push failure that happened AFTER the Owner's approval was consumed. Static: no input,
- * path or git output. Without it the model retries the identical call, which opens a fresh Owner approval for nothing.
+ * path or git output. Without it the model retries the identical call, which opens a fresh Owner approval for nothing. Worded
+ * "may not have been pushed": a timeout or a killed child can fail the call after the remote already accepted the ref.
  */
 export const PUSH_FAILED_APPROVAL_SPENT =
-  "The Owner's approval for this push is spent. A retry needs a new Owner approval, so tell the user that nothing was pushed and why before you try again.";
+  "The Owner's approval for this push is spent. A retry needs a new Owner approval. The branch may not have been pushed: tell the user the push failed and why, and that it may not have landed, before you try again.";
 
 /** The soleur_platform FQN of the approval-gated push tool (the gate, the tier map and the cc registrar key on it). */
 export const GITHUB_PUSH_BRANCH_TOOL_FQN = "mcp__soleur_platform__github_push_branch";

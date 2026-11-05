@@ -176,9 +176,11 @@ Checked the planned file list against open `code-review` issues (two-stage `gh -
 - **Artifact and vector pairs (added in review round 1, each with its mitigation or scope-out):**
   - *The full server environment, via a `.git` hook or config entry the agent wrote.* The legacy push child inherits the
     whole `process.env`, runs outside the sandbox on an Owner-approved push that looks benign, and its stderr is relayed to the
-    model. Mitigated for the cc form by the opt-in hardened push (hooks path, proxy and header overrides, allowlisted child
-    environment, real-directory `.git` check; ADR-309 addendum item 7). Scope-out, a flip precondition (ADR-309 flip item 9b): `url.*.insteadOf`
-    redirection and the approval gate's own `.git` read. This replaces the earlier "installation token only" framing.
+    model. Mitigated for the cc form by the opt-in hardened push (hooks path, the unscoped and github.com-scoped proxy and extra-header resets only,
+    `GIT_ALLOW_PROTOCOL=https`, allowlisted child environment, `.git` pre-flight check; ADR-309 addendum item 7): hook execution, config-driven
+    command execution and server-environment exposure are closed; token diversion is not. Scope-out, a flip precondition (ADR-309 flip item 9b):
+    `url.*.insteadOf` / `pushInsteadOf`, URL-scoped `http.<url>.*` (proxy, extraHeader, sslVerify, sslCAInfo), `http.curloptResolve`, and the approval
+    gate's own `.git` read. This replaces the earlier "installation token only" framing.
   - *A stale `default_branch` after the cold build.* An Owner-approved push could land on a renamed default branch.
     Mitigated: `rejectProtectedBranch` blocks `main`, `master` and the captured name, and the fail-closed lookup never falls back to a
     fixed name; scope-out: a rename mid-Query is a documented staleness window (ADR-309 addendum item 5).
@@ -698,7 +700,7 @@ None. The flag flip, toggle-copy rewording, compliance-posture addendum and PA-3
 ## Ship Notes (for `soleur:ship`)
 
 - Title `fix(approval): register github_push_branch in the cc platform server behind the approval gate (Ref #11636)`. Do not use `feat(`.
-- Body: `Ref #11636`, `Ref #11635`, epic `Ref #9601` only; no `Closes`/`Fixes`/`Resolves`; confirm `closingIssuesReferences = []` after creation. Do not edit the epic body. File no issues; #11640 is the open decision-challenge issue.
+- Body: `Ref #11636`, `Ref #11635`, epic `Ref #9601` only; no `Closes`/`Fixes`/`Resolves`; confirm `closingIssuesReferences = []` after creation. Do not edit the epic body. File no issues except one: the tracking issue for ADR-309 flip item 9b is filed by `soleur:ship` from its decision-challenges row (CTO ruling), not by the implementation batches; #11640 is the open decision-challenge issue.
 - Body states: nothing changes for users until the operator flips `approval-queue`; the flip preconditions (toggle copy first, CLO check, dogfood on the Owner workspace, then wider); the #11534 triggers that fired (probe re-run: fired, item stays deferred; "next PR touching `server/approval/*`": not fired by an edit, item stays deferred); the probe `RESULT:` line.
 - Avoid the words "soak", "stays 0", "stays zero" and "post-deploy verify" in the body (the sweepers key on them); no operator checklist in the ship message (`hr-ship-message-no-operator-checklist`).
 - `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` on every commit.
@@ -712,8 +714,9 @@ by the CTO and CLO agents on 2026-11-05 (rows in `decision-challenges.md`):
   `readCcMcpAllowlist` throw. It was reverted: the throw is total again (ADR-311 says #11636 must not weaken it). The constant
   `CC_GRANT_WIRED_APPROVAL_TOOLS` stays only as the registrar and census constant; a test pins that the env value throws; Phase 2 (#3722)
   must route the push tool through the registrar.
-- **Hardened push added (cc only, opt-in).** Not in the plan: it reuses the `_git-hardening` leaf, adds proxy and header overrides, an
-  allowlisted child environment and a real-directory `.git` check, with the legacy push byte-identical (ADR-309 flip item 9a). Flip item 9b stays.
+- **Hardened push added (cc only, opt-in).** Not in the plan: it reuses the `_git-hardening` leaf, adds the unscoped and github.com-scoped proxy and header resets
+  (a more specific `http.<url>.*` key still wins), a transport clamp, an allowlisted child environment and a `.git` pre-flight check, with the legacy push
+  byte-identical (ADR-309 flip item 9a). Flip item 9b stays, and it names the token-diversion residual.
 - **Wired-set assertion added.** `assertCcApprovalSetWired` runs in the dispatcher's registration `try` block; the sweep consumes real
   registrar output; a registered-build test asserts the only MCP server is `soleur_platform`; mutation floors ratcheted. The transitive
   import-graph census was not built (recorded as a residual).

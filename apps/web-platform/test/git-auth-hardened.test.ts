@@ -11,8 +11,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
-vi.mock("../server/github-app", () => ({ generateInstallationToken: async () => `ghs_${"a".repeat(40)}` }));
+// `allowFile`: these tests push to a LOCAL bare remote (the file transport), which the production clamp
+// (`GIT_ALLOW_PROTOCOL=https`) forbids by design. The wrapper below adds `file` to the allowed set for the tests that need a real
+// transport and leaves the production value untouched when `allowFile` is false (the clamp tests).
+const h = vi.hoisted(() => ({ mint: vi.fn(async () => `ghs_${"a".repeat(40)}`), allowFile: true }));
+vi.mock("../server/github-app", () => ({ generateInstallationToken: h.mint }));
 vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
+vi.mock("../server/git-hardened-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/git-hardened-env")>();
+  return {
+    ...actual,
+    buildHardenedGitEnv: (workspacePath: string, extra: Readonly<Record<string, string>> = {}) =>
+      actual.buildHardenedGitEnv(workspacePath, h.allowFile ? { ...extra, GIT_ALLOW_PROTOCOL: "https:file" } : extra),
+  };
+});
 
 import { gitWithInstallationAuth } from "../server/git-auth";
 
@@ -33,6 +45,8 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
   let marker: string;
 
   beforeEach(() => {
+    h.allowFile = true;
+    h.mint.mockClear();
     root = mkdtempSync(join(tmpdir(), "git-hardened-"));
     remote = join(root, "remote.git");
     work = join(root, "work");
@@ -70,19 +84,60 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("hardened: pushing to an unreachable URL fails and no planted hook ran", async () => {
+  /** A bare remote whose `pre-receive` rejects every push: the transport connects, the local `pre-push` hook is reached, the push fails. */
+  function rejectingRemote(): void {
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho rejected >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+  }
+
+  test("control: the legacy form, pushing to a remote that REJECTS the push, fails AND runs the planted pre-push hook", async () => {
+    rejectingRemote();
     plantHook(join(work, ".git", "hooks"), marker);
-    await expect(
-      gitWithInstallationAuth(["push", "https://127.0.0.1:9/o/r.git", "HEAD:refs/heads/feat-x"], 1, {
-        cwd: work,
-        hardened: true,
-        timeout: 20_000,
-      }),
-    ).rejects.toBeTruthy();
+    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work })).rejects.toBeTruthy();
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("hardened: pushing to a remote that REJECTS the push fails and the planted pre-push hook does NOT run", async () => {
+    rejectingRemote();
+    plantHook(join(work, ".git", "hooks"), marker);
+    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
+    expect(existsSync(marker)).toBe(false);
+    expect(() => git(remote, "rev-parse", "refs/heads/feat-x")).toThrow();
+  });
+
+  test("hardened: with the production clamp (GIT_ALLOW_PROTOCOL=https) a local-path push is refused, not performed", async () => {
+    h.allowFile = false;
+    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
+    expect(() => git(remote, "rev-parse", "refs/heads/feat-x")).toThrow();
+  });
+
+  test("control + hardened: a repo-config protocol.ext.allow=always does not let an ext:: URL run a command under the hardened form", async () => {
+    git(work, "config", "protocol.ext.allow", "always");
+    const url = `ext::touch ${marker}`;
+    // Control: the legacy form honours the repo config and runs the command, so the absence below is meaningful.
+    await expect(gitWithInstallationAuth(["push", url, "HEAD:refs/heads/feat-x"], 1, { cwd: work })).rejects.toBeTruthy();
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    h.allowFile = false;
+    await expect(gitWithInstallationAuth(["push", url, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
     expect(existsSync(marker)).toBe(false);
   });
 
-  test("hardened without a cwd refuses before minting anything or running git", async () => {
+  test("control + hardened: a repo-config push.followTags=true sends an annotated tag along in the legacy form, not in the hardened one", async () => {
+    git(work, "config", "push.followTags", "true");
+    git(work, "tag", "-a", "-m", "t", "v1");
+    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work });
+    expect(git(remote, "tag", "--list")).toBe("v1");
+    git(remote, "tag", "-d", "v1");
+    git(remote, "branch", "-D", "feat-x");
+    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true });
+    expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(git(work, "rev-parse", "HEAD"));
+    expect(git(remote, "tag", "--list")).toBe("");
+  });
+
+  test("hardened without a cwd refuses BEFORE minting a token or running git", async () => {
     await expect(gitWithInstallationAuth(["push"], 1, { hardened: true })).rejects.toThrow(/requires the workspace cwd/);
+    expect(h.mint).not.toHaveBeenCalled();
   });
 });

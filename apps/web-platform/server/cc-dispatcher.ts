@@ -2766,9 +2766,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // A violation throws into the catch below (empty set, reported), before anything is assigned or published.
         assertCcApprovalSetWired(pushRegistration.tools, pushRegistration.toolNames);
         if (pushRegistration.registered) {
+          // Every throwing step runs BEFORE the first assignment, so a throw can never leave a half-published set (the catch
+          // resets below are belt and braces, pinned by a test and a mutation row).
+          const addendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);
           approvalTools = pushRegistration.tools;
           approvalToolNames = pushRegistration.toolNames;
-          pushPromptAddendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);
+          pushPromptAddendum = addendum;
         }
       } catch (err) {
         // Fail closed AND visible: a defect in the optional push registration (its own checks are already fail-closed) must
@@ -2787,6 +2790,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // The wired-set guard again, on the PUBLISHED set (not only the registrar result): a second writer of `approvalTools` /
+    // `approvalToolNames` after the registrar block would otherwise reach the SDK server and `canUseTool` unchecked.
+    assertCcApprovalSetWired(approvalTools, approvalToolNames);
     const platformServer = createSdkMcpServer({
       name: "soleur_platform",
       version: "1.0.0",
@@ -2800,6 +2806,11 @@ export const realSdkQueryFactory: QueryFactory = async (
       }) as NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>,
     });
     (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
+    // One MCP server only (`soleur_platform`): a second key would carry tools no census sees. Phase 2 of the allowlist (#3722)
+    // must widen this set deliberately, together with the census.
+    if (!Object.keys(c4McpServers).every((key) => key === "soleur_platform")) {
+      throw new Error("cc dispatcher: unexpected MCP server key beside soleur_platform");
+    }
   }
 
   // Workspace-permissions patch and the #3250 prefill-guard probe both

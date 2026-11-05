@@ -132,8 +132,10 @@ export interface GitExecOptions {
   cwd?: string;
   timeout?: number;
   /**
-   * Opt-in hardened form (#11636, the cc push only): the shared git hardening args, proxy / extra-header resets, an
-   * ALLOWLISTED child environment (never `process.env`) and a pinned `GIT_DIR`. Requires `cwd` (the workspace). Unset keeps
+   * Opt-in hardened form (#11636, the cc push only): the shared git hardening args, the unscoped proxy / extra-header resets
+   * (a more specific `http.<url>.*` repo key still wins), a `https`-only transport clamp, an ALLOWLISTED child environment (never
+   * `process.env`) and pinned `GIT_DIR` / `GIT_COMMON_DIR` / `GIT_OBJECT_DIRECTORY`. Requires `cwd` (the workspace), checked before
+   * any token is minted. Unset keeps
    * the exact legacy argv and environment.
    */
   hardened?: true;
@@ -287,6 +289,12 @@ export async function gitWithInstallationAuth(
   installationId: number,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
+  const { hardened, ...execOpts } = opts;
+  // Checked BEFORE the mint: a hardened call without the workspace cwd refuses without minting a token or running git.
+  if (hardened && !execOpts.cwd) {
+    throw new Error("hardened git invocation requires the workspace cwd");
+  }
+
   const token = await generateInstallationToken(installationId);
 
   if (!TOKEN_FORMAT_RE.test(token)) {
@@ -295,11 +303,6 @@ export async function gitWithInstallationAuth(
       { installationId, lengthBucket: Math.round(token.length / 10) * 10 },
       "Installation token does not match expected format — proceeding",
     );
-  }
-
-  const { hardened, ...execOpts } = opts;
-  if (hardened && !execOpts.cwd) {
-    throw new Error("hardened git invocation requires the workspace cwd");
   }
 
   const scriptPath = writeAskpassScript();

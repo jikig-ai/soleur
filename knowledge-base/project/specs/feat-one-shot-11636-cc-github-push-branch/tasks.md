@@ -27,7 +27,7 @@ Branch: feat-one-shot-11636-cc-github-push-branch. One PR, `fix(approval):` pref
 
 - 2.1 `server/github-tools.ts`: extract `buildGithubPushBranchTool` (required `requireGrant`, `readonly grants`), `buildGithubTools` reuses it with `requireGrant: false`, export the FQN
 - 2.2 `server/cc-github-push.ts`: grant-wired constant, registrar (cheapest-first checks, bounded flag read last, fail-closed default-branch lookup, lazy `github-tools` import, a Sentry outcome event `cc-push-registration`, distinct reasons and ops `cc-push-flag-resolve` / `cc-push-default-branch-resolve`), prompt addendum
-- 2.3 `server/cc-dispatcher.ts`: hoist grants and repo slug, registrar call, `approvalTools` parameter, `platformToolNames`, addendum, per-conversation Map (publish after build, drain at all sites, consult in `onToolUse`), `readCcMcpAllowlist` relaxation
+- 2.3 `server/cc-dispatcher.ts`: hoist grants and repo slug, registrar call, `approvalTools` parameter, `platformToolNames`, addendum, per-conversation Map (publish after build, drain at all sites, consult in `onToolUse`), `readCcMcpAllowlist` relaxation (REVERTED in review round 1: the env route throws for every approval-required name)
 - 2.4 `approval-guard1-mutation.test.sh`: `--check-anchors` after the 2.1 rewrite (strict branch is a separate statement so the X7 anchor stays), three new mutant rows run with `--only`
 
 ## Phase 3 - Docs
@@ -48,7 +48,7 @@ Branch: feat-one-shot-11636-cc-github-push-branch. One PR, `fix(approval):` pref
 
 - Phase 0 done: baseline 13 files / 307 tests green; `--check-anchors` 228 rows apply.
 - Phase 1 done: all RED tests written first and observed RED for the right reason (missing builder / registrar module); 1.10 (b) lives in `cc-dispatcher-real-factory.test.ts` next to the live factory.
-- Phase 2 done: 2.1 `buildGithubPushBranchTool` + `requireGrant`; 2.2 `server/cc-github-push.ts`; 2.3 dispatcher wiring (grants hoisted, registrar call wrapped in a fail-closed try/catch, `approvalTools`, `platformToolNames`, addendum, per-conversation Map with accessor `getCcRegisteredApprovalTools`, `readCcMcpAllowlist` relaxation); 2.4 three mutant rows `G1-RG1..RG3` killed with `--only`, floors raised for the four census files, `--check-anchors` 231 rows apply.
+- Phase 2 done: 2.1 `buildGithubPushBranchTool` + `requireGrant`; 2.2 `server/cc-github-push.ts`; 2.3 dispatcher wiring (grants hoisted, registrar call wrapped in a fail-closed try/catch, `approvalTools`, `platformToolNames`, addendum, per-conversation Map with accessor `getCcRegisteredApprovalTools`; the `readCcMcpAllowlist` relaxation listed here was reverted in review round 1); 2.4 three mutant rows `G1-RG1..RG3` killed with `--only`, floors raised for the four census files, `--check-anchors` 231 rows apply at that point (242 after review round 1, 262 after fix round 1).
 - Phase 3 done (docs agent): ADR-309 addendum 2026-11-05 (Ref #11636) with flip-checklist items 8 and 9 mirrored into the archived handover; C4 `engine -> approvalStore` edge description extended and `model.likec4.json` re-rendered; negative-claim sweep comment edits in `cc-dispatcher.ts` and `workspace-settings-tools.ts`.
 - Phase 4.2 done: real-SDK approval-gate probe via the ci config, result line recorded in the ADR addendum. The PR body (4.5) is left to ship.
 
@@ -59,3 +59,8 @@ Branch: feat-one-shot-11636-cc-github-push-branch. One PR, `fix(approval):` pref
 - Real-SDK approval-gate probe re-run via the ci config: `RESULT: PASS (sdk=0.3.311 cli=2.1.311, cases-run=10)`.
 - What remains: `soleur:ship` (PR body per the plan's Ship Notes, the tracking issue for flip item 9b from its decision-challenges row, `closingIssuesReferences = []`).
 
+## Progress (fix round 1, 2026-11-06)
+
+- Fix round 1 done: the wired-set assertion also runs on the published sets before `createSdkMcpServer`, the addendum is computed before the first assignment, a runtime one-server key check, the registrar emits one outcome event (`registered` only), the hardened push gained `GIT_ALLOW_PROTOCOL=https`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `push.followTags=false`, timeouts and a wider `.git` pre-flight, the `PUSH_FAILED_APPROVAL_SPENT` text says the branch "may not have been pushed", and the prose overclaims about proxy and header coverage were corrected (ADR-309 items 3, 6, 7, 9; flip items 9a and 9b).
+- 20 mutation rows added (`G1-CCR8` to `G1-CCR16`, `G1-HD5` to `G1-HD15`), run with `--only`; floors raised to 261 / 256.
+- What remains: unchanged (`soleur:ship`, including the tracking issue for flip item 9b).
