@@ -20,3 +20,6 @@
 ### Components Invoked
 - `soleur:plan` (all phases inline), `soleur:deepen-plan` (halt gates 4.5–4.13 inline)
 - Artifacts: plan + tasks.md + decision-challenges.md, committed and pushed
+
+### Pipeline tally
+- cto_spawns=1
