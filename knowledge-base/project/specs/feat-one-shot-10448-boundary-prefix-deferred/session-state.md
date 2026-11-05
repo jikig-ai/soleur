@@ -36,3 +36,9 @@ soleur:plan, soleur:deepen-plan (inline), collision-precheck.sh, ratchet-observa
 - PANEL_SHA=e22d57880403cad842d1c6e6627e3915b0b3329c. Seats spawned background parallel 2026-11-05.
 - Review finding (performance-oracle P3): the work-time glob-rate receipt's rate columns are post-install (rows generated after the ALWAYS_ON edit landed in the tree) — annotated in glob-rate.marker; verdict rests on the PR5d readings per the CTO ruling.
 - Review finding (security P2, FIXED): the ops.ts rider was first dispositioned as an accept row, but the suite's TABLE-STALE check makes the file's existence verdict-relevant — re-dispositioned as a delete-sensitive edge declaration (test-affected-paths.sh :789), accept row removed, matching all ~20 sibling classification-table rows.
+
+## Compound Phase
+- Learning authored: knowledge-base/project/learnings/2026-11-05-a-receipt-generated-after-the-install-measures-the-install.md (9 session errors, each with recovery+prevention).
+- Deviation analyst: 3 plan deviations, all recorded — (a) glob-rate receipt is post-install basis (annotated; verdict rests on PR5d readings per ruling); (b) ops.ts rider re-dispositioned accept→delete-sensitive edge (security P2); (c) surgical suite-durations promotion instead of full regen (~40 unrelated floor promotions avoided; receipt documents why).
+- Workflow proposal (not corpus-edited here — scoped PR): "evidence receipts for a selection-rate verdict must be generated before the install they evidence; a queued/background measurement reads the tree it lands on, not the tree it was launched against." Candidate for the activation runbook or drain rubric.
+- Review tally: 10 seats, 1 P2 (fixed), ~10 P3 (all fixed or recorded advisories). Ratchet exit=0 live=0 on final HEAD. QA PASS 5/5.
