@@ -11,6 +11,20 @@ lane: cross-domain
 
 # fix: cla-signed-author-gate.test.sh setup commits need an explicit git identity
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05 (proportionate pass: one-file test fix, so the full 40-agent fan-out was not run)
+**Gates run:** 4.6 User-Brand Impact (pass, threshold `none`, test-only file outside the sensitive-path regex), 4.7 Observability (skip, no code/infra Files-to-Edit under the trigger paths; the edited file is a hook test), 4.8 PAT-shaped variable (none), 4.9 UI wireframe (skip, no UI surface), 4.10 encryption posture (skip, no store/connection), 4.11 guard contract (skip, deliverable is a fixture fix, not a guard), 4.12 Scope Check (1 unfenced section, 5 asks mapped, Recommendation present), 4.13 task design (skip, no autonomous-task surface).
+**Verified live:** issue #12120 OPEN, PR #12198 OPEN and draft; cited rule IDs `cq-test-fixtures-synthesized-only` and `cq-write-failing-tests-before` exist in AGENTS.md; failure reproduced (exit 128 after T14) and fix prototyped on a scratchpad copy of the hooks dir under the empty-HOME / `GIT_CONFIG_*=/dev/null` env: T15 and T16 PASS, no setup-commit errors (the 2 unrelated misses in the copy were path-relative artifacts of copying, absent in-tree: original in-tree run is 26/26).
+
+### Key Improvements
+1. AC1 now uses a separate `$E` for HOME/XDG so it does not rely on prefix-assignment expansion order.
+2. Pinned that `git ... commit` needs both name AND email on author and committer; the helper sets all four vars, since setting only `*_EMAIL` still fails when `user.name` is unset.
+
+### New Considerations Discovered
+- `commit_branch` leaves the committer to git config when a spec has no committer part; no current case combines that with an unset `user.email` (T16 and T15 both give both halves), so it is not changed. If a future case unsets `user.email` and uses a single-part spec, it would hit this same error; noted for the implementer as a comment-worthy edge, not a code change.
+- Accept-table anchors are content hashes, so the helper is placed after `commit_branch` and avoids naming the cla workflow path; AC3 enforces it.
+
 Spec lacks valid lane: - defaulted to cross-domain (fail-closed). No spec.md exists for this one-shot branch.
 
 ## Overview
@@ -135,7 +149,7 @@ None (no open `code-review` issue names `.claude/hooks/cla-signed-author-gate.te
 
 ## Acceptance Criteria
 
-- [ ] AC1: With `HOME=$(mktemp -d) XDG_CONFIG_HOME=$HOME GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash .claude/hooks/cla-signed-author-gate.test.sh`, the suite exits 0 and reports `26/26 passed` (pre-fix: exit 128 after `PASS: T14`).
+- [ ] AC1: `E=$(mktemp -d); HOME=$E XDG_CONFIG_HOME=$E GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash .claude/hooks/cla-signed-author-gate.test.sh` exits 0 and reports `26/26 passed` (pre-fix: exit 128 right after `PASS: T14`, reproduced during planning). Use a separate `$E` so the env assignments do not depend on left-to-right expansion of `$HOME`.
 - [ ] AC2: Normal-environment run is still `26/26 passed`; `T15` and `T16` both print `PASS`. `git diff` shows no change to `run_hook_noglobal`, `init_git_repo`, `make_repo`, `commit_branch` or any `tN()` body (hook-call path stays identity-unset).
 - [ ] AC3: `python3 scripts/ci-pr-affected-replay.py audit` summary `gap_refs=` and `stale=` are unchanged versus `origin/main` (no new line in the test file names the cla workflow path literal; the two content-anchored accept rows still match).
 - [ ] AC4: `git diff --name-only origin/main...HEAD` outside `knowledge-base/project/{plans,specs}/` lists only `.claude/hooks/cla-signed-author-gate.test.sh`.
