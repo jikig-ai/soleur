@@ -28,7 +28,7 @@
 // not a 200). That is the "handshake probe" the done-condition of #10479 asks for.
 //
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
-// change in the plan (knowledge-base/project/plans/2026-11-05-feat-origin-tls-listener-plan.md).
+// change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
 
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";

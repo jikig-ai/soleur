@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Date: 2026-11-05
-- Refs: #10479, #10205, #10136, ADR-068, ADR-241, ADR-320, plan `knowledge-base/project/plans/2026-11-05-feat-origin-tls-listener-plan.md`
+- Refs: #10479, #10205, #10136, ADR-068, ADR-241, ADR-320, plan `knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md`
 
 ## Context
 
