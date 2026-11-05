@@ -36,7 +36,8 @@ Registered in `server/approval/ops.ts` with `feature: "legal-acceptance"`: `acce
 `decide_rejected` (tag `reason`), `reauth_failed` (extra `errorClass`, never the address), `page_read_failed` (a founder page
 could not read its rows; not paged) and `row_without_event` (reconciliation, reported by the check endpoint, see Ack and
 reconciliation). PR-D adds `record_invalid` (a row failed its checksum; error) and `store_failed` (a verify, ack-state or ack
-call failed; error; tag `stage` is `verify`, `ack_state` or `ack`). `record_invalid` and `store_failed` have no paging rule yet
+call failed; error; tag `stage` is `verify`, `ack_state`, `ack`, `registry` (the legal text could not be read) or `config` (a token or
+founder id that is set but malformed; once per process, names only the variable)). `record_invalid` and `store_failed` have no paging rule yet
 (#12195). Nothing logs the note, the code, the address or the text.
 
 ## Check endpoint (PR-D)
@@ -44,12 +45,12 @@ call failed; error; tag `stage` is `verify`, `ack_state` or `ack`). `record_inva
 `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>` answers about the one founder id in its own configuration
 (`LEGAL_ACCEPTANCE_FOUNDER_ID`), never one from the request. The 200 body has exactly four keys: `status`, `text_hash`,
 `decided_at`, `row_ok`; it never carries the note. A row whose checksum no longer matches is `invalid` with `row_ok: false` and is
-never reported as `none`. Auth is a bearer token, `LEGAL_ACCEPTANCE_VERIFY_TOKEN`, read through `lib/internal-auth.ts`
-(`readInternalBearerSecret` takes the secret name) and separate from the Inngest token. Check order: 503 (token or founder id unset
-or malformed, or the registry cannot be read), 401 (wrong token), 400 (malformed key or hash), 404 (key not in the registry), then
-the lookup. Other statuses the route can emit are 200 and 502 (an RPC answer it does not recognise). `/api/internal/legal-acceptance`
-is a narrow `PUBLIC_PATHS` entry so the middleware does not redirect it to the login page. The code merges dark: the endpoint answers
-503 until the token and the founder id exist (follow-up #12196).
+never reported as `none`. The check order, the closed set of statuses (including what each 503 and 502 covers) and the auth
+shape are in the route docblock (`app/api/internal/legal-acceptance/[key]/route.ts`) and in ADR-319 (PR-D amendment, "Read path
+as built"). The token is `LEGAL_ACCEPTANCE_VERIFY_TOKEN` (to be minted at 48 characters by #12196; the guard accepts 48 to 256),
+read through `lib/internal-auth-named.ts` so that `lib/internal-auth.ts` stays byte-identical to the CLO-discharged census sha.
+`/api/internal/legal-acceptance` is a prefix `PUBLIC_PATHS` entry (dynamic `[key]` segment; every handler under it must check the
+bearer first). The code merges dark: the endpoint answers 503 until the token and the founder id exist (follow-up #12196).
 
 The hash is answered from the database for the exact hash asked. Whether it equals the committed text is the caller's job: the
 `web-acceptance` gate in `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` compares it with the sha256 of the committed file.
@@ -57,19 +58,27 @@ The hash is answered from the database for the exact hash asked. Whether it equa
 ## Ack and reconciliation (PR-D)
 
 Migration 185 adds `legal_acceptance_ack(acceptance_id, acked_at)`, reachable only through two service-role RPCs:
-`ack_legal_acceptance` and `legal_acceptance_ack_state`. It holds no founder id, no note and no decision field. The decide route
-writes the ack only after the `accepted` event was emitted and `Sentry.flush` resolved true, off the request path, so the founder's
-response never waits on it; `already_recorded` never acks. When the endpoint finds a row it reads the ack state and emits
-`row_without_event` if the row has no ack and is older than the 120 s grace. That proves the web route did not ack the row, not that
-Sentry received the event. It is alert-only (the response and the gate do not change) and pull-driven: it fires when a row is
-verified. A sweep over unacked rows is a follow-up (#12194).
+`ack_legal_acceptance` and `legal_acceptance_ack_state`. It holds no founder id, no note and no decision field; it is pseudonymous
+personal data through its key (the id of a `legal_acceptance` row), and the deletion path for `legal_acceptance` (#12080) must
+delete the matching ack rows too (no foreign key, so no cascade). The decide route writes the ack only after the `accepted` event
+was emitted and `Sentry.flush` resolved true, off the request path, so the founder's response never waits on it;
+`already_recorded` never acks. When the endpoint finds a row it reads the ack state and emits `row_without_event` if the row has no
+ack and is at least 120 s old. That proves the web route did not ack the row. It does not prove that Sentry received the event:
+a `true` flush result means the flush completed without an error, not that Sentry received and kept the event (it can also be
+`true` when no DSN is configured, or when the event was dropped before sending), so a row that raises no `row_without_event` is not
+proof that its `accepted` event was delivered. `row_without_event` is alert-only; if the reconciliation read fails or disagrees
+with the verify read, the endpoint answers 503 or 502 and never a partial 200. It is pull-driven: it fires when a row is
+verified. A flush that answers false or times out acks nothing and writes one warning log line (key only); a flush that throws or
+an ack write that fails is `store_failed` (stage `ack`). A sweep over unacked rows is a follow-up (#12194). Migrations apply
+before the deploy, so the functions exist when the code that calls them runs.
 
 ## Ops notes
 
 - Request changes note: pull-only, read by the operator personally; see
   `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`. Nothing pushes it, and no card copy changed.
-- A row whose ack was lost is reconciled by the operator through the same runbook after confirming with the founder.
-- Hard limits on the endpoint: the 48-character token, the read-only RPC and the single configured founder id. A wrong token is
-  answered 401 with no throttle.
-- A recorded Yes authorizes no production act; a `web-acceptance` gate backs only a hold on that legal acceptance itself.
+  The note is not readable through the endpoint or any `service_role` path; a database-owner credential could read it and is held
+  only by the operator, so "not shown to an agent" is a policy, not a control.
+- A row whose ack was lost is reconciled through the same runbook after confirming with the founder. Before the `approval-queue`
+  flag is on in the production project, the runbook's pre-flip count check must pass.
+- Hard limits, the token, the accepted residuals and the open items: ADR-319 (PR-D amendment).
 - The founder page still shows an `invalid` row as recorded (no card state for it, #12193).

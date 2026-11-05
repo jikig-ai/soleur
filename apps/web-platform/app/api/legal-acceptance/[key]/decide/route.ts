@@ -9,9 +9,8 @@ import type { VerifiedUser } from "@/server/request-auth";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
 import { isApprovalQueueEnabled } from "@/server/approval/flag";
 import { reportLegalOp } from "@/server/approval/ops";
-import { decideLegal, LegalServiceError, normaliseNote, type LegalRpcClient } from "@/server/legal-acceptance/service";
+import { ACK_FLUSH_TIMEOUT_MS, decideLegal, LegalServiceError, normaliseNote, type LegalRpcClient } from "@/server/legal-acceptance/service";
 import { runOffRequestPath } from "@/server/legal-acceptance/off-path";
-import { ACK_FLUSH_TIMEOUT_MS } from "@/server/legal-acceptance/service";
 import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptance/reauth";
 
 /**
@@ -27,8 +26,10 @@ import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptanc
  * service client only opens the intent for Decline and Request changes. Thin HTTP-only export.
  *
  * After a recorded decision, off the request path (`after()`), the route flushes the `accepted` event (2 s bound) and only
- * if that returned true writes the acknowledgement. A flush or ack failure is a `store_failed` event, never a response
- * change; `already_recorded` never acks.
+ * if that returned true writes the acknowledgement. A flush that throws or an ack write that fails is a `store_failed`
+ * event (stage ack); a flush that answers false or times out writes a warning log line only. None of them changes the
+ * response; `already_recorded` never acks. (`Sentry.flush` also answers true when there is no transport, so a true answer
+ * proves the queue drained, not that Sentry received the event.)
  */
 
 export const dynamic = "force-dynamic";

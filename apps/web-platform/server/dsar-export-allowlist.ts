@@ -623,12 +623,14 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   legal_acceptance_ack:
     "Migration 185 table (#12011, ADR-319): one marker per legal_acceptance row whose " +
     "accepted event the web route reported. Holds a random acceptance uuid and a " +
-    "timestamp only: NO founder id, no foreign key, no decision field, so it is not " +
-    "personal data on its own and is not linkable to a person without the legal_acceptance " +
-    "row. Kept with that row (Art. 17(3)(e) carve-out, same LIA and PA-40); no erasure " +
-    "scrub touches it. RPC-only (service_role holds no table privilege), so a worker " +
-    "read would fail every export; Art. 15 access to the record itself is answered " +
-    "through legal@jikigai.com as for legal_acceptance.",
+    "timestamp only: NO founder id, no foreign key, no decision field. It is " +
+    "pseudonymous personal data, not data that is non-personal on its own: the acceptance " +
+    "uuid is the key of a legal_acceptance row Jikigai holds, which carries the founder id. " +
+    "Kept with that row (Art. 17(3)(e) carve-out, same LIA and PA-40); no erasure scrub " +
+    "touches it. Excluded from the self-serve export for one reason: service_role holds no " +
+    "table privilege on it (RPC-only), so a worker read would fail every export. Art. 15 " +
+    "access is answered through legal@jikigai.com, and the matching ack rows are returned " +
+    "with the legal_acceptance rows.",
 };
 
 /**

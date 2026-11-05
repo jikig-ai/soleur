@@ -4,6 +4,12 @@
 -- for the DEV reset of an unmerged edit of 185 (the table is empty there) and for a full revert of the feature. The
 -- production rollback is to keep the schema; the endpoint's emitter is alert-only and never gates anything.
 -- It touches nothing of migration 184.
+-- It runs as ONE transaction (BEGIN ... COMMIT below): the ACCESS EXCLUSIVE lock taken by the check is held until the
+-- COMMIT, i.e. through the DROPs, so no acknowledgement can be inserted between the check and the drop. Outside a
+-- transaction the lock would be released when the DO block ends. (The migration runner never runs down files; this is
+-- applied by hand.)
+
+BEGIN;
 
 DO $$ BEGIN
   IF to_regclass('public.legal_acceptance_ack') IS NOT NULL THEN
@@ -18,3 +24,5 @@ END $$;
 DROP FUNCTION IF EXISTS public.legal_acceptance_ack_state(uuid, text, text);
 DROP FUNCTION IF EXISTS public.ack_legal_acceptance(uuid, text, text);
 DROP TABLE IF EXISTS public.legal_acceptance_ack;
+
+COMMIT;

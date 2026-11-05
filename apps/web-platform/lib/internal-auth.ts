@@ -11,14 +11,8 @@ import { timingSafeEqual } from "node:crypto";
 
 // The unset-secret case is deliberately indistinguishable-from-absent to the
 // caller (503), so a probe cannot tell "route disabled" from a bad token.
-//
-// The name is a CLOSED union (never a free string) and defaults to the Inngest secret, so the existing callers are
-// unchanged. LEGAL_ACCEPTANCE_VERIFY_TOKEN is the read-only status token of the legal-acceptance check endpoint
-// (#12011 PR-D): it is separate on purpose, so a holder of one secret cannot use the other route.
-export type InternalBearerSecretName = "INNGEST_MANUAL_TRIGGER_SECRET" | "LEGAL_ACCEPTANCE_VERIFY_TOKEN";
-
-export function readInternalBearerSecret(name: InternalBearerSecretName = "INNGEST_MANUAL_TRIGGER_SECRET"): string | null {
-  const v = process.env[name];
+export function readInternalBearerSecret(): string | null {
+  const v = process.env.INNGEST_MANUAL_TRIGGER_SECRET;
   return v && v.length > 0 ? v : null;
 }
 

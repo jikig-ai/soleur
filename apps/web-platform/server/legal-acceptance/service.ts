@@ -15,6 +15,9 @@ import type { LegalChoiceWire, LegalDecideResult } from "@/lib/legal-acceptance-
 import { codePointLength, REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
 import { isCurrent, type LegalTextEntry } from "./canonical";
 import { reportLegalOp } from "@/server/approval/ops";
+import { createChildLogger } from "@/server/logger";
+
+const log = createChildLogger("legal-acceptance");
 
 export interface LegalRpcResult {
   data: unknown;
@@ -185,7 +188,22 @@ export interface VerifyResult {
   row_ok: boolean | null;
 }
 
-const isTimestamp = (v: unknown): v is string => typeof v === "string" && v.length > 0 && !Number.isNaN(Date.parse(v));
+/**
+ * A UTC ISO timestamp as Postgres renders a timestamptz in JSON: date, `T`, time, optional fraction, then `Z` or a zero
+ * offset. The same pattern as WA_TS_RE in the shell gate (hold-gate-eval.sh), so the two layers cannot disagree about which
+ * forms count: `Date.parse` alone accepts many more (RFC 2822 dates, "2026", other offsets, a missing time) and rejects some
+ * of these (V8 refuses `+00` and, on some versions, `+0000`), so it is not used. The calendar fields are checked by hand.
+ */
+const UTC_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|\+00(:?00)?)$/;
+function isTimestamp(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const m = UTC_ISO_RE.exec(v);
+  if (!m) return false;
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number);
+  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return false;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate(); // day 0 of the next month = last day of this one
+  return day <= daysInMonth;
+}
 
 /**
  * The status of one founder's decision on one text. This RPC answers `{status, text_hash, decided_at, row_ok}` with NO
@@ -278,15 +296,17 @@ export interface DecideDeps {
   user: LegalRpcClient;
   now?: () => Date;
   /**
-   * Flush pending Sentry events; resolves true only when they were sent. Absent means "no proof of delivery is
-   * possible", so nothing is acknowledged. The wait is bounded by ACK_FLUSH_TIMEOUT_MS here, whatever this does.
+   * Flush pending Sentry events. `Sentry.flush` resolves true when the queue drained, which includes the case where there
+   * is no transport or DSN (nothing was sent), so a true answer is not proof that Sentry received the event. A rejection or
+   * throw is `store_failed` (stage ack); false or no answer within ACK_FLUSH_TIMEOUT_MS acknowledges nothing and logs one
+   * warning line. Absent means "no flush is possible", so nothing is acknowledged.
    */
   flushEvents?: () => Promise<boolean>;
   /** Runs the post-response task. The default is a caught fire-and-forget promise; the route passes `after()`. */
   runOffPath?: (task: () => Promise<void>) => void;
 }
 
-/** The longest the ack task waits for the event flush. A flush that has not answered by then counts as not flushed. */
+/** The longest the ack task waits for the event flush. A flush that has not answered by then counts as not flushed (warn only). */
 export const ACK_FLUSH_TIMEOUT_MS = 2000;
 
 /** Caught fire-and-forget: the task's own failures are already reported inside it, so a rejection here is dropped. */
@@ -319,30 +339,39 @@ function raceFlush(flush: () => Promise<boolean>): Promise<boolean> {
   });
 }
 
+/** The one place an ack-path failure is reported: `store_failed`, stage `ack`, with the step that failed. */
+function reportAckFailure(a: { userId: string; key: string }, err: unknown, step: string, extra: Record<string, unknown> = {}): void {
+  reportLegalOp("storeFailed", err, { userId: a.userId, tags: { stage: "ack" }, extra: { key: a.key, step, ...extra } });
+}
+
 /**
  * Off the request path: wait (bounded) for the `accepted` event to be flushed and, ONLY when the flush answered true,
- * write the acknowledgement that the verify endpoint later looks for. Never throws: a failure is reported as `store_failed`
- * (stage `ack`) and leaves the row unacknowledged, which the endpoint then surfaces as `row_without_event`.
+ * write the acknowledgement that the verify endpoint later looks for. Never throws. A flush that throws or rejects, and an
+ * ack write that fails, are reported as `store_failed` (stage `ack`); a flush that answers false or does not answer within
+ * ACK_FLUSH_TIMEOUT_MS writes one warning log line (key only, no Sentry event). All of them leave the row unacknowledged,
+ * which the endpoint then surfaces as `row_without_event`.
  */
 async function ackWhenFlushed(
   deps: DecideDeps & { flushEvents: () => Promise<boolean> },
   a: { userId: string; key: string; textHash: string },
 ): Promise<void> {
-  const failed = (err: unknown, step: string, extra: Record<string, unknown> = {}): void =>
-    reportLegalOp("storeFailed", err, { userId: a.userId, tags: { stage: "ack" }, extra: { key: a.key, step, ...extra } });
   let flushed: boolean;
   try {
     flushed = (await raceFlush(deps.flushEvents)) === true;
   } catch (err) {
-    failed(err, "flush");
+    reportAckFailure(a, err, "flush");
     return;
   }
-  if (!flushed) return;
+  if (!flushed) {
+    // The only trace of a flush that was not confirmed: no user id, no hash, no note, and not a Sentry event.
+    log.warn({ key: a.key }, "legal acceptance ack skipped: flush not confirmed");
+    return;
+  }
   try {
     const res = await ackAcceptance(deps.service, { founderId: a.userId, key: a.key, textHash: a.textHash });
-    if (res !== "acked") failed(null, "ack", { outcome: res });
+    if (res !== "acked") reportAckFailure(a, null, "ack", { outcome: res });
   } catch (err) {
-    failed(err, "ack");
+    reportAckFailure(a, err, "ack");
   }
 }
 
@@ -434,7 +463,7 @@ export async function decideLegal(
           ackWhenFlushed({ ...deps, flushEvents }, { userId: a.userId, key: a.entry.key, textHash: a.entry.textHash }),
         );
       } catch (err) {
-        reportLegalOp("storeFailed", err, { userId: a.userId, tags: { stage: "ack" }, extra: { key: a.entry.key, step: "schedule" } });
+        reportAckFailure({ userId: a.userId, key: a.entry.key }, err, "schedule");
       }
     }
     return { kind: "result", result: { outcome: "recorded", choice: rec.choice, decidedAt: rec.decidedAt, reauthAt: rec.reauthAt } };

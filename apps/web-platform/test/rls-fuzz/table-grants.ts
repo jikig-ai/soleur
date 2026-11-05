@@ -196,6 +196,8 @@ const INTERNAL: Record<string, string> = {
   git_data_erasure_counts: "service-role RPC-only erasure counter (migration 182, #8211): no api-role table privilege, written only by resolve_git_data_erasure_pending",
   // Migration 184 (#12011): the single-use email-code challenge. RLS on, no policy, every api role revoked.
   legal_reauth_event: "service-role RPC-only single-use challenge (migration 184, #12011): no api-role table privilege, reached only via issue/claim/mark SECURITY DEFINER RPCs and record_legal_acceptance",
+  // Migration 185 (#12011 PR-D): the acknowledgement marker behind the row_without_event reconciliation. RLS on, no policy, every api role revoked.
+  legal_acceptance_ack: "service-role RPC-only acknowledgement marker (migration 185, #12011): no api-role table privilege, written only by ack_legal_acceptance, read only by legal_acceptance_ack_state",
 };
 
 /**

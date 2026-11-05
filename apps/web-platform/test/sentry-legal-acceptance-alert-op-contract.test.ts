@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { LEGAL_OPS, STORE_FAILED_STAGES } from "@/server/approval/ops";
 
 // Cross-artifact contract for the founder legal-acceptance alert rules (#12011, PR-C; plan Observability section).
 //
@@ -10,7 +11,7 @@ import { describe, it, expect } from "vitest";
 //   accepted           an accepted row was written (liveness signal, NOT paged)
 //   decide_rejected    the decide RPC refused (reason tag: stale hash, expired, replaced, wrong user)  burst-paged
 //   reauth_failed      the email code send or verify failed (provider error class tag)                 burst-paged
-//   row_without_event  a legal_acceptance row exists with no matching `accepted` event                 paged on every event
+//   row_without_event  a legal_acceptance row exists with no recorded acknowledgement                   paged on every event
 // Two Sentry rules route them: `legal-acceptance-failure-burst` (the two failure ops, 3 events in an hour) and
 // `legal-acceptance-row-without-event` (the reconciliation op, re-pages per event). Renaming the feature or an op on
 // either side, or widening a filter to the feature alone (which would email on every accepted row), would dark or
@@ -184,22 +185,91 @@ describe("legal-acceptance alert op contract", () => {
   // `page_read_failed` is recorded, not paged (both stated above).
   const UNPAGED_OPS = ["accepted", "page_read_failed", "record_invalid", "store_failed"] as const;
 
-  it("the derived op set equals the routed ops plus the plain unpaged list (a new op must be placed in one of them)", () => {
-    const registry = stripJsComments(read("server/approval/ops.ts"));
-    const legalBlock = registry.slice(registry.indexOf("export const LEGAL_OPS"), registry.indexOf("export type LegalOpKey"));
+  // The legal op registry as written in the source (comment-stripped), and as loaded: they must be the same set, so a
+  // reader that only sees one of them cannot be fooled by the other. The op value may contain any of [A-Za-z0-9_-].
+  const registrySrc = stripJsComments(read("server/approval/ops.ts"));
+  const legalBlock = registrySrc.slice(registrySrc.indexOf("export const LEGAL_OPS"), registrySrc.indexOf("export type LegalOpKey"));
+  const derivedOps = [...legalBlock.matchAll(/\bop:\s*"([A-Za-z0-9_-]+)"/g)].map((m) => m[1]).sort();
+
+  it("the derived op set equals LEGAL_OPS, and equals the routed ops plus the plain unpaged list (a new op must be placed in one of them)", () => {
     expect(legalBlock.length, "LEGAL_OPS block extracted").toBeGreaterThan(200);
-    const derived = [...legalBlock.matchAll(/\bop:\s*"([a-z_]+)"/g)].map((m) => m[1]).sort();
-    expect(derived.length).toBeGreaterThanOrEqual(7);
+    const actual = Object.values(LEGAL_OPS)
+      .map((o) => o.op as string)
+      .sort();
+    expect(derivedOps, "every `op:` in the source block is a LEGAL_OPS member and vice versa").toEqual(actual);
+    // Cardinality: one op literal per registry entry (an extra literal in the block would be an unregistered emission).
+    expect(derivedOps).toHaveLength(Object.keys(LEGAL_OPS).length);
     const routed = [...(filterOf(BURST, "op")?.value ?? "").split(","), filterOf(ROWEV, "op")?.value ?? ""];
-    expect([...routed, ...UNPAGED_OPS].sort()).toEqual(derived);
+    expect([...routed, ...UNPAGED_OPS].sort()).toEqual(derivedOps);
     for (const op of UNPAGED_OPS) expect(routed, `${op} is not both routed and exempt`).not.toContain(op);
   });
 
-  it("the two PR-D ops are exempt from paging only until #12195, and neither rule matches them", () => {
-    for (const op of ["record_invalid", "store_failed"]) {
-      expect(UNPAGED_OPS).toContain(op);
-      for (const block of [BURST, ROWEV]) expect(block).not.toMatch(new RegExp(op));
+  it("the feature tag is emitted from reportLegalOp only: no other source under server/ or app/api/ can emit a legal-acceptance event", () => {
+    const FEATURE_EMISSION = /\bfeature:\s*["']legal-acceptance["']|\bLEGAL_FEATURE\b/g;
+    const others: string[] = [];
+    for (const dir of ["server", "app/api"]) {
+      const walk = (d: string): void => {
+        for (const n of readdirSync(join(root, d)).sort()) {
+          const rel = `${d}/${n}`;
+          if (statSync(join(root, rel)).isDirectory()) walk(rel);
+          else if (/\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n) && rel !== "server/approval/ops.ts") {
+            if (FEATURE_EMISSION.test(stripJsComments(read(rel)))) others.push(rel);
+            FEATURE_EMISSION.lastIndex = 0;
+          }
+        }
+      };
+      walk(dir);
     }
+    expect(others, "files that emit feature legal-acceptance outside reportLegalOp").toEqual([]);
+    const inOps = registrySrc.match(FEATURE_EMISSION) ?? [];
+    expect(inOps, "ops.ts emits the feature exactly once, inside reportLegalOp").toHaveLength(1);
+    const fnStart = registrySrc.indexOf("export function reportLegalOp(");
+    expect(fnStart).toBeGreaterThan(registrySrc.indexOf("export type LegalOpKey"));
+    expect(registrySrc.slice(fnStart).search(FEATURE_EMISSION)).toBeGreaterThan(0);
+  });
+
+  it("every storeFailed report carries a tags.stage from the closed set (and the set is the five documented stages)", () => {
+    expect([...STORE_FAILED_STAGES]).toEqual(["verify", "ack_state", "ack", "registry", "config"]);
+    const files: string[] = [];
+    for (const dir of ["server", "app/api"]) {
+      const walk = (d: string): void => {
+        for (const n of readdirSync(join(root, d)).sort()) {
+          const rel = `${d}/${n}`;
+          if (statSync(join(root, rel)).isDirectory()) walk(rel);
+          else if (/\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n)) files.push(rel);
+        }
+      };
+      walk(dir);
+    }
+    let sites = 0;
+    const stages = new Set<string>();
+    for (const rel of files) {
+      const src = stripJsComments(read(rel));
+      for (const m of src.matchAll(/reportLegalOp\(\s*"storeFailed"/g)) {
+        sites++;
+        // The balanced argument text of this call.
+        let depth = 0;
+        let i = m.index! + "reportLegalOp".length;
+        const from = i;
+        for (; i < src.length; i++) {
+          if (src[i] === "(") depth++;
+          else if (src[i] === ")" && --depth === 0) break;
+        }
+        const args = src.slice(from, i + 1);
+        const lit = /tags:\s*\{\s*stage:\s*"([a-z_]+)"\s*\}/.exec(args);
+        if (lit) {
+          expect(STORE_FAILED_STAGES as readonly string[], `${rel}: stage ${lit[1]}`).toContain(lit[1]);
+          stages.add(lit[1]);
+        } else {
+          // Shorthand `{ stage }` is allowed only where the variable is typed with the closed union in that file.
+          expect(args, `${rel}: storeFailed without a stage tag`).toMatch(/tags:\s*\{\s*stage\s*\}/);
+          expect(src, `${rel}: shorthand stage must be typed StoreFailedStage`).toMatch(/\bstage:\s*StoreFailedStage\b/);
+        }
+      }
+    }
+    expect(sites, "storeFailed call sites found").toBeGreaterThanOrEqual(3);
+    // The literal stages used somewhere in source; the typed shorthand covers verify, ack_state and registry.
+    expect([...stages].sort()).toEqual(["ack", "config"]);
   });
 
   it("both rules filter on exactly the emitted feature value", () => {

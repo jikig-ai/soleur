@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { TABLE_GRANT_REGISTRY } from "../rls-fuzz/table-grants";
 
 // Static shape tests for migration 185 (#12011 PR-D, ADR-319): the acknowledgement table behind the
 // `row_without_event` reconciliation and its two service-role RPCs. The BEHAVIOURAL proof runs against a real database
@@ -170,6 +171,12 @@ describe("migration 185 files", () => {
     expect(shapeProblems(rawUp)).toEqual([]);
   });
 
+  it("the ack table is classified INTERNAL in the rls-fuzz grant registry (the DB-backed parity gate in rls-authz-fuzz.yml reds on an unclassified relation; this is the cheap tripwire)", () => {
+    const entry = TABLE_GRANT_REGISTRY.get("legal_acceptance_ack");
+    expect(entry?.kind).toBe("INTERNAL");
+    expect(entry && "reason" in entry ? entry.reason : "").toMatch(/migration 185/);
+  });
+
   it("the down file locks the ack table, refuses while rows exist, and does both before dropping anything", () => {
     const d = norm(stripSql(read(DOWN)));
     const lock = d.search(/LOCK TABLE public\.legal_acceptance_ack IN ACCESS EXCLUSIVE MODE/i);
@@ -178,6 +185,15 @@ describe("migration 185 files", () => {
     expect(lock).toBeGreaterThanOrEqual(0);
     expect(refuse).toBeGreaterThan(lock);
     expect(firstDrop).toBeGreaterThan(refuse);
+  });
+
+  it("the down file is one transaction: BEGIN first, COMMIT last, so the lock holds through the DROPs", () => {
+    const d = norm(stripSql(read(DOWN)));
+    expect(d).toMatch(/^BEGIN;/);
+    expect(d).toMatch(/COMMIT;$/);
+    expect(d.search(/DROP (TABLE|FUNCTION)/i)).toBeGreaterThan(d.search(/LOCK TABLE/i));
+    expect(d.lastIndexOf("COMMIT;")).toBeGreaterThan(d.lastIndexOf("DROP TABLE"));
+    expect(d.match(/\bBEGIN;/g)).toHaveLength(1); // the plpgsql BEGIN has no semicolon directly after it
   });
 
   it("the down file drops the CURRENT signatures and never touches the 184 objects", () => {
@@ -195,6 +211,17 @@ describe("migration 185 files", () => {
     expect(v).toMatch(/legal_acceptance_ack_no_foreign_key/);
     expect(v).toMatch(/legal_acceptance_ack_columns_are_exactly_id_and_time/);
     expect(v).toMatch(/AS bad|::int/);
+  });
+
+  it("the verify file fails on a leftover overload and on EXECUTE for anon, authenticated or PUBLIC on any function of either name", () => {
+    const v = norm(stripSql(read(VERIFY)));
+    expect(v).toMatch(/'ack_functions_have_no_other_overloads'/);
+    expect(v).toMatch(/p\.proname IN \('ack_legal_acceptance', 'legal_acceptance_ack_state'\) AND p\.oid NOT IN/);
+    expect(v).toMatch(/'ack_functions_no_execute_for_anon_authenticated_or_public'/);
+    expect(v).toMatch(/has_function_privilege\('anon', p\.oid, 'EXECUTE'\)/);
+    expect(v).toMatch(/has_function_privilege\('authenticated', p\.oid, 'EXECUTE'\)/);
+    expect(v).toMatch(/a\.grantee = 0 AND a\.privilege_type = 'EXECUTE'/);
+    expect(v).toMatch(/acldefault\('f', p\.proowner\)/);
   });
 });
 

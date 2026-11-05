@@ -28,7 +28,20 @@ const h = vi.hoisted(() => ({
   failures: { value: null as unknown },
   clientFails: { value: false },
   flush: vi.fn(),
+  after: vi.fn(),
 }));
+
+// `after` is spied and then delegated to the real one (which throws outside a request scope, so the helper's fallback runs the task).
+vi.mock("next/server", async (orig) => {
+  const real = await orig<typeof import("next/server")>();
+  return {
+    ...real,
+    after: (...a: Parameters<typeof real.after>) => {
+      h.after(...a);
+      return real.after(...a);
+    },
+  };
+});
 
 // Only `flush` is replaced: the decide route flushes the accepted event before it acknowledges the row (#12011 PR-D).
 vi.mock("@sentry/nextjs", async (orig) => ({ ...(await orig<typeof import("@sentry/nextjs")>()), flush: (...a: unknown[]) => h.flush(...a) }));
@@ -331,6 +344,22 @@ describe("decide", () => {
       expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: HASH }),
     );
     expect(h.flush).toHaveBeenCalledWith(2000);
+  });
+
+  it("PR-D ack: the decide route hands the flush-then-ack task to next/server after() (not run inline, not dropped)", async () => {
+    h.after.mockReset();
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.after).toHaveBeenCalledTimes(1);
+    expect(typeof h.after.mock.calls[0][0]).toBe("function");
+    await vi.waitFor(() => expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", expect.anything()));
+    // already_recorded schedules nothing
+    h.after.mockReset();
+    h.userRpc.mockResolvedValue({ data: { outcome: "already_recorded", choice: "accept" }, error: null });
+    await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
+    expect(h.after).not.toHaveBeenCalled();
   });
 
   it("PR-D ack: a flush that returns false writes no ack; a flush that never resolves does not delay the response", async () => {

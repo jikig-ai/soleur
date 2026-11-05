@@ -6,7 +6,8 @@
 -- Invariants: the ack table is RLS-enabled with no policy and no privilege for any api role; its columns are exactly
 -- acceptance_id (primary key) and acked_at; no foreign key and no column-level privilege; both functions are SECURITY
 -- DEFINER with a pinned search_path, EXECUTE-able by service_role only, and neither names the write-door setting of
--- legal_acceptance.
+-- legal_acceptance. No other function of either name exists in public (no leftover overload), and none of them is
+-- EXECUTE-able by anon, authenticated or PUBLIC.
 
 SELECT 'legal_acceptance_ack_rls_enabled' AS check_name,
        CASE WHEN (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.legal_acceptance_ack'::regclass) THEN 0 ELSE 1 END::int AS bad
@@ -52,6 +53,22 @@ SELECT format('%s_execute_%s', f.fn, r.role),
     ('legal_acceptance_ack_state', 'public.legal_acceptance_ack_state(uuid, text, text)')
   ) AS f(fn, sig)
  CROSS JOIN (VALUES ('anon'), ('authenticated'), ('service_role')) AS r(role)
+UNION ALL
+-- A leftover overload (a different argument list under the same name) is invisible to the exact-signature checks above.
+SELECT 'ack_functions_have_no_other_overloads',
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname IN ('ack_legal_acceptance', 'legal_acceptance_ack_state')
+           AND p.oid NOT IN ('public.ack_legal_acceptance(uuid, text, text)'::regprocedure,
+                             'public.legal_acceptance_ack_state(uuid, text, text)'::regprocedure))::int
+UNION ALL
+-- EXECUTE for anon, authenticated or PUBLIC on ANY function of these two names, whatever its signature.
+SELECT 'ack_functions_no_execute_for_anon_authenticated_or_public',
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname IN ('ack_legal_acceptance', 'legal_acceptance_ack_state')
+           AND (has_function_privilege('anon', p.oid, 'EXECUTE')
+                OR has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+                            WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')))::int
 UNION ALL
 SELECT 'ack_functions_do_not_open_the_write_door_of_legal_acceptance',
        CASE WHEN (SELECT bool_and(prosrc NOT LIKE '%set_config%' AND prosrc NOT LIKE '%app.legal_acceptance_rpc%'

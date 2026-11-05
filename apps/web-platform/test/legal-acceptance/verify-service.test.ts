@@ -50,6 +50,38 @@ describe("verifyAcceptance", () => {
     }
   });
 
+  it("decided_at must be a strict UTC ISO timestamp (the same forms as the shell gate): other date strings are bad_payload", async () => {
+    const ok = { status: "accepted", text_hash: HASH, decided_at: WHEN, row_ok: true };
+    // Forms Postgres renders for a timestamptz in UTC, and forms the shell gate (WA_TS_RE) accepts.
+    for (const good of ["2026-11-05T10:00:00Z", "2026-11-05T10:00:00.123456+00:00", "2026-11-05T10:00:00+0000", "2026-11-05T10:00:00.5+00", "2026-11-05T10:00:00.000Z", "2028-02-29T23:59:59Z"]) {
+      expect((await verifyAcceptance(client({ data: { ...ok, decided_at: good } }).c, a)).decided_at, good).toBe(good);
+    }
+    // Everything Date.parse alone would let through, and the forms a gate would refuse.
+    for (const bad of [
+      "2026",
+      "2026-11-05",
+      "2026-11-05 10:00:00Z",
+      "2026-11-05T10:00:00",
+      "2026-11-05T10:00:00+01:00",
+      "2026-11-05T10:00:00-05:00",
+      "2026-11-05T10:00Z",
+      "Thu, 05 Nov 2026 10:00:00 GMT",
+      "Nov 5 2026 10:00:00 UTC",
+      "2026-11-05T10:00:00Z\n",
+      " 2026-11-05T10:00:00Z",
+      "2026-11-05T10:00:00z",
+      "2026-13-45T99:99:99Z", // shaped like a timestamp, not a date
+      "2026-02-29T10:00:00Z", // not a leap year
+      "2026-04-31T10:00:00Z",
+      "2026-11-05T24:00:00Z",
+      "2026-11-05T10:60:00Z",
+      "0000-00-00T00:00:00Z",
+      "",
+    ]) {
+      expect(await code(verifyAcceptance(client({ data: { ...ok, decided_at: bad } }).c, a)), JSON.stringify(bad)).toBe("bad_payload");
+    }
+  });
+
   it("none needs a null decided_at and a null row_ok", async () => {
     const none = { status: "none", text_hash: HASH, decided_at: null, row_ok: null };
     expect(await verifyAcceptance(client({ data: none }).c, a)).toEqual(none);

@@ -1,7 +1,8 @@
 /**
  * #12011 PR-D Guard 2: GET /api/internal/legal-acceptance/[key]?hash=. Behaviour tests for the check order
  * (503, 401, 400, 404, lookup), the four-field body, `invalid` pass-through, the closed status set, the founder id
- * from configuration only, and the narrow PUBLIC_PATHS entry through the middleware predicate.
+ * from configuration only, and the store_failed reports (stage registry, verify, ack_state, config). The PUBLIC_PATHS entry
+ * and the bearer-first rule for every handler under it are in verify-route-census.test.ts.
  * All fixtures are synthesized. The token and the founder id below are fixtures, not credentials.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +42,6 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
 import { GET } from "@/app/api/internal/legal-acceptance/[key]/route";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
 import { VERIFY_ENDPOINT_STATUSES } from "@/server/legal-acceptance/service";
-import { PUBLIC_PATHS } from "@/lib/routes";
 
 const dir = mkdtempSync(path.join(tmpdir(), "verify-route-"));
 writeFileSync(path.join(dir, "fixture-terms.md"), "---\nversion: fx-1\n---\nSynthesized fixture text.\n");
@@ -118,8 +118,8 @@ describe("503: dark and fail-closed (Guard 2 row 2, scenario 1)", () => {
     expect((await call({ auth: "Bearer " })).status).toBe(503);
     expect((await call({ auth: null })).status).toBe(503);
   });
-  it("a malformed configured token (whitespace, too short) is 503, never a working credential", async () => {
-    for (const bad of ["short", `${TOKEN}\n`, `${TOKEN} x`, `${TOKEN}"`]) {
+  it("a malformed configured token (whitespace, too short, too long) is 503, never a working credential", async () => {
+    for (const bad of ["short", "y".repeat(47), "y".repeat(257), `${TOKEN}\n`, `${TOKEN} x`, `${TOKEN}"`]) {
       vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", bad);
       expect((await call({ auth: `Bearer ${bad}` })).status, JSON.stringify(bad)).toBe(503);
     }
@@ -130,11 +130,91 @@ describe("503: dark and fail-closed (Guard 2 row 2, scenario 1)", () => {
     vi.stubEnv("INNGEST_MANUAL_TRIGGER_SECRET", TOKEN);
     expect((await call()).status).toBe(503);
   });
-  it("a registry read failure (not a missing file) is 503, never 404 (row 7)", async () => {
+  it("a registry read failure (not a missing file) is 503, never 404 (row 7), and is reported as store_failed stage registry", async () => {
     const out = await read(await call({ key: "unreadable-key" }));
     expect(out.status).toBe(503);
+    expect(out.body).toEqual({ error: "Not available" });
+    expect(h.rpc).not.toHaveBeenCalled(); // the database was not reached
+    expect(ops()).toEqual(["store_failed"]);
+    const ev = events()[0];
+    expect(ev.level).toBe("error");
+    expect(ev.tags).toEqual({ stage: "registry" });
+    expect(ev.extra).toMatchObject({ key: "unreadable-key", step: "registry" });
+    expect(JSON.stringify(ev)).not.toContain(TOKEN);
+  });
+  it("the registry failure is step 4: a wrong token is 401 and a malformed hash is 400 first, each with no report", async () => {
+    expect((await call({ key: "unreadable-key", auth: "Bearer wrong" })).status).toBe(401);
+    expect((await call({ key: "unreadable-key", hash: "zz" })).status).toBe(400);
+    expect(ops()).toEqual([]);
+  });
+});
+
+describe("set-but-malformed configuration is reported once per process; unset stays silent (store_failed stage config)", () => {
+  // The once-flag is module state, so each case loads a fresh copy of the route.
+  const fresh = async () => {
+    vi.resetModules();
+    return (await import("@/app/api/internal/legal-acceptance/[key]/route")).GET;
+  };
+  const get = (g: typeof GET) =>
+    g(new Request(`https://app.soleur.ai/api/internal/legal-acceptance/fixture-terms?hash=${HASH}`, { headers: { authorization: `Bearer ${TOKEN}` } }), {
+      params: Promise.resolve({ key: "fixture-terms" }),
+    });
+  const configEvents = () => events().filter((e) => e.op === "store_failed" && e.tags?.stage === "config");
+
+  it("a malformed token (set) emits one config report naming the variable, once across many calls; every call is still 503", async () => {
+    const g = await fresh();
+    vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", "x".repeat(47));
+    for (let i = 0; i < 3; i++) expect((await get(g)).status).toBe(503);
+    expect(ops()).toEqual(["store_failed"]);
+    const ev = configEvents()[0];
+    expect(ev.level).toBe("error");
+    expect(ev.tags).toEqual({ stage: "config" });
+    expect(ev.extra).toMatchObject({ step: "config", variables: ["LEGAL_ACCEPTANCE_VERIFY_TOKEN"] });
+    const dump = JSON.stringify(ev);
+    expect(dump).not.toContain("x".repeat(10)); // no value
+    expect(dump).not.toMatch(/\b47\b/); // no length
     expect(h.rpc).not.toHaveBeenCalled();
-    expect(ops()).toEqual([]); // nothing about a database was reported: the database was not reached
+  });
+  it("a token of 257 characters or one with a space or quote is malformed too", async () => {
+    for (const bad of ["x".repeat(257), `${TOKEN} y`, `${TOKEN}"`]) {
+      h.errSink.mockReset();
+      const g = await fresh();
+      vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", bad);
+      expect((await get(g)).status, JSON.stringify(bad.length)).toBe(503);
+      expect(configEvents(), JSON.stringify(bad.length)).toHaveLength(1);
+    }
+  });
+  it("a malformed founder id (set) emits one config report naming that variable only", async () => {
+    const g = await fresh();
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    expect((await get(g)).status).toBe(503);
+    expect((await get(g)).status).toBe(503);
+    expect(configEvents()).toHaveLength(1);
+    expect(configEvents()[0].extra).toMatchObject({ variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] });
+    expect(JSON.stringify(configEvents()[0])).not.toContain("not-a-uuid");
+  });
+  it("the process reports a misconfiguration once, even when the other variable breaks later", async () => {
+    const g = await fresh();
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    await get(g);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", FOUNDER);
+    vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", "short");
+    await get(g);
+    expect(configEvents()).toHaveLength(1);
+  });
+  it("unset (dark) is silent: no token, no founder id, an empty token, an empty founder id", async () => {
+    for (const [t, f] of [["", ""], ["", FOUNDER], [TOKEN, ""]] as const) {
+      const g = await fresh();
+      vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", t);
+      vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", f);
+      expect((await get(g)).status).toBe(503);
+    }
+    expect(ops()).toEqual([]);
+  });
+  it("a valid configuration reports nothing", async () => {
+    const g = await fresh();
+    expect((await get(g)).status).toBe(200);
+    expect(ops()).toEqual([]);
   });
 });
 
@@ -230,6 +310,27 @@ describe("200: exactly four keys, whatever the database returns (row 4, scenario
   });
 });
 
+describe("the lookup key is the key asked about (both RPCs)", () => {
+  it("a 63-character key and the default key each reach verify and ack_state as p_key, with the asked hash", async () => {
+    h.rpc.mockImplementation(async (fn: string, args: Record<string, string>) => {
+      const key63 = "k".repeat(63);
+      expect([key63, "fixture-terms"]).toContain(args.p_key);
+      if (fn === "verify_legal_acceptance") return { data: { status: "accepted", text_hash: args.p_text_hash, decided_at: WHEN, row_ok: true }, error: null };
+      return ACKED;
+    });
+    const k63 = "k".repeat(63);
+    const h63 = getLegalText(k63).textHash;
+    expect((await call({ key: k63, hash: h63 })).status).toBe(200);
+    expect((await call()).status).toBe(200);
+    expect(h.rpc.mock.calls.map((c) => [c[0], (c[1] as Record<string, string>).p_key, (c[1] as Record<string, string>).p_text_hash])).toEqual([
+      ["verify_legal_acceptance", k63, h63],
+      ["legal_acceptance_ack_state", k63, h63],
+      ["verify_legal_acceptance", "fixture-terms", HASH],
+      ["legal_acceptance_ack_state", "fixture-terms", HASH],
+    ]);
+  });
+});
+
 describe("invalid is never collapsed into none (row 6, AC2)", () => {
   it("passes through as invalid with row_ok false and emits record_invalid (error)", async () => {
     stubRpc({ verify: verifyRow("invalid") });
@@ -238,6 +339,7 @@ describe("invalid is never collapsed into none (row 6, AC2)", () => {
     const ev = events().filter((e) => e.op === "record_invalid");
     expect(ev).toHaveLength(1);
     expect(ev[0].level).toBe("error");
+    expect(ev[0].extra).toMatchObject({ key: "fixture-terms", textHash: HASH });
   });
   it("an invalid row whose payload says row_ok true is not a status: 502, never a 200 or a none", async () => {
     stubRpc({ verify: verifyRow("invalid", { row_ok: true }) });
@@ -311,26 +413,5 @@ describe("the status set is closed and declared once", () => {
     for (const r of [await call(), await call({ auth: "Bearer x" }), await call({ key: "Bad_Key" }), await call({ key: "no-such-key" })]) {
       expect(r.headers.get("cache-control")).toBe("no-store");
     }
-  });
-});
-
-describe("PUBLIC_PATHS through the middleware predicate (row 9, AC5)", () => {
-  // The same predicate as middleware.ts: `pathname === p || pathname.startsWith(p + "/")`. A route-level test alone
-  // misses the 307 to /login (learning 2026-06-01-new-internal-api-route-needs-public-paths-registration).
-  const isPublic = (pathname: string): boolean => PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
-  it("the entry is exact and narrow", () => {
-    expect(PUBLIC_PATHS).toContain("/api/internal/legal-acceptance");
-    expect(PUBLIC_PATHS).not.toContain("/api/internal");
-    expect(PUBLIC_PATHS).not.toContain("/api/internal/");
-    expect(PUBLIC_PATHS.filter((p) => p.startsWith("/api/internal/legal-acceptance"))).toEqual(["/api/internal/legal-acceptance"]);
-  });
-  it("the dynamic route is reachable without a session and no sibling is", () => {
-    expect(isPublic("/api/internal/legal-acceptance/fixture-terms")).toBe(true);
-    expect(isPublic("/api/internal/legal-acceptance/probe")).toBe(true);
-    expect(isPublic("/api/internal/legal-acceptance-foo")).toBe(false);
-    expect(isPublic("/api/internal/legal-acceptanc")).toBe(false);
-    expect(isPublic("/api/internal/other")).toBe(false);
-    expect(isPublic("/api/internal")).toBe(false);
-    expect(isPublic("/api/legal-acceptance/fixture-terms/decide")).toBe(false);
   });
 });

@@ -17,7 +17,7 @@
  * line endings are LF only (a CR makes the bytes, and therefore the hash, differ between platforms, so it is
  * refused); `version` is required. `texts/.gitattributes` pins LF in the working tree.
  *
- * `sha256sum <file>` produces the same value, which is how the shell-side gate (PR-D) will compare it.
+ * `sha256sum <file>` produces the same value, which is how the shell-side gate (hold-gate-eval.sh, `web-acceptance`) compares it.
  *
  * DEPLOYED PATH: the server is bundled with esbuild into dist/server/index.cjs, so `__dirname` there is `dist/server` and has
  * no `texts/`; the route handlers run from the Next build under `.next`. The Dockerfile therefore COPIES the directory

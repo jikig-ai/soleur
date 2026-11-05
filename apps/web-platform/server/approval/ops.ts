@@ -241,7 +241,7 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
  * the thrown value contributes only `{code, fn, errName}`, and never the note, the code, the address or the text.
  */
 export const LEGAL_OPS = {
-  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row with no matching event is `row_without_event`. */
+  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row the decide route did not acknowledge after flushing this event is `row_without_event`. */
   accepted: {
     op: "accepted",
     message: "Legal acceptance: a founder decision was recorded",
@@ -259,10 +259,14 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: the email code step failed at the auth service; nothing was recorded",
     level: "error",
   },
-  /** Reconciliation found a legal_acceptance row with no matching `accepted` event (reported by the verify endpoint, PR-D). */
+  /**
+   * Reconciliation found a legal_acceptance row with no acknowledgement (reported by the verify endpoint, PR-D): the decide
+   * route writes the ack only after the `accepted` event was flushed, so this proves the route did not acknowledge, not that
+   * Sentry received or missed the event. Alert-only. `extra` carries `key`, the public `textHash`, `ageSeconds` and `status`.
+   */
   rowWithoutEvent: {
     op: "row_without_event",
-    message: "Legal acceptance: a recorded decision has no matching accepted event",
+    message: "Legal acceptance: a legal acceptance row has no recorded acknowledgement",
     level: "error",
   },
   /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
@@ -271,13 +275,18 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
     level: "error",
   },
-  /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). */
+  /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). `extra` carries `key` and the public `textHash`. */
   recordInvalid: {
     op: "record_invalid",
     message: "Legal acceptance: a stored decision failed its integrity check",
     level: "error",
   },
-  /** A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is `verify`, `ack_state` or `ack`. No paging rule yet (#12195). */
+  /**
+   * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
+   * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
+   * ack write), `registry` (the legal text could not be read, verify endpoint step 4) or `config` (a token or founder id
+   * that is SET but malformed; once per process, names only the variable). No paging rule yet (#12195).
+   */
   storeFailed: {
     op: "store_failed",
     message: "Legal acceptance: a store call on the verify or acknowledge path failed",
@@ -286,6 +295,10 @@ export const LEGAL_OPS = {
 } as const satisfies Record<string, ApprovalOp>;
 
 export type LegalOpKey = keyof typeof LEGAL_OPS;
+
+/** The closed set of `store_failed` `tags.stage` values; every storeFailed report carries exactly one (the contract test pins it). */
+export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config"] as const;
+export type StoreFailedStage = (typeof STORE_FAILED_STAGES)[number];
 
 export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
   const def: ApprovalOp = LEGAL_OPS[key];

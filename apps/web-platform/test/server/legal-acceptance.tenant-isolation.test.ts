@@ -627,16 +627,27 @@ describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () 
     });
   });
 
-  test("age is computed in the database from the decision row's own time", async () => {
+  test("age is computed in the database, in whole seconds, from the decision row's own created_at (a row backdated 200 s reads 199..201)", async () => {
     await scenario(async (t, c) => {
       await verifiedIntent(t, c.userA, c.sessionA);
       await record(t, web(c));
-      // The write-once trigger forbids touching the row, so age the clock by comparing against a later statement time.
-      await t`select pg_sleep(1.2)`;
+      // now() is frozen inside one transaction, so a row written here is 0 s old. The write-once guard refuses UPDATE for
+      // everyone (it is ENABLE ALWAYS, so session_replication_role does not bypass it), so the owner switches that one
+      // trigger off INSIDE this rolled-back transaction, backdates the row and never turns it back on: the rollback
+      // restores both the trigger and the row, and no row is persisted on the shared database.
+      await t`alter table public.legal_acceptance disable trigger legal_acceptance_guard`;
+      expect(await ackState(t, c.userA)).toMatchObject({ outcome: "row", age_seconds: 0 });
+      await t`update public.legal_acceptance set created_at = now() - interval '200 seconds' where founder_id = ${c.userA}`;
       const s = await ackState(t, c.userA);
-      // Inside one transaction now() is frozen at the transaction start, so the age is 0 here; the integer type and
-      // the floor-at-zero are what this asserts. A cross-transaction age is covered by the verify sentinel in CI.
-      expect(s.age_seconds).toBe(0);
+      expect(s).toMatchObject({ outcome: "row", acked: false });
+      expect(Number.isInteger(s.age_seconds)).toBe(true);
+      expect(s.age_seconds).toBeGreaterThanOrEqual(199);
+      expect(s.age_seconds).toBeLessThanOrEqual(201);
+      // Units and offset: an hour is 3600 (not 60 or 3600000), and a row stamped in the future floors at 0.
+      await t`update public.legal_acceptance set created_at = now() - interval '1 hour' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(3600);
+      await t`update public.legal_acceptance set created_at = now() + interval '5 minutes' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(0);
     });
   });
 
