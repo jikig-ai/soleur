@@ -2,7 +2,7 @@
 title: "SWE-2 Flash adoption on the Devin harness — docs + routing"
 status: specified
 issue: none  # filing-gate refused at spec time on a docs-only estimate; scope grew at plan-review (harness.ts strings + pin suite) — inline delivery retained in PR #12135
-brainstorm: knowledge-base/project/brainstorms/2026-11-05-swe2-flash-devin-tiering-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261105-120831-2026-11-05-swe2-flash-devin-tiering-brainstorm.md
 branch: feat-swe2-flash-model-tiering
 pr: 12135
 date: 2026-11-05

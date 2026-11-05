@@ -1,6 +1,6 @@
 ---
 title: "Tasks — SWE-2 Flash on the Devin harness (docs + routing)"
-plan: knowledge-base/project/plans/2026-11-05-feat-swe2-flash-devin-tiering-plan.md
+plan: knowledge-base/project/plans/archive/20261105-120831-2026-11-05-feat-swe2-flash-devin-tiering-plan.md
 date: 2026-11-05
 ---
 
