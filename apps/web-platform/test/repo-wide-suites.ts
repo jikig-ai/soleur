@@ -44,6 +44,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/cla-evidence/cla-doc-path.test.ts",
   "test/cla-evidence/hash.test.ts",
   "test/cla-evidence/roster-entry-gate.test.ts",
+  "test/claude-pin-lockstep.test.ts",
   "test/context-injection.test.ts",
   "test/context-queries-hook.test.ts",
   "test/context-queries-shell-parity.test.ts",
