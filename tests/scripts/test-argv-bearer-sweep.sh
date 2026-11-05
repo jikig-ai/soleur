@@ -4435,7 +4435,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4446,7 +4446,7 @@ S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/ap
 S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
 [[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
 # Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
-S4_POP_FLOOR=24
+S4_POP_FLOOR=25
 S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
 if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
 else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
@@ -4473,8 +4473,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (11 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=11
+# The floor is the realized count (13 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read), key-rotate x2 (the deploy-status GET and the vector-restart POST)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=13
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
@@ -5565,7 +5565,7 @@ for f in sys.argv[2:]:
 print(n)
 '
 S4_RP="$S4/replay"; assert_fixture_dir "$S4_RP"; mkdir -p "$S4_RP"
-S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh"
+S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/key-rotate.sh"
 S4_RP_N="$(cd "$REPO_ROOT" && python3 -I -c "$s4_replay_py" "$S4_RP" $S4_REPLAY_FILES)"
 S4_RP_OK=0; S4_RP_BAD=""
 for stm in "$S4_RP"/*.stm; do
@@ -5577,8 +5577,8 @@ for stm in "$S4_RP"/*.stm; do
   res="$(grep -cx OK "$stm.out" || true)"; [[ "$(grep -c REFUSED "$stm.out" || true)" == 0 ]] || res=0
   [[ "$res" -ge 1 ]] && S4_RP_OK=$((S4_RP_OK + 1)) || S4_RP_BAD+=" $(basename "$stm")"
 done
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 24 bc_curl statements in the nine files.
-S4_REPLAY_FLOOR=24
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 26 bc_curl statements in the ten files.
+S4_REPLAY_FLOOR=26
 if [[ -z "$S4_RP_BAD" && "$S4_RP_OK" == "$S4_RP_N" && "$S4_RP_OK" -ge "$S4_REPLAY_FLOOR" ]]; then row "S4 replay (static): all $S4_RP_OK converted bc_curl statements hand an argument list the library's own _bc_tail_ok accepts (zero refusals; anti-vacuity floor $S4_REPLAY_FLOOR)" ok
 else row "S4 replay (static): a converted call's argument list is refused or does not parse" fail "ok=$S4_RP_OK of $S4_RP_N bad:$S4_RP_BAD"; fi
 s4_tail_probe() { # <argv file>: the recorded call minus the library's own prefix and the config channel, judged by _bc_tail_ok

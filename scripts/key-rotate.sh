@@ -1066,6 +1066,8 @@ KK_VBASE_SELF=0
 KK_VBASE_EPOCH=0
 
 kk_vector_status() { # <outfile> -> the http code on stdout; the body lands in $1
+  # shellcheck source=/dev/null
+  source "$KK_ROOT/scripts/lib/bearer-curl.sh" || return 1
   bc_curl key-rotate 'X-Signature-256:sha256=:KK_GET_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
     'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
     -s --max-time 15 -o "$1" -w '%{http_code}' -X GET "https://${KK_DEPLOY_BASE}/hooks/deploy-status" || echo 000
