@@ -1591,7 +1591,7 @@ echo "P17: a floor of 0 does NOT license the confident state — the positive-wo
 # "0 configs read, so coverage is 'degraded'" — the report and the published verdict
 # disagreeing, with the published one being the optimistic lie.
 #
-# No shipped call site passes 0 today (the scheduled step declares 13, the other three take
+# No shipped call site passes 0 today (the scheduled step declares the inventory's count, the other three take
 # the default 1), which is exactly why this needs a test: the guarantee is the detector
 # honouring its own contract rather than depending on every future caller to pass a sane
 # floor.
