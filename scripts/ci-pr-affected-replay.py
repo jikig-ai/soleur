@@ -132,12 +132,12 @@ it), anchor-not-live, path-untracked, suite-unaudited, suite-unregistered, suite
 star-row-unreadable-members, star-row-tracked-suite (git tracks the suite's input, so it is not a suite with no inputs even if the
 file is missing, dangling or a directory link). Delete the row.
 
-RATCHET (S4 index completion PR3a, #10448; the amendment of ADR-276). `ratchet` is the audit as a CI check that is green on a tree whose audit exits 1: the live gap
-set (after the --accept exemptions) must EQUAL a committed, shrink-only baseline (scripts/ci-pr-affected-audit.baseline.tsv, repo-relative, one
-`suite<TAB>path` line per pair, each field written by quote_field, sorted and unique in the C locale, with a final newline). What it proves is the
+RATCHET (S4 index completion PR3a, #10448; the amendment of ADR-276). `ratchet` is the audit as a CI check. Since PR5z (#10861) it is STRICT ZERO: the
+committed baseline (scripts/ci-pr-affected-audit.baseline.tsv) is retired, the live gap set (after the --accept exemptions) must be EMPTY — ratchet green
+iff audit green — and a baseline file re-added after the deletion can never adopt (baseline-reintroduced). What it proves is the
 literal-name completeness over what the audit reads (REACH above): necessary but not sufficient, and never "index complete". It is advisory until a later PR
 makes its CI context required. The live set and the baseline are read from the checkout; the base (HEAD^1, or --base REF) is read for the baseline-state table
-(adoption, deletion), the growth rule, the cause text of a new pair, the oracle notice and the merge-base copy of the lint-ratchet.py helper (on a developer
+(reintroduction refusal, deletion), the growth rule, the cause text of a new pair, the oracle notice and the merge-base copy of the lint-ratchet.py helper (on a developer
 checkout HEAD^1 is just the previous local commit, so those are not meaningful there; read the CI result or pass --base).
   EXIT CODES  0 clean; 1 drift (a verdict about the tree); 2 infrastructure (the check could not be trusted). A usage error is argparse's rc 2 and prints no marker.
   ORDER  every exit-2 condition comes before every exit-1 verdict, so infrastructure is never a verdict: the selector (rc, hang), then the FLOORS on what it
@@ -146,9 +146,9 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
          read at run time; the AFFECTED_SELECTED row count equals its of=; no tracked input unreadable for a reason other than absence (EACCES, EIO: floor-unreadable);
          at least one suite and one file read), then the base (resolved with git, its lint-ratchet.py loaded from the BASE commit, not the PR tree: a PR cannot weaken
          the helper and the baseline together; a base without the file, or one that does not compile, is internal). Then the verdicts, each class printed and the first one named in the marker: unaudited suite; a `*`
-         accept row for a readable suite; a stale or invalid accept row; a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
+         accept row for a readable suite; a stale or invalid accept row; a baseline re-introduced after strict zero (baseline-reintroduced); a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
          line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown).
-  BASELINE STATE  base absent / HEAD present: adoption, passes when live equals the baseline. Base present / HEAD absent: passes only when nothing is live
+  BASELINE STATE  base absent / HEAD present: exit 1 unconditionally (baseline-reintroduced) — a baseline re-added after strict zero never adopts, whatever it covers. Base present / HEAD absent: passes only when nothing is live
          (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
          growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
   The baseline is compared as OPAQUE rendered lines (there is no baseline parser); the failure text names the suite, the path and the referencing file:line, gives the two
@@ -1744,7 +1744,7 @@ def load_rows(list_path, root):
     return sp.stdout.split("\n")
 
 
-# ---- ratchet (S4 index completion PR3a): the audit as a check that is green on a tree the audit fails -----------------------------------------------
+# ---- ratchet (S4 index completion PR3a): the audit as a check — strict zero since PR5z, a re-added baseline never adopts -----------------------------------------------
 RATCHET_BASELINE = "scripts/ci-pr-affected-audit.baseline.tsv"
 RATCHET_ACCEPT = "scripts/ci-pr-affected-audit.accept.tsv"
 RATCHET_LINT = "plugins/soleur/scripts/lint-ratchet.py"
@@ -2055,6 +2055,9 @@ def ratchet_run(a, st):
     if stales:
         findings.append(("stale-accept", stales, ["remedy: delete the accept row: the tree no longer backs it, or it is malformed"]))
     new = [line for line in live if line not in head_set]
+    if head_text is not None and base_text is None:
+        findings.append(("baseline-reintroduced", [["baseline-reintroduced\t%s\ta baseline file absent at the base cannot be adopted: strict zero retired it" % q(rel)]],
+                         ["remedy: delete %s — a re-added baseline never adopts; declare the edge or add an accept row for each live pair it would claim" % rel]))
     if new and head_text is None and base_text is not None:
         findings.append(("baseline-deleted", [["baseline-deleted\t%s\t%d pair(s) are still live" % (q(rel), len(new))]],
                          ["remedy: restore it from main: git checkout origin/main -- %s" % rel]))
@@ -2084,7 +2087,9 @@ def ratchet_run(a, st):
         out.extend(remedy)
         rep.extend(remedy)
     names = {f[0] for f in findings}
-    if names & {"stale-line", "baseline-dup", "baseline-order", "grown"}:
+    # The restore/regenerate tail is only meaningful when the base carries a baseline; under a
+    # re-added file (base absent) main has no copy to restore and regeneration is the forbidden act.
+    if base_text is not None and names & {"stale-line", "baseline-dup", "baseline-order", "grown"}:
         tail = []
         if "stale-line" in names:
             tail.append("remedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun")
@@ -2511,7 +2516,7 @@ def main(argv):
                   "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, its source closure, then the naming-walk files); "
                   "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
-    r = sub.add_parser("ratchet", help="the audit as a check that is green on a tree the audit fails: live gap pairs must equal the committed shrink-only baseline")
+    r = sub.add_parser("ratchet", help="the audit as a check: strict zero — the live gap set must be empty and a re-added baseline never adopts")
     r.add_argument("--root", default="", help="the tree to check (default: the current checkout)")
     r.add_argument("--list", default="", help="read the selector output from FILE instead of running the selector")
     r.add_argument("--baseline", default="", help="repo-relative baseline path (default scripts/ci-pr-affected-audit.baseline.tsv)")
