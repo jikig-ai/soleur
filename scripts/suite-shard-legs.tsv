@@ -141,6 +141,7 @@ plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	2
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	2
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
+plugins/soleur/skills/incident/test/pull-card.test.sh	5
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
