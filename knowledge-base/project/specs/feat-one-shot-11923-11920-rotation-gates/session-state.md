@@ -35,3 +35,4 @@
 - Suites: key-rotate 639/0, inngest 478/0, ci-deploy 743/0, parity 360-tests/365-pass, c4 35/0.
 - Next: soleur:qa -> soleur:compound -> soleur:ship -> postmerge -> DONE.
 - QA: skipped per qa/SKILL.md rule — Test Scenarios are prose-only G/W/T (no Browser:/API verify: steps); covered by executed suites + post-merge live checks (env protection_rules, first restart vector dispatch, PREVIOUS empty post-clear).
+- Compound (2026-11-05, pipeline): 4 learnings written — implicit-success job `if:` (apply-skip on plan mode + wrong evaluator model), allow-skipped allowance leaking approve failure downstream, protection verify type-presence vs content, verdict literal in sibling cell blinding B22e. lint-shell-capture folded into Session Errors (already lint-enforced). Rule budget [WARN] 44408/46000; no deviations; constitution promotion + route-to-definition deferred per pipeline commit scope. Next: soleur:ship -> postmerge -> DONE.
