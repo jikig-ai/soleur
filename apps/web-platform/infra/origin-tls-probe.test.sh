@@ -44,7 +44,8 @@ PY
   srv_pid=$!
   for _ in $(seq 1 50); do
     kill -0 "$srv_pid" 2>/dev/null || return 1
-    if curl -sS -o /dev/null -D - "http://127.0.0.1:${PORT}/" 2>/dev/null | tr -d '\r' | grep -qix "x-probe-test-server: $TOKEN"; then return 0; fi
+    hdrs="$(curl -sS -o /dev/null -D - "http://127.0.0.1:${PORT}/" 2>/dev/null | tr -d '\r')" || hdrs=""
+    if grep -qix "x-probe-test-server: $TOKEN" <<<"$hdrs"; then return 0; fi
     sleep 0.1
   done
   return 1

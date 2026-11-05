@@ -1925,7 +1925,7 @@ h443_deploy() {
     run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   )" && H443_RC=0 || H443_RC=$?
   H443_REASON="$(jq -r '.reason' "$H443_DIR/state" 2>/dev/null)"
-  H443_TRACE="$(printf '%s\n' "$H443_OUT" | grep '^DOCKER_TRACE:' | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')"
+  H443_TRACE="$(printf '%s\n' "$H443_OUT" | { grep '^DOCKER_TRACE:' || true; } | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')"
   rm -rf "$H443_DIR"
 }
 h443_check() {
