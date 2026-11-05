@@ -8,6 +8,45 @@ type: docs
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Scope of the pass:** proportionate to a four-file markdown change. The skill's full agent fan-out (every
+skill, learning, research and review agent) was NOT run: the plan-review panel (DHH, Kieran, code-simplicity)
+and the CTO ruling already covered the design, and a wide fan-out over a wording change adds cost, not recall.
+What ran instead: the deepen-plan halt gates and the quality-check list, done by direct verification.
+
+### Gate results
+
+- 4.6 User-Brand Impact: section present, threshold `none`, diff touches no sensitive path (knowledge-base only).
+- 4.7 Observability, 4.10 Encryption Posture, 4.11 Guard Contract, 4.13 Task Design, 4.9 UI wireframe, 4.55
+  Downtime: not triggered (no code, infra, store, guard, UI or serving-surface change). 4.5 Network-outage: no
+  trigger pattern in the plan.
+- 4.8 PAT-shaped variables: no match.
+- 4.12 Scope Check: one unfenced `## Scope Check`, all three subsections present, no `unmapped` Status cell, no
+  empty justification, `Recommendation:` line present. The review panel's `inferred` relabel of the ADR-218 and
+  PIR rows is in place with justifications.
+
+### Quality checks done live
+
+- Cited issues: #10455 OPEN, #12142 OPEN (this branch's draft PR), #10453 / #10445 / #9168 CLOSED (historical
+  context only, none cited as a blocker), #10548 OPEN (not edited).
+- Cited rule ids exist as active rules: `cq-cite-content-anchor-not-line-number`,
+  `hr-always-read-a-file-before-editing-it`, `hr-no-dashboard-eyeball-pull-data-yourself`.
+- Cited ADRs exist: ADR-218, ADR-260, ADR-283, ADR-298. Attribution claims re-read from the files: ADR-298 says
+  the Oct-22 heartbeat incidents were posted to the channel and still went unseen; ADR-283 names `#error-found`;
+  the 2026-10-19 section of `canary-probe-set.md` says all 17 Logs alerts carried a team-level escalation target;
+  the `faithful_canary_sandbox_broken` entry is the deploy-time SDK Bash smoke alert.
+- Cited test scripts and the lint exist at the stated paths; the three guards in AC 7 read the touched
+  runbooks (anchor resolution, outer-wrap token scan) and none asserts runbook wake-path prose.
+
+### New considerations from the pass
+
+- The "Current team" claim now cites the repo-recorded 2026-10-19 read as corroboration of the dashboard
+  statement instead of resting on the dashboard alone.
+- Self-grep scope: ACs 2 and 3 grep `knowledge-base/engineering/**` only, so the plan and `tasks.md` (which quote
+  the stale phrases) are outside the scan by construction.
+
 ## Overview
 
 Item 4 of the post-incident follow-up list in #10455 ("Verify the Slack wake path (ADR-260) across all
@@ -160,7 +199,7 @@ match multi-line spans exactly or replace by a short scripted substitution; a si
    > single-channel mode, channel `#error-found`, workspace Soleur.ai), and the incident for the Logs alert
    > `soleur-egress-gw-probe-fail-prd` (2026-11-04) shows Slack posts on its timeline at incident start and at
    > auto-resolve, next to the email sends. **Inferred:** every Logs alert has the same "Current team"
-   > escalation target (the 2026-10-19 read above shows the same `escalation_target` on all 17) and the
+   > escalation target (the 2026-10-19 read above shows a team-level `escalation_target` on all 17) and the
    > integration is account-wide, so Logs-alert incidents reach Slack, including `agent_sandbox_bash_denial`
    > and `faithful_canary_sandbox_broken`, which were not separately observed. **Unchanged:** each alert's
    > own flags are still `email = true` with `push`, `call`, `sms` and `critical_alert` false and no
