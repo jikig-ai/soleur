@@ -28,7 +28,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host | expected, the latch refuses a second FLUSHALL on purpose. `op=arm` is retired (#9927 item 8): [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8); history in [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
 | Deliberate SECOND FLUSHALL on the same host (#7777) or a re-cutover | no dispatch: `op=reflush` and `op=arm` are retired (#9927 item 8). Needs a reviewed re-introduction (revert of the retirement PR); see [§ Retired cutover verbs and the re-cutover / second-FLUSHALL path](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8) |
-| `apply_target=inngest-host-replace` fails at the inherited-`done` preflight naming `DOPPLER_TOKEN_INNGEST_FLIP_READ` | [§ The inherited-`done` preflight, repair line](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-7228-9927) |
+| `apply_target=inngest-host-replace` fails at the inherited-`done` preflight naming `DOPPLER_TOKEN_INNGEST_FLIP_READ` | [§ The inherited-`done` preflight, repair line](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-8252-9927) |
 | First boot or reboot fails with `stage=unpointed_raw_refused`, `reopen_not_luks` or `inngest-luks-FAILED` (after the #9786 host replace) | read the stage and its `detail=` in Better Stack ([log query](betterstack-log-query.md)); meaning of each refusal: [cutover runbook, "After the host replace that carries #9786"](inngest-luks-cutover-6894.md) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
@@ -57,7 +57,7 @@ block on a value it has read — the replace is often exactly what you want and 
 one dispatch — but it **fails closed on an unreadable flag** (since #9927 item 8, 2026-11-05;
 it used to degrade open): an empty `DOPPLER_TOKEN_INNGEST_FLIP_READ`, or a Doppler read that
 cannot be trusted, fails the step and therefore the job. See
-[§ The preflight, how it reads the flag and why](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-7228-9927).
+[§ The preflight, how it reads the flag and why](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-8252-9927).
 
 **Recovery — one dispatch, then an approval, no data loss:**
 
@@ -158,12 +158,13 @@ SECOND flush on the same host — not a recovery — has no dispatch either: see
 [§ Retired cutover verbs and the re-cutover / second-FLUSHALL path](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8).
 For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
 
-### The inherited-`done` preflight: how it reads the flag and why (#7228, #9927)
+### The inherited-`done` preflight: how it reads the flag and why (#8252, #9927)
 
 This section holds the rationale that used to sit as comments above the preflight step in
 `apply-web-platform-infra.yml` (moved here on 2026-11-05 to keep that workflow under its file-size
 gate, `plugins/soleur/test/workflow-file-size.test.ts`). The step's name in the workflow is
-`Preflight - inherited-done check, fails closed (#7228, #9927)`.
+`Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)`. The preflight itself
+came from PR #8252 (merged 2026-09-17).
 
 **Why the step exists (2026-09-17 incident).** A replace of this host leaves its scheduler
 refusing to start, every time, and nothing said so before the step existed. `INNGEST_CUTOVER_FLIP`
@@ -224,14 +225,24 @@ of, and an unset flag is itself outside the allowlist, so the replaced host refu
 until a cutover sets it.
 
 <!-- lint-infra-ignore start: owner-reserved operator-local credential rotation; there is no CI rotation path for this token (#7263), and the step is a recovery for a failed owner-gated dispatch, not a prescribed agent step -->
+**Availability failure mode: a fail-closed preflight blocks a recovery replace when
+`DOPPLER_TOKEN_INNGEST_FLIP_READ` is missing or dead.** The fail-closed design trades availability for
+a trustworthy read: a recovery `inngest-host-replace` (for example after a host loss) cannot proceed
+while the instrument is blind. This is document-only; there is no bypass input. Two exact repairs:
+
 **Repair line: `DOPPLER_TOKEN_INNGEST_FLIP_READ` dead or missing.** A dispatch of
 `apply_target=inngest-host-replace` that fails at this step naming the missing secret means the
 per-merge apply has not (yet) minted it, or a rotation went wrong.
 
-1. If the last `apply-web-platform-infra` push run on `main` failed or was partial (token created,
-   repo secret not), re-run that failed run. The apply is idempotent on retry. **Never `-replace`
-   the token on a partial apply**: that orphans a live key.
-2. If the apply is green and the secret still reads dead (token revoked, wrong config), the owner
+1. Secret MISSING (the merge window between the merge and its push-triggered apply, or a partial
+   apply where the token was created and the repo secret was not): either re-run the failed
+   `apply-web-platform-infra` push run on `main` (the apply is idempotent on retry), or dispatch
+   `apply-web-platform-infra.yml` with its default target (`apply_target=manual-rerun`, plus the
+   required `reason` input, for example `gh workflow run apply-web-platform-infra.yml -f reason='mint
+   DOPPLER_TOKEN_INNGEST_FLIP_READ'`). Then re-dispatch the replace. When `main` has moved since the
+   failed run, dispatch from current `main`; never re-run an old-sha run, which would apply stale
+   state. **Never `-replace` the token on a partial apply**: that orphans a live key.
+2. Token DEAD (revoked, wrong config; the secret exists but the read fails): the owner
    runs the operator-local rotation from the header of `inngest-flip-read-token.tf`:
    `terraform apply -replace=doppler_service_token.inngest_flip_read` with `-target` on BOTH
    `doppler_service_token.inngest_flip_read` and `github_actions_secret.doppler_token_inngest_flip_read`
@@ -241,7 +252,9 @@ per-merge apply has not (yet) minted it, or a rotation went wrong.
    CI rotation path for this token (the family-wide gap is tracked at #7263).
 3. Verify with metadata only: `gh secret list --repo jikig-ai/soleur | grep DOPPLER_TOKEN_INNGEST_FLIP_READ`
    and `doppler configs tokens -p soleur-inngest -c prd --json | jq -r '.[]|"\(.name)\t\(.access)"'`
-   showing `inngest-ci-flip-read` with access `read`. No key material is ever read.
+   showing `inngest-ci-flip-read` with access `read`. No key material is ever read. **These two checks
+   prove existence, not that the token works**: a revoked token still lists. The proof of a working
+   token is the preflight itself reading the names list on the next replace dispatch.
 <!-- lint-infra-ignore end -->
 
 **Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
@@ -264,17 +277,23 @@ two verbs after a replacement write-credential design exists.
 
 **A re-cutover, or a deliberate second FLUSHALL, now needs a reviewed re-introduction of the
 verb**, that is a revert of the #9927 item 8 retirement PR (and with it the G1 to G6 gate sequences
-described in the historical sections below). There is no other CI path. For a catastrophic event
-that cannot wait for that review, the on-host `reflush` arm of `inngest-cutover-flip.sh` is
-unchanged and still consumes a Doppler-console write of `INNGEST_CUTOVER_FLIP` on
-`soleur-inngest/prd` by the owner. The bound on that act is the key name, the config and one rule:
-**read the current value of `INNGEST_CUTOVER_FLIP` live first** (a write over an in-flight flip
-races the running FSM, which is what the retired G1 refused), and do not write it unless the read
-shows a terminal value. The value format and the evidence the FSM validates (a malformed or bare
-`reflush` carries no authorization and is refused, `reflush-evidence-invalid`) are defined in
-`apps/web-platform/infra/inngest-cutover-flip.sh`; read them there rather than from this page. This
-is an owner act in the Doppler console, not an agent act. There is still no SSH anywhere in this
-path.
+described in the historical sections below). There is no other CI path, and there is no owner
+console path either: **a second flush requires a reviewed PR re-introducing the verb with its four
+gates restored.** Do not hand-write `INNGEST_CUTOVER_FLIP` values in the Doppler console to
+approximate it: a malformed or mistimed value can drive the on-host FSM to `aborted`, which is
+terminal and has no CI exit. There is still no SSH anywhere in this path.
+
+**What blocks the arm-token revoke, and the tracker.** `op=rollback` and `op=resume` still need a
+write credential, so the revoke of `doppler_service_token.inngest_arm_write` stays blocked until a
+replacement exists. The single follow-up tracker is #12158: the replacement write credential for
+rollback/resume (the Tier-B move before the arm revoke, optionally a canary) and removal of the arm
+`-target` lines in the revoke PR.
+
+**Host-side log text.** The on-host `SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED` line still says
+`op=reflush writes both`. That verb is retired. The text is part of the sha256-compared
+config-bundle content (`inngest-cutover-flip.sh`), so it is left as is and changes with the next
+host-config change (the next owner-gated `inngest-host-replace` delivers it). Read such a row as
+"a reflush carried no authorization", not as an instruction to dispatch anything.
 
 **How the latch ledger works (still true on the host).** The `/mnt/data` latch is an
 **append-only ledger**, never a flag file: each record is one line, `flushed_at=... host=...
@@ -3366,7 +3385,7 @@ ADR-100, amendment 2026-09-14.
      > before. An operator following the old wording would clear the flag, wait for a re-render
      > that cannot happen, and re-run `op=arm` into the same refusal. The gate's own `::error::`
      > string carried the same false instruction and was corrected in the same change.
-   - **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
+   - **[RETIRED 2026-11-05, #9927 item 8: `op=arm` is deleted, so this gate no longer runs and the `FLUSH_LATCH_SINCE` repo variable is no longer read; historical record only]** **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
      dedicated host's Better Stack log source carries a `"reason":"flip-complete"` or
      `"reason":"refuse-rearm-after-done"` row inside `FLUSH_LATCH_SINCE` (default `365d`), i.e. when a
      `FLUSHALL` has already been performed for this host. Such an arm was always doomed: the monotonic
@@ -3397,8 +3416,8 @@ ADR-100, amendment 2026-09-14.
      > recorded in the #7674 plan and tracked for the PR that opens the cutover window. Until it is
      > built, a standing latch has no in-repo remediation, and pretending otherwise is what left
      > this gate's operator-facing message pointing at a window that could not clear it. If that recut has ALREADY happened but
-     > the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
-     > after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
+     > the old rows have not aged out, the then-advice was to set the repo variable `FLUSH_LATCH_SINCE` to a window starting
+     > after it (e.g. `1h`) and re-dispatch (RETIRED: the variable is no longer read, `op=arm` being deleted).
 
      > **Post-cutover status (2026-09-18, #7695).** The recut target now exists:
      > `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778), dispatch-only, behind the
@@ -3427,7 +3446,7 @@ ADR-100, amendment 2026-09-14.
      > this volume a rollback is one-way: after `rolled-back`, `op=arm` G1 admits the flag, G3.7
      > refuses BEFORE any write (the flag stays `rolled-back`), and if that pre-filter is narrowed
      > the on-host latch refuses into terminal `aborted` (#7777). The `FLUSH_LATCH_SINCE` narrowing
-     > above has no application here — no recut has happened and the latch rows are genuine. The
+     > above (retired, see the G3.7 bullet) had no application here — no recut has happened and the latch rows are genuine. The
      > latch's real precondition is a measured-empty store, which this volume cannot reach without
      > #7777; the plaintext posture is #6894's (ADR-142, additive), and the target's fate — dormant
      > on this volume, retire-or-keep undecided — is decided on #8316.

@@ -4245,7 +4245,8 @@ _G2_LABELS="backup capture doublefire-probe enumerate execute inventory quiesce-
 # Non-comment YAML lines only, so a retained comment naming a verb neither masks nor fakes a hit.
 _G2_YAML_CODE="$(mktemp)"; SCRATCH+=("$_G2_YAML_CODE")
 grep -vE '^[[:space:]]*#' "$WF_YAML" > "$_G2_YAML_CODE"
-_g2_ops() { grep -oE "inputs\\.op == '[a-z-]+'" | sed -E "s/.*'([a-z-]+)'/\\1/" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+# Tolerant of spacing around `==` and of single OR double quoted literals (`inputs.op=="arm"`, `inputs.op  ==  'arm'`).
+_g2_ops() { grep -oE "inputs\\.op[[:space:]]*==[[:space:]]*['\"][a-z-]+['\"]" | sed -E "s/.*['\"]([a-z-]+)['\"]\$/\\1/" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 G2_OPTIONS=$(awk '/^[[:space:]]+options:[[:space:]]*$/{f=1;next} f && /^[[:space:]]+-[[:space:]]/{print;next} f && !/^[[:space:]]*(#.*)?$/{f=0}' "$_G2_YAML_CODE" | sed -E 's/^[[:space:]]+-[[:space:]]*//; s/[[:space:]]*(#.*)?$//; s/^["'"'"']//; s/["'"'"']$//' | tr '\n' ' ')
 G2_ENV_LINE=$(grep -E '^[[:space:]]+environment:' "$_G2_YAML_CODE" | sed -n '1p' || true)
 G2_TOK_LINE=$(grep -E '^[[:space:]]+DOPPLER_TOKEN_INNGEST_ARM:' "$_G2_YAML_CODE" | sed -n '1p' || true)
@@ -4257,7 +4258,13 @@ G2_IF_SET=$(printf '%s' "$G2_IF_LINE" | _g2_ops)
 G2_PRIV_SET=$(printf '%s' "$G2_PRIV_LINE" | _g2_ops)
 # Case labels of the orchestrator: every 2-space-indent pattern line inside `case "$OP"`, split on
 # `|`, quotes/parens/whitespace stripped, so a combined (`arm|rollback)`) or quoted (`"arm")`) label cannot hide.
-G2_LABELS=$(awk '/^case "\$OP" in$/{f=1;next} /^esac$/{f=0} f && /^  [^[:space:]#].*\)[[:space:]]*(#.*)?$/' "$BODY_SH" | sed -E 's/[[:space:]]*#.*$//; s/\)[[:space:]]*$//; s/^[[:space:]]*\(?//' | tr '|' '\n' | sed -E "s/[\"' ]//g" | { grep -vxF '*' || true; } | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//')
+# A label is the leading `[(]pat[|pat]...)` of a 2-space-indent line; it is found even when the arm is a ONE-LINER whose line
+# does not end in `)` (`  newop) cmd ;;`). Only label-shaped text is matched, so command text after the `)` cannot add labels.
+_g2_labels() { # <body file> -> sorted, space-separated case labels of `case "$OP" in`
+  awk '/^case "\$OP" in$/{f=1;next} /^esac$/{f=0} f && match($0, /^  \(?["\x27]?[A-Za-z0-9_*-]+["\x27]?([[:space:]]*\|[[:space:]]*["\x27]?[A-Za-z0-9_*-]+["\x27]?)*[[:space:]]*\)/){print substr($0, RSTART, RLENGTH)}' "$1" \
+    | sed -E 's/\)$//; s/^[[:space:]]*\(?//' | tr '|' '\n' | sed -E "s/[\"' ]//g" | { grep -vxF '*' || true; } | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+G2_LABELS=$(_g2_labels "$BODY_SH")
 assert "#9927 G2 anti-vacuity: options, the environment ternary, the token ternary, the export if:, the loader ternary and the case labels were all located" \
   "[[ -n '$G2_OPTIONS' && -n '$G2_ENV_SET' && -n '$G2_TOK_SET' && -n '$G2_IF_SET' && -n '$G2_PRIV_SET' && -n '$G2_LABELS' ]]"
 for _v in $_G2_RETIRED; do
@@ -4290,6 +4297,44 @@ assert "#9927 G2 the unknown-op catch-all arm still refuses (a retired verb disp
   "awk '/^case \"\\\$OP\" in\$/{f=1;next} /^esac\$/{f=0} f' '$BODY_SH' | grep -A2 -E '^  \\*\\)' | grep -qE \"unknown op .*exit 1\""
 assert "#9927 G2 no FLUSH_LATCH_SINCE mapping or reader remains (its only consumer, G3.7, went with op=arm)" \
   "! grep -qF 'FLUSH_LATCH_SINCE' '$WF_YAML' && ! grep -qF 'FLUSH_LATCH_SINCE' '$BODY_SH'"
+
+# --- Guard 2 hardening (#9927 review): arm-token consumption is EXACTLY one expression, no `secrets: inherit`,
+# the op-literal extraction tolerates spacing/quote style, and one-line case arms are found as labels. Each
+# check is a function of a FILE so the mutation rows below run the SAME code on a mutated copy.
+_g2_arm_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oE 'secrets\.DOPPLER_TOKEN_INNGEST_ARM' | wc -l | tr -d ' '; }
+_g2_inherit_n() { grep -vE '^[[:space:]]*#' "$1" | grep -cE '^[[:space:]]*secrets:[[:space:]]*inherit([[:space:]]|$)' || true; }
+assert "#9927 G2 the arm token secret is consumed EXACTLY once in the workflow (non-comment): the one scoped env ternary" \
+  "[[ \"\$(_g2_arm_secret_n '$WF_YAML')\" == 1 ]]"
+assert "#9927 G2 the workflow never uses 'secrets: inherit' (it would hand every secret, the arm token included, to a callee)" \
+  "[[ \"\$(_g2_inherit_n '$WF_YAML')\" == 0 ]]"
+G2M_DIR="$(mktemp -d)"; SCRATCH+=("$G2M_DIR")
+cp "$_G2_YAML_CODE" "$G2M_DIR/wf-ok.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}"; } > "$G2M_DIR/wf-second-consumer.yml"
+grep -v 'secrets\.DOPPLER_TOKEN_INNGEST_ARM' "$_G2_YAML_CODE" > "$G2M_DIR/wf-no-consumer.yml" || true
+{ cat "$_G2_YAML_CODE"; echo "    secrets: inherit"; } > "$G2M_DIR/wf-inherit.yml"
+{ cat "$_G2_YAML_CODE"; echo "    # secrets: inherit  (a comment, must not count)"; echo "    # secrets.DOPPLER_TOKEN_INNGEST_ARM (comment)"; } > "$G2M_DIR/wf-comment-only.yml"
+assert "#9927 G2 MUTATION: a second consumer of the arm token reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-second-consumer.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: removing the only consumer reads count=0 (judged RED, not vacuously green)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-no-consumer.yml')\" == 0 ]]"
+assert "#9927 G2 MUTATION: an added 'secrets: inherit' is detected (count=1)" \
+  "[[ \"\$(_g2_inherit_n '$G2M_DIR/wf-inherit.yml')\" == 1 ]]"
+assert "#9927 G2 MUTATION: comment-only mentions of the secret or 'secrets: inherit' do not count (neither masks nor fakes a hit)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-comment-only.yml')\" == 1 && \"\$(_g2_inherit_n '$G2M_DIR/wf-comment-only.yml')\" == 0 ]]"
+assert "#9927 G2 MUTATION: the op-literal extraction reads a double-quoted, unspaced literal (inputs.op==\"arm\")" \
+  "[[ \"\$(printf '%s' 'x: \${{ inputs.op==\"arm\" && 1 || 2 }}' | _g2_ops)\" == arm ]]"
+assert "#9927 G2 MUTATION: the op-literal extraction reads a wide-spaced single-quoted literal (inputs.op  ==  'luks-cutover')" \
+  "[[ \"\$(printf '%s' \"x: \\\${{ inputs.op  ==  'luks-cutover' }}\" | _g2_ops)\" == luks-cutover ]]"
+assert "#9927 G2 MUTATION: a mutated token ternary with a double-quoted 'arm' is no longer equal to the literal set (judged RED)" \
+  "[[ \"\$(printf '%s' \"DOPPLER_TOKEN_INNGEST_ARM: \\\${{ (inputs.op == 'rollback' || inputs.op==\\\"arm\\\" || inputs.op == 'resume') && 1 }}\" | _g2_ops)\" != '$_G2_TOKEN_OPS' ]]"
+sed '/^case "\$OP" in$/a\  newop) echo hi ;;' "$BODY_SH" > "$G2M_DIR/body-oneliner.sh"
+sed '/^case "\$OP" in$/a\  "quoted-op"|other-op) echo hi ;;' "$BODY_SH" > "$G2M_DIR/body-oneliner-multi.sh"
+assert "#9927 G2 the live label extraction still equals the literal set via the shared function (anti-vacuity for the rows below)" \
+  "[[ \"\$(_g2_labels '$BODY_SH')\" == '$_G2_LABELS' ]]"
+assert "#9927 G2 MUTATION: a one-line case arm '  newop) cmd ;;' is extracted as a label (judged RED vs the literal set)" \
+  "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner.sh')\" == *newop* && \"\$(_g2_labels '$G2M_DIR/body-oneliner.sh')\" != '$_G2_LABELS' ]]"
+assert "#9927 G2 MUTATION: a one-line combined/quoted arm '  \"quoted-op\"|other-op) cmd ;;' yields both labels" \
+  "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *other-op* && \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *quoted-op* ]]"
 
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
@@ -4411,7 +4456,9 @@ _DISPATCHED=$((PASS + FAIL))
 #   G3.7, the g3_decide / g3_action / diag_boot_decide / flush_latch_decide / _flush_latch_count harnesses, the LUKS liveness
 #   and confirm readers, the luks-cutover and reflush blocks), +19 for the Guard 2 absence / literal-set block. The kept
 #   op=rollback / op=resume / execute / probe rows are unchanged.
-_EXACT_FLOOR=965
+# 965 -> 977 (+12) at the #9927 review round (this PR), measured from the STALE FLOOR FATAL line: Guard 2 hardening - arm-token
+#   consumption count==1, no `secrets: inherit`, tolerant op-literal extraction, one-line case-arm labels (live + mutation rows).
+_EXACT_FLOOR=977
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

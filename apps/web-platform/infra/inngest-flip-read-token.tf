@@ -1,7 +1,7 @@
 # Ref #9927 item 8. A READ-ONLY Doppler service token for `soleur-inngest/prd`, published as the repo
 # secret DOPPLER_TOKEN_INNGEST_FLIP_READ. Its one consumer is the `inngest_host_replace` inherited-done
 # preflight in `.github/workflows/apply-web-platform-infra.yml`, which reads INNGEST_CUTOVER_FLIP before a
-# host replace (#7228). Until this token existed that read rode on DOPPLER_TOKEN_INNGEST_ARM, a read/write
+# host replace (#8252). Until this token existed that read rode on DOPPLER_TOKEN_INNGEST_ARM, a read/write
 # token (inngest-arm-write-token.tf), and silently degraded to "SKIPPED" the moment the arm token was gone.
 # The preflight now FAILS CLOSED without this token, so the arm token's revoke no longer disables the guard.
 #
@@ -15,7 +15,10 @@
 # repo-level secret, so it resolves in any workflow on any pushed branch with no reviewer gate. After the arm
 # token is eventually revoked this is the only repo-wide read path to those keys. The rotation owner is the
 # repository owner, via the recipe below. Fetching the token inside the main-only `infra-privileged` job from
-# a Tier-B secret was considered and not chosen (decision-challenges F4 of the plan that added this file).
+# a Tier-B secret (soleur-infra-privileged/prd, precedent GITHUB_APP_RUNTIME_DOPPLER_TOKEN) is the
+# alternative, rejected for now because it needs a new privileged secret plus a loader change in a
+# prod-mutating apply; moving it before the arm revoke is tracked in #12158. No expires_at, like the sibling
+# tokens: an expiry would become a silent fail-closed outage of the preflight.
 #
 # By-reference project/config (not the soleur-inngest / prd string literals), as inngest_arm_write: this
 # builds the dependency edge onto doppler_project.inngest and doppler_environment.inngest_prd. Both carry

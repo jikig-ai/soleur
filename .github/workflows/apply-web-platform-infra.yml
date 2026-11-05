@@ -1928,28 +1928,29 @@ jobs:
             exit 1
           fi
 
-      # INHERITED-`done` PREFLIGHT (#7228, 2026-09-17). A replace of this host strands the scheduler when
+      # INHERITED-`done` PREFLIGHT (#8252, 2026-09-17). A replace of this host strands the scheduler when
       # INNGEST_CUTOVER_FLIP is `done` (the root-disk marker is destroyed, the Doppler flag is not). This step
       # does not block that; it makes the recovery known BEFORE the outage. It does FAIL CLOSED when it cannot
       # measure (empty token, blind instrument, failed read of a present key): a skipped guard is not a cleared
       # one (#9927). Rationale, the rc-capture reasoning and the non-`done` stranding values live in the runbook
       # inngest-server.md, inherited-done section; the token is inngest-flip-read-token.tf.
-      - name: 'Preflight - inherited-done check, fails closed (#7228, #9927)'
+      - name: 'Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)'
         env:
           DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}
         run: |
-          case "$-" in *x*) echo "::error::xtrace is on; refusing to run with a credential in scope"; exit 78 ;; esac
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           set -uo pipefail
           RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
           if [[ -z "${DOPPLER_TOKEN_INNGEST_FLIP_READ:-}" ]]; then
-            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. The per-merge apply-web-platform-infra run mints it; re-run the failed push run if that apply was partial (never -replace on a partial apply). Repair: runbook inngest-server.md, inherited-done section."
+            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the failed apply-web-platform-infra push run, or dispatch it with its default target, then re-dispatch this replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
             exit 1
           fi
-          blind() { echo "::error::inherited-done preflight: the instrument is blind (${1}). Nothing was measured, so this replace is not cleared. Repair: runbook inngest-server.md, inherited-done section."; exit 1; }
+          blind() { echo "::error::inherited-done preflight: no verdict could be formed (${1}), so this replace is not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
+          warn_unset() { echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until it is set (no CI cutover verb exists since #9927; runbook: Retired cutover verbs)."; }
           command -v doppler >/dev/null 2>&1 || blind "doppler missing"
           command -v jq >/dev/null 2>&1 || blind "jq missing"
           NAMES_RC=0
-          NAMES="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null)" || NAMES_RC=$?
+          NAMES="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" timeout 30 doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null)" || NAMES_RC=$?
           [[ "$NAMES_RC" -eq 0 ]] || blind "names list exit ${NAMES_RC}"
           [[ -n "$NAMES" ]] || blind "names list empty"
           printf '%s' "$NAMES" | jq -e 'type=="object" and length>0' >/dev/null 2>&1 || blind "names list is not a non-empty JSON object"
@@ -1959,18 +1960,22 @@ jobs:
             0) ;;
             1)
               echo "INNGEST_CUTOVER_FLIP is not in the config's names (the list was read)."
-              echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until a cutover sets it."
+              warn_unset
               exit 0 ;;
             *) blind "jq exit ${HAS_RC}" ;;
           esac
           FLAG_RC=0
-          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
+          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" timeout 30 doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
           [[ "$FLAG_RC" -eq 0 ]] || blind "read of INNGEST_CUTOVER_FLIP exit ${FLAG_RC}"
           # tr -d matches the on-host readers (inngest-server-flip-guard.sh, inngest-cutover-flip.sh).
           FLAG="$(printf '%s' "$FLAG" | tr -d '[:space:]')"
           if [[ -z "$FLAG" ]]; then
             echo "INNGEST_CUTOVER_FLIP is empty (the read succeeded)."
-            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until a cutover sets it."
+            warn_unset
+            exit 0
+          fi
+          if ! [[ "$FLAG" =~ ^[a-z-]{1,24}$ ]]; then
+            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP has an unexpected shape (${#FLAG} chars, value withheld). It is outside inngest-server-flip-guard.sh's allowlist, so the replaced host will refuse every prod start; fix the flag in Doppler before replacing."
             exit 0
           fi
           echo "INNGEST_CUTOVER_FLIP=${FLAG}"
@@ -1978,7 +1983,7 @@ jobs:
           if [[ "$FLAG" == "armed" || "$FLAG" == "flipping" ]]; then
             echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- this replace WILL strand the scheduler, and NOT via the inherited-done path. The /mnt/data flush latch survives the replace, so the FSM takes flush_already_performed -> refuse_rearm_after_done and writes flag=aborted, which is outside inngest-server-flip-guard.sh's allowlist. op=resume accepts 'done' only, so there is NO one-dispatch recovery from this state -- resolve the flag with the operator BEFORE replacing."
           elif [[ "$FLAG" != "done" && "$FLAG" != "flushed" ]]; then
-            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it."
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it (no CI cutover verb exists since #9927; runbook: Retired cutover verbs)."
           fi
           if [[ "$FLAG" == "done" ]]; then
             {

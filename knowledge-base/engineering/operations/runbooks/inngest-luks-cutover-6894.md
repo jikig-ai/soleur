@@ -7,11 +7,11 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927
 # Inngest LUKS cutover (#6894)
 
 > **Cutover dispatch retired 2026-10-25 (#10112).** The on-host cutover trio (`inngest-luks-cutover.{sh,service,timer}`) is no longer baked into
-> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, and the dispatcher refuses `op=luks-cutover` (G1/G2/G3).
+> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, and the dispatcher refused `op=luks-cutover` (G1/G2/G3) until the verb was deleted on 2026-11-05 (#9927 item 8, §5a-2).
 > Sections 1-5b are the record of how the cutover ran (2026-09-20); do not follow their dispatch steps. **Section 5c (sole-copy
 > protection, key loss, total loss, deliberate unprotect, break-glass and revert) stays in force** and is still the operator procedure those alerts point at. Section 6 below is FSM-dispatch troubleshooting; read it as history. A host provisioned before this
 > change still has the trio installed and its timer enabled until the next host replace; the dispatcher stays inert only while the flag is `done`
-> and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text are retired in a tracked follow-up.
+> and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text were deleted on 2026-11-05 (#9927 item 8, §5a-2).
 >
 > **Dispatch verb deleted 2026-11-05 (#9927 item 8).** That follow-up landed: `op=luks-cutover` is gone from `cutover-inngest.yml`
 > and `scripts/cutover-inngest.sh` (by deletion, no refusal stub), so a dispatch naming it is rejected by GitHub as an invalid `op` input.
@@ -24,7 +24,7 @@ swaps the mount, restarts the writers, and verifies. (Before 2026-10-09 a failed
 itself back by reverse-copying to the plaintext volume; that volume was destroyed, so on this host a failed
 post-swap verification is an incident with no automatic rollback — see §5a.)
 
-**One dispatch, nothing else.** There is no SSH step in this document and there is no manual
+**[RETIRED 2026-11-05, history only, see 5a-2] One dispatch, nothing else.** There is no SSH step in this document and there is no manual
 Doppler write. If you find yourself wanting one, the answer is in §6.
 
 | | |
@@ -91,6 +91,8 @@ is the prod-write ack; the token that can write the flag is injected only for th
 ---
 
 ## 2. Dispatch, then watch the FSM
+
+> **RETIRED 2026-11-05, history only, see 5a-2.** The command below no longer exists; GitHub rejects `op=luks-cutover` as an invalid input.
 
 ```
 gh workflow run cutover-inngest.yml -f op=luks-cutover
@@ -311,7 +313,7 @@ volume destroyed there is no plaintext exception to record, so none of those ste
 `op=luks-cutover` (a Doppler write of `INNGEST_LUKS_CUTOVER=armed` with the arm token, then a poll of the on-host copy FSM through
 Better Stack) was deleted from `cutover-inngest.yml` and `scripts/cutover-inngest.sh` as part of #9927 item 8, together with
 `op=arm` and `op=reflush`. The cutover it drove ran once (2026-09-20) and `INNGEST_LUKS_CUTOVER` is `done` (read live on
-2026-11-05, flag value only). Its dispatch had been inert since #10112 (2026-10-25: the on-host trio no longer ships, and G1/G2
+2026-11-05, flag value only). Its dispatch had been inert since PR #10966 (merged 2026-10-26: the on-host trio no longer ships, and G1/G2
 refused on a set pointer plus `done`), so nothing operational is lost; what changed is that there is no dispatchable surface and
 no arm-token consumer for it any more. The dated history of the verb stays in ADR-142 and in §§1-5b above.
 
@@ -805,7 +807,7 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
 ## 6. If something looks stuck
 
 - **The flag is a non-terminal value and nothing is moving.** The unit holds a `flock` and resumes
-  from its own state on the next 30s tick. Do not re-dispatch blind: `op=luks-cutover` refuses an
+  from its own state on the next 30s tick. Do not re-dispatch blind: the retired `op=luks-cutover` refused an
   in-flight flag precisely so a second write cannot race the FSM. Read the rows first.
 - **No rows at all.** The host is dark or the trio never installed. Neither is fixed by writing the
   flag — the write would park it in a state the next dispatch refuses. The route is

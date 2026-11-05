@@ -2530,7 +2530,7 @@ else row "cutover rollback heartbeat mutants: the marker commented out or sent t
 # The text under test is EXTRACTED from the real script; mutants doctor exactly one clause (text_mut refuses a replacement that changes more than one line).
 # =====================================================================================
 LD_REAL="$TMPD/ldreal"
-for d in "$LD_REAL"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+assert_fixture_dir "$LD_REAL"; mkdir -p "$LD_REAL"
 for t in bash cat grep sed tr awk head cut sha256sum jq mktemp rm mkdir env wc sort true false printf; do
   p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$LD_REAL/$t"
 done
@@ -8193,7 +8193,7 @@ echo "=== stage S9: Guard 1 rows (terraform -var credentials: derived scan, floo
 
 # =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
-# through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
+# through the helpers they guard. The floor is EXACT (a count above it is a STALE FLOOR, see the -ne branch at the end): raise it in the same PR as the rows.
 # =====================================================================================
 # Conservation: `row` counts at the call site, `_report` counts the verdict. If they diverge the
 # helper stopped counting (or a row bypassed it). A function over its three counters so a control can
@@ -8245,6 +8245,9 @@ EXPECTED_TESTS=831
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
+  exit 1
+elif [[ "$REAL" -ne "$EXPECTED_TESTS" ]]; then
+  printf 'STALE FLOOR: %s rows ran, EXPECTED_TESTS is %s -- set EXPECTED_TESTS=%s (the count is exact by design; rows were added without updating it).\n' "$REAL" "$EXPECTED_TESTS" "$REAL" >&2
   exit 1
 fi
 

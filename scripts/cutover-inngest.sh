@@ -22,7 +22,7 @@
 # stdout, which this child process inherits.
 #
 # RUNTIME DEPENDENCY. The workflow's `actions/checkout` step is required by ALL ops now,
-# not just the arm/rollback Better Stack confirm it was originally added for. Gating it on
+# not just the rollback/resume Better Stack confirm it was originally added for (op=arm, the other original consumer, was retired in #9927). Gating it on
 # `inputs.op` would break every cutover op, on a workflow_dispatch-only path where no CI
 # signal would catch it. See ADR-150.
 #
@@ -62,11 +62,6 @@ BASE="https://deploy.soleur.ai/hooks"
 # existing `|| ...` / `if ...` failure path handles it exactly like a transport failure. `printf`
 # is the shell builtin (not an exec), so the token is on no argv at any point.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-# _mask_ok <value>: the shape check that precedes an `::add-mask::` line for a value that is NOT a bearer token (a DSN, a heartbeat URL, a channel key
-# legitimately carry `:`, `@`, `?`, `&`, so _bearer_ok would refuse them and leave them UNMASKED). `::add-mask::` is itself a workflow command and the
-# runner parses commands per LINE, so the only hazard is a value holding a control character (a newline or CR ends the directive and starts a forged
-# one). Empty and control-character values return 1: nothing is printed for them, so an empty read never prints a bare directive.
-_mask_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
 # _body_head <body>: the FIRST line of a response body, every character outside printable ASCII replaced by `?`, cut at 160 characters. For the public run
 # log, where a raw body is an unbounded egress path (a host script's CombinedOutput can carry anything) and a body line starting with `::` could forge a
 # workflow command: callers embed the result MID-LINE in their own `::error::` text, never on a line of its own.
@@ -97,7 +92,7 @@ _sig_curl() {
 }
 
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
-# Stack Logs (source 2457081), used by op=arm (G6) and op=rollback (#6369). The emitter
+# Stack Logs (source 2457081), used by op=rollback (#6369) and, until its retirement in #9927, op=arm (G6). The emitter
 # (apps/web-platform/infra/inngest-cutover-flip.sh:125-137, `emit_state exit_code dbsize
 # reason flag`) puts the TERMINAL STATE in the `flag` field (done/aborted/rolled-back) and
 # a CAUSE in `reason` (flip-complete/dbsize-nonzero/…) — so we key on `"flag":"<state>"`,
@@ -1761,7 +1756,7 @@ case "$OP" in
       # ---- 2.0 DARK ARM (#8054). A non-200 here is the EXPECTED pre-arm state, not a fault:
       # inngest-server-flip-guard.sh (P1-5) refuses a prod-URI start while INNGEST_CUTOVER_FLIP is
       # outside {armed,flipping,flushed,done}, every pre-arm value is outside it, and the flag
-      # leaves that set only via op=arm — which runs AFTER this step. So the webhook's GQL forward
+      # left that set only via op=arm (retired in #9927) — which ran AFTER this step. So the webhook's GQL forward
       # cannot succeed on the first execute of a cutover, and until #8054 this branch was
       # `exit 1`, making 2.0 unrunnable in the very sequence it guards (same class as #8017).
       #
@@ -2116,9 +2111,9 @@ case "$OP" in
     echo "::notice::2.2 QUIESCE HARD GATE PASSED: web-1 (the deploy tunnel origin, the web scheduler host) reported the QUIESCED unit shape (inactive|failed + disabled + a valid quiesce marker — written only by op=quiesce-web) on every answered probe with no HTTP 200 across ${QUIESCE_PROBES} probe(s) (fail-closed). web-2 scope: see SEAM 2.2a."
 
     # ---- SEAM: operator maintenance-window steps. As of #6369 the 2.2b/2.3 arm-flip is NO
-    # LONGER an out-of-band Doppler write — it is the no-SSH `op=arm` dispatch (a prod-write
-    # behind explicit dispatch + the inngest-cutover environment required-reviewer gate, which
-    # satisfies hr-menu-option-ack-not-prod-write-auth: the dispatch + approval IS the ack).
+    # LONGER an out-of-band Doppler write — it WAS the no-SSH `op=arm` dispatch (a prod-write
+    # behind explicit dispatch + the inngest-cutover environment required-reviewer gate); that
+    # verb was retired in #9927 (the echo below says so), so no arm path is dispatchable now.
     # The remaining true operator seam is 2.4 (app-repoint). 2.2a is a statement, not a step,
     # and it is the ONE authoritative web-2 statement in this file — every other site points here.
     # This block still echoes only step text; no secrets / bodies / connection strings (AC-NOBODY).
@@ -2582,10 +2577,10 @@ case "$OP" in
     # INNGEST_CUTOVER_FLIP=rollback on soleur-inngest/prd (folded here from the former
     # operator SEAM D.5 step 1 — the enabled on-host timer picks it up and drives the FSM to
     # rolled-back); (B) the WEB re-enable + restart across EVERY $CUTOVER_HOSTS host via the
-    # deploy hook over the private net (no SSH). op=rollback stays a SEPARATE verb from op=arm
-    # (ADR-100 Decision 6b forward/reverse symmetry). Half (A) is value-silent + behind the same
-    # inngest-cutover environment required-reviewer gate + conditional DOPPLER_TOKEN_INNGEST_ARM
-    # as op=arm; it writes ONLY the flip value (never POSTGRES_URI/HEARTBEAT). This is also the
+    # deploy hook over the private net (no SSH). op=rollback was a SEPARATE verb from op=arm
+    # (ADR-100 Decision 6b forward/reverse symmetry; op=arm retired in #9927, rollback kept).
+    # Half (A) is value-silent + behind the inngest-cutover environment required-reviewer gate +
+    # conditional DOPPLER_TOKEN_INNGEST_ARM (now consumed only by op=rollback and op=resume); it writes ONLY the flip value (never POSTGRES_URI/HEARTBEAT). This is also the
     # P0-3 `aborted`-state recovery (the DBSIZE gate disabled the web schedulers; (B) restores them).
     if [[ -z "${CUTOVER_HOSTS:-}" ]]; then
       echo "::error::CUTOVER_HOSTS is empty — refusing to run rollback against an empty host-set"; exit 1
@@ -2636,9 +2631,9 @@ case "$OP" in
         echo "::notice::op=rollback: INNGEST_CUTOVER_FLIP is '${RB_CUR:-unset}' (not armed/forward-progressed) — nothing on the dedicated host to reverse (aborted = already stopped by the DBSIZE gate; unset = never armed). This is the documented P0-3 aborted-state recovery; proceeding to the web re-enable." ;;
     esac
 
-    # ---- #6552: DELETE the armed INNGEST_HEARTBEAT_URL (inverse of op=arm G4, :760).
+    # ---- #6552: DELETE the armed INNGEST_HEARTBEAT_URL (inverse of the retired op=arm's G4 heartbeat write; retired in #9927).
     # UNCONDITIONAL — it lives in Half (B), which runs for EVERY entry state, NOT in the
-    # forward-state case arm above. op=arm writes the URL at G4 BEFORE the FSM runs, so it
+    # forward-state case arm above. the retired op=arm wrote the URL at G4 BEFORE the FSM ran, so it
     # persists in `aborted`, the partial-arm state (G4 wrote it, then G5 `armed` failed),
     # and the `rolled-back` re-dispatch path — all of which the forward-state arm skips.
     # Leaving it stranded there re-creates the two-pushers-on-one-monitor bug #6552 closes:
@@ -2681,7 +2676,7 @@ case "$OP" in
     # live `status=="paused"`. Deleting the resource would instead force a terraform recreate and
     # mint a NEW url, stranding the one already in Doppler under ignore_changes=[value].
     #
-    # op=arm deliberately does NOT unpause. ADR-117's whole rule is that a monitor is unpaused
+    # (History: the retired op=arm deliberately did NOT unpause.) ADR-117's whole rule is that a monitor is unpaused
     # only after a REAL beat has been measured; arming it here — before the FSM has even run —
     # would create precisely the green-but-inert monitor #6537 spent nine days as.
     #
@@ -2804,8 +2799,8 @@ case "$OP" in
     # WHY THIS VERB HAD TO EXIST. inngest-server-flip-guard.sh refuses a prod start when the flag
     # is `done` and this host carries no done-owner marker — the inherited-`done` case, i.e. every
     # REPLACED host. Its refusal message prescribes INNGEST_CUTOVER_FLIP=flushed. Nothing wrote
-    # that value: op=arm writes `armed`, op=rollback writes `rollback`, and op=arm's G1 explicitly
-    # REFUSES when the flag is already armed/flipping/flushed/done. So the named recovery was a
+    # that value: the (since-retired, #9927) op=arm wrote `armed`, op=rollback writes `rollback`, and op=arm's G1 explicitly
+    # REFUSED when the flag was already armed/flipping/flushed/done. So the named recovery was a
     # bare out-of-band Doppler write against a deny-all-public host — an unowned operator step of
     # exactly the class hr-no-ssh-fallback-in-runbooks and
     # hr-never-label-any-step-as-manual-without forbid, on the critical recovery path.
@@ -2824,25 +2819,20 @@ case "$OP" in
     #     no latch is recorded that assertion is unfounded, and starting the server would adopt a
     #     queue that was never flushed. Answered off-host, never by SSH.
     #
-    #     ENFORCED SINCE #7462, AND NOT HERE — read this clause as a statement about the SYSTEM,
-    #     not about this verb. From #7228 until #7462 it was documentation only: nothing anywhere
-    #     evaluated it. `op=arm`'s G3.7 now does, over betterstack-query.sh, keyed on the two
-    #     emit_state literals that prove a flush happened (`flip-complete`,
-    #     `refuse-rearm-after-done`). It lives at `op=arm` because that is the verb the predicate
-    #     can act on: `op=arm` must refuse when a latch EXISTS, `op=resume` must refuse when one
-    #     does NOT, and only the first is answerable off-host — absence of a Better Stack row is
-    #     also what a retention lapse looks like, so an off-host reader can only ever prove
-    #     presence. G1 below is what protects this verb, by scoping it to `done`: only a completed
-    #     flip evidences that a FLUSHALL actually happened. The earlier wording named the
-    #     deploy-status hook as the read path; the implemented reader is Better Stack.
+    #     NOTHING ENFORCES G2 NOW. From #7462 until #9927 it was enforced at op=arm's G3.7 (over
+    #     betterstack-query.sh, keyed on the `flip-complete` / `refuse-rearm-after-done` emit_state
+    #     literals); op=arm was retired in #9927 and G3.7 went with it, and op=reflush (the only
+    #     thing that could clear the latch, #7777) was retired too. So the latch check is
+    #     documentation only again. G1 below — `done` ONLY — is the SOLE guard of this verb: only a
+    #     completed flip evidences that a FLUSHALL actually happened. Do NOT widen G1 to
+    #     aborted/rolled-back to compensate: that would re-open #7674/#5450 (a scheduler started
+    #     against a queue that was never flushed).
     #
     #     KNOWN DEAD END, stated rather than left to be rediscovered: from terminal `aborted`
-    #     there is no dispatchable path forward. G1 accepts `done` ONLY, and `op=arm` is refused by
-    #     its own G3.7 whenever the latch that drove the FSM to `aborted` is still recorded. That
-    #     is pre-existing and correct — the latch is what stops a second FLUSHALL — but it means
-    #     recovery from `aborted` is not a dispatch of this op: no apply_target recuts /mnt/data
-    #     (inngest-volume-recut was retired by #8285) and the latch yields only to the authorized
-    #     flush op=reflush (#7777). #7462 did not change it; it made the refusal happen before the prod writes.
+    #     there is no dispatchable path forward. G1 accepts `done` ONLY, and no verb remains that
+    #     can re-arm or clear the latch (op=arm / op=reflush retired in #9927; no apply_target
+    #     recuts /mnt/data, inngest-volume-recut was retired by #8285). The latch is what stops a
+    #     second FLUSHALL, so that is correct; recovery from `aborted` is not a dispatch of this op.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
       echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
     fi
@@ -2850,8 +2840,9 @@ case "$OP" in
     # SCOPED TO `done`, and that scoping IS the safety argument. `done` is the only value that
     # evidences a COMPLETED flip, i.e. that a FLUSHALL actually happened — which is exactly what
     # writing `flushed` asserts. Widening this to aborted/rolled-back would let the resume arm
-    # start a scheduler against a queue that was never flushed, and those states have a correct
-    # verb already: op=arm, whose monotonic-latch refusal is the intended answer there.
+    # start a scheduler against a queue that was never flushed, and those states
+    # had their answer in the retired op=arm (#9927), whose monotonic-latch refusal was the intended
+    # one; with it gone, the `done`-only scoping here is the only thing standing between those states and #5450.
     # It is also precisely the guard's case: a REPLACED host inherits `done` and carries no
     # done-owner marker, which is the only state whose named recovery had no dispatchable verb.
     case "$RS_CUR" in
@@ -2864,15 +2855,15 @@ case "$OP" in
       *)
         echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. A fresh cutover needs a reviewed re-introduction of the retired op=arm verb; the on-host monotonic latch is the guard against a second flush."; exit 1 ;;
     esac
-    # G2 (the latch must EXIST) stays deferred here, and its absence is NOT the #7674 hole:
-    # op=arm's PERMITTING condition is an ABSENCE (L=0), which a dark host manufactures for free,
+    # G2 (the latch must EXIST) is not enforced anywhere now (see the G2 note above), and its absence is NOT the #7674 hole:
+    # the retired op=arm's (#9927) PERMITTING condition was an ABSENCE (L=0), which a dark host manufactured for free,
     # whereas op=resume's is the PRESENCE of a `done` that only a completed flip writes — so a
     # silent host can BLOCK this verb but can never AUTHORISE it. H is checked below for
     # DELIVERABILITY, not for evidence.
     #
     # G3 — HOST-AUDIBILITY GATE (#7674, CTO ruling). `flushed` is acted on ONLY by the on-host 30s
     # timer. Writing it to a dark host recovers nothing AND parks the flag in a state op=resume's
-    # own G1 rejects as IN-FLIGHT, while op=arm is separately refused by G3.7 — stranding the only
+    # own G1 rejects as IN-FLIGHT, while (when op=arm still existed, retired in #9927) op=arm was separately refused by G3.7 — stranding the only
     # dispatchable re-entry the system has, i.e. manufacturing a fresh instance of the KNOWN DEAD
     # END this arm already documents, which has no clearing apply_target today (#7695). Refusing is
     # strictly dominant: it forfeits nothing the write would have achieved.
