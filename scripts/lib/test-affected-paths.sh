@@ -516,6 +516,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_MAIN_ALERT_GATE_WORKFLOW_WIRING_TEST_SH_PATH
   "plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS=(
+  ".github/workflows/codeql-to-issues.yml"  # plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh:25
+  "plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_ARM_TEST_SH_PATHS=(
   ".github/workflows/web-platform-release.yml"  # plugins/soleur/test/deploy-arm.test.sh:29
   "plugins/soleur/test/deploy-arm.test.sh"
