@@ -21,6 +21,7 @@ vi.mock("@/server/permission-log", () => ({ logPermissionDecision: logDecision }
 vi.mock("@/server/observability", () => ({ warnSilentFallback, reportSilentFallback }));
 
 import { createCanUseTool, SOLEUR_GO_SAFE_UX_TOOLS, type CanUseToolContext } from "@/server/permission-callback";
+import { isSafeTool } from "@/server/tool-path-checker";
 import { APPROVAL_UNAVAILABLE_DENY } from "@/server/approval/gate-flow";
 import { APPROVAL_OPS } from "@/server/approval/ops";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
@@ -140,10 +141,14 @@ describe("pre-gate allow sets", () => {
     expect(SOLEUR_GO_SAFE_UX_TOOLS.size).toBeGreaterThan(0);
     for (const tool of APPROVAL_REQUIRED_TOOLS) expect(SOLEUR_GO_SAFE_UX_TOOLS.has(tool), tool).toBe(false);
   });
+
+  test("no approval-required tool is accepted by isSafeTool (SAFE_TOOLS is also checked before the platform branch)", () => {
+    for (const tool of APPROVAL_REQUIRED_TOOLS) expect(isSafeTool(tool), tool).toBe(false);
+  });
 });
 
 describe("approvalFailClosed set, approval wiring ABSENT", () => {
-  test.each([...APPROVAL_REQUIRED_TOOLS])("%s is denied with the static text, no card, no flag read, one wiring-absent Sentry error", async (tool) => {
+  test.each([...APPROVAL_REQUIRED_TOOLS])("%s is denied with the static text, no card, one wiring-absent Sentry error", async (tool) => {
     const h = setup({ failClosed: true, approval: "absent" });
     const res = await h.call(tool, inputFor(tool));
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });

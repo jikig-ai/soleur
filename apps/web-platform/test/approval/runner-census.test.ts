@@ -108,6 +108,15 @@ describe("self-test: the census regexes see code, not comments (mutation list)",
     expect(switchSet(`// approvalFailClosed: true\nconst d = {};`)).toBe(false);
   });
 
+  test("the cc registration regex flags a quoted short name or fully-qualified literal, and not an unrelated or other-prefix string", () => {
+    const re = (name: string) => new RegExp(`["'\`](?:mcp__soleur_platform__)?${name}["'\`]`);
+    expect(re("github_push_branch").test('const a = "github_push_branch";')).toBe(true);
+    expect(re("github_push_branch").test('const a = "mcp__soleur_platform__github_push_branch";')).toBe(true);
+    expect(re("github_push_branch").test('const a = "mcp__other__github_push_branch";')).toBe(false);
+    expect(re("github_push_branch").test("const a = 'not_github_push_branch_x';")).toBe(false);
+    // Composed names (a prefix constant plus interpolation) are NOT seen here; the derived sweep in tools-census.test.ts is the control.
+  });
+
   test("a URL with // inside a string literal is code and survives", () => {
     expect(stripComments(`const u = "https://a/b"; // trailing`)).toContain('"https://a/b"');
   });

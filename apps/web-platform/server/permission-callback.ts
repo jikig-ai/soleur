@@ -151,7 +151,7 @@ const NEAR_MISS_STATE = new WeakMap<CanUseToolContext, NearMissState>();
 // args and no command execution. Kept separate from `SAFE_TOOLS` in
 // `tool-path-checker.ts` so the existing `canusertool-decisions`
 // negative-space tests remain stable.
-export const SOLEUR_GO_SAFE_UX_TOOLS = new Set<string>([
+export const SOLEUR_GO_SAFE_UX_TOOLS: ReadonlySet<string> = new Set<string>([
   "ExitPlanMode",
 ]);
 
@@ -1522,7 +1522,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // or the flag is off or unreadable), and that tool must never be answered from the requester-answerable in-memory
         // card below. Static text only, no tool input echoed. A missing dependency is a wiring defect and goes to Sentry
         // (existing op, told apart by `stage`); flag off or unreadable is a normal dormant state and a read failure is
-        // mirrored by the flag seam at most once per its report TTL, so those two only log.
+        // mirrored by the flag seam (debounced per process by its report TTL), so those two only log.
         if (deps.approvalFailClosed && isApprovalRequiredTool(toolName)) {
           if (!deps.approval) {
             reportApprovalOp("gateFailed", null, {
