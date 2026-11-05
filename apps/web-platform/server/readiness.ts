@@ -4,7 +4,7 @@ import { randomBytes } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 import { countWorkspaceDirsAt } from "./session-metrics";
 import { reportSilentFallback } from "./observability";
-import { isLoopbackHost, isLoopbackPeer } from "./loopback";
+import { hasProxyMarkers, isLoopbackHost, isLoopbackPeer } from "./loopback";
 
 // Deep-readiness (#5966, ADR-068 Sharp Edge C1). `/health` is liveness-only
 // (hardcoded status:"ok" + a SHARED-Supabase probe) — neither signal reflects
@@ -121,7 +121,7 @@ export function handleReadyzRequest(
 ): void {
   try {
     const peerLoopback = isLoopbackPeer(req.socket?.remoteAddress);
-    if (!peerLoopback || !isLoopbackHost(req.headers.host)) {
+    if (!peerLoopback || !isLoopbackHost(req.headers.host) || hasProxyMarkers(req.headers)) {
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "forbidden" }));
       return;

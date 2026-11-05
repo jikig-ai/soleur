@@ -56,7 +56,7 @@ import {
   handleReadyzRequest,
   verifyWorkspacesMountOnce,
 } from "./readiness";
-import { isLoopbackHost } from "./loopback";
+import { hasProxyMarkers, isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
 import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
 import { verifyOuterWrapInterpose } from "./agent-runner-query-options";
@@ -124,7 +124,7 @@ app.prepare().then(() => {
     // (DoS-tuning feedback loop) or per-user counts (competitive scraping).
     // resource-monitor.sh curls http://127.0.0.1:3000/internal/metrics.
     if (parsedUrl.pathname === "/internal/metrics") {
-      if (!isLoopbackHost(req.headers.host)) {
+      if (!isLoopbackHost(req.headers.host) || hasProxyMarkers(req.headers)) {
         res.writeHead(403, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "forbidden" }));
         return;
@@ -159,9 +159,10 @@ app.prepare().then(() => {
 
   const wss = setupWebSocket(server, dev);
 
-  // #10479 — the Cloudflare-to-origin TLS listener (strict SSL mode). Inert (null) without valid
-  // ORIGIN_TLS_* material; shares every handler with `server` above. See ./origin-tls.
-  const originTls = startOriginTlsListener({ httpServer: server });
+  // #10479 — the Cloudflare-to-origin TLS listener (strict SSL mode). Started inside the
+  // `server.listen` callback below so both listeners come up together; inert (null) without valid
+  // ORIGIN_TLS_* material and shares every handler with `server`. See ./origin-tls.
+  let originTls: ReturnType<typeof startOriginTlsListener> = null;
 
   // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
   // proxy listener. A session that lands on a non-owning web host is relayed
@@ -304,6 +305,7 @@ app.prepare().then(() => {
   }
 
   server.listen(port, () => {
+    originTls = startOriginTlsListener({ httpServer: server });
     // #9534 — reap orphaned forwarder processes + their gateway tokens before
     // serving dispatches (best-effort, never throws). Only on the owning
     // dispatcher — see the import comment.

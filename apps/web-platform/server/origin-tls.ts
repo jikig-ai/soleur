@@ -14,6 +14,12 @@
 // starts either, the reason is mirrored to Sentry, and the plain-HTTP listener keeps serving: a
 // bad certificate must never take the :80 path down while the zone is still `flexible`.
 //
+// REQUIRED MODE. With ORIGIN_TLS_REQUIRED=1 (set in Doppler `prd` by the strict-flip PR, never
+// before) "inert" is no longer allowed: absent or invalid material, a TLS context that cannot be
+// built, or a listener error is reported and then FATAL, so the canary container (same env-file)
+// exits, its health gate fails and the old container keeps serving. Without it a deploy with bad
+// material would pass the canary and Cloudflare, in `strict`, would answer 525/526 to every user.
+//
 // MATERIAL. ORIGIN_TLS_KEY_B64 and ORIGIN_TLS_CERT_B64 are base64 of the PEM files, delivered
 // through Doppler `prd` into the container's env-file. Base64 because the docker env-file format
 // is line-oriented (precedent: INNGEST_TLS_CA in infra/inngest-tls.tf). The key is minted
@@ -23,9 +29,10 @@
 //
 // PROOF OF TRANSPORT. Every /health response served through this listener carries
 // `x-origin-transport: <negotiated TLS version>`. The plain-HTTP listener never sets it, so a
-// probe through Cloudflare that sees the header has proven the Cloudflare-to-origin hop used TLS
-// and that Cloudflare accepted the certificate (a rejected certificate under `strict` is a 526,
-// not a 200). That is the "handshake probe" the done-condition of #10479 asks for.
+// probe through Cloudflare that sees the header has proven the Cloudflare-to-origin hop used TLS.
+// It proves that Cloudflare ACCEPTED the certificate only when the zone (or the canary rule) is in
+// `strict` for that request: under `full`, Cloudflare dials TLS without validating the certificate,
+// so the header appears with any certificate. The probe's pass/fail text says which it measured.
 //
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
 // change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
@@ -34,6 +41,7 @@ import { X509Certificate, createPrivateKey } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { TLSSocket } from "node:tls";
+import { performance } from "node:perf_hooks";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -45,8 +53,18 @@ export const ORIGIN_TLS_HOSTNAME = "app.soleur.ai";
 export const ORIGIN_TLS_DEFAULT_PORT = 3443;
 export const ORIGIN_TLS_KEY_ENV = "ORIGIN_TLS_KEY_B64";
 export const ORIGIN_TLS_CERT_ENV = "ORIGIN_TLS_CERT_B64";
-export const ORIGIN_TLS_PORT_ENV = "ORIGIN_TLS_PORT";
 export const ORIGIN_TRANSPORT_HEADER = "x-origin-transport";
+/** A client that connects and never sends a ClientHello must not hold a socket for Node's 120 s. */
+export const ORIGIN_TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
+/**
+ * Idle keep-alive must outlast Cloudflare's reuse of pooled origin connections (~900 s,
+ * unverified): Node's 5 s default closes them first and Cloudflare then reuses a dead socket
+ * (intermittent 502/520) or re-handshakes constantly. Set on this server only; the plain :80
+ * server is deliberately unchanged here (tracked separately).
+ */
+export const ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS = 905_000;
+/** `1` makes absent/invalid material or a listener failure fatal at startup (the strict flip sets it). */
+export const ORIGIN_TLS_REQUIRED_ENV = "ORIGIN_TLS_REQUIRED";
 /** Below this many days to notAfter the startup line is also a Sentry warning. */
 export const ORIGIN_TLS_EXPIRY_WARN_DAYS = 90;
 
@@ -78,6 +96,20 @@ export type OriginTlsLoad =
   | { status: "absent" }
   | { status: "invalid"; reason: OriginTlsInvalidReason }
   | { status: "ready"; key: string; cert: string; info: OriginCertInfo };
+
+const PEM_CERT_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** Every certificate block in a chain must parse; `new X509Certificate` only reads the first. */
+function chainParses(pem: string): boolean {
+  const blocks = pem.match(PEM_CERT_BLOCK);
+  if (!blocks) return false;
+  try {
+    for (const block of blocks) new X509Certificate(block);
+  } catch {
+    return false;
+  }
+  return true;
+}
 
 function decodePem(raw: string): string | null {
   const text = Buffer.from(raw.trim(), "base64").toString("utf8").trim();
@@ -118,6 +150,8 @@ export function loadOriginTlsMaterial(
     return { status: "invalid", reason: "cert-unparseable" };
   }
 
+  // The leaf must come first (X509Certificate reads the first block); the rest are intermediates.
+  if (!chainParses(cert)) return { status: "invalid", reason: "cert-unparseable" };
   if (!x509.checkPrivateKey(privateKey)) return { status: "invalid", reason: "key-cert-mismatch" };
   if (x509.ca) return { status: "invalid", reason: "ca-certificate" };
   const notBefore = new Date(x509.validFrom).getTime();
@@ -170,33 +204,80 @@ export function startOriginTlsListener(params: {
   /** 0 asks the OS for a free port (tests). */
   port?: number;
   onListening?: (port: number) => void;
+  /** Injected in tests; defaults to process.exit. Only called in REQUIRED mode. */
+  exit?: (code: number) => void;
 }): OriginTlsListener | null {
   const env = params.env ?? process.env;
+  const required = env[ORIGIN_TLS_REQUIRED_ENV] === "1";
+  const exit = params.exit ?? ((code: number) => process.exit(code));
+  const failClosed = (): null => {
+    if (required) exit(1);
+    return null;
+  };
   const loaded = loadOriginTlsMaterial(env);
 
   if (loaded.status === "absent") {
+    if (required) {
+      reportSilentFallback(null, {
+        feature: "origin_tls",
+        op: "load",
+        tags: { reason: "absent-but-required" },
+        message: "origin-tls: material absent but ORIGIN_TLS_REQUIRED=1",
+      });
+      return failClosed();
+    }
     log.info("origin-tls: no ORIGIN_TLS material configured, origin TLS listener disabled");
     return null;
   }
   if (loaded.status === "invalid") {
-    reportSilentFallback(new Error(`origin-tls: material rejected (${loaded.reason})`), {
+    // Error argument is null on purpose: an Error here is mirrored to Sentry by the pino logger
+    // first and the tagged capture is then deduplicated away, leaving a `pino-mirror` event with
+    // no origin_tls tags. A null error takes the captureMessage path and keeps feature/op/reason.
+    reportSilentFallback(null, {
       feature: "origin_tls",
       op: "load",
       tags: { reason: loaded.reason },
+      message: `origin-tls: material rejected (${loaded.reason})`,
     });
-    return null;
+    return failClosed();
   }
 
-  const port = params.port ?? parsePort(env[ORIGIN_TLS_PORT_ENV]) ?? ORIGIN_TLS_DEFAULT_PORT;
-  const httpsServer = createHttpsServer({
-    key: loaded.key,
-    cert: loaded.cert,
-    minVersion: "TLSv1.2",
-  });
+  const port = params.port ?? ORIGIN_TLS_DEFAULT_PORT;
+  let httpsServer: HttpsServer;
+  try {
+    httpsServer = createHttpsServer({
+      key: loaded.key,
+      cert: loaded.cert,
+      minVersion: "TLSv1.2",
+      handshakeTimeout: ORIGIN_TLS_HANDSHAKE_TIMEOUT_MS,
+    });
+  } catch (err) {
+    // The TLS secure context is built separately from the validation above and can still throw
+    // (a key/cert pair OpenSSL parses but the TLS stack rejects). This runs inside the boot chain
+    // that exits on an unhandled rejection, so it must never escape.
+    reportSilentFallback(null, {
+      feature: "origin_tls",
+      op: "create",
+      tags: { reason: "tls-context-rejected" },
+      message: "origin-tls: TLS context could not be created, listener disabled",
+      extra: { errName: err instanceof Error ? err.name : typeof err },
+    });
+    return failClosed();
+  }
+  // The secure context is built; the base64 key is not needed again, and every child process the
+  // server spawns with `...process.env` (git, cron helpers) would otherwise inherit it. Only the
+  // real process environment is scrubbed; a plain-object env (tests) is left alone.
+  if (env === process.env) {
+    delete process.env[ORIGIN_TLS_KEY_ENV];
+    delete process.env[ORIGIN_TLS_CERT_ENV];
+  }
+  httpsServer.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
 
   // The same handlers as the plain-HTTP server, by re-emitting its events: the request handler and
   // the WebSocket upgrade listener (ws-handler.ts) are registered on `httpServer`, and ws accepts
-  // any duplex socket, so a TLS socket upgrades like a plain one.
+  // any duplex socket, so a TLS socket upgrades like a plain one. Server-level options (timeouts,
+  // maxHeaderSize) are per server instance and are NOT shared: any such option later set on the
+  // plain server in index.ts must be applied here too.
   httpsServer.on("request", (req, res) => {
     if (isHealthPath(req.url)) {
       res.setHeader(ORIGIN_TRANSPORT_HEADER, negotiatedProtocol(req));
@@ -207,25 +288,42 @@ export function startOriginTlsListener(params: {
     params.httpServer.emit("upgrade", req, socket, head);
   });
 
-  let lastClientErrorLog = 0;
+  let lastClientErrorLog = -Infinity;
+  const suppressed = new Map<string, number>();
   httpsServer.on("tlsClientError", (err) => {
-    const t = Date.now();
-    if (t - lastClientErrorLog < TLS_CLIENT_ERROR_LOG_INTERVAL_MS) return;
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    const t = performance.now();
+    if (t - lastClientErrorLog < TLS_CLIENT_ERROR_LOG_INTERVAL_MS) {
+      if (suppressed.size < 8 || suppressed.has(code)) suppressed.set(code, (suppressed.get(code) ?? 0) + 1);
+      return;
+    }
     lastClientErrorLog = t;
+    const dropped = Object.fromEntries(suppressed);
+    suppressed.clear();
     log.warn(
-      { code: (err as NodeJS.ErrnoException).code ?? "unknown" },
+      { code, suppressed: dropped },
       "origin-tls: a client failed the TLS handshake (rate-limited to one line per minute)",
     );
   });
 
   httpsServer.on("error", (err) => {
-    reportSilentFallback(err, { feature: "origin_tls", op: "listen" });
+    reportSilentFallback(null, {
+      feature: "origin_tls",
+      op: "listen",
+      tags: { reason: (err as NodeJS.ErrnoException).code ?? "unknown" },
+      message: "origin-tls: listener error",
+      extra: { errName: err.name },
+    });
+    if (required) exit(1);
   });
 
   httpsServer.listen(port, () => {
     const address = httpsServer.address();
     const boundPort = typeof address === "object" && address ? address.port : port;
-    log.info(
+    // warn, not info: Vector's app_container_warn_filter drops INFO before Better Stack, and this
+    // once-per-start line is the positive evidence (per host, by host_name) that the listener bound
+    // with this certificate. Precedent: logGitDataHostKeyPinAtStartup.
+    log.warn(
       { port: boundPort, ...loaded.info },
       "origin-tls: listening (Cloudflare strict-mode origin), certificate loaded",
     );
@@ -253,10 +351,4 @@ export function startOriginTlsListener(params: {
 
 function negotiatedProtocol(req: IncomingMessage): string {
   return (req.socket as TLSSocket).getProtocol?.() ?? "unknown";
-}
-
-function parsePort(raw: string | undefined): number | null {
-  if (!raw) return null;
-  const n = Number.parseInt(raw, 10);
-  return Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
 }

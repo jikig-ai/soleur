@@ -81,7 +81,7 @@ All forks below are technical. They are recorded, not asked.
 ### R5 - Ruled by CTO agent, 2026-11-05: Authenticated Origin Pulls are NOT adopted in this effort (CLO condition 7)
 
 - **Decision:** no AOP now. Origin CA cert owner: the CTO function (Jikigai Cloudflare account). Renewal: R4. Revisit trigger: after `strict` has been stable for 14 days AND the LB-monitor question (F12) is answered, or any evidence of direct origin access.
-- **Rationale:** AOP closes "another Cloudflare tenant dials our origin IP", an exposure that already exists on :80, requires knowing the origin IP, and is bounded because the app authenticates every request itself (session cookies, HMAC webhooks). AOP adds a failure mode of its own (a misconfigured client-certificate check is an outage under `strict`) and it is unknown whether LB monitors present client certificates (F12). The stricter-for-users option is to avoid a second outage lever during the deadline window.
+- **Rationale:** AOP closes "another Cloudflare tenant dials our origin IP", an exposure that already exists on :80, requires knowing the origin IP, and is bounded because the app authenticates every request EXCEPT the loopback-gated internal endpoints (corrected by review, #12181: those now also refuse requests carrying proxy markers, see ADR-321 decision 4) itself (session cookies, HMAC webhooks). AOP adds a failure mode of its own (a misconfigured client-certificate check is an outage under `strict`) and it is unknown whether LB monitors present client certificates (F12). The stricter-for-users option is to avoid a second outage lever during the deadline window.
 - **Rejected alternatives:** shared-certificate AOP (proves only "came from Cloudflare", which the firewall allowlist already says); zone-level custom AOP now (new credential scope and a new upload step on the critical path).
 - **Dissent:** the CLO asked for a decision, not for AOP. A tracking issue is filed with the revisit trigger (see Follow-ups).
 
@@ -187,7 +187,7 @@ failure_modes:
     alert_route: "Better Stack uptime escalation; Cloudflare web_lb_health email"
   - mode: "certificate nearing expiry (no Cloudflare notice exists)"
     detection: "startup log daysLeft and Sentry warning below 90 days; Better Stack Logs alert on the origin-tls line (PR-2)"
-    alert_route: "Sentry warning and Better Stack alert policy"
+    alert_route: "Sentry warning today; the Better Stack alert policy is a forward reference added with the mint workflow in PR-2 (review of #12181 found none in PR-1)"
   - mode: "strict accepted at the edge but a host's listener is down (web-2 is drained so the edge cannot see it)"
     detection: "origin-tls-handshake hook per host (PR-2)"
     alert_route: "post-deploy gate in the release workflow output; flip PR refuses without both hosts"
@@ -251,7 +251,7 @@ exception:
 
 ### Guard 1 - strict-flip precondition test (PR-5, written before the flip)
 
-**Property.** A tree whose app-host `ssl` rule is `strict` also contains every precondition that makes strict safe: the 443 publish at all three docker-run sites, the load balancer monitor on https/443, and no `lb-staging`-only coupling.
+**Property.** A tree whose app-host `ssl` rule is `strict` also contains every precondition that makes strict safe: the 443 publish at the two LB-served docker-run sites (prod in ci-deploy.sh and first-boot in cloud-init.yml; the canary is deliberately NOT published, ADR-278), the load balancer monitor on https/443, and no `lb-staging`-only coupling.
 
 **Assembly.** The chokepoint is the set of `ssl` rules in `seo-config-rules.tf` that match the app host (the flexible rule and the canary rule), the three `docker run` sites enumerated by `lib/docker-run-tuple.py` (canary, prod, first-boot), and `cloudflare_load_balancer_monitor.web`. Members are derived by parsing the files, not listed by name; the test fails if it finds zero `ssl` rules or zero run sites.
 
