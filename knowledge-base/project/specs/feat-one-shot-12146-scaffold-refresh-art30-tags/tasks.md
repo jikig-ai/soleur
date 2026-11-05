@@ -45,7 +45,7 @@ Tracker: #12146 (items 2 and 3). PR #12177 (draft). PR body uses `Ref #12146`, n
 
 ## Phase 6: verify and PR
 
-- 6.0 File the `take_run_lock` race scope-out issue (label deferred-scope-out; verify the label exists; roadmap milestone)
+- 6.0 `take_run_lock` race: fixed inline after the second-reviewer DISSENT (no issue filed); see the plan amendment
 - 6.1 `git diff origin/main -- apps/web-platform/test/claude-pin-lockstep.test.ts` is empty
 - 6.2 PR body: `Ref #12146`, `## Changelog`, `semver:patch`; check `sync-pr-behind.sh 12177 --queue-state` before any push; real push exit code
 - 6.3 CI: rely on required `test`; read infra-validation and sandbox-canary-capture-gate by hand; stop if the owner-run freeze blocks the merge

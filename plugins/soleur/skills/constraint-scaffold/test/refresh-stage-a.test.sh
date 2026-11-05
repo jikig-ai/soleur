@@ -348,6 +348,20 @@ chk "12c triggers are pull_request (+ workflow_dispatch for manual retry) only; 
 chk "12d top-level permissions are exactly contents: read" test "$perm_block" = "  contents: read"
 chk "12e no write scope and no id-token anywhere in the template body" test -z "$(grep -E '^[[:space:]]+(id-token|[a-z-]+):[[:space:]]*write[[:space:]]*$' "$TPL_CODE" || true)"
 
+# --- 13. The run lock: an owner-less fresh lock is held, an old one is stale, EPERM is not "gone" ----
+FX="$(new_case c13a)"; mkdir -p "$FX/.git/constraint-scaffold.lock"
+run_refresh "$FX"
+rcis "13a fresh lock directory with no owner pid yet is held, not taken over" 69
+state "13a' the lock directory is untouched" test -d "$FX/.git/constraint-scaffold.lock"
+
+FX="$(new_case c13b)"; mkdir -p "$FX/.git/constraint-scaffold.lock"; touch -t 200001010000 "$FX/.git/constraint-scaffold.lock"
+run_refresh "$FX"
+rcis "13b owner-less lock older than the grace window is stale and taken over" 0
+
+FX="$(new_case c13c)"; mkdir -p "$FX/.git/constraint-scaffold.lock"; printf '1\n' > "$FX/.git/constraint-scaffold.lock/pid"
+run_refresh "$FX"
+rcis "13c a live process of another user (pid 1: kill -0 says EPERM) is not read as gone" 69
+
 # --- Accounting -------------------------------------------------------------------------------------
 if [[ $((passes + fails)) -ne "$cases" ]]; then
   printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' "$((passes + fails))" "$cases" >&2
@@ -357,7 +371,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
 fi
 
 # --- Anti-vacuity floor (ADR-193 #1). The literal sits directly above the `if`. -----------------------
-MIN_ROWS=63
+MIN_ROWS=67
 if [[ "$cases" -lt "$MIN_ROWS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d.\n' "$cases" "$MIN_ROWS" >&2
   printf '  Rows were deleted or skipped; a green run here would be a coverage loss.\n' >&2

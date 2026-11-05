@@ -237,9 +237,16 @@ take_run_lock() {
   if ! mkdir "$RUN_LOCK" 2>/dev/null; then
     local owner
     owner="$(cat "$RUN_LOCK/pid" 2>/dev/null || true)"
-    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+    # `kill -0` fails with EPERM for a live process owned by another user, so "gone" needs `ps -p` too.
+    if [[ -n "$owner" ]] && { kill -0 "$owner" 2>/dev/null || ps -p "$owner" >/dev/null 2>&1; }; then
       RUN_LOCK=""
       fail_stdout 69 "another constraint-scaffold run (pid $owner) is in progress in this repository; wait for it"
+    fi
+    # A lock directory with no owner yet is a run caught between its `mkdir` and its pid write, not a
+    # stale lock: honour it while the directory is under a minute old (`find -mmin` exists on GNU and BSD).
+    if [[ -z "$owner" && -n "$(find "$RUN_LOCK" -prune -mmin -1 -print 2>/dev/null || true)" ]]; then
+      RUN_LOCK=""
+      fail_stdout 69 "another constraint-scaffold run is starting in this repository (the run lock has no owner pid yet); wait a moment and re-run"
     fi
     rm -rf -- "$RUN_LOCK"
     mkdir "$RUN_LOCK" 2>/dev/null || { RUN_LOCK=""; fail_stdout 69 "cannot take the run lock at $RUN_LOCK"; }

@@ -590,3 +590,17 @@ answer) and are applied above. Judgement calls, recorded here so a later reader 
 - The register edits are in single very long table cells. Use exact-string `Edit` replacement of the quoted fragments, not line-based edits; GFM silently drops cells past the header count, so re-render-check the table row count is unchanged.
 - PR #8626 also edits the register; expect a possible textual conflict at ship time and resolve by re-applying only the three fragments.
 - The merge freeze is owner-run. If it blocks the merge, stop with the PR ready or queued and report; do not escalate to `--admin`.
+
+## Work-phase Amendment (2026-11-05)
+
+- The `take_run_lock` race was planned as a tracked `deferred-scope-out` issue (Non-Goals, Phase 6, tasks 6.0). The
+  second-reviewer gate (code-simplicity-reviewer) returned DISSENT: the fix is under the 100-line, 4-file
+  inline threshold and this PR adds a third caller of the helper. It was fixed inline instead, so no issue is
+  filed. Two changes in `take_run_lock`: an owner-less lock directory younger than a minute is held rather than
+  taken over, and a failed `kill -0` is confirmed with `ps -p` before the owner is called gone (EPERM on a live
+  process of another user). Test cases 13a-13c in `refresh-stage-a.test.sh`; each reddens when its half of the
+  fix is removed. The stale-takeover `rm -rf` between two simultaneous takers remains a narrower residual.
+  Suite floor `MIN_ROWS` is 67.
+- The canonical `assert_fixture_dir` guard was copied into `constraint-scaffold.sh` and called before the two new
+  write sites, because the fixture-relative and fixture-dir-operand ratchets count unproven write operands
+  (the plan said to write guard-first rather than baseline new rows).
