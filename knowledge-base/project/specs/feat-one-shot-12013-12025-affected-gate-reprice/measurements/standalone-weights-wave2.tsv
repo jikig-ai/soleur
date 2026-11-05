@@ -1,0 +1,9 @@
+scripts/guard-vacuity-floor	1	0	88387	4.55
+scripts/lint-shell-trace-credential-refusal	1	0	134223	2.64
+tests/scripts/scratch-residue	1	0	36577	3.42
+scripts/lint-orphan-test-suites	1	0	56203	8.13
+tests/scripts/argv-bearer-sweep	1	0	145123	4.77
+scripts/test-affected-kb-consumers	1	0	85025	3.37
+plugins/soleur/test/ci-pr-affected-replay-a	1	0	1301328	5.95
+plugins/soleur/test/ci-pr-affected-replay-b	1	0	479595	3.12
+plugins/soleur/test/ci-pr-affected-replay-c	1	0	446041	3.54

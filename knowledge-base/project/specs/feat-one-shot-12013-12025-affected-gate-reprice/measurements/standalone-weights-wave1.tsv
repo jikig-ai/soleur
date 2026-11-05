@@ -1,0 +1,6 @@
+scripts/image-cve-verdict	1	0	53280	4.27
+scripts/image-cve-verdict	2	0	54031	2.97
+scripts/image-cve-verdict	3	0	55649	2.90
+apps/web-platform/test/destroy-ask-mutation	1	0	125861	3.65
+apps/web-platform/test/destroy-ask-mutation	2	0	123235	3.50
+apps/web-platform/test/destroy-ask-mutation	3	0	139068	3.50

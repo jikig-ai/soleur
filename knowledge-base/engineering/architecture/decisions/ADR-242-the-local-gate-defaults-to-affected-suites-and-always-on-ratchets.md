@@ -852,3 +852,71 @@ CI-only skip (ADR-196, ADR-183); a suite-result cache (rejected twice, see
 lands, a typical single-feature gate is still over 10 minutes, or ADR-276 S3's push-count gate (a
 post-policy mean of at least 2.75 pushes per draft PR is what lets S3 proceed) reads below it. Edge
 re-pricing and measured weights for the slowest suites are tracked in #12025.
+
+## Amendment — 2026-11-04 (#12013, #12025)
+
+The pool and the live red line (previous amendment) are merged. This amendment records the measurement #12013 asked for and the re-pricing #12025 deferred. Raw rows live in `knowledge-base/project/specs/feat-one-shot-12013-12025-affected-gate-reprice/measurements/`; every number below carries the file it came from.
+
+### Measurement: the local gate on a replayed single-feature diff
+
+One reading, taken from a private local clone at the pinned base `8cc167c2e3` (its own git-common-dir, so its own advisory lock and a pool that engages), under eight CPU burners plus whatever the sibling sessions were running. The pick is the web-platform median of the 30 most recent attributable commits (`7af192071d`, 8 files); the pick is an ancestor of the base, so the replay puts each changed path back to its pre-change content, which keeps the path set, the index and the lib untouched.
+
+| Field | Value | Source |
+|---|---|---|
+| Selected suites | 160 of 731 (the model said 159) | `gate-run-1.summary.txt` |
+| Load | 8 burners; 5 sibling runs at start; load average 9 at start and 14 at the end (up to 35 during the earlier attempts) | `gate-run-1.summary.txt` |
+| Cold derive | 543 s | first attempt in the clone, `AFFECTED_SUMMARY` at +543 s |
+| Warm derive | 108 s (727 of 731 labels cached) | warm run, `AFFECTED_SUMMARY` at +108 s |
+| Queue wait | 36 ms in the private clone; in the shared worktree the run sat at ticket position 3 behind a sibling full run that had held the lock for 2 h 10 min | gate logs |
+| Warm gate wall | 6087 s (pool width 4) | `gate-run-1.summary.txt` |
+| Cold gate time | 543 + 6087 = 6630 s | derived |
+| Result | 159 passed, 1 failed (one red), 0 killed | `gate-run-1.summary.txt` |
+
+**Verdict: the 10-minute acceptance of #12013 is not met.** The cold gate took 110 minutes under this load. Two deviations from the plan are recorded here rather than hidden. First, one reading, not three: each reading is about 110 minutes, the first misses the bar by 11x, and the cheapest possible diff under the same load would still cost 543 s of cold derive plus at least 154 s for the 116 always-on suites (617 s summed, divided by the width of 4), which is 697 s. That floor is a property of this load, not a general one: a planning-time cold derive at load 10 to 19 took 366 s. Second, the pool engages only while the run holds the advisory lock, so the reading uses a private lock; the shared-lock wait is a separate observation, above. A serial run in the shared worktree (the lock gave up, the runner fell back to serial) was stopped at 30 minutes and is not a datum.
+
+**Acceptance AC2 (a red is reported live): met.** The provisional line `[run] apps/web-platform [repo-wide+component] done (rc=1, 202605ms)` with its marker appeared 1271 s into the run; 97 suites had started before it and 64 finished after it; exactly one `[FAIL]` verdict followed at drain (6084 s) and the exit code was 1. The failing suite's log from the first attempt in the same clone shows the load-sensitive real-git push test #12013 recorded (`git-data-replication` F21) plus a roster test that clones a ledger branch the private clone does not have; the warm run's red is the same suite.
+
+**Acceptance AC3 (per-suite timings for every suite): met.** The run's `suite-timings.tsv` holds 160 rows that are not `skip=` (162 less the two run-boundary markers), passing and failing alike (`gate-run-1.suite-timings.tsv`); `gate-run-1.tsv` adds start and end offsets from the live lines.
+
+### What the measurement found
+
+1. **The pool is effectively serial for most of the run.** 78 percent of the suite phase (4632 of 5960 s) had at most one suite running. The cause is the `lock:test-all` token (the known limit stated above) plus the strict FIFO queue: while `ci-pr-affected-replay-a` ran for 1818 s, 46 suites had not started. The three replay arms (`-a`, `-b`, `-c`) took 1818, 835 and 627 s in the pool.
+2. **Cold derive is paid again by every fresh worktree**: 543 s here, which is 8 percent of this cold gate but most of the cost of a diff that selects few edge suites. Not filed: below the 25 percent threshold of the plan; recorded as a lever on #12013.
+3. **The budget includes the queue wait.** `budget_seconds` (2400 in `.soleur-test-gate.json`) counts from the gate's start, so a run queued behind a sibling's full run is deferred (rc 6) without a suite having run. The first attempt in the clone, with the repo's budget, ended deferred at 2400 s with 107 of 160 suites done.
+4. **A budget kill hides a red that was already visible.** In the delegated arm of `plugins/soleur/scripts/affected-tests.sh`, runner rc 124 or 137 maps to rc 6 (deferred) whenever a CI workflow is detected, even if a provisional `done (rc=1` line was already printed; the header's own contract says a failure seen before budget expiry wins over deferral. Recorded on #12013 for the next lever; not fixed here.
+5. **Edge-selected suites are 93 percent of the suite time**: 44 edge-selected suites summed 8054 s of the 8671 s of suite time; the 116 always-on suites summed 617 s.
+
+### Decision rule for re-pricing (#12025)
+
+Cost of a suite per PR = its selection rate over the last 100 first-parent commits (74 attributable, 25 runner-changed, 1 empty) multiplied by its standalone wall time. A narrowing is attempted only when that cost is at least 5 s per PR and the suite's verdict-input set is nameable. `demoted` (moving a suite to CI-only) is not available: it would remove the suite from the set a diff touching its subject files selects, which #12025 forbids. Every disposition is therefore `narrowed` or `priced-and-kept`. A narrowing edits `scripts/lib/test-affected-paths.sh`, and any such edit makes this PR's own gate the full battery, so the edit runs only if the bar is missed and the summed saving of the eligible suites reaches the gap (median cold gate minus 600 s).
+
+The gate did not fire. The eligible suites (`argv-bearer-sweep`, `test-affected-kb-consumers`, `scratch-residue`) save at most 186 s per PR against a gap of 6030 s; adding the three replay arms (1806 s per PR) still gives 1992 s. No edge array was changed in this PR.
+
+### Pricing ledger
+
+Rates from `suite-rate.tsv` (hits of 74 attributable commits; `python3 -I scripts/ci-pr-affected-replay.py suite-rate --commits 100 --base 8cc167c2e3`, spot-check agreed on 3655 comparisons). Walls are standalone, idle machine (load 3 to 6, no sibling runs), from `standalone-weights-wave1.tsv` and `standalone-weights-wave2.tsv`. The committed CI weight is shown for comparison only; `suite-durations.tsv` is a CI-leg table and is not edited by hand.
+
+| Suite | Disposition | Rate | Wall (source) | Cost per PR | Committed CI weight | Evidence |
+|---|---|---|---|---|---|---|
+| `tests/scripts/argv-bearer-sweep` | priced-and-kept | 44/74 (59.5%) | 145.1 s (1 run) | 86 s | 47.0 s | candidate; its subjects are the follow-through probes, but the arithmetic gate did not fire; the recorder could not read it (`audit-suite-reads-check.txt`: unreliable, rc 2 in the no-network sandbox) |
+| `apps/web-platform/test/destroy-ask-mutation` | priced-and-kept | 36/74 (48.6%) | 125.9 s (median of 3: 123.2, 125.9, 139.1; `local-measured`) | 61 s | none (webplat shard has no durations table) | no declared edge array to narrow; derived edges only |
+| `scripts/lint-shell-trace-credential-refusal` | priced-and-kept | 56/74 (75.7%) | 134.2 s (1 run) | 102 s | 108.6 s | whole-tree population: every `*.sh` |
+| `scripts/test-affected-kb-consumers` | priced-and-kept | 67/74 (90.5%) | 85.0 s (1 run) | 77 s | 91.2 s | reads every registered suite's `knowledge-base/` use; whole-tree join; recorder contaminated by `.soleur/` |
+| `scripts/lint-orphan-test-suites` | priced-and-kept | 56/74 (75.7%) | 56.2 s (1 run) | 43 s | 27.2 s | whole-tree population: `git ls-files '*.test.sh'` |
+| `scripts/guard-vacuity-floor` | priced-and-kept | 57/74 (77.0%) | 88.4 s (1 run) | 68 s | 44.9 s | whole-tree population: `git ls-files '*.test.sh'` |
+| `tests/scripts/scratch-residue` | priced-and-kept | 46/74 (62.2%) | 36.6 s (1 run) | 23 s | 26.3 s | candidate; leaves are the directly-run suites; the recorder failed in the sandbox (rc 1) |
+| `scripts/image-cve-verdict` | priced-and-kept | 16/74 (21.6%) | 54.0 s (median of 3: 53.3, 54.0, 55.6; `local-measured`) | 12 s | 1.2 s (`floor`) | below the cost threshold for any narrowing worth its risk |
+
+Observed while pricing, outside the eight labels: the three `ci-pr-affected-replay` arms are the largest edge-selected cost.
+
+| Suite | Rate | Wall (standalone, 1 run) | Cost per PR | Committed CI weight |
+|---|---|---|---|---|
+| `plugins/soleur/test/ci-pr-affected-replay-a` | 60/74 (81.1%) | 1301.3 s | 1055 s | 1033.1 s |
+| `plugins/soleur/test/ci-pr-affected-replay-b` | 60/74 (81.1%) | 479.6 s | 389 s | 399.4 s |
+| `plugins/soleur/test/ci-pr-affected-replay-c` | 60/74 (81.1%) | 446.0 s | 362 s | 326.2 s |
+
+Their declared edges include the whole `^plugins/soleur/` prefix and `^knowledge-base/project/specs/`, which is why they are selected on 81 percent of PRs, and they hold `lock:test-all`, so they also serialize (finding 1). Together they cost 1806 s per PR at an idle machine, four times the seven suites of #12025 combined (459 s). They are the first lever of the next re-pricing; they were not narrowed here because the arithmetic gate did not fire and a prefix this wide hides reads the audit has not enumerated.
+
+**Correction to the brief.** Only `scripts/image-cve-verdict-consumers` is in `ALWAYS_ON_SUITES`. `scripts/image-cve-verdict` is edge-selected (21.6 percent), so no demotion was ever needed to price it; its 1223 ms `floor` row in `suite-durations.tsv` is a CI shard-balancing defect, tracked in #12106.
+
+Re-evaluation trigger for the lib edit: a cold derive under 200 s (a seeded cache) together with a reading of the pool that shows more than one suite running for most of the suite phase; until then, narrowing moves a number that is not the bottleneck.
