@@ -66,8 +66,8 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
   "cron-agent-spawn-stale-settle": {
-    placement: "portable",
-    reason: "host-free: action_sends select + shared settle-path UPDATE + spawn-dead-letter/Sentry reporting; no workspace-resolver or filesystem reach (#8839)",
+    placement: "volume-bound",
+    reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested module that exports its settle handler (#8839)",
   },
   "cron-agent-native-audit": {
     placement: "host-affine",
