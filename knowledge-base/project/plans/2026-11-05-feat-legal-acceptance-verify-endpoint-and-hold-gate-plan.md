@@ -495,6 +495,7 @@ Not part of this PR. They gate turning `approval-queue` on for any founder. The 
 6. The Terraform secrets and the founder uuid exist and the web app restarted (Operator Holds 1), so the endpoint stops answering 503; the `verify/185` sentinel reported `bad = 0` on the production deploy; the first real acceptance (8.1) was verified by the gate.
 7. The founder-page card state for a record that fails its checksum: a wireframe and CLO-gated copy before the flag is on (follow-up issue).
 8. The post-deploy registry smoke (a key loaded from inside the container) waits for the first committed text.
+9. The Sentry paging rules for `record_invalid` and `store_failed` (follow-up #12195, milestone set before this PR merges) are live, so the unpaged ops have paging before the flag is on (CTO ruling, 2026-11-05).
 
 Before any customer founder (not just the operator): a named reader role for the note with a response expectation; a count-only "note waiting" signal with no note text; a visible acknowledgement and a closed loop for the founder when the text is revised; CLO-approved card copy that matches the real delivery behaviour; a runbook a non-engineer can follow; the 8.3 UX test with a non-technical founder as a hard gate.
 
