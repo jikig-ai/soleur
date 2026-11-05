@@ -332,7 +332,7 @@ model {
       }
       legalAcceptanceStore = database "Legal Acceptances" {
         technology "Supabase (legal_acceptance, legal_reauth_event; mig 184)"
-        description "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge and the read-only check are service_role RPCs. No agent tool reaches it and a runtime-audience token can neither read nor write it (code holding the service key in-process is the stated ADR-319 residual). Dark until the screens ship."
+        description "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge and the read-only check are service_role RPCs. No agent tool reaches it and a runtime-audience token can neither read nor write it (code holding the service key in-process is the stated ADR-319 residual). Screens ship behind the approval-queue flag (PR-C); the verify endpoint arrives in PR-D."
       }
       crmStore = database "Beta-CRM Store" {
         technology "Supabase (beta_contacts, interview_notes, beta_contact_stage_transitions, beta_contact_access_log; mig 126 + 127)"
@@ -640,7 +640,7 @@ model {
   engine -> approvalStore "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal; no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)" { technology "PostgreSQL / PostgREST RPC" }
   // ADR-319: deliberately NO `engine -> legalAcceptanceStore` edge. The record is written from the founder's web session
   // and read through a service_role check; the agent process must not reach it.
-  webapp -> legalAcceptanceStore "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. Dark until the screens ship (ADR-319)" { technology "PostgreSQL / PostgREST RPC" }
+  webapp -> legalAcceptanceStore "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. Screens ship behind the approval-queue flag (PR-C); the verify endpoint arrives in PR-D (ADR-319)" { technology "PostgreSQL / PostgREST RPC" }
 
   // Beta-CRM (ADR-102): two access paths now exist. The agent WRITES + reads via
   // crm_* MCP tools (mig 126); the read-only UI phase (mig 127, #6172) adds the

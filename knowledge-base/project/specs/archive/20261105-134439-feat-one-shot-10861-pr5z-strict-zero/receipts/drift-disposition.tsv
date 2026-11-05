@@ -1,0 +1,4 @@
+pair-or-state	disposition	evidence
+stale-accept x11 (main-side, #12110)	sequence-after-12128	CTO ruling decision-challenges row 13; gh pr view 12128 OPEN MERGEABLE 2026-11-05
+live pairs x3 (plugins/soleur->sentry-issue.sh, tests/hooks/emissions->betterstack-query.sh+sentry-issue.sh, components.test.ts:987-992)	sequence-after-12128	mention-class per drain rubric; absorbed post-merge only if #12128 leaves them uncovered
+live pair plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh->.github/workflows/codeql-to-issues.yml	absorbed-edge-declared	suite landed via #12070 queue merge while #12128 was queued; real read (check_wf parses WF, sed mutants) -> AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS edge declared; audit re-run gap_suites=0

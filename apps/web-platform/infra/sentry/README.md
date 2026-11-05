@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **54 `sentry_alert` rules** (54 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672, #10914. 52 are
-  fully Terraform-owned (51 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **56 `sentry_alert` rules** (56 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548, #9545, #4672, #10914, #12011. 54 are
+  fully Terraform-owned (53 of the 55 `sentry_alert` blocks in `issue-alerts.tf`, the other two being the frozen pair below, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -333,6 +333,17 @@ doppler run --project soleur --config prd --command '
 
 `lastTriggered` is the only evidence the route fires; nothing reads it on a
 schedule (decision DC-5 in the #8630 spec).
+
+### Founder legal-acceptance paging (#12011)
+
+Two rules in `issue-alerts.tf` email the web card's failure signals (`feature=legal-acceptance`):
+`legal-acceptance-failure-burst` (matches `decide_rejected` and `reauth_failed`, 3 events in one hour, `frequency_minutes = 45`,
+PROVISIONAL until the flag has run for 14 days) and `legal-acceptance-row-without-event` (`op=row_without_event`, re-pages on
+every event, `frequency_minutes = 46`). Neither matches the feature alone, so the per-row `op=accepted` liveness event never
+emails, and the `page_read_failed` op (a founder page could not read its rows) is a non-paged op that neither rule matches.
+The `row_without_event` rule is inert until the PR-D verify endpoint emits `row_without_event`: nothing emits it today. Both bind the project issue stream (detector already exists), so the rules and their `alert-reference.json` entries land
+in one PR; they are not live until `apply-sentry-infra.yml` has applied them. The op set is held equal to the server source by
+`test/sentry-legal-acceptance-alert-op-contract.test.ts`.
 
 ### Git-data erasure re-drive paging (#10914)
 

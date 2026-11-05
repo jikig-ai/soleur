@@ -381,7 +381,7 @@
 1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
 1	plugins/soleur/skills/ship/scripts/hold-gate-eval.sh
 4	plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh
-11	plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh
+2	plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 29	plugins/soleur/skills/verification-scaffold/scripts/verification-scaffold.sh

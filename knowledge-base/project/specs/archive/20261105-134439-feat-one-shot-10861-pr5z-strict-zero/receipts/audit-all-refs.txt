@@ -1,0 +1,20 @@
+gap	tests/hooks/emissions	2	scripts/betterstack-query.sh,scripts/sentry-issue.sh
+ref	tests/hooks/emissions	scripts/betterstack-query.sh	plugins/soleur/test/components.test.ts:987	6e9e24010f9b/1	"Better Stack=scripts/betterstack-query.sh",
+ref	tests/hooks/emissions	scripts/betterstack-query.sh	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+ref	tests/hooks/emissions	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:989	ee8220c7499a/1	"Sentry=scripts/sentry-issue.sh",
+ref	tests/hooks/emissions	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+gap	plugins/soleur	1	scripts/sentry-issue.sh
+ref	plugins/soleur	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:989	ee8220c7499a/1	"Sentry=scripts/sentry-issue.sh",
+ref	plugins/soleur	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+stale	plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	4663b0253b8d/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	4e5a4d1caf27/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	0ce179c2ca7a/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	3be5ad93bfce/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	da9456338a93/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	db12ad216e7d/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	df729b3e38c7/1	not-a-gap
+stale	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	fa71562066a9/1	not-a-gap
+stale	plugins/soleur	package.json	0b403e085b16/1	anchor-not-live
+stale	plugins/soleur	package.json	8d47cc95bf11/1	anchor-not-live
+stale	plugins/soleur	package.json	f3792010002b/1	anchor-not-live
+SOLEUR_PR_AFFECTED_AUDIT suites=731 always_on=116 audited=615 unaudited=0 gap_suites=2 gap_refs=3 accepted=1549 stale=11 refs=4377 files_read=1232

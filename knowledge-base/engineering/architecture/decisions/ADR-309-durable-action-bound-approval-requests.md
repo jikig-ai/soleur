@@ -115,14 +115,14 @@ may have moved during the wait. A per-session in-process side channel, `Executio
 
 - **Mechanism.** The gate writes a grant immediately before `allow()` on BOTH allow paths (the live `approved` case and the `released` re-proposal case); the three handlers that need it read it once.
   A side channel is needed because the tool zod strips keys not in the schema and SDK `tool()` handlers get no reliable `tool_use_id`, so a binding cannot ride in `updatedInput` without letting the model supply it.
-  The object is created once per user message (turn) in `agent-runner.ts` (`startAgentSessionInner`) and shared by closure between the gate deps and the tool builders; no MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot forge it.
+  The object is created once per user message (turn) in `agent-runner.ts` (`startAgentSessionInner`; the cc dispatcher differs, see the Addendum) and shared by closure between the gate deps and the tool builders; no MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot forge it.
   A grant is keyed by `canonicalJson(zod-parsed handler args)` (the same `SPECS[tool].input.parse` on both sides, so defaults such as `force=false` match), is one-shot (`take` deletes), expires after 120 s,
   and the map is capped at 64 entries (oldest dropped).
 - **Fail closed, sticky for the rest of the turn.** The gate sets `enforcing = true` as soon as the flag evaluates true in a turn. From then on a handler that finds no grant refuses with a TERMINAL message ("the action was NOT performed; do not retry in
   this conversation; start a new conversation"). If the flag is turned off, or its read errors, later in the same turn: the three grant-checked tools (`github_push_branch`, `kb_share_create`, `workspace_set_autonomous`) refuse at the
   handler, and the gate itself denies the other five approval-required tools with the static "approval unavailable" text instead of falling back to the legacy requester-answerable card, for the rest of that turn (the
-  `ExecutionGrants` lifetime). The grants object is created per user message, so the next user message starts with a fresh, non-enforcing grants object and evaluates the flag again. This is accepted. When `grants` is never `enforcing` (the flag was never on in the turn), handler behaviour is byte-identical to before.
-  Two accepted consequences of that lifetime, both bounded to the dark/cohort phase. (1) A flag read error on the FIRST gated call of a turn takes the same path as flag off: the legacy card runs. "Unreadable means off" is the accepted contract while the flag is dark or limited to the Jikigai canary; the flip checklist asks for a decision on hardening it before the flag goes wider. (2) A legacy card opened before enforcement began in the turn and approved afterwards lets the five tools without a handler grant check run on that legacy approval; the window is the card wait and is accepted.
+  `ExecutionGrants` lifetime). The grants object is created per user message (cc dispatcher excepted, see the Addendum), so the next user message starts with a fresh, non-enforcing grants object and evaluates the flag again. This is accepted. When `grants` is never `enforcing` (the flag was never on in the turn), handler behaviour is byte-identical to before.
+  Two accepted consequences of that lifetime, both bounded to the dark/cohort phase. (1) A flag read error on the FIRST gated call of a turn takes the same path as flag off: the legacy card runs (the cc dispatcher excepted: it denies, see the Addendum). "Unreadable means off" is the accepted contract while the flag is dark or limited to the Jikigai canary; the flip checklist asks for a decision on hardening it before the flag goes wider. (2) A legacy card opened before enforcement began in the turn and approved afterwards lets the five tools without a handler grant check run on that legacy approval; the window is the card wait and is accepted.
   `grants` is a REQUIRED argument of the three builders, so a forgotten wiring is a compile error. Every grant refusal is reported as the warn op `approval-grant-refused` (`extra.reason`, `extra.tool`).
 - **Hotfix boundary untouched.** The grant is written inside the existing `canUseTool` allow path; `allowedTools` and ADR-305 are unchanged.
 
@@ -145,7 +145,7 @@ lines live in `apps/web-platform/server/approval/render.ts` (`PHRASES`, rendered
 ### Flag-off posture
 
 With `approval-queue` off (the state at merge), no request is created, shown, emitted or notified, no cron work is done for new rows, and the gate behaves as
-ADR-305 left it. The code paths are dormant by construction (the flag seam is the only reader). "Dormant" means no `approval_request` read: the reattach sites on session attach still do the attaching session's workspace
+ADR-305 left it (the cc dispatcher excepted: it denies an approval-required tool instead, see the Addendum). The code paths are dormant by construction (the flag seam is the only reader). "Dormant" means no `approval_request` read: the reattach sites on session attach still do the attaching session's workspace
 resolution and the flag read before the flag check short-circuits. Flipping the flag is not part of this decision and is not done by the PR that lands it.
 
 ### Residual risk: sentinel discipline (the DB grant is not a barrier)
@@ -165,8 +165,8 @@ as its sentinel.** What exists:
   `cost-writer.ts` -> `ws-handler.ts`; it is a NAMED exemption, and any other builder, approval module or gate-side module that starts reaching the hub fails the sentinel. Two further assertions bound the hub: no module
   outside the allowlisted set imports `handleMessage` (or any value export) from `ws-handler`, no gate-side, approval or builder module value-imports `ws-handler` directly, and every hub export imported by anything reachable
   is one of the two senders (`sendToClient`, `forceDisconnectForTierChange`), so the hub exemption cannot be used to reach `handleMessage`, which mints a tenant client.
-- `readCcMcpAllowlist` (the cc runner's env-driven MCP allowlist) throws if any resolved name is in `APPROVAL_REQUIRED_TOOLS`: the cc runner has no approval wiring, so a promoted approval tool would otherwise run
-  on the legacy in-memory gate and silently skip the queue.
+- `readCcMcpAllowlist` (the cc runner's env-driven MCP allowlist) throws if any resolved name is in `APPROVAL_REQUIRED_TOOLS`: the cc runner has the gate dependency and a grants object but no cc tool builder is wired to
+  read a grant, so a promoted approval tool could not be bound to an approval (see the Addendum for the cc fail-closed switch behind this backstop).
 
 Pre-existing and not changed by this ADR: `pushBranch` runs `git push` inside the agent-writable workspace with the installation token in the child's environment, and whether `bwrap` makes `.git/hooks` read-only
 for the agent is UNVERIFIED. A hook planted by the agent could therefore observe the token during a push the Owner approved. This is outside the approval boundary (it exists with the flag off) and is recorded here so it is not
@@ -221,7 +221,7 @@ The same list is copied verbatim into `knowledge-base/project/specs/archive/2026
    fingerprint is keyed (pepper set, known-answer vector green); both recorded in `knowledge-base/legal/audits/`. The integration test `approval-request.tenant-isolation.test.ts` is the falsifier; `verify/180` deliberately has no row-level check (invariant 3).
 6. **CLO attestation and sign-offs** (compliance-posture row, items (b), (h), (i)): (b) the full CLO attestation is discharged in `knowledge-base/legal/audits/` (a Jikigai-owned canary needs only its (b-canary) verification step);
    (h) the autonomous-mode card copy is non-provisional with both the CPO and CLO reviewer fields filled; (i) as item 5. Evidence gates #9776 and #10111 are closed.
-7. **First-call flag-error posture**: decide whether to harden a flag read error on the first gated call of a turn to deny before enabling beyond the Jikigai canary (today it takes the flag-off path, a legacy card; see "Fail closed, sticky for the rest of the turn").
+7. **First-call flag-error posture**: decide whether to harden a flag read error on the first gated call of a turn to deny before enabling beyond the Jikigai canary (today it takes the flag-off path, a legacy card, except in the cc dispatcher, which denies; see "Fail closed, sticky for the rest of the turn" and the Addendum).
 
 ### Accepted deviation: cron monitor routing (the CTO review's cron-and-alerts ruling, second clause)
 
@@ -235,7 +235,7 @@ yet. The approval alerts that DO exist and are routed in this PR: `approval-gate
 **Rollback is: flag off, keep the schema.** `180_approval_request.down.sql` is NOT a hot rollback. Run by hand against production it (1) leaves the `_schema_migrations` row, so the runner never re-applies 180 while
 the schema is gone; (2) strands `verify/068` (which expects the extra `_jti_not_denied` policy) and `verify/180`, which stay in `main` and fail every following release's `verify-migrations`, blocking `deploy`; (3) breaks
 account deletion for every user if the new app is live, because saga step 5.16 calls `anonymise_approval_request`; and (4) deletes the `approval_required` inbox rows and DROPs the table including its audit rows.
-Turning the flag off is also safe mid-session, with one stated effect: for the rest of any turn in which the approval flow already ran (the `ExecutionGrants` lifetime, one user message), the three grant-checked tools refuse at the handler
+Turning the flag off is also safe mid-session, with one stated effect: for the rest of any turn in which the approval flow already ran (the `ExecutionGrants` lifetime, one user message; one Query in the cc dispatcher, where no builder reads grants yet so only the gate deny applies, see the Addendum), the three grant-checked tools refuse at the handler
 and the other five approval-required tools are denied by the gate with the static unavailable text (they never fall back to the legacy requester-answerable card); the next user message starts with a fresh, non-enforcing grants object. Live `pending` and `approved` rows are
 not touched and expire by themselves. **Rotating `SENTRY_USERID_PEPPER` is a rollback hazard of its own**: it invalidates every live approval (pending and approved rows fail closed as `hash_mismatch`; ADR-029 pseudonyms change with it), so
 do it only with the flag off and no live rows.
@@ -287,6 +287,25 @@ retention.
 - The flag is limited to single-member workspaces until the cohort rule in the flip checklist is met.
 - The decide path stays code-discipline protected in the agent's process until it moves out (Residual risk).
 - Nothing in this ADR is a measured production claim. Status is `adopting` until the flag is flipped for a canary and the path (consume success, unanswered rate) is measured.
+
+## Addendum — 2026-11-05 (Ref #11635, epic Ref #9601): the cc dispatcher carries the gate and fails closed
+
+The cc dispatcher (`cc-dispatcher.ts`, the Concierge and web-egress path) previously had no approval wiring. It now builds the gate dependency with `createApprovalGateDeps` and one `ExecutionGrants`, both inside
+`realSdkQueryFactory`. No cc tool builder reads a grant yet and the cc path registers no `APPROVAL_REQUIRED_TOOLS` member, so no reachable behaviour changes with the flag absent.
+
+- **Lifetime.** The cc grants object is created once per factory invocation, that is per Query, not per user message. A cc Query spans many turns, so the sticky `enforcing` flag spans all of them: stricter than the legacy
+  runner, never looser. Per-turn grants in cc are out of scope until a cc tool builder reads grants.
+- **Fail closed (deliberate per-runner divergence).** The cc dispatcher sets `approvalFailClosed` on its `canUseTool` deps. With it set, an approval-required tool that the flow gave no verdict for (the dependency is
+  absent, the flag is off, or the flag read failed) is denied with the static unavailable text and is never answered from the in-memory review card. The legacy runner is unchanged and still falls back to that card with
+  the flag off. A missing dependency with the switch set is a wiring defect and is reported to Sentry on each denied call (not debounced) under the existing `approval-gate-failed` op with `extra.stage = wiring-absent`; flag off or unreadable is a
+  normal dormant state and only logs (a read failure is mirrored by the flag seam, debounced per process by its report TTL; in production the flag client usually falls back to its env mirror rather than throwing). The switch covers only the no-verdict cases: with the flag on and the dependency wired, a required tool that cc later registered would get the full gate flow and a written grant that no cc builder reads, which is why the allowlist throw and the derived sweep stay in place.
+- **Backstop and pins.** `readCcMcpAllowlist` still throws for every approval-required name. A derived sweep over the cc registry function (`test/approval/tools-census.test.ts`) fails naming any approval-required tool
+  that cc starts to register, and `test/approval/runner-census.test.ts` plus the real-factory capture in `test/cc-dispatcher-real-factory.test.ts` pin the wiring.
+- **What the switch cannot see.** It acts on a required tool that reaches the gated platform branch of `canUseTool` (a `platformToolNames` member in the gated tier). Routes that never reach that branch are held by other pins, or are unpinned where stated, and are listed so they are not over-read as covered: `allowedTools` (the pre-approval assert in `agent-runner-query-options.ts` plus the real-factory check), a re-tier of a required tool to `auto-approve` (only the tier test in `cc-approval-fail-closed.test.ts` and `tools-census.test.ts`), the UX allow set and `SAFE_TOOLS`, both checked before the platform branch (pinned for required names in `cc-approval-fail-closed.test.ts`; the other exact-name allows there, `Agent`, the file tools and `Bash`, match no MCP name by construction and are not pinned), and a skill's `allowed-tools` frontmatter or a hook returning allow (nothing pins these; a hook allow is measured to resolve ahead of `canUseTool` for Bash, and the sandbox hook's matcher excludes MCP tools, but whether any other allow source is honoured for an MCP tool is UNVERIFIED).
+- **What the user sees on a denied call.** Only the generic tool-use indicator for the attempt, with no deny status: the late deny sends no WebSocket event, so the user learns of it only if the model relays the static text. Deciding what the Owner sees when an approval-required tool is denied in a Concierge chat belongs to the first PR that registers one, together with the pending-approval question above.
+- **Preconditions for the first PR that registers an approval-required tool in cc.** It must pass the derived sweep and census, wire the grant-reading builders with the same grants object, and settle where the workspace
+  Owner finds a pending approval from a Concierge chat (a product decision, not made here). Unverified and carried to that PR: the gate captures the active workspace, repository and workspace path at construction;
+  `activeWorkspaceId`, `connectedOwner` and `connectedRepo` are `const` bindings in the factory, but whether the user's active workspace can change while a Query is alive is not checked here.
 
 ## Ordinal history
 
