@@ -327,6 +327,9 @@ esac
 FAKE
   chmod +x "$FAKE/$tool"
 done
+# Positive control: the fake must log an argv it refuses, or the empty-log row below proves nothing.
+FAKE_REFUSED="$TMPROOT/fake-probe" PATH="$FAKE:$PATH" sha256sum --probe unexpected-argv >/dev/null 2>&1 || true
+chk "9c control: the fake records an unexpected argv" test -s "$TMPROOT/fake-probe"
 RC=0
 OUT="$(FAKE_REFUSED="$TMPROOT/fake-refused" PATH="$FAKE:$PATH" CONSTRAINT_SCAFFOLD_REPO_ROOT="$FX" TMPDIR="$TMPROOT/tmp" bash "$REAL_SCRIPTS/constraint-scaffold.sh" --refresh-stage-a 2>"$TMPROOT/err")" || RC=$?
 ERR="$(cat "$TMPROOT/err")"
@@ -420,7 +423,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
 fi
 
 # --- Anti-vacuity floor (ADR-193 #1). The literal sits directly above the `if`. -----------------------
-MIN_ROWS=83
+MIN_ROWS=84
 if [[ "$cases" -lt "$MIN_ROWS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= %d.\n' "$cases" "$MIN_ROWS" >&2
   printf '  Rows were deleted or skipped; a green run here would be a coverage loss.\n' >&2
