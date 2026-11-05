@@ -1,10 +1,12 @@
 reading: r1 (web-platform median pick 7af192071d, 8 files), private local clone at base 8cc167c2e3, wave: warm complete rerun
 cold derive (separate attempt, same clone, empty cache): 543 s  [t0=1793824936.409 to AFFECTED_SUMMARY 1793825479.306]; selected=160 of=731 (model said 159)
-warm gate wall: 6086.6 s (derive cache hits=727 misses=4); cold gate = 543 + 6087 = 6630 s
-burners=8 (nproc/2) plus ambient sibling runs: siblings=5 at start; load average at start 8.65 (burners had just started), 15-35 during
+warm gate wall: 6086.6 s (derive cache hits=727 misses=4); cold gate = 543 + (6087 - 108) = 6522 s (the 6087 s warm wall already contains the 108 s warm derive)
+burners=8 (nproc/2) plus ambient sibling runs: siblings=5 at start; load average 8.65 at start (burners had just started), 13.61 at the end, 15-35 during the run, peaking at 34.62 during the earlier attempts
 pool: [parallel] mode engaged width=4; suites 160 passed 159 failed 1 killed 0; gate rc=1 (the one red: apps/web-platform [repo-wide+component], git-data-replication F21 real git push + a clone-based ledger test in the private clone)
 provisional red line 1271 s after start (97 suites had started, 64 finished after it); drain verdict at 6084 s; exactly one [FAIL] verdict
 sum of suite wall 8671 s; edge-selected (44) 8054 s; always-on (116) 617 s (sum/4 = 154 s); seconds with <=1 suite running: 4632 of 5960 (78%)
 lock:test-all serial chain: ci-pr-affected-replay-a 1818 s, -b 835 s, -c 627 s plus the test-all-* suites that hold the same token
 first attempt in the same clone with the repo budget (2400 s): deferred rc=6 at 2400 s, 107 of 160 done, approval-guard1-mutation killed rc=143 at 628 s, provisional red already printed
 attempts in the shared worktree: queued behind sibling full runs (ticket position 3, holder running 7842 s); with TC timeouts set to 1 s the run fell back to SERIAL (reason=lock-not-held)
+queue wait: 36 ms to acquire the advisory lock in the private clone (own git-common-dir); in the shared worktree a different attempt sat at ticket position 3 behind a sibling full run that had held the lock for 2 h 10 min and was stopped after about 11 minutes
+warm derive: 108 s (727 of 731 labels cached; AFFECTED_SUMMARY at +108 s of the warm run)
