@@ -5,7 +5,8 @@
 # WHY. CodeQL is advisory once the merge queue is on (it cannot report a status on merge_group,
 # github/codeql-action#1537), so a critical/high alert that lands on main is no longer blocked
 # before the merge. This gate runs on the push, AFTER the merge, so it cannot block: it pages.
-# Page-and-continue, never auto-revert.
+# Page-and-continue, never auto-revert. TWO TRIGGERS, ONE FILER: the push workflow calls it in push
+# mode; the daily workflow calls it with SWEEP=true (#12065, CTO ruling on #12004).
 #
 # WHAT "NEW" MEANS. An alert is new when no OPEN, bot-authored issue titled with the prefix
 # `sec: CodeQL alert #<N>` exists. The tracker is the state: no watermark, no cache. A CLOSED
@@ -15,8 +16,9 @@
 #
 # VERDICT. RED iff this run filed at least one issue, or any error occurred. A re-run on an
 # already-tracked alert is green: the issue is the durable page, the red run is the push-time
-# signal. Degraded exits (cap hit, no Analyze check-runs, any API error) upsert ONE
-# `codeql-gate-degraded` issue so a red run on a queue-made push (no human actor) is not invisible.
+# signal. Degraded exits (cap hit, no Analyze check-runs, any API error) upsert ONE degraded issue —
+# `codeql-gate-degraded` in push mode, `codeql-sweep-degraded` in sweep mode — so a red run with no
+# human actor (a queue-made push, a scheduled cron) is not invisible.
 #
 # ACCEPTING A RISK. Do it by DISMISSING the alert in code scanning. Closing the tracking issue does
 # not accept anything: the alert is still open, so the next push to main files a new issue. A
@@ -33,7 +35,13 @@
 #
 # INPUTS (environment only):
 #   GH_REPO            owner/repo (required)
-#   SHA                the pushed commit, 40 lowercase hex (required)
+#   SWEEP              true|false (default false): the scheduled daily sweep (codeql-to-issues.yml).
+#                      In sweep mode there is no push to wait on: phases 1-2 are skipped, SHA is
+#                      optional (an empty SHA is resolved to main HEAD), and a degraded run upserts
+#                      `codeql-sweep-degraded` instead of `codeql-gate-degraded`.
+#   SHA                the pushed commit, 40 lowercase hex (required in push mode; optional in sweep
+#                      mode — unset means "resolve main HEAD"; a provided SHA is validated but
+#                      advisory: the alert read is always refs/heads/main-scoped)
 #   DRY_RUN            true|false (default false): no `gh issue create` / comment; still exits 1
 #   POLL_INTERVAL      seconds between polls (default 30)
 #   MAX_POLLS          polls of PHASE 1, the Analyze check-runs wait (default 50 = about 25 minutes at 30 seconds)
@@ -48,7 +56,9 @@
 #
 # The defaults above are production (the workflow sets none of them); the suite pins them.
 #
-# TIMING. The workflow job is killed at 40 minutes and a kill never reaches `degrade`, so the script tries to finish (and
+# TIMING. The workflow job is killed at 40 minutes (the push caller; the sweep caller codeql-to-issues.yml
+# sets DEADLINE_SECONDS=240 under a 10-minute kill — the same deadline + 300 s invariant) and a kill never
+# reaches `degrade`, so the script tries to finish (and
 # file the degraded issue) first. The deadline is a wall clock checked BETWEEN calls: before every poll of phase 1 and
 # phase 2 (a pause that would not fit is never taken) and, in phase 3, after the alerts read and before every tracking
 # issue is created (a deadline hit there degrades with `deadline-exceeded`). The poll counts alone cannot promise that: 58
@@ -66,6 +76,7 @@ set -euo pipefail
 
 GH_REPO="${GH_REPO-}"
 SHA="${SHA-}"
+SWEEP="${SWEEP-false}"
 DRY_RUN="${DRY_RUN-false}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 MAX_POLLS="${MAX_POLLS:-50}"
@@ -88,7 +99,18 @@ reject_input() { annotate_error "input rejected: $1"; exit 2; }
 
 # ---- input validation: before any API call, before any temp file ------------------------------
 [[ "$GH_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || reject_input "GH_REPO is not owner/repo"
-[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || reject_input "SHA is not 40 lowercase hex characters"
+# SWEEP is validated before SHA because the SHA requirement is mode-aware: required in push mode,
+# optional in sweep mode (an unset SHA resolves to main HEAD after WORK/trap setup), and a PROVIDED
+# SHA is held to the same contract in both modes.
+[[ "$SWEEP" == "true" || "$SWEEP" == "false" ]] || reject_input "SWEEP is not true or false"
+if [[ "$SWEEP" != "true" || -n "$SHA" ]]; then
+  [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || reject_input "SHA is not 40 lowercase hex characters"
+fi
+# The degraded issue's title is trigger-scoped (ruling on #12004, item 12004.2): a sweep failure must
+# not read as a gate failure. Both titles route to the operator digest via action-required.
+if [[ "$SWEEP" == "true" ]]; then
+  DEGRADED_TITLE='codeql-sweep-degraded'
+fi
 [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "false" ]] || reject_input "DRY_RUN is not true or false"
 # norm_int <name> <value> <max-digits> <minimum>: digits only, then leading zeros stripped (so 08 and 09 are decimal and a
 # later $(( )) can never read them as octal), bounded in length so the arithmetic cannot overflow, and at least <minimum>.
@@ -144,7 +166,8 @@ list_issues() {
   return "$rc"
 }
 
-# upsert_degraded <reason-code>: create or comment on the single codeql-gate-degraded issue.
+# upsert_degraded <reason-code>: create or comment on the single degraded issue
+# (codeql-gate-degraded in push mode, codeql-sweep-degraded in sweep mode).
 upsert_degraded() {
   local code="$1" rc=0 existing="" body="$WORK/degraded-body.md"
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -154,11 +177,19 @@ upsert_degraded() {
   list_issues "$WORK/degraded-open.json" || return 1
   existing="$(jq -r --arg t "$DEGRADED_TITLE" '[.[] | select(.title == $t)][0].number // empty' "$WORK/degraded-open.json")" || return 1
   {
-    printf 'The CodeQL alert gate could not reach a verdict for a push to main.\n\n'
+    if [[ "$SWEEP" == "true" ]]; then
+      printf 'The scheduled CodeQL alert sweep could not reach a verdict.\n\n'
+    else
+      printf 'The CodeQL alert gate could not reach a verdict for a push to main.\n\n'
+    fi
     printf 'Reason code: %s\n' "$code"
-    printf 'Commit: %s\n' "$SHA"
+    printf 'Commit: %s\n' "${SHA:-unresolved}"
     if [[ -n "$GITHUB_RUN_ID" ]]; then printf 'Run: %s/actions/runs/%s\n' "$REPO_URL" "$GITHUB_RUN_ID"; fi
-    printf '\nThe daily CodeQL alert sweep remains the backstop. Close this issue once a re-run of the gate is green.\n'
+    if [[ "$SWEEP" == "true" ]]; then
+      printf '\nThe push-time CodeQL alert gate remains the backstop. Close this issue once a re-run of the sweep is green.\n'
+    else
+      printf '\nThe daily CodeQL alert sweep remains the backstop. Close this issue once a re-run of the gate is green.\n'
+    fi
   } >"$body" || return 1
   if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ ]]; then
     timeout 60 gh issue comment "$existing" --body-file "$body" >/dev/null 2>"$WORK/err" || rc=$?
@@ -211,6 +242,18 @@ out_of_time() { [[ $((SECONDS + 10#$POLL_INTERVAL)) -ge $((10#$DEADLINE_SECONDS)
 past_deadline() { [[ "$SECONDS" -ge $((10#$DEADLINE_SECONDS)) ]]; }
 pause() { sleep "$POLL_INTERVAL"; }
 
+# ---- mode branch: the sweep skips phases 1-2; phase bodies stay at column 0 (mutant anchors) ----
+if [[ "$SWEEP" == "true" ]]; then
+  if [[ -z "$SHA" ]]; then
+    echo "sweep mode: resolving main HEAD"
+    fetch_page "main HEAD" "$WORK/main-head.json" "repos/${GH_REPO}/commits/main"
+    SHA="$(jq -r '.sha // empty' "$WORK/main-head.json" 2>/dev/null)" || SHA=""
+    [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || degrade "api-error" "main HEAD resolution returned no 40-hex sha"
+    echo "sweep mode: resolved main HEAD ${SHA} (phases 1-2 skipped)"
+  else
+    echo "sweep mode: evaluating provided commit ${SHA} (phases 1-2 skipped)"
+  fi
+else
 # ---- phase 1: wait for every Analyze (*) check-run of the commit ------------------------------
 echo "waiting for the Analyze (*) check-runs of ${SHA}"
 POLLS=0
@@ -263,6 +306,7 @@ while true; do
   if out_of_time; then degrade "deadline-exceeded" "the wall-clock deadline passed while waiting for the analyses to settle"; fi
   pause
 done
+fi
 
 # ---- phase 3: open critical/high alerts on refs/heads/main ------------------------------------
 fetch_pages "open alerts" "$WORK/alerts-open.json" "repos/${GH_REPO}/code-scanning/alerts?state=open&ref=refs/heads/main&per_page=100"

@@ -1126,6 +1126,53 @@ advisory `affected-index-ratchet` (the drift this PR files). #11739 and
 #11734 re-armed and landed: mergedAt 03:24Z (squash `4393472919`) and 03:44Z
 (squash `0e8a6ebb02`).
 
-## Addendum 2026-11-03: follower detection-only contract partially superseded by ADR-318
+### Addendum 2026-11-03: follower detection-only contract partially superseded by ADR-318
 
 The 2026-10-23 addendum records the apply-delivery-gap follower as "detection only — applies nothing, dispatches nothing". ADR-318 adds a bounded redrive arm: a `redrive` job holding `actions: write` may re-dispatch `apply-deploy-pipeline-fix.yml --ref main` when every deploy-fix gap row is `evicted-before-start` and nothing is in flight. `cancelled-mid-run` stays human-only; the `infra` key stays manual. The `follow` job and this ADR's merge-queue/advisory-gate decisions are unchanged.
+
+### Addendum 2026-11-04 (#12065, #12066): one filer, two triggers — the daily sweep now runs the gate script
+
+The daily `codeql-to-issues.yml` `check-alerts` job is no longer a second
+filer with its own inline `gh`/`jq` body. It is a second **trigger** of
+`scripts/codeql-main-alert-gate.sh`: the job is a pinned-SHA sparse checkout
+of the script plus one `run:` step, invoked with `SWEEP=true`. The
+convergence design, the degraded-signal subsumption, and the rejected
+alternatives are the CTO ruling on issue #12004 (comment 6625921398,
+2026-11-04).
+
+**Sweep mode.** `SWEEP=true` makes `SHA` optional: when empty the script
+resolves main HEAD itself (`repos/{repo}/commits/main`, one bounded
+`fetch_page` call, the 40-hex re-validated, failure degrades `api-error`)
+and skips phases 1–2 — there is no pushed commit to wait on, so the
+check-run and analyses-settle waits do not apply. Phase 3 is byte-identical
+in both modes: ref-scoped open critical/high alert read, bot-authored
+`sec: CodeQL alert #N` dedupe, `LABELS_P1` tracker filing. Sweep-filed
+trackers therefore carry the same `type/security` + `priority/p1-high` +
+`action-required` set as push-filed ones and the two modes still cannot
+double-file. The `check-alerts` run carries `DEADLINE_SECONDS=240` under
+`timeout-minutes: 10` and a `dry_run` dispatch input mirrored to `DRY_RUN`;
+`permissions` gained `contents: read` for the checkout.
+
+**The `|| true` residual is retired.** The accepted-residual line above —
+the cron "swallows API errors with `|| true` today, Follow-up (b)" — no
+longer holds. The inline body that swallowed them is deleted; a failed read
+in sweep mode degrades through the same `degrade` machinery as push mode
+and upserts a durable page. The difference between the two triggers is now
+exactly the degraded-issue title, not the failure semantics.
+
+**Two degraded titles.** `upsert_degraded` is mode-aware: push mode upserts
+`codeql-gate-degraded` as before; sweep mode upserts `codeql-sweep-degraded`
+— same `LABELS_P2` (`meta/machinery`, `type/security`, `priority/p2-medium`,
+`action-required`), same upsert-and-comment dedupe, body naming the
+scheduled sweep rather than a push. A red scheduled run now pages the same
+way a red push run does; neither title masks the other's signal.
+
+**`fixed`-state reaper.** `close-orphans` previously reaped a tracker only
+when every referenced alert was `dismissed`; GitHub marks remediated alerts
+`fixed` (the `state` enum is `open|dismissed|fixed`), so fixed-alert
+trackers accumulated as permanently open `type/security` issues and
+inflated the 200-row `--limit` dedupe population both triggers read. The
+predicate now accepts `dismissed` or `fixed` per referenced alert, the
+close comment reads "dismissed or fixed", and the recorded per-alert reason
+carries the actual state. `keep-open` and lookup-failure still keep the
+tracker open.
