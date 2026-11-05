@@ -378,6 +378,7 @@ NEOF
     ins_unquoted)    sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  x' "$f" ;;                                  # an unquoted member inside an extent is code, not data
     ins_evil)        sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  "$(evil)"' "$f" ;;                          # command substitution inside a quoted member — the file is SOURCED bash
     ins_evil_out)    sed -i '1i\  "$(evil)"' "$f" ;;                                                       # the same substitution OUTSIDE every extent
+    ins_pp)          sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\++evil' "$f" ;;                              # content starts `++`: the diff line is `+++evil`, which must reach ELEM_RE, not the header-skip arm
     ins_member_comment) sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  "scripts/zzleak-cmt.test.sh" # a comment' "$f" ;;  # grammar-legal: member + trailing comment
     unclosed)        sed -i '/^AFFECTED_PLUGINS_BAR_PATHS=($/,/^)$/{/^)$/d}' "$f" ;;                        # delete the closer: the head image's extent walk hits EOF with in=1
     nested)          sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\AFFECTED_ZZLEAK_NESTED_PATHS=(' "$f" ;;       # a second opener inside an extent: the bitmap walk refuses
@@ -415,7 +416,7 @@ unset _t
 # ELEMENT GRAMMAR (Guard 1 row 7): every +/- line inside an index hunk must match ELEM_RE — opener, `)`,
 # `"member"` + optional comment, whole-line comment, or blank. A NUL makes the blob binary (zero hunks must
 # not pass vacuously); a broken image (unclosed extent, nested opener) is extent_parse, not a hunk miss.
-for _t in bin_nul ins_unquoted ins_evil ins_evil_out unclosed nested; do
+for _t in bin_nul ins_unquoted ins_evil ins_evil_out ins_pp unclosed nested; do
   fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
 done
 unset _t
@@ -775,6 +776,8 @@ row_elem_grammar() {  # Guard 1 row 7: the element grammar inside index hunks, t
   check_eq "O-ELEM quoted substitution: reason" "$N_REASON" "extent_miss"
   drive tap_ins_evil_out "$d";   expect_full "O-ELEM substitution outside every extent"
   check_eq "O-ELEM substitution outside extents: reason" "$N_REASON" "extent_miss"
+  drive tap_ins_pp "$d";         expect_full "O-ELEM plus-prefixed content must reach the grammar arm, not the header skip"
+  check_eq "O-ELEM plus-prefixed payload: reason" "$N_REASON" "extent_miss"
   drive tap_ins_member_comment "$d"; expect_lane "O-ELEM member + trailing comment stays oracle (no over-rejection)"
   drive tap_unclosed "$d";       expect_full "O-ELEM an unclosed extent image"
   check_eq "O-ELEM unclosed extent: reason" "$N_REASON" "extent_parse"

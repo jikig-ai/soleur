@@ -492,7 +492,8 @@ jobs:
           else
             printf 'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha=\n' >> "$GITHUB_OUTPUT"
             printf '::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE event=%s switch=unreadable locked=na attempt=%s files=0 reason=no_base_driver oracle_only=false would_skip=none active=false\n' \
-              "${EVENT_NAME:-unknown}" "${GITHUB_RUN_ATTEMPT:-0}"
+              "${EVENT_NAME:-unknown}" "${RUN_ATTEMPT:-0}"
+            printf 'oracle-lane: switch=unreadable locked=na reason=no_base_driver files=0 oracle_only=false would_skip=none active=false\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
   # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. Since PR5z (#10861) the check is

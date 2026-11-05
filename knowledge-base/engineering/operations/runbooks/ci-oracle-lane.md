@@ -44,8 +44,8 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 | Field | Values |
 |---|---|
 | `event` | `pull_request`, `merge_group`, or whatever `github.event_name` carried |
-| `switch` | `on`, `invalid` (non-empty, not `on`); `unset` exists in the grammar but is unreachable in CI — the job only schedules while the variable is non-empty |
-| `locked` | `true` while `ORACLE_LANE_LOCKED=1` stands in the driver |
+| `switch` | `on`, `invalid` (non-empty, not `on`); `unset` exists in the grammar but is unreachable in CI — the job only schedules while the variable is non-empty; `unreadable` only on the `no_base_driver` fallback (the base-sourced driver could not be produced, so the switch was never evaluated) |
+| `locked` | `true` while `ORACLE_LANE_LOCKED=1` stands in the driver; `na` only on the `no_base_driver` fallback (the base driver's lock state is unobservable when it cannot be read) |
 | `attempt` | `github.run_attempt`; only `1` can ever reach `oracle` |
 | `files` | changed-path count in the diff listing — set before the per-path loop, so a mid-loop `malformed_diff` abort still reports the total count (0 on pre-listing exits) |
 | `reason` | the verdict token — enum below |

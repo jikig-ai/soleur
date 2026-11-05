@@ -21,3 +21,21 @@
 - Inline agent roles: repo-research, learnings research, functional-overlap, engineering domain-leader assessment, condensed plan-review self-pass.
 - Scripts: `cloud-detect.sh`, `collision-precheck.sh 12156`, `lint-guard-contract.py`; plus `gh issue/pr view`, `gh variable list`, `gh issue list --label code-review`.
 - Artifacts: plan file, `specs/feat-one-shot-12156-oracle-fast-lane/tasks.md`, `decision-challenges.md` — pushed to the branch.
+
+## Review phase (2026-11-05, PR #12166)
+
+Design pass (design-risk): code-simplicity f672069c, architecture 6e323eca, performance-oracle c8b90c1a — no P1.
+Panel (8 seats, dedup'd): git-history 1e2a6387, pattern-recognition ddf8f42d, security fffc27d9, data-integrity
+a03b80da, agent-native 413ca83b, code-quality a7c53594, test-design 984a309e, user-impact 04fe5776.
+
+P1s fixed: (a) candidate-tree forgery — driver now sourced from base image (git show HEAD^1:/$MERGE_GROUP_BASE_SHA:);
+(b) binary-diff vacuous extent pass — ^Binary files fails closed in check_hunks.
+P2s fixed: element grammar ELEM_RE ($/backtick excluded inside quotes after sentinel caught the first form),
+self-exclusions, manifest argv 387-599, G4 ci-oracle family + exclusion note, ocensus .if whitelist, y-orasel mutants,
+GITHUB_SHA bind rows, extent_parse fixtures, remedy-line rows, pagination total_count<=100, baseline.tsv doc drift
+(5 sites), runbook gh-syntax/audit-block/four-leg variant, plan RATCHET_ORACLE overclaim, CODEOWNERS rows,
+suite-durations floor row, ALWAYS_RUN_JOBS +2, pr-fanout-ledger 30.
+Deferred (recorded, not fixed): RUNNER_TEMP fallback port back to ci-pr-selection.sh (sibling-file scope),
+serial-manifest merge-queue wall-clock bound (bounded by timeout-minutes:30; activation-gated concern),
+oracle-index-check skip diagnostic nuance on push, reordered.txt tac fallback, mutate_otol bash -n.
+Suites green: ci-oracle-lane 4837/4837 (31/31 mutants), push-dedupe 268, draft-light 209, aggregator 249 (47/47).

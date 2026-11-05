@@ -239,7 +239,9 @@ check_hunks() {  # $1 = diff file   GUARD:O1-EXTENT-MISS
             [ "${head_bitmap:l-1:1}" = "1" ] || return 1
           done
         fi ;;
-      '+++'*|'---'*) continue ;;
+      # The ---/+++ arms must name the literal HEADER shapes only: a content line is sign+content, so an added member
+      # whose text starts with `++` (e.g. `+++$(evil)`) would bypass ELEM_RE under a bare `'+++'*'.
+      '--- a/'*|'--- /dev/null'|'+++ b/'*|'+++ /dev/null') continue ;;
       '+'*|'-'*)
         body="${line:1}"
         [[ "$body" =~ $ELEM_RE ]] || return 1 ;;  # GUARD:O-ELEM-GRAMMAR
