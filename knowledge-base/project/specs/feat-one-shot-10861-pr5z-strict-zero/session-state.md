@@ -26,3 +26,10 @@ planning subagent only (no Task tool — all research inline). Sources: archived
 
 ### Next Action
 Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, red-gate measurement + #12128 coordination, then the single deletion commit.
+
+## Deepen pass (2026-11-05, HEAD 946632001d — KB edits only)
+
+- **Halt gates all pass (mechanical, run inline — no Task tool):** `lint-guard-contract.py` on the plan → 1 file, 2 guard entries, no FAIL; exactly 1 unfenced `## Scope Check`; User-Brand section present (threshold `none` + scope-out reason); Observability block complete (discoverability `bash -c 'test ! -f … && echo baseline-absent'` — allowlisted verb, literal expected_output); zero PAT-shaped variables; no UI-surface or encryption-trigger files in Files to Edit/Create → gates 4.9/4.10 skip; Task Design 4.13 skip (no new autonomous-task surface); downtime 4.55 skip (no availability-changing operation).
+- **Verification findings already folded into the plan during planning** (the deepen pass confirms rather than discovers): the adoption hole is an absent check (not an arm) in `ratchet_run` :2057-2075; 42 orphaned accept rows require same-commit deletion; marker precedence requires the `! grep -q '^grown'` assertion on the reintroduced row to kill `ratchet-adoption-refused`; `origin/main` red `stale-accept live=3` (#12110, PR #12128) → Phase 0.3 coordination arm; `ci.yml` step name is load-bearing for the observation probe (`STEP=` :88).
+- **Agent fan-outs unavailable** (research/review/advisor/spec-flow/CTO): all analysis ran inline; the 8 technical decision rows in `decision-challenges.md` carry `pending - assumed` rulings for the work phase to settle or escalate.
+- **Work-ready:** yes. The one sequencing item is #12128 — if still open at work start, Phase 0.3's arm governs (never duplicate the repin).
