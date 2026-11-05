@@ -1942,10 +1942,10 @@ jobs:
           set -uo pipefail
           RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
           if [[ -z "${DOPPLER_TOKEN_INNGEST_FLIP_READ:-}" ]]; then
-            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the apply-web-platform-infra push run if one failed, otherwise dispatch it with its default target, then re-dispatch this replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
+            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the apply-web-platform-infra push run if one failed, otherwise dispatch it with its default target, then re-dispatch the replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
             exit 1
           fi
-          blind() { local t=""; case "$1" in *"exit 124") t=" - timed out after 30s" ;; esac; echo "::error::inherited-done preflight: no verdict could be formed (${1}${t}), so this replace is not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
+          blind() { local t=""; case "$1" in *"exit 124") t=" - timed out after 30s" ;; esac; echo "::error::inherited-done preflight: no verdict could be formed (${1}${t}); replace not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
           warn_unset() { echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET or empty. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until it is set (#9927 retired the verbs that could re-arm it; runbook: Retired cutover verbs)."; }
           command -v doppler >/dev/null 2>&1 || blind "doppler missing"
           command -v jq >/dev/null 2>&1 || blind "jq missing"
@@ -1975,7 +1975,7 @@ jobs:
             exit 0
           fi
           if ! [[ "$FLAG" =~ ^[a-z-]{1,24}$ ]]; then
-            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP has an unexpected shape (${#FLAG} chars, value withheld). It is outside inngest-server-flip-guard.sh's allowlist, so the replaced host will refuse every prod start; fix the flag in Doppler before replacing."
+            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP has an unexpected shape (${#FLAG} chars, value withheld). It is outside inngest-server-flip-guard.sh's allowlist, so the replaced host refuses every prod start; fix the flag in Doppler first."
             exit 0
           fi
           echo "INNGEST_CUTOVER_FLIP=${FLAG}"
