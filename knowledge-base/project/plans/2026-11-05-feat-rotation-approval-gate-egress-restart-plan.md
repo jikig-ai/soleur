@@ -76,7 +76,7 @@ is also not declared in Terraform — only read by `server/egress-audit-ingest.t
   Both rotate workflows get a dedicated **`approve` job** carrying `environment:
   key-rotate-approval` and no secrets, `needs`-chained so every production-mutating
   job runs only after reviewer approval. `kk_chk_approval` becomes a live read of
-  `protection_rules` (the env must carry `required_reviewers`; absent/unprotected/API-
+  `protection_rules` (the env must carry BOTH `required_reviewers` AND `branch_policy`; absent/unprotected/API-
   error refuses `approval_environment_unprotected`). The approve job emits
   `approval_epoch`; `authorization_stale` measures from it, not `guard_epoch`.
 - **#11920:** `ci-deploy.sh` restart action accepts `vector` — skips the
@@ -187,8 +187,10 @@ the new token while the app still ran the old env and reject every bucket.
   inngest quiesce check for it); capture `ActiveEnterTimestamp` before,
   `sudo /usr/bin/systemctl try-restart vector.service`, verify is-active + timestamp
   delta; reasons `vector_restart_failed` / `vector_restart_unverified` / `success`;
-  call `fan_out_to_peers` on the vector arm (fan-out first so a local failure
-  cannot hold peers back — mirrors quiesce).
+  call `fan_out_to_peers` on the vector arm AFTER local restart + verify pass
+  (mirrors quiesce's ordering, Ruled by CTO agent 2026-11-05 — a partial fleet
+  is detectable via merged deploy-status, and consistency with the proven arm
+  is the safer read).
 - `key-rotate.sh`: delete `kk_chk_egress`'s refusal (keep the function as a
   pass-through or remove it + its ladder call site); rewrite `kk_chk_approval` as
   the live env-protection verify; `KK_APPROVAL_ENV_BOUND=true`; verdict list and
