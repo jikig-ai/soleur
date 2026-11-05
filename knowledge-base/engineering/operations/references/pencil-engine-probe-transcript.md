@@ -1,6 +1,6 @@
 # Engine contract probe transcript
 
-engine: @pen.dev/cli@0.3.13 probed 2026-11-01
+engine: @pen.dev/cli@0.3.13 probed 2026-11-05
 scope: engine and adapter cases
 result: all cases passed (145 passed)
 
@@ -133,7 +133,7 @@ RECORD files the engine wrote under HOME in a session: none
 PASS no file the engine wrote under HOME contains a form of the canary credential
 PASS positive control: this probe's own redactor removes the canary in all three forms
 RECORD lockfile packages declaring an install script (skipped by --ignore-scripts): @google/genai, protobufjs
-RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 8 s; node v26.12.1
+RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 10 s; node v26.13.0
 PASS npm ci --ignore-scripts from the committed lockfile succeeds
 PASS npm ci left the lockfile byte-identical
 PASS the --ignore-scripts install holds the pinned engine version
@@ -180,6 +180,7 @@ RECORD acceptance app ui concierge activity trail.pen: disk=4 loaded=4
 RECORD acceptance app ui inbox bulk archive.pen: disk=2 loaded=2
 RECORD acceptance app ui session completion inline.pen: disk=2 loaded=2
 RECORD acceptance approvals approval request.pen: disk=9 loaded=9
+RECORD acceptance approvals founder approval cards.pen: disk=9 loaded=9
 RECORD acceptance auth otp code step wireframe.pen: disk=2 loaded=2
 RECORD acceptance billing subscription management.pen: disk=4 loaded=4
 RECORD acceptance billing upgrade modal at capacity.pen: disk=3 loaded=3
@@ -264,7 +265,7 @@ RECORD acceptance scope grants pr g cohort onboarding.pen: disk=7 loaded=7
 RECORD acceptance settings agent web access.pen: disk=3 loaded=3
 RECORD acceptance settings concierge command execution.pen: disk=4 loaded=4
 RECORD acceptance settings connected services.pen: disk=3 loaded=3
-RECORD acceptance settings egress audit log.pen: disk=25 loaded=25
+RECORD acceptance settings egress audit log.pen: disk=29 loaded=29
 RECORD acceptance settings general workspace identity relocation.pen: disk=1 loaded=1
 RECORD acceptance settings kb reconnect affordance.pen: disk=2 loaded=2
 RECORD acceptance settings subscription token removal and key invalid chat.pen: disk=7 loaded=7
@@ -285,7 +286,7 @@ RECORD acceptance workstream creator attribution.pen: disk=2 loaded=2
 RECORD acceptance workstream workstream filter bar.pen: disk=3 loaded=3
 RECORD acceptance workstream workstream issue crud.pen: disk=29 loaded=29
 RECORD acceptance workstream workstream kanban.pen: disk=5 loaded=5
-RECORD load-fidelity acceptance summary: 111 committed design .pen files, 111 parse as documents, 111 load faithfully, 0 refused by the engine, 0 load with fewer top-level nodes, 89 s
+RECORD load-fidelity acceptance summary: 112 committed design .pen files, 112 parse as documents, 112 load faithfully, 0 refused by the engine, 0 load with fewer top-level nodes, 85 s
 PASS acceptance: every committed file was evaluated
 PASS acceptance (ruling 6): no committed design .pen loads with fewer top-level nodes than on disk
 PASS acceptance: the committed files the engine refuses to open are exactly the pinned set
