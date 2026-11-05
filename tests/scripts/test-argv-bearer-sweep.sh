@@ -972,7 +972,8 @@ send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
 git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
 discord-blog-webhook-fallback|scripts/followthroughs/discord-blog-webhook-fallback.test.sh
-dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh'
+dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+egress-gw-probe-silent-12180|scripts/followthroughs/egress-gw-probe-silent-12180.test.sh'
 
 # HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
 # config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and

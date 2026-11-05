@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-05T10:54:18Z
+# generated-at=2026-11-05T19:37:41Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -408,6 +408,7 @@ scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	7
 scripts/domain-model-drift	4
 scripts/egress-audit-retention-check	1
+scripts/egress-gw-probe-silent-12180	5
 scripts/ensure-doppler	8
 scripts/ensure-kb-index	4
 scripts/expenses-verify-by-check	3
