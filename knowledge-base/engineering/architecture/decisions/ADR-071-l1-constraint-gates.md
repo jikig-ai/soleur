@@ -295,3 +295,60 @@ symlink, so the code path a founder runs is the code path the suite runs.
   suite gains an independent `cases` counter, a conservation check and a `MIN_ROWS=10` floor.
   Every pre-existing sentinel — the config template, the shared runner, the three workflow
   templates and their dogfood copies — is byte-unchanged by this amendment.
+
+## Amendment 2026-11-05 (#12146) — a fourth artifact class: the template-keyed re-emittable workflow
+
+**Context.** The default mode refuses to overwrite any existing executable (Consequences (b) of the
+2026-09-19 amendment), so a repository that installed the scaffold keeps the claude-code-action pin its
+first install wrote. The Stage A workflow holds the founder's model API key and runs an action whose
+bundled runtime ships security fixes, so a permanently stale copy is a standing exposure, and a
+`--force` flag would let a hand-edited workflow be replaced without anyone reading a diff. Ruled by
+CTO agent, 2026-11-05: add a third mode to the existing script rather than a sibling script.
+
+**Decision.** `constraint-scaffold.sh --refresh-stage-a` re-emits exactly one file,
+`fix-constraints-stage-a.yml`, and only when the installed bytes are an exact historical emission of
+the template, listed in `references/fix-constraints-stage-a.emitted.sha256` (a sha256 per historical
+substituted emission, newest last). It supersedes the "executables stay refuse-only" sentence of
+(b) for that one file; the enumeration is now four classes, each placed by the consequence of an
+overwrite:
+
+1. **Prose artifacts** (`server/README.md`, the instructions pointer): append-once, marker-keyed,
+   never rewritten.
+2. **Gate executables** (the config, the runner, `constraint-gates.yml`, the Stage B workflow):
+   refuse-if-exists; there is no way to rewrite them.
+3. **The baseline JSON**: re-writable only through `--refresh-baseline`, which runs the bite-proof.
+4. **The template-keyed re-emittable workflow** (Stage A only): re-writable only through
+   `--refresh-stage-a`, only over ledger-listed bytes, only when the tree is clean and the file is
+   tracked, never over a symlink or a redirected directory, and never to an OLDER template (the
+   ledger row order is the rank).
+
+**Privilege rule.** A workflow belongs to class 4 only if its token scope is `contents: read` and it
+holds no write credential. Stage B and any write-scoped workflow stay in class 2. A ledger row may not
+admit a Stage A emission whose `permissions:` differs from `contents: read`; changing that needs an
+ADR-074 amendment. The test asserts it on the current template (`refresh-stage-a.test.sh`, case 12).
+
+**Frozen Stage A to Stage B interface.** Stage B is not refreshable, so an older Stage B must keep
+working against a newer Stage A. The interface is frozen as: (a) the Stage A workflow name
+`fix-constraints-stage-a` (Stage B filters `workflow_run` on it), (b) the artifact names
+`fix-constraints-patch-<pr>` and `fix-constraints-giveup-<pr>`, (c) the ADR-074 `meta.json` schema.
+A Stage A change to any of these is not a ledger-append event; it needs a Stage B refresh path
+first. (Verified from git history: none of the six historical Stage A emissions changed (a) or (b).)
+Stage B staleness is accepted, and safe, only because of this frozen interface.
+
+**Bite-proof.** The 2026-09-19 sentence "a `prove_bite` step at the tail of both modes" is amended:
+the bite-proof runs in every mode that can change what the gate enforces (config, runner, baseline).
+The Stage A refresh changes none of them, so skipping it is a property of the mode's write set, not
+an opt-out; the rejected `--skip-bite-proof` flag stays rejected.
+
+**Alternatives considered.** `--force`: violates the no-silent-overwrite invariant. A sibling script:
+duplicates about 150 lines of guards that already live in `constraint-scaffold.sh`. A pin-line-only
+edit: fixes a v1.0.236-era copy but leaves earlier copies, which lack the `github_token` input and
+fail on OIDC, broken. A pristine-modulo-pin heuristic: needs a normalisation that widens until an
+edited file is admitted.
+
+**Consequences (added).** A refresh is a content upgrade (install command, model id, token wiring),
+not only a pin bump, and exits 75 (refused, not retryable) on anything it cannot prove pristine. A
+ledger row certifies only that Soleur emitted those bytes once; appending one is a reviewable diff, and
+a test case reddens when the current template's emission is missing. The lockstep guard
+(`claude-pin-lockstep.test.ts`) is unchanged: the template is already one of its carriers and the
+refresh derives the pin from it at run time, so no new pin carrier exists.

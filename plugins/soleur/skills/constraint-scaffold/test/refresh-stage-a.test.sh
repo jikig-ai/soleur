@@ -119,7 +119,7 @@ git -C "$BASE" commit -q -m "seed app and scaffold artifacts"
 
 # new_case <name>: a fresh copy of the base fixture. Prints the path.
 new_case() { local fx="$TMPROOT/$1"; cp -R "$BASE" "$fx"; printf '%s' "$fx"; }
-commit_all() { git -C "$1" add -A; git -C "$1" commit -q -m "${2:-change}"; }
+commit_all() { assert_fixture_dir "$1"; git -C "$1" add -A; git -C "$1" commit -q -m "${2:-change}"; }
 # new_sandbox <name>: a per-case copy of scripts/ and references/ so a case can vary the ledger or
 # the template. Prints the scripts dir to run.
 new_sandbox() { local sb="$TMPROOT/sb-$1"; mkdir -p "$sb"; cp -R "$REAL_SCRIPTS" "$sb/scripts"; cp -R "$REAL_REFS" "$sb/references"; printf '%s' "$sb"; }
@@ -213,6 +213,7 @@ run_refresh "$FX"
 rcis "5d symlinked destination on a dirty tree (symlink check precedes the tree check)" 75
 
 FX="$(new_case c5e)"
+assert_fixture_dir "$FX"
 git -C "$FX" rm -q --cached "$FIX_A_REL"
 git -C "$FX" commit -q -m "untrack stage a"
 run_refresh "$FX"
@@ -283,6 +284,7 @@ state "9a' the symlink target is unchanged" same_bytes "$TMPROOT/outside9a/targe
 state "9a'' no diff printed" test -z "$(grep -E '^[<>] ' <<<"$OUT" || true)"
 
 FX="$(new_case c9b)"
+assert_fixture_dir "$FX"
 git -C "$FX" mv apps/web-platform/.github .github
 ln -s ../../.github "$FX/apps/web-platform/.github"
 commit_all "$FX" "symlinked .github parent"

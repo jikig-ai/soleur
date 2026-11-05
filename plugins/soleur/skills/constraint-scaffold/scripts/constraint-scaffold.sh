@@ -95,6 +95,18 @@ esac
 physdir() { ( cd -- "$1" 2>/dev/null && pwd -P ); }
 # physpath <path>: physical path of a file that may not exist yet, via its (existing) parent.
 physpath() { local d; d="$(physdir "$(dirname -- "$1")")" || return 1; [[ -n "$d" ]] && printf '%s/%s' "$d" "$(basename -- "$1")"; }
+# assert_fixture_dir: the CANONICAL copy (byte-for-byte; fixture-dir-operand-assert.test.sh pins every copy). It refuses an
+# empty, relative, `..`-bearing or filesystem-root operand; the stage-a refresh calls it before each write.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 # Canonical form once (a trailing slash would defeat every `${f#"$REPO_ROOT"/}` display and the
 # TMPDIR containment case below), re-guarded: the value now comes from a command substitution.
 REPO_ROOT="$(physdir "$REPO_ROOT")"
@@ -597,6 +609,7 @@ refresh_stage_a() {
   take_run_lock
   # 5. Fresh emission to a temp file next to the destination (same filesystem: atomic rename).
   STAGE_A_TMP="$(mktemp "$dest_dir/.fix-constraints-stage-a.XXXXXX")" || die "cannot create a temp file next to fix-constraints-stage-a.yml" 69
+  assert_fixture_dir "$STAGE_A_TMP"
   sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" > "$STAGE_A_TMP" || die "cannot render the stage-a template" 69
   if ! sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" | cmp -s - "$STAGE_A_TMP"; then
     die "the rendered stage-a emission did not verify against a second render" 69
@@ -636,6 +649,7 @@ refresh_stage_a() {
     die "fix-constraints-stage-a.yml changed during the run; left unchanged — re-run" 75
   fi
   chmod 0644 "$STAGE_A_TMP" || die "cannot set the mode on the refreshed workflow (left unchanged)" 69
+  assert_fixture_dir "$dest"
   mv -f -- "$STAGE_A_TMP" "$dest" || die "could not replace fix-constraints-stage-a.yml (the original is intact)" 69
   STAGE_A_TMP=""
   say "refreshed fix-constraints-stage-a.yml (ledger row $have_rank -> $want_rank); review the change with \`git diff\` and commit it"
