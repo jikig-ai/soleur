@@ -33,7 +33,7 @@ batch that mixes a code PR in, a malformed diff — yields the full battery.
 | **locked-telemetry** | `CI_ORACLE_LANE=on` AND `readonly ORACLE_LANE_LOCKED=1` in the driver | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream is the blocking pre-activation audit evidence |
 | **active** | `CI_ORACLE_LANE=on` AND the lock literal removed by a separate authorized PR | the five legs in `skip_legs` skip on `pull_request`/`merge_group`, tolerated by the `test` aggregator's `ORACLE-ONLY-SKIP` arm; `shard-totality-mutations` skips; `oracle-index-check` runs the manifest |
 
-A non-empty value that is not exactly `on` (`off`, `ON`, `on ` with whitespace) is NONE of these: the job runs
+A non-empty value that is not exactly `on` (`off`, `ON`, `on ` with whitespace) is NONE of these: the job runs <!-- markdownlint-disable-line MD038 -->
 but the driver stops at `reason=switch_off` with `switch=invalid` — telemetry for a mistyped value, never an off
 switch. To turn the lever off, DELETE the variable.
 

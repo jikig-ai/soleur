@@ -500,6 +500,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+# plugins/soleur/test/cloudflare-readonly.test.sh — the snapshot-drift pin (#10479) greps live rule counts out of the
+# committed Terraform file, so a seo-config-rules.tf edit without a header update is meant to red this suite; declared
+# edge, not a name (the audit's stale-accept report surfaced it on #12156 — the check never runs on push, so the pair
+# was already live on main unobserved).
+AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
+  "apps/web-platform/infra/seo-config-rules.tf"  # plugins/soleur/test/cloudflare-readonly.test.sh:350
+  "plugins/soleur/test/cloudflare-readonly.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUD_INIT_STRIP_HELPERS_MUTATION_TEST_SH_PATHS=(
   "apps/web-platform/.dockerignore"  # plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh:93
   "apps/web-platform/Dockerfile"  # plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh:93
@@ -2019,6 +2028,7 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   "scripts/ci-oracle-lane-suites.txt"
   "scripts/ci-oracle-lane.sh"
   "scripts/ci-oracle-lane.test.sh"
+  "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
   "scripts/lib/test-affected-paths.sh"
 )
 
