@@ -506,6 +506,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
+  "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
+  "plugins/soleur/test/cloudflare-readonly.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUD_INIT_STRIP_HELPERS_MUTATION_TEST_SH_PATHS=(
   "apps/web-platform/.dockerignore"  # plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh:93
   "apps/web-platform/Dockerfile"  # plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh:93
