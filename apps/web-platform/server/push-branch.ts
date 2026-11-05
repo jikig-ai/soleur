@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from "child_process";
-import { lstatSync, type Stats } from "fs";
+import { lstatSync, readdirSync, type Stats } from "fs";
 import { join } from "path";
 
 import { COMMIT_SHA_RE } from "./approval/canonical";
@@ -111,12 +111,13 @@ const GIT_DIR_REDIRECT_FILES: readonly string[] = [
   "info/grafts",
 ];
 
-/** Upper bound of each synchronous git child on the hardened path: a FIFO planted in `.git` must not freeze the server. */
+/** Upper bound of each synchronous git child on the hardened path: a FIFO planted in `.git` can stall a child for at most this long, not indefinitely. */
 const HARDENED_SYNC_GIT_TIMEOUT_MS = 10_000;
 
 /**
  * Hardened path only: `<workspace>/.git` must be a REAL directory (not a `gitdir:` file, not a symlink), none of the entries git
- * reads or writes through may be a symlink, and none of the files that redirect where git reads objects, refs or config from may
+ * reads or writes through may be a symlink (the listed entries, `objects/pack`, and every loose-object fan-out directory directly
+ * under `objects`, since each is a separate path component git resolves into an object store), and none of the files that redirect where git reads objects, refs or config from may
  * exist. The agent can write the workspace, so otherwise it could point the server-side git at another repository. The
  * environment also pins `GIT_COMMON_DIR` and `GIT_OBJECT_DIRECTORY`. Static refusal text (no path echo), typed so the tool handler
  * reports it as `commit_unavailable`. This is a pre-flight, not an atomic guarantee: a sandbox process that outlives the tool call
@@ -150,6 +151,23 @@ function assertPlainGitDir(workspacePath: string): void {
       refuse();
     }
     refuse();
+  }
+  // The object store's own children (`pack`, `info`, and the loose-object fan-out directories): a symlinked `objects/pack` or `objects/<2hex>` can point at another repository's objects
+  // even though `objects` itself is a real directory. Every entry directly under `objects` is lstat-ed (so `pack` needs no entry of its own); only a symlink refuses.
+  const objectsDir = join(gitDir, "objects");
+  let objectEntries: string[] = [];
+  try {
+    objectEntries = readdirSync(objectsDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") refuse();
+  }
+  for (const name of objectEntries) {
+    try {
+      if (lstatSync(join(objectsDir, name)).isSymbolicLink()) refuse();
+    } catch (err) {
+      if (err instanceof ApprovedCommitUnavailableError) throw err;
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") refuse();
+    }
   }
 }
 

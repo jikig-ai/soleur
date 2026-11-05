@@ -529,6 +529,7 @@ M("G1-HD12-hardened-cwd-guard-runs-after-the-token-mint", GAUTH, [
 M("G1-HD13-shared-hardening-args-lose-the-hooks-path", GHARD, E('"core.hooksPath=/dev/null"', '"core.sparseCheckout=false"'), T_GAU, ["hardened: the push succeeds and a planted .git/hooks/pre-push does NOT run", "hardened: pushing to a remote that REJECTS the push fails and the planted pre-push hook does NOT run"])
 M("G1-HD14-hardened-env-allowlist-gains-a-server-secret", HENV, E('  "SSL_CERT_DIR",\n];', '  "SSL_CERT_DIR",\n  "ANTHROPIC_API_KEY",\n];'), T_GAH, ["hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring"])
 M("G1-HD15-hardened-env-drops-the-object-directory-pin", HENV, E("  env.GIT_OBJECT_DIRECTORY = `${gitDir}/objects`;\n", ""), T_HARD, ["hardened: the push call carries hardened:true and the cat-file and config calls get hardening args and an allowlisted env"])
+M("G1-HD16-plain-git-dir-check-follows-a-symlinked-object-store-child", PUSH, E("      if (lstatSync(join(objectsDir, name)).isSymbolicLink()) refuse();", "      lstatSync(join(objectsDir, name));"), T_HARD, ["refuses when .git/objects/pack is a symlink to a complete copy of it", "refuses when a loose-object fan-out directory .git/objects/<2hex> is a symlink to a complete copy of it"])
 M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
 M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
 M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
@@ -843,8 +844,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 262 rows today (round 3 plus the #11636 rows and fix round 1); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=261
+# 263 rows today (round 3 plus the #11636 rows and fix round 1); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=262
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -886,7 +887,7 @@ declare -A FLOOR=(
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
   ["test/cc-dispatcher-real-factory.test.ts"]=106
   ["test/cc-github-push.test.ts"]=61
-  ["test/push-branch-hardened.test.ts"]=19
+  ["test/push-branch-hardened.test.ts"]=21
   ["test/git-auth-hardened-env.test.ts"]=4
   ["test/git-auth-hardened.test.ts"]=9
 )
@@ -1014,7 +1015,7 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=3
 EXPECT_RESID=2
-MIN_KILLED=256
+MIN_KILLED=257
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1

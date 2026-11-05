@@ -21,8 +21,9 @@
  * read is bounded (one read, `CC_PUSH_FLAG_TIMEOUT_MS`) and only reached when those held, and the default-branch lookup (a
  * network round trip) runs last, only when the flag is on. The dispatcher call site already resolves a repo and an installation
  * before it calls here, so the `no-repo-or-installation` arm is defensive for any other caller. The persona arm is NOT: the
- * dispatcher passes `args.persona` through unchanged, so `support-persona` is the live guard that keeps this write tool off a
- * support dispatch (ADR-113); do not remove it or reorder it behind the network lookup.
+ * dispatcher passes `args.persona` through unchanged, so `support-persona` is a live guard and the SECOND of two that keep this
+ * write tool off a support dispatch (ADR-113): for support the dispatcher also resolves no installation, so this registrar is
+ * normally never reached. Do not remove the persona arm or reorder it behind the network lookup.
  *
  * The tool is built with `requireGrant: true` and the SAME `ExecutionGrants` object the gate writes to, so a call that
  * reaches the handler without a gate-written grant carrying the approved commit is refused (see `github-tools.ts`).

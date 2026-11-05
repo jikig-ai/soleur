@@ -96,7 +96,7 @@ describe("pushBranch hardened", () => {
       expect(c.opts.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
       expect(c.opts.env?.GIT_NO_REPLACE_OBJECTS).toBe("1");
       expect(c.opts.env?.GIT_ALLOW_PROTOCOL).toBe("https");
-      // A FIFO planted in .git must not freeze the server: every synchronous child is bounded.
+      // A FIFO planted in .git can stall a child for at most the timeout: every synchronous child is bounded.
       expect(c.opts.timeout).toBe(10_000);
     }
   });
@@ -152,6 +152,23 @@ describe("pushBranch hardened", () => {
     const aside = join(root, `aside-${entry}`);
     renameSync(join(work, ".git", entry), aside);
     symlinkSync(aside, join(work, ".git", entry));
+    await expectPlainDirRefusal();
+  });
+
+  // Children of the object store: `objects` stays a real directory, but `objects/pack` or a loose-object fan-out directory
+  // symlinked to a complete copy (containing the approved commit) would still read another object store.
+  test("refuses when .git/objects/pack is a symlink to a complete copy of it", async () => {
+    const aside = join(root, "aside-pack");
+    renameSync(join(work, ".git", "objects", "pack"), aside);
+    symlinkSync(aside, join(work, ".git", "objects", "pack"));
+    await expectPlainDirRefusal();
+  });
+
+  test("refuses when a loose-object fan-out directory .git/objects/<2hex> is a symlink to a complete copy of it", async () => {
+    const fanOut = sha.slice(0, 2);
+    const aside = join(root, "aside-fanout");
+    renameSync(join(work, ".git", "objects", fanOut), aside);
+    symlinkSync(aside, join(work, ".git", "objects", fanOut));
     await expectPlainDirRefusal();
   });
 
