@@ -52,6 +52,14 @@ const EXPECTED_CARRIERS: readonly string[] = [
   TEMPLATE,
 ];
 
+// Each SHA the repository may pin, with the tag it was verified to be (a tag
+// object resolved with `gh api repos/anthropics/claude-code-action/git/ref/tags/<tag>`).
+// A pin comment is otherwise just text: this ties it to the SHA offline, and a new
+// bump has to add its verified entry here deliberately.
+const KNOWN_ACTION_PINS: Readonly<Record<string, string>> = {
+  "3b7e1a45ca6f231c62605aabcf79e6a41b08c7da": "v1.0.263",
+};
+
 // First release with Bun 1.4.4 and the 2.1.311 CLI (#12102). A coherent revert
 // of every carrier to an older pair would otherwise pass the one-pair check.
 const MIN_ACTION_TAG: readonly [number, number, number] = [1, 0, 263];
@@ -156,6 +164,15 @@ describe("claude pin lockstep (#12102)", () => {
     for (const s of sites) pairs.set(`${s.sha} # ${s.tag}`, [...(pairs.get(`${s.sha} # ${s.tag}`) ?? []), s.file]);
     const detail = [...pairs.entries()].map(([k, files]) => `${k}: ${files.join(", ")}`).join("\n");
     expect(pairs.size, `pins diverge:\n${detail}`).toBe(1);
+  });
+
+  it("every pinned SHA is a known, verified tag object and its comment names that tag", () => {
+    const { sites } = collect(EXPECTED_CARRIERS);
+    expect(sites.length).toBeGreaterThan(0);
+    for (const s of sites) {
+      expect(KNOWN_ACTION_PINS[s.sha], `${s.file} pins ${s.sha}, which is not in KNOWN_ACTION_PINS (verify the tag object, then add it)`).toBeDefined();
+      expect(s.tag, `${s.file}: the comment names ${s.tag} but ${s.sha} is ${KNOWN_ACTION_PINS[s.sha]}`).toBe(KNOWN_ACTION_PINS[s.sha]);
+    }
   });
 
   it(`the pinned action tag is at or above v${MIN_ACTION_TAG.join(".")} (the Bun 1.4.4 release)`, () => {
