@@ -1703,7 +1703,7 @@ test_webhook_envfile_unconditioned() {
   assert_eq "cloud-init webhook.service twin carries zero ConditionPathExists= directives" "0" "$n_twin_cond"
   n_twin_marker=$(printf '%s\n' "$twin" | grep -cF 'DELIBERATELY UNCONDITIONED' || true)
   assert_eq "cloud-init webhook.service twin carries the designed-loud comment" "1" "$n_twin_marker"
-  printf '%s\n' "$twin" | grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' \
+  grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' <<<"$twin" \
     || fail "cloud-init webhook.service twin names no detector token for the crash-loop signal"
 }
 

@@ -52,9 +52,8 @@ interface Row {
   user_id: string;
   message_id: string;
   action_class: string;
-  source_ref: string | null;
   current_turn_started_at: string | null;
-  created_at: string;
+  clicked_at: string;
   failure_reason: string | null;
   acknowledged_at: string | null;
   undone_at: string | null;
@@ -74,11 +73,11 @@ function matches(row: Row, filters: Filter[]): boolean {
     if (op === "lt") return String(cell) < String(val);
     if (op === "or") {
       // Minimal evaluator for the staleBeforeIso conjunct:
-      // and(current_turn_started_at.is.null,created_at.lt.X) OR
+      // and(current_turn_started_at.is.null,clicked_at.lt.X) OR
       // current_turn_started_at.lt.X
       const iso = String(val).match(/lt\.([^,)]+)/)?.[1] ?? "";
       const ctsa = row.current_turn_started_at as string | null;
-      return (ctsa == null && String(row.created_at) < iso) || (ctsa != null && ctsa < iso);
+      return (ctsa == null && String(row.clicked_at) < iso) || (ctsa != null && ctsa < iso);
     }
     return cell === val;
   });
@@ -166,9 +165,8 @@ function row(over: Partial<Row>): Row {
     user_id: U(2),
     message_id: U(3),
     action_class: "engineering.pr_review_pending",
-    source_ref: "jikig-ai/soleur#1",
     current_turn_started_at: new Date(NOW - 60 * 60_000).toISOString(),
-    created_at: new Date(NOW - 2 * 60 * 60_000).toISOString(),
+    clicked_at: new Date(NOW - 2 * 60 * 60_000).toISOString(),
     failure_reason: null,
     acknowledged_at: null,
     undone_at: null,
@@ -214,16 +212,16 @@ describe("isStaleWorkingRow — the live-run discriminator", () => {
     ).toBe(false);
   });
 
-  it("falls back to created_at for a run lost before turn-1", () => {
+  it("falls back to clicked_at for a run lost before turn-1", () => {
     expect(
       isStaleWorkingRow(
-        row({ current_turn_started_at: null, created_at: new Date(NOW - BOUND_MS - 1).toISOString() }),
+        row({ current_turn_started_at: null, clicked_at: new Date(NOW - BOUND_MS - 1).toISOString() }),
         NOW,
       ),
     ).toBe(true);
     expect(
       isStaleWorkingRow(
-        row({ current_turn_started_at: null, created_at: new Date(NOW - 60_000).toISOString() }),
+        row({ current_turn_started_at: null, clicked_at: new Date(NOW - 60_000).toISOString() }),
         NOW,
       ),
     ).toBe(false);
@@ -238,7 +236,7 @@ describe("isStaleWorkingRow — the live-run discriminator", () => {
 
   it("an unparseable timestamp is never guessed stale", () => {
     expect(
-      isStaleWorkingRow(row({ current_turn_started_at: "not-a-date", created_at: "also-not" }), NOW),
+      isStaleWorkingRow(row({ current_turn_started_at: "not-a-date", clicked_at: "also-not" }), NOW),
     ).toBe(false);
   });
 });

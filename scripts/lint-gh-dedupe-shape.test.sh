@@ -430,7 +430,7 @@ else
   fail "G9b the quoted-capture site is NOT a census finding" "no finding at line 9" "$(tr '\n' ' ' < "$TMP/out.txt")"
 fi
 _qout="$(python3 "$LINTER" --root "$r" 2>&1 || true)"
-if printf '%s\n' "$_qout" | grep -q 'advisory.*:9:.*EXISTING'; then
+if grep -q 'advisory.*:9:.*EXISTING' <<<"$_qout"; then
   pass "G9c the quoted site lands in the advisory census"
 else
   fail "G9c the quoted site lands in the advisory census" "advisory row naming :9:" "$(printf '%s' "$_qout" | tr '\n' ' ')"
@@ -452,7 +452,7 @@ jobs:
 YAML
 assert_fires "G10 control: the bad unquoted line FIRES" "$r" 10
 _qhout="$(python3 "$LINTER" --root "$r" 2>&1 || true)"
-if ! printf '%s\n' "$_qhout" | grep -q 'advisory.*:9:'; then
+if ! grep -q 'advisory.*:9:' <<<"$_qhout"; then
   pass "G10b a ||-handled quoted site is absent from the advisory"
 else
   fail "G10b a ||-handled quoted site is absent from the advisory" "no advisory row for :9:" "$(printf '%s' "$_qhout" | tr '\n' ' ')"
@@ -666,7 +666,7 @@ jobs:
 YAML
 assert_fires "G21 control: the bad unquoted line FIRES" "$r" 10
 _geout="$(python3 "$LINTER" --root "$r" 2>&1 || true)"
-if ! printf '%s\n' "$_geout" | grep -q 'advisory.*:9:'; then
+if ! grep -q 'advisory.*:9:' <<<"$_geout"; then
   pass "G21b a quoted site with escaped quotes + || arm stays handled"
 else
   fail "G21b a quoted site with escaped quotes + || arm stays handled" "absent from advisory" "$(printf '%s' "$_geout" | tr '\n' ' ')"

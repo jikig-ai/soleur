@@ -1623,10 +1623,11 @@ jobs:
             echo "</details>"
           }
 
+          # dedupe: fail-closed — deliberate bare capture: a failed lookup fails the step (the reconcile outcome itself is the observable) instead of reading as "no open mismatch issue" and filing a duplicate.
           OPEN_ISSUES=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
             --limit 100 \
             --json number,title \
-            --jq ".[] | select(.title == \"${TITLE}\") | .number") || { echo "::error::heartbeat-reconcile: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; OPEN_ISSUES=""; }
+            --jq ".[] | select(.title == \"${TITLE}\") | .number")
           EXISTING="${OPEN_ISSUES%%$'\n'*}"
 
           if [[ -n "$EXISTING" ]]; then

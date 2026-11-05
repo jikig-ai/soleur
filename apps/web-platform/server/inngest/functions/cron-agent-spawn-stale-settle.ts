@@ -14,7 +14,7 @@
 // change through the BLOCKING Product/UX gate plus a `.pen` wireframe.
 //
 // THE PREDICATE, AND WHY IT IS THE LIVE-RUN DISCRIMINATOR. A row is stale
-// iff its `current_turn_started_at` (or `created_at`, for a run that never
+// iff its `current_turn_started_at` (or `clicked_at`, for a run that never
 // reached turn-1-progress-write) is older than FINISH_TIMEOUT_MS +
 // STALE_WORKING_MARGIN_MS. This is not a heuristic: `timeouts.finish` on
 // agent-on-spawn-requested is an ABSOLUTE bound on the run's lifetime, and
@@ -75,9 +75,8 @@ interface StaleRow {
   user_id: string;
   message_id: string;
   action_class: string | null;
-  source_ref: string | null;
   current_turn_started_at: string | null;
-  created_at: string;
+  clicked_at: string;
 }
 
 export interface StaleSettleResult {
@@ -109,7 +108,7 @@ function isWorkingRow(row: {
 
 /**
  * The stale predicate = the live-run discriminator. A row is stale iff its
- * last turn-write (`current_turn_started_at`, or `created_at` for a run lost
+ * last turn-write (`current_turn_started_at`, or `clicked_at` for a run lost
  * before turn-1-progress-write) predates `now - boundMs`. No live run can
  * satisfy this: `timeouts.finish` bounds every run's lifetime below the
  * bound, so a row this old is orphaned by construction — the property the
@@ -121,13 +120,13 @@ export function isStaleWorkingRow(
     acknowledged_at: string | null;
     undone_at: string | null;
     current_turn_started_at: string | null;
-    created_at: string;
+    clicked_at: string;
   },
   nowMs: number,
   boundMs: number = FINISH_TIMEOUT_MS + STALE_WORKING_MARGIN_MS,
 ): boolean {
   if (!isWorkingRow(row)) return false;
-  const lastWrite = Date.parse(row.current_turn_started_at ?? row.created_at);
+  const lastWrite = Date.parse(row.current_turn_started_at ?? row.clicked_at);
   if (Number.isNaN(lastWrite)) return false; // unparseable time ≠ stale; never guessed
   return lastWrite < nowMs - boundMs;
 }
@@ -153,8 +152,8 @@ export async function cronAgentSpawnStaleSettleHandler({
     async (): Promise<{ ok: true; rows: StaleRow[] } | { ok: false }> => {
       try {
         const sb = getServiceClient();
-        // created_at < cutoff is a NECESSARY condition for staleness
-        // (current_turn_started_at >= created_at), so it belongs in SQL:
+        // clicked_at < cutoff is a NECESSARY condition for staleness
+        // (current_turn_started_at >= clicked_at), so it belongs in SQL:
         // bounds the unindexed Working scan and pins the PostgREST max-rows
         // truncation to the OLDEST rows, never an arbitrary subset.
         const cutoffIso = new Date(
@@ -163,20 +162,20 @@ export async function cronAgentSpawnStaleSettleHandler({
         const { data, error } = await sb
           .from("action_sends")
           .select(
-            "id,user_id,message_id,action_class,source_ref,current_turn_started_at,created_at,failure_reason,acknowledged_at,undone_at",
+            "id,user_id,message_id,action_class,current_turn_started_at,clicked_at,failure_reason,acknowledged_at,undone_at",
           )
           .is("failure_reason", null)
           .is("acknowledged_at", null)
           .is("undone_at", null)
-          .lt("created_at", cutoffIso)
-          .order("created_at", { ascending: true })
+          .lt("clicked_at", cutoffIso)
+          .order("clicked_at", { ascending: true })
           .limit(500);
         if (error) throw error;
         const now = Date.now();
         const stale = ((data ?? []) as SelectRow[])
           .filter((r) => isStaleWorkingRow(r, now))
           // Oldest first, so a capped tick drains the longest-stuck rows.
-          .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+          .sort((a, b) => Date.parse(a.clicked_at) - Date.parse(b.clicked_at));
         return { ok: true, rows: stale };
       } catch (err) {
         reportSilentFallback(err instanceof Error ? err : new Error(String(err)), {
@@ -268,10 +267,9 @@ export async function cronAgentSpawnStaleSettleHandler({
         extra: {
           founderId: row.user_id,
           messageId: row.message_id,
-          sourceRef: row.source_ref,
           actionSendId: row.id,
           currentTurnStartedAt: row.current_turn_started_at,
-          createdAt: row.created_at,
+          clickedAt: row.clicked_at,
         },
       });
     });
