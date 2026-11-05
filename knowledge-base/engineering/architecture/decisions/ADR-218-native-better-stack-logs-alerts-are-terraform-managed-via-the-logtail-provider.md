@@ -697,3 +697,29 @@ Appended, not edited. The text above is unchanged; where it conflicts with this 
 2026-10-19 (#10453) amendment ("the Slack wake of ADR-260 is not verified for Logs alerts") has its Slack clause superseded by the 2026-11-05 dashboard read,
 recorded in `canary-probe-set.md` under "Slack wake check, dashboard read 2026-11-05": a Slack post is observed on one Logs-alert incident
 and inferred for the others. A factual correction; no decision changes.
+
+## Amendment — 2026-11-05 (#12180): absence alerts on a multiplexed source report a missing-host count; a positive-control canary accompanies any new evaluator shape
+
+A dated amendment, appended, not edited. The text above is unchanged; where it conflicts with this section, this section wins. Scope: sub-900 s host-roster absence alerts on a multiplexed source (today only `egress_gw_probe_silent`). The once-a-day dead-mans of the 2026-10-30 amendment are untouched.
+
+**Preserved.** The 2026-10-12 standing rule: count emitting HOSTS (`count(DISTINCT host_name)`), never rows, over a whole-window scalar with no `GROUP BY`.
+
+**Superseded.** Only that amendment's comparator: `lower_than length(var.web_hosts)` over the emitting-host count. The alert now reports the number of roster hosts that did NOT emit, `greatest(toInt64(length(var.web_hosts)) - toInt64(count(DISTINCT host_name)), 0)`, and pages on `higher_than 0`. `on_missing_data = "treat_as_zero"` stays, so a fully dark window (the aggregate still returns one row, the roster size) is detected; dropping it was rejected because a dark window would then carry no value at all.
+
+**Evidence.** Incident 1047829421 on `soleur-egress-gw-probe-silent-prd` opened at 2026-11-05T17:15:00Z while both hosts shipped probe rows (read-only query: 2 distinct hosts in the window). Incident 1031046761 from the same alert had stayed open for 24 days with rows present before it was resolved with owner authorization, and the paused `inngest_cutover_flip_silent` sibling showed the same stuck-at-0 (#11869). The per-merge apply that ran at 2026-11-05T17:15:38Z changed nothing, so an apply-triggered re-create is not the cause.
+
+**INFERRED, not measured.** The mechanism is that the evaluator reads a step it cannot evaluate as 0 and compares 0 to the threshold: a false page under `lower_than 2`, a healthy reading under `higher_than 0`. The vendor does not expose the evaluated value over its read-only API (the same limit as the hot-window rule of the 2026-10-30 amendment). The QUERY is proven read-only on the final text: 0 on healthy data, 1 with one host excluded, 2 for an identifier no host emits. The EVALUATOR is not.
+
+**Inversion of an earlier posture.** ADR-197 says a zero from a log surface is not evidence of absence, and the 2026-10-30 amendment's feeder never reads a zero as healthy. This alert reads a zero as healthy. The accepted failure direction moves from false page to false silence: with `treat_as_zero` kept, an evaluator error or timeout also reads 0 and is now quiet. Compensating controls: the canary below, the sibling detectors that cover host death independently (Sentry `op=egress_gw_probe_fail`, the resolver's cron check-in), and the deferred heartbeat poller (#12190).
+
+**Canary and decision rule.** A throwaway alert pair, `egress_gw_probe_silent_canary`, runs the production query against `egress-gw-probe-canary-absent` (derived with `replace()` from the production local, so there is one producer), reads the roster size, and must open an incident that never recovers. It proves non-zero delivery on an empty count for this query shape; it shares the production shape, so it cannot tell a silent fleet from an empty window and does not prove general evaluator health. Decision table (full text in `cron-egress-blocked.md`): canary fired and 1047829421 resolves for 4 hours means delete the canary (tracker #12189); `canary=absent` with the canary alert live 25 minutes after apply means the evaluator reads 0 for this shape, so keep the production alert armed and build the poller; `canary=absent` with the alert not live means the apply did not create it (a hotfix, not an evaluator finding); an incident that stays open with rows on both hosts means the poller or a pause, never a revert (a revert restores the shape that misfired). Any Better Stack write needs the owner's per-command go-ahead.
+
+**Alert count.** 19 Logs alerts were live when read on 2026-11-05 (names and counts only; 18 managed here plus one hand-made). With the canary, 20 once applied; 19 after the canary is deleted. The free-tier cap is undocumented and the apply is refused if it is lower; the pre-decided response is a hotfix PR that removes the canary and proceeds to the poller.
+
+**Alternatives considered.**
+
+- A feeder-fed heartbeat poller (the 2026-10-30 pattern) as the first move: rejected as the first move, kept as the fallback (#12190), because the canary answers the cheaper question first.
+- Dropping `treat_as_zero`: rejected, a fully dark window must remain detectable.
+- A time-bucketed rewrite of the query: rejected, it trades the stuck incident for false pages on windows with a single missing bucket.
+
+**Enforcement.** `apps/web-platform/test/infra/egress-gw-alert.test.sh` pins the production canon whole, the canary derivation line, the canary's paging semantics, the four `-target` lines and an exact count of four `egress_gw_probe_silent*` resources; `scripts/followthroughs/egress-gw-probe-silent-12180.sh` reads the incident API and prints the verdict line the post-merge step and the sweeper consume. Residual, accepted: the metric compares a distinct-host COUNT to the roster size, so an extra or renamed emitter could mask a dead host.

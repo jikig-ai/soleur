@@ -910,18 +910,73 @@ them) flips **Settings → Agent web access** off.
 domain-fronting/SNI drift (Squid sees the CONNECT line only; the tunnel is
 opaque). Both are named residuals in the ADR.
 
-#### `soleur-egress-gw-probe-silent-prd` (lower_than fleet size / 900 s)
+#### `soleur-egress-gw-probe-silent-prd` (higher_than 0 missing hosts / 900 s)
 
-**What it means.** Fewer DISTINCT `host_name`s emitted an `egress_gw_probe` row
-under `SYSLOG_IDENTIFIER=egress-gw-probe` than `var.web_hosts` over the last 15
-minutes — one host's beats can no longer mask the other's silence (pre-2026-10-12
-this alert counted ROWS, so web-1 emitting kept a dead web-2 pipeline green).
+**What it means.** The alert's value is the number of roster hosts that did NOT
+emit an `egress_gw_probe` row under `SYSLOG_IDENTIFIER=egress-gw-probe` in the
+last 15 minutes: `var.web_hosts` minus the DISTINCT emitting `host_name`s, floored
+at 0 (healthy 0, one host dark 1, all dark 2). It pages on any value above 0.
+One host's beats cannot mask the other's silence (pre-2026-10-12 this alert
+counted ROWS, so web-1 emitting kept a dead web-2 pipeline green).
 The heartbeat is emitted by `run_egress_gw_probe` in `cron-egress-resolve.sh`
 every 5 minutes per host. A host's absence means its resolver timer stopped, its
 journal→Vector pipeline broke (a stale, birth-frozen `vector.toml` Source-4
 allowlist on that host is a measured failure mode — the tag must exist in the
 config the agent reads), or the probe function errored — that host's gateway
 allow/deny verification is dark.
+
+**Why the metric is inverted (2026-11-05, #12180).** The previous shape was
+`lower_than` the roster size over the emitting-host count. It opened incident
+1047829421 on a healthy fleet, and incident 1031046761 stayed open for 24 days
+with probe rows present. The probe rows were proven present with a read-only
+query each time; the vendor does not expose the value its evaluator computed.
+**The mechanism is an inference, not a measurement:** an evaluator step that
+cannot be evaluated is read as 0 (`treat_as_zero` is kept so a fully dark window
+still evaluates), and 0 against `lower_than 2` is a false page, while 0 against
+`higher_than 0` reads healthy. What IS proven (read-only, counts only) is the
+query: it returned 0 on healthy data, 1 with one host excluded and 2 for an
+identifier no host emits. The vendor evaluator is not proven.
+
+**Two limits that follow.**
+
+- A green alert is not evidence of health until the canary below has fired.
+- An evaluator error or timeout also reads 0 under `treat_as_zero`, so that failure
+  is quiet here: the old shape would have paged and this one does not. The sibling
+  detectors (Sentry `op=egress_gw_probe_fail`, the resolver's cron check-in)
+  cover host death independently; the heartbeat poller tracked in #12190 is the
+  mitigation.
+
+**Canary (throwaway, #12180).** `soleur-egress-gw-probe-silent-canary-prd` runs the
+same query against `egress-gw-probe-canary-absent`, an identifier no host emits, so
+it reads the roster size and MUST open an incident that never recovers. That
+incident, its mirrored P1 `action-required` issue and one email are expected until
+the follow-up PR (tracker #12189) deletes the canary pair. Read the verdict, not
+the dashboard: `bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`
+prints one `SOLEUR_EGRESS_GW_SILENT_SOAK` line with `canary=`, `canary_alert_live=`,
+`prod_incident=` and `rows_in_window=`. The canary shares the production query
+shape, so it proves non-zero delivery on an empty count, not general evaluator
+health.
+
+| Observation | Reading | Response |
+|---|---|---|
+| canary incident exists and 1047829421 resolves | the evaluator delivers a non-zero value for this shape | delete the canary pair (tracker #12189) |
+| `canary=absent`, `canary_alert_live=1` after 25 minutes | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
+| `canary=absent`, `canary_alert_live=0` | the apply did not create it (alert-count cap or a failed create) | hotfix PR; not an evaluator finding |
+| 1047829421 still open and `rows_in_window` shows rows on both hosts | evaluator or vendor never auto-resolving | poller (#12190) or a pause; never a revert (a revert restores the shape that misfired) |
+| 1047829421 still open and one host has no rows | real silence | the decode ladder below; the alert is right |
+
+A Better Stack write (resolving or pausing an incident by hand) needs the owner's
+explicit per-command go-ahead.
+
+**Deleting the canary** (also the rollback recipe for this change). Remove the two
+`egress_gw_probe_silent_canary` resources from `betterstack-logs-alerts.tf`, but keep
+their two `-target` lines in `apply-web-platform-infra.yml` for one apply (a bare
+`-target` on an address with no configuration plans its DELETE), and put
+`[ack-destroy]` on its own line in the merge commit (the plan shows 2 destroyed). Move
+`EXPECT_BLOCKS` 19 to 18 in `logs-alert-query-period-ceiling.test.sh`, the `== 19`
+anchor to 18 in `betterstack-send-failed-alert-mutation.test.sh`, and drop the G2b block
+and rows from `egress-gw-alert.test.sh`; a later PR removes the two `-target` lines. The
+full site list is the `RETIREMENT:` line in the probe header.
 
 **Decode ladder:**
 

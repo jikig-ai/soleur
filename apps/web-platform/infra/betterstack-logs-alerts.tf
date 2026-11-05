@@ -2169,7 +2169,7 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
 # and an empty window returns 0 under both). The API accepted the resource (no 422), so the evaluator
 # does not REJECT it; it returns 0 for a window that holds rows. The predicate cannot be blamed alone:
-# the sibling silence alert `egress_gw_probe_silent` (`lower_than`, the same `toDateTime({{end_time}})`
+# the sibling silence alert `egress_gw_probe_silent` (`lower_than` until #12180 inverted it on 2026-11-05; the same `toDateTime({{end_time}})`
 # + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
 # returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
 # (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
@@ -2191,8 +2191,8 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 #
 # INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
 # Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
-# this alert and for egress_gw_probe_silent carry the same three sentences, each followed by a per-alert resolve rule;
-# edit the two bullets and this comment together.
+# this alert carry those three sentences, each followed by a per-alert resolve rule (the egress_gw_probe_silent bullet
+# dropped them when #12180 inverted that alert); edit the bullet and this comment together.
 # Observed 2026-11-02, re-read with betterstack-query.sh (read only): incident 1031046761 (egress_gw_probe_silent, whose
 # SQL has no JSONType, so this is not a JSONType artefact) is Started and unresolved since 2026-10-12 while probe rows
 # keep arriving (22 in the last hour). Incident 1045365287 (this alert) started at 14:00Z, so it was only hours old at

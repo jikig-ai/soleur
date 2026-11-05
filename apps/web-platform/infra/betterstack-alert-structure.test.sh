@@ -95,8 +95,10 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-CENSUS_FLOOR_ALERTS=18
-CENSUS_FLOOR_EXPLORATIONS=18
+# 19 = the 18 permanent alerts plus the throwaway egress_gw_probe_silent_canary pair (#12180); the PR that
+# deletes the canary returns both census floors to 18 (RETIREMENT line in the egress-gw-probe-silent-12180 probe).
+CENSUS_FLOOR_ALERTS=19
+CENSUS_FLOOR_EXPLORATIONS=19
 GUARD_CENSUS_FLOOR=17
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
