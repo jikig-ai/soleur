@@ -497,6 +497,11 @@ if grep -qF 'checkout button failed' "${TMP_DIR}/fence-halt.out"; then
 else
   pass "complaint text stayed off stdout"
 fi
+if grep -qF 'checkout button failed' "${TMP_DIR}/fence-halt.err"; then
+  fail "complaint text reached the trace"
+else
+  pass "complaint text stayed off the trace"
+fi
 python3 - "${TMP_DIR}/fence-halt.err" <<'PY'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
@@ -521,7 +526,7 @@ else
   fail "xtrace did not keep the two supabase refs on separate lines"
 fi
 if grep -qF -- '--table t520508_soleur_inngest_vector_prd_3_logs' "${TMP_DIR}/fence-halt.err" \
-  && grep -qF -- 'env -u BS_TABLE' "${TMP_DIR}/fence-halt.err"; then
+  && grep -qF -- 'env -u BS_TABLE -u BS_TABLE_S3' "${TMP_DIR}/fence-halt.err"; then
   pass "xtrace pins the betterstack table and unsets BS_TABLE"
 else
   fail "xtrace did not pin the betterstack table"

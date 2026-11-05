@@ -64,7 +64,7 @@ If Doppler `prd` cannot be read and `prd_terraform` can, Better Stack still runs
 
 ### FR4: Hypothesis card
 
-The card is the coverage lines plus at most one sentence built only from those fields, or `hypotheses=none`. It does not rank causes, say what would disprove the complaint, or print a pull time. For each source that ran, or that the Doppler wrapper skipped, it names the window, the table or ref, and the exit or coverage verdict. A `reason=usage` line does not print the refused window. It does not set `affected_user_count`, `data_categories_breached`, `risk_to_subjects`, `revenue_impact`, the Art. 33/34 booleans, `brand_survival_threshold`, or `detected_at` from telemetry.
+The card is the coverage lines plus at most one sentence built only from those fields, or `hypotheses=none`. It does not rank causes, say what would disprove the complaint, or print a pull time. A source that ran names the window and, for Better Stack and Supabase, the table or ref. A Doppler wrapper line names the window and the coverage verdict and does not name the table or ref. A `reason=usage` line does not print the refused window. It does not set `affected_user_count`, `data_categories_breached`, `risk_to_subjects`, `revenue_impact`, the Art. 33/34 booleans, `brand_survival_threshold`, or `detected_at` from telemetry.
 
 ### FR5: Sentinel before display
 

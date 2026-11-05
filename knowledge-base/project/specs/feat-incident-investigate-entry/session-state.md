@@ -24,12 +24,17 @@ structural-cause roll-up: none
 | Sentinel exit 1 emits a second marker trio | pr-introduced card-redaction-failed is a second trio | soleur:engineering:review:pattern-recognition-specialist | wontfix: code-quality says both facts stay |
 | Sentry no-id card is `sentry: not-queried` rather than `verdict=not-queried` | pr-introduced sentry no-id grammar | soleur:engineering:review:pattern-recognition-specialist | wontfix: that string is the tested no-id contract |
 | `hypotheses=none` is always what the shell executes | pr-introduced hypothesis comment is not a ranker | soleur:engineering:review:agent-native-reviewer | wontfix: safe card, not a ranker to add |
+| Inherited xtrace prints the complaint at the assignment above `set +x` | pr-introduced complaint assignment traced before the sentinel | soleur:engineering:review:security-sentinel | review: hide the complaint assignment from an inherited trace (P2) |
+| FR4 says a wrapper line names the table or ref | pr-introduced spec wrapper line overclaims the ref | soleur:engineering:review:pattern-recognition-specialist | same commit |
+| `env -u BS_TABLE` needle also matches `env -u BS_TABLE_S3` | pr-introduced table-unset pin is a prefix | soleur:engineering:review:test-design-reviewer | same commit |
+| Inside-worktree halt exits before the EXIT trap, leaving empty temps | pr-introduced halt leaves empty temps | soleur:engineering:review:code-quality-analyst | wontfix: files are empty, no reader has written them |
 
-dedup: 15 raw → 15 unique. No two findings share one root cause.
+dedup: 19 raw → 19 unique. No two findings share one root cause.
 
 ## Disposition notes
 
 - User-impact: no open failure mode. The four design-pass defects stay mitigated at PANEL_SHA.
 - Security, performance, data-integrity, agent-native, git-history, semgrep: no P0/P1/P2.
 - Do not collapse the card-redaction-failed trio. Do not add a fifth verdict token. Do not teach `pull-card.sh` the Sentry reason tokens.
-- The trap row is the only open decision. Design-pass architecture said match Phase 6 and do not exit. Code-quality measured that a signal still runs the later readers.
+- The trap decision is closed. Phase 0 exits 130/143/129. EXIT stays rm-only. Phase 6 is unchanged.
+- Fix round 1 at `3002ff4aa6` closed the twelve rows above it. Security's remaining P2 is the complaint assignment, fixed in the next review commit. The empty-temp halt stays.

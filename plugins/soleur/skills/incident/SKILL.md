@@ -108,7 +108,6 @@ fi
 window="${INCIDENT_WINDOW:-}"
 issue_id="${INCIDENT_SENTRY_ISSUE_ID:-}"
 sb_project="${INCIDENT_SUPABASE_PROJECT:-}"
-complaint="${INCIDENT_COMPLAINT:-}"
 bs_since="1h"
 sb_since="24h"
 bs_skip=""
@@ -224,7 +223,9 @@ else
   fi
 fi
 # An inherited xtrace would print the complaint before the sentinel scans it.
+# The assignment stays below set +x. Nothing above this line expands the complaint.
 set +x
+complaint="${INCIDENT_COMPLAINT:-}"
 complaint_keep=""
 if [[ -n "$complaint" ]]; then
   printf '%s\n' "$complaint" > "$complaint_out"
