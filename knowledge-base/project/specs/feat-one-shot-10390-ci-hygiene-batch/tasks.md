@@ -2,7 +2,7 @@
 title: Tasks — feat-one-shot-10390-ci-hygiene-batch
 date: 2026-11-04
 plan: knowledge-base/project/plans/2026-11-04-chore-ci-infra-hygiene-batch-plan.md
-issues: [8780, 9659, 10078]
+issues: [8780, 9659, 10078, 8525, 8013, 8080, 8839, 9943, 10136, 9074, 8624]
 epic: 10390
 ---
 
@@ -90,3 +90,62 @@ epic: 10390
 - [ ] 5.6 PR body carries `Closes #8780`, `Closes #9659`, `Closes #10078`,
   the `Reviewed-Coverage: sequential-fallback` disclosure, and the
   decision-challenges render.
+
+## 6. Workstream D — observability/probe-schema cluster (Phase 5)
+
+- [ ] 6.1 (#8525) `inngest-bootstrap.sh`: probe_schema 8→9, `data_luks=<blkid
+  TYPE>` emit on both emit lines with sibling-identical sentinel contract;
+  update every `probe_schema=8` consumer/pin
+  (`git grep -n 'probe_schema' tests/ apps/ scripts/` census first).
+- [ ] 6.2 (#8525) Create `scripts/followthroughs/inngest-luks-field-8525.sh`
+  + `.test.sh`; post the follow-through directive comment + `follow-through`
+  label on #8525.
+- [ ] 6.3 (#8013) Rewrite the stale `NAMES ONLY, NEVER VALUES` comment block;
+  post the corrective comment on #7978; record the live-row ULID-absence
+  query evidence (or file `action-required` if the query is unreadable).
+- [ ] 6.4 (#8080) `RestartSec=5→300` on the inngest-server template with the
+  class-naming comment (no `StartLimitBurst`); record the 55k/day figure on
+  the Better Stack row of `knowledge-base/operations/expenses.md`.
+- [ ] 6.5 (#8839) Create `cron-agent-spawn-stale-settle` (stale-Working rows
+  older than finish-timeout+margin, live-run discriminator check, settle via
+  the shared settle path, `stale_working` dead-letter suffix); register in
+  `cron-manifest.ts` + `EXPECTED_CRON_FUNCTIONS` + `cron-budgets.ts`; update
+  `spawn-dead-letter.ts` COVERAGE + failure-reason list + triage runbook;
+  test battery incl. live-run-must-survive row.
+- [ ] 6.6 (#9943) `git-data-cutover.yml` flip preconditions: heartbeat `up`
+  + post-`boot_complete` `state=ok first=1` predicate, refuse
+  `verdict=liveness_unproven`, unreadable reads refuse closed; update the
+  runbook hard item + `git-data-flag-precheck.sh` verdict docs if needed.
+
+## 7. Workstream E — #10136 transit exceptions (Phase 6)
+
+- [ ] 7.1 Rewrite the Inngest connection row: leg-1 measured TLS
+  (2026-10-26 flip + `tls-health` evidence), leg-2 exception anchored to
+  the A7 record's dates/voids (`#10538` tracking).
+- [ ] 7.2 Zot x2 rows: ruled-decision record pointer, concrete `expires_on`,
+  retire all "pending the CLO ruling" prose.
+- [ ] 7.3 Create `knowledge-base/legal/audits/<date>-zot-private-network-accepted-risk-10136.md`
+  (A7 precedent form); post the accepted-risk record comment on #10136 for
+  owner confirmation (single operator step).
+- [ ] 7.4 `lint-encryption-posture.py` + ledger vitest green.
+
+## 8. Workstream F — legal (Phase 7)
+
+- [ ] 8.1 (#9074) DPD §2.3(o) store sentence corrected (canonical + mirror)
+  — count defect + bearing determination; Last Updated note.
+- [ ] 8.2 (#9074) PA-13 (f) in-cell correction + superseded marker; sweep
+  every `not personal-data-bearing`/`neither` repeat (PA-21/PA-22 quoting
+  notes get markers); zero unmarked repeats grep-verified.
+- [ ] 8.3 (#8624) PA-14 dated-marker amendment (PA-21/22 form, dated
+  2026-11-05), one `(encryption-posture ledger: …)` clause per live store;
+  `records` entries on the ledger rows.
+- [ ] 8.4 (#8624) Workspace-encryption qualifier per CLO ruling on every
+  published surface the `LUKS-encrypted|Encrypted workspace` grep finds;
+  `legal-doc-shas.ts` re-pin; five legal-doc CI gates green locally.
+- [ ] 8.5 `compliance-posture.md` active-item updates for #9074/#8624.
+
+## 9. Expansion verification
+
+- [ ] 9.1 All new per-suite tests green; `git grep` censuses recorded.
+- [ ] 9.2 PR body `Closes:` list covers all 11 issues; operator-step
+  disclosure (#10136 record confirmation); decision-challenges render.
