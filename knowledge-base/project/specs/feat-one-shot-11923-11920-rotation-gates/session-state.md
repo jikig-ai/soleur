@@ -31,3 +31,6 @@
 - Next: soleur:review → resolve findings (+fix-round) → soleur:qa → soleur:compound → soleur:ship → postmerge → DONE.
 - Issues: #11923, #11920. Draft PR: #12153. Branch pushed.
 - Affected gate: killed per operator decision ("rely on CI instead") — all touched-file suites green individually; sole real FAIL lint-shell-capture-exit fixed+committed; CI is the authoritative gate at ship.
+- Review: BLOCKED→fixed. P1-1 !cancelled() plan-path + evaluator revert; P1-2 rebased onto main. P2-1 content-level env verify; P2-2 inngest envverify step; P2-3 previous_not_staged. Fix-round: second P1 (approve-failure leaking to reboot/apply2/redeploy) fixed + approve-fails matrix rows. HEAD=5ef3082cd8 pushed.
+- Suites: key-rotate 639/0, inngest 478/0, ci-deploy 743/0, parity 360-tests/365-pass, c4 35/0.
+- Next: soleur:qa -> soleur:compound -> soleur:ship -> postmerge -> DONE.
