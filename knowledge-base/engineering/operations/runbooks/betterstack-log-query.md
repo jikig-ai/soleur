@@ -220,7 +220,7 @@ Live standing alarms over this source:
   [the 2026-10-16 PIR](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md): check whether
   `network.allowAllUnixSockets` is still set in `agent-runner-sandbox-config.ts` and whether an SDK bump changed
   the helper-selection condition; do NOT loosen the seccomp filter to unblock (a filter cannot key on the
-  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email (the alert's own channel) plus an inferred Slack post;** see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05". **Accepted limitation:** a tenant (or a
+  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email (the alert's own channel) plus an inferred Slack post (a post is not a guaranteed page);** see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05". **Accepted limitation:** a tenant (or a
   prompt-injected agent) printing the exact helper line every few minutes can keep ONE incident open and suppress new
   pages for everyone (`recovery_period 600`, `treat_as_zero`, per-user 5-minute debounce). Accepted at current scale;
   mitigation (page on at least 2 distinct users, or verify server-side) is tracked in #10455. It auto-resolves after 10 quiet minutes,
@@ -279,7 +279,7 @@ Live standing alarms over this source:
   consequence applies only once the `agent-sandbox-unix-deny` flag is ON). **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
   pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`; `reason` carries the first sandbox error
   line) and decode it with the table in
-  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email plus an inferred Slack post** (same record). **Positive control (run 2026-10-19, counts only):** the
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email plus an inferred Slack post** (a post is not a guaranteed page; see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05"). **Positive control (run 2026-10-19, counts only):** the
   predicate's non-reason conjuncts match live rows: 167 `ci-deploy` rows in 14 days start `SANDBOX_CANARY_FAIL:
   verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;` (the retired arm), 45 more carry `(op=sandbox-canary;`
   (inner `bwrap_*` reasons), and the full predicate matches 0 of them, which is the discrimination the alert depends on. The

@@ -136,7 +136,7 @@ Deliberately out of scope (statement stays true or is not about Better Stack Log
   L141 parenthetical "(email)": channel-flag statements, still true.
 - `app-database-readiness-alarm.md` (Delivery-path check): Uptime-product monitors; it makes no Logs-alert
   claim and "non-empty means wired" is still true. Review panel (3 of 3 reviewers) cut the pointer edit.
-- ADR-283 (Uptime heartbeat `506836`), ADR-260 body, `model.c4`: not statements about Logs alerts.
+- ADR-283 (the Uptime heartbeat), ADR-260 body, `model.c4`: not statements about Logs alerts.
 
 ### Test and guard hazards found
 
