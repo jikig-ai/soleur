@@ -19,18 +19,41 @@
  *
  * `sha256sum <file>` produces the same value, which is how the shell-side gate (PR-D) will compare it.
  *
- * PR-C PRECONDITION: the server is bundled with esbuild into dist/server and the Dockerfile copies only that directory,
- * so `texts/` is NOT in the production image yet. PR-C must embed the texts at build time (or COPY the directory and
- * resolve it from a deployed path) and add a test that the deployed path resolves, before any card is built.
+ * DEPLOYED PATH: the server is bundled with esbuild into dist/server/index.cjs, so `__dirname` there is `dist/server` and has
+ * no `texts/`; the route handlers run from the Next build under `.next`. The Dockerfile therefore COPIES the directory
+ * to `/app/server/legal-acceptance/texts`, and `resolveTextsDir` falls back to `<cwd>/server/legal-acceptance/texts` when
+ * the module-relative directory does not exist (cwd is /app in the image, the same convention as
+ * `infra/egress-forwarder.mjs`). Bytes are copied untouched, so `sha256sum <file>` still equals the hash.
+ * Asserted by test/legal-acceptance/registry-embedding.test.ts for the esbuild bundle layout; the Next-compiled routes and
+ * pages rely on the same cwd convention (WORKDIR /app).
  */
 
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 export const KEY_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const TEXT_HASH_RE = /^[0-9a-f]{64}$/;
-export const TEXTS_DIR = path.join(__dirname, "texts");
+
+/** Where `texts/` lives relative to the working directory in the deployed image (and in the source tree under apps/web-platform). */
+export const TEXTS_DIR_FROM_CWD = path.join("server", "legal-acceptance", "texts");
+
+/**
+ * The registry directory: next to this module when it exists (source tree, vitest), else under the working directory
+ * (the deployed image, where this code runs from `dist/server` or `.next`). When neither exists the module-relative
+ * path is returned so a missing directory fails the same way it always did (unknown_key, never a guess).
+ */
+export function resolveTextsDir(
+  opts: { moduleDir?: string; cwd?: string; exists?: (p: string) => boolean } = {},
+): string {
+  const moduleDir = "moduleDir" in opts ? opts.moduleDir : typeof __dirname === "string" ? __dirname : undefined;
+  const cwd = opts.cwd ?? process.cwd();
+  const exists = opts.exists ?? existsSync;
+  const candidates = [...(moduleDir ? [path.join(moduleDir, "texts")] : []), path.join(cwd, TEXTS_DIR_FROM_CWD)];
+  return candidates.find((c) => exists(c)) ?? candidates[0];
+}
+
+export const TEXTS_DIR = resolveTextsDir();
 
 export class LegalTextError extends Error {
   constructor(

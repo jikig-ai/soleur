@@ -35,7 +35,7 @@ Plan: `knowledge-base/project/plans/2026-11-03-feat-founder-approval-cards-plan.
 - [ ] 6.7 Embed or COPY `server/legal-acceptance/texts/` into the production image (esbuild bundle + Dockerfile copy only `dist/server`) and test the deployed path before any card is built
 - [ ] 6.8 Call `claim_legal_reauth_attempt` before the auth service and `mark_legal_reauth_verified` with the returned event id after; add a per-user (not per-key) attempt ceiling and shorten the auth OTP expiry
 - [ ] 6.9 Record sequence in the route: the session id passed to issue/claim/mark equals the JWT `session_id` (or `ses_id`) the database reads; sign the throwaway OTP session out; verify the code on a throwaway client so the founder's own session id does not change (the intent is bound to it); derive `p_session_id` exactly as the SQL reads it (`session_id`, else `ses_id`, empty string = absent); handle `code_stale` from claim and `code_expired` from record by reopening the card (a new intent)
-- [ ] 6.10 Define the undo of a mistaken Decline (new text version) and show it in the card copy; the deletion/redaction path for a retained row and its note is a counsel + engineering item (PA-40 item 17)
+- [ ] 6.10 Define how a mistaken Decline is recovered (there is no undo; a new text version replaces it) and show it in the card copy; the deletion/redaction path for a retained row and its note is a counsel + engineering item (PA-40 item 17)
 
 ## PR-D — Verify endpoint and gate kind
 
