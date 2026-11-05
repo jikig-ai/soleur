@@ -98,6 +98,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/seo-page-redirects-ruleset.test.ts",
   "test/seo-rulesets-noindex.test.ts",
   "test/server/health-keyword-monitor-contract.test.ts",
+  "test/server/inngest/claude-cli-pin-knows-models.test.ts",
   "test/server/inngest/cron-claude-eval-mcp-flags.test.ts",
   "test/server/inngest/cron-community-monitor-allowlist.test.ts",
   "test/server/inngest/cron-community-monitor-collector-status.test.ts",

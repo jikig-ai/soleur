@@ -556,7 +556,7 @@ async function runDefault() {
   let found = null;
   let err = "";
   try {
-    const q = query({ prompt: "run it", options: { cwd: ws, env, sandbox, allowedTools: ["Bash"], permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, maxTurns: 3, model: "claude-haiku-4-5-20251001", settingSources: [] } });
+    const q = query({ prompt: "run it", options: { cwd: ws, env, sandbox, allowedTools: ["Bash"], permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true, maxTurns: 3, model: "claude-haiku-5-5", settingSources: [] } });
     for await (const m of q) {
       if (m.type !== "user" || !Array.isArray(m.message?.content)) continue;
       for (const b of m.message.content) {
@@ -674,7 +674,7 @@ async function runSmoke() {
         permissionMode: "default",
         canUseTool: async (_name, input) => ({ behavior: "allow", updatedInput: input }),
         maxTurns: 3,
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-5-5",
         settingSources: [],
       },
     });

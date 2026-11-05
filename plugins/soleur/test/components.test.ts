@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   discoverAgents,
   discoverCommands,
@@ -751,7 +752,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     whole: (raw) => flatten(stripLive(raw)),
     rule: (raw) => flatten(stripLive(ruleLine(raw))),
   };
-  const PAIRS_FLOOR = 48; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS_FLOOR = 59; // the table's length at write time; raise it in the same edit as any added row
   const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
     [SD, "sd9", "## 9. Class R: acts needing no delegation"],
     [SD, "sd9", "Class R is not a delegation"],
@@ -780,12 +781,24 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [SD, "sd9", "forces a `Problem found` line"],
     [SD, "sd9", "is never reused as evidence for a go or a tick"],
     [SD, "sd9", "the exact parsed hostnames of items 2 and 3"],
+    // Cloudflare as a Class R vendor (Ref #10479): one GET-only wrapper, four named reads.
+    [SD, "sd9", "plugins/soleur/scripts/cloudflare-readonly.sh"],
+    [SD, "sd9", "the exact parsed `api.cloudflare.com`"],
+    [SD, "sd9", "`ssl-mode`, `config-entrypoint`, `pagerules-ssl` or `change-history`"],
+    [SD, "sd9", "the wrapper sends GET only"],
+    [SD, "sd9", "never prints a rule `expression`"],
+    [SD, "sd9", "never answered by widening a token"],
+    [SD, "sd9", "The Cloudflare MCP server and the `cf-token-scope` skill are not Class R"],
+    [SD, "sd9", "`unverified - no-credential` when `CF_API_TOKEN_AUDIT` is absent"],
+    [SD, "sd9", "`CF_API_TOKEN` is never used"],
+    [SD, "sd9", "this bar does not cover exactly two paths"],
     [CTO, "ctoOwn", "Class R first"],
     [CTO, "ctoOwn", 'Never hand a Class R act back with the phrase "run by the owner or a follow-up agent"'],
     [CTO, "ctoOwn", "a failed or unrun read means the act does not run"],
     [CTO, "ctoOwn", "never `Operator-reserved:` for the read itself"],
     [CTO, "ctoOwn", "only production acts stand as holds"],
-    [CTO, "ctoOwn", "`unverified`"],
+    [CTO, "ctoOwn", "${CLAUDE_PLUGIN_ROOT}/scripts/cloudflare-readonly.sh"], // plugin-root form: cto-interface-selector forbids a repo-relative plugins/soleur/ path in this section
+    [CTO, "ctoOwn", "section 9 item 2"], // the one-sentence Cloudflare pointer (invocation and drift check live in SD item 2, the Records mapping in the wrapper header)
     [CTO, "ctoOwn", "`## Class R Checks`"],
     [CTO, "ctoRule", "A live read-only check is technical"],
     [CTO, "ctoRule", 'never return "run by the owner or a follow-up agent"'],
@@ -868,15 +881,198 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     const items = sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
     const flat = (n: number) => flatten(items.find((l) => l.startsWith(`${n}. `)) ?? "");
     const REQUIRED: Record<number, string[]> = {
-      2: ["never `--latest-event`", "the `--table` and `--grep` flag forms"],
+      2: [
+        "never `--latest-event`",
+        "the `--table` and `--grep` flag forms",
+        "plugins/soleur/scripts/cloudflare-readonly.sh",
+        "the wrapper sends GET only",
+        // the drift guard: a wrapper runs only from a checkout that matches a freshly fetched origin/main
+        "a freshly fetched `origin/main` (`git fetch origin main`, then `git diff origin/main -- <wrapper>` is empty)",
+        // the full Cloudflare invocation, and that a plugin-cache copy is not the checkout
+        "doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand>",
+        "from the repository checkout where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` is empty, never from a plugin-cache copy",
+      ],
       3: ["so there is no screenshot", "including the `playwright` entry", "aggregate pages only"],
-      4: ["is never pushed under Class R", "Never push main.", "again before opening the pull request"],
+      4: [
+        "is never pushed under Class R",
+        "Never push main.",
+        "again before opening the pull request",
+        "where `scripts/**` means any directory named `scripts` at any depth",
+        "this bar does not cover exactly two paths",
+      ],
       5: ["never the CLA signing sentence", "never closing or editing an issue or its body", "`priority/*`, `domain/*` and `type/*`"],
       6: ["no `prd` configuration", "one suite at a time"],
     };
     for (const [n, strs] of Object.entries(REQUIRED)) {
       for (const str of strs) expect(flat(Number(n)).includes(str), `Class R act ${n} lost "${str}"`).toBe(true);
     }
+  });
+
+  // Cloudflare closed set (Ref #10479). These are structural (set equality, sentence slices), not
+  // anchor presence: the member list drifts, the structure does not. Superset semantics hold for the
+  // PAIRS rows only; a second surviving copy of a row's text keeps that row green, so the guarantee
+  // is that at least the item-scoped REQUIRED test or one of these goes red.
+  const WRAPPER = resolve(PLUGIN_ROOT, "scripts/cloudflare-readonly.sh");
+  const CF_FOUR = ["change-history", "config-entrypoint", "pagerules-ssl", "ssl-mode"];
+  const sdItems = () => sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
+  const sdItem = (n: number) => flatten(sdItems().find((l) => l.startsWith(`${n}. `)) ?? "");
+  // Text of `s` from the first `from` to the first `to` after it ("" when either is missing).
+  const slice = (s: string, from: string, to: string): string => {
+    const i = s.indexOf(from);
+    if (i < 0) return "";
+    const j = s.indexOf(to, i + from.length);
+    return j < 0 ? "" : s.slice(i, j);
+  };
+  const backticked = (s: string): string[] => [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  // Whole-line comments removed; a trailing comment is left alone on purpose (the wrapper has none on these lines).
+  const codeOnly = (t: string) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+  test("Cloudflare subcommand parity: item 2 text, wrapper SUBCOMMANDS array, dispatcher case labels and --list are the same four", () => {
+    const names = backticked(slice(sdItem(2), "its four subcommands", ", as a status")).sort();
+    expect(names.length, "item 2 lost the backticked subcommand names after `its four subcommands` (an empty slice must fail)").toBe(4);
+    expect(names, "item 2 subcommand list").toEqual(CF_FOUR);
+
+    const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
+    const arr = /^\s*SUBCOMMANDS=\(([^)]*)\)/m.exec(src);
+    expect(arr, "the wrapper has no SUBCOMMANDS=(...) array").not.toBeNull();
+    const arrNames = arr![1].trim().split(/\s+/).filter(Boolean).sort();
+    expect(arrNames.length, "the wrapper SUBCOMMANDS array must hold four names").toBe(4);
+    expect(arrNames, "wrapper SUBCOMMANDS array vs item 2 text").toEqual(names);
+
+    // Every one of the four is a dispatcher case label (a fifth arm is caught by the wrapper suite's unknown-endpoint rows).
+    const labels = new Set([...src.matchAll(/^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)/gm)].flatMap((m) => m[1].split("|")));
+    for (const n of names) expect(labels.has(n), `the wrapper dispatcher has no case label for "${n}"`).toBe(true);
+
+    const r = spawnSync("bash", [WRAPPER, "--list"], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf-8", timeout: 10000 });
+    expect(r.status, `--list exit (stderr: ${r.stderr})`).toBe(0);
+    expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
+  });
+
+  test("Cloudflare Credentials clause names exactly the three bound token variables, and CF_API_TOKEN is never one of them", () => {
+    const cred = paragraph(sectionRaw(readRel(SD), "## 9."), "Credentials.");
+    const clause = slice(cred, "Cloudflare reads use only the token variable bound to the subcommand", "An absent bound token makes the read `unverified`.");
+    expect(clause, "the Credentials paragraph lost the Cloudflare clause (or its closing sentence)").not.toBe("");
+    const vars = backticked(clause).filter((t) => /^CF_[A-Z_]+$/.test(t));
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort()).toEqual(["CF_API_TOKEN_AUDIT", "CF_API_TOKEN_RULESETS", "CF_API_TOKEN_ZONE_SETTINGS"]);
+    expect(clause.includes("`CF_API_TOKEN` is never used"), "the Credentials clause lost `CF_API_TOKEN` is never used").toBe(true);
+    // The first (binding) sentence lists only the three; the bare CF_API_TOKEN belongs to the prohibition after it.
+    const binding = slice(clause, "Cloudflare reads use only", ");");
+    expect(binding.includes("`CF_API_TOKEN`"), "the binding list names the bare `CF_API_TOKEN`").toBe(false);
+    // The doc's names are compared with what the WRAPPER binds (its TOKVAR assignments), not with a literal in this test.
+    const bound = [...new Set([...codeOnly(readFileSync(WRAPPER, "utf-8")).matchAll(/\bTOKVAR=(CF_[A-Z_]+)/g)].map((m) => m[1]))].sort();
+    expect(bound.length, "the wrapper must bind three token variables (TOKVAR=CF_...)").toBe(3);
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort(), "doc token variables vs the wrapper's TOKVAR assignments").toEqual(bound);
+    expect(bound.includes("CF_API_TOKEN"), "the wrapper binds the bare CF_API_TOKEN").toBe(false);
+  });
+
+  const VENDOR_SENTENCE =
+    "Class R is read-only on the operator's own vendor accounts (Sentry, Better Stack and Cloudflare, the last added by a CTO-agent ruling of 2026-11-04 that the owner reviews on the draft pull request; " +
+    "any further vendor still needs a CTO ruling and a test row)";
+
+  test("the Boundary sentence pins the vendor list whole: exactly Sentry, Better Stack, Cloudflare, a CTO-agent ruling the owner reviews, and the further-vendor gate", () => {
+    const b = paragraph(sectionRaw(readRel(SD), "## 9."), "Boundary.");
+    expect(b, "section 9 lost its Boundary paragraph").not.toBe("");
+    expect(slice(b, "Class R is read-only", ", and on this repository's GitHub").trim(), "the Boundary vendor sentence").toBe(VENDOR_SENTENCE);
+    const head = "vendor accounts (";
+    const list = slice(b, head, ", the last added");
+    expect(list, "the Boundary sentence lost `vendor accounts (...)` or `, the last added`").not.toBe("");
+    const vendors = list.slice(head.length).split(/,\s*|\s+and\s+/).map((v) => v.trim()).filter(Boolean).sort();
+    expect(vendors, "vendors named by the Boundary sentence").toEqual(["Better Stack", "Cloudflare", "Sentry"]);
+  });
+
+  test("item 2 introduces no read vendor beyond Sentry, Better Stack and Cloudflare (`<Vendor> through <wrapper>` phrases and wrapper paths)", () => {
+    const i2 = sdItem(2);
+    const through = [...i2.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].map((m) => `${m[1]}=${m[2]}`).sort();
+    expect(through, "`<Vendor> through <wrapper>` phrases in item 2").toEqual([
+      "Better Stack=scripts/betterstack-query.sh",
+      "Cloudflare=plugins/soleur/scripts/cloudflare-readonly.sh",
+      "Sentry=scripts/sentry-issue.sh",
+    ]);
+    const wrappers = backticked(i2).filter((t) => /^[\w./-]+\.sh$/.test(t)).sort();
+    expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+    // The vendor-through extractor is live: a fourth vendor changes the set.
+    const probe = `${i2} Datadog through \`scripts/datadog-query.sh\` only.`;
+    expect([...probe.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].length, "an added vendor must be visible").toBe(4);
+  });
+
+  // The whole push-bar sentence of item 4, by equality: ONE reading (scripts/** is any directory named scripts at any depth) with
+  // exactly two paths outside it. A backticked or unbackticked third path, or a new sentence between the bar and "Never push main.",
+  // changes the slice and goes red.
+  const ITEM4_BAR =
+    "A branch whose diff touches `.github/**` or `scripts/**` is never pushed under Class R, where `scripts/**` means any directory named `scripts` at any depth; " +
+    "this bar does not cover exactly two paths, `plugins/soleur/scripts/cloudflare-readonly.sh` and `plugins/soleur/test/cloudflare-readonly.test.sh`, which the trigger-block read above governs.";
+  const item4Bar = (i4: string) => slice(i4, "A branch whose diff touches", "Never push main.").trim();
+
+  test("item 4: the push-bar sentence is pinned whole (one reading, exactly two exempt paths), and never widens the .github bar", () => {
+    const i4 = sdItem(4);
+    expect(item4Bar(i4), "the item 4 push-bar sentence (from `A branch whose diff touches` up to `Never push main.`)").toBe(ITEM4_BAR);
+    expect(i4.includes("Here `scripts/**` means the repository-root"), "the root-anchored phrase must be gone: item 4 has ONE reading").toBe(false);
+    expect(i4.includes("plain reading"), "the second reading (`plain reading of the bar`) must be gone").toBe(false);
+    // The exempt files exist, so the clause cannot drift onto a path nothing occupies.
+    expect(existsSync(WRAPPER), "the exempted wrapper is missing").toBe(true);
+    expect(existsSync(resolve(PLUGIN_ROOT, "test/cloudflare-readonly.test.sh")), "the exempted wrapper test is missing").toBe(true);
+    // `.github` appears in item 4 exactly twice: the trigger-block read and the bar.
+    expect((i4.match(/\.github/g) ?? []).length, "item 4 `.github` mentions changed (workflows path and the push bar)").toBe(2);
+  });
+
+  test("the item 4 pin is live: a third path, an unbackticked path, an extra sentence or a restored root-anchored phrase all change the slice", () => {
+    const base = `x. ${ITEM4_BAR} Never push main. y.`;
+    expect(item4Bar(base)).toBe(ITEM4_BAR);
+    for (const v of [
+      base.replace("and `plugins/soleur/test", "`plugins/soleur/scripts/other.sh`, and `plugins/soleur/test"),
+      base.replace("which the trigger-block", "and plugins/other/scripts/x.sh, which the trigger-block"),
+      base.replace(" Never push main.", " A branch touching `docs/**` is also pushed. Never push main."),
+      base.replace("is never pushed under Class R, where", "is never pushed under Class R. Here `scripts/**` means the repository-root `scripts/` directory, where"),
+    ]) expect(item4Bar(v), "a variant of the bar sentence must not equal the pinned sentence").not.toBe(ITEM4_BAR);
+  });
+
+  test("the Cloudflare clause of item 2 carries no negating word (polarity)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause (`Cloudflare through` ... `are not Class R`)").not.toBe("");
+    expect(/\b(permits?|except|unless|but)\b/.test(clause), "the Cloudflare clause carries a negating word").toBe(false);
+    for (const m of ["GET only", "never prints a rule `expression`", "never answered by widening a token"]) {
+      expect(clause.includes(m), `the Cloudflare clause lost "${m}"`).toBe(true);
+    }
+  });
+
+  // Every dotted hostname-like token of a text, with NO suffix allow-list: split on whitespace, backticks, quotes, brackets, commas and
+  // semicolons; strip a trailing sentence dot, a scheme, a userinfo prefix and a port; keep only the part before the first "/" so a file path
+  // such as plugins/soleur/scripts/x.sh is not a host while evil.example/x is. A bare dotted token (an IP, a file name) IS reported.
+  const hostTokens = (text: string): string[] => {
+    const out = new Set<string>();
+    for (const raw of text.split(/[\s`'"(),;<>[\]{}]+/)) {
+      let t = raw.replace(/[.:!?]+$/, "");
+      if (!t) continue;
+      t = t.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+      t = t.split("/")[0];
+      t = t.slice(t.lastIndexOf("@") + 1);
+      t = t.replace(/:\d+$/, "");
+      if (/^[A-Za-z0-9*_-]+(\.[A-Za-z0-9*_-]+)+$/.test(t)) out.add(t);
+    }
+    return [...out].sort();
+  };
+
+  test("the Cloudflare clause of item 2 names exactly one host: api.cloudflare.com (every dotted token, no TLD allow-list)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
+    expect(hostTokens(clause), "dotted hostname-like tokens in the Cloudflare clause").toEqual(["api.cloudflare.com"]);
+  });
+
+  test("the host extractor is live: an extra host on .xyz, .cloud, an IP, a URL with userinfo or a wildcard goes red; a file path does not", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
+    for (const extra of ["evil.xyz", "evil.cloud", "127.0.0.1", "https://u:p@a.example.io:8443/p", "*.cloudflare.com", "evil.example/path", "10.0.0.1:8080", "api.cloudflare.com.evil.sh"]) {
+      expect(hostTokens(`${clause} and also \`${extra}\`.`), `an added "${extra}" must change the host set`).not.toEqual(["api.cloudflare.com"]);
+    }
+    expect(hostTokens("see `plugins/soleur/scripts/cloudflare-readonly.sh` and origin/main, run `a/b.c`"), "file paths are not hosts").toEqual([]);
+    expect(hostTokens("one `api.cloudflare.com`, two"), "a plain host with trailing punctuation").toEqual(["api.cloudflare.com"]);
+  });
+
+  test("Cloudflare slicers are live: a clause re-flowed over lines still slices, a missing anchor slices to empty", () => {
+    const flow = flatten("Cloudflare through\n  `x.sh` only, with one of its four\n subcommands `a` or `b`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.");
+    expect(slice(flow, "Cloudflare through", "are not Class R").includes("sends GET only")).toBe(true);
+    expect(backticked(slice(flow, "its four subcommands", ", as a status"))).toEqual(["a", "b"]);
+    expect(slice(flow, "no such anchor", ":")).toBe("");
   });
 
   test("the Playwright host list is a closed set (an added host must change this test)", () => {

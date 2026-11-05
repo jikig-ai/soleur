@@ -1,0 +1,4 @@
+BASE=fadd34b5c06180aeab44a2a34794bd0bad5fb460
+DATE_UTC=2026-11-04T22:28:56Z
+HEAD=e3e94dfe7a3fc78bd385154feb092e6102802959
+drain-claim: gh pr list --label s4-drain --state open => [#12116 only]

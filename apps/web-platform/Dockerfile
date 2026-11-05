@@ -64,11 +64,9 @@ FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fd
 # install is the fallback path. Since #8603
 # test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
 # pins agree and that the installed bundle knows every tier model id.
-# CVE-2026-111497: this CLI's native binary embeds Bun 1.4.3 (vulnerable) until the CLI/SDK pair
-# bump tracked in #12026 lands; the Node digest bump above does not cover it.
 # No `--before` on this line: the tree is the package plus its exact-pinned platform
 # packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
-RUN npm install -g @anthropic-ai/claude-code@2.1.293
+RUN npm install -g @anthropic-ai/claude-code@2.1.311
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —

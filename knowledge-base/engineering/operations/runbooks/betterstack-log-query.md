@@ -203,7 +203,7 @@ Live standing alarms over this source:
   same on web-1 and web-2) with `message.feature = 'agent-sandbox'`, `message.op = 'bash-tool-result'` AND
   `message.sandboxErrorCode IN ('helper_userns_eperm', 'helper_step_eperm')`. That is the live-session mirror of a
   hosted agent's Bash `tool_result` whose line is exactly `apply-seccomp: <step>: Operation not permitted` (or the
-  `EPERM` spelling; line-anchored, nothing trailing) for one of the 16 step strings of the SDK's command-side helper
+  `EPERM` spelling; line-anchored, nothing trailing) for one of the step strings (19 at SDK 0.3.311) of the SDK's command-side helper
   (exact allowlist read from the vendored binary, `HELPER_STEPS` in `server/sandbox-startup-classifier.ts`).
   `helper_userns_eperm` is the `unshare(CLONE_NEWUSER)` step (the helper could not create its user namespace, so EVERY
   Bash call in that session fails); `helper_step_eperm` is any other step (the #10455 e regression net: while

@@ -481,25 +481,33 @@ kill-switch needs explicit CTO acknowledgement and a time box; it is not a routi
 
 **Which helper step failed, and what the tenant sees (#10455 c, e).** The helper embedded in the vendored `claude` binary
 prints `apply-seccomp: <step>: <strerror>` on a failing step. Measured on `claude-agent-sdk` 0.3.284 (the same 17 strings
-are in `claude-code` 2.1.293): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
+are in `claude-code` 2.1.293; 21 strings at 0.3.311, see the 2026-11-04 note below): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
 recorded 2026-10-19 with an `LD_PRELOAD` interposer around the helper (not recalled from source):
 `unshare(CLONE_NEWPID|CLONE_NEWNS)` attempt, `unshare(CLONE_NEWUSER)`, `write /proc/self/setgroups`, `write
 /proc/self/uid_map`, `write /proc/self/gid_map`, `unshare(CLONE_NEWPID|CLONE_NEWNS) after userns`, `fork` (the PID-namespace
 init), then in the init `prctl(PR_SET_DUMPABLE)`, `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`,
 `fork(worker)`; the worker then runs `prctl(PR_SET_NO_NEW_PRIVS)`, `prctl(PR_SET_SECCOMP)`, `execvp`; both waiting
-processes print `waitpid` AFTER the tenant command ran. All 16 are classified (`helper_userns_eperm` for the userns step,
-`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The 15 steps before the tenant command
+processes print `waitpid` AFTER the tenant command ran. All 16 (at 0.3.284) are classified (`helper_userns_eperm` for the userns step,
+`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The pre-command steps (15 at 0.3.284, 18 at 0.3.311; see the 2026-11-04 note below)
 (`HELPER_STEPS_PRE_COMMAND`: everything above up to and including `execvp`) can trigger the tenant notice; only `waitpid`
 (`HELPER_STEPS_POST_COMMAND`), which prints after the command ran, never does. (CTO ruling 2026-10-19: widened from the 11 steps
 before `fork(worker)`, because the measured order runs `fork(worker)`, both `prctl` steps and `execvp` before the tenant command;
 flip `execvp` out to make it 14 only if a measured argv shows the helper execs the tenant argv directly.) A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
+> **Re-measured 2026-11-04 (#12026; SDK 0.3.311 / CLI 2.1.311, one shared binary).** The helper is now the `claude` binary itself,
+> entered by `argv0=apply-seccomp` through `/proc/self/fd/3`. The pool holds 21 strings: 19 `<step>` literals (the 16 above plus
+> `prctl(PR_SET_NO_NEW_PRIVS, stub)`, `prctl(PR_SET_SECCOMP, stub)` and `prctl(PR_SET_SECCOMP, namespaces)`) and 2 errno-less lines
+> (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
+> run on 2026-11-04 shows, per process, all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
+> pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
+> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
+
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single
 line to START with `bwrap:` plus a space (and carry EPERM / `Operation not permitted`), or to be an exact-allowlisted `apply-seccomp: <step>:
-Operation not permitted` line for one of the 15 pre-command steps (any classified helper step except `waitpid`); a line that merely
+Operation not permitted` line for one of the pre-command steps (18 at 0.3.311) (any classified helper step except `waitpid`); a line that merely
 CONTAINS "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) is never rewritten. The mirror event is
 emitted first from the raw output. The SDK-visible tool_result is not rewritable, so the model still sees the raw line and a
 system-prompt directive (`BASH_UNAVAILABLE_PROMPT_DIRECTIVE`) tells it not to echo it, to retry the same command ONCE only
