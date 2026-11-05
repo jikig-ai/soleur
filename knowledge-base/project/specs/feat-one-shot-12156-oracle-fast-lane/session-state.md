@@ -39,3 +39,8 @@ Deferred (recorded, not fixed): RUNNER_TEMP fallback port back to ci-pr-selectio
 serial-manifest merge-queue wall-clock bound (bounded by timeout-minutes:30; activation-gated concern),
 oracle-index-check skip diagnostic nuance on push, reordered.txt tac fallback, mutate_otol bash -n.
 Suites green: ci-oracle-lane 4837/4837 (31/31 mutants), push-dedupe 268, draft-light 209, aggregator 249 (47/47).
+
+## QA (2026-11-05)
+Plan `## Test Scenarios` is empty → per soleur:qa graceful degradation the phase is SKIPPED, not blocking. The
+executable evidence is the sentinel battery itself (ci-oracle-lane.test.sh 4861 rows / 31 mutants, all synthetic
+fixtures hermetic) plus the four touched suites at green on the final tree.
