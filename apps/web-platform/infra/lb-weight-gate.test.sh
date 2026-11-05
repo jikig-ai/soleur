@@ -681,8 +681,127 @@ assert_zero "C.4-G11: standby inputs pass the gate…"
 c4_assert "C.4-G11b: …but WITHOUT requires_runtime_bind_probe=true (the serve step would refuse it)" \
   "$([[ "$GATE_OUT" != *requires_runtime_bind_probe=true* ]] && echo 1 || echo 0)"
 
+# --- R: the relay bind probe (serve only) — #12167 -------------------------------------------------
+# The gate chain's A.1 shape check is VACUOUS for the real bind (it is fed a synthetic value), and the
+# pool-health read proves origin HEALTH, not that the relay listens on web-2's private address. This step
+# closes that: it reads web-2's OWN relay report from Better Stack (scripts/lib/web2-relay-rows.sh, the
+# credentials ride the environment, never argv) and refuses unless >= 2 rows in the last 180 s, newest <= 120 s,
+# every row proxy_state=listening on the address Terraform STATE holds for web-2, port 8443, workspaces_populated=1.
+# R1-R8 pin the step's position and form; E1-E24 EXECUTE the step's own run body against stubbed `terraform` and
+# `curl` (the real helper and the real scripts/betterstack-query.sh in between), one refusal per fixture.
+PROBE_STEP="$(step_of 'relay bind probe \(serve only\)' || true)"
+PROBE_AT="$(line_of 'relay bind probe \(serve only\)')"
+INIT_AT="$(line_of 'Terraform init \(parent root\)')"
+PROBE_RUN="$(awk '/^        run: \|[[:space:]]*$/ {on=1; next} on {print}' <<<"$PROBE_STEP" | sed -E 's/^          //')"
+c4_assert "C.4-R1: the 'relay bind probe (serve only)' step exists in ga_pool_update with a run body (non-vacuity)" \
+  "$([[ -n "$PROBE_STEP" && "$PROBE_AT" -gt 0 && -n "$PROBE_RUN" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R2: order is gate chain < probe < plan (the probe runs after the gate, before anything is planned)" \
+  "$([[ "$GATE_AT" -gt 0 && "$PROBE_AT" -gt "$GATE_AT" && "$PLAN_AT" -gt "$PROBE_AT" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R2b: the probe runs after Terraform init (it reads web-2's address from state)" \
+  "$([[ "$INIT_AT" -gt 0 && "$PROBE_AT" -gt "$INIT_AT" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R3: the probe is serve-gated on the step itself" \
+  "$(grep -qE "^        if: inputs\.mode == 'serve'[[:space:]]*$" <<<"$PROBE_STEP" && echo 1 || echo 0)"
+PROBE_NC="$(c4_nocomment <(printf '%s\n' "$PROBE_STEP"))"
+PROBE_RUN_NC="$(c4_nocomment <(printf '%s\n' "$PROBE_RUN"))"
+c4_assert "C.4-R4: no continue-on-error / '|| true' / 'set +e' in the probe step (a tolerated refusal would still reach the plan)" \
+  "$([[ -n "$PROBE_NC" && -z "$(grep -E 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R4b: no 'secrets.' expression in the probe's run body (credentials arrive only through the env block)" \
+  "$([[ -n "$PROBE_RUN_NC" && -z "$(grep -F 'secrets.' <<<"$PROBE_RUN_NC")" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R5: the expected address is READ FROM STATE (terraform show -json, hcloud_server_network.web[\"web-2\"]) and handed to the judge as a variable" \
+  "$(grep -qF 'terraform show -json' <<<"$PROBE_RUN_NC" && grep -qF 'hcloud_server_network.web[\"web-2\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R5b: no literal IPv4 address anywhere in the probe step" \
+  "$([[ -n "$PROBE_NC" && -z "$(grep -E '(^|[^0-9.])[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9.]|$)' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R6: the step never names SOLEUR_PROXY_BIND, never writes Doppler or GITHUB_ENV" \
+  "$([[ -n "$PROBE_NC" && -z "$(grep -E 'SOLEUR_PROXY_BIND|doppler[[:space:]]+secrets|GITHUB_ENV' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R7: the three BETTERSTACK_QUERY_* credentials ride the step env, each refused when empty, none on a command line" \
+  "$([[ "$(grep -cE '^          BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD): \$\{\{ secrets\.BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD) \}\}$' <<<"$PROBE_STEP")" -eq 3 ]] && grep -qE 'for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD' <<<"$PROBE_RUN_NC" && grep -qE '\-z "\$\{!v:-\}"' <<<"$PROBE_RUN_NC" && [[ -z "$(grep -E 'BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD)[^ ]*[[:space:]]*(=|\))' <<<"$(grep -vE 'for v in|^[[:space:]]*(if|echo)' <<<"$PROBE_RUN_NC")")" ]] && echo 1 || echo 0)"
+c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge) and passes ONLY on a GREEN verdict" \
+  "$(grep -qF 'scripts/lib/web2-relay-rows.sh' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_fetch|[[:space:]]wrr_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge' <<<"$PROBE_RUN_NC" && grep -qE 'VERDICT.*!=.*GREEN' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+
+# --- E: execute the step's own run body, offline ------------------------------------------------------
+R_WORK="$(mktemp -d)"; trap 'rm -rf "$R_WORK"' EXIT
+R_BIN="$R_WORK/bin"; R_FX="$R_WORK/fx"; mkdir -p "$R_BIN" "$R_FX"
+printf '%s\n' "$PROBE_RUN" > "$R_WORK/probe-run.sh"
+cat > "$R_BIN/terraform" <<'STUB'
+#!/usr/bin/env bash
+[ "$1 $2" = "show -json" ] || { echo "terraform stub: only 'show -json' is taught" >&2; exit 64; }
+[ -f "$FX/tf.fail" ] && exit 1
+cat "$FX/state"
+STUB
+cat > "$R_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+url=""; data=""; user=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--data-binary) data="$2"; shift 2 ;;
+    --config) if [ "$2" = - ]; then cfg="$(cat)"; user="${cfg#user = \"}"; user="${user%%\"*}"; fi; shift 2 ;;
+    -u) echo "curl stub: credentials on ARGV" >&2; exit 64 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+leak="$(env | cut -d= -f1 | grep -E 'TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL|AUTH|DOPPLER' | grep -vxE 'BETTERSTACK_QUERY_PASSWORD' || true)"
+if [ -n "$leak" ]; then printf '%s\n' "$leak" >> "$LEAK"; exit 64; fi
+case "$url" in "https://fixture-connect.betterstackdata.com?"*) : ;; *) exit 64 ;; esac
+[ "$user" = fixture-user:fixture-pass ] || exit 64
+printf 'q\n' >> "$CALLS"
+case "$(cat "$FX/mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; timeout) exit 28 ;; esac
+cat "$FX/rows"
+STUB
+chmod +x "$R_BIN/terraform" "$R_BIN/curl"
+r_state() { printf '{"values":{"root_module":{"resources":[{"address":"hcloud_server_network.web[\\"web-1\\"]","values":{"ip":"10.0.1.10"}},{"address":"hcloud_server_network.web[\\"web-2\\"]","values":{"ip":"%s"}}]}}}' "$1" > "$R_FX/state"; }
+r_line() { printf 'relay_probe proxy_state=%s addr=%s port=%s workspaces_populated=%s' "${1:-listening}" "${2:-10.0.1.11}" "${3:-8443}" "${4:-1}"; }
+r_row() { jq -cn --arg a "$1" --arg l "$2" --arg h "${3:-soleur-web-2}" '{age_s:$a,host_name:$h,line:$l}'; }
+R_OUT=""; R_RC=0
+r_exec() { # r_exec [ENV=VAL ...] — run the step body in a clean env; output -> R_OUT, rc -> R_RC
+  : > "$R_WORK/leak"; : > "$R_WORK/calls"; : > "$R_WORK/summary"
+  R_OUT="$(cd "$R_WORK" && env -i PATH="$R_BIN:/usr/bin:/bin" HOME="$R_WORK" TMPDIR="$R_WORK" FX="$R_FX" LEAK="$R_WORK/leak" CALLS="$R_WORK/calls" \
+    GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_STEP_SUMMARY="$R_WORK/summary" GH_TOKEN=decoy-gh DOPPLER_TOKEN=decoy-doppler AWS_SECRET_ACCESS_KEY=decoy-aws \
+    BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user BETTERSTACK_QUERY_PASSWORD=fixture-pass \
+    "$@" bash "$R_WORK/probe-run.sh" 2>&1)" && R_RC=0 || R_RC=$?
+}
+e_refuse() { # e_refuse <desc> <needle> [ENV=VAL ...] — exit 1 with an ::error:: line that NAMES the reason (a refusal for the wrong reason is red)
+  r_exec "${@:3}"
+  c4_assert "$1 → exit 1, refused for: $2" "$([[ "$R_RC" -eq 1 && "$R_OUT" == *"::error::"* && "$R_OUT" == *"$2"* && ! -s "$R_WORK/leak" ]] && echo 1 || echo 0)"
+}
+e_reset() { : > "$R_FX/mode"; rm -f "$R_FX/tf.fail"; r_state 10.0.1.11; { r_row 20 "$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; }
+
+if [[ -n "$PROBE_RUN" ]]; then
+e_reset; r_exec
+c4_assert "C.4-E1: two healthy rows on the state address → exit 0 and a GREEN line in the run summary" \
+  "$([[ "$R_RC" -eq 0 && "$(cat "$R_WORK/summary")" == *GREEN* ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1b: …no credential-shaped variable reached the query child, no decoy printed" \
+  "$([[ ! -s "$R_WORK/leak" && "$R_OUT" != *decoy-* && "$R_OUT" != *fixture-pass* ]] && echo 1 || echo 0)"
+for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
+  e_reset; e_refuse "C.4-E2: $v absent" "$v is not configured" "$v="
+  c4_assert "C.4-E2b: …and no query was sent" "$([[ ! -s "$R_WORK/calls" ]] && echo 1 || echo 0)"
+done
+e_reset; printf '503' > "$R_FX/mode"; e_refuse "C.4-E3: Better Stack answers 503" "FAILED"
+e_reset; printf 'timeout' > "$R_FX/mode"; e_refuse "C.4-E3b: Better Stack times out" "FAILED"
+e_reset; printf '<html>502 Bad Gateway</html>\n' > "$R_FX/rows"; e_refuse "C.4-E4: unparseable (HTML) body" "reason=body_unparseable"
+e_reset; : > "$R_FX/rows"; e_refuse "C.4-E5: EMPTY body (zero rows is not a pass)" "reason=rows_below_floor"
+e_reset; r_row 20 "$(r_line)" > "$R_FX/rows"; e_refuse "C.4-E6: one row only (floor is 2)" "reason=rows_below_floor"
+e_reset; { r_row 20 "$(r_line)"; r_row 200 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E6b: second row outside the 180 s window" "reason=rows_below_floor"
+e_reset; { r_row 121 "$(r_line)"; r_row 150 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E7: newest row 121 s old" "reason=newest_stale"
+e_reset; { r_row 20 "$(r_line no_bind none)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E8: a row says proxy_state=no_bind" "reason=proxy_state_not_listening"
+e_reset; { r_row 20 "$(r_line disabled)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E8b: a row says proxy_state=disabled" "reason=proxy_state_not_listening"
+e_reset; { r_row 20 "$(r_line listening ::)"; r_row 80 "$(r_line listening ::)"; } > "$R_FX/rows"; e_refuse "C.4-E9: addr=:: (wildcard)" "reason=addr_wildcard"
+e_reset; { r_row 20 "$(r_line listening 0.0.0.0)"; r_row 80 "$(r_line listening 0.0.0.0)"; } > "$R_FX/rows"; e_refuse "C.4-E9b: addr=0.0.0.0 (wildcard)" "reason=addr_wildcard"
+e_reset; r_state 10.0.1.12; e_refuse "C.4-E10: rows say 10.0.1.11 but STATE says 10.0.1.12 (address compared against state, not a literal)" "reason=addr_mismatch"
+e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8444)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E11: port 8444" "reason=port_mismatch"
+e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8443 0)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E12: workspaces_populated=0" "reason=workspaces_unpopulated"
+e_reset; { r_row 20 "$(r_line) extra=1"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E13: trailing text after the grammar (substring match must not pass)" "reason=row_malformed"
+e_reset; { r_row 20 "x$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E13b: leading text before the grammar" "reason=row_malformed"
+e_reset; { r_row 20 "$(r_line)" soleur-web-platform; r_row 80 "$(r_line)" soleur-web-platform; } > "$R_FX/rows"; e_refuse "C.4-E14: rows from another host do not count" "reason=rows_below_floor"
+e_reset; touch "$R_FX/tf.fail"; e_refuse "C.4-E15: terraform show -json fails" "terraform show -json failed"
+e_reset; printf '{"values":{"root_module":{"resources":[]}}}' > "$R_FX/state"; e_refuse "C.4-E16: web-2's private address absent from state" "private IPv4 is absent from state"
+e_reset; printf '{"values":{"root_module":{"resources":[{"address":"hcloud_server_network.web[\\"web-2\\"]","values":{"ip":"not-an-ip"}}]}}}' > "$R_FX/state"; e_refuse "C.4-E16b: web-2's state address is not a private IPv4" "private IPv4 is absent from state"
+else
+  c4_bad "C.4-E*: the probe step has no run body — the execute-the-step fixtures cannot run (vacuity refused)"
+fi
+
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=72
+MIN_CASES=204
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
