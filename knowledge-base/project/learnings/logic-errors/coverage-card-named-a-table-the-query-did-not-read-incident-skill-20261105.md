@@ -30,7 +30,7 @@ The incident skill's Phase 0 pull prints a coverage card and then starts the nin
 ## Symptoms
 
 - A shimmed query used `remote(not_the_card_table)` while the card printed `t520508_soleur_inngest_vector_prd_3_logs`.
-- `bash -x` stderr contained `+ complaint='checkout button failed'` (and, with the fixture email, `fixture-pull@example.invalid`) while stdout stayed clean. The halt test grepped only stdout, so it stayed green.
+- `bash -x` stderr contained `+ complaint='checkout button failed'` and the fixture email, while stdout stayed clean. The halt test grepped only stdout, so it stayed green.
 - Deleting only `-u BS_TABLE` and leaving `-u BS_TABLE_S3` still matched the short needle.
 
 ## What Didn't Work
