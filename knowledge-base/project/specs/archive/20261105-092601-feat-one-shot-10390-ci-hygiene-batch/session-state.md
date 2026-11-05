@@ -113,3 +113,9 @@
 
 ## Rebase #5 (2026-11-05)
 - Fifth main-move conflict: terraform-target-parity.test.ts TEST_FLOOR chain — union'd main's +1 (#11857, 354) + mine +4 (#8780) = 358 exact-verified. tenant-integration CANCELLED on prior head was my own force-push racing its run (concurrency group), not a real failure. 40 commits rebased. Force-pushed. Merge queue re-evaluating.
+
+## Merge Queue Rounds (2026-11-05, cont)
+- Rebase #5 (terraform-target-parity TEST_FLOOR union -> 358 exact) pushed; repeated DIRTY cycles from main moving 4-5x. Merged origin/main INTO branch (274cf8f1eb) for queue admission — isInMergeQueue stayed false on re-arms.
+- Merged-head CI new failures: Doppler-CLI install flakes (reran runs 42045321402/42045323465), Terraform validate, build-check (Candidate build), sentry-destroy-required aggregate (investigate plan counts), infra-validate-required (derivative), shard reds (non-required).
+- Required checks green at last verified head: tenant-integration-required, service-role-allowlist-gate, enforce.
+- Remaining: fix tf-validate + sentry-destroy + build-check -> push -> queue -> postmerge verification -> epic status. Operator step: #10136 zot confirmation. Residual #12092.
