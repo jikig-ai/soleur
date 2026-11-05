@@ -4,6 +4,16 @@
 # hardened HTTPS GET with it. Consumer: skills/ship/scripts/hold-gate-eval.sh (the `web-acceptance` gate). Suite:
 # plugins/soleur/test/bearer-curl.test.sh. Precedent for the token handling: skills/trigger-cron/scripts/trigger.sh.
 #
+# Why this file exists beside scripts/lib/bearer-curl.sh (the repository-root helper, `bc_curl`, used by the workflow YAML
+# and CI): this plugin ships to customer machines, which have the plugin directory and nothing of the repository root, so
+# it cannot source a repo-root script (ADR-280 already records that the plugin cannot source scripts/lib). Same name, a
+# different helper: the repo-root one SENDS a request for a workflow; this one reads ONE secret by name and sends ONE GET.
+# Both hide the same family of curl environment variables (the list below is kept equal to _bc_send's in the root helper).
+# ADR-280's stdin-config form (`--config -`) is not used here: the 0600 config file lives in a private 0700 scratch
+# directory the caller made (hold-gate-eval.sh uses mktemp -d) and is removed right after curl returns, on every path.
+# bc_read_token and bc_get are GENERIC: any UPPER_SNAKE secret name and any https URL. The closed union of secret names
+# that may be read lives in the TypeScript reader (apps/web-platform/lib/internal-auth-named.ts), not here.
+#
 # API (all return 0 on success, non-zero on ANY failure; no function prints anything on stdout):
 #   bc_read_token <SECRET_NAME>   reads `doppler secrets get <name> --plain --project soleur --config prd` (project and
 #                                 config are fixed here, never a parameter, never the environment), applies the shape
@@ -15,11 +25,12 @@
 #                                 function never reads a 4xx or 5xx as success or failure).
 #   bc_clear                      forgets the token.
 #
-# Hardening, in one place: refuse under xtrace (a traced run would print the credential), a token-shape guard (the token
-# is written into a curl config line, so a quote or newline would inject a directive), `--disable` first (no ~/.curlrc),
+# Hardening, in one place: refuse under xtrace (a traced run would print the credential), a token-shape guard (48 to 256
+# characters of [A-Za-z0-9._~+/=-], the same bounds as TOKEN_RE in the verify route; the token is written into a curl config
+# line, so a quote or newline would inject a directive), `--disable` first (no ~/.curlrc),
 # `--noproxy '*'`, `--proto =https`, `--max-redirs 0` (a redirect is a status, never followed), bounded connect time,
 # total time and body size, no retry (a retry turns a throttled answer into a later success), and the environment
-# variables that subvert TLS or name resolution hidden from curl only (the caller's own environment is not mutated).
+# variables that subvert TLS, name resolution or the loaded libraries hidden from curl only (the caller's own environment is not mutated).
 
 # Refuse to be loaded under xtrace. `return` ends a `source`; `exit` covers a direct execution.
 case "$-" in *x*) printf 'bearer-curl: refusing to run under xtrace: this helper handles a live credential and -x would print it. No secret has been read.\n' >&2; return 78 2>/dev/null || exit 78 ;; esac # mut:xtrace-source
@@ -28,7 +39,8 @@ BC_TOKEN=""; BC_STATUS="000"; BC_RC=1; BC_BODY=""
 
 bc_shape_ok() { # <value>: 0 only for a plausible bearer token (never echoes it)
   local LC_ALL=C
-  [ "${#1}" -le 512 ] || return 1
+  [ "${#1}" -ge 48 ] || return 1
+  [ "${#1}" -le 256 ] || return 1
   case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac
   return 0
 }
@@ -58,7 +70,7 @@ bc_get() { # <scratch-dir> <https-url>
   cfg="$scratch/bc.cfg"; body="$scratch/bc.body"
   rm -f "$cfg" "$body"
   ( umask 077 && printf 'header = "Authorization: Bearer %s"\n' "$BC_TOKEN" > "$cfg" ) || { rm -f "$cfg"; return 1; }
-  BC_STATUS="$(env -u SSLKEYLOGFILE -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR -u CURL_HOME -u HOSTALIASES -u LOCALDOMAIN -u RES_OPTIONS curl --disable --noproxy '*' --proto =https --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 4096 -sS -o "$body" -w '%{http_code}' --config "$cfg" "$url" 2>/dev/null </dev/null)"; BC_RC=$?
+  BC_STATUS="$(env -u SSLKEYLOGFILE -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR -u CURL_HOME -u HOSTALIASES -u LOCALDOMAIN -u RES_OPTIONS -u OPENSSL_CONF -u OPENSSL_MODULES -u LD_PRELOAD -u LD_AUDIT -u LD_LIBRARY_PATH curl --disable --noproxy '*' --proto =https --max-redirs 0 --connect-timeout 5 --max-time 15 --max-filesize 4096 -sS -o "$body" -w '%{http_code}' --config "$cfg" "$url" 2>/dev/null </dev/null)"; BC_RC=$?
   rm -f "$cfg"
   [[ "$BC_STATUS" =~ ^[0-9]{3}$ ]] || BC_STATUS="000"
   [ -f "$body" ] && BC_BODY="$body"

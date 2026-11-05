@@ -26,7 +26,7 @@ Envelope: <path>[#<title>]
   Gate: pr-merged <N>
   Gate: no-inflight-run <workflow-file>
 - Hold: Operator-reserved: <a decision only the operator may make, in their words>
-- Hold: <the operator's words: wait for the founder to accept a legal text>
+- Hold: <the operator's words: wait for the founder to accept the legal text <key>>
   Gate: web-acceptance <key> <64 lowercase hex>
 ```
 
@@ -46,39 +46,65 @@ stands.
 
 **`web-acceptance <key> <hash>`** discharges a hold by the founder's recorded decision on a legal text, never by anyone's
 reading of prose. `<key>` is the file name (without `.md`) of a text committed under
-`apps/web-platform/server/legal-acceptance/texts/`; `<hash>` is the sha256 of that committed file, 64 lowercase hex characters.
+`apps/web-platform/server/legal-acceptance/texts/`; `<hash>` is the sha256 of that committed file, 64 lowercase hex characters
+(compute it with `git show HEAD:apps/web-platform/server/legal-acceptance/texts/<key>.md | sha256sum`).
 The evaluator hashes the committed file (the `HEAD` blob) itself, and asks the web application, with a read-only token read
 from the secret store, whether the configured founder accepted exactly that hash. Both tokens are validated first, by the same
 rule as the database (a key of 1 to 63 lowercase letters, digits and hyphens that does not start with a hyphen; a lowercase hash
-of exactly 64 characters): a path character, an uppercase hex digit, a tab, a missing or extra token makes the hold
-`Could not check` and nothing is requested. A hold is discharged only for an `accepted` answer whose record passed its checksum,
-whose echoed hash equals the gate's hash, and whose hash equals the committed text's hash. What each reason means:
+of exactly 64 characters): a path character, an uppercase hex digit, a missing or extra token makes the hold
+`Could not check` and nothing is requested. A tab inside a `Hold:` or `Gate:` line is read as one space, so it can never split
+the line. A hold is discharged only for an `accepted` answer whose record passed its checksum, whose echoed hash equals the
+gate's hash, and whose hash equals the committed text's hash.
+
+**Name the text key in the `Hold:` line.** The `Hold:` line (the one line, not the lines under it) must contain the gate's key
+as a whole word, in any case: `wa-key` is named by `Wait for wa-key` or `(WA-KEY)` but not by `wa-key-two`, `xwa-key` or
+`wa-keys`. A hold that does not name the key is `Could not check` ("this wait does not name the legal text it is about, so a
+recorded decision cannot clear it") and nothing is requested, with or without a `Delegation:` line. Every `web-acceptance` gate
+on the hold needs its own key named. This stops a decision about one text from clearing a wait about something else. It is a
+lexical check: it proves the words and the gate point at the same key, not that the words faithfully describe the text, so
+reviewing the pairing stays the author's and the CTO's job. A `web-acceptance` gate is never evaluated in `--file` mode (an
+envelope backs a production step; a recorded decision on a legal text cannot): it is `Could not check` there.
+
+If the text's front matter (the first `---` block) carries `valid_until: YYYY-MM-DD` and that day is before today (UTC), the
+hold stands as a person's matter and nothing is requested; a `valid_until` that is not written `YYYY-MM-DD` cannot be used
+(`Could not check`); no `valid_until` means no expiry.
+
+What each reason means (the evaluator prints these words, and only these):
 
 | Printed reason | Meaning | Exit |
 |---|---|---|
-| `hash mismatch` | the text was revised after the gate was written; the gate names an old text | 1 |
+| `the text was changed after this check was written` | the text was revised after the gate was written; the gate names an old text | 1 |
 | `no decision recorded for this text version` | the founder has not decided this text yet | 1 |
-| `declined; a revised text with a new hash is needed` | the founder said No: a person decides, and the same hash can never be accepted later | 1 |
-| `changes requested; read the note per <runbook>` | the founder asked for changes: the operator reads the note by the runbook, the agent never does | 1 |
-| `the record failed its check` | the stored decision no longer matches its checksum; never read as "no decision" | 2 |
-| `endpoint not configured yet` | the check endpoint answers 503 until its token and founder id exist | 2 |
-| `token rejected` | the token read from the secret store was refused (401) | 2 |
-| `key not in the deployed registry` | the text is committed but not deployed yet (a text added in the same change is a post-merge hold) | 2 |
-| `answer not understood` | a 400 or 502, or a body that is not exactly the four expected fields in the expected types | 2 |
-| `unreachable` | timeout, name or connection failure, a body over the size limit, a redirect, any other status | 2 |
-| `no access to the verify token` / `no hash tool` | no secret-store tool, no token, a token of the wrong shape, or no sha256 tool on this machine | 2 |
-| `the committed text cannot be used` | no committed regular file for the key, or it contains a carriage return | 2 |
+| `declined; a revised text is needed` | the founder said No: a person decides, and this exact text can never be accepted later | 1 |
+| `this text has expired; a revised text is needed` | the text's `valid_until` day is past | 1 |
+| second line `Needs you: the founder asked for changes. Read the note yourself, not in an agent session: <runbook path>` | the founder asked for changes: the operator reads the note by the runbook, the agent never does | 1 |
+| `the saved decision looks damaged` | the stored decision no longer matches its checksum; never read as "no decision" | 2 |
+| `the check is not available right now (not switched on, or temporarily down)` | the check answers 503: its token and founder id are not set yet, the saved texts could not be read, or the database failed | 2 |
+| `the check did not accept my sign-in` | the token read from the secret store was refused (401) | 2 |
+| `the live app does not know this text yet` | the text is committed but not deployed yet (a text added in the same change is a post-merge hold) | 2 |
+| `answer not understood` | a 400 or 502, or a body that is not exactly the four expected fields once each, in the expected types, with a plain UTC date | 2 |
+| `unreachable (HTTP <status>, curl rc <n>)` | timeout, name or connection failure, a body over the size limit, a redirect, any other status; numbers only, never the body or the credential | 2 |
+| `I could not sign in to the check` / `I have no tool here to check that the text is unchanged` | no secret-store tool, no token, a token of the wrong shape (48 to 256 characters), or no sha256 tool on this machine | 2 |
+| `the saved text is not in the project` | no committed regular file for the key, a carriage return in it, or a `valid_until` that is not a date | 2 |
+| `this wait does not name the legal text it is about, so a recorded decision cannot clear it` | the `Hold:` line does not contain the gate's key as a whole word | 2 |
+| `a recorded decision on a legal text cannot back a production step` | a `web-acceptance` gate in an envelope (`--file` mode) | 2 |
 
 **What ship does with each.** Exit 0 for a web-acceptance hold: record the `Done:` line (it carries the decision date) in the PR
-body. Exit 1 with `no decision recorded`: print the card route `/dashboard/approvals/legal/<key>` so the founder can decide, and
-offer to defer with an issue (the hold stays). Exit 1 with `declined` or `changes requested`: the answer for that hash is
-terminal, so say that a revised text (a new hash, a new gate) is needed; never retry, never re-ask for the same hash. Exit 1
-with `hash mismatch`: the plan's gate must be rewritten for the committed text, by the plan's author. Exit 2: the hold stands,
-named in one plain sentence from the table, and never retried into a pass.
+body. Exit 1 with `no decision recorded`: print the full card link `https://app.soleur.ai/dashboard/approvals/legal/<key>` (not a
+relative path: the founder opens it from a message) so the founder can decide, and offer to defer with an issue (the hold stays).
+Exit 1 with `declined`, `expired` or `Needs you`: the answer for that text is terminal, so say that a revised text (a new hash,
+a new gate) is needed; never retry, never re-ask for the same text. For `Needs you` say that the founder asked for changes and
+that the operator, not an agent session, reads the note by the path on the line. Exit 1 with `the text was changed after this
+check was written`: the plan's gate must be rewritten for the committed text (compute the new hash with the one-liner above),
+by the plan's author. Exit 2: the hold stands, named in one plain sentence from the table, and never retried into a pass.
 
-**A web-acceptance gate backs only a hold on that legal acceptance itself, for a text written for that hold.** A recorded Yes
-authorizes no production act, and a text accepted for another purpose is not evidence for this one: never use the gate to
-discharge a merge, a deploy or a spend, and never reuse an old acceptance for a new hold.
+**What a web-acceptance gate is for, and not for.** It discharges a hold like any other gate: the hold stands until the
+founder's recorded decision on exactly that text is `accepted`, and then the hold is cleared. It grants no authority of its own:
+a recorded Yes is not a merge approval, a deploy approval or a spend approval, and it does not stand in for an
+`Operator-reserved:` hold (those always stand). The canonical use is a hold of the form "do not ship until the founder has
+accepted this text". The pairing of the hold's words with the gate's key is checked lexically (above); the residual is a hold
+whose words name a key that the author attached to a gate for a text that was accepted for another purpose. So never reuse an
+old acceptance for a new hold: write a new text and a new gate.
 
 A read-only check is never a hold line: write the `Gate:` when `pr-merged` or `no-inflight-run` fits; otherwise the CTO runs it ([standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 9) and records it as `Checked:` or `Unverified:` in a `## Class R Checks` section beside this one, never `Operator-reserved:` for the read itself (an `Unverified:` read that a merge or deploy depends on makes the act it gates an `Operator-reserved:` hold: section 9 Records) and never a `Hold:` with no `Gate:`. A read result never satisfies a `Gate:` and removes no hold line.
 
@@ -213,7 +239,7 @@ required checks green, the review evidence (the `Reviewed-By-Soleur` trailer, an
 
 Evaluate at the draft exit AND again at the start of Phase 6.45, before the plan is archived, through the same command
 (`hold-gate-eval.sh --plan <plan file>`; any exit other than 0 stops the arming). It runs there, not at the arming call itself,
-because once Phase 6.45 archives the plan its live path is gone and the evaluator would answer 2. Be honest about the gap: a
+because once Phase 6.45 archives the plan its live path is gone and the evaluator would answer 2. The second evaluation is for any plan whose `## Operator Holds` carries a hold with a `Gate:` or a `Delegation:` line (a web-acceptance-only plan has no `Delegation:` line): a review fix that edits the committed text after the first look changes its hash, and only this second look sees the stale gate. Be honest about the gap: a
 predicate such as `no-inflight-run` is true only at the instant it is read, so a run that starts between that look and the
 arming is not seen. The repository's required checks, not this look, are the final authority at the merge.
 

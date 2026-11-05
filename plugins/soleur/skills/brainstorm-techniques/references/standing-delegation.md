@@ -207,7 +207,7 @@ Stop conditions: {STOP_CONDITIONS}
 ## 3. `Gate:` v1 grammar
 
 One predicate per line, closed set. An unknown kind, an unreadable probe, a missing or invalid delegation or a timeout
-means the hold STANDS (the evaluator exits 1 for an invalid delegation and 2 for anything it cannot evaluate). Adding a kind is a CTO ruling plus a test row.
+means the hold STANDS (the evaluator exits 1 for an invalid delegation or a gate that is false or needs a person, 2 for anything it cannot evaluate, and 3 when no `Delegation:` line is recorded and no non-reserved hold carries a `web-acceptance` gate: the prose path, see the web-acceptance exception below). Adding a kind is a CTO ruling plus a test row.
 
 ```text
 Gate: pr-merged <N>
@@ -223,11 +223,15 @@ and is true only at that instant (it is evaluated again right before arming).
 `web-acceptance` needs the founder's recorded decision for exactly that legal text to be `accepted`: `<key>` names a text
 committed under `apps/web-platform/server/legal-acceptance/texts/`, `<hash>` is the sha256 of that committed file, and the
 evaluator checks the hash against the committed file itself, then asks the web application (read-only token, fixed address).
-`none` or a changed text keeps the hold; `declined` and `changes_requested` need a person and a revised text; `invalid`, an
-unconfigured or unreachable endpoint, and any answer that is not exactly the expected shape leave the hold standing as
-unevaluable. It is its own evidence and needs no `Delegation:` line (a plan of only web acceptances is evaluated without one; one
-that mixes them with other kinds and no delegation is exit 2), it never backs a merge, deploy or spend (a recorded Yes
-authorizes no production act), and it backs only a hold on that legal acceptance for a text written for that hold.
+`none` or a changed text keeps the hold (exit 1); `declined`, `changes_requested` and an expired text (its `valid_until` day is past)
+need a person and a revised text (exit 1); `invalid`, a check that is not available or unreachable, and any answer that is not exactly the
+expected shape leave the hold standing as unevaluable (exit 2). The hold's own `Hold:` line must name the gate's key as a whole word, or the
+gate is unevaluable (exit 2); a `web-acceptance` gate is never evaluated in an envelope (`--file` mode). The web-acceptance exception to
+"a delegation is cited": it is its own evidence and needs no `Delegation:` line. With no `Delegation:` line, a plan whose every
+non-reserved hold carries only web acceptances is evaluated here (exit 0, 1 or 2, never 3); a plan that mixes a web acceptance with another
+kind of gate, or with a hold that has no gate, is exit 2; a plan with no web acceptance on a non-reserved hold (reserved-only and gate-less
+plans included) is exit 3 and keeps the prose path. A recorded Yes authorizes no production act and grants no merge, deploy or spend
+authority: the gate discharges a hold like any other gate, and it backs only a hold on that legal acceptance for a text written for that hold.
 Procedure and the meaning of each printed reason: [operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md) section 1.
 
 ## 4. What this does NOT bypass

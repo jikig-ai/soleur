@@ -8,7 +8,7 @@ Nothing in this section is a hold.
 
 No standing approval is recorded. Every condition below is a decision the founder records on the web.
 
-- Hold: do not ship the feature until the founder has accepted the synthetic text.
+- Hold: do not ship the feature until the founder has accepted the synthetic text @KEY@.
   Gate: web-acceptance @KEY@ @HASH@
 
 ## Acceptance Criteria

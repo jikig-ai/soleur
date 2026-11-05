@@ -8,9 +8,11 @@
 # Property: plan mode verifies the delegation, and a hold is discharged only if a Standing Delegation is cited
 # (verifier rc 0 AND a first line `delegation: valid`) and EVERY one of its `Gate:` predicates is a known kind that
 # evaluates true now. The one exception to "a delegation is cited" is a plan whose every non-reserved hold carries
-# nothing but `web-acceptance` gates (below): the gate IS the evidence, so no delegation is needed. Any other state leaves it standing: an unknown kind, an unreadable probe, a missing,
-# ambiguous or invalid delegation, a missing envelope, a timeout, a missing time-limit tool, a hold with no gate.
+# nothing but `web-acceptance` gates (below): the gate IS the evidence, so no delegation is needed. Any other state
+# leaves it standing: an unknown kind, an unreadable probe, a missing, ambiguous or invalid delegation, a missing
+# envelope, a timeout, a missing time-limit tool, a hold with no gate.
 # --file mode does not verify a delegation (the caller just did); it only measures one envelope's `Preconditions:` gates.
+# A `web-acceptance` gate is never evaluated in --file mode: a recorded decision on a legal text cannot back a production step.
 #
 # Usage:
 #   hold-gate-eval.sh --plan <plan.md>                              evaluate `## Operator Holds`
@@ -28,13 +30,16 @@
 #     Gate: pr-merged <N> | no-inflight-run <workflow-file> | web-acceptance <key> <64 lowercase hex>
 # `web-acceptance <key> <hash>` is true only when the founder's recorded decision for exactly that text is `accepted`:
 # <key> is the file name (minus .md) of a committed text under apps/web-platform/server/legal-acceptance/texts/ and <hash>
-# the sha256 of that committed file (HEAD blob). It asks https://app.soleur.ai/api/internal/legal-acceptance/<key>?hash=<hash>
-# with a read-only bearer token read from the secret store (lib/bearer-curl.sh); the base URL is a literal. `none` or a hash
-# that no longer matches the committed text is FALSE (stands); `declined` and `changes_requested` are PERSON (a person must
-# decide; stands, exit 1, a revised text is needed); `invalid` (the record failed its checksum), an unconfigured or
-# unreachable endpoint, a rejected token and every answer that is not exactly the four-key shape are UNEVAL (exit 2).
-# Key and hash shapes are the same predicate as the database CHECK (migration 184) and KEY_RE / TEXT_HASH_RE in
-# server/legal-acceptance/canonical.ts (WA_KEY_RE and WA_HASH_RE below). A recorded Yes authorizes no production act.
+# the sha256 of that committed file (HEAD blob). The hold's own `Hold:` line must name <key> as a whole token (CTO ruling D1:
+# a decision about one text must not clear a wait about something else), or the gate is UNEVAL. If the text's front matter
+# carries `valid_until: YYYY-MM-DD` and that day is past, the gate is PERSON (a revised text is needed). It asks
+# https://app.soleur.ai/api/internal/legal-acceptance/<key>?hash=<hash> with a read-only bearer token read from the secret
+# store (lib/bearer-curl.sh); the base URL is a literal. `none` or a text that changed since the gate was written is FALSE
+# (stands); `declined` and `changes_requested` are PERSON (a person must decide; stands, exit 1, a revised text is needed);
+# `invalid` (the record failed its checksum), an unavailable check, a rejected sign-in and every answer that is not exactly
+# the four-key shape are UNEVAL (exit 2). Key and hash shapes are the same predicate as the database CHECK (migration 184)
+# and KEY_RE / TEXT_HASH_RE in server/legal-acceptance/canonical.ts (WA_KEY_RE and WA_HASH_RE below). The reason table is in
+# skills/ship/references/operator-holds.md. A recorded Yes authorizes no production act.
 # `command` and `run-green` are deferred. The first real consumer re-adds them, and only by CTO ruling. A `Gate:`
 # line of any other kind is an unknown kind: it exits 2 and the hold stands. Markers (`Hold:`, `Gate:`,
 # `Delegation:`, `Envelope:`) are read in any case, with or without the list dash and a space before the colon.
@@ -49,6 +54,8 @@
 #       and tool check, so the caller keeps its prose evaluation (operator-holds.md section 3).
 # A hold that needs a person's decision (a declined or changes-requested web acceptance, or no gate at all) is printed
 # `Needs a person: ... - only a person can settle this`, with the reason in parentheses when there is one.
+# A changes-requested web acceptance adds a second line, `Needs you: the founder asked for changes. Read the note yourself,
+# not in an agent session: <path>`, so the reader of the note is named.
 # stdout: when a delegation was checked, its verdict line first (`delegation: <valid|invalid|unverifiable>
 # reason=<token>`); then one plain line per hold, then `holds: N discharged: M standing: K`. A `Done:` line carries
 # the gate text that was true. Exit 2 and 1 are never converted to a pass by any caller; nothing here retries a
@@ -127,16 +134,15 @@ known_kind() { case "$1" in pr-merged|no-inflight-run|web-acceptance) return 0 ;
 # these two lines and compares them with those sources: change all of them together or none.
 WA_KEY_RE='^[a-z0-9][a-z0-9-]{0,62}$'
 WA_HASH_RE='^[0-9a-f]{64}$'
-WA_TS_RE='^([0-9]{4}-[0-9]{2}-[0-9]{2})T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|\+00(:?00)?)$'
 WA_TEXTS='apps/web-platform/server/legal-acceptance/texts'
 WA_BASE='https://app.soleur.ai/api/internal/legal-acceptance' # mut:base-url
 WA_TOKEN_NAME='LEGAL_ACCEPTANCE_VERIFY_TOKEN'
 WA_RUNBOOK='knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md'
-WA_CANT='the committed text cannot be used'
+WA_CANT='the saved text is not in the project'
 BEARER_LIB="$SCRIPT_DIR/../../../scripts/lib/bearer-curl.sh"
 WA_HASH=""
 
-GRES=""; GWHY=""; GNOTE=""
+GRES=""; GWHY=""; GNOTE=""; GLINE=""; WA_HOLD_TEXT=""
 gate_pr_merged() {
   local n="$1" st sha base rc
   [[ "$n" =~ ^[0-9]+$ ]] || { GRES=UNEVAL; GWHY="the earlier change is not named by a plain number"; return; }
@@ -176,15 +182,29 @@ gate_no_inflight() {
 }
 
 wa_notu() { GRES=UNEVAL; GWHY="answer not understood"; }
-wa_jq() { jq -e --arg h "$WA_HASH" "$1" "$BC_BODY" >/dev/null 2>&1 </dev/null; } # the filter is a program, the body the file; no stdin
+wa_jq() { jq -e -s --arg h "$WA_HASH" "length == 1 and (.[0] | ($1))" "$BC_BODY" >/dev/null 2>&1 </dev/null; } # the filter is a program, the body the file; no stdin; exactly one JSON document
+
+# decided_at is a plain UTC instant: the shape (\A..\z, so a trailing newline fails), then calendar ranges (year 2000 to 2099, month 01-12,
+# day 01-31, hour <= 23, minute and second <= 59) and a round trip through the clock (2026-02-30 comes back as 2026-03-02 and fails).
+WA_JQ_DEFS='def okts: type == "string"
+  and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00(:?00)?)\\z")
+  and (capture("\\A(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})")
+       | (.y >= "2000" and .y <= "2099" and .mo >= "01" and .mo <= "12" and .d >= "01" and .d <= "31" and .h <= "23" and .mi <= "59" and .s <= "59")
+         and ("\(.y)-\(.mo)-\(.d)T\(.h):\(.mi):\(.s)Z" as $t | (try ($t | fromdateiso8601 | todateiso8601) catch "") == $t)); '
+# the answer must be exactly four scalar leaves at the top level, one per key (jq keeps the LAST of a repeated key, so a repeat, or an object that a later
+# scalar replaces, could hide a value from the readers that come after it)
+WA_JQ_ONCE='[inputs | select(length == 2)] as $l | ($l | length) == 4 and all($l[]; (.[0] | length) == 1) and ($l | map(.[0][0]) | unique | length) == 4'
 
 # gate_web_acceptance <key> <hash>: TRUE only for an `accepted` answer with row_ok true whose echoed hash equals the gate hash, which
-# in turn equals the sha256 of the committed text. Every verdict and reason is a row of the closed table in the plan (Guard 1).
+# in turn equals the sha256 of the committed text. Every verdict and reason is a row of the closed table in
+# skills/ship/references/operator-holds.md (section 3, web-acceptance).
 gate_web_acceptance() {
-  local rest="$1" key hash path ent top lh="" st d ok
+  local rest="$1" key hash path ent top lh="" st d ok vu today
   WA_HASH=""
   key="${rest%% *}"; hash="${rest#* }"
-  if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain key and a hash"; return; fi # mut:wa-shape
+  if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain text name and fingerprint"; return; fi # mut:wa-shape
+  # CTO ruling D1: the hold's own words must name this text's key as a whole token, so a decision about one text cannot clear a wait about another thing.
+  printf '%s' "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z' | grep -Eq "(^|[^a-z0-9-])${key}([^a-z0-9-]|\$)" || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about, so a recorded decision cannot clear it"; return; } # mut:wa-bind
   WA_HASH="$hash"
   path="$WA_TEXTS/$key.md"
   top="$(git rev-parse --show-toplevel </dev/null 2>/dev/null)" || top="" # a pathspec is relative to the working directory, so list from the top
@@ -195,51 +215,64 @@ gate_web_acceptance() {
   [ "$(tr -cd '\r' < "$WORK/wa.txt" | wc -c | tr -d ' ')" = 0 ] || { GRES=UNEVAL; GWHY="$WA_CANT"; return; } # mut:wa-cr
   if command -v sha256sum >/dev/null 2>&1; then lh="$(sha256sum < "$WORK/wa.txt" 2>/dev/null | cut -c1-64)"
   elif command -v shasum >/dev/null 2>&1; then lh="$(shasum -a 256 < "$WORK/wa.txt" 2>/dev/null | cut -c1-64)"; fi
-  [[ "$lh" =~ $WA_HASH_RE ]] || { GRES=UNEVAL; GWHY="no hash tool"; return; }
-  [ "$lh" = "$hash" ] || { GRES=FALSE; GWHY="hash mismatch"; return; } # mut:local-hash
+  [[ "$lh" =~ $WA_HASH_RE ]] || { GRES=UNEVAL; GWHY="I have no tool here to check that the text is unchanged"; return; }
+  [ "$lh" = "$hash" ] || { GRES=FALSE; GWHY="the text was changed after this check was written"; return; } # mut:local-hash
+  # CTO ruling D6: a text whose front matter names a last day (valid_until: YYYY-MM-DD) that is past needs a revised text. Absent = no expiry.
+  vu="$(awk 'NR == 1 { if ($0 == "---") { f = 1; next } else exit } f && $0 == "---" { exit } f && /^valid_until:/ { sub(/^valid_until:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' "$WORK/wa.txt" 2>/dev/null)"
+  if [ -n "$vu" ]; then
+    [[ "$vu" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { GRES=UNEVAL; GWHY="$WA_CANT"; return; } # mut:wa-valid-shape
+    today="$(date -u +%F 2>/dev/null)"
+    [[ "$today" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { GRES=UNEVAL; GWHY="I could not read today's date"; return; }
+    if [[ "$vu" < "$today" ]]; then GRES=PERSON; GWHY="this text has expired; a revised text is needed"; return; fi # mut:wa-expired
+  fi
   # shellcheck source=/dev/null
-  { [ -r "$BEARER_LIB" ] && . "$BEARER_LIB" 2>/dev/null && bc_read_token "$WA_TOKEN_NAME"; } || { GRES=UNEVAL; GWHY="no access to the verify token"; return; }
+  { [ -r "$BEARER_LIB" ] && . "$BEARER_LIB" 2>/dev/null && bc_read_token "$WA_TOKEN_NAME"; } || { GRES=UNEVAL; GWHY="I could not sign in to the check"; return; }
   bc_get "$WORK" "$WA_BASE/$key?hash=$hash"; ok=$?
   bc_clear
-  [ "$ok" -eq 0 ] || { GRES=UNEVAL; GWHY="unreachable"; return; } # mut:curl-fail
+  [ "$ok" -eq 0 ] || { GRES=UNEVAL; GWHY="unreachable (HTTP $BC_STATUS, curl rc $BC_RC)"; return; } # mut:curl-fail
   case "$BC_STATUS" in
     200) ;;
-    503) GRES=UNEVAL; GWHY="endpoint not configured yet"; return ;;
-    401) GRES=UNEVAL; GWHY="token rejected"; return ;;
-    404) GRES=UNEVAL; GWHY="key not in the deployed registry"; return ;;
+    503) GRES=UNEVAL; GWHY="the check is not available right now (not switched on, or temporarily down)"; return ;;
+    401) GRES=UNEVAL; GWHY="the check did not accept my sign-in"; return ;;
+    404) GRES=UNEVAL; GWHY="the live app does not know this text yet"; return ;;
     400|502) wa_notu; return ;;
-    *) GRES=UNEVAL; GWHY="unreachable"; return ;; # mut:status-default
+    *) GRES=UNEVAL; GWHY="unreachable (HTTP $BC_STATUS, curl rc $BC_RC)"; return ;; # mut:status-default
   esac
   wa_jq 'type == "object" and (keys == ["decided_at","row_ok","status","text_hash"])' || { wa_notu; return; } # mut:body-keys
+  jq -e -n --stream "$WA_JQ_ONCE" "$BC_BODY" >/dev/null 2>&1 </dev/null || { wa_notu; return; } # mut:body-dupkeys
   wa_jq '(.text_hash | type) == "string" and .text_hash == $h' || { wa_notu; return; } # mut:echo-hash
-  st="$(jq -r '.status | if type == "string" then . else "-" end' "$BC_BODY" </dev/null 2>/dev/null)"
+  # the status is compared INSIDE jq against the closed set, so "accepted\n" or "accepted\u0000" can never turn into "accepted" in the shell
+  st="$(jq -r '.status as $s | if $s | IN("accepted","declined","changes_requested","invalid","none") then $s else "-" end' "$BC_BODY" </dev/null 2>/dev/null)" # mut:st-allow
   case "$st" in
-    accepted|declined|changes_requested) wa_jq '(.row_ok | type) == "boolean" and .row_ok == true and (.decided_at | type) == "string"' || { wa_notu; return; } ;; # mut:row-ok
+    accepted|declined|changes_requested) wa_jq "$WA_JQ_DEFS"'(.row_ok | type) == "boolean" and .row_ok == true and (.decided_at | okts)' || { wa_notu; return; } ;; # mut:row-ok
     invalid) wa_jq '(.row_ok | type) == "boolean" and .row_ok == false and ((.decided_at | type) == "string" or .decided_at == null)' || { wa_notu; return; } ;;
     none) wa_jq '.row_ok == null and .decided_at == null' || { wa_notu; return; } ;;
     *) wa_notu; return ;; # mut:body-status
   esac
   case "$st" in
     accepted)
-      d="$(jq -r '.decided_at' "$BC_BODY" </dev/null 2>/dev/null)"
-      [[ "$d" =~ $WA_TS_RE ]] || { wa_notu; return; }
-      GRES=TRUE; GWHY=""; GNOTE="decided ${BASH_REMATCH[1]}" ;;
-    declined) GRES=PERSON; GWHY="declined; a revised text with a new hash is needed" ;; # mut:st-declined
-    changes_requested) GRES=PERSON; GWHY="changes requested; read the note per $WA_RUNBOOK" ;; # mut:st-changes
+      d="$(jq -r '.decided_at[0:10]' "$BC_BODY" </dev/null 2>/dev/null)"
+      [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { wa_notu; return; }
+      GRES=TRUE; GWHY=""; GNOTE="decided $d" ;;
+    declined) GRES=PERSON; GWHY="declined; a revised text is needed" ;; # mut:st-declined
+    changes_requested) GRES=PERSON; GWHY=""; GLINE="Needs you: the founder asked for changes. Read the note yourself, not in an agent session: $WA_RUNBOOK" ;; # mut:st-changes
     none) GRES=FALSE; GWHY="no decision recorded for this text version" ;; # mut:st-none
-    invalid) GRES=UNEVAL; GWHY="the record failed its check" ;; # mut:st-invalid
+    invalid) GRES=UNEVAL; GWHY="the saved decision looks damaged" ;; # mut:st-invalid
   esac
 }
 
 eval_gate() { # <gate text after `Gate:`> -> GRES (TRUE|FALSE|PERSON|UNEVAL), GWHY, GNOTE
   local text="$1" kind rest
-  GRES=UNEVAL; GWHY="I do not know this kind of condition, so it stays on hold"; GNOTE=""
+  GRES=UNEVAL; GWHY="I do not know this kind of condition, so it stays on hold"; GNOTE=""; GLINE=""
   kind="${text%%[[:space:]]*}"; rest="$(trim "${text#"$kind"}")"
   known_kind "$kind" || { GRES=UNEVAL; return; } # mut:unknown-kind
   case "$kind" in
     pr-merged) gate_pr_merged "$rest" ;;
     no-inflight-run) gate_no_inflight "$rest" ;;
-    web-acceptance) gate_web_acceptance "$rest" ;; # mut:wa-case
+    web-acceptance)
+      # CTO ruling D1: an envelope backs a production step; a founder's recorded decision on a legal text cannot
+      if [ "$MODE" = file ]; then GRES=UNEVAL; GWHY="a recorded decision on a legal text cannot back a production step"; return; fi # mut:wa-file
+      gate_web_acceptance "$rest" ;; # mut:wa-case
   esac
 }
 
@@ -290,7 +323,7 @@ NORM_AWK='
     while (match(s, /^([ \t]+|[>*+_-]+|[0-9]+[.)]([ \t]|$))/)) s = substr(s, RLENGTH + 1)
     return s
   }
-  function val(s) { s = substr(s, index(s, ":") + 1); sub(/^[*_ \t]+/, "", s); return trim(s) }
+  function val(s) { s = substr(s, index(s, ":") + 1); gsub(/\t/, " ", s); sub(/^[*_ \t]+/, "", s); return trim(s) } # mut:tab-val
 '
 
 # marker_count <file>: prints how many unfenced `Hold:` or `Gate:` marker lines the file has.
@@ -474,7 +507,7 @@ if [ "$MODE" = plan ]; then
   [ "$(marker_count "$SRC")" -eq "$PARSED" ] || { echo "I found a hold that is not inside a hold section I can read, so I am treating every hold as still on hold."; echo "holds: $NH discharged: 0 standing: $NH"; exit 2; } # mut:stray-all
   [ "$ND" -eq 1 ] || [ "$NODELEG" -eq 1 ] || stall_unchecked "More than one standing approval is named, so I am treating every hold as still on hold." "the standing approval is not clear" # mut:deleg-multi
   [ "$CNT" -eq 1 ] || stall_unchecked "The plan has more than one hold section, so I am treating every hold as still on hold." "the plan is not clear"
-  [ "$NE" -eq 1 ] || [ "$NODELEG" -eq 1 ] || stall_unchecked "The standing approval does not name exactly one runbook it covers, so I am treating every hold as still on hold." "the standing approval is incomplete" # mut:envelope-req
+  [ "$NE" -eq 1 ] || [ "$NODELEG" -eq 1 ] || stall_unchecked "The standing approval does not name exactly one written procedure it covers, so I am treating every hold as still on hold." "the standing approval is incomplete" # mut:envelope-req
   need_tools
   if grep -q '^ORPHAN' "$WORK/items"; then echo "A condition is written outside any hold, so I am treating every hold as still on hold."; echo "holds: $NH discharged: 0 standing: $NH"; exit 2; fi
   [ "$NH" -gt 0 ] || { echo "I found a hold section but could not read any hold in it, so I am treating it as still on hold."; exit 2; } # mut:zero-holds
@@ -511,15 +544,17 @@ while IFS=$'\t' read -r _ i text; do
   if reserved_hold "$text"; then print_result_line RESERVED "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue; fi # mut:reserved
   awk -F'\t' -v i="$i" '$1 == "GATE" && $2 == i { print $3 }' "$WORK/items" > "$WORK/g.$i"
   ng="$(wc -l < "$WORK/g.$i" | tr -d ' ')"
-  HV=OK; WHY=""; GTXT=""; GNOTES=""
+  HV=OK; WHY=""; GTXT=""; GNOTES=""; HLINE=""
+  WA_HOLD_TEXT="$text"
   [ "$ng" -gt 0 ] || HV=NEEDS # mut:zero-gates
   while IFS= read -r gate; do
     eval_gate "$gate"
     GTXT="${GTXT:+$GTXT; }$gate"
     [ -z "$GNOTE" ] || GNOTES="${GNOTES:+$GNOTES; }$GNOTE"
-    case "$GRES" in TRUE) ;; FALSE) [ "$HV" = OK ] && { HV=WAIT; WHY="$GWHY"; } ;; PERSON) [ "$HV" = OK ] && { HV=NEEDS; WHY="$GWHY"; } ;; *) HV=UNEVAL; WHY="$GWHY"; ANY_UNEVAL=1 ;; esac # mut:all-gates
+    case "$GRES" in TRUE) ;; FALSE) [ "$HV" = OK ] && { HV=WAIT; WHY="$GWHY"; } ;; PERSON) [ "$HV" = OK ] && { HV=NEEDS; WHY="$GWHY"; HLINE="$GLINE"; } ;; *) HV=UNEVAL; WHY="$GWHY"; HLINE=""; ANY_UNEVAL=1 ;; esac # mut:all-gates
   done < "$WORK/g.$i"
   print_result_line "$HV" "$text" "$WHY" "$GTXT" "$GNOTES"
+  [ "$HV" != NEEDS ] || [ -z "$HLINE" ] || printf '%s\n' "$HLINE"
   if [ "$HV" = OK ]; then DISCHARGED=$((DISCHARGED + 1)); else STANDING=$((STANDING + 1)); fi
 done < <(grep '^HOLD' "$WORK/items")
 

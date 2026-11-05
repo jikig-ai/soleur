@@ -9,7 +9,7 @@
 # (a mismatch answers 401), and records argv and the TLS-related environment it saw. No network, no real secret store:
 # the PATH is a hermetic directory of symlinks that holds NEITHER a real curl NOR a real doppler.
 #
-# PROPERTY UNDER TEST: the token is read with a fixed project and config, passes a shape guard, reaches curl only through
+# PROPERTY UNDER TEST: the token is read with a fixed project and config, passes a shape guard (48 to 256 characters, CTO ruling D3), reaches curl only through
 # a 0600 config file (never argv, never output), curl is hardened (no rc file, no proxy, https only, no redirect, bounded
 # time and size, no retry, TLS environment variables hidden), the helper refuses to run under xtrace, and every failure
 # is a distinct non-zero return that never prints the token.
@@ -63,7 +63,7 @@ cat > "$BIN/curl" <<'STUB'
 #!/usr/bin/env bash
 d="${STUB_DIR:?}"
 { printf 'curl'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$d/curl-argv.log"
-tls="${SSLKEYLOGFILE+x}${CURL_CA_BUNDLE+x}${SSL_CERT_FILE+x}${SSL_CERT_DIR+x}${CURL_HOME+x}${HOSTALIASES+x}${LOCALDOMAIN+x}${RES_OPTIONS+x}"
+tls="${SSLKEYLOGFILE+x}${CURL_CA_BUNDLE+x}${SSL_CERT_FILE+x}${SSL_CERT_DIR+x}${CURL_HOME+x}${HOSTALIASES+x}${LOCALDOMAIN+x}${RES_OPTIONS+x}${OPENSSL_CONF+x}${OPENSSL_MODULES+x}${LD_PRELOAD+x}${LD_AUDIT+x}${LD_LIBRARY_PATH+x}"
 echo "tls=$tls" >> "$d/curl-env.log"
 if [ -f "$d/eat-stdin" ]; then n="$(cat | wc -c | tr -d ' ')"; echo "$n" >> "$d/stdin-bytes"; fi
 miss() { echo "STUB-MISS $*" >> "$d/curl-argv.log"; echo "curl stub: unsupported argv: $1" >&2; exit 64; }
@@ -102,8 +102,17 @@ drive() {
   DRC=$?
 }
 outs() { cat "$TMP/drv.out" "$TMP/drv.err" 2>/dev/null; }
-no_token_anywhere() { ! { outs; cat "$STUB_DIR"/curl-argv.log "$STUB_DIR"/curl-url.log "$STUB_DIR"/doppler-argv.log 2>/dev/null; } | grep -qF -- "$TOKEN"; }
+# the group ends in `|| true`: under pipefail a log that does not exist (curl never ran) would otherwise make the whole pipeline "fail" and the leak check "pass"
+no_token_anywhere() { ! { outs; cat "$STUB_DIR"/curl-argv.log "$STUB_DIR"/curl-url.log "$STUB_DIR"/doppler-argv.log 2>/dev/null || true; } | grep -qF -- "$TOKEN"; }
 have() { [[ -s "$STUB_DIR/$1" ]]; }
+# T2: the leak detector is under a control. A token placed in each place it reads MUST be flagged, or every "the token is in no output" row proves nothing.
+mkdir -p "$TMP/ctl-leak"
+for leak in drv.out drv.err curl-argv.log curl-url.log doppler-argv.log; do
+  ( STUB_DIR="$TMP/ctl-leak"; TMP="$TMP/ctl-leak"; rm -f "$TMP"/* ; : > "$TMP/drv.out"; : > "$TMP/drv.err"; no_token_anywhere ) \
+    || { printf 'FATAL: no_token_anywhere flags a clean run\n' >&2; exit 2; }
+  ( STUB_DIR="$TMP/ctl-leak"; TMP="$TMP/ctl-leak"; rm -f "$TMP"/* ; : > "$TMP/drv.out"; : > "$TMP/drv.err"; printf 'x %s y\n' "$TOKEN" > "$TMP/$leak"; ! no_token_anywhere ) \
+    || { printf 'FATAL: no_token_anywhere cannot see a token in %s\n' "$leak" >&2; exit 2; }
+done
 calls_of() { { cat "$STUB_DIR/$1" 2>/dev/null || true; } | grep -c -e "$2" || true; }
 
 ( DRV_PATH="$BIN"; assert_fixture_dir "$TMP"; ( cd "$TMP" && env -i PATH="$BIN" STUB_DIR="$TMP" "$BASH_BIN" -c 'doppler bogus' ) >/dev/null 2>&1; [[ $? -eq 64 ]] ) \
@@ -126,7 +135,7 @@ assert_eq "1" "$(calls_of doppler-argv.log '^doppler secrets get LEGAL_ACCEPTANC
 assert_eq "0" "$(calls_of doppler-argv.log 'STUB-MISS')" "C6: no doppler stub miss"
 assert_eq "0" "$(calls_of curl-argv.log 'STUB-MISS')" "C7: no curl stub miss"
 assert_eq "1" "$(calls_of curl-env.log 'cfg-mode-600')" "C8: the config file was mode 0600 when curl read it"
-assert_eq "0" "$(ls "$STUB_DIR" | grep -c '^bc\.cfg$')" "C9: the config file (which holds the token) is removed after the call"
+assert_eq "0" "$([[ -e "$STUB_DIR/bc.cfg" ]] && echo 1 || echo 0)" "C9: the config file (which holds the token) is removed after the call"
 
 echo "=== Arm 1: the token read ==="
 scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"; [ -n "$BC_TOKEN" ] && echo set'
@@ -161,8 +170,15 @@ scn; printf 'abc\ndef\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read
 assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "S2: a two-line token is refused"
 scn; printf '%0600d\n' 0 > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "S3: an over-long token is refused"
-scn; printf 'Ab9._~+/=-xyz\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
+scn; printf 'Ab9._~+/=-xyzAb9._~+/=-xyzAb9._~+/=-xyzAb9._~+/=-xyz\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=0$' "$TMP/drv.out")" "S4: every allowed character is accepted"
+echo "--- the length bounds are 48 to 256 (CTO ruling D3): both edges, one step either side ---"
+for n in 1 32 47 48 49 255 256 257 512 513; do
+  scn; printf '%*s\n' "$n" '' | tr ' ' 'a' > "$STUB_DIR/doppler-token"
+  drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
+  if [[ "$n" -ge 48 && "$n" -le 256 ]]; then want=0; else want=1; fi
+  assert_eq "1" "$(grep -c "^rc=$want\$" "$TMP/drv.out")" "S6: a token of $n characters is $([[ $want = 0 ]] && echo accepted || echo refused)"
+done
 scn; printf 'bad"tok\n' > "$STUB_DIR/doppler-token"
 drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$?"'
 assert_eq "0" "$(calls_of curl-argv.log 'curl')" "S5: a refused token means zero curl calls"
@@ -195,16 +211,24 @@ for st in 200 401 404 503 307 500; do
   scn; echo "$st" > "$STUB_DIR/curl-status"
   drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$? status=$BC_STATUS"'
   assert_eq "1" "$(grep -c "^rc=0 status=$st\$" "$TMP/drv.out")" "R4: HTTP $st is returned as a status, the call itself succeeded"
+  no_token_anywhere && { echo "  PASS: R4b: HTTP $st: the token is in no output and no log"; PASS=$((PASS + 1)); } || { echo "  FAIL: R4b: HTTP $st: the token leaked"; FAIL=$((FAIL + 1)); }
 done
 for crc in 28 6 7 63 35; do
   scn; echo "$crc" > "$STUB_DIR/curl-rc"
   drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$? status=$BC_STATUS curlrc=$BC_RC"'
   assert_eq "1" "$(grep -c "^rc=1 status=000 curlrc=$crc\$" "$TMP/drv.out")" "R5: curl exit $crc is a failed call with status 000"
+  no_token_anywhere && { echo "  PASS: R5b: curl exit $crc: the token is in no output and no log"; PASS=$((PASS + 1)); } || { echo "  FAIL: R5b: curl exit $crc: the token leaked"; FAIL=$((FAIL + 1)); }
 done
-scn; printf '%s\n' "OTHERtoken0123456789012345678901234567890123" > "$STUB_DIR/doppler-token"
+scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"'
+assert_eq "0" "$(wc -c < "$TMP/drv.out" | tr -d ' ')" "R5c: bc_get prints nothing on stdout (the helper's functions are silent)"
+assert_eq "0" "$(wc -c < "$TMP/drv.err" | tr -d ' ')" "R5d: and nothing on stderr"
+scn; echo 28 > "$STUB_DIR/curl-rc"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"'
+assert_eq "0" "$(wc -c < "$TMP/drv.out" | tr -d ' ')" "R5e: a failed bc_get prints nothing on stdout either"
+assert_eq "0" "$(wc -c < "$TMP/drv.err" | tr -d ' ')" "R5f: and nothing on stderr"
+scn; printf '%s\n' "OTHERtoken0123456789012345678901234567890123456789" > "$STUB_DIR/doppler-token"
 drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$? status=$BC_STATUS"'
 assert_eq "1" "$(grep -c '^rc=0 status=200$' "$TMP/drv.out")" "R6: instrument: the stub accepts the config it was meant to receive"
-scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; printf "%s\n" "DIFFERENTtoken012345678901234567890123456789" > "$STUB_DIR/doppler-token"; bc_get "$STUB_DIR" "'"$URL1"'"; echo "status=$BC_STATUS"'
+scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; printf "%s\n" "DIFFERENTtoken0123456789012345678901234567890123456789" > "$STUB_DIR/doppler-token"; bc_get "$STUB_DIR" "'"$URL1"'"; echo "status=$BC_STATUS"'
 assert_eq "1" "$(grep -c '^status=401$' "$TMP/drv.out")" "R7: instrument: the stub can tell a config carrying the wrong bearer (401)"
 scn; : > "$STUB_DIR/eat-stdin"; drive "$LIB_REAL" 'echo not-for-curl | { bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; }; echo done'
 assert_eq "0" "$(grep -vcx 0 "$STUB_DIR/stdin-bytes")" "R8: neither doppler nor curl saw the caller's stdin"
@@ -213,9 +237,8 @@ assert_eq "2" "$(wc -l < "$STUB_DIR/stdin-bytes" | tr -d ' ')" "R8b: and both we
 echo "=== Arm 5: the curl argv is exactly the hardened shape; no token on it ==="
 scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"'
 a="$(head -1 "$STUB_DIR/curl-argv.log")"
-for flag in '[--disable] [--noproxy] [*] [--proto] [=https] [--max-redirs] [0] [--connect-timeout] [5] [--max-time] [15] [--max-filesize] [4096]'; do
-  assert_eq "1" "$(printf '%s\n' "$a" | grep -cF -- "curl $flag [-sS] [-o] ")" "A1: the flags are the hardened shape, in order, --disable first"
-done
+flags='[--disable] [--noproxy] [*] [--proto] [=https] [--max-redirs] [0] [--connect-timeout] [5] [--max-time] [15] [--max-filesize] [4096]'
+assert_eq "1" "$(printf '%s\n' "$a" | grep -cF -- "curl $flags [-sS] [-o] ")" "A1: the flags are the hardened shape, in order, --disable first"
 assert_eq "0" "$(printf '%s\n' "$a" | grep -c -e '-L\]\|--location\|--retry\|--insecure\|\[-k\]\|-H\]\|--header\|Authorization\|--data\|-d\]\|-X\]')" "A2: no redirect-following, retry, TLS bypass, header or body flag on argv"
 assert_eq "0" "$(printf '%s\n' "$a" | grep -cF -- "$TOKEN")" "A3: the token is not on argv"
 assert_eq "1" "$(printf '%s\n' "$a" | grep -c '\[--config\] \[[^]]*bc.cfg\] \[https://')" "A4: the bearer reaches curl through a config file"
@@ -223,6 +246,11 @@ assert_eq "1" "$(printf '%s\n' "$a" | grep -c '^curl \[--disable\]')" "A5: --dis
 scn; DRV_ENV="SSLKEYLOGFILE=/x CURL_CA_BUNDLE=/x SSL_CERT_FILE=/x SSL_CERT_DIR=/x CURL_HOME=/x HOSTALIASES=/x LOCALDOMAIN=x RES_OPTIONS=x" drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=0$' "$TMP/drv.out")" "E0: the call works with the hostile environment set"
 assert_eq "1" "$(grep -c '^tls=$' "$STUB_DIR/curl-env.log")" "E1: curl saw none of the TLS and resolver variables"
+for hv in OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH; do
+  scn; DRV_ENV="$hv=/nonexistent/x" drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$?"'
+  assert_eq "1" "$(grep -c '^rc=0$' "$TMP/drv.out")" "E3: the call works with $hv set"
+  assert_eq "1" "$(grep -c '^tls=$' "$STUB_DIR/curl-env.log")" "E3b: curl saw no $hv"
+done
 scn; DRV_ENV="SSLKEYLOGFILE=/x" drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "caller-still-has=${SSLKEYLOGFILE-unset}"'
 assert_eq "1" "$(grep -c '^caller-still-has=/x$' "$TMP/drv.out")" "E2: the caller's own environment is not mutated (the variables are hidden from curl only)"
 
@@ -245,6 +273,8 @@ kill_mut() {
   else echo "  FAIL: mutant $name SURVIVED ('$got')"; FAIL=$((FAIL + 1)); fi
 }
 S_ok() { scn; }
+S_short() { scn; printf '%47s\n' '' | tr ' ' 'a' > "$STUB_DIR/doppler-token"; }
+S_long() { scn; printf '%257s\n' '' | tr ' ' 'a' > "$STUB_DIR/doppler-token"; }
 S_bad() { scn; printf 'bad"tok\n' > "$STUB_DIR/doppler-token"; }
 Q_get='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$? status=$BC_STATUS"'
 Q_read='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
@@ -271,6 +301,11 @@ mlib xtrace-source 's/^(.*)# mut:xtrace-source$/ : # mut:xtrace-source/' && {
 mlib xtrace-read 's/^(.*)# mut:xtrace-read$/ : # mut:xtrace-read/' && kill_mut xtrace-read S_ok "$Q_xt" "rc=1 "
 S_tls() { scn; DRV_ENV="SSLKEYLOGFILE=/x CURL_CA_BUNDLE=/x SSL_CERT_FILE=/x"; }
 mlib tls-env 's/-u SSLKEYLOGFILE /-u SSLKEYLOGFILE_X /' && kill_mut tls-env S_tls "$Q_get" "rc=0 status=200 "
+for hv in OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH; do
+  mlib "env-$hv" "s/ -u $hv / /" && eval "S_env_$hv() { scn; DRV_ENV=\"$hv=/nonexistent/x\"; }" && kill_mut "env-$hv" "S_env_$hv" "$Q_get" "rc=0 status=200 "
+done
+mlib shape-min 's/\[ "\$\{#1\}" -ge 48 \] \|\| return 1/ : /' && kill_mut shape-min S_short "$Q_read" "rc=1 "
+mlib shape-max 's/\[ "\$\{#1\}" -le 256 \] \|\| return 1/ : /' && kill_mut shape-max S_long "$Q_read" "rc=1 "
 mlib argv-token 's/--config "\$cfg"/-H "Authorization: Bearer $BC_TOKEN"/' && kill_mut argv-token S_ok "$Q_get" "rc=0 status=200 "
 
-print_results 97
+print_results 145
