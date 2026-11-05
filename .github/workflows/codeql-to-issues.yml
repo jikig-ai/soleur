@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Evaluate and report, but file no issue (still exits 1 on a qualifying alert)."
+        description: "Evaluate and report, but file no issue (still exits 1 on a qualifying alert); the orphan reaper is skipped too."
         required: false
         type: boolean
         default: false
@@ -56,9 +56,16 @@ jobs:
   close-orphans:
     # Auto-close open type/security issues whose referenced CodeQL alerts have
     # all been dismissed or fixed (GitHub marks a remediated alert `fixed`, not
-    # `dismissed` — #12066). See knowledge-base/project/learnings/best-practices/
+    # `dismissed` — #12066). `fixed` is machine-derived, not a human decision: an
+    # analysis-scope change can flip an alert to `fixed` without a remediation, and
+    # the reaper inherits that blind spot (`keep-open` + reversible close mitigate).
+    # See knowledge-base/project/learnings/best-practices/
     # 2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md for context.
     needs: check-alerts
+    # A dry_run dispatch is the zero-write verification path (ruling on #12004,
+    # amended 2026-11-04): the reaper's issue closes are real writes, so it is
+    # gated on the typed inputs context — schedule evaluates null != true -> runs.
+    if: inputs.dry_run != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -132,7 +139,7 @@ jobs:
               continue
             fi
 
-            ALL_DISMISSED=1
+            ALL_RESOLVED=1
             REASONS=""
             for AN in $ALERTS; do
               # Per AGENTS.md cq-ci-steps-polling-json-endpoints-under: query
@@ -142,17 +149,17 @@ jobs:
               if [ -z "$STATE" ]; then
                 # Alert lookup failed — could be deleted, rate-limited, or
                 # the number was a false match. Skip without closing.
-                ALL_DISMISSED=0
+                ALL_RESOLVED=0
                 break
               fi
               if [ "$STATE" != "dismissed" ] && [ "$STATE" != "fixed" ]; then
-                ALL_DISMISSED=0
+                ALL_RESOLVED=0
                 break
               fi
               REASONS="${REASONS}- alert #${AN}: ${STATE}"$'\n'
             done
 
-            if [ "$ALL_DISMISSED" -eq 1 ]; then
+            if [ "$ALL_RESOLVED" -eq 1 ]; then
               { printf 'All referenced CodeQL alerts are now dismissed or fixed.\n\n'; \
                 printf '%s\n' "$REASONS"; \
                 printf 'Closing as resolved: every referenced alert is dismissed or fixed. Reopen with the `keep-open` label if this issue tracks something other than the alert state.\n'; \

@@ -22,7 +22,8 @@ mutate "row12b: degraded issue never deduplicated" 's/select\(\.title == \$t\)\]
 mutate "row12c: wrong degraded label" 's/priority\/p2-medium/priority\/p3-low/'
 mutate "row14: tracker list not bot-scoped" 's/--author app\/github-actions //'
 mutate "row15: sha not validated" 's/^[[:space:]]*\[\[ "\$SHA" =~ [^|]*\|\| reject_input .*$/  true/'
-GATE_MUT_ONLY=sw1,sw2 mutate "sw: mode guard dropped — sweep still runs the push phases" 's/if \[\[ "\$SWEEP" == "true" \]\]; then/if [[ "$SWEEP" == "never" ]]; then/'
+GATE_MUT_ONLY=sw1,sw2 mutate "sw: mode guard dropped — lands on all four SWEEP==true sites (title + both body branches + mode branch)" 's/if \[\[ "\$SWEEP" == "true" \]\]; then/if [[ "$SWEEP" == "never" ]]; then/'
+GATE_MUT_ONLY=sw3 mutate "sw: degraded body not mode-aware (sweep body reads as a push failure)" 's/The scheduled CodeQL alert sweep could not reach a verdict/The CodeQL alert gate could not reach a verdict for a push to main/'
 GATE_MUT_ONLY=sw3b mutate "sw: resolved sha never re-validated" 's/ \|\| degrade "api-error" "main HEAD resolution returned no 40-hex sha"//'
 GATE_MUT_ONLY=sw3 mutate "sw: degraded title not mode-aware" "s/DEGRADED_TITLE='codeql-sweep-degraded'/DEGRADED_TITLE='codeql-gate-degraded'/"
 GATE_MUT_ONLY=sw1,sw6 mutate "sw: SHA still unconditionally required" 's/if \[\[ "\$SWEEP" != "true" \|\| -n "\$SHA" \]\]; then/if [[ true ]]; then/'

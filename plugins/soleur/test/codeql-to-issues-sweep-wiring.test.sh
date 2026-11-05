@@ -26,7 +26,7 @@ WF="$ROOT/.github/workflows/codeql-to-issues.yml"
 FACTS="$SCRIPT_DIR/fixtures/codeql-to-issues-sweep-wiring/sweep_facts.py"
 
 # The EXACT assertion count of a green run (re-derive it from a green run, never from arithmetic; -ne, not -lt).
-FLOOR=61
+FLOOR=70
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -117,7 +117,7 @@ check_wf() { # <workflow> <out>
   _a B09 "the sweep step has no || ; & | or newline that could swallow the exit status" \
     '[.check_alerts.steps[] | select(.run != null) | .run | gsub("\\n$"; "") | select(test("\\|\\||;|&|\\||\\n"))] | length == 0'
   _a B10 "the sweep step follows a pinned-SHA checkout with persist-credentials false and a sparse checkout of the script" \
-    '.gate_step_index == 1 and (.check_alerts.steps[0].uses | test("^actions/checkout@[0-9a-f]{40}$")) and (.check_alerts.steps[0].with["persist-credentials"] == false) and ((.check_alerts.steps[0].with["sparse-checkout"] | tostring) | contains("scripts/codeql-main-alert-gate.sh"))'
+    '.gate_step_index == 1 and (.check_alerts.steps[0].uses | test("^actions/checkout@[0-9a-f]{40}$")) and (.check_alerts.steps[0].with["persist-credentials"] == false) and ((.check_alerts.steps[0].with["sparse-checkout"] | tostring) | contains("scripts/codeql-main-alert-gate.sh")) and (.check_alerts.steps[0].with["sparse-checkout-cone-mode"] == false)'
   _a B11 "the sweep step env is EXACTLY GH_TOKEN, GH_REPO, SWEEP, DRY_RUN, GITHUB_RUN_ID, DEADLINE_SECONDS" \
     '.gate_env_keys == ["DEADLINE_SECONDS","DRY_RUN","GH_REPO","GH_TOKEN","GITHUB_RUN_ID","SWEEP"]'
   _a B12 "SWEEP is the literal true in every event" '[.evals[] | .SWEEP] | all(. == "true")'
@@ -149,11 +149,13 @@ check_wf() { # <workflow> <out>
     '.workflow_env == null and .check_alerts.env == null and ([.env_sites[] | select(.site != "step:1")] | length) == 0'
   _a B27 "every check-alerts step carries only name/uses/with/run/env keys" \
     '.check_alerts.steps | length >= 1 and all(((.keys - ["name","uses","with","run","env"]) | length) == 0)'
+  _a B28 "the reaper is gated on inputs.dry_run — skipped only on a dry_run dispatch" \
+    '.close_orphans_if.schedule == true and .close_orphans_if.dispatch_default == true and .close_orphans_if.dispatch_dry == false'
 
   return "$(grep -c '^FAIL' "$CHECK_OUT")"
 }
 
-CHECKS_PER_RUN=27
+CHECKS_PER_RUN=28
 
 # ---------------------------------------------------------------------------------------------
 # Pristine workflow: every assertion must pass, and the engine must have run all of them.
@@ -208,6 +210,12 @@ mutate_wf "workflow-level env sets DEADLINE_SECONDS" B26 's/^(permissions:)$/env
 mutate_wf "DRY_RUN pinned to true (every scheduled run is a dry run)" B14 "s/\&\& 'true' \|\| 'false' \}\}/\&\& 'true' || 'true' }}/"
 mutate_wf "reaper predicate widened to a third state" B20 's/\[ "\$STATE" != "fixed" \]/[ "$STATE" != "open" ]/'
 mutate_wf "lookup-failure branch flipped to close" B23 's/if \[ -z "\$STATE" \]/if [ -n "$STATE" ]/'
+mutate_wf "workflow_dispatch trigger renamed (dry_run input unreachable)" B02 's/^  workflow_dispatch:/  workflow_dispatchx:/'
+mutate_wf "a third step in check-alerts" B06 "s/^(        run: ${G})\$/\\1\\n      - run: echo extra/"
+mutate_wf "the reaper reason hardcodes the state" B22 's/- alert #\$\{AN\}: \$\{STATE\}/- alert #${AN}: fixed/'
+mutate_wf "a GitHub expression smuggled into the reaper run text" B24 's/keep-open/${{ github.sha }}/'
+mutate_wf "sparse-checkout-cone-mode removed" B10 '/^          sparse-checkout-cone-mode:/d'
+mutate_wf "the dry_run reaper gate removed" B28 '/^    if: inputs.dry_run != true$/d'
 
 # Guard 2 row 7: a facts helper neutered to always report parse_ok must red the suite — a green
 # with no parse is vacuous.
@@ -252,6 +260,33 @@ printf 'name: x\njobs: {}\n' >"$ec/empty.yml"
 rc=0; check_wf "$ec/empty.yml" "$ec/empty.out" || rc=$?
 [[ "$rc" -ge 10 ]] && pass "a workflow with no jobs fails many assertions ($rc)" || fail "a workflow with no jobs fails many assertions (got $rc)"
 eq "the engine still ran every assertion against the empty workflow" "$CHECK_N" "$CHECKS_PER_RUN"
+
+# ---------------------------------------------------------------------------------------------
+# Evaluator parity: sweep_facts.py's expression evaluator is a verbatim copy of wiring_facts.py's
+# (self-contained fixtures can't import a shared module). The copy that RUNS must equal the copy
+# that was reviewed — a normalized logic-parity guard, not a presence grep.
+# ---------------------------------------------------------------------------------------------
+echo "== evaluator parity: the two *_facts.py evaluator copies stay identical =="
+WIRING_FACTS="$SCRIPT_DIR/fixtures/codeql-main-alert-gate-workflow-wiring/wiring_facts.py"
+eval_blocks() { # <facts.py>: the evaluator's nine top-level units, one __block__ marker each
+  python3 - "$1" <<'PY'
+import ast, sys
+src = open(sys.argv[1]).read()
+names = {"ExprError", "TOKEN", "tokenize", "truthy", "to_num", "loose_eq", "Parser", "EXPR", "evaluate"}
+out = []
+for node in ast.parse(src).body:
+    nm = getattr(node, "name", None)
+    if nm in names or (isinstance(node, ast.Assign) and any(getattr(t, "id", None) in names for t in node.targets)):
+        seg = ast.get_source_segment(src, node)
+        if seg:
+            out.append("__block__\n" + seg.rstrip())
+print("\n".join(out))
+PY
+}
+eq "the parity extractor covers all nine evaluator units in both facts helpers" \
+  "$( { eval_blocks "$FACTS"; eval_blocks "$WIRING_FACTS"; } | grep -c '__block__' )" "18"
+eq "the sweep evaluator is verbatim the wiring evaluator" \
+  "$(diff <(eval_blocks "$FACTS") <(eval_blocks "$WIRING_FACTS") >/dev/null; echo $?)" "0"
 
 # ---------------------------------------------------------------------------------------------
 # Verdict. The floor is reported with printf + exit, outside the pass/fail helpers.

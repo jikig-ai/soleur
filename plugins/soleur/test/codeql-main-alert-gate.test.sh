@@ -45,9 +45,9 @@ SELF="$SCRIPT_DIR/codeql-main-alert-gate.test.sh"
 
 # The EXACT assertion count of a green run (-ne, not -lt; re-derive it from a green run). Reported by printf + exit at the bottom, NOT through pass/fail, so a
 # harness that stops counting cannot report its own shortfall as green.
-FLOOR=406
+FLOOR=414
 # Exact number of SUT mutants in fixtures/mutants.sh (GATE_MUTANTS=1 adds one assertion per mutant).
-MUTANT_FLOOR=55
+MUTANT_FLOOR=56
 
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); echo "  PASS: $1"; }
@@ -194,6 +194,7 @@ if want c0; then
   t "c0 read the analyses scoped to main, newest first, one page of 100" grep -qF "code-scanning/analyses?ref=refs/heads/main&sort=created&direction=desc&per_page=100" "$ST/calls.log"
   eq "c0 read the analyses exactly twice (count then stable count), never the whole history" "$(count_calls 'code-scanning/analyses')" "2"
   tn "c0 never paginated the analyses history" grep -qE 'gh api --paginate .*code-scanning/analyses' "$ST/calls.log"
+  eq "c0 never read commits/main (push mode never resolves)" "$(count_calls 'commits/main')" "0"
   tn "c0 never used gh search" grep -qE '^gh search' "$ST/calls.log"
 fi
 
@@ -776,7 +777,7 @@ if want sw1; then
   eq "sw1 zero analyses calls" "$(count_calls 'code-scanning/analyses')" "0"
   eq "sw1 alerts read still ran (phase 3 shared)" "$(count_calls 'code-scanning/alerts')" "1"
   eq "sw1 files nothing" "$(ncreate)" "0"
-  t "sw1 output names the resolved sweep commit" out_has "sweep mode: evaluating main HEAD ${GOOD_SHA}"
+  t "sw1 output names the resolved sweep commit" out_has "sweep mode: resolved main HEAD ${GOOD_SHA}"
 fi
 
 if want sw2; then
@@ -805,6 +806,9 @@ if want sw3; then
   eq "sw3 the degraded title is trigger-scoped (codeql-sweep-degraded)" "$(latest_title)" "codeql-sweep-degraded"
   eq "sw3 degraded labels" "$(latest_labels)" "$LBL_P2"
   t "sw3 degraded annotation is api-error" out_has "degraded (api-error)"
+  t "sw3 degraded body names the scheduled sweep" body_has "scheduled CodeQL alert sweep"
+  t "sw3 degraded body names the push gate as the backstop" body_has "push-time CodeQL alert gate remains the backstop"
+  t "sw3 degraded body records the unresolvable commit" body_has "Commit: unresolved"
 fi
 
 if want sw3b; then
@@ -821,13 +825,15 @@ if want sw4; then
   eq "sw4 exit 1" "$GATE_RC" "1"
   eq "sw4 creates no second degraded issue" "$(ncreate)" "0"
   eq "sw4 comments on the existing codeql-sweep-degraded issue" "$(ncomment)" "1"
+  eq "sw4 the comment lands on issue 9107, not some other number" "$(count_calls 'ISSUE-COMMENT 9107')" "1"
 fi
 
 if want sw5; then
   echo "== sw5: input validation — SWEEP must be true or false, before any gh call =="
   i=0
-  # SWEEP= is not a bad input: an empty env var reads as unset (default false), like DRY_RUN's own contract.
-  for bi in "SWEEP=garbage" "SWEEP=yes" "SWEEP=TRUE"; do
+  # SWEEP= (explicitly empty) IS a bad input: both booleans share one true|false contract —
+  # `${SWEEP-false}` without the colon keeps the empty value for the validator, like DRY_RUN's own contract.
+  for bi in "SWEEP=garbage" "SWEEP=yes" "SWEEP=TRUE" "SWEEP="; do
     i=$((i + 1)); mk_case "sw5-$i"; run_gate "$bi"
     eq "sw5.$i $bi rejected (exit 2)" "$GATE_RC" "2"
     if [[ ! -s "$ST/calls.log" ]]; then pass "sw5.$i $bi rejected before any gh call"; else fail "sw5.$i $bi rejected before any gh call"; fi
@@ -843,6 +849,7 @@ if want sw6; then
   eq "sw6b SWEEP=true + valid provided SHA runs (no resolution call needed)" "$GATE_RC" "0"
   eq "sw6b a provided SHA skips the commits/main read" "$(count_calls 'commits/main')" "0"
   eq "sw6b phases 1-2 still skipped with a provided SHA" "$(count_calls 'check-runs')" "0"
+  t "sw6b output names the provided commit, not a resolution" out_has "sweep mode: evaluating provided commit ${GOOD_SHA}"
   mk_case sw6c; run_gate SWEEP=false SHA=
   eq "sw6c SWEEP=false + empty SHA is still a rejected input (push contract unchanged)" "$GATE_RC" "2"
 fi
@@ -888,9 +895,9 @@ if want s1; then
   eq "s1 no || true anywhere in code" "$(grep -c '|| true' "$scode")" "0"
   eq "s1 no gh search" "$(grep -c 'gh search' "$scode")" "0"
   eq "s1 no GitHub expression syntax" "$(grep -c '\${{' "$scode")" "0"
-  eq "s1 every gh api call paginates except the ONE analyses page read" "$(grep 'timeout 60 gh api' "$scode" | grep -vc -- '--paginate')" "1"
+  eq "s1 every gh api call paginates except the shared fetch_page call site" "$(grep 'timeout 60 gh api' "$scode" | grep -vc -- '--paginate')" "1"
   eq "s1 the sanctioned single-page fetch_page labels are exactly analyses and main HEAD" \
-    "$(grep -oE 'fetch_page "[A-Za-z ]+"' "$scode" | sed 's/fetch_page "//;s/"$//' | sort -u | tr '\n' ' ')" \
+    "$(grep -oE 'fetch_page "[^"]+"' "$scode" | sed 's/fetch_page "//;s/"$//' | sort -u | tr '\n' ' ')" \
     "analyses main HEAD "
   tn "s1 no dismissal machinery (DISMISS_ALLOWLIST, state=dismissed) remains in code" grep -qE 'DISMISS_ALLOWLIST|state=dismissed|--search' "$scode"
   eq "s1 every gh issue list is bounded by --limit" "$(grep -c 'gh issue list' "$scode")" "$(grep -c -- '--limit 200' "$scode")"
@@ -915,7 +922,7 @@ if want s2; then
   refs=("$ROOT"/.github/workflows/*.yml "$ROOT"/.github/actions/*/action.yml "$ROOT"/.github/scripts/*.sh "$ROOT"/plugins/soleur/scripts/*.sh)
   # codeql-to-issues.yml is the SANCTIONED sweep caller (#12065: one filer, two triggers).
   others="$(grep -HnF 'codeql-main-alert-gate' "${refs[@]}" 2>/dev/null | grep -vF 'codeql-main-alert-gate.yml:' | grep -vF 'codeql-to-issues.yml:' | grep -vE ':[0-9]+:[[:space:]]*#' || true)"
-  eq "s2 no executable line outside the gate itself references it" "$others" ""
+  eq "s2 no executable line outside the gate workflow and the sanctioned sweep caller references it" "$others" ""
   keyed="$(grep -HnE '(needs|workflow_run|workflows)[^#]*codeql-main-alert-gate' "${refs[@]}" 2>/dev/null || true)"
   eq "s2 no needs/workflow_run reference to the gate" "$keyed" ""
   t "s2 the reference surfaces were actually enumerated" test "${#refs[@]}" -gt 50

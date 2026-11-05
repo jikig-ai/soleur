@@ -40,7 +40,8 @@
 #                      optional (an empty SHA is resolved to main HEAD), and a degraded run upserts
 #                      `codeql-sweep-degraded` instead of `codeql-gate-degraded`.
 #   SHA                the pushed commit, 40 lowercase hex (required in push mode; optional in sweep
-#                      mode — unset means "resolve main HEAD"; a provided SHA is still validated)
+#                      mode — unset means "resolve main HEAD"; a provided SHA is validated but
+#                      advisory: the alert read is always refs/heads/main-scoped)
 #   DRY_RUN            true|false (default false): no `gh issue create` / comment; still exits 1
 #   POLL_INTERVAL      seconds between polls (default 30)
 #   MAX_POLLS          polls of PHASE 1, the Analyze check-runs wait (default 50 = about 25 minutes at 30 seconds)
@@ -55,7 +56,9 @@
 #
 # The defaults above are production (the workflow sets none of them); the suite pins them.
 #
-# TIMING. The workflow job is killed at 40 minutes and a kill never reaches `degrade`, so the script tries to finish (and
+# TIMING. The workflow job is killed at 40 minutes (the push caller; the sweep caller codeql-to-issues.yml
+# sets DEADLINE_SECONDS=240 under a 10-minute kill — the same deadline + 300 s invariant) and a kill never
+# reaches `degrade`, so the script tries to finish (and
 # file the degraded issue) first. The deadline is a wall clock checked BETWEEN calls: before every poll of phase 1 and
 # phase 2 (a pause that would not fit is never taken) and, in phase 3, after the alerts read and before every tracking
 # issue is created (a deadline hit there degrades with `deadline-exceeded`). The poll counts alone cannot promise that: 58
@@ -73,7 +76,7 @@ set -euo pipefail
 
 GH_REPO="${GH_REPO-}"
 SHA="${SHA-}"
-SWEEP="${SWEEP:-false}"
+SWEEP="${SWEEP-false}"
 DRY_RUN="${DRY_RUN-false}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 MAX_POLLS="${MAX_POLLS:-50}"
@@ -180,7 +183,7 @@ upsert_degraded() {
       printf 'The CodeQL alert gate could not reach a verdict for a push to main.\n\n'
     fi
     printf 'Reason code: %s\n' "$code"
-    printf 'Commit: %s\n' "$SHA"
+    printf 'Commit: %s\n' "${SHA:-unresolved}"
     if [[ -n "$GITHUB_RUN_ID" ]]; then printf 'Run: %s/actions/runs/%s\n' "$REPO_URL" "$GITHUB_RUN_ID"; fi
     if [[ "$SWEEP" == "true" ]]; then
       printf '\nThe push-time CodeQL alert gate remains the backstop. Close this issue once a re-run of the sweep is green.\n'
@@ -246,8 +249,10 @@ if [[ "$SWEEP" == "true" ]]; then
     fetch_page "main HEAD" "$WORK/main-head.json" "repos/${GH_REPO}/commits/main"
     SHA="$(jq -r '.sha // empty' "$WORK/main-head.json" 2>/dev/null)" || SHA=""
     [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || degrade "api-error" "main HEAD resolution returned no 40-hex sha"
+    echo "sweep mode: resolved main HEAD ${SHA} (phases 1-2 skipped)"
+  else
+    echo "sweep mode: evaluating provided commit ${SHA} (phases 1-2 skipped)"
   fi
-  echo "sweep mode: evaluating main HEAD ${SHA} (phases 1-2 skipped)"
 else
 # ---- phase 1: wait for every Analyze (*) check-run of the commit ------------------------------
 echo "waiting for the Analyze (*) check-runs of ${SHA}"

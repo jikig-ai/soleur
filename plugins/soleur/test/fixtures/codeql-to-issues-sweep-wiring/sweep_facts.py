@@ -19,7 +19,6 @@ first assertion turns that into a RED, so an unreadable workflow can never read 
 import json
 import re
 import sys
-from pathlib import Path
 
 import yaml
 
@@ -198,6 +197,7 @@ def job_facts(job):
         "keys": sorted(job),
         "timeout": job.get("timeout-minutes"),
         "needs": needs if isinstance(needs, list) else None,
+        "if": job.get("if"),
         "env": job.get("env"),
         "permissions": job.get("permissions"),
         "steps": [
@@ -274,6 +274,19 @@ def main():
             except ExprError as exc:
                 evals[sname][var] = "<<expression error: %s>>" % exc
     facts["evals"] = evals
+    # The reaper's job-level `if` is a bare expression (no ${{ }} wrapper in YAML); wrap it so
+    # evaluate() treats it like an env expression, then score it per scenario.
+    co_if = co.get("if")
+    if isinstance(co_if, str) and co_if.strip():
+        wrapped = co_if if "${{" in co_if else "${{ %s }}" % co_if
+        facts["close_orphans_if"] = {}
+        for sname, sc in SCENARIOS.items():
+            try:
+                facts["close_orphans_if"][sname] = evaluate(wrapped, context(sc))
+            except ExprError as exc:
+                facts["close_orphans_if"][sname] = "<<expression error: %s>>" % exc
+    else:
+        facts["close_orphans_if"] = None
     facts["expected_values"] = {"repo": "example-org/example-repo", "token": "SYNTHETIC-TOKEN", "run_id": RUN_ID}
     print(json.dumps(facts))
 
