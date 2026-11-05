@@ -561,7 +561,7 @@ Before applying the routing table, detect the active harness and use the correct
 | Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
-| Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
+| Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with a profile — `subagent_explore` read-only (no exec/git/gh/webfetch), else `subagent_general` | `/soleur:go` |
 | Cursor CLI | Read the canonical file the stub names. Soleur names are `/go`, `/sync`, `/soleur-plan`, `/soleur-help`, and `/soleur-review` | Prefixed stem, for example `/soleur-engineering-cto` | `/go` |
 | OpenCode | **skill** tool with the **bare id** — `plan`, never `soleur:plan` (the id must equal its directory name) | **subagent** tool with the **path-derived id**, for example `engineering/cto` | `/go` |
 
@@ -629,7 +629,7 @@ If intent is clear, route without confirmation:
 <!-- harness-forms:start -->
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
 - **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
-- **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
+- **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with a profile (`subagent_explore` for read-only tasks needing no exec/git/gh/webfetch, else `subagent_general`) and prompt = the agent's absolute definition path + original user input.
 - **Cursor CLI:** read the canonical file the stub names. `/go` and `/sync` stay bare. Every other skill uses the prefixed form, including `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. A Cursor CLI session uses this bullet. The unknown-harness stop in Step 2.0 is not this bullet.
 - **OpenCode:** invoke via the **skill** tool with the bare skill id (`plan`, not `soleur:plan`) and args = original user input. Agents: **subagent** tool with the path id (`engineering/cto`) and prompt = original user input.
 <!-- harness-forms:end -->

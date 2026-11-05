@@ -657,9 +657,10 @@ while IFS= read -r _hit; do
     *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) _g4_stager=$((_g4_stager + 1)) ;;  # first-boot STAGER (counted: G4.j)
     *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks'*) : ;;      # stager's own check
     *'echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id'*) : ;;          # diagnostic text
-    # The dispatch's pre-write READ is the only non-device reader. The pointer has NO writer, injector or stager since #10112:
-    # a site that reappears is UNCLASSIFIED (G4.b) or a direct write (G4.g3), never silently allowlisted.
-    *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
+    # No non-device reader remains: the dispatch's pre-write READ lived in op=luks-cutover, retired in #9927 item 8. The pointer has
+    # NO writer, injector or stager since #10112: a site that reappears is UNCLASSIFIED (G4.b) or a direct write (G4.g3), never
+    # silently allowlisted, and a returning dispatch read is counted by _g4_dispatch_read below (G4.i expects none).
+    *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # a dispatch pre-write READ is back: G4.i reds
     *'doppler'*'secrets'*) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:secrets-verb-on-a-pointer-line" ;;   # never allowlisted by a text arm below
     *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
     *) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:UNCLASSIFIED" ;;
@@ -676,7 +677,7 @@ if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c 
 # line naming the pointer literal is UNCLASSIFIED (G4.b), which is what bounds a respelled writer.
 _g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler[^#]*secrets[^#]*(set|delete)[^#]*INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
 if [ -z "$_g4_any_write" ]; then ok "G4.g3 no delivered artifact writes the pointer with a direct doppler set or delete"; else no "G4.g3 a direct pointer write exists: ${_g4_any_write}"; fi
-if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
+if [ "$_g4_dispatch_read" -eq 0 ]; then ok "G4.i no dispatch reads the pointer: its only reader, op=luks-cutover, was retired (#9927 item 8)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected none; a reappearing dispatch read needs a reviewed reintroduction of the verb with its gates"; fi
 # G4.j the first-boot stager writes the pointer line exactly ONCE: systemd's EnvironmentFile is last-wins, so a second stager line would
 # silently decide which volume the boot-reopen unit opens. (The cutover FSM's stager, which asserted cardinality itself, is retired, #10112.)
 if [ "$_g4_stager" -eq 1 ]; then ok "G4.j the first-boot stager appears exactly once in delivered artifacts"; else no "G4.j first-boot pointer stager sites=${_g4_stager} -- expected exactly one (EnvironmentFile is last-wins)"; fi

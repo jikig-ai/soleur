@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-05T19:59:24Z
+# generated-at=2026-11-05T22:00:44Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -140,6 +140,7 @@ plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	2
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	2
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
+plugins/soleur/skills/incident/test/pull-card.test.sh	5
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
@@ -457,7 +458,7 @@ scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
 scripts/inngest-liveness-classify	3
-scripts/inngest-luks-field-8525	5
+scripts/inngest-luks-field-8525	4
 scripts/inngest-probe-heartbeat-feeder	6
 scripts/inngest-provision-unit-8562	5
 scripts/inngest-restart-age-gate	1
@@ -507,8 +508,8 @@ scripts/lint-feature-map-coverage-battery	1
 scripts/lint-feature-map-coverage-live	1
 scripts/lint-gh-argv-arg	1
 scripts/lint-gh-argv-arg-live	7
-scripts/lint-gh-dedupe-shape	4
-scripts/lint-gh-dedupe-shape-live	5
+scripts/lint-gh-dedupe-shape	5
+scripts/lint-gh-dedupe-shape-live	4
 scripts/lint-guard-contract	7
 scripts/lint-guard-contract-live	6
 scripts/lint-infra-no-human-steps	8
