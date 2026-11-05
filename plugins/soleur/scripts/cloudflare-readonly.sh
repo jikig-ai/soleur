@@ -78,12 +78,15 @@
 #                       with a non-null ssl) and per rule ref, enabled, ssl and two host booleans. The host booleans are
 #                       LITERAL SUBSTRING figures only and are not a verdict input: a wildcard such as
 #                       ends_with(http.host, ".soleur.ai") or an expression of true defeats them. Records ok ONLY when
-#                       enabled_ssl_rules is 1 AND that rule's ref is dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible AND
-#                       rule_count is 3; anything else is recorded not ok with the figures. The wrapper CANNOT verify that
+#                       enabled_ssl_rules is 2 AND one of those rules has ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible
+#                       (the other is the `ssl = "full"` rule on soleur.ai and www) AND rule_count is 3; anything else is
+#                       recorded not ok with the figures. The wrapper CANNOT verify that
 #                       the rule's expression is host-scoped (it never prints the expression), so Records ok does not depend
 #                       on the host booleans; the owner compares the live expression with
 #                       apps/web-platform/infra/seo-config-rules.tf before any flip go. The 3 and the ref are DATED
-#                       SNAPSHOTS (2026-11-04): re-derive both from that file at read time.
+#                       SNAPSHOTS (re-derived 2026-11-05: enabled_ssl_rules 1 -> 2, the `ssl = "full"` rule was missed on
+#                       2026-11-04; rule_count stays 3): the 2, the 3 and the ref are re-derived from that file at read time,
+#                       and the wrapper test fails when the counts here drift from it.
 #   C pagerules-ssl     figures active_rule_count, ssl_rule_count and per rule the matches_app_host substring figure. Records
 #                       ok ONLY when ssl_rule_count is 0. Any SSL page rule is recorded not ok with the figures and flagged
 #                       for CTO review even when matches_app_host is false (a wildcard pattern defeats that boolean).
