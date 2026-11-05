@@ -212,6 +212,7 @@ means the hold STANDS (the evaluator exits 1 for an invalid delegation and 2 for
 ```text
 Gate: pr-merged <N>
 Gate: no-inflight-run <workflow-file>
+Gate: web-acceptance <key> <64 lowercase hex>
 ```
 
 `command` and `run-green` are deferred. The first real consumer re-adds them, and only by CTO ruling.
@@ -219,6 +220,15 @@ Gate: no-inflight-run <workflow-file>
 `pr-merged` needs state MERGED on the repository's default branch and the merge commit reachable from HEAD.
 `no-inflight-run` needs no run of that workflow in any of the statuses queued, in_progress, waiting, requested or pending,
 and is true only at that instant (it is evaluated again right before arming).
+`web-acceptance` needs the founder's recorded decision for exactly that legal text to be `accepted`: `<key>` names a text
+committed under `apps/web-platform/server/legal-acceptance/texts/`, `<hash>` is the sha256 of that committed file, and the
+evaluator checks the hash against the committed file itself, then asks the web application (read-only token, fixed address).
+`none` or a changed text keeps the hold; `declined` and `changes_requested` need a person and a revised text; `invalid`, an
+unconfigured or unreachable endpoint, and any answer that is not exactly the expected shape leave the hold standing as
+unevaluable. It is its own evidence and needs no `Delegation:` line (a plan of only web acceptances is evaluated without one; one
+that mixes them with other kinds and no delegation is exit 2), it never backs a merge, deploy or spend (a recorded Yes
+authorizes no production act), and it backs only a hold on that legal acceptance for a text written for that hold.
+Procedure and the meaning of each printed reason: [operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md) section 1.
 
 ## 4. What this does NOT bypass
 

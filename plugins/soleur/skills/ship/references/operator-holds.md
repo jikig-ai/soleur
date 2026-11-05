@@ -26,6 +26,8 @@ Envelope: <path>[#<title>]
   Gate: pr-merged <N>
   Gate: no-inflight-run <workflow-file>
 - Hold: Operator-reserved: <a decision only the operator may make, in their words>
+- Hold: <the operator's words: wait for the founder to accept a legal text>
+  Gate: web-acceptance <key> <64 lowercase hex>
 ```
 
 **A gate says WHEN a hold's condition is true, never WHO the hold is reserved to.** Some holds reserve a decision to the
@@ -38,8 +40,45 @@ evaluator prints `Reserved for you: <words> - only you can clear this`, does not
 only by the operator saying so, and the CTO then removes or rewrites the line. Words in the middle of a hold do not reserve
 it.
 
-The grammar has two kinds, `pr-merged` and `no-inflight-run`. `command` and `run-green` are deferred: the first real
-consumer re-adds them, and only by CTO ruling. A `Gate:` line of any other kind is an unknown kind, and the hold stands.
+The grammar has three kinds, `pr-merged`, `no-inflight-run` and `web-acceptance`. `command` and `run-green` are deferred: the
+first real consumer re-adds them, and only by CTO ruling. A `Gate:` line of any other kind is an unknown kind, and the hold
+stands.
+
+**`web-acceptance <key> <hash>`** discharges a hold by the founder's recorded decision on a legal text, never by anyone's
+reading of prose. `<key>` is the file name (without `.md`) of a text committed under
+`apps/web-platform/server/legal-acceptance/texts/`; `<hash>` is the sha256 of that committed file, 64 lowercase hex characters.
+The evaluator hashes the committed file (the `HEAD` blob) itself, and asks the web application, with a read-only token read
+from the secret store, whether the configured founder accepted exactly that hash. Both tokens are validated first, by the same
+rule as the database (a key of 1 to 63 lowercase letters, digits and hyphens that does not start with a hyphen; a lowercase hash
+of exactly 64 characters): a path character, an uppercase hex digit, a tab, a missing or extra token makes the hold
+`Could not check` and nothing is requested. A hold is discharged only for an `accepted` answer whose record passed its checksum,
+whose echoed hash equals the gate's hash, and whose hash equals the committed text's hash. What each reason means:
+
+| Printed reason | Meaning | Exit |
+|---|---|---|
+| `hash mismatch` | the text was revised after the gate was written; the gate names an old text | 1 |
+| `no decision recorded for this text version` | the founder has not decided this text yet | 1 |
+| `declined; a revised text with a new hash is needed` | the founder said No: a person decides, and the same hash can never be accepted later | 1 |
+| `changes requested; read the note per <runbook>` | the founder asked for changes: the operator reads the note by the runbook, the agent never does | 1 |
+| `the record failed its check` | the stored decision no longer matches its checksum; never read as "no decision" | 2 |
+| `endpoint not configured yet` | the check endpoint answers 503 until its token and founder id exist | 2 |
+| `token rejected` | the token read from the secret store was refused (401) | 2 |
+| `key not in the deployed registry` | the text is committed but not deployed yet (a text added in the same change is a post-merge hold) | 2 |
+| `answer not understood` | a 400 or 502, or a body that is not exactly the four expected fields in the expected types | 2 |
+| `unreachable` | timeout, name or connection failure, a body over the size limit, a redirect, any other status | 2 |
+| `no access to the verify token` / `no hash tool` | no secret-store tool, no token, a token of the wrong shape, or no sha256 tool on this machine | 2 |
+| `the committed text cannot be used` | no committed regular file for the key, or it contains a carriage return | 2 |
+
+**What ship does with each.** Exit 0 for a web-acceptance hold: record the `Done:` line (it carries the decision date) in the PR
+body. Exit 1 with `no decision recorded`: print the card route `/dashboard/approvals/legal/<key>` so the founder can decide, and
+offer to defer with an issue (the hold stays). Exit 1 with `declined` or `changes requested`: the answer for that hash is
+terminal, so say that a revised text (a new hash, a new gate) is needed; never retry, never re-ask for the same hash. Exit 1
+with `hash mismatch`: the plan's gate must be rewritten for the committed text, by the plan's author. Exit 2: the hold stands,
+named in one plain sentence from the table, and never retried into a pass.
+
+**A web-acceptance gate backs only a hold on that legal acceptance itself, for a text written for that hold.** A recorded Yes
+authorizes no production act, and a text accepted for another purpose is not evidence for this one: never use the gate to
+discharge a merge, a deploy or a spend, and never reuse an old acceptance for a new hold.
 
 A read-only check is never a hold line: write the `Gate:` when `pr-merged` or `no-inflight-run` fits; otherwise the CTO runs it ([standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 9) and records it as `Checked:` or `Unverified:` in a `## Class R Checks` section beside this one, never `Operator-reserved:` for the read itself (an `Unverified:` read that a merge or deploy depends on makes the act it gates an `Operator-reserved:` hold: section 9 Records) and never a `Hold:` with no `Gate:`. A read result never satisfies a `Gate:` and removes no hold line.
 
@@ -58,6 +97,12 @@ Rules the evaluator applies to this section:
   and compares the count with the lines it parsed inside readable sections; any difference is exit 2. A line inside a code
   fence is an example and is ignored; only a fence of the same character, at least as long, closes it.
 - A hold with no `Gate:` line is "Needs a person" (section 2).
+- **No `Delegation:` line, and a `web-acceptance` gate** (CTO ruling F3): a web acceptance is its own evidence, so it needs no
+  delegation. With no `Delegation:` line, a plan whose every non-reserved hold carries at least one gate and only
+  `web-acceptance` gates is evaluated (never exit 3); a plan that puts a `web-acceptance` gate beside any other kind of gate,
+  or beside a hold with no gate, is exit 2 (every hold stands, nothing is probed); a plan with no `web-acceptance` gate on a
+  non-reserved hold, reserved-only and gate-less plans included, keeps exit 3 and the prose path. An `Operator-reserved:` hold
+  stands in every case, whatever gates it carries.
 
 The operator's wording stays beside the gates so a gate that weakens a hold is visible in review. Whether a gate
 faithfully encodes a hold is the CTO's authoring and review's check; the evaluator only measures the gate.
@@ -73,17 +118,18 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan 
 | Exit | Meaning | Action |
 |---|---|---|
 | 0 | Every hold is discharged, or none is recorded (an absent or empty section is a no-op) | Continue to Phase 6.45 and the arming in Phase 6.5 |
-| 1 | At least one hold STANDS (a gate is false, or the delegation is invalid) | Stop and name that condition, in one plain sentence to the operator |
-| 2 | A hold could not be evaluated or is reserved to the operator (unknown gate kind, unreadable probe, unreadable delegation, no `Envelope:` line, two `Delegation:` lines, a hold outside a readable section, a section that parses to zero holds, no time-limit tool, an `Operator-reserved:` hold) | It STANDS. Say so in one plain sentence; never retry it into a pass |
-| 3 | No `Delegation:` line is recorded: legacy prose holds | Evaluate by hand per section 3 |
+| 1 | At least one hold STANDS (a gate is false, a web acceptance is undecided, declined or changes-requested, or the delegation is invalid) | Stop and name that condition, in one plain sentence to the operator; for a web acceptance, follow "What ship does with each" in section 1 |
+| 2 | A hold could not be evaluated or is reserved to the operator (unknown gate kind, unreadable probe, unreadable delegation, no `Envelope:` line, two `Delegation:` lines, a hold outside a readable section, a section that parses to zero holds, no time-limit tool, an `Operator-reserved:` hold, a web acceptance mixed with other kinds and no delegation, a web acceptance that could not be asked) | It STANDS. Say so in one plain sentence; never retry it into a pass |
+| 3 | No `Delegation:` line is recorded and no non-reserved hold carries a `web-acceptance` gate: legacy prose holds | Evaluate by hand per section 3 |
 | any other status (127 script not found, 124 timed out, 137 killed) | The check did not run | Treat it as 2: the hold STANDS and was not checked. Say so; never read it as a no-op |
 
 Before naming a standing hold (exit 1 or 2), class it per section 8.1b of [technical-ruling-delegation.md](../../brainstorm-techniques/references/technical-ruling-delegation.md): a hold that rests on an evidence judgement is a technical ruling and goes to the CTO first; a plain unmet gate (a date, CI, a missing tool) and an `Operator-reserved:` hold are named as they are.
 
 Exit 3 is decided before every other structure and tool check, so a plan written in the earlier prose format keeps the prose
-path whatever else it contains.
+path whatever else it contains; the one exception is a plan that carries a `web-acceptance` gate on a non-reserved hold (section 1).
 
-A hold with no `Gate:` line is reported "Needs a person": route it to the Undeferred Operator-Step Gate rather than
+A hold with no `Gate:` line is reported "Needs a person" (a declined or changes-requested web acceptance is reported the same
+way, with its reason in parentheses): route it to the Undeferred Operator-Step Gate rather than
 improvising a gate. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate,
 because a PR body is not an operator-visible surface. The standing delegation is verified first, through
 `${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh` (its exit status AND its first line must both say valid); anything else
