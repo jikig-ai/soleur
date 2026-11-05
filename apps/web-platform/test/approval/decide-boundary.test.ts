@@ -308,10 +308,13 @@ export function callSites(src: string): string[] {
 }
 
 describe("runner census: every createCanUseTool call site wires the approval dependency or is on the explicit allowlist", () => {
-  // The cc runner (cc-dispatcher.ts) is deliberately NOT wired: it registers no slice-1 tool, and readCcMcpAllowlist
-  // refuses to promote one (test/approval/tools-census.test.ts). A new call site fails here until it is wired or listed.
+  // The cc runner (cc-dispatcher.ts) IS wired, but not in a way this parser can see: it passes `deps: ccDeps`, a variable
+  // whose `approval:` and `approvalFailClosed:` are set where it is declared, outside the call's own argument text. The
+  // wiring is pinned by test/approval/runner-census.test.ts and by the live-deps capture in
+  // test/cc-dispatcher-real-factory.test.ts; the registration side by test/approval/tools-census.test.ts. A new call site
+  // fails here until it is wired or listed.
   const ALLOWLIST: Record<string, string> = {
-    "server/cc-dispatcher.ts": "cc router: no approval-required tool is registered and CC_MCP_ALLOWLIST refuses them",
+    "server/cc-dispatcher.ts": "cc router: wires approval through the ccDeps variable (pinned by runner-census and the real-factory capture), invisible to this literal-argument parser",
   };
 
   test("the call-site parser finds the real call sites (not vacuous)", () => {

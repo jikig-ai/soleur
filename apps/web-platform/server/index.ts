@@ -26,6 +26,7 @@ import {
 } from "./cc-dispatcher";
 import { activeLegacySessionCount } from "./agent-session-registry";
 import { startQuietWindowReporter } from "./quiet-window";
+import { startProxyListenerReporter } from "./proxy-listener-status";
 // feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
 // not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
 // leaves the previous generation's forwarders reparented to init with live
@@ -55,6 +56,7 @@ import {
 import {
   handleReadyzRequest,
   verifyWorkspacesMountOnce,
+  isWorkspacesPopulated,
 } from "./readiness";
 import { hasProxyMarkers, isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
@@ -227,6 +229,14 @@ app.prepare().then(() => {
       ccQueries: activeCcQueryCount(),
       legacySessions: activeLegacySessionCount(),
     }),
+  });
+
+  // #12167 — the relay reports its OWN bind: one fixed-grammar warn-level line per
+  // minute (relay_probe proxy_state= addr= port= workspaces_populated=), read off-host
+  // from Better Stack by host_name (no new HTTP endpoint). State is read at emit time;
+  // the populated bit is the read-only readiness signal, never a write probe.
+  const proxyListenerReporterTimer = startProxyListenerReporter({
+    readWorkspacesPopulated: () => isWorkspacesPopulated(),
   });
 
   // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
@@ -422,6 +432,7 @@ app.prepare().then(() => {
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
     clearInterval(quietWindowReporterTimer);
+    clearInterval(proxyListenerReporterTimer);
     // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
     // bounded at 90 s and the other web host covers its slot).
     watchdogClock.stop();

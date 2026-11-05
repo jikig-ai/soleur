@@ -342,6 +342,15 @@ grp_source() {
   fi
   t "source: header documents direct-exec invocation" has_file "$SUT_SRC" 'doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh'
   tn "source: header never shows doppler run ... -- bash" grep -Eq -- '--[[:space:]]+bash' "$SUT_SRC"
+  # drift pin (#10479, Ref #10205): the header's dated snapshot of the config-settings ruleset must equal the counts in the
+  # Terraform file, so a rule added to seo-config-rules.tf without a header update fails here instead of misleading a flip go.
+  local TF="$REPO_ROOT/apps/web-platform/infra/seo-config-rules.tf" TF_RULES TF_SSL
+  TF_RULES="$(grep -cE '^[[:space:]]+rules \{' "$TF" || true)"
+  TF_SSL="$(grep -cE '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" || true)"
+  t "snapshot: anchor - the Terraform file yields a non-zero rule count" test "${TF_RULES:-0}" -gt 0
+  t "snapshot: header enabled_ssl_rules equals the ssl rules in seo-config-rules.tf ($TF_SSL)" has_file "$SUT_SRC" "enabled_ssl_rules is $TF_SSL AND one of those rules has ref"
+  t "snapshot: header rule_count equals the rules in seo-config-rules.tf ($TF_RULES)" has_file "$SUT_SRC" "AND rule_count is $TF_RULES; anything else"
+  tn "snapshot: header no longer states the stale enabled_ssl_rules is 1" has_file "$SUT_SRC" 'enabled_ssl_rules is 1 AND'
   # census controls: the scan is live
   assert_fixture_dir "$WORK"
   printf '%s\n' 'x=$("$CURL" a)' 'y=$("$CURL" b)' > "$WORK/c2.txt"
