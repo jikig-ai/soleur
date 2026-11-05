@@ -320,19 +320,20 @@ describe("classifyBashSandboxFailure — apply-seccomp helper arm (#10445, Guard
 });
 
 // #10455 e — every step line the vendored helper can print is classified or deliberately excluded (Guard 2).
-// Step list MEASURED on claude-agent-sdk 0.3.284 (strings of the embedded helper; runtime order recorded with an
-// LD_PRELOAD interposer on 2026-10-19): 16 `<step>: <strerror>` literals + the errno-less `observe sendmsg failed`.
+// Step list MEASURED on claude-agent-sdk 0.3.311 (strings of the embedded helper; runtime order recorded with an
+// LD_PRELOAD interposer on 2026-10-19, re-recorded 2026-11-04): 19 `<step>: <strerror>` literals + two errno-less lines
+// (`observe sendmsg failed` and the `user.max_user_namespaces` warning). 0.3.284 carried 16 steps + one errno-less line.
 describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", () => {
   const USERNS = "unshare(CLONE_NEWUSER)";
   const NON_USERNS = HELPER_STEPS.filter((s) => s !== USERNS);
   const POST_COMMAND = ["waitpid"];
   const line = (step: string, errno = "Operation not permitted") => `apply-seccomp: ${step}: ${errno}`;
 
-  it("floor: the allowlist is the 16 measured steps, userns among them, with no duplicates", () => {
-    expect(HELPER_STEPS).toHaveLength(16);
-    expect(new Set(HELPER_STEPS).size).toBe(16);
+  it("floor: the allowlist is the 19 measured steps, userns among them, with no duplicates", () => {
+    expect(HELPER_STEPS).toHaveLength(19);
+    expect(new Set(HELPER_STEPS).size).toBe(19);
     expect(HELPER_STEPS).toContain(USERNS);
-    expect(NON_USERNS).toHaveLength(15);
+    expect(NON_USERNS).toHaveLength(18);
   });
 
   it.each(HELPER_STEPS)("step %s: EPERM (both spellings) classifies; the matched line is the fixed line", (step) => {
@@ -359,16 +360,34 @@ describe("apply-seccomp helper steps — classification (#10455 e, Guard 2)", ()
     expect(classifyBashSandboxFailure("apply-seccomp: : EPERM", null)).toBeNull();
   });
 
-  it("the errno-less helper message is deliberately excluded, and the exclusions are not allowlisted", () => {
-    expect(HELPER_NON_STEP_LINES).toEqual(["observe sendmsg failed"]);
+  it("the errno-less helper messages are deliberately excluded, and the exclusions are not allowlisted", () => {
+    expect(HELPER_NON_STEP_LINES).toEqual([
+      "observe sendmsg failed",
+      "could not set user.max_user_namespaces (%s); the seccomp filter alone keeps the command from making namespaces",
+    ]);
     for (const x of HELPER_NON_STEP_LINES) expect(HELPER_STEPS).not.toContain(x);
   });
 
-  it("the notice subset is exactly the 15 steps that run before the tenant command; only waitpid is excluded", () => {
-    expect(HELPER_STEPS_PRE_COMMAND).toHaveLength(15);
+  it("the max_user_namespaces warning is never classified, even with an EPERM-shaped tail (it is not in the exact-step allowlist)", () => {
+    const warn = HELPER_NON_STEP_LINES[1];
+    expect(classifyBashSandboxFailure(`apply-seccomp: ${warn}`, null)).toBeNull();
+    expect(classifyBashSandboxFailure(`apply-seccomp: ${warn}: Operation not permitted`, null)).toBeNull();
+    expect(isPreExecSandboxDenialOutput(`apply-seccomp: ${warn}`, true)).toBe(false);
+  });
+
+  it("the notice subset is exactly the 18 steps that run before the tenant command; only waitpid is excluded", () => {
+    expect(HELPER_STEPS_PRE_COMMAND).toHaveLength(18);
     expect(HELPER_STEPS_POST_COMMAND).toEqual(POST_COMMAND);
     for (const s of HELPER_STEPS_PRE_COMMAND) expect(HELPER_STEPS).toContain(s);
-    for (const s of ["fork(worker)", "prctl(PR_SET_NO_NEW_PRIVS)", "prctl(PR_SET_SECCOMP)", "execvp"]) {
+    for (const s of [
+      "fork(worker)",
+      "prctl(PR_SET_NO_NEW_PRIVS)",
+      "prctl(PR_SET_NO_NEW_PRIVS, stub)",
+      "prctl(PR_SET_SECCOMP)",
+      "prctl(PR_SET_SECCOMP, stub)",
+      "prctl(PR_SET_SECCOMP, namespaces)",
+      "execvp",
+    ]) {
       expect(HELPER_STEPS_PRE_COMMAND, s).toContain(s);
     }
     expect(HELPER_STEPS_PRE_COMMAND).not.toContain("waitpid");
@@ -488,7 +507,7 @@ describe("isPreExecSandboxDenialOutput — the notice predicate (#10455 c, Guard
 describe("apply-seccomp helper steps — census against the vendored binary (Guard 2)", () => {
   const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
   const SKIP_REAL = shouldSkipRealBinaryRows(process.platform, process.arch, process.env.CI);
-  const PINS = { classified: HELPER_STEPS, excluded: HELPER_NON_STEP_LINES, minStrings: 17 };
+  const PINS = { classified: HELPER_STEPS, excluded: HELPER_NON_STEP_LINES, minStrings: 21 };
   let realRowsRun = 0;
 
   // Independent of SKIP_REAL (a floor that reads the skip flag would be satisfied by the very skip it guards).

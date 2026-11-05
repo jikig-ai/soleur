@@ -1,0 +1,4 @@
+suite	entries	duration_ms	src	existing_hits	glob_hits	total_hits	incremental_hits	units	runner_changed	not_evaluable	empty	deleted_path_units	rate_conservative	rate_excluded	ci_seconds_added	drained_pairs	tree_files	tree_missing	verdict	reason
+plugins/soleur	0	-	missing	95	0	95	0	200	48	0	1	0	144/200	95/151	-	-	-	-	baselined	duration-missing
+plugins/soleur/test/boundary-prefix.test.sh	0	1222	floor	48	0	48	0	200	48	0	1	0	97/200	48/151	-	-	-	-	baselined	duration-floor
+tests/scripts/argv-bearer-sweep	0	47034	measured	94	0	94	0	200	48	0	1	0	143/200	94/151	-	-	-	-	baselined	rate-over-and-duration-over-30s

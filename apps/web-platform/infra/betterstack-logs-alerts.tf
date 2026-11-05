@@ -1761,7 +1761,7 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 #   apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted
 # (the shim's seccomp filter is inherited by the helper, which then cannot create its user namespace; every
 # Bash call in the session fails), or the same helper failing with EPERM at ANY other of its steps (#10455 e: an exact
-# allowlist of the 16 step strings in the vendored binary). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
+# allowlist of the 19 step strings in the vendored binary at SDK 0.3.311). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
 # classifies the output (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`; errorCode
 # `helper_userns_eperm` for the userns step, `helper_step_eperm` for every other step, and the predicate below pages on
 # BOTH) and mirrors ONE pino row per user per debounce window per code: feature `agent-sandbox`, op

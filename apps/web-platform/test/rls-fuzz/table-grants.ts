@@ -194,6 +194,8 @@ const INTERNAL: Record<string, string> = {
   // sentinels in the migration carry the same reasons).
   git_data_erasure_pending: "service-role RPC-only erasure ledger (migration 182, #8211): no api-role table privilege, access only via record/claim/resolve SECURITY DEFINER RPCs",
   git_data_erasure_counts: "service-role RPC-only erasure counter (migration 182, #8211): no api-role table privilege, written only by resolve_git_data_erasure_pending",
+  // Migration 184 (#12011): the single-use email-code challenge. RLS on, no policy, every api role revoked.
+  legal_reauth_event: "service-role RPC-only single-use challenge (migration 184, #12011): no api-role table privilege, reached only via issue/claim/mark SECURITY DEFINER RPCs and record_legal_acceptance",
 };
 
 /**
@@ -226,6 +228,10 @@ const OVERRIDES: Record<string, RegistryEntry> = {
   // landing page reads the row as the signed-in Owner); every write is a SECURITY DEFINER approval RPC and
   // service_role holds NO table privilege at all (it reaches the table only through the RPCs). Created after the 174 snapshot.
   "approval_request": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 180 (#4672): authenticated SELECT only (Owner-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
+  // Migration 184 (#12011): the founder's legal acceptance record. The founder reads their own rows through RLS
+  // (founder_id = auth.uid()); every write is record_legal_acceptance under a write-once trigger and service_role holds
+  // NO table privilege (it reaches the table only through the RPCs).
+  "legal_acceptance": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 184 (#12011): authenticated SELECT only (founder-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
   // Migration 181 (#11569): the owner-draft UPDATE policy plus a column-narrowed grant. 174's snapshot gave anon and
   // authenticated the full table-level verb set on messages; 181 revokes the table-level UPDATE from both and re-grants
   // UPDATE on (status, draft_preview) to authenticated only, so every other verb stays as 174 recorded it. To roll

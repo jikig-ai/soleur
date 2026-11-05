@@ -53,7 +53,10 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold, 
     `connection` blocks and this workflow's two hops are strict; git-data's key is Terraform-minted
     and rotated on every replace; the app's transport pins when a pin is published (since
     PR #9096 it always pins, and an absent pin refuses).
-  - [ ] Step 1 — every merge-triggered apply is `success` (the `web_1_host_key_probe` ran).
+  - [x] Step 1 — every merge-triggered apply is `success` (the `web_1_host_key_probe` ran). Ticked by the owner's
+    instruction on 2026-11-04. Read: the eight newest `apply-web-platform-infra.yml` push runs (2026-11-03T00:40Z
+    to 2026-11-04T09:12Z, newest `9921efb93d`) all concluded `success`; the `apply` job of the last two ran its
+    host-probe heartbeat step green. Older merge-triggered applies were not re-read.
   - [x] Step 2 — rung-2 re-rehearsal, then the evidence-only PR. Done: rehearsal run
     [35914294265](https://github.com/jikig-ai/soleur/actions/runs/35914294265) (2026-09-23, `main`,
     `success`), evidence PR #8655 merged 2026-09-23 (#5914 issuecomment-5803357950).

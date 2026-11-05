@@ -285,7 +285,7 @@ latency is the threshold plus the schedule delivery delay, and GitHub `schedule:
 delivery on this repository is degraded: the sibling `*/15` workflow
 `scheduled-inngest-health.yml` measured a median gap of about 275 min (n=59 fires,
 max about 479) and `scheduled-actions-queue-health.yml` (`*/30`) gaps of 2.7 to 6 h.
-Against the 30-minute window between threshold and timeout the probe will often miss a
+Against the window between threshold and timeout (30 minutes when written, 75 since the 2026-11-03 raise to 120) the probe will often miss a
 stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
 issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
 from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
@@ -703,6 +703,7 @@ threshold stays 45 minutes, so the window between threshold and timeout widens f
 row, the "Stall probe" section and canary item 10 state the new value; dated records above are left as written. The
 demand side (the concurrency cap, per-run job fan-out, cancelled-run waste, `merge_group` rebuilds) is tracked in #12030
 and may make a smaller value correct again. The live value is verified after the apply.
+Re-verified 2026-11-04: Team = 60 concurrent jobs on standard runners (<https://docs.github.com/en/actions/reference/limits>); this supersedes the unverified recall above.
 
 ### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
 
