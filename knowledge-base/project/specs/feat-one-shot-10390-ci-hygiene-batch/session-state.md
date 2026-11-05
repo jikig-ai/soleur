@@ -72,3 +72,9 @@
 ## Rebase Delegated (2026-11-05)
 - Resolver agent f6d28181 handling `git rebase origin/main` conflicts (stopped at 5edf1e698f; replay hits legal F-commit + TSV/sha conflicts next). Rules: TSVs+legal-doc-shas→ours then regenerate/re-pin; legal docs→union merge keeping #9074 bearing correction + #8624 qualifier; mirrors identical; compliance-posture union. No push — lead pushes.
 - After rebase: push branch -> soleur:qa -> soleur:compound -> soleur:ship -> postmerge. PR body needs remaining Closes (#9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624) — #10136 stays Ref only (owner confirmation pending).
+
+## Rebase Complete + Ship-Ready State (2026-11-05)
+- Rebase resolved by agent f6d28181: 22/22 commits replayed onto f06b595420. TSVs regen'd (f3c61d00e9), LEGAL_DOC_SHAS re-pinned (db66299349 + fragment cleanup cf6477dc4f — resolver's scripted union left commit-subject suffixes on 10 lines, caught by mirror-drift gate and fixed). Legal content verified: all-three-stores-bearing + LUKS qualifier + #12011 Nov-4 entries retained.
+- All gates green post-rebase: legal-doc-shas 0, mirror-drift 0, scope-block 0, registers 11/11, vitest 43/43, dedupe-shape 62/62.
+- Force-pushed (--force-with-lease) at cf6477dc4f. PR body closes list correct: Closes 10 issues, Ref #10136 #10390.
+- Remaining: soleur:qa -> soleur:compound -> soleur:ship -> postmerge. Operator step pending: #10136 zot accepted-risk owner confirmation (issue stays open; PR does NOT auto-close it).
