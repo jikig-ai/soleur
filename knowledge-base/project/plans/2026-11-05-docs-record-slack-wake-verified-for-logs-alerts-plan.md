@@ -310,26 +310,26 @@ threshold: none, reason: documentation-only change to internal runbooks, one ADR
 
 ### Pre-merge (PR)
 
-- [ ] 1. The diff is markdown-only: `git diff --name-only origin/main...HEAD` lists only `knowledge-base/**.md`;
+- [x] 1. The diff is markdown-only: `git diff --name-only origin/main...HEAD` lists only `knowledge-base/**.md`;
   `git diff origin/main...HEAD --stat -- apps .github scripts` is empty (no `.tf`, workflow or script edit).
-- [ ] 2. The stale phrases are gone from the runbooks:
+- [x] 2. The stale phrases are gone from the runbooks:
   `git grep -n -E "until the ADR-260 Slack integration is verified|NOT been verified for this alert|same unverified Slack caveat" -- knowledge-base/engineering/operations/runbooks`
   returns nothing, and the 2026-10-19 history paragraphs plus the ADR-218 old "Wake path" bullet are unchanged
   (`git diff` shows only additions after them).
-- [ ] 3. The record exists once and is pointed to: `git grep -l "dashboard read 2026-11-05" -- knowledge-base/engineering`
+- [x] 3. The record exists once and is pointed to: `git grep -l "dashboard read 2026-11-05" -- knowledge-base/engineering`
   lists `canary-probe-set.md`, `betterstack-log-query.md`, ADR-218 and the PIR (match the short single-line anchor
   "dashboard read 2026-11-05"; wrapped lines can hide the longer phrase).
-- [ ] 4. The canonical paragraph is complete. Extract it first, then read it:
+- [x] 4. The canonical paragraph is complete. Extract it first, then read it:
   `awk '/^\*\*Slack wake check, dashboard read 2026-11-05/,/^$/' knowledge-base/engineering/operations/runbooks/canary-probe-set.md`
   and confirm it labels Observed (`soleur-egress-gw-probe-fail-prd`) apart from Inferred
   (`agent_sandbox_bash_denial`, `faithful_canary_sandbox_broken`), states the flags are still `email = true`
   with push/call/sms/critical_alert false, and states the two limits (no proof of a phone push; escalation
   policies gated off on the free tier).
-- [ ] 5. No person's name in any added line: read `git diff origin/main...HEAD -U0 | grep '^+'`; the only proper
+- [x] 5. No person's name in any added line: read `git diff origin/main...HEAD -U0 | grep '^+'`; the only proper
   nouns allowed are `Soleur.ai`, `Better Stack`, `Slack`, `ADR-*` and the alert and channel names above.
 - [ ] 6. PR body: `Ref #10455`, no `Closes`/`Fixes`/`Resolves` for it; says `.tf` deliberately untouched and why;
   Sentry rule text (the `masked-dir-precreate-failed` paragraph) is unchanged.
-- [ ] 7. Guards still pass: `bash apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh`,
+- [x] 7. Guards still pass: `bash apps/web-platform/test/infra/faithful-canary-sandbox-alert.test.sh`,
   `bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (runbook anchor resolution),
   `bash apps/web-platform/infra/sandbox-canary-soak.test.sh` (outer-wrap token scan), and
   `python3 scripts/lint-infra-no-human-steps.py` on the touched runbooks and the planning set.

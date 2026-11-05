@@ -531,8 +531,7 @@ line-anchored, nothing trailing), is debounced per user (keyed with the error co
 keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
 in #10455). The same forgery can reach the tenant notice: the notice requires the SDK's error flag, a single non-blank
 line and a pre-command helper step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
-is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
-the Better Stack free tier until the ADR-260 Slack integration is verified.
+is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. Wake path: email (the alert's own channel), plus a Slack post (inferred); see **Slack wake check, dashboard read 2026-11-05** below.
 
 **Slack wake check, run 2026-10-19 (#10455 d), read-only.** Two reads with the read-only token (Doppler `soleur/prd_terraform`,
 `BETTERSTACK_API_TOKEN_READONLY`; counts and flags only, nothing written):
@@ -554,6 +553,19 @@ doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer
 
 What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
 property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
+
+**Slack wake check, dashboard read 2026-11-05 (#10455 item 4).** This closes the open point above, from the Better Stack dashboard;
+the API check of 2026-10-19 found no field tying a Logs alert to a Slack channel and was not re-run. **Observed:** the Slack integration
+is connected (Incidents product, single-channel mode, channel `#error-found`, workspace Soleur.ai), and the incident for the Logs alert
+`soleur-egress-gw-probe-fail-prd` (2026-11-04) shows Slack posts on its timeline at incident start and at auto-resolve, next to the email
+sends. **Inferred:** every Logs alert has the same "Current team" escalation target (the 2026-10-19 read above shows a team-level
+`escalation_target` on all 17) and the integration is account-wide, so Logs-alert incidents reach Slack, including
+`agent_sandbox_bash_denial` and `faithful_canary_sandbox_broken`, which were not separately observed. **Unchanged:** each alert's own
+flags are still `email = true` with `push`, `call`, `sms` and `critical_alert` false and no escalation policy; the Slack post comes from
+the Incidents integration, not from an alert flag. **Limits:** a Slack post is not proof of a phone push or a read (a push depends on
+the Slack client's notification settings; the 2026-10-22 heartbeat incidents were posted to the channel and still went unseen, ADR-298),
+and Logs-alert escalation policies stay gated off on the free tier (`var.betterstack_paid_tier`). To repeat the check, read the timeline
+of a recent Logs-alert incident in the dashboard.
 
 ## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
 
