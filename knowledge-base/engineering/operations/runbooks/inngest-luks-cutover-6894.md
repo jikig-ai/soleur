@@ -12,6 +12,10 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927
 > protection, key loss, total loss, deliberate unprotect, break-glass and revert) stays in force** and is still the operator procedure those alerts point at. Section 6 below is FSM-dispatch troubleshooting; read it as history. A host provisioned before this
 > change still has the trio installed and its timer enabled until the next host replace; the dispatcher stays inert only while the flag is `done`
 > and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text are retired in a tracked follow-up.
+>
+> **Dispatch verb deleted 2026-11-05 (#9927 item 8).** That follow-up landed: `op=luks-cutover` is gone from `cutover-inngest.yml`
+> and `scripts/cutover-inngest.sh` (by deletion, no refusal stub), so a dispatch naming it is rejected by GitHub as an invalid `op` input.
+> See §5a-2. Every `gh workflow run ... -f op=luks-cutover` command below is history.
 
 **What this does.** Moves the dedicated Inngest host's Redis AOF store from the plaintext volume to
 the encrypted (LUKS) one, without losing a byte and without SSH. The host freezes its writers, copies
@@ -25,14 +29,14 @@ Doppler write. If you find yourself wanting one, the answer is in §6.
 
 | | |
 | --- | --- |
-| Forward | `gh workflow run cutover-inngest.yml -f op=luks-cutover` |
+| Forward | none. `op=luks-cutover` was retired by deletion on 2026-11-05 (#9927 item 8, §5a-2); the command that used to sit here no longer exists. |
 | Back | none. `op=luks-rollback` was retired by #8285 PR B (§5a): the plaintext volume it copied back to was destroyed on 2026-10-09. |
 
 The forward dispatch holds in **Waiting** until a reviewer approves the `inngest-cutover` environment. That approval
 is the prod-write ack; the token that can write the flag is injected only for the ops that need it.
 
 > **The cutover this document describes has run (2026-09-20) and its rollback route is gone (2026-10-09).** Sections 1-4
-> are kept because the forward verb still exists; §5a says what replaced the rollback and §5b is the record of how the
+> are kept as the record of the forward verb, which was itself deleted on 2026-11-05 (§5a-2); §5a says what replaced the rollback and §5b is the record of how the
 > plaintext backstop was retired. Where an older sentence below says "roll back", read §5a first.
 
 ---
@@ -286,7 +290,7 @@ production write and needs the operator's per-command go-ahead:
 | --- | --- | --- |
 | Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
-| `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
+| `op=luks-cutover` dispatched again | The verb no longer exists (deleted 2026-11-05, §5a-2): GitHub rejects the dispatch as an invalid `op` input. Before that it was refused on this host (durable pointer set, flag `done`, G1/G2) | Nothing to do |
 
 **Recovery routes that exist:** the host-replace route is the first row of the table above (note #7228: **every**
 replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
@@ -299,6 +303,30 @@ replace strands the scheduler, whose one-dispatch recovery is `gh workflow run c
 wrong-volume alert and amended the C4 model and ADR-142. All of that assumed a plaintext volume to revert to. With the
 volume destroyed there is no plaintext exception to record, so none of those steps applies. This heading is kept
 (`op=luks-rollback` in the title) so existing links to 5a still resolve.
+
+---
+
+## 5a-2. `op=luks-cutover` is retired: what to do instead (#9927 item 8, 2026-11-05)
+
+`op=luks-cutover` (a Doppler write of `INNGEST_LUKS_CUTOVER=armed` with the arm token, then a poll of the on-host copy FSM through
+Better Stack) was deleted from `cutover-inngest.yml` and `scripts/cutover-inngest.sh` as part of #9927 item 8, together with
+`op=arm` and `op=reflush`. The cutover it drove ran once (2026-09-20) and `INNGEST_LUKS_CUTOVER` is `done` (read live on
+2026-11-05, flag value only). Its dispatch had been inert since #10112 (2026-10-25: the on-host trio no longer ships, and G1/G2
+refused on a set pointer plus `done`), so nothing operational is lost; what changed is that there is no dispatchable surface and
+no arm-token consumer for it any more. The dated history of the verb stays in ADR-142 and in §§1-5b above.
+
+- **What stays in force:** §5c (sole-copy protection, key loss, total loss, deliberate unprotect, break-glass, revert) and the
+  `op=resume` recovery for an inherited `done` after a host replace. `op=rollback` and `op=resume` still use the arm token, so
+  `DOPPLER_TOKEN_INNGEST_ARM` is not revoked by this retirement (that revoke is a separate, owner-reserved act).
+- **A second LUKS cutover** (for example onto a recreated volume) needs a reviewed re-introduction of the verb: a revert of the
+  #9927 item 8 retirement PR, or a new reviewed design. Do not improvise a Doppler write of `INNGEST_LUKS_CUTOVER`; read the
+  flag live first, and treat a non-terminal value as an in-flight FSM you must not race.
+- **Signals:** a probe row or alert that used to point here for "dispatch `op=luks-cutover` again" is now an incident
+  (`soleur:incident`), exactly as §5a says for the rollback signals. Read the newest `host_role=dedicated`
+  `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
+
+This heading is kept so that links to §5a-2 resolve; `op=luks-cutover` stays in the title because that is what a search for the
+verb will find.
 
 ---
 
