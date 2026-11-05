@@ -4,8 +4,8 @@
  *
  * The cc dispatcher gives the Concierge no way to push a branch from its sandbox. This module owns the ONE decision to
  * register the platform's push tool for a Query, and nothing else: it returns the built tool plus a machine `reason`, and
- * the dispatcher merges `tools` into its single server, appends `toolNames` to the `canUseTool` platform list and the
- * `CC_PUSH_PROMPT_ADDENDUM` to the system prompt. Registration is DARK by construction. It needs ALL of:
+ * the dispatcher merges `tools` into its single server, appends `toolNames` to the `canUseTool` platform list and
+ * `ccPushPromptAddendum(defaultBranch)` to the system prompt. Registration is DARK by construction. It needs ALL of:
  *
  *   1. a non-`support` persona (support never writes: ADR-113, #9558);
  *   2. a connected repo (owner + name) and a resolved installation;
@@ -17,8 +17,10 @@
  *      fallback, so the tool can never be advertised while unable to protect the default branch.
  *
  * With any condition false the cc tool set, `platformToolNames` and the published registered set are byte-identical to a
- * build that never heard of this module; the checks run cheapest first and the lookup (a network round trip) last, so the
- * dark path pays at most one flag read.
+ * build that never heard of this module. The checks run cheapest first: persona, repo and entitlement cost nothing, the flag
+ * read is bounded (one read, `CC_PUSH_FLAG_TIMEOUT_MS`) and only reached when those held, and the default-branch lookup (a
+ * network round trip) runs last, only when the flag is on. The dispatcher call site already resolves a repo, an installation
+ * and a non-support persona before it calls here, so those three arms are defensive for any other caller.
  *
  * The tool is built with `requireGrant: true` and the SAME `ExecutionGrants` object the gate writes to, so a call that
  * reaches the handler without a gate-written grant carrying the approved commit is refused (see `github-tools.ts`).
@@ -31,12 +33,15 @@
 
 import { isApprovalQueueEnabled, type ApprovalFlagIdentity } from "./approval/flag";
 import type { ExecutionGrants } from "./approval/grants";
-import { createChildLogger } from "./logger";
+import type { BuildGithubPushBranchToolOpts } from "./github-tools";
 import { infoSilentFallback, reportSilentFallback } from "./observability";
-import { RESOLVE_TIMEOUT_MS } from "./resolve-protected-branches";
+import {
+  defaultFetchDefaultBranch,
+  isSafeBranch,
+  RESOLVE_TIMEOUT_MS,
+  SAFE_SEGMENT_RE,
+} from "./resolve-protected-branches";
 import type { Persona } from "./workspace-mode";
-
-const log = createChildLogger("cc-github-push");
 
 /** The soleur_platform FQN of the tool. Kept equal to `GITHUB_PUSH_BRANCH_TOOL_FQN` in github-tools.ts by a test. */
 const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
@@ -79,7 +84,8 @@ export type CcPushRegistrationReason =
   | "not-entitled"
   | "flag-off"
   | "flag-error"
-  | "default-branch-unresolved";
+  | "default-branch-unresolved"
+  | "default-branch-unsafe";
 
 export interface CcPushRegistration {
   registered: boolean;
@@ -88,16 +94,8 @@ export interface CcPushRegistration {
   tools: { name: string }[];
   /** The fully-qualified names to append to the `canUseTool` platform list: `[PUSH_FQN]` when registered, empty otherwise. */
   toolNames: string[];
-}
-
-export interface BuildPushToolOpts {
-  installationId: number;
-  owner: string;
-  repo: string;
-  defaultBranch: string;
-  workspacePath: string;
-  grants: ExecutionGrants;
-  requireGrant: true;
+  /** The validated (`isSafeBranch`) default branch the tool was closed over and the prompt names; `null` unless registered. */
+  defaultBranch: string | null;
 }
 
 export interface ResolveCcGithubPushArgs {
@@ -118,30 +116,29 @@ export interface ResolveCcGithubPushArgs {
   /** Test seam; defaults to the GitHub API `default_branch` read with the installation token. */
   lookupDefaultBranch?: (installationId: number, owner: string, repo: string, signal: AbortSignal) => Promise<unknown>;
   /** Test seam; defaults to the real `buildGithubPushBranchTool` (lazy import). */
-  buildTool?: (opts: BuildPushToolOpts) => { name: string };
+  buildTool?: (opts: BuildGithubPushBranchToolOpts) => { name: string };
 }
 
 /**
- * Short, factual, and only added when the tool is registered. The model-relayed text is the user's first signal that a push
- * is waiting for the Owner or was refused; there is no automated detector for model prose (stated in the ADR addendum).
+ * The system-prompt addendum, only added when the tool is registered (the no-tool prompt stays byte-identical). The
+ * model-relayed text is the user's first signal that a push is waiting for the Owner or was refused; there is no automated
+ * detector for model prose (stated in the ADR addendum), so each obligation is pinned by its own anchored phrase in a test.
+ * `defaultBranch` is the registrar's validated value (never model or user text); anything unsafe throws into the dispatcher's
+ * registration catch.
  */
-export const CC_PUSH_PROMPT_ADDENDUM =
-  "## Pushing a branch\n" +
-  "The `github_push_branch` tool pushes the workspace HEAD commit to a feature branch after the workspace Owner approves it. " +
-  "If its result says the approval is pending, was denied, expired or is unavailable, or the push was refused, nothing was pushed: " +
-  "relay that result to the user as it is. Never claim a push happened unless the tool result says it was pushed.";
-
-const SAFE_BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
-
-function isSafeBranch(name: unknown): name is string {
-  return typeof name === "string" && SAFE_BRANCH_RE.test(name) && !name.includes("..") && !name.startsWith("/");
-}
-
-async function defaultLookupDefaultBranch(installationId: number, owner: string, repo: string, signal: AbortSignal): Promise<unknown> {
-  // Lazy: keeps the GitHub App / JWT import graph out of the dark path.
-  const { githubApiGet } = await import("./github-api");
-  const data = await githubApiGet<{ default_branch?: unknown }>(installationId, `/repos/${owner}/${repo}`, { signal });
-  return data?.default_branch;
+export function ccPushPromptAddendum(defaultBranch: string): string {
+  if (!isSafeBranch(defaultBranch)) throw new Error("cc push prompt addendum: unsafe default branch name");
+  return (
+    "## Pushing a branch\n" +
+    "The `github_push_branch` tool is the only way to push a branch from this workspace; do not run `git push` in Bash. " +
+    "It pushes the workspace HEAD commit after the workspace Owner approves it.\n" +
+    `Push to a feature branch only. NEVER push to main, master or ${defaultBranch}: a refusal for a protected branch still spends the Owner's approval. ` +
+    "Never set force.\n" +
+    "Commit your work first, and do not change HEAD (no commit, checkout or reset) while an approval is pending: the Owner approves one specific commit.\n" +
+    "If the result says the approval is pending or was denied, tell the user in plain words that nothing was pushed and why, " +
+    "and follow the retry or no-retry instruction inside the result; do not paste the raw result.\n" +
+    "Never claim a push happened unless the result says it was pushed."
+  );
 }
 
 /** Run `fn` under a hard deadline; the timer is always cleared, and `onTimeout` runs when the deadline fires first. */
@@ -160,36 +157,61 @@ async function withDeadline<T>(fn: () => Promise<T>, ms: number, what: string, o
   }
 }
 
+/**
+ * The failure fields for a mirror: the class name and the HTTP status, NEVER the Error (null goes first): the pino mirror
+ * captures a passed Error first and Sentry then drops the tagged second capture (#8629), and a GitHub API error's message embeds
+ * `/repos/<owner>/<repo>`.
+ */
+function failureExtra(err: unknown): { errName?: string; status?: number } {
+  const status = (err as { statusCode?: unknown; status?: unknown } | null)?.statusCode ?? (err as { status?: unknown } | null)?.status;
+  return {
+    errName: err instanceof Error ? err.name : undefined,
+    ...(typeof status === "number" ? { status } : {}),
+  };
+}
+
+/** The reasons that emit a Sentry outcome event: the registered case and the two failures a flag-on operator must see. */
+const OUTCOME_EVENT_REASONS: ReadonlySet<CcPushRegistrationReason> = new Set([
+  "registered",
+  "flag-error",
+  "default-branch-unresolved",
+  "default-branch-unsafe",
+]);
+
 export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushArgs): Promise<CcPushRegistration> {
   const isEnabled = args.isEnabled ?? isApprovalQueueEnabled;
-  const lookup = args.lookupDefaultBranch ?? defaultLookupDefaultBranch;
-  const hasRepo = Boolean(args.owner) && Boolean(args.repo);
+  const lookup = args.lookupDefaultBranch ?? defaultFetchDefaultBranch;
+  // The owner and repo are interpolated into an API path: only the safe segment charset is accepted (the dispatcher's own
+  // values come from a parsed repo URL; this keeps the guard with the sink).
+  const hasRepo =
+    Boolean(args.owner) && Boolean(args.repo) && SAFE_SEGMENT_RE.test(args.owner) && SAFE_SEGMENT_RE.test(args.repo);
   const hasInstallation = args.installationId !== null;
   let flagEnabled = false;
   let defaultBranchResolved = false;
 
-  const done = (reason: CcPushRegistrationReason, tools: { name: string }[] = []): CcPushRegistration => {
+  const done = (reason: CcPushRegistrationReason, tools: { name: string }[] = [], defaultBranch: string | null = null): CcPushRegistration => {
     const registered = reason === "registered";
-    const fields = {
-      registered,
-      reason,
-      flagEnabled,
-      entitled: args.webEgressEntitled,
-      persona: args.persona,
-      hasRepo,
-      hasInstallation,
-      defaultBranchResolved,
-    };
-    // One outcome per cold Query construction that reaches the registrar. Sentry carries the signal (the log shipper keeps
-    // only warn and above, so the pino line is a local aid); `reason` is a low-cardinality tag.
-    infoSilentFallback(null, {
-      feature: "cc-push-registration",
-      tags: { reason },
-      extra: fields,
-      message: "cc github_push_branch registration outcome",
-    });
-    log.info(fields, "cc github_push_branch registration outcome");
-    return { registered, reason, tools, toolNames: registered ? [PUSH_FQN] : [] };
+    // Dark paths that are the NORMAL state (support persona, no repo, not entitled, flag off) stay silent: an event per cold
+    // Query would be the dominant volume of this feature while it is dark. Sentry carries the registered case and the failures;
+    // `reason` is a low-cardinality tag.
+    if (OUTCOME_EVENT_REASONS.has(reason)) {
+      infoSilentFallback(null, {
+        feature: "cc-push-registration",
+        tags: { reason },
+        extra: {
+          registered,
+          reason,
+          flagEnabled,
+          entitled: args.webEgressEntitled,
+          persona: args.persona,
+          hasRepo,
+          hasInstallation,
+          defaultBranchResolved,
+        },
+        message: "cc github_push_branch registration outcome",
+      });
+    }
+    return { registered, reason, tools, toolNames: registered ? [PUSH_FQN] : [], defaultBranch: registered ? defaultBranch : null };
   };
 
   // Cheapest first, the flag last among the cheap checks, the network lookup last of all.
@@ -206,43 +228,50 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
     flagEnabled = value === true;
   } catch (err) {
     // Defensive net: the real seam swallows every read error and answers false. A future seam change must not turn a throw or
-    // a hang into a registered tool.
-    reportSilentFallback(err, {
+    // a hang into a registered tool. null first, never the Error (see `failureExtra`).
+    reportSilentFallback(null, {
       feature: "cc-dispatcher",
       op: "cc-push-flag-resolve",
-      extra: { userId: args.userId },
+      extra: { userId: args.userId, ...failureExtra(err) },
       message: "approval-queue flag read failed for the cc push tool; github_push_branch not registered",
     });
     return done("flag-error");
   }
   if (!flagEnabled) return done("flag-off");
 
-  let defaultBranch: string;
+  let value: unknown;
   try {
     const ac = new AbortController();
-    const value = await withDeadline(
+    value = await withDeadline(
       () => lookup(args.installationId as number, args.owner, args.repo, ac.signal),
       RESOLVE_TIMEOUT_MS,
       "default-branch lookup",
       () => ac.abort(),
     );
-    if (!isSafeBranch(value)) throw new Error("default branch lookup returned an unusable value");
-    defaultBranch = value;
-    defaultBranchResolved = true;
   } catch (err) {
     // NEVER a "main" fallback here: a push tool advertised while unable to protect the default branch is the failure to avoid.
-    reportSilentFallback(err, {
+    reportSilentFallback(null, {
       feature: "cc-dispatcher",
       op: "cc-push-default-branch-resolve",
-      extra: { userId: args.userId },
+      extra: { userId: args.userId, ...failureExtra(err) },
       message: "default branch lookup failed for the cc push tool; github_push_branch not registered",
     });
     return done("default-branch-unresolved");
   }
+  if (!isSafeBranch(value)) {
+    // The lookup answered, but with a name that cannot be closed over safely (not the outage the other arm reports).
+    reportSilentFallback(null, {
+      feature: "cc-dispatcher",
+      op: "cc-push-default-branch-unsafe",
+      extra: { userId: args.userId, valueType: typeof value },
+      message: "default branch lookup returned an unusable name for the cc push tool; github_push_branch not registered",
+    });
+    return done("default-branch-unsafe");
+  }
+  const defaultBranch: string = value;
+  defaultBranchResolved = true;
 
-  const buildTool =
-    args.buildTool ??
-    (await import("./github-tools")).buildGithubPushBranchTool;
+  const buildTool = args.buildTool ?? (await import("./github-tools")).buildGithubPushBranchTool;
   const tool = buildTool({
     installationId: args.installationId as number,
     owner: args.owner,
@@ -252,5 +281,5 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
     grants: args.grants,
     requireGrant: true,
   });
-  return done("registered", [tool]);
+  return done("registered", [tool], defaultBranch);
 }

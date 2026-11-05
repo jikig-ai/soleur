@@ -26,7 +26,7 @@ vi.mock("@/server/github-app", () => ({}));
 vi.mock("@/server/trigger-workflow", () => ({ triggerWorkflow: vi.fn() }));
 vi.mock("@/server/push-branch", () => ({ pushBranch: m.pushBranch }));
 
-import { buildGithubPushBranchTool, buildGithubTools, GITHUB_PUSH_BRANCH_TOOL_FQN } from "@/server/github-tools";
+import { buildGithubPushBranchTool, buildGithubTools, GITHUB_PUSH_BRANCH_TOOL_FQN, PUSH_FAILED_APPROVAL_SPENT } from "@/server/github-tools";
 import { ExecutionGrants, GRANT_MISSING_MESSAGE, putGrant } from "@/server/approval/grants";
 
 const PUSH = "mcp__soleur_platform__github_push_branch";
@@ -177,7 +177,8 @@ describe("buildGithubPushBranchTool (requireGrant: true, the cc registration)", 
     putGrant(g, PUSH, { branch: "feat-x" }, { workspaceId: WS, headSha: SHA });
     const res = await strictTool(g).handler({ branch: "feat-x", force: false });
     expect(res.isError).toBeUndefined();
-    expect(JSON.parse(res.content[0].text)).toEqual({ branch: "feat-x", pushed: true });
+    // With a grant the result names the commit that landed (the approved one), so the model can report it.
+    expect(JSON.parse(res.content[0].text)).toEqual({ branch: "feat-x", pushed: true, commit: SHA });
     expect(m.pushBranch).toHaveBeenCalledTimes(1);
     expect(m.pushBranch.mock.calls[0][0]).toEqual({
       installationId: 7,
@@ -191,6 +192,20 @@ describe("buildGithubPushBranchTool (requireGrant: true, the cc registration)", 
       hardened: true,
     });
     expect(m.reportGrantRefused).not.toHaveBeenCalled();
+  });
+
+  it("the legacy shape is unchanged: no grant => the success JSON has no commit key, and a push failure carries no approval-spent line", async () => {
+    const ok = await pushTool(new ExecutionGrants()).handler({ branch: "feat-x", force: false });
+    expect(JSON.parse(ok.content[0].text)).toEqual({ branch: "feat-x", pushed: true });
+    const legacy = strictTool(new ExecutionGrants(), false);
+    m.pushBranch.mockRejectedValueOnce(new Error("non-fast-forward"));
+    const failed = await legacy.handler({ branch: "feat-x", force: false });
+    expect(failed.content[0].text).toBe("Error pushing branch: non-fast-forward");
+  });
+
+  it("the approval-spent line is static: it names no input, branch, path or git output", () => {
+    expect(PUSH_FAILED_APPROVAL_SPENT).toMatch(/^The Owner's approval for this push is spent\. A retry needs a new Owner approval/);
+    expect(PUSH_FAILED_APPROVAL_SPENT).not.toMatch(/feat-x|\/|git /);
   });
 
   it("hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT", async () => {
@@ -244,7 +259,8 @@ describe("buildGithubPushBranchTool (requireGrant: true, the cc registration)", 
     const t = strictTool(g);
     const first = await t.handler({ branch: "feat-x", force: false });
     expect(first.isError).toBe(true);
-    expect(first.content[0].text).toBe("Error pushing branch: non-fast-forward");
+    // The strict path says the approval is spent (a blind retry would open a fresh Owner approval for nothing).
+    expect(first.content[0].text).toBe(`Error pushing branch: non-fast-forward\n${PUSH_FAILED_APPROVAL_SPENT}`);
     const second = await t.handler({ branch: "feat-x", force: false });
     expect(second.isError).toBe(true);
     expect(JSON.parse(second.content[0].text).code).toBe("approval_grant_missing");

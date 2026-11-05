@@ -308,7 +308,7 @@ import { createApprovalGateDeps } from "./approval/gate";
 import { ExecutionGrants } from "./approval/grants";
 import {
   assertCcApprovalSetWired,
-  CC_PUSH_PROMPT_ADDENDUM,
+  ccPushPromptAddendum,
   resolveCcGithubPushRegistration,
 } from "./cc-github-push";
 
@@ -2768,7 +2768,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         if (pushRegistration.registered) {
           approvalTools = pushRegistration.tools;
           approvalToolNames = pushRegistration.toolNames;
-          pushPromptAddendum = CC_PUSH_PROMPT_ADDENDUM;
+          pushPromptAddendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);
         }
       } catch (err) {
         // Fail closed AND visible: a defect in the optional push registration (its own checks are already fail-closed) must
@@ -2776,10 +2776,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         approvalTools = [];
         approvalToolNames = [];
         pushPromptAddendum = undefined;
-        reportSilentFallback(err, {
+        // null first, never the Error: the pino mirror captures a passed Error first and Sentry drops the tagged second capture
+        // (#8629); the class name is what the operator needs.
+        reportSilentFallback(null, {
           feature: "cc-dispatcher",
           op: "cc-push-registration-failed",
-          extra: { userId: args.userId },
+          extra: { userId: args.userId, errName: err instanceof Error ? err.name : undefined },
           message: "cc github_push_branch registration threw; tool not registered",
         });
       }

@@ -14,6 +14,11 @@
  *     (a wildcard, a bare server, a list entry, a one-line string, a second member after a compliant first one); in the
  *     body, only an approval-required FQN is a hit (prose elsewhere may describe the `mcp__soleur_platform__*` naming).
  *   - JSON (hooks.json, .mcp.json, plugin.json): any line naming the server prefix or an approval-required FQN is a hit.
+ *   - Wildcards: in frontmatter or JSON, an `mcp__...*` token whose literal part is a PREFIX of an approval-required FQN
+ *     (`mcp__*`, `mcp__soleur*`, `mcp__soleur_platform*`) is a hit even though it never spells the server prefix; an
+ *     unrelated plugin wildcard (`mcp__plugin_x__*`) is not.
+ *   - hooks.json matchers (a behavioural check, not a text scan): every PreToolUse / PostToolUse matcher is tested, as a
+ *     string and as a regular expression, against the push FQN; an empty, `*` or matching matcher is a hit.
  *
  * Does NOT see: how the SDK orders an MCP allow rule that came from a skill against `canUseTool` (stays UNVERIFIED beyond
  * this source scan; `settingSources: []` is pinned by T7 in cc-dispatcher-real-factory.test.ts), or a tool name assembled
@@ -67,6 +72,15 @@ function discover(root: string): string[] {
   return out;
 }
 
+/** An `mcp__...*` wildcard whose literal part would match an approval-required FQN (so it could pre-allow it). */
+function namesPlatformWildcard(line: string): boolean {
+  const tokens = line.match(/mcp__[A-Za-z0-9_]*\*/g) ?? [];
+  return tokens.some((tok) => {
+    const literal = tok.slice(0, -1);
+    return APPROVAL_REQUIRED_TOOLS.some((fqn) => fqn.startsWith(literal));
+  });
+}
+
 /** The 1-based line numbers (and text) of every offending line in one file's text. */
 function scanText(file: string, text: string): Hit[] {
   const hits: Hit[] = [];
@@ -86,7 +100,8 @@ function scanText(file: string, text: string): Hit[] {
     const inFrontmatter = fmEnd > 0 && idx > 0 && idx < fmEnd;
     const namesFqn = APPROVAL_REQUIRED_TOOLS.some((fqn) => line.includes(fqn));
     const namesServer = line.includes(SERVER_PREFIX);
-    if (namesFqn || ((isJson || inFrontmatter) && namesServer)) hits.push({ file, line: idx + 1, text: line.trim().slice(0, 160) });
+    const namesWildcard = (isJson || inFrontmatter) && namesPlatformWildcard(line);
+    if (namesFqn || namesWildcard || ((isJson || inFrontmatter) && namesServer)) hits.push({ file, line: idx + 1, text: line.trim().slice(0, 160) });
   });
   return hits;
 }
@@ -140,6 +155,60 @@ describe("the platform plugin tree pre-allows no approval-required tool and not 
   });
 });
 
+/** Tool-event hook matchers from a hooks.json text: `undefined` when the entry has none (which matches every tool). */
+const TOOL_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"] as const;
+function toolHookMatchers(json: string): Array<string | undefined> {
+  const doc = JSON.parse(json) as { hooks?: Record<string, Array<{ matcher?: string }>> };
+  return TOOL_EVENTS.flatMap((ev) => (doc.hooks?.[ev] ?? []).map((entry) => entry.matcher));
+}
+/** String form: an exact name (or the match-all `""` / `*`). Regex form: an unanchored RegExp (the over-reporting reading). */
+function matcherReaches(matcher: string | undefined, toolName: string): boolean {
+  if (matcher === undefined || matcher === "" || matcher === "*") return true;
+  if (matcher === toolName) return true;
+  try {
+    return new RegExp(matcher).test(toolName);
+  } catch {
+    return false;
+  }
+}
+
+describe("hooks.json: no tool-event hook matcher reaches the push tool (behavioural, string and regex forms)", () => {
+  const hooksJson = readFileSync(join(PLUGIN_ROOT, "hooks/hooks.json"), "utf8");
+  const matchers = toolHookMatchers(hooksJson);
+
+  it("is non-vacuous: the real file has tool-event matchers to test", () => {
+    expect(matchers.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("no PreToolUse or PostToolUse matcher in the real hooks.json matches the push FQN", () => {
+    expect(matchers.filter((m) => matcherReaches(m, PUSH_FQN))).toEqual([]);
+  });
+
+  it.each([
+    ["an empty matcher", ""],
+    ["a star matcher", "*"],
+    ["an unset matcher", undefined],
+    ["a regex over the mcp__ prefix", "mcp__.*"],
+    ["the exact FQN as a string", PUSH_FQN],
+    ["a regex alternation naming the tool", "^(Bash|mcp__soleur_platform__github_push_branch)$"],
+    ["an unanchored fragment of the tool name", "github_push"],
+  ])("canary: %s reaches the push FQN", (_n, matcher) => {
+    expect(matcherReaches(matcher, PUSH_FQN)).toBe(true);
+  });
+
+  it.each(["^Bash$", "^(Bash|exec)$", "^(Bash|Monitor|Write|Edit|MultiEdit|NotebookEdit)$", "startup|resume"])(
+    "must-pass: %s does not reach the push FQN",
+    (matcher) => {
+      expect(matcherReaches(matcher, PUSH_FQN)).toBe(false);
+    },
+  );
+
+  it("canary: a fixture hooks.json with a match-all PreToolUse entry is reported by the extractor", () => {
+    const fixtureJson = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "^Bash$" }, { hooks: [] }], SessionStart: [{ matcher: "" }] } });
+    expect(toolHookMatchers(fixtureJson).filter((m) => matcherReaches(m, PUSH_FQN))).toEqual([undefined]);
+  });
+});
+
 describe("canary: the scanner reports an offending fixture (mutation rows)", () => {
   const skill = (fm: string, body = "Body.\n") => `---\nname: x\n${fm}\n---\n${body}`;
 
@@ -175,6 +244,18 @@ describe("canary: the scanner reports an offending fixture (mutation rows)", () 
     expect(scanTree(root).hits).toHaveLength(1);
   });
 
+  it.each(["mcp__*", "mcp__soleur*", "mcp__soleur_*", "mcp__soleur_platform*"])(
+    "a frontmatter wildcard %s that would cover the platform server is a hit even though it never spells the server prefix",
+    (wild) => {
+      const root = fixture({
+        "skills/a/SKILL.md": skill(`allowed-tools: Read, ${wild}`),
+        "agents/b.md": skill(`tools:\n  - ${wild}`),
+        "hooks/hooks.json": `{\n  "allow": ["${wild}"]\n}\n`,
+      });
+      expect(scanTree(root).hits.map((h) => h.file).sort()).toEqual(["agents/b.md", "hooks/hooks.json", "skills/a/SKILL.md"]);
+    },
+  );
+
   it("row 3: a walker that returns no files trips the floor (no '0 checked' green)", () => {
     const empty = fixture({ "README.md": "x" });
     const { files: none } = scanTree(empty);
@@ -194,6 +275,19 @@ describe("must-pass: non-canonical inputs that are NOT violations", () => {
       ),
       "agents/b.md": skill("tools: Read, Grep"),
     });
+    expect(scanTree(root).hits).toEqual([]);
+  });
+
+  it.each(["mcp__plugin_x__*", "mcp__github__*", "mcp__playwright__browser_*"])(
+    "an unrelated plugin wildcard %s in frontmatter passes",
+    (wild) => {
+      const root = fixture({ "skills/a/SKILL.md": skill(`allowed-tools: Read, ${wild}`), "agents/b.md": skill(`tools: ${wild}`) });
+      expect(scanTree(root).hits).toEqual([]);
+    },
+  );
+
+  it("a wildcard named in prose in a body (not frontmatter) passes", () => {
+    const root = fixture({ "commands/c.md": skill("description: d", "Never grant `mcp__*` here.\n") });
     expect(scanTree(root).hits).toEqual([]);
   });
 

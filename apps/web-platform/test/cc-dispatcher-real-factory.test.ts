@@ -57,7 +57,9 @@ const {
   mockGithubApiGet,
   mockHeadSha,
   registrarOverride,
+  conversationWriteOverride,
 } = vi.hoisted(() => ({
+  conversationWriteOverride: { fn: null as null | (() => Promise<unknown>) },
   // #11636: a per-test replacement for the registrar (null = the REAL one). Lets a test hand the dispatcher a result the real
   // registrar can never produce (a foreign name), to prove the dispatcher's own runtime assertion rejects it.
   registrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
@@ -409,6 +411,17 @@ vi.mock("@/server/push-branch", async (importOriginal) => ({
   pushBranch: mockPushBranch,
 }));
 
+// #11636: the warm-turn dispatch test passes the dispatcher's conversation-ownership write through this seam; everything else (and
+// every other test in this file) uses the REAL writer.
+vi.mock("@/server/conversation-writer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/conversation-writer")>();
+  return {
+    ...actual,
+    updateConversationFor: (...a: Parameters<typeof actual.updateConversationFor>) =>
+      conversationWriteOverride.fn ? conversationWriteOverride.fn() : actual.updateConversationFor(...a),
+  };
+});
+
 // #11636: the registrar, delegating to the REAL one unless a test installs `registrarOverride.fn`.
 vi.mock("@/server/cc-github-push", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/cc-github-push")>();
@@ -445,8 +458,17 @@ vi.mock("@/server/approval/gate", async (importOriginal) => {
   };
 });
 
-import { __resetDispatcherForTests, CC_REGISTERED_PLATFORM_TOOL_NAMES, getCcRegisteredApprovalTools, realSdkQueryFactory } from "@/server/cc-dispatcher";
-import { CC_PUSH_PROMPT_ADDENDUM } from "@/server/cc-github-push";
+import {
+  __resetDispatcherForTests,
+  CC_REGISTERED_PLATFORM_TOOL_NAMES,
+  cleanupCcBashGatesForConversation,
+  crmLeadPermissionToolNames,
+  dispatchSoleurGo,
+  __setCcRunnerForTests,
+  getCcRegisteredApprovalTools,
+  realSdkQueryFactory,
+} from "@/server/cc-dispatcher";
+import { ccPushPromptAddendum } from "@/server/cc-github-push";
 import { createApprovalGateDeps } from "@/server/approval/gate";
 import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
 import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
@@ -541,6 +563,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     vi.clearAllMocks();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
     registrarOverride.fn = null;
+    conversationWriteOverride.fn = null;
     mockApprovalFlag.mockReset().mockResolvedValue(false);
     mockGithubApiGet.mockReset().mockResolvedValue({ default_branch: "trunk" });
     mockHeadSha.mockReset().mockResolvedValue("d".repeat(40));
@@ -950,6 +973,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
     const HEAD = "d".repeat(40);
     const REPO_URL = "https://github.com/acme/kb-repo";
+    // The default branch the mocked lookup answers with (see the hoisted `mockGithubApiGet` default).
+    const ADDENDUM = ccPushPromptAddendum("trunk");
 
     /** Every precondition true (flag on, entitled, repo, installation); a test turns ONE off. */
     function eligible(over: { flag?: unknown; entitled?: boolean; repo?: boolean; forwarder?: boolean } = {}) {
@@ -992,7 +1017,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(toolNames()).toEqual(["narrate", "summarize"]);
       expect(ccCtx().platformToolNames).toEqual([]);
       expect(prompt()).not.toContain("github_push_branch");
-      expect(prompt()).not.toContain(CC_PUSH_PROMPT_ADDENDUM);
+      expect(prompt()).not.toContain(ADDENDUM);
       expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
       const opts = mockQuery.mock.calls.at(-1)![0].options;
       expect(opts.allowedTools).not.toContain(PUSH_FQN);
@@ -1007,8 +1032,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       const deps = ccCtx().deps;
       expect(deps.approval.grants).toBeInstanceOf(ExecutionGrants);
       expect(deps.approval.grants.enforcing).toBe(false);
-      expect(registrationEvents()).toHaveLength(1);
-      expect(registrationEvents()[0][1]).toMatchObject({ tags: { reason: "flag-off" } });
+      // The normal dark states emit no outcome event (the registered case and the failures do).
+      expect(registrationEvents()).toHaveLength(0);
     });
 
     it("flag read THROWS: not registered (fail closed), reported under cc-push-flag-resolve, dark-path literals hold", async () => {
@@ -1052,10 +1077,24 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       ["tools and toolNames that do not correspond one-to-one", { tools: [], toolNames: [PUSH_FQN] }],
     ])("the dispatcher's wired-set assertion rejects %s: the Query is built on the dark path, nothing is published, and it is reported", async (_n, bad) => {
       eligible();
-      registrarOverride.fn = async () => ({ registered: true, reason: "registered", ...bad });
+      // defaultBranch present: the prompt-addendum guard must not be what rejects it (the wired-set assertion is under test).
+      registrarOverride.fn = async () => ({ registered: true, reason: "registered", defaultBranch: "trunk", ...bad });
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
       expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
+    });
+
+    it("a registrar that throws is reported with a null first argument and the class name, never the Error (its message may embed a repo path)", async () => {
+      eligible();
+      registrarOverride.fn = async () => {
+        throw new Error("boom GET /repos/acme/kb-repo");
+      };
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-push-registration-failed")!;
+      expect(call[0]).toBeNull();
+      expect(call[1]).toMatchObject({ extra: { userId: "user-1", errName: "Error" } });
+      expect(JSON.stringify(call[1])).not.toContain("kb-repo");
     });
 
     it("persona support with every other precondition true: not registered", async () => {
@@ -1083,13 +1122,38 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // list plus exactly the push FQN: the base names are the always-on narration tools, canUseTool's list carries the rest.
       expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
       expect(toolNames().map((n) => `mcp__soleur_platform__${n}`)).toEqual([...CC_REGISTERED_PLATFORM_TOOL_NAMES, PUSH_FQN]);
-      expect(prompt()).toContain(CC_PUSH_PROMPT_ADDENDUM);
-      expect(prompt().split(CC_PUSH_PROMPT_ADDENDUM)).toHaveLength(2);
+      expect(prompt()).toContain(ADDENDUM);
+      expect(prompt().split(ADDENDUM)).toHaveLength(2);
       expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
       // ADR-305: a gated tool never enters allowedTools (canUseTool, i.e. the gate, is its only allow source).
       expect(mockQuery.mock.calls.at(-1)![0].options.allowedTools).not.toContain(PUSH_FQN);
       expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
       expect(registrationEvents()[0][1]).toMatchObject({ tags: { reason: "registered" } });
+    });
+
+    it("registered x crm-lead x c4 on: the server list is narration, c4, push, crm in that order, canUseTool's list is c4, push, crm, and NO approval-required tool is in allowedTools", async () => {
+      eligible();
+      mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+      await realSdkQueryFactory(makeArgs({ crmLead: true }));
+      const C4_FQN = "mcp__soleur_platform__edit_c4_diagram";
+      const crm = crmLeadPermissionToolNames(true);
+      expect(crm.length).toBeGreaterThan(0);
+      expect(toolNames().map((n) => `mcp__soleur_platform__${n}`)).toEqual([...CC_REGISTERED_PLATFORM_TOOL_NAMES, C4_FQN, PUSH_FQN, ...crm]);
+      expect(ccCtx().platformToolNames).toEqual([C4_FQN, PUSH_FQN, ...crm]);
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      // ADR-305: not one of the 8 approval-required tools (the push tool included) is pre-allowed.
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      expect([...APPROVAL_REQUIRED_TOOLS]).toHaveLength(8);
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(allowed, tool).not.toContain(tool);
+      expect(prompt()).toContain(ADDENDUM);
+    });
+
+    it("registered: none of the 8 approval-required tools is in allowedTools", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toContain("github_push_branch");
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(allowed, tool).not.toContain(tool);
     });
 
     it("the registered prompt equals the dark prompt plus exactly the addendum (nothing else moved)", async () => {
@@ -1098,7 +1162,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       const dark = prompt();
       eligible();
       await realSdkQueryFactory(makeArgs());
-      expect(prompt().replace(`\n\n${CC_PUSH_PROMPT_ADDENDUM}`, "")).toBe(dark);
+      expect(prompt().replace(`\n\n${ADDENDUM}`, "")).toBe(dark);
     });
 
     it("entitled with the forwarder DEGRADED (spawn failed, webEgress undefined): still registered (push is server-side)", async () => {
@@ -1182,6 +1246,116 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       const resA = await a.handler({ branch: "feat-x", force: false });
       expect(resA.isError).toBeUndefined();
       expect(mockPushBranch).toHaveBeenCalledTimes(1);
+    });
+
+    it("the registrar receives the gate's identity and the SAME installation the tool is closed over: flag seam {userId, workspaceId}, lookup (installationId, repo path, signal), pushBranch installationId", async () => {
+      const TEAM = "00000000-0000-4000-8000-0000000000aa";
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: TEAM }));
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      // The flag is read for the same workspace identity the gate binds (the TEAM id, not the user id).
+      expect(mockApprovalFlag.mock.calls[0]).toEqual([{ userId: "user-1", workspaceId: TEAM }]);
+      expect(ccCtx().deps.approval.workspaceId).toBe(TEAM);
+      // The default-branch lookup: the effective installation id, owner/repo in order, and an abort signal.
+      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
+      expect(mockGithubApiGet).toHaveBeenCalledWith(987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) });
+      // The handler pushes with that same installation.
+      const deps = ccCtx().deps;
+      deps.approval.grants.enforcing = true;
+      putGrant(deps.approval.grants, PUSH_FQN, { branch: "feat-x" }, { workspaceId: TEAM, headSha: HEAD });
+      await platformTools().find((t) => t.name === "github_push_branch")!.handler({ branch: "feat-x", force: false });
+      expect(mockPushBranch.mock.calls[0][0]).toMatchObject({ installationId: 987654, owner: "acme", repo: "kb-repo", hardened: true });
+    });
+
+    // The warm turn: the factory does not run, the per-dispatch re-resolve knows nothing about the push tool, and the
+    // `onToolUse` mirror consults the set the cold build published. Driven through the REAL dispatch loop (a stub runner
+    // delivers the tool_use block to the dispatcher's own `onToolUse`), so a regex-shaped line cannot stand in for the behaviour.
+    describe("warm turn: a push tool_use through the real dispatch loop", () => {
+      const unregisteredMirrors = () => mockReportSilentFallback.mock.calls.filter(([, o]) => o?.op === "unregistered-tool-invoked");
+
+      /** A permissive tenant chain for the dispatcher's own persistence: every builder call chains, every await yields no error. */
+      function permissiveTenantChain(): unknown {
+        const q: unknown = new Proxy(function () {}, {
+          get: (_t, p) => {
+            if (p === "then") return undefined;
+            if (p === "error" || p === "data") return null;
+            if (p === "single" || p === "maybeSingle") return async () => ({ data: { workspace_id: "ws-warm", workspace_path: WORKSPACE_PATH }, error: null });
+            return () => q;
+          },
+        });
+        return q;
+      }
+
+      async function warmTurnWith(toolName: string, conversationId = "conv-1") {
+        mockSupabaseFrom.mockImplementation(() => permissiveTenantChain());
+        conversationWriteOverride.fn = async () => ({ ok: true });
+        const runner = {
+          dispatch: vi.fn(async (a: { events: { onToolUse: (b: { name: string; input: Record<string, unknown>; toolUseId: string }) => void } }) => {
+            await Promise.resolve();
+            a.events.onToolUse({ name: toolName, input: { branch: "feat-x" }, toolUseId: "tu-1" });
+            return { queryReused: true };
+          }),
+          hasActiveQuery: () => true,
+          activeQueriesSize: () => 1,
+          reapIdle: () => 0,
+          closeConversation: () => {},
+          respondToToolUse: () => false,
+          notifyAwaitingUser: () => {},
+        };
+        __setCcRunnerForTests(runner as never);
+        mockReportSilentFallback.mockClear();
+        await dispatchSoleurGo({
+          persona: "command_center",
+          userId: "user-1",
+          conversationId,
+          userMessage: "push my branch",
+          currentRouting: { kind: "soleur_go_pending" },
+          sendToClient: vi.fn().mockReturnValue(true),
+          persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+        } as never);
+      }
+
+      it("after a REGISTERED cold build the push tool_use does not mirror as an unregistered platform tool", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+        await warmTurnWith(PUSH_FQN);
+        expect(unregisteredMirrors()).toHaveLength(0);
+      });
+
+      it("control: another platform tool on the same conversation STILL mirrors", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        await warmTurnWith("mcp__soleur_platform__email_send");
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+
+      it("control: the push tool_use on a conversation whose cold build did NOT register it (flag off) STILL mirrors", async () => {
+        eligible({ flag: false });
+        await realSdkQueryFactory(makeArgs());
+        expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+        await warmTurnWith(PUSH_FQN);
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+
+      it("control: the set is per conversation (a registered conv-1 does not silence conv-other)", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        await warmTurnWith(PUSH_FQN, "conv-other");
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+    });
+
+    it("both drain sites forget the published set: the conversation close hook and the test reset", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      cleanupCcBashGatesForConversation("user-1", "conv-1");
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      __resetDispatcherForTests();
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
     });
 
     it("a factory throw AFTER registration drains the Map entry (no stale published set)", async () => {

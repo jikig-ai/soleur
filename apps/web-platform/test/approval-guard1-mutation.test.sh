@@ -489,6 +489,9 @@ M("G1-CCR1-wired-set-assertion-call-dropped", CCD, E("        assertCcApprovalSe
 M("G1-CCR2-registrar-flag-off-still-registers", CCP, E('  if (!flagEnabled) return done("flag-off");\n', ""), T_CCP, ["'flag off' -> 'flag-off'; lookup and builder not called"])
 M("G1-CCR3-registrar-support-persona-registers", CCP, E('  if (args.persona === "support") return done("support-persona");\n', ""), T_CCP, ["-> 'support-persona'; lookup and builder not called"])
 M("G1-CCR4-platform-tool-names-drop-the-registrar-result", CCD, E("            ...approvalToolNames,\n", ""), T_RF, ["all preconditions true: the tool is registered ONCE"])
+M("G1-CCR5-warm-turn-mirror-ignores-the-published-registered-set", CCD, E("          ...getCcRegisteredApprovalTools(userId, conversationId),\n", ""), T_RF, ["after a REGISTERED cold build the push tool_use does not mirror as an unregistered platform tool"])
+M("G1-CCR6-push-success-result-drops-the-approved-commit", GHT, E('? { ...pushed, commit: grant.binding.headSha } : pushed;', '? pushed : pushed;'), T_PUSHG, ["a gate-written grant with a valid commit pushes exactly the approved commit with the CLOSED-OVER values"])
+M("G1-CCR7-push-failure-after-consume-omits-the-spent-approval-line", GHT, E("if (requireGrant && result.isError) {", "if (false) {"), T_PUSHG, ["pushBranch failing AFTER the grant was taken: isError 'Error pushing branch: ...', the grant is spent, a retry is refused as grant_missing"])
 M("G1-HD1-hardened-push-skips-the-git-dir-check", PUSH, E("  if (hardened) assertPlainGitDir(workspacePath);\n", ""), T_HARD, ["refuses (typed, static text, nothing pushed) when .git is a FILE"])
 M("G1-HD2-hardened-push-inherits-the-server-env", GAUTH, E("? buildHardenedGitEnv(execOpts.cwd as string, authEnv)", "? { ...process.env, ...authEnv }"), T_GAH, ["hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child"])
 M("G1-HD3-hardened-push-drops-the-hardening-args", GAUTH, E("...(hardened ? HARDENED_GIT_ARGS : []), ", ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
@@ -807,8 +810,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 239 rows today (round 3 plus the #11636 rows); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=238
+# 242 rows today (round 3 plus the #11636 rows); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=241
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -839,7 +842,7 @@ declare -A FLOOR=(
   ["test/approval/execution-grant-handlers.test.ts"]=10
   ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=16
+  ["test/github-tools-push-grant.test.ts"]=18
   ["test/push-branch-pinned.test.ts"]=4
   ["test/approval/gate-deps.test.ts"]=29
   ["test/approval/approval-ops-real-sink.test.ts"]=13
@@ -848,8 +851,8 @@ declare -A FLOOR=(
   ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
-  ["test/cc-dispatcher-real-factory.test.ts"]=95
-  ["test/cc-github-push.test.ts"]=42
+  ["test/cc-dispatcher-real-factory.test.ts"]=104
+  ["test/cc-github-push.test.ts"]=55
   ["test/push-branch-hardened.test.ts"]=7
   ["test/git-auth-hardened-env.test.ts"]=3
 )
@@ -977,7 +980,7 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=3
 EXPECT_RESID=2
-MIN_KILLED=233
+MIN_KILLED=236
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1

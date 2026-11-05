@@ -55,6 +55,13 @@ export interface BuildGithubPushBranchToolOpts {
   requireGrant: boolean;
 }
 
+/**
+ * Appended (strict cc path only) to a push failure that happened AFTER the Owner's approval was consumed. Static: no input,
+ * path or git output. Without it the model retries the identical call, which opens a fresh Owner approval for nothing.
+ */
+export const PUSH_FAILED_APPROVAL_SPENT =
+  "The Owner's approval for this push is spent. A retry needs a new Owner approval, so tell the user that nothing was pushed and why before you try again.";
+
 /** The soleur_platform FQN of the approval-gated push tool (the gate, the tier map and the cc registrar key on it). */
 export const GITHUB_PUSH_BRANCH_TOOL_FQN = "mcp__soleur_platform__github_push_branch";
 
@@ -146,7 +153,7 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
       let commitUnavailable = false;
       const result = await wrapToolHandler("Error pushing branch", async () => {
         try {
-          return await pushBranch({
+          const pushed = await pushBranch({
             installationId,
             owner,
             repo,
@@ -159,6 +166,9 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
             // The strict (cc) builder pushes in the hardened form; the legacy runner's call is unchanged (key absent).
             ...(requireGrant ? { hardened: true as const } : {}),
           });
+          // With a grant the result names the commit that landed (the one the Owner approved), so the model reports THAT commit
+          // and not whatever HEAD is by now; without one (the legacy path) the shape is unchanged.
+          return grant.kind === "granted" ? { ...pushed, commit: grant.binding.headSha } : pushed;
         } catch (err) {
           // By name, not instanceof: the class lives in push-branch.ts and a module double of it must not break the refusal.
           if (err instanceof Error && err.name === "ApprovedCommitUnavailableError") commitUnavailable = true;
@@ -168,6 +178,10 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
       if (commitUnavailable) {
         reportGrantRefused(toolName, "commit_unavailable");
         return grantRefusalResponse("commit_unavailable");
+      }
+      // The approval was consumed before the handler ran: say so on a failure, strict (cc) path only.
+      if (requireGrant && result.isError) {
+        return { ...result, content: [{ type: "text", text: `${result.content[0].text}\n${PUSH_FAILED_APPROVAL_SPENT}` }] };
       }
       return result;
     },

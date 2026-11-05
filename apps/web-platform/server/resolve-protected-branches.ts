@@ -24,8 +24,8 @@ export const NEGATIVE_TTL_MS = 30_000;
 export const RESOLVE_TIMEOUT_MS = 3_000;
 const LOCAL_HEAD_MAX_BYTES = 512;
 const CONSTANT_NAMES = ["main", "master"] as const;
-const SAFE_BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
-const SAFE_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+export const SAFE_BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
+export const SAFE_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 const LOCAL_HEAD_RE = /^ref: refs\/remotes\/origin\/([A-Za-z0-9._/-]{1,255})\n?$/;
 
 export interface ProtectedBranchInput {
@@ -42,11 +42,11 @@ export interface ProtectedBranchDeps {
   readLocal?: (workspacePath: string) => Promise<string | null>;
 }
 
-function isSafeBranch(name: unknown): name is string {
+export function isSafeBranch(name: unknown): name is string {
   return typeof name === "string" && SAFE_BRANCH_RE.test(name) && !name.includes("..") && !name.startsWith("/");
 }
 
-async function defaultFetchDefaultBranch(
+export async function defaultFetchDefaultBranch(
   installationId: number,
   owner: string,
   repo: string,
