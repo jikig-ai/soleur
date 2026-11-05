@@ -13,6 +13,29 @@ lane: cross-domain
 
 # chore: retire the Inngest cutover write ops that need the arm-write token (Ref #9927 item 8)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Agents used:** repo-research-analyst, learnings-researcher, CTO (six rulings, two amending the brief), DHH-style, Kieran-style and simplicity plan reviewers, a sharp-edges catalogue pass, security-sentinel, architecture-strategist, terraform-architect. Halt gates 4.6-4.13 were run by hand (see below).
+
+### Key improvements folded in
+
+1. Scope corrected by the CTO: three ops retired, `rollback` and `resume` kept (the arm token stays consumed by exactly those two).
+2. Preflight semantics made precise: blind-instrument detection (`jq` shape check, missing `doppler`/`jq`, invalid JSON), xtrace refusal, step-block-scoped mutation checks, stub argv and token assertions, hardened extraction harness.
+3. Guard 3 closed the realistic swap (the published secret carrying the arm token's key) and the by-reference project/config pin; Guard 2 gained the positive label set and a separate `if:` extraction.
+4. The 282-byte headroom on `apply-web-platform-infra.yml` is a first-class constraint with a dry-run step.
+5. Merge-time production effect stated plainly (the push apply mints a token and a repo secret).
+
+### New considerations discovered
+
+- The deletions make `lint-shell-capture-exit` and `fixture-relative-assert` baselines stale; `model.likec4.json` is generated from `model.c4`.
+- A repo-scoped secret resolves in any workflow on any pushed branch; after the eventual arm revoke the new token is the only repo-wide read path to the LUKS passphrase (standing exposure with a named rotation owner).
+- Both Terraform parents carry `prevent_destroy`, so the by-reference edge fails safe on a teardown.
+
+### Halt gates (deepen-plan Phase 4)
+
+4.6 User-Brand Impact present, `aggregate pattern`; 4.7 Observability present, probe replaced with a sub-second `grep -cF` (the suite cannot fit the 15 s cap); 4.8 no PAT-shaped variable; 4.9 not a UI plan; 4.10 Encryption Posture present with `does_not_defend` populated; 4.11 `lint-guard-contract.py` green, three entries, assemblies structural; 4.12 one unfenced Scope Check, all rows justified; 4.13 no new autonomous-task surface (a test suite and a step edit); 4.55 not triggered (additive resources, no reboot or lock). Cited issue and PR numbers were checked live; the `#7228` label is the repo's own name for the inherited-done guard as used in the workflow text (the GitHub issue of that number has an unrelated title), and is cited as the workflow cites it.
+
 `Ref #9927` only. Spec lacks a valid `lane:` - defaulted to cross-domain (fail-closed). The epic stays open; nothing here closes it (`wg-use-closes-n-in-pr-body-not-title-to` does not apply: no `Closes`).
 
 ## Overview
@@ -160,7 +183,7 @@ Order is test-first (`cq-write-failing-tests-before`): Phase 1 produces RED, Pha
 
 ### Phase 1 - Failing tests first
 
-1. New suite `apps/web-platform/infra/inngest-host-replace-preflight.test.sh` (Guard 1): extracts the preflight step's `run:` body from `apply-web-platform-infra.yml` by step name (non-vacuity: at least 40 non-comment lines, the step name found exactly once) and executes it under a `doppler` stub, covering every row of the Guard 1 harness table, and asserting the stub's argv (`-p soleur-inngest -c prd`) and that the `$DOPPLER_TOKEN` the stub sees equals the flip-read value (dropping the inline `DOPPLER_TOKEN=` override would otherwise read with the ambient Tier-A token and go unnoticed). RED now (the step still reads the arm secret and exits 0 everywhere).
+1. New suite `apps/web-platform/infra/inngest-host-replace-preflight.test.sh` (Guard 1): extracts the preflight step's `run:` body from `apply-web-platform-infra.yml` by step name (non-vacuity: at least 40 non-comment lines, the step name found exactly once) and executes it under a `doppler` stub, covering every row of the Guard 1 harness table, and asserting the stub's argv (`-p soleur-inngest -c prd`) and that the `$DOPPLER_TOKEN` the stub sees equals the flip-read value (dropping the inline `DOPPLER_TOKEN=` override would otherwise read with the ambient Tier-A token and go unnoticed). RED now (the step still reads the arm secret and exits 0 everywhere). Harness hardening: match the step name with a fixed-string comparison (it contains `(#7228, #9927)`); write the extracted body to a temp file and run `bash <file>`, never `eval`; run under `env -i` with a temp `HOME`, `GITHUB_STEP_SUMMARY` and `GITHUB_ENV` and a PATH built from a symlink farm holding only the stub, `tr` and `printf` plus `jq` toggled per row (a runner's real `doppler` or an ambient `DOPPLER_TOKEN` must not be able to satisfy the stub-sees-flip-read assertion); read the env-var name from the step's own `env:` block; use fake token strings that do not resemble `dp.st.` secrets (keeps secret scanners quiet).
 2. In `apps/web-platform/infra/cutover-inngest-workflow.test.sh` add the Guard 2 absence block (retired verbs absent from options, case labels, ternaries; token-op set literal `rollback resume`; environment-op set literal `backup resume rollback`). RED now.
 3. Static pins for the new token (Guard 3) in the same preflight suite: `access = "read"`, by-reference project/config, not in `token-drift-read-tokens.tf` or `doppler-config-inventory.txt`, both addresses present in the default per-merge `-target` list. RED now (file absent).
 4. Register the new suite wherever `scripts/lint-orphan-test-suites.sh` requires (run it; `apps/web-platform/infra/*.test.sh` is normally picked up by the infra runner glob in `infra-validation.yml`, but the orphan lint and `scripts/lib/test-affected-paths.sh` decide).
@@ -168,13 +191,13 @@ Order is test-first (`cq-write-failing-tests-before`): Phase 1 produces RED, Pha
 ### Phase 2 - Terraform (file only; applied by the standard per-merge pipeline, never dispatched)
 
 1. Create `apps/web-platform/infra/inngest-flip-read-token.tf` (F4, details in `## Infrastructure (IaC)`).
-2. `apply-web-platform-infra.yml`, the default allow-list step: add `-target=doppler_service_token.inngest_flip_read` and `-target=github_actions_secret.doppler_token_inngest_flip_read` next to the existing `inngest_arm_write` lines. **Not** the `inngest_host` job (its shape-gate parity floor, `targets.length` equal to 16 in `terraform-target-parity.test.ts`, stays untouched and is unrelated to #12100's drift-inventory floor).
-3. `inngest-arm-write-token.tf`: comment-only edit of the `CONSUMERS` block (consumer 1 is now `rollback`/`resume` only; consumer 3 reads `DOPPLER_TOKEN_INNGEST_FLIP_READ`; strike "STILL UNBUILT AND UNTRACKED"). No resource block is edited, nothing deleted; the file stays (hard limit).
+2. `apply-web-platform-infra.yml`, the default allow-list step: add `-target=doppler_service_token.inngest_flip_read` and `-target=github_actions_secret.doppler_token_inngest_flip_read` each beside its arm sibling (the token target next to `doppler_service_token.inngest_arm_write`, the secret target next to `github_actions_secret.doppler_token_inngest_arm`; this keeps the #12064 conflict surface small), and never between `doppler_secret.inngest_redis_luks_key` and `supabase_project.prd` (the parity test pins the TLS targets directly after the former and `supabase_project.prd` after them). **Not** the `inngest_host` job (its shape-gate parity floor, `targets.length` equal to 16 in `terraform-target-parity.test.ts`, stays untouched and is unrelated to #12100's drift-inventory floor).
+3. `inngest-arm-write-token.tf`: comment-only edits. The `CONSUMERS` block (consumer 1 is now `rollback`/`resume` only; consumer 3 reads `DOPPLER_TOKEN_INNGEST_FLIP_READ`; strike "STILL UNBUILT AND UNTRACKED"), and the other comments that name `op=arm`/`op=reflush`/`op=luks-cutover` as consumers or as the reviewer-gated jobs (the file header, the "Human ack" paragraph, the environment-secret comment), so property P4 holds for this file too. No resource block is edited, nothing deleted; the file stays (hard limit).
 4. If `terraform-target-parity.test.ts` needs a new `test(` block (only if one is added), recompute `TEST_FLOOR` with `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts`, set exactly that, and add a `prev -> new` comment line citing this PR (F6). Do not hand-add.
 
 ### Phase 3 - Preflight rewrite (size-neutral or smaller)
 
-1. Replace the step per `### Preflight semantics`. Rename the step to `Preflight - inherited-done check, fails closed (#7228, #9927)`; remove `continue-on-error`; env `DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}`.
+1. Replace the step per `### Preflight semantics`. Rename the step to `Preflight - inherited-done check, fails closed (#7228, #9927)`; remove `continue-on-error`; env `DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}`. The step's first line is the xtrace refusal this workflow already uses elsewhere (`case "$-" in *x*) ... exit 78`, see the existing instances in the same file): under a `BASH_ENV`/`SHELLOPTS` trace the inline `DOPPLER_TOKEN=... doppler` assignment would otherwise print the token. Both `doppler` calls discard stderr and the error branches print only an exit code, never the names JSON. The empty-token and blind-instrument `::error::` text names the secret, says the per-merge apply mints it, and says to re-run the failed `apply-web-platform-infra` push run if the apply was partial (never `-replace` the token on a partial apply: that orphans a live key).
 2. Move the long rationale comment blocks (the 2026-09-17 incident narrative, the `rc` CAPTURED paragraph, the `done is not the only stranding value` paragraph) into `knowledge-base/engineering/operations/runbooks/inngest-server.md` under the existing inherited-`done` section; leave a two-line pointer in the workflow. The runbook sentence "degrades open on an unreadable flag" becomes "fails closed".
 3. Dry-run first: write the new step into a scratch copy and `wc -c` the whole file BEFORE committing to the shape; the new branches add bytes that the moved prose must more than repay. If it does not fit, move more prose to the runbook, not code. `wc -c` after: must be at or below baseline, and `bun test plugins/soleur/test/workflow-file-size.test.ts` green. Run `python3 scripts/lint-infra-no-human-steps.py --changed`.
 4. Grep proves zero remaining `DOPPLER_TOKEN_INNGEST_ARM` references in `apply-web-platform-infra.yml`, comments included: the new pointer comment names the runbook and the new secret, never the old one.
@@ -198,14 +221,14 @@ Order is test-first (`cq-write-failing-tests-before`): Phase 1 produces RED, Pha
 
 ### Phase 6 - Docs and records
 
-1. Runbook `inngest-server.md`: remove or mark retired the `arm`, `reflush`, `luks-cutover` rows and sections; the quick-reference rows that name them; add one note that a re-cutover or a second FLUSHALL now needs a reviewed re-introduction of the verb (revert of this PR) and, for the on-host reflush arm, a Doppler-console write of `INNGEST_CUTOVER_FLIP` on `soleur-inngest/prd` preceded by a live read of its current value (acceptable for a catastrophic event, CTO; the bound is the key name, the config and the read-first rule, not a printed recipe). Also update `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`, whose rows list `op=arm`, `op=reflush` and `op=luks-*` among the generation-anchor consumers. Keep the `op=resume` and `op=rollback` procedures. Update the inherited-done text per Phase 3. Runbook `inngest-luks-cutover-6894.md`: add a retirement note modeled on its existing section 5a (`luks-rollback` retired).
-2. ADR-282: append an addendum (`soleur:architecture`, no new ordinal): "arm, reflush and luks-cutover retired; rollback and resume remain pending a write-credential design; the preflight reads `DOPPLER_TOKEN_INNGEST_FLIP_READ` and fails closed". Append-only: no existing text edited. Other ADRs (100, 117, 142, 225, 257, 307) and the post-mortems are append-only records and are not edited.
-3. C4: `model.c4` `github -> hetzner` edge description names "op=arm G3.7 H and op=luks-* G3": rewrite to the surviving verbs; add one `github -> doppler` edge describing the read-only flip-read token (see `## Architecture Decision`). Regenerate the tracked `knowledge-base/engineering/architecture/diagrams/model.likec4.json` with `scripts/regenerate-c4-model.sh` (it carries the same edge text). Run the C4 validation tests and `c4-count-parity`.
+1. Runbook `inngest-server.md`: remove or mark retired the `arm`, `reflush`, `luks-cutover` rows and sections; the quick-reference rows that name them; add one note that a re-cutover or a second FLUSHALL now needs a reviewed re-introduction of the verb (revert of this PR) and, for the on-host reflush arm, a Doppler-console write of `INNGEST_CUTOVER_FLIP` on `soleur-inngest/prd` preceded by a live read of its current value (acceptable for a catastrophic event, CTO; the bound is the key name, the config and the read-first rule, not a printed recipe). Also update `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`, whose rows list `op=arm`, `op=reflush` and `op=luks-*` among the generation-anchor consumers. Keep the `op=resume` and `op=rollback` procedures. Add a repair line for a dead or missing `DOPPLER_TOKEN_INNGEST_FLIP_READ` (operator-local `-replace` of both targets per the `.tf` header recipe, and re-running a partial per-merge apply). Update the inherited-done text per Phase 3. Runbook `inngest-luks-cutover-6894.md`: add a retirement note modeled on its existing section 5a (`luks-rollback` retired).
+2. ADR-282: append an addendum (`soleur:architecture`, no new ordinal): "arm, reflush and luks-cutover retired; rollback and resume remain pending a write-credential design; the preflight reads `DOPPLER_TOKEN_INNGEST_FLIP_READ` and fails closed". The addendum restates the ledger of who reads or writes `INNGEST_CUTOVER_FLIP` by token (arm and reflush rows retired, preflight row now flip-read), cross-references ADR-100 D6b (CI can write `soleur-inngest/prd`) and ADR-241 D2 (the repo-scoped secret is an advisory deviation from the main-only direction, forced by the Terraform App being unable to write environment secrets), and uses the precedent wording "conditional on the PR merging". Append-only: no existing text edited. Other ADRs (100, 117, 142, 225, 257, 307) and the post-mortems are append-only records and are not edited.
+3. C4: `model.c4` `github -> hetzner` edge description names "op=arm G3.7 H and op=luks-* G3": rewrite to the surviving verbs; add ONE `github -> doppler` edge whose description covers both CI credentials into `soleur-inngest/prd` (the read/write arm token, now consumed only by `rollback`/`resume`, and the read-only flip-read token), so the model does not carry an edge for only the weaker token (see `## Architecture Decision`). Regenerate the tracked `knowledge-base/engineering/architecture/diagrams/model.likec4.json` with `scripts/regenerate-c4-model.sh` (it carries the same edge text). Run the C4 validation tests and `c4-count-parity`.
 4. At ship time (not production-mutating): file the tracking issue "design a replacement write credential for op=rollback and op=resume so doppler_service_token.inngest_arm_write can be revoked" (`wg-when-deferring-a-capability-create-a`, milestone from `knowledge-base/product/roadmap.md`, `Ref #9927`). The issue body carries the F2 precondition (delivery replace plus `op=resume` first, then retire resume and rollback in the same owner-run sequence as the revoke) and `Ref #9927`, which cross-references the epic; no separate epic comment and no `Closes`.
 
 ### Phase 7 - Post-merge verification (read-only, agent-run)
 
-1. The per-merge `apply-web-platform-infra` run for the merge commit: log shows the two new resources created, no other change (`git fetch origin main`, take the sha from `git rev-parse origin/main`, then `gh run list -w apply-web-platform-infra.yml --event push --commit <merge-sha> -L 3`; an empty result means "not yet", poll again; then `gh run view <id> --log | grep -E 'Plan:|Apply complete'`). It is a push-triggered run, not a dispatch, so no dispatch watch is armed, but its conclusion is read.
+1. The per-merge `apply-web-platform-infra` run for the merge commit: log shows the two new resources created, no other change (`git fetch origin main`, take the sha from `git rev-parse origin/main`, then `gh run list -w apply-web-platform-infra.yml --event push --commit <merge-sha> -L 3`; an empty result means "not yet", poll again; require `conclusion=success`, then `gh run view <id> --log | grep -E 'Plan:|Apply complete'`). It is a push-triggered run, not a dispatch, so no dispatch watch is armed, but its conclusion is read.
 2. `gh secret list --repo jikig-ai/soleur | grep DOPPLER_TOKEN_INNGEST_FLIP_READ` present; `doppler configs tokens -p soleur-inngest -c prd --json | jq -r '.[]|"\(.name)\t\(.access)"'` shows a row named `inngest-ci-flip-read` with access `read` (metadata only).
 3. The first real use of the new secret is the owner-gated replace (Operator Holds). Until then the fail-closed preflight can only be exercised by the test suite; that residual is recorded in the PR body.
 
@@ -265,7 +288,7 @@ New `apps/web-platform/infra/inngest-flip-read-token.tf` (providers already pinn
 
 - `doppler_service_token.inngest_flip_read`: `project = doppler_project.inngest.name`, `config = doppler_environment.inngest_prd.slug` (by-reference, as `inngest_arm_write`, F4), `name = "inngest-ci-flip-read"`, `access = "read"`. No `expires_at`, no `lifecycle` block.
 - `github_actions_secret.doppler_token_inngest_flip_read`: `repository = "soleur"`, `secret_name = "DOPPLER_TOKEN_INNGEST_FLIP_READ"`, `plaintext_value = doppler_service_token.inngest_flip_read.key`. No `ignore_changes` (a `-replace` rotation must propagate in the same apply).
-- Header comment: purpose (the one consumer, the preflight), that it is **not** `doppler_service_token.inngest_flip` (the on-host read/write flip credential, never published), that read access reaches the whole config (names verified: `INNGEST_REDIS_LUKS_KEY`, `INNGEST_TLS_KEY`, `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`) so it bounds writes, not reads, the `autonomy-considered: provider-mint-applied` line, the rotation recipe with BOTH `-target`s (token and secret; `-target` selects dependencies never dependents), the by-reference transitive-edge caveat copied from the arm file, and the repo-scoped (not environment) secret reason (the Terraform GitHub App cannot write environment secrets).
+- Header comment: purpose (the one consumer, the preflight), that it is **not** `doppler_service_token.inngest_flip` (the on-host read/write flip credential, never published), that read access reaches the whole config (names verified: `INNGEST_REDIS_LUKS_KEY`, `INNGEST_TLS_KEY`, `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`) so it bounds writes, not reads, the `autonomy-considered: provider-mint-applied` line, the rotation recipe with BOTH `-target`s (token and secret; `-target` selects dependencies never dependents), the by-reference transitive-edge caveat (both `doppler_project.inngest` and `doppler_environment.inngest_prd` carry `prevent_destroy = true`, so a teardown first needs a reviewed lift; do not copy the arm file's "recreates the isolated project unattended" wording verbatim), the teardown ordering (once the arm token is gone this token is the only per-merge path onto those two parents, so a teardown removes both `-target` lines first), the standing-exposure note (a repo secret resolves in any workflow on any pushed branch with no reviewer gate; after the arm revoke this is the only repo-wide read path to `INNGEST_REDIS_LUKS_KEY` and `INNGEST_TLS_KEY`; rotation owner is the repository owner via the recipe above; fetching the token inside the main-only `infra-privileged` job from a Tier-B secret was considered and not chosen, F4), and the repo-scoped (not environment) secret reason (the Terraform GitHub App cannot write environment secrets).
 - Sensitive variables: none new. The token is minted by the existing `DOPPLER_TOKEN_TF` provider auth.
 
 ### Apply path
@@ -312,9 +335,11 @@ logs:
   where: GitHub Actions run logs for apply-web-platform-infra.yml and cutover-inngest.yml
   retention: the repository's configured Actions log retention
 discoverability_test:
-  command: bash apps/web-platform/infra/inngest-host-replace-preflight.test.sh
-  expected_output: "0 failed"
+  command: grep -cF 'secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ' .github/workflows/apply-web-platform-infra.yml
+  expected_output: "1"
 ```
+
+The probe is the smallest command that prints the wiring signal named in `liveness_signal.what` (the preflight reads the new secret exactly once); it finishes in milliseconds and needs no credentials. The behavioural proof is the new suite `inngest-host-replace-preflight.test.sh`, run by CI, not declared here because a suite cannot finish inside the 15-second probe cap.
 
 ## Encryption Posture
 
@@ -324,7 +349,7 @@ at_rest:
     mechanism: provider-managed:Cloudflare R2 server-side encryption for the state object; GitHub Actions secrets are encrypted with a repository libsodium sealed-box public key before upload
     evidence: apps/web-platform/infra/main.tf backend "s3" block (R2, TLS-only) for the state; github_actions_secret resource in inngest-flip-read-token.tf for the secret; same posture as every sibling doppler_service_token key in this root (see the arm file's State storage paragraph)
     defends_against: a leaked R2 object copy at rest without the R2 credential; a read of the repo secret listing (values are write-only to the API)
-    does_not_defend: any workflow job in this repository that can resolve repo secrets (the secret is repo-scoped, not environment-scoped); a holder of Terraform state access or R2 credentials, who obtains the key in cleartext; read of the WHOLE soleur-inngest/prd config, including INNGEST_REDIS_LUKS_KEY, by whoever holds the token
+    does_not_defend: any workflow on any pushed branch in this repository that can resolve repo secrets (the secret is repo-scoped, not environment-scoped, so CODEOWNERS and the main-only environments do not gate it; after the arm revoke this is the only repo-wide read path to the LUKS passphrase); a holder of Terraform state access or R2 credentials, who obtains the key in cleartext; read of the WHOLE soleur-inngest/prd config, including INNGEST_REDIS_LUKS_KEY, by whoever holds the token
     disclosed_as: not-publicly-claimed
     live_verification: unavailable:the token key is unreadable after create and the repo secret is write-only; only token metadata (name, access) is readable, which Phase 7 reads
 in_transit:
@@ -363,6 +388,8 @@ in_transit:
 | 6 | Treat a names-list error as "key absent" | RED |
 | 7 | Add a second step elsewhere in the file that reads the arm secret | RED |
 | 8 | Names list returns invalid JSON with rc 0 and the step treats `jq`'s non-zero as "absent" | RED |
+| 9 | Keep the env key `DOPPLER_TOKEN_INNGEST_FLIP_READ` but give it the value `${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}`, or any other `secrets.` / `secrets[` / `toJSON(` reference in the step body (the step's `env:` value must equal the literal flip-read expression and the body must contain no other secrets access) | RED |
+| 10 | Remove the leading xtrace refusal; run the step with `SHELLOPTS=xtrace` | RED (the step must exit 78) |
 
 Mutation 1 is checked against the step block extracted by name, not the whole file, so a retained comment that merely contains the text `continue-on-error` neither masks nor fakes it.
 
@@ -399,20 +426,22 @@ The case-label check is a literal POSITIVE set of surviving labels (enumerate, r
 
 ### Guard 3 - The CI flip credential cannot write
 
-**Property.** The only CI-published credential into `soleur-inngest/prd` that this PR adds has `access = "read"`, is declared outside the token-drift map and inventory, is published under the secret name the preflight reads, and both resource addresses are in the default per-merge allow-list.
+**Property.** The only CI-published credential into `soleur-inngest/prd` that this PR adds has `access = "read"`, is declared outside the token-drift map and inventory, is published under the secret name the preflight reads with `plaintext_value` equal to its own token's `.key`, and references the isolated project and config by-reference. (Presence of both addresses in the per-merge allow-list is enforced by the parity test's #5566 rule and is deliberately not re-asserted here.)
 
-**Assembly.** `inngest-flip-read-token.tf` (two resources), `token-drift-read-tokens.tf` and `doppler-config-inventory.txt` (must not mention it), the default allow-list step of `apply-web-platform-infra.yml`, the preflight's `env:` secret name, and the parity test's #5566 publish rule.
+**Assembly.** `inngest-flip-read-token.tf` (two resources), `token-drift-read-tokens.tf` and `doppler-config-inventory.txt` (must not mention it), the `github_actions_secret` `plaintext_value` expression, the token's `project`/`config` expressions, the preflight's `env:` secret name, and (by reference, not re-asserted) the parity test's #5566 publish rule. Pins run on comment-stripped, whitespace-normalized `.tf` text.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Change `access = "read"` to `"read/write"` | RED |
-| 2 | Remove the token's `-target=` line | RED (parity publish rule and the static pin) |
+| 2 | Remove the token's `-target=` line | RED (by the parity test's #5566 rule; this suite does not duplicate it) |
 | 3 | Rename the secret so the preflight's `env:` name no longer matches | RED |
 | 4 | Make `doppler_service_token.inngest_flip_read` join the `for_each` in `token-drift-read-tokens.tf` (or add it to the inventory file) | RED |
 | 5 | Make the static pin's `.tf` read return empty (path typo) | RED (non-vacuity) |
 | 6 | Add a second resource in the file with `access = "read/write"` after the compliant first | RED |
+| 7 | Set the published secret's `plaintext_value` to `doppler_service_token.inngest_arm_write.key` (the realistic swap: the secret named read-only would carry the read/write token) | RED |
+| 8 | Change `project` or `config` to a string literal or another project's reference | RED |
 
 **Harness rows:** suite edit: point the pin at a copy where `access` is split across lines or quoted differently (a permitted spelling) - must stay GREEN; and a copy with a trailing comment containing the text `read/write` - must stay GREEN (comment-stripped match).
 
@@ -505,6 +534,7 @@ The case-label check is a literal POSITIVE set of surviving labels (enumerate, r
 
 - **Merge-to-apply window.** Between merge and the per-merge apply, `secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ` is empty; a host-replace dispatched in that window fails at the preflight naming the secret. Fail-closed is the safe direction and no replace is scheduled (it needs the owner's in-session go).
 - **Recovery replace blocked by a Doppler outage.** The job is also the sole-scheduler recovery route. The step now fails on a blind read where it used to degrade open. CTO F3: acceptable, because the later "Extract backend credentials" and terraform steps need Doppler anyway.
+- **A never-used credential gates a recovery route.** Fail-closed makes the sole-scheduler recovery replace depend on a credential that has not been exercised live and has no CI rotation path (#7263). If it is dead at that moment the dispatch fails at the preflight. Mitigation: the runbook gets a repair line (operator-local `-replace` of both targets per the `.tf` header recipe), and Phase 7 confirms the apply conclusion is `success` before anyone relies on it. A partial per-merge apply (token created, secret not) is idempotent on retry: re-run the failed push run; never `-replace` the token.
 - **The arm token is NOT revocable after this PR.** `rollback` and `resume` still consume it. The PR body, the ADR-282 addendum and the tracking issue say so explicitly; the revoke precondition is in `## Operator Holds`.
 - **Concurrent PRs.** F6: ship independently. If #12100 merges first, it edits `terraform-target-parity.test.ts` and the inventory: rebase and recompute `TEST_FLOOR`. If #12064 merges first, it edits the allow-list region and `cutover-inngest-workflow.test.sh` (+8/-8, a probe-schema rename): rebase, resolve, recompute `_EXACT_FLOOR`. Never hand-add to a count; the Phase 5 command is authoritative.
 - **Large mechanical deletion.** Mitigation: Guard 2 absence block, per-helper `git grep`, AC7 byte-identity of the kept arms, and the whole-tree ratchets.

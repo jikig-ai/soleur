@@ -13,20 +13,20 @@ Hard limits: no revoke, scope-down or deletion of the arm-write token; `inngest-
 
 ## Phase 1 - Failing tests first
 
-- 1.1 Create `apps/web-platform/infra/inngest-host-replace-preflight.test.sh` (Guard 1 behavioural rows with stubbed `doppler`/`jq`; Guard 3 static pins). RED.
+- 1.1 Create `apps/web-platform/infra/inngest-host-replace-preflight.test.sh` (Guard 1 behavioural rows with stubbed `doppler`/`jq` under `env -i` and a symlink-farm PATH, fixed-string step-name match, `bash <tmpfile>` not `eval`; Guard 3 static pins incl. `plaintext_value` equals its own token's `.key` and by-reference project/config). RED.
 - 1.2 Add the Guard 2 literal-set and absence block to `cutover-inngest-workflow.test.sh`. RED.
 - 1.3 Register the new suite as `scripts/lint-orphan-test-suites.sh` and `scripts/lib/test-affected-paths.sh` require.
 
 ## Phase 2 - Terraform (file only)
 
 - 2.1 Create `apps/web-platform/infra/inngest-flip-read-token.tf` (token `inngest-ci-flip-read`, `access = "read"`, by-reference project/config; repo secret `DOPPLER_TOKEN_INNGEST_FLIP_READ`; rotation comment with both `-target`s).
-- 2.2 Add both `-target=` lines to the default per-merge allow-list in `apply-web-platform-infra.yml` (not the `inngest_host` job).
-- 2.3 Comment-only update of the `CONSUMERS` block in `inngest-arm-write-token.tf`.
+- 2.2 Add both `-target=` lines to the default per-merge allow-list in `apply-web-platform-infra.yml`, each beside its arm sibling (never between `doppler_secret.inngest_redis_luks_key` and `supabase_project.prd`); not the `inngest_host` job.
+- 2.3 Comment-only updates in `inngest-arm-write-token.tf`: the `CONSUMERS` block, the file header, the "Human ack" paragraph and the environment-secret comment.
 - 2.4 Recompute `TEST_FLOOR` in `terraform-target-parity.test.ts` only if a `test(` is added.
 
 ## Phase 3 - Preflight rewrite
 
-- 3.1 Rewrite the step: empty token exits 1; blind names-list exits 1; key absent warns; present-and-get-fails exits 1; remove `continue-on-error`.
+- 3.1 Rewrite the step: leading xtrace refusal (exit 78); empty token exits 1; blind names-list (missing `doppler`/`jq`, rc != 0, empty output, invalid JSON, non-object or empty object) exits 1; key absent warns; present-and-get-fails exits 1; stderr discarded; remove `continue-on-error`; error text names the secret and the re-run-the-push-apply remedy.
 - 3.2 Move the rationale prose to the runbook; dry-run `wc -c` first; stay at or below 489,718.
 - 3.3 Zero `DOPPLER_TOKEN_INNGEST_ARM` references left in the workflow, comments included.
 
@@ -43,12 +43,12 @@ Hard limits: no revoke, scope-down or deletion of the arm-write token; `inngest-
 
 ## Phase 6 - Docs and records
 
-- 6.1 Runbooks: `inngest-server.md`, `inngest-luks-cutover-6894.md`, `infra-credential-tiers-8209.md`.
+- 6.1 Runbooks: `inngest-server.md` (incl. a repair line for a dead or missing flip-read token), `inngest-luks-cutover-6894.md`, `infra-credential-tiers-8209.md`.
 - 6.2 ADR-282 addendum (append-only).
-- 6.3 C4: rewrite the `github -> hetzner` edge text, add the `github -> doppler` read-token edge, regenerate `model.likec4.json`, run the C4 tests.
+- 6.3 C4: rewrite the `github -> hetzner` edge text, add ONE `github -> doppler` edge covering both CI credentials into `soleur-inngest/prd`, regenerate `model.likec4.json`, run the C4 tests.
 - 6.4 PR body first lines (production-mutating merge; departures; no benefit until revoke); file the tracking issue for a replacement write-credential design with the F2 precondition and `Ref #9927`.
 
 ## Phase 7 - Post-merge (read-only)
 
-- 7.1 Confirm the merge-commit push apply created exactly the two resources.
+- 7.1 Confirm the merge-commit push apply (`--event push --commit <sha>`, `conclusion=success`) created exactly the two resources; on a partial apply re-run it, never `-replace` the token.
 - 7.2 Confirm the repo secret exists and the live token metadata is `inngest-ci-flip-read` / `read`.
