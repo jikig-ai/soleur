@@ -21,7 +21,7 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x3, learnings-researche
 ## Work Phase
 - Status: complete
 - (suite-rate tool + test were committed here and later dropped in review, see Review Phase) rates at the pinned base recorded; one gate reading replayed (cold gate 6522 s, not met); weights and ledger in the ADR-242 amendment; Phase 5 not fired (186 s eligible saving vs a 5922 s gap)
-- Exit gate: deferred by its own 2400 s budget after 118 of 298 suites, no red; the covering suites (replay arms a/b/c, test-all-affected-b, the new test) were run directly and pass
+- Exit gate: deferred by its own 2400 s budget after 118 of 298 suites, no red; the covering suites (replay arms a/b/c, test-all-affected-b, the dropped suite-rate test) were run directly and pass
 - Operator leftover: the private clone /data/git-repositories/jikig-ai/measure-clone-r1 could not be deleted by the agent (safety check) and is left for the operator
 - lint-ratchet: user-ruff not adopted (relay; do not adopt unprompted)
 
@@ -41,3 +41,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x3, learnings-researche
 | glob-rate command missing --out; amendment date | command and date accuracy | pattern, history | same |
 | 459 s label, eligibility wording, overstatements, missing outcome lead | wording and clarity | quality | same |
 | deviation (one reading) not surfaced in decision-challenges | missing decision row | pattern | follow-up commit (mechanical row) |
+- Final affected gate (docs-only diff, 123 selected): stopped at 95 suites done, none red; the 28 not reached are the serial `lock:test-all` chain (replay arms, test-all-* batteries), selected by the `knowledge-base/project/specs/` edge even for a documents-only diff. CI's required `test` check is the merge gate.

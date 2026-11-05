@@ -27,7 +27,7 @@ Issues: #12013, #12025. Draft PR: #12103. Follow-up filed: #12106.
 - [~] 3.3 One reading with 8 burners: cold derive 543 s, warm derive 108 s, pool run 6087 s. Warm rerun and serial pair: the serial attempt fell back (lock not held) and was stopped; not a datum
 - [x] 3.4 Live red observed inside the reading (provisional line at 1271 s, 97 suites started before and 64 finished after, one `[FAIL]` at drain, rc 1)
 - [x] 3.5 Timing rows: 160 non-skip rows equal the selected count
-- [x] 3.6 Verdict: 6522 s (543 cold derive + 5979 s suite phase), not met. Derive is 8 percent of the cold gate (below the 25 percent tracker threshold)
+- [x] 3.6 Verdict: 6522 s (543 cold derive + 5979 s warm wall net of derive), not met. Derive is 8 percent of the cold gate (below the 25 percent tracker threshold)
 - [x] 3.7 Throwaway worktree removed, burners and runs killed. The private clone `/data/git-repositories/jikig-ai/measure-clone-r1` could not be removed by the agent (safety check) and is left for the operator
 
 ## Phase 4 - Weights and ledger (#12025)
