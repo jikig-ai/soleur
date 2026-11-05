@@ -297,3 +297,9 @@ installed commit can still be behind `main`, because the plugin is delivered unp
 releases are only tagged points on it. An answer from a stale cache or a failed lookup is reported as
 `relation=unknown` (`reason=stale-cache`), never as current. Only `relation=older` is trusted from a
 cached answer.
+
+## Addendum 2026-11-05 (#12102)
+
+The scheduled canary installs CLI 2.1.311 from this date (it was 2.1.228). Every statement above that cites 2.1.228 is a dated
+measurement and was not re-measured; only the delivery canary was re-run on 2.1.311 (`compared=2084 expected=2084`, all
+conjuncts green). Treat the destruction-half and `autoUpdate` observations as unverified on 2.1.311 until someone repeats them.

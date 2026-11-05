@@ -96,7 +96,7 @@ jobs:
       - name: Dispatch agent to fix the gate (fix-only)
         if: steps.gate.outputs.rc != '0' && steps.preflight.outputs.ok == 'true'
         id: agent
-        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
+        uses: anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # `id-token: write` is deliberately ABSENT here (untrusted pull_request
