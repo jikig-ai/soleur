@@ -105,3 +105,8 @@
 ## Rebase #3 (2026-11-05)
 - Third main-move conflict: TSVs only. Rebased in-session (37 commits), TSVs → branch side, regen'd post-rebase (+1 floor row, commit in rebase chain). Force-pushed 6acb99343d. Merge queue re-evaluating.
 - Remaining: merge poll → postmerge verification from merged main (release envs, dedupe lint, systemd parity, legal gates) → epic #10390 status update (stays OPEN). Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
+
+## Rebase #4 (2026-11-05)
+- Fourth main-move conflict: ADR-241 only (main's #8209 entry vs my #8780 entry — union-merged, main's entry first, mine second). Rebases in-session: 39 commits, single conflict stop. Force-pushed 858ea49b4c.
+- test-webplat (1/2) FAILURE seen on prior head — non-required; local vitest over test/server/inngest/ green except env-pinned CLI/sdk tests (unrelated).
+- Remaining: merge poll -> postmerge verification from merged main -> epic #10390 status update. Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
