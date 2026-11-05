@@ -442,11 +442,20 @@ fi
 TOTAL=$((passes + fails))
 printf '\n== %d passed, %d failed (%d assertions, %d stubbed executions in the control, %d mutants)\n' "$passes" "$fails" "$TOTAL" "$CONTROL_ROWS" "$MUTANTS_RUN"
 # Anti-vacuity floors, reported with printf + exit so a neutered pass()/fail() cannot hide them.
-MIN_ASSERTIONS=48; MIN_MUTANTS=40; MIN_CONTROL_ROWS=19
-if [ "$TOTAL" -lt "$MIN_ASSERTIONS" ]; then printf 'FAIL FLOOR: %d assertions ran, floor %d\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 1; fi
-if [ "$fails" -eq 0 ]; then
-  if [ "$MUTANTS_RUN" -lt "$MIN_MUTANTS" ]; then printf 'FAIL FLOOR: %d mutants ran, floor %d\n' "$MUTANTS_RUN" "$MIN_MUTANTS" >&2; exit 1; fi
-  if [ "$CONTROL_ROWS" -lt "$MIN_CONTROL_ROWS" ]; then printf 'FAIL FLOOR: %d control executions, floor %d\n' "$CONTROL_ROWS" "$MIN_CONTROL_ROWS" >&2; exit 1; fi
+MIN_ASSERTIONS=48
+if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
+  printf 'FAIL: assertion floor: only %d assertions passed, floor %d\n' "$passes" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+MIN_MUTANTS=40
+if [ "$fails" -eq 0 ] && [ "$MUTANTS_RUN" -lt "$MIN_MUTANTS" ]; then
+  printf 'FAIL: assertion floor: only %d mutants ran, floor %d\n' "$MUTANTS_RUN" "$MIN_MUTANTS" >&2
+  exit 1
+fi
+MIN_CONTROL_ROWS=19
+if [ "$fails" -eq 0 ] && [ "$CONTROL_ROWS" -lt "$MIN_CONTROL_ROWS" ]; then
+  printf 'FAIL: assertion floor: only %d control executions, floor %d\n' "$CONTROL_ROWS" "$MIN_CONTROL_ROWS" >&2
+  exit 1
 fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then printf 'FAIL INSTRUMENT: fail() ledger (%d) disagrees with the counter (%d)\n' "${#FAILURES[@]}" "$fails" >&2; exit 1; fi
 [ "$fails" -eq 0 ]
