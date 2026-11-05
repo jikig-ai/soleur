@@ -21,14 +21,14 @@
 #   scripts/lint-orphan-test-suites-mutations-a   SUT is the linter's own detection corpus (fixtures), not repo oracle state
 #   scripts/lint-orphan-test-suites-mutations-b   same: corpus mutations, not repo oracle state
 #   scripts/test-all-orphan-log-retention         known flake (ADR-276 amendment 2026-10-16 item 5); a lane leg must not flake
-#   scripts/affected-tests.test.sh                suite-file, not a registration label (SUITE_GLOB member; SUT is the local
-#                                                 affected gate's own test list, not the index the lane protects)
-#   scripts/affected-tests-pool-default.test.sh   same shape: glob-registered pool-default suite, adjacent not oracle SUT
+#   plugins/soleur/scripts/affected-tests.test.sh   SUT is the local
+#                                                 affected gate's own test list, not the index the lane protects
+#   plugins/soleur/test/affected-tests-pool-default.test.sh   same shape: glob-registered pool-default suite, adjacent not oracle SUT
 #   scripts/audit-suite-reads                     runtime-read recorder; adjacent machinery, not the oracle/selector SUT
 #   tests/scripts/lint-ratchet                    the ratchet LINTER's suite — adjacent machinery (the ratchet's own
 #                                                 affected-index-ratchet job already runs on the reduced set)
 #   scripts/pre-push-ratchet-lane                 local pre-push lane, not part of the hosted oracle validation
-#   scripts/ci-path-gating.test.sh (label: scripts/ci-path-gating)   path-gating classifier, adjacent machinery
+#   plugins/soleur/test/ci-path-gating.test.sh     path-gating classifier, adjacent machinery
 #
 scripts/lint-orphan-test-suites	bash scripts/lint-orphan-test-suites.sh
 scripts/test-all-affected-a	bash scripts/test-all-affected.test.sh --rows 1-13

@@ -227,7 +227,7 @@ cp "$DRIVER" "$PRISTINE"
 # `readonly ORACLE_LANE_LOCKED=1`, carried on its own line — the activation PR deletes it.
 LOCK_RE='^readonly ORACLE_LANE_LOCKED=1([[:space:]]+#.*)?$'
 UNLOCKED="$SANDBOX/drv.unlocked.sh"
-sed "/$LOCK_RE/d" "$PRISTINE" > "$UNLOCKED"
+sed -E "/$LOCK_RE/d" "$PRISTINE" > "$UNLOCKED"
 
 # ── Fixture builders ─────────────────────────────────────────────────────────
 ACCEPT="scripts/ci-pr-affected-audit.accept.tsv"
@@ -348,10 +348,9 @@ fx_tap() {
   case "$2" in
     ins_member)      sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  "scripts/zzleak-new.test.sh"' "$f" ;;
     ins_member_end)  sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/,/^)$/ s|^)$|  "scripts/zzleak-end.test.sh"\n)|' "$f" ;;
-    del_member)      sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/,/^)$/ s|^  "scripts/zzleak-foo.test.sh"$||; /^$/d' "$f" ;;
-    reorder)         sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/,/^)$/{N;s|\("scripts/zzleak-foo.test.sh"\)\n\(  "scripts/zzleak-foo/"\)|\2\n\1|}' "$f" ;;
+    del_member)      sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/,/^)$/ { s|^  "scripts/zzleak-foo.test.sh"$||; /^$/d }' "$f" ;;
+    reorder)         sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/,/^)$/ { s|^  "scripts/zzleak-foo.test.sh"$|@@ZZLEAK_SWAP@@|; s|^  "scripts/zzleak-foo/"$|  "scripts/zzleak-foo.test.sh"|; s|^@@ZZLEAK_SWAP@@$|  "scripts/zzleak-foo/"| }' "$f" ;;
     new_array)       cat >> "$f" <<'NEOF'
-
 AFFECTED_SCRIPTS_ZZLEAK_NEW_PATHS=(
   "scripts/zzleak-new.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -519,6 +518,9 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
       ov+=("$a")
     fi
   done
+  # sweep stale oracle-lane scratch dirs BEFORE the run (a SIGKILLed earlier row leaves one, legitimately — the
+  # post-run reaped check below must see only THIS run's leak, not history's)
+  rm -rf "$SANDBOX"/rt/oracle-lane.* "$SANDBOX"/tmp/oracle-lane.* 2>/dev/null
   { ( cd "$repo" && env -i "${e[@]}" "${ov[@]}" bash -c 'exec bash "$DRV"' ) > "$o/stdout" 2> "$o/stderr"; } 2> /dev/null
   RC=$?
   O="$o"
@@ -603,6 +605,11 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   check_eq "run$RUN_N($name) no sha in stderr, the notice or the summary" "$shaleak" "0"
   if [ "$EXPECT_KILLED" != 1 ]; then
     check_eq "run$RUN_N($name) stderr is empty" "$(head -c 200 "$o/stderr")" ""
+    # the EXIT trap owns scratch cleanup on EVERY path (normal, early return, abort): a leaked oracle-lane.*
+    # workdir under RUNNER_TEMP or TMPDIR means the trap is gone or reordered. (EXPECT_KILLED rows are SIGKILLed
+    # mid-run — an untrappable leak is the correct behaviour there and stays unasserted.)
+    check_eq "run$RUN_N($name) the oracle scratch dir is reaped on exit" \
+      "$(find "$SANDBOX/rt" "$SANDBOX/tmp" -maxdepth 1 -name 'oracle-lane.*' -type d 2>/dev/null | wc -l)" "0"
   fi
 }
 
@@ -666,17 +673,28 @@ row_shape() {  # two-parent merge-ref only: octopus, non-merge HEAD, HEAD^2 != P
   expect_full "O-1 empty PR head sha"
 }
 row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus every outside-surface path
+  # the reason is pinned per row: the exclusion check is VERDICT-redundant with the surface check by design (its
+  # members are already outside the surface), so dropping it only moves reason=excluded to reason=outside_surface.
   local d="$1"
   drive replay "$d"
   expect_full "O-EXC row1 replay.py beside accept.tsv"
+  check_eq "O-EXC row1 replay.py: reason" "$N_REASON" "excluded"
   drive ex_testall "$d";  expect_full "O-EXC scripts/test-all.sh"
+  check_eq "O-EXC test-all.sh: reason" "$N_REASON" "excluded"
   drive ex_ratchet "$d";  expect_full "O-EXC lint-ratchet.py"
+  check_eq "O-EXC lint-ratchet.py: reason" "$N_REASON" "excluded"
   drive ex_ciyml "$d";    expect_full "O-EXC .github/workflows/ci.yml"
+  check_eq "O-EXC ci.yml: reason" "$N_REASON" "excluded"
   drive ex_foo "$d";      expect_full "O-EXC scripts/foo.sh"
+  check_eq "O-EXC scripts/foo.sh: reason" "$N_REASON" "outside_surface"
   drive ex_lib "$d";      expect_full "O-EXC other scripts/lib/**"
+  check_eq "O-EXC scripts/lib/**: reason" "$N_REASON" "excluded"
   drive ex_tap "$d";      expect_full "O-EXC accept + out-of-extent hunk"
+  check_eq "O-EXC out-of-extent hunk: reason" "$N_REASON" "extent_miss"
   drive ex_code "$d";     expect_full "O-EXC apps/web-platform ts"
+  check_eq "O-EXC apps ts: reason" "$N_REASON" "outside_surface"
   drive ex_mk "$d";       expect_full "O-EXC Makefile"
+  check_eq "O-EXC Makefile: reason" "$N_REASON" "outside_surface"
 }
 row_extent_out() {  # Guard 1 row 3: hunks outside AFFECTED_*_PATHS extents disqualify the whole diff
   local d="$1" t
@@ -729,10 +747,16 @@ row_maxfiles() {  # the ≤500 cap
   expect_full "O-MAX a >64KB listing with a code file at the end"
 }
 row_status_modes() {  # M/A/D only, modes ⊆ {000000,100644,100755}
+  # reason is pinned per fixture: the status arm runs BEFORE the mode arms, so a typechange on an in-surface path
+  # reads non_oracle_status (kill the status case and it falls through to non_oracle_mode — reason-visible only).
   local d="$1" f
-  for f in typ msym mgit mdsym; do
+  drive typ "$d"
+  expect_full "O-MODE typechange fixture 'typ'"
+  check_eq "O-STATUS typechange: reason" "$N_REASON" "non_oracle_status"
+  for f in msym mgit mdsym; do
     drive "$f" "$d"
-    expect_full "O-MODE typechange/symlink/gitlink fixture '$f'"
+    expect_full "O-MODE symlink/gitlink fixture '$f'"
+    check_eq "O-MODE '$f': reason" "$N_REASON" "non_oracle_mode"
   done
   drive mflip "$d"
   expect_lane "O-MODE a 100644->100755 flip on accept.tsv stays in-surface"
@@ -747,14 +771,19 @@ row_odd() {  # control characters, `::`, `,`, non-ASCII and invalid UTF-8 in a p
   done
 }
 row_empty() {  # Guard 1 row 5: an EMPTY surface membership must NOT classify (the vacuity arm)
+  # the reason is pinned: kill the vacuity arm and an empty listing falls through to files=0 → malformed_diff —
+  # verdict-identical, reason-visible.
   local d="$1"
   drive empty "$d"
   expect_full "O-EMPTY pull_request empty diff"
+  check_eq "O-EMPTY pull_request empty diff: reason" "$N_REASON" "empty_diff"
   drive empty "$d" "EVENT_NAME=merge_group"
   expect_full "O-EMPTY merge_group empty diff"
+  check_eq "O-EMPTY merge_group empty diff: reason" "$N_REASON" "empty_diff"
   # the same with the head/base shas EQUAL (a zero-range batch)
   drive accept "$d" "EVENT_NAME=merge_group" "MERGE_GROUP_BASE_SHA=$(git -C "$FX/accept" rev-parse HEAD)"
   expect_full "O-EMPTY merge_group base==head (zero-range batch)"
+  check_eq "O-EMPTY merge_group base==head: reason" "$N_REASON" "empty_diff"
 }
 row_diff_error() {  # Guard 1 row 4: the listing cannot be trusted → fail closed, never skip
   local d="$1"
@@ -991,7 +1020,9 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
     [[ "$reg" =~ $ORACLE_FAMILY_RE ]] || continue
     covered=0
     if awk -v l="$reg" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qF -- "$reg"; then covered=1; fi
+    # comment coverage is word-boundary, not substring: `scripts/lint-orphan-test-suites` must NOT be covered by the
+    # `scripts/lint-orphan-test-suites-mutations-a` exclusion comment.
+    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "$reg([^[:alnum:]_-]|\$)"; then covered=1; fi
     [ "$covered" = 1 ] || printf 'UNCOVERED-REGISTRATION:%s\n' "$reg"
   done < "$REGS"
   # the declared member set: each name is a member or an exclusion comment (14 plan names).
@@ -999,7 +1030,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
   for dm in "${DECLARED_MEMBERS[@]}"; do
     covered=0
     if awk -v l="$dm" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qF -- "$dm"; then covered=1; fi
+    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "$dm([^[:alnum:]_-]|\$)"; then covered=1; fi
     [ "$covered" = 1 ] || printf 'DECLARED-MISSING:%s\n' "$dm"
   done
   # the committed exclusion list, each named in a comment line.
@@ -1069,11 +1100,13 @@ PYX
     _oic="$SANDBOX/oic-repo"
     assert_fixture_dir "$_oic"
     mkdir -p "$_oic/scripts"
-    { printf 'scripts/fake-pass true\n'; printf 'scripts/fake-also-pass true\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
+    # the manifest grammar is label<TAB>argv — the step body reads IFS=$'\t', so a space-separated stub reads as a
+    # member with no argv and exits 1 by design (the no-argv fail-closed arm).
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-also-pass\ttrue\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
     ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/pass.out" 2>&1
     _rc_pass=$?
     check_eq "G4 row4 an all-pass stub manifest leaves the leg green" "$_rc_pass" "0"
-    { printf 'scripts/fake-pass true\n'; printf 'scripts/fake-fail false\n'; printf 'scripts/fake-after true\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-fail\tfalse\n'; printf 'scripts/fake-after\ttrue\n'; } > "$_oic/scripts/ci-oracle-lane-suites.txt"
     ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/fail.out" 2>&1
     _rc_fail=$?
     check_true "G4 row4 a member's non-zero exit propagates into the leg verdict" "$(rc_of test "$_rc_fail" -ne 0)"
@@ -1125,15 +1158,19 @@ mutate() {  # $1=label $2=base driver file $3=sed expression $4...=row functions
 kill_guard() { printf 's|^.*# GUARD:%s$|  : # MUTATED|' "$1"; }
 
 # Guard 1 — the surface, the exclusion list, the extent check
-mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" "$(kill_guard O-SURFACE)"        row_exclusions row_allowlist
+mutate "O-SURFACE the surface membership check is removed"      "$PRISTINE" "$(kill_guard O-SURFACE)"        row_oracle_surface row_allowlist
 mutate "O-EXCLUSION the exclusion list is removed"              "$PRISTINE" "$(kill_guard O-EXCLUSION)"      row_exclusions
 mutate "O-EXCLUSION replay.py dropped from the exclusion list"  "$PRISTINE" '/ci-pr-affected-replay\.py/d'     row_exclusions
 mutate "O-EXCLUSION ci.yml dropped from the exclusion list"     "$PRISTINE" '/workflows\/ci\.yml/d'            row_exclusions
 mutate "O-EXTENT the in-extent hunk check is removed (whole-file path test — the plan's named sharp edge)" "$PRISTINE" "$(kill_guard O-EXTENT)" row_extent_out
 mutate "O-EXTENT-BASE the base-image half is dropped (a deleted array is not checked)" "$PRISTINE" "$(kill_guard O-EXTENT-BASE)" row_oracle_surface
 mutate "O-EXTENT-HEAD the head-image half is dropped (a new array is not checked)"     "$PRISTINE" "$(kill_guard O-EXTENT-HEAD)" row_oracle_surface
-mutate "O-SURFACE the doc allowlist widened to any .md"         "$PRISTINE" 's|knowledge-base/\*\*/\*\.md|*.md|g; s|knowledge-base/\?\*\.md|*.md|g' row_allowlist
-mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|scripts/lib/[^"'"'"' ]*|scripts/lib/*|g' row_exclusions row_extent_out
+# the doc-widening sed must hit the is_doc_path CASE PATTERN `knowledge-base/?*.md` (the comment's `**` spelling is not
+# the pattern site — a comment-only hit lands trivially and survives). BRE: literal `?`, escaped `*` and `.`.
+mutate "O-SURFACE the doc allowlist widened to any .md"         "$PRISTINE" 's|knowledge-base/?\*\.md|*.md|' row_allowlist
+# a REAL wholesale admission, well-formed: (a) the exclusion entry stops matching lib paths, (b) is_oracle_data_path
+# gains scripts/lib/* — a one-arm no-op sed would leave the exclusion first in line and change nothing.
+mutate "O-SURFACE scripts/lib/** admitted wholesale"            "$PRISTINE" 's|    scripts/lib/\*) return 0 ;;|    scripts/lib/ZZ-NOMATCH-XX) return 0 ;;|; s|    scripts/ci-pr-affected-audit.baseline.tsv) return 0 ;;|&\n    scripts/lib/*) return 0 ;;|' row_exclusions row_extent_out
 # the preconditions
 mutate "O-EVENT any event classifies"                           "$PRISTINE" "$(kill_guard O-EVENT)"          row_event_out
 mutate "O-TWO-PARENTS the two-parent check is removed"          "$PRISTINE" "$(kill_guard O-TWO-PARENTS)"    row_shape
@@ -1148,13 +1185,17 @@ mutate "O-PATH-CHARS control/odd characters accepted in a path" "$PRISTINE" "$(k
 mutate "O-EMPTY-DIFF a zero-path diff classifies (the vacuous arm)" "$PRISTINE" "$(kill_guard O-EMPTY-DIFF)" row_empty
 mutate "O-DIFF a failed git diff is trusted anyway"             "$PRISTINE" 's/ || return 0/ # MUTATED/'    row_diff_error
 # the arm, the lock, the defaults
-mutate "O-SWITCH the exact-`on` compare becomes non-empty"      "$UNLOCKED"  's|= on \]|=~ ^on]|'            row_switch
+mutate "O-SWITCH the exact-on compare becomes non-empty"        "$UNLOCKED"  's|= on \]|=~ ^on]|'            row_switch
 mutate "O-SWITCH any non-empty switch arms"                     "$UNLOCKED"  's|\[ "\${SWITCH:-}" = on \]|[ -n "${SWITCH:-}" ]|' row_switch
-mutate "O-LOCK the arm ignores the lock"                        "$PRISTINE"  "$(kill_guard O-ARM)"           row_lock row_oracle_surface
+# a dead arm is verdict-identical on the LOCKED copy (active stays false by construction), so this one mutates the
+# lock-neutralized driver and is read by the unlocked rows that expect active=true.
+mutate "O-LOCK the arm ignores the lock"                        "$UNLOCKED"  "$(kill_guard O-ARM)"           row_switch
 mutate "O-LOCK the lock is not read"                            "$PRISTINE"  "$(kill_guard O-LOCK-READ)"     row_lock
 mutate "O-DEFAULTS the defaults are not written first"          "$PRISTINE"  "$(kill_guard O-DEFAULTS)"      row_defaults_first
 mutate "O-EXIT the always-exit-0 trap is removed"               "$PRISTINE"  "$(kill_guard ALWAYS-EXIT-0)"   row_diff_error
-_e1='s|^if \[ "\$active" != true \]|if ! |'
+# dead block, not an orphan: `if ! true; then` + a comment swallowing the rest of the line leaves a well-formed
+# never-executing reset, so the emitted skip_legs survives to the final write (line-count and grammar rows both see it).
+_e1='s/^if \[ "$active" != true/if ! true; then : # MUTATED-IF /'
 mutate "O-GRAMMAR skip_legs written when not active (arm gating AND final validation removed)" \
   "$PRISTINE" 's|^  reason=|  printf "skip_legs=%s\\n" "$would_skip" >> "$OUT"\n  reason=|; '"$_e1" row_lock row_oracle_surface
 unset _e1

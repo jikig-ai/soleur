@@ -175,7 +175,7 @@ expect_line() {  # $1=label $2=body $3..$5=results $6=event $7=needle $8=want_rc
 # and each row's verdict is arbitrary. This runs FIRST and aborts on failure.
 _c0=$fails
 expect_line "CONTROL all-green" "$BODY" success success success push \
-  "All six legs green (four shards + web-platform-build + encryption-posture)." 0
+  "All legs green (six battery legs + oracle-index-check)." 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing. The unmutated\n' >&2
   printf 'aggregator body does not emit its own success line, so every mutation\n' >&2
@@ -325,7 +325,7 @@ done
 # CONTROL; repeated here across the other event name so the event gate cannot
 # be implemented as "always fail on pull_request".
 expect_line "Hb must-PASS all-green on pull_request" "$BODY" success success success pull_request \
-  "All six legs green (four shards + web-platform-build + encryption-posture)." 0
+  "All legs green (six battery legs + oracle-index-check)." 0
 
 # ── MUTATION BATTERY ─────────────────────────────────────────────────────────
 # Each row mutates a COPY of the extracted body, asserts the mutation LANDED
@@ -466,7 +466,7 @@ elif op == "stdout":
     s = s.replace(arm, arm.replace(">&2", "", 1), 1)
 elif op == "after-final":
     s = s.replace(arm, "", 1)
-    k = s.rfind('echo "All six legs green')
+    k = s.rfind('echo "All legs green (six battery')
     s = s[:k] + arm + s[k:]
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
@@ -532,7 +532,7 @@ tol() {  # $1=label $2=body $3=event $4=skip_legs $5=active $6=head_ok $7=attemp
 S=skipped; OK=success
 # must-PASS (the canonical shape, and two non-canonical ones): a listed skip on an active, head-bound, attempt-1 pull_request run
 tol "G1-0 must-PASS: one listed skip" "$BODY" pull_request test-bun true true 1 $OK $S $OK $OK $OK $OK 0 "test-bun: $TOL_MSG" "test-bun: SKIPPED"
-tol "G1-0b must-PASS: all three listed and skipped" "$BODY" pull_request "$ALL3" true true 1 $S $S $OK $S $OK $OK 0 "All legs green or $TOL_MSG tolerated" "SKIPPED —"
+tol "G1-0b must-PASS: all three listed and skipped" "$BODY" pull_request "$ALL3" true true 1 $S $S $OK $S $OK $OK 0 "All legs green or skip tolerated" "SKIPPED —"
 tol "G1-0c must-PASS: listed skip, list in another order" "$BODY" pull_request "test-scripts-heavy,test-webplat" true true 1 $S $OK $OK $S $OK $OK 0 "test-scripts-heavy: $TOL_MSG" ""
 # G1-1 a skipped leg that is NOT in skip_legs, with a compliant first listed skip beside it; G1-5 a second leg after a compliant first
 tol "G1-1 skipped leg absent from skip_legs" "$BODY" pull_request test-bun true true 1 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" ""
@@ -578,7 +578,7 @@ tol "G1-14 cancelled alone beside tolerated skips" "$BODY" pull_request "test-we
 # G1-8 pr-selection skipped leaves the inputs empty: the full battery's normal verdict is unchanged. Non-PR events always have it skipped; since the
 # job-level switch gate (ADR-276 S4 follow-up, #9729) a `pull_request` run does too while CI_PR_AFFECTED is unset or empty, so `pull_request` joins the loop.
 for _ev in merge_group push workflow_dispatch pull_request; do
-  tol "G1-8 $_ev with empty pr-selection inputs, all green" "$BODY" "$_ev" "" "" "" "" $OK $OK $OK $OK $OK $OK 0 "All six legs green" "$TOL_MSG"
+  tol "G1-8 $_ev with empty pr-selection inputs, all green" "$BODY" "$_ev" "" "" "" "" $OK $OK $OK $OK $OK $OK 0 "All legs green (six battery" "$TOL_MSG"
   tol "G1-8b $_ev with empty pr-selection inputs, a skipped leg" "$BODY" "$_ev" "" "" "" "" $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" ""
 done
 # G1-15 Option R still wins: a tolerated skip on a light draft is red
@@ -596,11 +596,11 @@ tol_exact() {  # $1=label $2=body $3=skip_legs $4=webplat $5=bun $6=heavy $7=exa
   fail "$1 — skip_legs='$3' legs=($4,$5,$6): want rc=0 and the exact line '$7'; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
   return 1
 }
-SIX_LINE="All six legs green (four shards + web-platform-build + encryption-posture)."
-tol_exact "G1-16 one tolerated skip" "$BODY" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
-tol_exact "G1-16b all three tolerated" "$BODY" "$ALL3" $S $S $S "All legs green or $TOL_MSG tolerated (test-webplat,test-bun,test-scripts-heavy); skip_legs=$ALL3"
-tol_exact "G1-16c two tolerated, list in another order (legs print in entries order, skip_legs verbatim)" "$BODY" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
-tol_exact "G1-16d a leg listed but ran: the all-six sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
+SIX_LINE="All legs green (six battery legs + oracle-index-check)."
+tol_exact "G1-16 one tolerated skip" "$BODY" test-bun $OK $S $OK "All legs green or skip tolerated (pr-affected: test-bun skip_legs=test-bun; oracle-only: none oracle_skip_legs=none)"
+tol_exact "G1-16b all three tolerated" "$BODY" "$ALL3" $S $S $S "All legs green or skip tolerated (pr-affected: test-webplat,test-bun,test-scripts-heavy skip_legs=$ALL3; oracle-only: none oracle_skip_legs=none)"
+tol_exact "G1-16c two tolerated, list in another order (legs print in entries order, skip_legs verbatim)" "$BODY" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or skip tolerated (pr-affected: test-webplat,test-scripts-heavy skip_legs=test-scripts-heavy,test-webplat; oracle-only: none oracle_skip_legs=none)"
+tol_exact "G1-16d a leg listed but ran: the all-green sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
 # G1-8c a pull_request run whose pr-selection job was SKIPPED (the job-level switch gate: CI_PR_AFFECTED unset or empty) hands the body EMPTY SKIP_LEGS and
 # ACTIVE, and HEAD_SHA_OK is the computed boolean string `false` (`'' != ''` is false) or, defensively, empty. That state is full CI: a must-PASS characterization
 # through the real body (SKIP_LEGS='' fails the regex on its own, so the tolerance arm is dead here; the G1-8c rows drive this state through the real body; p23 in the mutant set covers the empty HEAD_SHA_OK spelling).
@@ -714,7 +714,7 @@ for _r in failure cancelled; do
   otol "O2-10 listed leg with result=$_r is not tolerated" "$BODY" merge_group test-bun true true 1 $OK $OK $_r $OK $OK $OK $OK 1 "" "test-bun: $OTOL_MSG"
 done
 # an unlisted leg skipped beside a compliant listed skip: the unlisted one reds
-otol "O2-11 second leg skipped and unlisted after a compliant first" "$BODY" merge_group test-bun true true 1 $OK $S $S $OK $OK $OK $OK 1 "test-scripts: SKIPPED" "test-scripts: $OTOL_MSG"
+otol "O2-11 second leg skipped and unlisted after a compliant first" "$BODY" merge_group test-bun true true 1 $OK $S $S $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "test-webplat: $OTOL_MSG"
 # the PR arm stays pull_request-only: the SAME tolerated shape under ORACLE inputs never leaks into
 # the pr-selection arm, and oracle tolerance does not fire on pull_request without the oracle inputs
 otol "O2-12 PR-listed skip beside empty oracle inputs still works (PR arm unchanged)" "$BODY" pull_request "" "" "" 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
@@ -736,7 +736,8 @@ def sub(old, new, n=1):
         sys.stderr.write("anchor missing for %r\n" % (old,)); sys.exit(3)
     s = s.replace(old, new, n)
 if op == "remove-arm":
-    sub("ORACLE-ONLY-SKIP", "ZZ-NEVER-MATCHES")
+    # the tolerance arm itself, not just the marker: a tolerated leg becomes an ordinary SKIPPED again
+    sub('if [[ "$oracle_tolerated" == *",$shard,"* ]]; then', 'if false; then')
 elif op == "no-active":
     sub('"$ORACLE_ACTIVE" == "true" && ', "")
 elif op == "no-head":
@@ -752,8 +753,8 @@ elif op == "posture-tolerable":
     sub("test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build",
         "test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build|encryption-posture")
 elif op == "substring":
-    sub('*",${oentry%%:*},"*', '*"${oentry%%:*}"*')
-    sub('*",${oentry},"*', '*"${oentry}"*')
+    # the ORACLE loop's delimited match (the `entry` var is shared; the `oracle_tolerated=` target disambiguates)
+    sub('*",${entry%%:*},"*) oracle_tolerated=', '*"${entry%%:*}"*) oracle_tolerated=')
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
 open(dst, "w").write(s)
@@ -776,6 +777,12 @@ mutate_otol() {  # $1=label $2=op ; probes the Guard-2 rows over the mutant — 
     otol "o7" "$m" merge_group "encryption-posture" true true 1 $OK $OK $OK $OK $OK $OK $S 1 "encryption-posture: SKIPPED" "$OTOL_MSG"
     otol "o8" "$m" merge_group "test-scripts" true true 1 $OK $OK $OK $OK $S $OK $OK 1 "test-scripts-heavy: SKIPPED" "$OTOL_MSG"
     otol "o9" "$m" pull_request "test-webplat,test-bun" true true 1 $OK $S $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" ""
+    # o10 kills no-active/active-loose: VALID list, every other conjunct true, only ACTIVE non-true
+    otol "o10" "$m" merge_group test-bun "" true 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
+    # o11 kills index-tolerable: the list names ONLY oracle-index-check and it is the skipped leg
+    otol "o11" "$m" merge_group "oracle-index-check" true true 1 $S $OK $OK $OK $OK $OK $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG"
+    # o12 kills the substring mutant: `test-scripts` is a strict substring of the listed `test-scripts-heavy`
+    otol "o12" "$m" merge_group test-scripts-heavy true true 1 $OK $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED" "test-scripts: $OTOL_MSG"
   } >/dev/null 2>&1
   PROBE=0
   if [ "$PROBE_FAILS" -gt 0 ]; then pass; MUT_KILLED=$((MUT_KILLED + 1))
@@ -804,7 +811,7 @@ def sub(old, new):
 COND = '[[ "$EVENT_NAME" == "pull_request" && "$ACTIVE" == "true" && "$HEAD_SHA_OK" == "true" && "$ATTEMPT" == "1" && "$SKIP_LEGS" =~ $skip_re ]]'
 # The body is the YAML block scalar, i.e. 10 columns left of the file: these anchors carry the BODY's indentation.
 SIB = ("          skipped)\n"
-       "            if [[ \"$tolerated\" == *\",${other%%:*},\"* ]]; then\n"
+       "            if [[ \"$tolerated\" == *\",${other%%:*},\"* || \"$oracle_tolerated\" == *\",${other%%:*},\"* ]]; then\n"
        "              concluded_siblings=$((concluded_siblings + 1))\n"
        "            fi\n"
        "            ;;\n")
@@ -838,7 +845,8 @@ elif op == "tolerate-failure":
 elif op == "skip-re-no-caret":
     sub("skip_re='^(", "skip_re='(")
 elif op == "skip-re-no-dollar":
-    sub(")*$'", ")*'")
+    sub("skip_re='^(test-webplat|test-bun|test-scripts-heavy)(,(test-webplat|test-bun|test-scripts-heavy))*$'",
+        "skip_re='^(test-webplat|test-bun|test-scripts-heavy)(,(test-webplat|test-bun|test-scripts-heavy))*'")
 elif op == "remedy-removed":
     sub('if [[ ' + REMGATE + ' ]]; then', 'if false; then')
 elif op == "remedy-at-attempt-1":
@@ -856,7 +864,7 @@ elif op == "final-trailing-comma":
 elif op == "final-leading-comma":
     sub('tol_list="${tolerated#,}"', 'tol_list="${tolerated}"')
 elif op == "final-no-skip-legs":
-    sub('; skip_legs=${SKIP_LEGS}"', '"')
+    sub(' skip_legs=${SKIP_LEGS:-none}', '')
 elif op == "head-loose-empty":
     # ADR-276 S4 follow-up (#9729), Guard 3 row 1: HEAD_SHA_OK read as "not false", so its EMPTY spelling reads as bound
     sub('"$HEAD_SHA_OK" == "true"', '"$HEAD_SHA_OK" != "false"')
@@ -867,9 +875,9 @@ elif op == "compound-outer-removed-tolerate-skipped":
     sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if [[ "$tolerated" == *",$shard,"* || "$result" == "skipped" ]]; then')
 elif op == "banner-when-none-tolerated":
     # Guard 3 row 3: the tolerated banner printed when `tolerated` is "," (nothing was tolerated)
-    sub('if [[ "$tolerated" != "," ]]; then', 'if true; then')
+    sub('if [[ "$tolerated" != "," || "$oracle_tolerated" != "," ]]; then', 'if true; then')
 elif op == "six-green-reworded":
-    sub('All six legs green (four shards', 'All six legs green (the four shards')
+    sub('All legs green (six battery', 'All legs green (the six battery')
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
 open(dst, "w").write(s)
@@ -906,8 +914,8 @@ mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least on
     tol "p19" "$m" pull_request "" "" "" 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
     tol "p19b" "$m" pull_request test-bun true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "cached from attempt 1"
     tol "p19c" "$m" pull_request test-scripts-heavy true true 2 $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED — the leg did not run" "cached from attempt 1"
-    tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
-    tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
+    tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or skip tolerated (pr-affected: test-bun skip_legs=test-bun; oracle-only: none oracle_skip_legs=none)"
+    tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or skip tolerated (pr-affected: test-webplat,test-scripts-heavy skip_legs=test-scripts-heavy,test-webplat; oracle-only: none oracle_skip_legs=none)"
     tol_exact "p22" "$m" test-bun $OK $OK $OK "$SIX_LINE"
     # ADR-276 S4 follow-up (#9729), Guard 3: ONE new probe row (this p-set never runs the main-line G1-8c rows). p23: HEAD_SHA_OK EMPTY (the p-set had only `false`).
     tol "p23" "$m" pull_request test-bun true "" 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$TOL_MSG"

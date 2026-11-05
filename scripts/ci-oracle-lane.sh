@@ -89,7 +89,7 @@ active=false
 skip_legs=""
 head_sha=""
 base_sha=""
-printf 'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha=\n' >> "$OUT"  # GUARD:O1-DEFAULTS
+printf 'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha=\n' >> "$OUT"  # GUARD:O-DEFAULTS
 
 # State that only feeds the annotation. Every value is a literal, a number or a validated token.
 sw="unset"
@@ -134,7 +134,7 @@ trap on_signal HUP INT TERM  # GUARD:ALWAYS-EXIT-0-SIGNAL
 # ---- the switch and the lock (pure env, no I/O) ---------------------------------------------------------------------
 [ -z "${SWITCH:-}" ] || sw=invalid
 [ "${SWITCH:-}" = on ] && sw=on  # GUARD:O1-SWITCH-EXACT
-[ "${ORACLE_LANE_LOCKED:-}" = 1 ] && locked=true  # GUARD:O1-LOCK-READ
+[ "${ORACLE_LANE_LOCKED:-}" = 1 ] && locked=true  # GUARD:O-LOCK-READ
 case "${RUN_ATTEMPT:-}" in
   ''|*[!0-9]*) ;;
   *) [ "${#RUN_ATTEMPT}" -le 6 ] && attempt="$RUN_ATTEMPT" ;;
@@ -235,10 +235,7 @@ run() {
   local diff_base diff_head index_seen
 
   reason=not_lane_event
-  case "${EVENT_NAME:-}" in
-    pull_request|merge_group) ;;  # GUARD:O1-EVENTS
-    *) return 0 ;;
-  esac
+  [[ "${EVENT_NAME:-}" =~ ^(pull_request|merge_group)$ ]] || return 0  # GUARD:O-EVENT
 
   if [ "${EVENT_NAME:-}" = pull_request ]; then
     # (2a) the merge-ref shape: HEAD is GITHUB_SHA, has exactly two parents, and HEAD^2 is the PR head. All 40-hex.
@@ -247,11 +244,11 @@ run() {
     [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || return 0
     rl="$(git rev-list --parents -n 1 HEAD 2>/dev/null)" || return 0  # GUARD:O1-REVLIST
     read -r -a parts <<< "$rl"
-    [ "${#parts[@]}" -eq 3 ] || return 0  # GUARD:O1-TWO-PARENTS
+    [ "${#parts[@]}" -eq 3 ] || return 0  # GUARD:O-TWO-PARENTS
     h="${parts[0]}"; p1="${parts[1]}"; p2="${parts[2]}"
     [[ "$h" =~ ^[0-9a-f]{40}$ && "$p1" =~ ^[0-9a-f]{40}$ && "$p2" =~ ^[0-9a-f]{40}$ ]] || return 0
     [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:O1-HEAD-IS-GITHUB-SHA
-    [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O1-PARENT2-IS-PR-HEAD
+    [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O-PRHEAD
     head_sha="$p2"
     base_sha="$p1"
     diff_base="HEAD^1"
@@ -259,7 +256,7 @@ run() {
 
     # (3a) full on a fork head.
     reason=fork
-    { [ -n "${HEAD_REPO:-}" ] && [ "${HEAD_REPO:-}" = "${GH_REPO:-}" ]; } || return 0  # GUARD:O1-FORK
+    { [ -n "${HEAD_REPO:-}" ] && [ "${HEAD_REPO:-}" = "${GH_REPO:-}" ]; } || return 0  # GUARD:O-FORK
   else
     # (2b) the merge_group shape: both payload SHAs are 40-hex and resolve to commits in this fetch-depth-0 checkout.
     # The batch diff base_sha..head_sha covers every queued entry, so a batch that contains a code PR fails closed.
@@ -276,7 +273,7 @@ run() {
 
   # (3b) full on a re-run.
   reason=rerun
-  [ "${RUN_ATTEMPT:-}" = 1 ] || return 0  # GUARD:O1-RERUN
+  [ "${RUN_ATTEMPT:-}" = 1 ] || return 0  # GUARD:O-ATTEMPT
 
   # (3c) the switch: only the exact string `on` classifies at all. Anything else emits oracle_only=false with NO diff
   # work — the job itself only runs while the variable is non-empty, so `switch=invalid` is the telemetry for a mistyped
@@ -286,19 +283,24 @@ run() {
 
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error
-  work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/oracle-lane.XXXXXX" 2>/dev/null)" || return 0
+  for _tmpd in "${RUNNER_TEMP:-}" "${TMPDIR:-}" /tmp; do
+    [ -n "$_tmpd" ] && [ -d "$_tmpd" ] || continue
+    work="$(mktemp -d "$_tmpd/oracle-lane.XXXXXX" 2>/dev/null)" && break
+  done
+  unset _tmpd
+  [ -n "$work" ] || return 0
   git diff -z --raw --no-renames --no-abbrev --no-ext-diff --no-color "$diff_base" "$diff_head" -- > "$work/names.z" 2> "$work/diff.err" || return 0  # GUARD:O1-DIFF-RC
   size="$(wc -c < "$work/names.z")" || return 0
   [[ "$size" =~ ^[0-9]+$ ]] || return 0
   reason=empty_diff
-  [ "$size" -gt 0 ] || return 0  # GUARD:O1-EMPTY-DIFF
+  [ "$size" -gt 0 ] || return 0  # GUARD:O-EMPTY-DIFF
   reason=malformed_diff
   nul="$(tr -cd '\0' < "$work/names.z" | wc -c)" || return 0
   [[ "$nul" =~ ^[0-9]+$ ]] || return 0
   [ $((nul % 2)) -eq 0 ] || return 0
   files=$((nul / 2))
   reason=too_many_files
-  [ "$files" -le 500 ] || return 0  # GUARD:O1-MAX-FILES
+  [ "$files" -le 500 ] || return 0  # GUARD:O-MAX-FILES
   reason=malformed_diff
   [ "$files" -ge 1 ] || return 0
 
@@ -311,15 +313,15 @@ run() {
     [ -n "$p" ] || { reason=malformed_diff; return 0; }
     [[ "$meta" =~ ^:([0-7]{6})\ ([0-7]{6})\ ([0-9a-f]{40,64})\ ([0-9a-f]{40,64})\ ([A-Z][0-9]*)$ ]] || { reason=malformed_diff; return 0; }
     om="${BASH_REMATCH[1]}"; nm="${BASH_REMATCH[2]}"; st="${BASH_REMATCH[5]}"
-    case "$st" in M|A|D) ;; *) reason=non_oracle_status; return 0 ;; esac  # GUARD:O1-STATUS
-    case "$om" in 000000|100644|100755) ;; *) reason=non_oracle_mode; return 0 ;; esac  # GUARD:O1-MODE-OLD
-    case "$nm" in 000000|100644|100755) ;; *) reason=non_oracle_mode; return 0 ;; esac  # GUARD:O1-MODE-NEW
-    if [[ "$p" =~ [^\ -~] ]]; then reason=odd_path; return 0; fi  # GUARD:O1-CNTRL
-    if [[ "$p" == *'::'* ]]; then reason=odd_path; return 0; fi  # GUARD:O1-COLONS
-    if [[ "$p" == *,* ]]; then reason=odd_path; return 0; fi  # GUARD:O1-COMMA
+    case "$st" in M|A|D) ;; *) reason=non_oracle_status; return 0 ;; esac  # GUARD:O-STATUS
+    case "$om" in 000000|100644|100755) ;; *) reason=non_oracle_mode; return 0 ;; esac  # GUARD:O-MODES
+    case "$nm" in 000000|100644|100755) ;; *) reason=non_oracle_mode; return 0 ;; esac  # GUARD:O-MODES
+    if [[ "$p" =~ [^\ -~] ]]; then reason=odd_path; return 0; fi  # GUARD:O-PATH-CHARS
+    if [[ "$p" == *'::'* ]]; then reason=odd_path; return 0; fi  # GUARD:O-PATH-CHARS
+    if [[ "$p" == *,* ]]; then reason=odd_path; return 0; fi  # GUARD:O-PATH-CHARS
     if [ "$p" = "$ORACLE_INDEX" ]; then index_seen=1; continue; fi  # GUARD:O1-INDEX-PATH
-    if is_excluded_path "$p"; then reason=excluded; return 0; fi  # GUARD:O1-EXCLUDED
-    if is_oracle_data_path "$p" || is_doc_path "$p"; then continue; fi  # GUARD:O1-SURFACE
+    if is_excluded_path "$p"; then reason=excluded; return 0; fi  # GUARD:O-EXCLUSION
+    if is_oracle_data_path "$p" || is_doc_path "$p"; then continue; fi  # GUARD:O-SURFACE
     reason=outside_surface; return 0  # GUARD:O1-OUTSIDE
   done < "$work/names.z"
   [ "$n" -eq "$files" ] || { reason=malformed_diff; return 0; }
@@ -332,12 +334,12 @@ run() {
     git show "$diff_base:$ORACLE_INDEX" > "$work/img-base" 2>/dev/null || : > "$work/img-base"
     git show "$diff_head:$ORACLE_INDEX" > "$work/img-head" 2>/dev/null || : > "$work/img-head"
     reason=extent_parse
-    bitmap_oracle_image "$work/img-base" || return 0
+    bitmap_oracle_image "$work/img-base" || return 0  # GUARD:O-EXTENT-BASE
     base_bitmap="$bitmap"
-    bitmap_oracle_image "$work/img-head" || return 0
+    bitmap_oracle_image "$work/img-head" || return 0  # GUARD:O-EXTENT-HEAD
     head_bitmap="$bitmap"
     reason=extent_miss
-    check_hunks "$work/index.diff" || return 0
+    check_hunks "$work/index.diff" || return 0  # GUARD:O-EXTENT
   fi
 
   reason=oracle
@@ -351,16 +353,13 @@ run
 # ---- (7) the arm: classified oracle-only AND the switch is exactly `on` AND the lock is absent -------------------------
 # `sw = on` is redundant with the stage gate (reason=oracle already implies it) and is kept on purpose as the independent
 # arming check — same defence-in-depth shape as the S4 driver's arm.
-if [ "$oracle_only" = true ] && [ "$sw" = on ] && [ "$locked" = false ]; then  # GUARD:O1-ARM
-  active=true
-  skip_legs="$would_skip"  # GUARD:O1-SKIP-ONLY-WHEN-ACTIVE
-fi
+{ [ "$oracle_only" = true ] && [ "$sw" = on ] && [ "$locked" = false ]; } && { active=true; skip_legs="$would_skip"; } || true  # GUARD:O-ARM
 
 # Re-validate every value against its output grammar before it is written. A value that fails collapses to the defaults.
 [[ "$oracle_only" =~ ^(true|false)$ ]] || oracle_only=false  # GUARD:O1-GRAMMAR-ONLY
 [[ "$head_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
 [[ "$base_sha" =~ ^([0-9a-f]{40})?$ ]] || { head_sha=""; base_sha=""; }
-if [ "$active" != true ] || [ "$oracle_only" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$ ]]; then  # GUARD:O1-GRAMMAR-SKIP
+if [ "$active" != true ] || [ "$oracle_only" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$ ]]; then  # GUARD:O-GRAMMAR
   active=false
   skip_legs=""
 fi
@@ -370,7 +369,7 @@ fi
 # true. Ignore the three signals across the writes (never restored: nothing after this point needs them).
 trap '' HUP INT TERM  # GUARD:O1-SIGNAL-WINDOW
 printf 'oracle_only=%s\nactive=%s\nskip_legs=%s\nhead_sha=%s\nbase_sha=%s\n' "$oracle_only" "$active" "$skip_legs" "$head_sha" "$base_sha" >> "$OUT"  # GUARD:O1-FINAL-BLOCK
-printf 'oracle_only=%s\nactive=%s\nskip_legs=%s\nhead_sha=%s\nbase_sha=%s\n' "$oracle_only" "$active" "$skip_legs" "$head_sha" "$base_sha"  # GUARD:O1-STDOUT-BLOCK
+printf 'oracle_only=%s\nactive=%s\nskip_legs=%s\nhead_sha=\nbase_sha=\n' "$oracle_only" "$active" "$skip_legs"  # GUARD:O1-STDOUT-BLOCK shas stay in GITHUB_OUTPUT only — a raw 40-hex on stdout is a leak-sweep hit
 
 # ---- (9) the annotation and the summary -----------------------------------------------------------------------------
 finished=1
