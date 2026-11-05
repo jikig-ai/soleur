@@ -137,7 +137,7 @@ set (after the --accept exemptions) must EQUAL a committed, shrink-only baseline
 `suite<TAB>path` line per pair, each field written by quote_field, sorted and unique in the C locale, with a final newline). What it proves is the
 literal-name completeness over what the audit reads (REACH above): necessary but not sufficient, and never "index complete". It is advisory until a later PR
 makes its CI context required. The live set and the baseline are read from the checkout; the base (HEAD^1, or --base REF) is read for the baseline-state table
-(adoption, deletion), the growth rule, the cause text of a new pair, the oracle notice and the merge-base copy of the lint-ratchet.py helper (on a developer
+(reintroduction refusal, deletion), the growth rule, the cause text of a new pair, the oracle notice and the merge-base copy of the lint-ratchet.py helper (on a developer
 checkout HEAD^1 is just the previous local commit, so those are not meaningful there; read the CI result or pass --base).
   EXIT CODES  0 clean; 1 drift (a verdict about the tree); 2 infrastructure (the check could not be trusted). A usage error is argparse's rc 2 and prints no marker.
   ORDER  every exit-2 condition comes before every exit-1 verdict, so infrastructure is never a verdict: the selector (rc, hang), then the FLOORS on what it
@@ -146,9 +146,9 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
          read at run time; the AFFECTED_SELECTED row count equals its of=; no tracked input unreadable for a reason other than absence (EACCES, EIO: floor-unreadable);
          at least one suite and one file read), then the base (resolved with git, its lint-ratchet.py loaded from the BASE commit, not the PR tree: a PR cannot weaken
          the helper and the baseline together; a base without the file, or one that does not compile, is internal). Then the verdicts, each class printed and the first one named in the marker: unaudited suite; a `*`
-         accept row for a readable suite; a stale or invalid accept row; a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
+         accept row for a readable suite; a stale or invalid accept row; a baseline re-introduced after strict zero (baseline-reintroduced); a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
          line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown).
-  BASELINE STATE  base absent / HEAD present: adoption, passes when live equals the baseline. Base present / HEAD absent: passes only when nothing is live
+  BASELINE STATE  base absent / HEAD present: exit 1 unconditionally (baseline-reintroduced) — a baseline re-added after strict zero never adopts, whatever it covers. Base present / HEAD absent: passes only when nothing is live
          (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
          growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
   The baseline is compared as OPAQUE rendered lines (there is no baseline parser); the failure text names the suite, the path and the referencing file:line, gives the two
@@ -2055,6 +2055,9 @@ def ratchet_run(a, st):
     if stales:
         findings.append(("stale-accept", stales, ["remedy: delete the accept row: the tree no longer backs it, or it is malformed"]))
     new = [line for line in live if line not in head_set]
+    if head_text is not None and base_text is None:
+        findings.append(("baseline-reintroduced", [["baseline-reintroduced\t%s\ta baseline file absent at the base cannot be adopted: strict zero retired it" % q(rel)]],
+                         ["remedy: delete %s — a re-added baseline never adopts; declare the edge or add an accept row for each live pair it would claim" % rel]))
     if new and head_text is None and base_text is not None:
         findings.append(("baseline-deleted", [["baseline-deleted\t%s\t%d pair(s) are still live" % (q(rel), len(new))]],
                          ["remedy: restore it from main: git checkout origin/main -- %s" % rel]))
