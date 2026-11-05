@@ -90,3 +90,4 @@
   - AC-F1..F3: DPD §2.3(o) all-three-bearing + count fix canonical+mirror; PA-13(f)/PA-21/PA-22 superseded markers; PA-14 dated-marker amendment + ledger records entries; LUKS qualifier on all surfaces; legal-doc-shas re-pinned; legal gates green (sha/mirror-drift/scope-block/registers/consistency 43).
 - Affected gate queued behind sibling worktree run (advisory lock) — see /tmp/gate-final.log.
 - Next: gate green -> soleur:compound -> soleur:ship -> postmerge. Operator step: #10136 zot accepted-risk owner confirmation.
+echo done
