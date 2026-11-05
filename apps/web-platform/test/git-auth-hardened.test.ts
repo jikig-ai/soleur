@@ -44,7 +44,19 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
   let remote: string;
   let marker: string;
 
+  // The LEGACY form inherits `process.env`. `scripts/test-all.sh` exports `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0=core.hooksPath`
+  // (the battery ref guard) to its whole process tree, which would displace the planted `.git/hooks/pre-push` and turn every
+  // "legacy runs the hook" control red in CI only. Strip the count-indexed env config for the file so the controls measure git,
+  // not the runner; the hardened form builds its own environment and never sees it either way.
+  const savedGitConfigEnv: Record<string, string | undefined> = {};
+
   beforeEach(() => {
+    for (const k of Object.keys(process.env)) {
+      if (k === "GIT_CONFIG_COUNT" || k === "GIT_CONFIG_PARAMETERS" || /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)) {
+        savedGitConfigEnv[k] = process.env[k];
+        delete process.env[k];
+      }
+    }
     h.allowFile = true;
     h.mint.mockClear();
     root = mkdtempSync(join(tmpdir(), "git-hardened-"));
@@ -61,7 +73,13 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     git(work, "commit", "-q", "-m", "A");
   });
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    for (const [k, v] of Object.entries(savedGitConfigEnv)) {
+      if (v !== undefined) process.env[k] = v;
+      delete savedGitConfigEnv[k];
+    }
+  });
 
   test("control: the legacy form runs a planted .git/hooks/pre-push", async () => {
     plantHook(join(work, ".git", "hooks"), marker);
