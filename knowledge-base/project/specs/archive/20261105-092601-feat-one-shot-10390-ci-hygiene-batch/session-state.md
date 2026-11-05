@@ -101,3 +101,7 @@
 - Second main-move conflict set (same legal files; main gained #9066/#8211 correction entry). Rebase resolved by agent b1a20d08: 35 commits, union-merged Nov-5 head stays head (postdates main's Nov-4); commit-subject fragment hazards stripped again; LEGAL_DOC_SHAS re-pinned (df3509a5fc); mirror-drift + scope-block + sha + consistency + acceptance all green.
 - Force-pushed df3509a5fc. Merge queue evaluating head; only advisory affected-index-ratchet red.
 - Postmerge remaining: verify all targeted workflows dispatched + merge landed + postmerge checks (release envs readback, dedupe lint, systemd parity, legal gates from merged main). Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
+
+## Rebase #3 (2026-11-05)
+- Third main-move conflict: TSVs only. Rebased in-session (37 commits), TSVs → branch side, regen'd post-rebase (+1 floor row, commit in rebase chain). Force-pushed 6acb99343d. Merge queue re-evaluating.
+- Remaining: merge poll → postmerge verification from merged main (release envs, dedupe lint, systemd parity, legal gates) → epic #10390 status update (stays OPEN). Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
