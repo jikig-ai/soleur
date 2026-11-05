@@ -9,6 +9,6 @@ pr_reference: "#11949"
 
 ## X/Twitter Thread
 
-Shipped: Soleur's launch readiness check can now file the gaps it finds as tasks in your GitHub project, ranked by how much each matters. It's opt-in and asks before it files anything. A findings list, not a score or certification.
+Shipped: Soleur's launch readiness check can now file the gaps it finds as tasks in your GitHub project, ranked by how much each matters. It's opt-in and built to ask first. A findings list, not a score or certification.
 
 https://soleur.ai/blog/what-your-mvp-is-missing-before-real-users-show-up/?utm_source=x&utm_medium=social&utm_campaign=what-your-mvp-is-missing-before-real-users-show-up
