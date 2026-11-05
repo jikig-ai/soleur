@@ -110,3 +110,6 @@
 - Fourth main-move conflict: ADR-241 only (main's #8209 entry vs my #8780 entry — union-merged, main's entry first, mine second). Rebases in-session: 39 commits, single conflict stop. Force-pushed 858ea49b4c.
 - test-webplat (1/2) FAILURE seen on prior head — non-required; local vitest over test/server/inngest/ green except env-pinned CLI/sdk tests (unrelated).
 - Remaining: merge poll -> postmerge verification from merged main -> epic #10390 status update. Operator step: #10136 zot accepted-risk owner confirmation. Residual #12092.
+
+## Rebase #5 (2026-11-05)
+- Fifth main-move conflict: terraform-target-parity.test.ts TEST_FLOOR chain — union'd main's +1 (#11857, 354) + mine +4 (#8780) = 358 exact-verified. tenant-integration CANCELLED on prior head was my own force-push racing its run (concurrency group), not a real failure. 40 commits rebased. Force-pushed. Merge queue re-evaluating.
