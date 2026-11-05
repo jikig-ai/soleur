@@ -1674,13 +1674,19 @@ export async function agentOnSpawnSettleHandler({
 /**
  * The one memoized step. Every query is scoped to the founder, so a forged or
  * mismatched envelope matches zero rows and reports nothing.
+ *
+ * EXPORTED for `cron-agent-spawn-stale-settle` (#8839): the sweep settles each
+ * stale row through THIS path — never a second write path — passing its own
+ * per-row `stepId` (step ids must be unique within a run; the settle step name
+ * is otherwise fixed for the lifecycle caller).
  */
-async function settleOrphanedSpawn(
+export async function settleOrphanedSpawn(
   step: HandlerArgs["step"],
   target: SettleTarget,
   attempt: number,
+  stepId = "settle-orphaned-spawn",
 ): Promise<{ wrote: boolean; reason: FailureReason }> {
-  return step.run("settle-orphaned-spawn", async () => {
+  return step.run(stepId, async () => {
     const sb = getServiceClient();
     const { actionSendId, founderId, messageId } = target;
 

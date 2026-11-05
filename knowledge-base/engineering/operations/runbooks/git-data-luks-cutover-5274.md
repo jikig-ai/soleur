@@ -124,14 +124,20 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold, 
   armed after a measured `up` transition on the CURRENT host (the manifest row's `arming_pending` is
   gone), and a re-read at the flip dispatch shows it `up` with a `state=ok` event under 15 minutes
   old and later than that host's `boot_complete`. A box ticked once goes stale at the next replace,
-  so it is RE-READ, never remembered. **Armed 2026-10-12 (#9438, record PR):** the host that
+  so it is RE-READ, never remembered. **ENFORCED since #9943:** the flip's `Flip preconditions`
+  step in `git-data-cutover.yml` reads both evidences itself — heartbeat status `up` via the
+  betteruptime API and a `state=ok first=1` row newer than the newest `boot_complete` on
+  `host_name=soleur-git-data` — and refuses `verdict=liveness_unproven` on absent, stale,
+  pre-boot or unreadable evidence, so the by-hand read below is belt-and-suspenders, no longer
+  the only control. **Armed 2026-10-12 (#9438, record PR):** the host that
   replace run 38140050880 created (its `boot_complete` was read; the run's own conclusion is `failure`, at
   a post-apply step after "Apply complete") was armed with `--arm-one` (#9980), `outcome=armed`, `status=up`
   within 11 s, id 506836; the pre- and post-arm `--status` reads are on #9438. That is one read at one
   instant, not the flip-time re-read, which is still taken at the flip dispatch and is the binding one. The
   pre-arm soak read (step 6) is not recorded in this PR or on #9438. Procedure and reads:
-  [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
-  and its re-read are the only control.
+  [Liveness heartbeat](#liveness-heartbeat-9438). #9943 enforces it in the workflow (`Flip
+  preconditions`, `verdict=liveness_unproven`, fail-closed on unreadable reads); the re-read
+  below remains the human check around the machine gate.
 - **No post-flip rotate route is accepted, in writing (#10175).** The owner has recorded that from the first flip no
   workflow dispatch can rotate the LUKS key until #8571 or the "store measured empty" marker lands, and names the
   [break-glass](#when-a-rotate-is-needed-after-the-flip-10175) as the only route for a key compromise.

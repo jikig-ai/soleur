@@ -303,8 +303,10 @@ print("  server_active  %s        http_code=%s" % (f.get("server_active", "?"), 
 print("  registry_fns   %s" % f.get("registry_fns", "?"))
 print("  redis_active   %s        redis_keys=%s expires=%s" % (
     f.get("redis_active", "?"), f.get("redis_keys", "?"), f.get("redis_expires", "?")))
-print("  data_mount     %s  devid=%s  bytes=%s" % (
-    f.get("data_mount_src", "?"), f.get("data_mount_devid", "?"), f.get("data_bytes", "?")))
+print("  data_mount     %s  devid=%s  bytes=%s  luks=%s" % (
+    f.get("data_mount_src", "?"), f.get("data_mount_devid", "?"), f.get("data_bytes", "?"),
+    # probe_schema=9 (#8525): blkid TYPE of the backing device — crypto_LUKS, ext4, or a sentinel.
+    f.get("data_luks", "?")))
 print("  cutover_flag   %s        flush_latched=%s" % (
     f.get("cutover_flag", "?"), f.get("flush_latched", "?")))
 # AN UNKNOWN AGE IS NOT A FRESH ONE. `age_min is None` (an unparseable or absent `dt`) used
