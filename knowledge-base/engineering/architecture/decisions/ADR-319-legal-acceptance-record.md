@@ -218,3 +218,56 @@ All of these hold before the flag goes on for any founder:
 - **Password and provider confirmation** as further strength checks: #12031.
 - **Counsel review** of the card wording and both notices. Nothing in this amendment says counsel has reviewed anything.
 - **PR-D:** the check endpoint and the hold evaluator that read the record.
+
+## Amendment 2026-11-05 (PR-D)
+
+PR-D ships the read path: a check endpoint, an acknowledgement table that gives the `row_without_event` alert an emitter, a `web-acceptance` kind in the ship hold evaluator, and a pull-only way for the operator to read a Request changes note. The
+decisions above are unchanged; this amendment records what PR-D decided on top of them. Status stays `adopting`: no real row has been recorded and the endpoint has not run against one. The code merges dark: the endpoint answers 503 until both
+configuration values exist (see Hard limits).
+
+### Decisions
+
+- **Read path as built.** `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>`. Check order: 503 (token or founder id unset or malformed, or the registry cannot be read), 401 (wrong token), 400 (malformed key or hash), 404 (key not in the
+  registry), then the lookup. The 200 body has exactly four keys: `status`, `text_hash`, `decided_at`, `row_ok`. The founder id comes from the endpoint's own configuration, never from the request. The hash is answered from the database for the
+  exact hash asked; whether that hash equals the committed text is the gate's job. The token is its own secret, `LEGAL_ACCEPTANCE_VERIFY_TOKEN`, separate from the Inngest one; `lib/internal-auth.ts` takes the secret name as a closed-union argument
+  defaulting to the Inngest secret, so its existing callers are unchanged.
+- **The acknowledgement table and what `row_without_event` proves.** Migration 185 adds `legal_acceptance_ack(acceptance_id, acked_at)`: service-role only, no founder id, no foreign key, no note and no decision field. The decide route writes the
+  acknowledgement (`ack_legal_acceptance`) after the `accepted` event is emitted and `Sentry.flush` resolved true, off the request path, so the founder's response never waits on it. The verify endpoint reads `legal_acceptance_ack_state` for the one row it
+  found and emits `row_without_event` when there is no acknowledgement and the row is older than 120 s. This proves "the web route did not acknowledge this row", not "Sentry received the event". It is alert-only: the response body and the gate are
+  unchanged by it.
+- **Note delivery: pull-only.** The note stays in `legal_acceptance.requested_edit`. No email, no Inngest function, no GitHub issue and no other push: that would create a second copy outside the retention and redaction decisions (#12080) and the agent holds
+  the GitHub identity. The operator reads it personally with an owner-level query in their own Supabase login, following `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`. No `service_role` function returns the note, the card
+  copy is not changed, and the endpoint never returns it. The PR-C enabling condition "no delivery path to the team until PR-D" is restated as: pull-only delivery, no push.
+- **The `invalid` rule.** A row whose checksum no longer matches is `invalid`. The endpoint passes it through as `invalid` with `row_ok: false` and emits `record_invalid` (error); the gate treats it as unevaluable (exit 2, "the record failed its check"). It
+  is never collapsed into `none` at any layer PR-D touches. **Standing gap:** the founder page still shows such a row as recorded, because the card has six states and none is `invalid`. Adding one needs a wireframe and counsel-gated copy, so it is
+  deferred to #12193; it is an enabling condition before the `approval-queue` flag is on for anyone beyond the operator-run dev exercise.
+- **Hold-gate semantics.** `web-acceptance <key> <hash>` discharges a hold only when the endpoint answers `accepted` with `row_ok` true, the echoed hash equals the gate's hash, and that hash equals the sha256 of the committed text. A declined or
+  changes-requested answer is terminal for that hash (a revised text with a new hash is needed). Every other answer, and every inability to ask, keeps the hold with a printed reason. A plan that carries a `web-acceptance` gate and no `Delegation:` line is
+  evaluated rather than handed to the prose path; mixed with another kind and no delegation it is unevaluable (exit 2); a no-delegation plan without such a gate keeps exit 3; `Operator-reserved:` holds always stand.
+- **A recorded Yes authorizes no production act.** A `web-acceptance` gate backs only a hold on that legal acceptance itself, for a text written for that hold. It is not a licence for any other action.
+- **The flag is still effectively global.** `approval-queue` is read with `workspaceId: null`; the endpoint does not read the flag at all. The statement in the PR-C amendment stands.
+- **Hard limits on the endpoint.** The 48-character bearer token, the read-only RPC, and the single configured founder id. A wrong token is answered 401 with no throttle, which the token length makes acceptable. A Tier-A reader (a branch workflow) can read the
+  token from Terraform state and query one founder's status; that is bounded to four fields about one founder, and it is the consequence of choosing Terraform over a Doppler-only token (see the ADR-320 ruling below).
+- **The alert is pull-driven.** `row_without_event` fires when a row is verified; a row nobody verifies stays silent. A sweep over unacknowledged rows is a follow-up (#12194) that must exist before the flag is on for a non-operator founder.
+  `already_recorded` never acknowledges: a second tab proves nothing about a first tab that died, and a heal there would hide a row written through the RPC directly. A row whose acknowledgement was lost is reconciled by the operator through the runbook
+  after confirming with the founder.
+- **ADR-320 review of the verify token.** Outside ADR-320 decision 1: read-only status token, reviewed under decision 4 on 2026-11-05. Rotating it does not repair a leak, and it would move out of Terraform if it ever gains write reach. The founder uuid is not a secret:
+  the operator enters it into the Doppler dev and prd configs outside Terraform and it is checked by a read, never passed as a Terraform variable. ADR-320 carries a one-line scope note pointing here.
+- **Terraform is plan-only here.** No `.tf` file ships in this PR: the infra workflow applies on the push that merges one, so the secrets are carried by a separate change after the operator approves the plan (#12196).
+
+### Added signals
+
+Two ops join the existing set under `feature=legal-acceptance`: `record_invalid` and `store_failed` (tag `stage` in `verify`, `ack_state`, `ack`). `row_without_event` now has its emitter. `record_invalid` and `store_failed` have no paging rule in this PR; the
+draft rules are tracked in #12195 and are an enabling condition before the flag is on. No payload carries the note.
+
+### Still open after PR-D
+
+- The founder-page state for `invalid` (#12193), the sweep (#12194), paging for the two new ops (#12195), the Terraform secrets and the founder uuid (#12196).
+- The first real acceptance verified end to end by the gate, the post-deploy registry smoke (no text is committed, so every key answers 404) and the roadmap wording (#12197). Status moves to `accepted` only after the first.
+- Before any non-operator founder: a named reader role for the note with a response expectation, a count-only "note waiting" signal, a visible acknowledgement for the founder, counsel-approved card copy that matches the real delivery behaviour, and the UX test with a
+  non-technical founder.
+
+### Diagram
+
+The C4 model gains three edges: the ship component to the web application (read-only HTTPS bearer to the check endpoint), the ship component to Doppler (read of the one token), and the founder to the legal-acceptance store (the operator's owner-level read of the
+note; operator-only and not reachable by an agent). The statement that no edge reaches the store from the agent side is replaced: the agent can read four fields about one decision through the endpoint and can never read the note.
