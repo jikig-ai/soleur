@@ -29,9 +29,8 @@ fails=0; total=0
 pass() { total=$((total + 1)); printf '  PASS: %s\n' "$1"; }
 fail() { total=$((total + 1)); printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
-# Assertion-count floor, reported via printf+exit (a suite whose assertions silently stopped
-# running must not read as green). Raise it when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=150
+# Assertion-count floor lives at the bottom, on the line directly above its `if`, so
+# guard-vacuity-floor.test.sh can slice it into a mutant (a threshold bound far above is unbound there).
 
 [[ -f "$SUT" ]] || { printf 'FATAL: SUT not found at %s\n' "$SUT" >&2; exit 1; }
 [[ -x "$SUT" ]] || { printf 'FATAL: SUT not executable at %s\n' "$SUT" >&2; exit 1; }
@@ -417,8 +416,15 @@ if printf '%s' "$sut_code" | grep -qE 'attributes\.name[[:space:]]*==' ; then pa
 if printf '%s' "$sut_code" | grep -qE 'startswith|test\(|contains\(|ascii_downcase'; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
 
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
+# Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
+# Re-pin deliberately when rows are added; never lower it to fit a deletion.
+MIN_ASSERTIONS=160
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+if [[ "$total" -ne "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: %s assertions ran, expected exactly %s (re-pin MIN_ASSERTIONS after a deliberate change)\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 printf '\n%s assertions, %s failed (floor %s)\n' "$total" "$fails" "$MIN_ASSERTIONS"

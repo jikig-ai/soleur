@@ -130,7 +130,13 @@ INCIDENTS_HOST="uptime.betterstack.com"
 # ── State for the single verdict line ────────────────────────────────────────────────────────
 V_PROD=unknown; V_AGE=-1; V_NEWER=unknown; V_CANARY=unknown; V_ALIVE=unknown; V_DECL=unknown; V_ROWS=na
 VERDICT_DONE=0
-WORK=""
+# WORK is bound once, here, before any trap or helper that reads it. A failed mktemp is a verdict, never a bare status.
+WORK="$(mktemp -d -t egs-probe.XXXXXXXX)" || {
+  printf 'TRANSIENT: mktemp failed\n' >&2
+  printf 'SOLEUR_EGRESS_GW_SILENT_SOAK verdict=unknown prod_incident=%s resolved_age_s=%s newer_prod_incident=%s canary=%s canary_alert_live=%s canary_declared=%s rows_in_window=%s\n' \
+    "$V_PROD" "$V_AGE" "$V_NEWER" "$V_CANARY" "$V_ALIVE" "$V_DECL" "$V_ROWS"
+  exit 3
+}
 
 # THE chokepoint: the only place a SOLEUR_EGRESS_GW_SILENT_SOAK line is printed and the only place the contract
 # exit codes are chosen. <verdict> <exit>
@@ -147,7 +153,7 @@ action() { printf 'ACTION REQUIRED: %s\n' "$1" >&2; }
 # status; a stray exit 1 is remapped, because to the sweeper 1 is FAIL.
 _on_exit() {
   local rc=$?
-  [[ -n "$WORK" ]] && rm -rf "$WORK" 2>/dev/null
+  rm -rf "$WORK" 2>/dev/null
   if [[ "$VERDICT_DONE" != 1 ]]; then
     VERDICT_DONE=1
     transient "the probe ended without a verdict (status ${rc})"
@@ -176,14 +182,13 @@ NOW="${EGRESS_GW_SILENT_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[0-9]+$ ]] || unknown "the clock is not an epoch"
 [[ -f "$TF" ]] || unknown "betterstack-logs-alerts.tf not found at ${TF}"
 command -v jq >/dev/null 2>&1 || unknown "jq is not available"
-WORK="$(mktemp -d -t egs-probe.XXXXXXXX)" || unknown "mktemp failed"
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────────────────────
 # One GET with the bearer on curl's STDIN config channel (never argv: #7797). Returns 0 or non-zero with ONE reason
 # line on stderr that carries the HTTP status and byte length only — never the body, never a credential.
 http_get() { # <url> <outfile>
   local url="$1" body="$2" code rc=0 bytes
-  : > "$body"
+  : > "$WORK/${body##*/}"
   # -g: no URL globbing; --max-redirs 0 for explicitness; --proto =https pins the scheme.
   code="$(curl --disable --noproxy '*' -g -sS -m 20 --proto '=https' --max-redirs 0 -o "$body" -w '%{http_code}' \
     -H 'Accept: application/json' --config - "$url" \
