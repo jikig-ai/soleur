@@ -1,0 +1,27 @@
+# Emission ledger for fix-constraints-stage-a.template (consumed by `constraint-scaffold.sh --refresh-stage-a`).
+#
+# Each data row is the sha256 of one historical, substituted emission of the Stage A template
+# (the template with __TARGET_DIR__ replaced by apps/web-platform). Only the first
+# whitespace-separated field is read; the rest is a human note. Comment and blank lines are ignored.
+#
+# ORDER IS THE SEQUENCE. Rows are appended chronologically, newest last, and are never reordered
+# or removed: the line position of a row is its rank, and the refresh refuses to move an installed
+# file to an OLDER template (no downgrade). A row certifies only that Soleur emitted these bytes
+# once. A refresh converges the file on the CURRENT template, so it is a content upgrade (install
+# command, model id, token wiring), not only a pin bump.
+#
+# Append a row ONLY when fix-constraints-stage-a.template changes AND the new template keeps the
+# frozen Stage A to Stage B interface and the `contents: read` permission set (ADR-071 amendment
+# 2026-11-05). A test case reddens when the current template's hash is missing here.
+#
+# Regenerate or re-derive any row from git history (run from the repository root):
+#   T=plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template
+#   for c in $(git log --reverse --format=%h -- "$T"); do
+#     git show "$c:$T" | sed 's|__TARGET_DIR__|apps/web-platform|g' | sha256sum
+#   done
+b8187a33c668e44a00cff048117d2ed1b6d568b90b5c10b28f21bb5e46d99386  2026-07-01  initial two-stage emission (bun install --frozen-lockfile, model sonnet-4-6)
+889e8a08481de2af5909b59043f8df0a59207374aa30f35deca3676a0fe536bc  2026-07-01  model moved to sonnet-5
+e68d1cc2ce56c3e60c6ed939172ef19d83bcb85a606ae8442934898e873941e3  2026-08-16  install step moved to npm ci --ignore-scripts
+5130360de005d5534dfab73ad5fb1af8dd8a196c72e97eb1eb08d17ceb7facbe  2026-09-30  model moved to claude-sonnet-5-5
+45fdc5c5e0060d8ced95d64688061dc567beba1329a9323b6b6a7817ecdd2895  2026-10-05  adds the github_token input (needed for OIDC) and moves the action pin forward
+58377282013228a6bd5bbf1a9d647ee2710622711efa58710999b3c46585a1da  2026-11-05  moves the action pin to the Bun 1.4.4 pair

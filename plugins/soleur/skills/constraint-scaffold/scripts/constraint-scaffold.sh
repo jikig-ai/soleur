@@ -17,6 +17,14 @@
 #                        origin/main merge-base (so a same-PR violation is NOT
 #                        grandfathered), then bite-proof. Never writes README/pointer.
 #                        Agent-only; never shown to the founder.
+#   --refresh-stage-a    re-emit ONE file, the Stage A auto-recovery workflow
+#                        (fix-constraints-stage-a.yml), when the installed copy is byte-identical
+#                        to a historical emission listed in
+#                        references/fix-constraints-stage-a.emitted.sha256. Anything else (edited,
+#                        unknown version, newer than this plugin's template) is refused with 75
+#                        and left untouched. Needs a committed workflow and a clean tree. No
+#                        bite-proof: the swap changes none of config, runner or baseline. ADR-071
+#                        amendment 2026-11-05. Agent-only; never shown to the founder.
 #
 # Base ref: origin/main when it exists, else the remote's default branch (origin/HEAD, e.g. a
 # founder repo on master). Neither present -> 69 BEFORE anything is written.
@@ -32,11 +40,20 @@
 #   68  dependency-cruiser binary missing, or baseline capture failed
 #   69  git/base-ref/worktree/temp-dir error, TMPDIR resolves inside the repository, or another
 #       scaffold run holds the run lock (<git-common-dir>/constraint-scaffold.lock, owner pid inside)
-#   70  --refresh-baseline before generation (no .dependency-cruiser.cjs yet — run default mode first)
+#   70  --refresh-baseline / --refresh-stage-a before generation (no .dependency-cruiser.cjs yet, or
+#       no fix-constraints-stage-a.yml to refresh — run default mode first)
 #   71  bite-proof: gate did not pass on the clean HEAD tree before the probe (config/toolchain)
 #   72  bite-proof: gate did NOT reject the injected client->server-secret imports on their edges
 #   73  bite-proof: gate did not return to green after the probes were removed
 #   74  bite-proof: real client->server-secret violation(s) on HEAD newer than the baseline
+#   75  --refresh-stage-a refused, file left byte-unchanged (refused, not retryable): the installed
+#       workflow is not a known pristine emission (edited, or a version the ledger does not know), is
+#       NEWER than this plugin's template (update the plugin; never downgrade), is a symlink or sits
+#       behind one, or changed during the run. Removes nothing.
+#
+# (--refresh-stage-a has its own, smaller window: the only thing it can leave behind is its temp
+# file `.fix-constraints-stage-a.XXXXXX` next to the workflow, removed by the same trap; only a
+# SIGKILL leaves it, and the recovery is to delete that untracked file, never `git add -A`.)
 #
 # In default mode the self-cleanup is armed BEFORE the first artifact is written and disarmed
 # only after the bite has passed: every failure in between (67..74, a failed `mktemp`, a
@@ -128,7 +145,8 @@ MODE="default"
 case "${1:-}" in
   "") MODE="default" ;;
   --refresh-baseline) MODE="refresh" ;;
-  *) die "unknown argument: $1 (expected none or --refresh-baseline)" 64 ;;
+  --refresh-stage-a) MODE="stage-a" ;;
+  *) die "unknown argument: $1 (expected none, --refresh-baseline or --refresh-stage-a)" 64 ;;
 esac
 
 # --- Precondition: target is a Next.js app -----------------------------------
@@ -166,12 +184,18 @@ remove_emitted_artifacts() {
 # both signals because the distinction buys nothing here). Both the baseline capture and the
 # bite-proof are callers, so there is exactly one trap owner and no ordering hazard.
 WT=""
+# The Stage A refresh's temp file (initialised here so an early `die` under `set -u` cannot trip an
+# unbound variable inside the EXIT trap and replace the intended exit code).
+STAGE_A_TMP=""
 # _wt_cleanup [interrupted]: the ONE trap handler. Removes the worktree if one is open and, in
 # default mode, every artifact this run emitted. The word "interrupted" is printed only when a
 # signal arrived; a failed step says "run aborted".
 _wt_cleanup() {
   local why="${1:-run aborted}"
   release_run_lock
+  if [[ -n "${STAGE_A_TMP:-}" ]]; then
+    rm -f -- "$STAGE_A_TMP"
+  fi
   if [[ -n "${WT:-}" ]]; then
     git -C "$REPO_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
     rm -rf -- "$WT"
@@ -181,6 +205,8 @@ _wt_cleanup() {
     local removed
     removed="$(remove_emitted_artifacts)"
     [[ -n "$removed" ]] && say "$why; removed: $removed"
+  elif [[ "$why" == "interrupted" && "$MODE" == "stage-a" ]]; then
+    say "interrupted (stage-a refresh): the workflow is replaced only by the final atomic rename; review it with \`git diff\` before deciding"
   elif [[ "$why" == "interrupted" ]]; then
     say "interrupted (refresh mode): nothing removed; the committed baseline may already have been rewritten — review it with \`git diff\` before deciding"
   fi
@@ -500,6 +526,126 @@ emit_pointer() {
   fi
 }
 
+# --- --refresh-stage-a ------------------------------------------------------------------------
+# Re-emit ONE file, the Stage A workflow, over an installed copy that is byte-identical to a
+# historical emission. The clobber control is a sha256 LEDGER of every historical substituted
+# emission (references/fix-constraints-stage-a.emitted.sha256, rows in chronological order, newest
+# last); the tree guard only makes the result reviewable. The pin is read from the template at run
+# time, so this script carries no action pin of its own (claude-pin-lockstep.test.ts stays whole).
+STAGE_A_TEMPLATE="$REF_DIR/fix-constraints-stage-a.template"
+STAGE_A_LEDGER="$REF_DIR/fix-constraints-stage-a.emitted.sha256"
+
+# sha256_hex <file>: the bare 64-hex digest on stdout, or nothing when the tool printed none. Never
+# dies (it runs inside command substitutions); the caller validates the shape.
+sha256_hex() {
+  local out=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    out="$(sha256sum "$1" 2>/dev/null || true)"
+  elif command -v shasum >/dev/null 2>&1; then
+    out="$(shasum -a 256 "$1" 2>/dev/null || true)"
+  fi
+  printf '%s' "${out%% *}"
+}
+is_sha256() { grep -Eq '^[0-9a-f]{64}$' <<<"$1"; }
+
+# ledger_rank <sha>: the 1-based rank of the row among the ledger's data rows, or nothing. Exact
+# equality on the FIRST field only (a substring or prefix match would admit a different hash), so a
+# missing, empty or comment-only ledger matches nothing. Always returns 0: the caller tests the OUTPUT.
+ledger_rank() {
+  [[ -f "$STAGE_A_LEDGER" ]] || return 0
+  awk -v h="$1" '/^[[:space:]]*#/ || !NF {next} {n++} $1 == h {print n; exit}' "$STAGE_A_LEDGER" || true
+  return 0
+}
+
+# stage_a_report: the template-side lines only, bounded in width and count. The user's own file is
+# NEVER printed (a secret pasted into an edited workflow must not reach an agent transcript); the
+# agent reads its own file when it merges by hand. Wrapped so SIGPIPE from `head` cannot abort.
+stage_a_report() {
+  { diff -- "$FIXWORKFLOW_A" "$STAGE_A_TMP" | grep -v '^< ' | cut -c1-200 | head -60 || true; }
+  return 0
+}
+
+refresh_stage_a() {
+  local dest="$FIXWORKFLOW_A" dest_dir want_dir want have want_rank have_rank now
+  # 1. Existence first, before every check that can fail for another reason or write a lock. A
+  #    dangling symlink is not a file, so it is also 70.
+  [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 70
+  [[ -f "$dest" ]] || die "no fix-constraints-stage-a.yml at $TARGET_REL/.github/workflows to refresh — run the default mode first" 70
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    die "no sha256 tool (sha256sum or shasum) on PATH" 69
+  fi
+  # 2. Path safety. A symlinked FILE is refused; so is any destination whose PHYSICAL directory is
+  #    not exactly <target>/.github/workflows (a symlinked .github passes a repo-containment check
+  #    and would redirect the write). One physical string is used for mktemp, mv and the recheck.
+  if [[ -L "$dest" ]]; then
+    die "fix-constraints-stage-a.yml is a symlink; refusing to refresh through it (left unchanged)" 75
+  fi
+  dest_dir="$(physdir "$(dirname -- "$dest")")" || dest_dir=""
+  want_dir="$(physdir "$TARGET")" || want_dir=""
+  want_dir="$want_dir/.github/workflows"
+  if [[ -z "$dest_dir" || "$dest_dir" != "$want_dir" ]]; then
+    die "the physical directory of fix-constraints-stage-a.yml (${dest_dir:-unresolvable}) is not $TARGET_REL/.github/workflows; refusing to write through a redirected directory (left unchanged)" 75
+  fi
+  # 3. Reviewable: tracked and clean. The hash gate below, not this, is the clobber control.
+  if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "${dest#"$REPO_ROOT"/}" >/dev/null 2>&1; then
+    die "fix-constraints-stage-a.yml is not tracked by git — commit the workflow first so the refresh is reviewable with git diff" 67
+  fi
+  require_clean_tree "before refreshing the stage-a workflow"
+  # 4. Arm the single trap owner, THEN take the lock (a failed take never removes another run's lock).
+  trap '_wt_cleanup' EXIT
+  trap '_wt_cleanup interrupted; trap - EXIT; exit 143' INT TERM
+  take_run_lock
+  # 5. Fresh emission to a temp file next to the destination (same filesystem: atomic rename).
+  STAGE_A_TMP="$(mktemp "$dest_dir/.fix-constraints-stage-a.XXXXXX")" || die "cannot create a temp file next to fix-constraints-stage-a.yml" 69
+  sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" > "$STAGE_A_TMP" || die "cannot render the stage-a template" 69
+  if ! sed "s|__TARGET_DIR__|$TARGET_REL|g" "$STAGE_A_TEMPLATE" | cmp -s - "$STAGE_A_TMP"; then
+    die "the rendered stage-a emission did not verify against a second render" 69
+  fi
+  want="$(sha256_hex "$STAGE_A_TMP")"
+  have="$(sha256_hex "$dest")"
+  # An empty or malformed digest must never reach classification: an empty `have` would otherwise
+  # compare equal to nothing here but is the shape a fail-open match takes elsewhere.
+  if ! is_sha256 "$want" || ! is_sha256 "$have"; then
+    die "could not compute a sha256 for the stage-a workflow (the hash tool printed no digest); left unchanged" 69
+  fi
+  # 6. Already current: the one outcome that never consults the ledger, and writes nothing.
+  if [[ "$have" == "$want" ]]; then
+    say "fix-constraints-stage-a.yml already current; nothing to do"
+    exit 0
+  fi
+  # 7. Classify against the ledger.
+  want_rank="$(ledger_rank "$want")"
+  have_rank="$(ledger_rank "$have")"
+  if [[ -z "$want_rank" ]]; then
+    die "this plugin's ledger (references/fix-constraints-stage-a.emitted.sha256) is missing, empty or lacks its own template's emission; update the plugin. Left unchanged" 75
+  fi
+  if [[ -z "$have_rank" ]]; then
+    say "FAILED (75): fix-constraints-stage-a.yml differs from every known emission (edited, or a version this ledger does not know); left unchanged"
+    say "template-side differences follow (your file is not printed; read it yourself and merge by hand):"
+    stage_a_report
+    log "fix-constraints-stage-a.yml is not a known pristine emission; left unchanged"
+    exit 75
+  fi
+  if [[ "$have_rank" -gt "$want_rank" ]]; then
+    die "the installed fix-constraints-stage-a.yml is newer than this plugin's template (ledger row $have_rank of $want_rank); update the plugin, do not downgrade. Left unchanged" 75
+  fi
+  # 8. Pre-write recheck (narrows the window; the residual is a microsecond-wide race with an editor
+  #    on a tracked, clean file, recoverable from the reflog), then the one write.
+  now="$(sha256_hex "$dest")"
+  if [[ ! -f "$dest" || -d "$dest" || -L "$dest" || "$now" != "$have" ]]; then
+    die "fix-constraints-stage-a.yml changed during the run; left unchanged — re-run" 75
+  fi
+  chmod 0644 "$STAGE_A_TMP" || die "cannot set the mode on the refreshed workflow (left unchanged)" 69
+  mv -f -- "$STAGE_A_TMP" "$dest" || die "could not replace fix-constraints-stage-a.yml (the original is intact)" 69
+  STAGE_A_TMP=""
+  say "refreshed fix-constraints-stage-a.yml (ledger row $have_rank -> $want_rank); review the change with \`git diff\` and commit it"
+  exit 0
+}
+
+if [[ "$MODE" == "stage-a" ]]; then
+  refresh_stage_a
+fi
+
 if [[ "$MODE" == "refresh" ]]; then
   [[ -f "$CFG" ]] || die "no .dependency-cruiser.cjs at $TARGET_REL — run the default mode first to generate the gate" 70
   require_clean_tree "before capturing the baseline"
@@ -525,7 +671,7 @@ fi
 require_clean_tree "before generating the gate"
 
 for f in "$CFG" "$RUNNER" "$WORKFLOW" "$FIXWORKFLOW_A" "$FIXWORKFLOW_B"; do
-  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force). Committed gate: re-baseline via --refresh-baseline. Untracked leftovers of a killed first install: delete them (\`git clean -n $TARGET_REL\` lists them), run \`git worktree prune\`, re-run" 66
+  [[ -e "$f" ]] && die "refuse-if-exists: ${f#"$REPO_ROOT"/} already present (no --force). Committed gate: re-baseline via --refresh-baseline; a stale fix-constraints-stage-a.yml: --refresh-stage-a. Untracked leftovers of a killed first install: delete them (\`git clean -n $TARGET_REL\` lists them), run \`git worktree prune\`, re-run" 66
 done
 [[ -e "$BASELINE" ]] && die "refuse-if-exists: ${BASELINE#"$REPO_ROOT"/} already present (re-baseline via --refresh-baseline)" 66
 
