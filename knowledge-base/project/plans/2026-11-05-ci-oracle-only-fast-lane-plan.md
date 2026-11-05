@@ -17,7 +17,7 @@ requires_cpo_signoff: true
 ## Overview
 
 A repair diff that touches only oracle data — `scripts/ci-pr-affected-audit.accept.tsv`,
-`scripts/ci-pr-affected-audit.baseline.tsv`, or the `AFFECTED_*_PATHS` edge arrays inside
+`scripts/lib/test-affected-paths.sh`'s `AFFECTED_*_PATHS` edge arrays inside
 `scripts/lib/test-affected-paths.sh` — currently pays the full ~2h double battery
 (pull_request + merge_group) even though it changes no executable path. The affected
 selector proves this twice over: every declared edge set self-includes
@@ -49,7 +49,7 @@ path. The ratchet job IS the relevant check for such diffs; the full battery's p
 A diff is **oracle-only** when EVERY changed path is one of:
 
 1. `scripts/ci-pr-affected-audit.accept.tsv`
-2. `scripts/ci-pr-affected-audit.baseline.tsv`
+2. `scripts/ci-pr-affected-audit.baseline.tsv` — **REMOVED from the surface at review** (PR5z strict zero: the only possible diff is a `baseline-reintroduced` alarm shape; must pay the full battery)
 3. `scripts/lib/test-affected-paths.sh` — **AND** every changed line lies inside an
    `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` array extent, computed in BOTH the base and
    head images (so adding or deleting a whole array block still classifies — PR
@@ -201,7 +201,7 @@ still activation-locked with `CI_PR_AFFECTED` unset — verified `gh variable li
 
 **Value quantification** — the saving claim is measured, not asserted: latest full PR
 baseline 164.4 job-min of which 119.2 test-scripts (ADR-276 measurement,
-2026-10-07); oracle repairs measured at ~50 min merge_group wall + PR run
+2026-10-12); oracle repairs measured at ~50 min merge_group wall + PR run
 (#12156 body, 2026-11-05). Reduced set ≈ ratchet (~3.4 min, runbook) + one
 validation leg (≤ ~10–20 min bounded) + cheap guards + e2e (~4.2 min) → order
 ~15–25 job-min and ~10–15 min wall.
@@ -214,8 +214,8 @@ jobs), `ci.yml:1296,1395,1433,1672,1765,2306` (leg `if:`s), `ci.yml:2090-2292`
 the hunk-parsing precedent for the array-extent check),
 `scripts/lib/test-affected-paths.sh:68-77` (self-inclusion + runner-changed),
 `scripts/ci-pr-affected-replay.py:1748-1761,1898-1900` (`RATCHET_ORACLE` — the
-lane's surface ⊂ this set; the ratchet's `oracle-inputs-changed` notice therefore
-already covers every lane-eligible diff),
+lane's machinery members are added to this set so the ratchet's `oracle-inputs-changed`
+notice covers lane-machinery diffs; doc-path surface members are intentionally not in it),
 `scripts/probe-merge-group-coverage.sh` (merge_group `if:` constraint),
 `scripts/required-checks.txt` (required-context inventory — unchanged).
 
@@ -249,6 +249,8 @@ classification; `2026-10-26-a-ratchet-green-on-the-branch-tip-was-red-on-the-mer
 `soleur:engineering:review:user-impact-reviewer` runs at review time
 (`plugins/soleur/skills/review/SKILL.md` conditional block). CPO sign-off is required
 at plan time; headless run — recorded as operator item O1 in decision-challenges.md.
+
+- The one user-visible artifact added while dark: `oracle-index-check` runs as a permanent green check row on every pull_request/merge_group (always() + !cancelled(), needs:[oracle-selection]) — a new always-on member of `test`'s closure and therefore a new permanent failure surface (a job-level fault there reds `test` on every PR), accepted because a lane-eligible diff must never weaken its own validation and the job no-ops in under a minute on non-oracle diffs.
 
 ## Observability
 
@@ -303,7 +305,7 @@ the final printf.
 | 3 | Hunk in `test-affected-paths.sh` outside `AFFECTED_*_PATHS` extents (`ALWAYS_ON_SUITES`, `_CLOSURE_LEAF_*`, a comment) | RED (no lane) |
 | 4 | Guard's own dispatch: classifier aborts / diff unparseable / zero paths checked but reports oracle | RED — fail-closed defaults stand |
 | 5 | Harness: sentinel asserts lane on an EMPTY surface membership (vacuous classifier) | RED |
-| 6 | Must-PASS non-canonical: baseline.tsv + `knowledge-base/project/specs/x/y.md` + a NEW `AFFECTED_*_PATHS` block, paths in non-sorted order | PASS |
+| 6 | Must-PASS non-canonical: accept.tsv + `knowledge-base/project/specs/x/y.md` + a NEW `AFFECTED_*_PATHS` block, paths in non-sorted order | PASS |
 
 **Anchor.** The surface and exclusion lists are committed literals in the driver; a
 one-commit weakening must edit the driver AND defeat the sentinel — the sentinel pins
@@ -508,7 +510,7 @@ Files to Edit/Create: zero matches).
 
 ### Phase 3 — push-dedupe + consumers
 
-- Tighten the elide proof (all five heavy legs `success`); extend
+- Tighten the elide proof (all six lane-skippable legs `success`); extend
   `scripts/ci-push-dedupe.test.sh`.
 - Verify consumers read a reduced `test` correctly: battery-owed.sh,
   admin-merge-ready.sh, monitor-pr-checks.sh, post-merge-monitor.yml (list each
@@ -528,7 +530,7 @@ Files to Edit/Create: zero matches).
 - [ ] `bash scripts/ci-oracle-lane.test.sh` exits 0; every mutation-matrix row in the
       Guard Contract drives the named guard RED when applied.
 - [ ] A fixture diff of only `ci-pr-affected-audit.accept.tsv` →
-      `oracle_only=true`; same for baseline.tsv alone; same for an
+      `oracle_only=true`; a `baseline.tsv` touch alone classifies `oracle_only=false` (outside_surface — PR5z strict zero, review-narrowed); same for an
       `AFFECTED_*_PATHS`-only hunk in `test-affected-paths.sh` (incl. a NEW array block).
 - [ ] A fixture diff containing `scripts/ci-pr-affected-replay.py`,
       `scripts/test-all.sh`, `.github/workflows/ci.yml`, or
@@ -565,7 +567,7 @@ Files to Edit/Create: zero matches).
 
 ## Test Scenarios
 
-- Given a diff of only `accept.tsv` + `baseline.tsv` + one edge-array hunk + two KB
+- Given a diff of only `accept.tsv` + one edge-array hunk + two KB
   planning `.md`s, when `oracle-selection` runs on pull_request, then
   `oracle_only=true` and `skip_legs` names the five heavy legs. (integration)
 - Given a `test-affected-paths.sh` diff whose hunk adds a member to
@@ -680,7 +682,7 @@ executed mechanically):
 - The `[full]` run-name marker is not on `main` yet (S4 PR C unshipped) — the
   amendment records that oracle-lane runs must never carry it when it lands.
 - push-dedupe (already `on`) would elide the push run on an oracle merge_group
-  green unless the proof requires all five heavy legs `success` — now a named
+  green unless the proof requires all six lane-skippable legs `success` — now a named
   deliverable (Guard 3), not a review-time surprise.
 - `oracle-index-check` joins `test`'s `needs:` and always runs (sub-minute no-op
   off the lane) rather than being a second tolerated context — keeps the merge

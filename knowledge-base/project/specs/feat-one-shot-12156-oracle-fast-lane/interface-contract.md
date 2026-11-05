@@ -21,7 +21,7 @@ Outputs — one `GITHUB_OUTPUT`-style block AND stdout, grammar-revalidated befo
 
 Classification — `oracle_only=true` iff EVERY changed path is in surface:
 1. `scripts/ci-pr-affected-audit.accept.tsv`
-2. `scripts/ci-pr-affected-audit.baseline.tsv`
+2. ~~`scripts/ci-pr-affected-audit.baseline.tsv`~~ — REMOVED at design review: PR5z strict zero deleted the file, so the only possible diff is a `baseline-reintroduced` alarm shape that must pay the full battery (classifies `outside_surface`)
 3. `scripts/lib/test-affected-paths.sh` AND every changed hunk line lies inside an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` array extent computed in BOTH base and head images (a new/deleted whole array still classifies; any hunk line outside extents — `ALWAYS_ON_SUITES`, `_CLOSURE_LEAF_*`, `AFFECTED_CONSUMED_EDGES`, comments, functions — disqualifies the whole diff)
 4. `knowledge-base/**/*.md` or root-level `*.md` — identical grammar to `ci-pr-selection.sh` `is_doc_path`
 
@@ -33,7 +33,7 @@ Hard exclusions (any hit → `oracle_only=false`): `scripts/ci-pr-affected-repla
 
 ### 3. Leg `if:` conjuncts
 
-Five heavy legs (`test-webplat`, `test-bun`, `test-scripts`, `test-scripts-heavy`, `web-platform-build`) each gain `needs: oracle-selection` + the same `!(… && needs.oracle-selection.outputs.active == 'true' && head-bound && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',<leg>,'))` shape the S4 legs carry, head bound event-agnostically via `github.event.pull_request.head.sha || github.event.merge_group.head_sha`. `shard-totality-mutations` gains `needs: oracle-selection` + `needs.oracle-selection.outputs.oracle_only != 'true'`. `e2e`, `encryption-posture`, `affected-index-ratchet`, `pr-selection`, `draft-light`, `push-dedupe`, all guard/lint jobs: NEVER skipped.
+Five heavy legs (`test-webplat`, `test-bun`, `test-scripts`, `test-scripts-heavy`, `web-platform-build`) each gain `needs: oracle-selection` + the same `!(… && needs.oracle-selection.outputs.active == 'true' && head-bound && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',<leg>,'))` shape the S4 legs carry, head bound event-agnostically via `github.event.pull_request.head.sha || github.event.merge_group.head_sha`. `shard-totality-mutations` gains `needs: oracle-selection` + `!((event∈{pull_request,merge_group}) && needs.oracle-selection.outputs.active == 'true' && head_sha bound)` — the legs' four-term conjunct minus `skip_legs` membership (it skips on `active`, not `oracle_only`, so the locked dark phase never skips it). `e2e`, `encryption-posture`, `affected-index-ratchet`, `pr-selection`, `draft-light`, `push-dedupe`, all guard/lint jobs: NEVER skipped.
 
 ### 4. `oracle-index-check` job (ci.yml)
 

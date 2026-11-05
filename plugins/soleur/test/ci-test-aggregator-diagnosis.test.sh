@@ -590,6 +590,7 @@ fi
 # G1-16 the final success line with tolerated skips is EXACT: the tolerated legs joined by a comma (no leading or trailing comma, in
 # entries order), then the raw skip_legs. `tol_exact` reads a whole line (grep -x), so a stray trailing comma or a dropped suffix is red.
 REM_TXT='the pr-selection skip decision is cached from attempt 1; use "Re-run all jobs" (or push) to get a full run'
+OREM_TXT='the oracle-lane skip decision is cached from attempt 1; use "Re-run all jobs" (or push) to get a full run'
 tol_exact() {  # $1=label $2=body $3=skip_legs $4=webplat $5=bun $6=heavy $7=exact expected line ; pull_request, active, head bound, attempt 1, rc 0
   run_body "$2" "$4" "$5" success pull_request success "$6" success "" "$3" true true 1
   if [ "$RC" -eq 0 ] && grep -qxF -- "$7" "$OUT"; then pass; return 0; fi
@@ -718,6 +719,13 @@ otol "O2-11 second leg skipped and unlisted after a compliant first" "$BODY" mer
 # the PR arm stays pull_request-only: the SAME tolerated shape under ORACLE inputs never leaks into
 # the pr-selection arm, and oracle tolerance does not fire on pull_request without the oracle inputs
 otol "O2-12 PR-listed skip beside empty oracle inputs still works (PR arm unchanged)" "$BODY" pull_request "" "" "" 1 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "$OTOL_MSG"
+# the ORACLE re-run remedy (P2-5, mirror of the PR G1-17 family): on attempt > 1 a leg the cached ORACLE_SKIP_LEGS
+# decision NAMED gets the remedy line; a leg skipped for another reason keeps the plain line. The remedy is a
+# courtesy, not the verdict — the skip itself is already not tolerated (rc=1) because the arm requires attempt 1.
+otol "O2-14 a NAMED skip on ATTEMPT=2 names the oracle re-run remedy" "$BODY" pull_request test-bun true true 2 $OK $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $OREM_TXT" "$OTOL_MSG"
+otol "O2-14b an UNNAMED shard skipped beside a set list keeps the plain line" "$BODY" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "cached from attempt 1"
+otol "O2-14d delimited, not substring: 'test-scripts-heavy' names no remedy for 'test-scripts'" "$BODY" merge_group test-scripts-heavy true true 2 $OK $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED — the leg did not run" "cached from attempt 1"
+otol "O2-14c attempt 1, named skip tolerated: no remedy line" "$BODY" pull_request test-bun true true 1 $OK $OK $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" "cached from attempt 1"
 run_body "$BODY" success skipped success pull_request success success success "" test-bun true true 1 success "" "" ""
 if [ "$RC" -eq 0 ] && grep -qF -- "test-bun: $TOL_MSG" "$OUT" && ! grep -qF -- "$OTOL_MSG" "$OUT"; then pass; else
   fail "O2-13 the PR-AFFECTED-SKIP arm is unchanged by the oracle arm (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
@@ -755,6 +763,14 @@ elif op == "posture-tolerable":
 elif op == "substring":
     # the ORACLE loop's delimited match (the `entry` var is shared; the `oracle_tolerated=` target disambiguates)
     sub('*",${entry%%:*},"*) oracle_tolerated=', '*"${entry%%:*}"*) oracle_tolerated=')
+elif op == "o-remedy-removed":
+    # the oracle re-run remedy arm (P2-5): a leg the cached oracle decision NAMED keeps only the plain SKIPPED
+    # line on attempt > 1 — the mirror of the PR family's remedy-removed.
+    sub('if [[ "$ATTEMPT" != "1" && ",$ORACLE_SKIP_LEGS," == *",$shard,"* ]]; then', 'if false; then')
+elif op == "o-remedy-any-shard":
+    sub('if [[ "$ATTEMPT" != "1" && ",$ORACLE_SKIP_LEGS," == *",$shard,"* ]]; then', 'if [[ "$ATTEMPT" != "1" && -n "$ORACLE_SKIP_LEGS" ]]; then')
+elif op == "o-remedy-substring":
+    sub('if [[ "$ATTEMPT" != "1" && ",$ORACLE_SKIP_LEGS," == *",$shard,"* ]]; then', 'if [[ "$ATTEMPT" != "1" && ",$ORACLE_SKIP_LEGS," == *"$shard"* ]]; then')
 else:
     sys.stderr.write("unknown op\n"); sys.exit(2)
 open(dst, "w").write(s)
@@ -783,6 +799,12 @@ mutate_otol() {  # $1=label $2=op ; probes the Guard-2 rows over the mutant — 
     otol "o11" "$m" merge_group "oracle-index-check" true true 1 $S $OK $OK $OK $OK $OK $OK 1 "oracle-index-check: SKIPPED" "oracle-index-check: $OTOL_MSG"
     # o12 kills the substring mutant: `test-scripts` is a strict substring of the listed `test-scripts-heavy`
     otol "o12" "$m" merge_group test-scripts-heavy true true 1 $OK $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED" "test-scripts: $OTOL_MSG"
+    # the oracle re-run remedy probes: a NAMED skip on attempt 2 prints the remedy, an UNNAMED one does not,
+    # the match is delimited (heavy does not name scripts), and nothing prints at attempt 1.
+    otol "o13" "$m" pull_request test-bun true true 2 $OK $OK $S $OK $OK $OK $OK 1 "the oracle-lane skip decision is cached" ""
+    otol "o14" "$m" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "cached from attempt 1"
+    otol "o15" "$m" merge_group test-scripts-heavy true true 2 $OK $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED — the leg did not run" "cached from attempt 1"
+    otol "o16" "$m" pull_request test-bun true true 1 $OK $OK $S $OK $OK $OK $OK 0 "test-bun: $OTOL_MSG" "cached from attempt 1"
   } >/dev/null 2>&1
   PROBE=0
   if [ "$PROBE_FAILS" -gt 0 ]; then pass; MUT_KILLED=$((MUT_KILLED + 1))
@@ -796,6 +818,9 @@ mutate_otol "O2-H1e the arm also fires on push" event-any
 mutate_otol "O2-H1f the allowlist gains oracle-index-check" index-tolerable
 mutate_otol "O2-H1g the allowlist gains encryption-posture" posture-tolerable
 mutate_otol "O2-H1h delimited match becomes a substring match" substring
+mutate_otol "O2-H2a the oracle re-run remedy arm is removed" o-remedy-removed
+mutate_otol "O2-H2b the remedy fires for any shard when the list is nonempty" o-remedy-any-shard
+mutate_otol "O2-H2c the remedy match becomes a substring match" o-remedy-substring
 
 # G1-H1 (Guard 1 harness): mutate the body under test and require RED. Each named operation edits ONE condition of the tolerance; the
 # row set above must catch it. A mutant that survives is labelled fixture-inadequate or equivalent.

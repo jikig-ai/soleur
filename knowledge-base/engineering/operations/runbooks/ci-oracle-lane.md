@@ -15,7 +15,7 @@ manifest), `scripts/ci-oracle-lane.test.sh` (the sentinel)
 ## What the lane is
 
 A repair diff that touches only oracle data — `scripts/ci-pr-affected-audit.accept.tsv`,
-`scripts/ci-pr-affected-audit.baseline.tsv`, the `AFFECTED_*_PATHS` edge arrays inside
+the `AFFECTED_*_PATHS` edge arrays inside
 `scripts/lib/test-affected-paths.sh`, plus documentation (`knowledge-base/**/*.md`, root `*.md`) —
 changes no executable path, so the full battery proves nothing about it. The `oracle-selection` job in
 `.github/workflows/ci.yml` classifies a `pull_request` or `merge_group` diff once per run; when EVERY changed
@@ -30,7 +30,7 @@ batch that mixes a code PR in, a malformed diff — yields the full battery.
 | State | Condition | Behaviour |
 |---|---|---|
 | **dark** | `CI_ORACLE_LANE` unset or empty | the `oracle-selection` job is SKIPPED — no runner, no checkout, zero cost; every leg runs; `oracle-index-check` prints `not-oracle-only` and exits 0 inside a minute |
-| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `readonly ORACLE_LANE_LOCKED=1` in the driver | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<five legs>` notice instead of skipping — this stream is the blocking pre-activation audit evidence |
+| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `readonly ORACLE_LANE_LOCKED=1` in the driver | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream is the blocking pre-activation audit evidence |
 | **active** | `CI_ORACLE_LANE=on` AND the lock literal removed by a separate authorized PR | the five legs in `skip_legs` skip on `pull_request`/`merge_group`, tolerated by the `test` aggregator's `ORACLE-ONLY-SKIP` arm; `shard-totality-mutations` skips; `oracle-index-check` runs the manifest |
 
 A non-empty value that is not exactly `on` (`off`, `ON`, `on ` with whitespace) is NONE of these: the job runs
@@ -44,13 +44,13 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 | Field | Values |
 |---|---|
 | `event` | `pull_request`, `merge_group`, or whatever `github.event_name` carried |
-| `switch` | `unset` (empty), `invalid` (non-empty, not `on`), `on` |
+| `switch` | `on`, `invalid` (non-empty, not `on`); `unset` exists in the grammar but is unreachable in CI — the job only schedules while the variable is non-empty |
 | `locked` | `true` while `ORACLE_LANE_LOCKED=1` stands in the driver |
 | `attempt` | `github.run_attempt`; only `1` can ever reach `oracle` |
-| `files` | changed-path count the classifier parsed (0 on early exits) |
+| `files` | changed-path count in the diff listing — set before the per-path loop, so a mid-loop `malformed_diff` abort still reports the total count (0 on pre-listing exits) |
 | `reason` | the verdict token — enum below |
 | `oracle_only` | `true` iff every changed path is in the surface |
-| `would_skip` | `none`, or the five-leg list while locked (the audit datum) |
+| `would_skip` | `none`, or the leg list while locked — five legs, or four when a diagrams path was in the diff (the audit datum) |
 | `active` | `true` only when oracle_only AND `on` AND unlocked — never while locked |
 
 `reason=` enum (`oracle` is the only lane verdict; everything else is a fail-closed full battery):
@@ -67,12 +67,21 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 - `non_oracle_status`, `non_oracle_mode`, `odd_path` — a changed entry carried a status outside M/A/D, a mode
   outside {000000,100644,100755}, or a non-printable/`::`/`,`-containing path.
 - `excluded` — a committed exclusion-list path (`scripts/ci-pr-affected-replay.py`, `scripts/test-all.sh`,
-  `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`, other `scripts/lib/**`).
+  `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`, other `scripts/lib/**`, and the lane's own
+  machinery: `scripts/ci-oracle-lane.sh`, `scripts/ci-oracle-lane.test.sh`, `scripts/ci-oracle-lane-suites.txt`).
 - `outside_surface` — a path outside the surface.
 - `extent_parse` / `extent_miss` — the `AFFECTED_*_PATHS` extent walk failed on a base/head image, or a
-  `test-affected-paths.sh` hunk line fell outside extents.
+  `test-affected-paths.sh` hunk line fell outside extents, was a non-data line (the element grammar rejects
+  `$(`, backtick, `${`, unquoted members — the index is sourced bash), or the diff was binary.
+- `no_base_driver` — emitted by the WORKFLOW STEP, not the driver: the classifier is sourced from the base image
+  (`git show HEAD^1:`/`git show $MERGE_GROUP_BASE_SHA:` — a PR must not rewrite the oracle that judges it), and a
+  base that lacks the file fails closed with the defaults. Seen on pre-#12156 trees and on this lane's own
+  introduction PR.
 - `signalled` / `lever_error` — the EXIT-trap exits (HUP/INT/TERM, or an internal abort); both exit 0 with the
-  fail-closed defaults. No notice at all on a job that did not conclude `skipped` means the classifier died
+  fail-closed defaults. No notice at all on a job that did not conclude `skipped` means the classifier died  — and a job that died AT the job level (checkout failure, runner loss, the 3-minute cap) shows as a red
+  `oracle-selection` check beside a green `test` (measured canary shape: job-level `continue-on-error` still
+  concludes `failure` in the jobs API). Empty outputs = full battery, so the red is advisory; the remediation is
+  re-running the workflow, not reverting.
   before emitting (SIGKILL, runner loss) — that absence is itself the failure signal.
 
 ## When `oracle-index-check` fails
@@ -100,16 +109,29 @@ Activation is operator row O2 — a separate, explicitly authorized step, never 
 mechanism and never implied by this runbook existing. The dark-phase `would_skip` audit is BLOCKING evidence
 (ruling T1), not advisory.
 
-1. **Arm the telemetry** (authorized): `gh variable set CI_ORACLE_LANE=on --repo jikig-ai/soleur`. Verify:
+1. **Arm the telemetry** (authorized): `gh variable set CI_ORACLE_LANE --body on --repo jikig-ai/soleur` —
+   the value goes via `--body`; an `=` in the positional is read as part of the variable name and 422s. Verify:
    `gh api repos/jikig-ai/soleur/actions/variables/CI_ORACLE_LANE` returns the variable with `"value": "on"`
    (404, 401 and 403 all exit 1 — call the variable absent only when stderr says `HTTP 404`; also check
    `gh api --paginate repos/jikig-ai/soleur/actions/organization-variables --jq '.variables[].name'` for an org
    variable that resolves through `vars`). The NEXT `pull_request`/`merge_group` run executes `oracle-selection`
    and the notice stream begins; nothing skips while `locked=true`.
 2. **Observe at least one real oracle-repair merge.** On the #10865 observation window, audit the dark run's
-   `SOLEUR_ORACLE_LANE` notice against the diff it classified: `oracle_only=true` with the five-leg `would_skip`
+   `SOLEUR_ORACLE_LANE` notice against the diff it classified: `oracle_only=true` with the `would_skip` leg list
    on a genuinely oracle-only diff is the evidence; `reason=` on the non-oracle runs should be the surface/guard
    tokens, never `oracle`. A wrong classification is a stop — do not proceed.
+
+   Collecting the evidence: the notice lands in the raw job log — `gh run view <run-id> --log | grep
+   SOLEUR_ORACLE_LANE` on the run that carried the repair merge (one notice per `oracle-selection` execution).
+   The notice deliberately carries NO diff identity: `head_sha`/`base_sha` go to `GITHUB_OUTPUT` only, which is
+   not retrievable post-hoc. Reconstruct the classified diff from the run payload — `pull_request`: the run's
+   `head_sha` is the merge ref and its parents are base/head in a `fetch-depth: 0` clone (`git log --format=%P
+   <sha> -1` → `p1` base, `p2` PR head, diff `p1..p2`); `merge_group`: the payload's `head_sha`/`base_sha`
+   (`gh api repos/{owner}/{repo}/actions/runs/<id>` → `.head_sha`; the base is the batch's base commit). Then
+   diff `base..head` and re-apply the surface check mentally — every path must be accept.tsv, an in-extent
+   `AFFECTED_*_PATHS` hunk, or a doc path. The expected `would_skip` list is the FIVE legs, or the FOUR-leg
+   variant (`test-webplat` retained) when the diff touched `knowledge-base/engineering/architecture/diagrams/*`
+   — the diagrams carve-out, which keeps the web-platform leg because diagrams feed its surface.
 3. **Authorized activation PR**: remove the `readonly ORACLE_LANE_LOCKED=1` line from
    `scripts/ci-oracle-lane.sh` (the comment marks it `ACTIVATION LOCK`), run
    `bash scripts/ci-oracle-lane.test.sh`, and attach the audit evidence from step 2 to #10865. First live run

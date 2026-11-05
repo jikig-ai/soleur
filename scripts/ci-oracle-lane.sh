@@ -47,7 +47,8 @@
 #
 # THE SURFACE (the lane's entire authority). A diff is oracle-only iff EVERY changed path is one of:
 #   * scripts/ci-pr-affected-audit.accept.tsv
-#   * scripts/ci-pr-affected-audit.baseline.tsv
+#     (baseline.tsv is NOT a member — PR5z strict zero deleted it; a re-add is the `baseline-reintroduced`
+#      alarm shape the advisory ratchet names, so it must pay the full battery: see is_oracle_data_path)
 #   * scripts/lib/test-affected-paths.sh — AND every changed hunk line lies inside an AFFECTED_*_PATHS array extent
 #     computed in BOTH the base and head images (a NEW or DELETED whole array block still classifies: its lines are
 #     inside the extent on the side that carries it; any hunk line outside extents — ALWAYS_ON_SUITES, _CLOSURE_LEAF_*,
@@ -173,6 +174,11 @@ is_excluded_path() {
     plugins/soleur/scripts/lint-ratchet.py) return 0 ;;
     .github/workflows/ci.yml) return 0 ;;
     scripts/lib/*) return 0 ;;
+    # The lane's own machinery: outcome-redundant today (outside the surface) but load-bearing if the surface ever
+    # widens — a diff that edits the classifier, its sentinel or its validation manifest always pays the battery.
+    scripts/ci-oracle-lane.sh) return 0 ;;
+    scripts/ci-oracle-lane.test.sh) return 0 ;;
+    scripts/ci-oracle-lane-suites.txt) return 0 ;;
   esac
   return 1
 }
@@ -181,7 +187,6 @@ is_excluded_path() {
 # `bitmap` / `bitmap_n` are the one shared scratch pair; each call overwrites them and callers copy out. A bitmap byte
 # per image line: 1 = inside an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent (opener and closer lines inclusive).
 bitmap=""
-bitmap_n=0
 base_bitmap=""
 head_bitmap=""
 
@@ -190,10 +195,8 @@ head_bitmap=""
 # EOF — because then no line-range claim can be proven and the diff fails closed.
 bitmap_oracle_image() {  # GUARD:O1-EXTENT-PARSE
   bitmap=""
-  bitmap_n=0
   local line in=0
   while IFS= read -r line || [ -n "$line" ]; do
-    bitmap_n=$((bitmap_n + 1))
     if [[ "$line" =~ ^AFFECTED_[A-Z0-9_]+_PATHS=\( ]]; then
       [ "$in" = 0 ] || return 1
       in=1
@@ -207,26 +210,40 @@ bitmap_oracle_image() {  # GUARD:O1-EXTENT-PARSE
   return 0
 }
 
+# The element grammar every CHANGED line inside an index hunk must match: array opener, `)` closer, a quoted member
+# (optional trailing comment), a whole-line comment, or blank. Everything else — `$(`, backtick, `${`, unquoted
+# members, `readonly`/append forms — is code, not data, and disqualifies the whole diff (the lane's premise is that an
+# oracle diff changes no executable path; the index is SOURCED bash).
+readonly ELEM_RE='^[[:space:]]*(AFFECTED_[A-Z0-9_]+_PATHS=\(|\)|"([^"\\$`]|\\.)*"[[:space:]]*(#.*)?|#.*)?[[:space:]]*$'
+
 # Every `@@` hunk in a `git diff -U0` of ORACLE_INDEX: each changed old-side line must be inside a base extent and each
 # changed new-side line inside a head extent. A pure-insertion hunk carries no old lines (a new array block is judged by
-# the head extents); a pure-deletion hunk carries no new lines (a removed block is judged by the base extents).
+# the head extents); a pure-deletion hunk carries no new lines (a removed block is judged by the base extents). A
+# `Binary files` verdict (a NUL anywhere makes the blob binary) produces ZERO hunks and must NOT pass vacuously.
 check_hunks() {  # $1 = diff file   GUARD:O1-EXTENT-MISS
-  local line os oc ns nc l
+  local line os oc ns nc l body
+  grep -q '^Binary files' "$1" && return 1  # GUARD:O-BINARY-INDEX
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '@@ -'*) ;; *) continue ;; esac
-    [[ "$line" =~ ^@@\ -([0-9]+)(,([0-9]+))?\ \+([0-9]+)(,([0-9]+))?\ @@ ]] || return 1
-    os="${BASH_REMATCH[1]}"; oc="${BASH_REMATCH[3]:-1}"
-    ns="${BASH_REMATCH[4]}"; nc="${BASH_REMATCH[6]:-1}"
-    if [ "$oc" -gt 0 ]; then
-      for (( l=os; l<os+oc; l++ )); do
-        [ "${base_bitmap:l-1:1}" = "1" ] || return 1
-      done
-    fi
-    if [ "$nc" -gt 0 ]; then
-      for (( l=ns; l<ns+nc; l++ )); do
-        [ "${head_bitmap:l-1:1}" = "1" ] || return 1
-      done
-    fi
+    case "$line" in
+      '@@ -'*)
+        [[ "$line" =~ ^@@\ -([0-9]+)(,([0-9]+))?\ \+([0-9]+)(,([0-9]+))?\ @@ ]] || return 1
+        os="${BASH_REMATCH[1]}"; oc="${BASH_REMATCH[3]:-1}"
+        ns="${BASH_REMATCH[4]}"; nc="${BASH_REMATCH[6]:-1}"
+        if [ "$oc" -gt 0 ]; then
+          for (( l=os; l<os+oc; l++ )); do
+            [ "${base_bitmap:l-1:1}" = "1" ] || return 1
+          done
+        fi
+        if [ "$nc" -gt 0 ]; then
+          for (( l=ns; l<ns+nc; l++ )); do
+            [ "${head_bitmap:l-1:1}" = "1" ] || return 1
+          done
+        fi ;;
+      '+++'*|'---'*) continue ;;
+      '+'*|'-'*)
+        body="${line:1}"
+        [[ "$body" =~ $ELEM_RE ]] || return 1 ;;  # GUARD:O-ELEM-GRAMMAR
+    esac
   done < "$1"
   return 0
 }

@@ -29,6 +29,9 @@
 #                                                 affected-index-ratchet job already runs on the reduced set)
 #   scripts/pre-push-ratchet-lane                 local pre-push lane, not part of the hosted oracle validation
 #   plugins/soleur/test/ci-path-gating.test.sh     path-gating classifier, adjacent machinery
+#   scripts/ci-oracle-lane                        SUT is the lane driver itself, unreachable by a lane-eligible diff
+#                                                 (the driver, its sentinel and this manifest are all in the
+#                                                 hard-exclusion list — a diff touching them always pays the battery)
 #
 scripts/lint-orphan-test-suites	bash scripts/lint-orphan-test-suites.sh
 scripts/test-all-affected-a	bash scripts/test-all-affected.test.sh --rows 1-13
@@ -41,6 +44,6 @@ scripts/test-affected-derive-cache	bash scripts/test-affected-derive-cache.test.
 scripts/test-affected-kb-consumers	bash scripts/test-affected-kb-consumers.test.sh
 plugins/soleur/test/ci-pr-affected-replay-a	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
 plugins/soleur/test/ci-pr-affected-replay-b	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-596
+plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-599
 scripts/ci-pr-selection	bash scripts/ci-pr-selection.test.sh
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	bash plugins/soleur/test/ci-pr-affected-preactivation.test.sh

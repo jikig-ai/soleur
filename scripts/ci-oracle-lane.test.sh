@@ -14,7 +14,7 @@
 #     MERGE_GROUP_HEAD_SHA, MERGE_GROUP_BASE_SHA, RUN_ATTEMPT.
 #
 # THE ORACLE SURFACE (the lane's entire authority, Guard 1): a diff is oracle-only iff EVERY
-# changed path is `scripts/ci-pr-affected-audit.accept.tsv`, `scripts/ci-pr-affected-audit.baseline.tsv`,
+# changed path is `scripts/ci-pr-affected-audit.accept.tsv`,
 # `knowledge-base/**/*.md`, a root `*.md`, or `scripts/lib/test-affected-paths.sh` whose EVERY changed
 # line lies inside an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent computed in BOTH the base and the
 # head image (so adding or deleting a whole array block still classifies — the PR #12150 shape).
@@ -29,7 +29,7 @@
 # (ALWAYS_ON_SUITES, _CLOSURE_LEAF_*, AFFECTED_CONSUMED_EDGES, comments, a function, a member-looking
 # line outside the extents); row 4 → row_diff_error + row_event_out + the killed-driver row;
 # row 5 → row_empty (an EMPTY surface membership must NOT classify: the vacuity arm);
-# row 6 (must-PASS non-canonical) → fixture mustpass6: baseline.tsv + a KB specs .md + a NEW
+# row 6 (must-PASS non-canonical) → fixture mustpass6: accept.tsv + a KB specs .md + a NEW
 # AFFECTED_*_PATHS block, paths in non-sorted order.
 #
 # GUARD 4 MATRIX MAPPING (manifest parity): row 1 → check_manifest bogus-member copy;
@@ -52,11 +52,14 @@
 #   O-DEFAULTS        the defaults-first output block (crash-safe first write)
 #   ALWAYS-EXIT-0     the trap that makes every path exit 0
 #   O-EVENT           only pull_request / merge_group classify
-#   O-SWITCH          the exact-`on` comparison
+#   O1-SWITCH-EXACT   the exact-`on` read maps SWITCH to sw (was listed as "O-SWITCH")
+#   O1-SWITCH-GATE    the `sw = on` gate in classify() (the two switch anchors together are "O-SWITCH")
 #   O-TWO-PARENTS     the merge-ref two-parent shape (pull_request)
 #   O-PRHEAD          HEAD^2 == PR_HEAD_SHA (pull_request)
+#   O1-HEAD-IS-GITHUB-SHA  HEAD == GITHUB_SHA (pull_request)
 #   O-FORK            same-repo head (pull_request)
-#   O-MG-SHAPE        the merge_group sha pair is valid and resolvable
+#   O1-MG-SHA         the merge_group sha pair is 40-hex (was listed as "O-MG-SHAPE")
+#   O1-MG-RESOLVE     the merge_group shas resolve to commits (the other half of "O-MG-SHAPE")
 #   O-ATTEMPT         run attempt 1 only
 #   O-DIAGRAMS-FLAG   knowledge-base/engineering/architecture/diagrams/* drops test-webplat from the skip list
 #   O-MAX-FILES       the ≤500 changed-file cap
@@ -68,6 +71,8 @@
 #   O-EXTENT          the in-extent hunk check for test-affected-paths.sh
 #   O-EXTENT-BASE     the base-image half of the extent check
 #   O-EXTENT-HEAD     the head-image half of the extent check
+#   O-BINARY-INDEX    a `Binary files` verdict on the index diff returns 1 (zero hunks must not pass vacuously)
+#   O-ELEM-GRAMMAR    every +/- line inside an index hunk must match the element grammar
 #   O-EMPTY-DIFF      a zero-path diff is NOT oracle-only (the vacuity arm)
 #   O-LOCK-READ       the driver reads ORACLE_LANE_LOCKED
 #   O-ARM             active=true only when unlocked AND switch `on` AND oracle_only
@@ -369,6 +374,13 @@ NEOF
     comment_out)     sed -i '1i\# a comment outside every extent' "$f" ;;
     func_edit)       sed -i '/^_zzleak_helper() {$/,/^}$/ s|return 1|return 2|' "$f" ;;
     after_paren)     sed -i '/^AFFECTED_PLUGINS_BAR_PATHS=($/,/^)$/ s|^)$|)\n  "scripts/zzleak-late.test.sh"|' "$f" ;;
+    bin_nul)         printf '\x00' >> "$f" ;;                                                              # a NUL anywhere makes the blob binary: the -U0 diff is `Binary files`, zero hunks — must NOT pass vacuously
+    ins_unquoted)    sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  x' "$f" ;;                                  # an unquoted member inside an extent is code, not data
+    ins_evil)        sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  "$(evil)"' "$f" ;;                          # command substitution inside a quoted member — the file is SOURCED bash
+    ins_evil_out)    sed -i '1i\  "$(evil)"' "$f" ;;                                                       # the same substitution OUTSIDE every extent
+    ins_member_comment) sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\  "scripts/zzleak-cmt.test.sh" # a comment' "$f" ;;  # grammar-legal: member + trailing comment
+    unclosed)        sed -i '/^AFFECTED_PLUGINS_BAR_PATHS=($/,/^)$/{/^)$/d}' "$f" ;;                        # delete the closer: the head image's extent walk hits EOF with in=1
+    nested)          sed -i '/^AFFECTED_SCRIPTS_FOO_PATHS=($/a\AFFECTED_ZZLEAK_NESTED_PATHS=(' "$f" ;;       # a second opener inside an extent: the bitmap walk refuses
     *) printf 'FAIL: unknown fx_tap edit %s\n' "$2" >&2; exit 2 ;;
   esac
   git -C "$d" add -- "$TAP"
@@ -385,6 +397,8 @@ fx_done() { fx_merge "$1" || { printf 'FAIL: fx_merge %s\n' "$1" >&2; exit 2; };
 # ── Fixture inventory ────────────────────────────────────────────────────────
 # ORACLE-ONLY (must classify true): surface members and in-extent hunks.
 fx_case accept; fx_op accept M "$ACCEPT"; fx_done accept
+# BASELINE-PATH (must classify false, outside_surface): baseline.tsv is a non-member since PR5z — the only
+# possible diff on that path is the baseline-reintroduced alarm shape, which pays the full battery.
 fx_case base1; fx_op base1 M "$BASELINE"; fx_done base1
 fx_case ab; fx_op ab M "$ACCEPT"; fx_op ab M "$BASELINE"; fx_done ab
 fx_case acceptdel; fx_op acceptdel D "$BASELINE"; fx_done acceptdel
@@ -394,7 +408,14 @@ fx_case rootmd; fx_op rootmd M AGENTS.md; fx_done rootmd
 fx_case rootnew; fx_op rootnew A zzleak-new-doc.md; fx_done rootnew
 fx_case kbdel; fx_op kbdel D "$KB_A"; fx_done kbdel
 fx_case kbrn; fx_op kbrn R "$KB_A" "knowledge-base/project/learnings/zzleak-a2.md"; fx_done kbrn
-for _t in ins_member ins_member_end del_member reorder new_array del_array ren_array comment_in; do
+for _t in ins_member ins_member_end del_member reorder new_array del_array ren_array comment_in ins_member_comment; do
+  fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
+done
+unset _t
+# ELEMENT GRAMMAR (Guard 1 row 7): every +/- line inside an index hunk must match ELEM_RE — opener, `)`,
+# `"member"` + optional comment, whole-line comment, or blank. A NUL makes the blob binary (zero hunks must
+# not pass vacuously); a broken image (unclosed extent, nested opener) is extent_parse, not a hunk miss.
+for _t in bin_nul ins_unquoted ins_evil ins_evil_out unclosed nested; do
   fx_case "tap_$_t"; fx_tap "tap_$_t" "$_t"; fx_done "tap_$_t"
 done
 unset _t
@@ -423,6 +444,11 @@ fx_case ex_ratchet; fx_op ex_ratchet M "$ACCEPT"; fx_op ex_ratchet M "plugins/so
 fx_case ex_ciyml; fx_op ex_ciyml M "$ACCEPT"; fx_op ex_ciyml M ".github/workflows/ci.yml"; fx_done ex_ciyml
 fx_case ex_foo; fx_op ex_foo M "$ACCEPT"; fx_op ex_foo M "scripts/foo.sh"; fx_done ex_foo
 fx_case ex_lib; fx_op ex_lib M "$ACCEPT"; fx_op ex_lib M "scripts/lib/zzleak-other-lib.sh"; fx_done ex_lib
+# the lane's own machinery is excluded: a diff that edits the classifier, its sentinel or its validation
+# manifest always pays the battery (outcome-redundant today — outside the surface — load-bearing if it widens)
+fx_case ex_oracle_sh; fx_op ex_oracle_sh M "$ACCEPT"; fx_op ex_oracle_sh M "scripts/ci-oracle-lane.sh"; fx_done ex_oracle_sh
+fx_case ex_oracle_test; fx_op ex_oracle_test M "$ACCEPT"; fx_op ex_oracle_test M "scripts/ci-oracle-lane.test.sh"; fx_done ex_oracle_test
+fx_case ex_oracle_suites; fx_op ex_oracle_suites M "$ACCEPT"; fx_op ex_oracle_suites M "scripts/ci-oracle-lane-suites.txt"; fx_done ex_oracle_suites
 fx_case ex_tap; fx_op ex_tap M "$ACCEPT"; fx_tap ex_tap always_on; fx_done ex_tap
 fx_case ex_code; fx_op ex_code M "$ACCEPT"; fx_op ex_code M "apps/web-platform/zzleak-app.ts"; fx_done ex_code
 fx_case ex_mk; fx_op ex_mk M "$ACCEPT"; fx_op ex_mk M Makefile; fx_done ex_mk
@@ -660,6 +686,10 @@ row_oracle_surface() {  # the must-PASS set: surface members and in-extent hunks
   drive diag "$d"
   check_eq "O-DIAGRAMS accept+diagrams.md: oracle_only" "$O_OO" "true"
   check_eq "O-DIAGRAMS would_skip is the four-name subset" "$N_WOULD" "$ORACLE_FOUR"
+  # the carve-out never rescues a contaminated diff: diagrams.md + a code path pays the full battery
+  drive diagx "$d"
+  expect_full "O-DIAGRAMS diagrams+contaminant pays the full battery"
+  check_eq "O-DIAGRAMS contaminated: reason" "$N_REASON" "outside_surface"
   for f in tap_ins_member tap_ins_member_end tap_del_member tap_reorder tap_new_array tap_del_array tap_ren_array tap_comment_in; do
     drive "$f" "$d"
     expect_lane "O-EXTENT in-extent hunk '$f'"
@@ -689,6 +719,14 @@ row_shape() {  # two-parent merge-ref only: octopus, non-merge HEAD, HEAD^2 != P
   check_eq "O-1 HEAD^2 != PR head sha: no audit values" "$O_HEAD$O_BASE" ""
   drive accept "$d" "PR_HEAD_SHA="
   expect_full "O-1 empty PR head sha"
+  # the merge-ref HEAD must BE GITHUB_SHA (GUARD:O1-HEAD-IS-GITHUB-SHA): a different 40-hex or a non-hex value
+  # is not the runner's merge commit — bad_merge_shape, fail closed.
+  drive accept "$d" "GITHUB_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  expect_full "O-1 GITHUB_SHA != merge-ref HEAD"
+  check_eq "O-1 GITHUB_SHA mismatch: reason" "$N_REASON" "bad_merge_shape"
+  drive accept "$d" "GITHUB_SHA=nothex"
+  expect_full "O-1 non-hex GITHUB_SHA"
+  check_eq "O-1 non-hex GITHUB_SHA: reason" "$N_REASON" "bad_merge_shape"
 }
 row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus every outside-surface path
   # the reason is pinned per row: the exclusion check is VERDICT-redundant with the surface check by design (its
@@ -707,6 +745,12 @@ row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus eve
   check_eq "O-EXC scripts/foo.sh: reason" "$N_REASON" "outside_surface"
   drive ex_lib "$d";      expect_full "O-EXC other scripts/lib/**"
   check_eq "O-EXC scripts/lib/**: reason" "$N_REASON" "excluded"
+  drive ex_oracle_sh "$d";   expect_full "O-EXC the lane driver itself"
+  check_eq "O-EXC ci-oracle-lane.sh: reason" "$N_REASON" "excluded"
+  drive ex_oracle_test "$d"; expect_full "O-EXC this sentinel"
+  check_eq "O-EXC ci-oracle-lane.test.sh: reason" "$N_REASON" "excluded"
+  drive ex_oracle_suites "$d"; expect_full "O-EXC the validation manifest"
+  check_eq "O-EXC ci-oracle-lane-suites.txt: reason" "$N_REASON" "excluded"
   drive ex_tap "$d";      expect_full "O-EXC accept + out-of-extent hunk"
   check_eq "O-EXC out-of-extent hunk: reason" "$N_REASON" "extent_miss"
   drive ex_code "$d";     expect_full "O-EXC apps/web-platform ts"
@@ -720,6 +764,22 @@ row_extent_out() {  # Guard 1 row 3: hunks outside AFFECTED_*_PATHS extents disq
     drive "tapx_$t" "$d"
     expect_full "O-EXTENT out-of-extent hunk '$t'"
   done
+}
+row_elem_grammar() {  # Guard 1 row 7: the element grammar inside index hunks, the binary-diff guard and the
+  local d="$1"        # bitmap return-1 arms (unclosed extent / nested opener both fail closed as extent_parse)
+  drive tap_bin_nul "$d";        expect_full "O-BINARY a NUL anywhere makes the index blob binary"
+  check_eq "O-BINARY index blob: reason" "$N_REASON" "extent_miss"
+  drive tap_ins_unquoted "$d";   expect_full "O-ELEM an unquoted member is code, not data"
+  check_eq "O-ELEM unquoted member: reason" "$N_REASON" "extent_miss"
+  drive tap_ins_evil "$d";       expect_full "O-ELEM quoted command substitution is code, not data"
+  check_eq "O-ELEM quoted substitution: reason" "$N_REASON" "extent_miss"
+  drive tap_ins_evil_out "$d";   expect_full "O-ELEM substitution outside every extent"
+  check_eq "O-ELEM substitution outside extents: reason" "$N_REASON" "extent_miss"
+  drive tap_ins_member_comment "$d"; expect_lane "O-ELEM member + trailing comment stays oracle (no over-rejection)"
+  drive tap_unclosed "$d";       expect_full "O-ELEM an unclosed extent image"
+  check_eq "O-ELEM unclosed extent: reason" "$N_REASON" "extent_parse"
+  drive tap_nested "$d";         expect_full "O-ELEM a second opener inside an extent"
+  check_eq "O-ELEM nested opener: reason" "$N_REASON" "extent_parse"
 }
 row_allowlist() {  # the doc surface is knowledge-base/**/*.md or a root *.md — near-misses stay full
   local d="$1" i
@@ -945,6 +1005,7 @@ row_shape_ok "$PRISTINE"
 row_shape "$PRISTINE"
 row_exclusions "$PRISTINE"
 row_extent_out "$PRISTINE"
+row_elem_grammar "$PRISTINE"
 row_allowlist "$PRISTINE"
 row_fork "$PRISTINE"
 row_attempt "$PRISTINE"
@@ -974,19 +1035,30 @@ echo "  control: $((passes)) checks green against the pristine and the lock-neut
 _lockn=$(grep -c -E "$LOCK_RE" "$PRISTINE")
 check_eq "O-LOCK the activation lock is ONE literal line" "$_lockn" "1"
 _lockline=$(grep -n -E "$LOCK_RE" "$PRISTINE" | cut -d: -f1)
-check_true "O-LOCK the lock line sits near the top of the driver (line $_lockline)" "$(rc_of test "$_lockline" -le 90)"
+_armline=$(grep -n 'GUARD:O-ARM' "$PRISTINE" | head -1 | cut -d: -f1)
+check_true "O-LOCK the lock line is read BEFORE the arm that checks it ($_lockline < $_armline)" "$(rc_of test "$_lockline" -lt "$_armline")"
 check_eq "O-LOCK the neutralized copy differs from the pristine driver by exactly the lock line" \
   "$(diff "$PRISTINE" "$UNLOCKED" | grep -c '^[<>]')" "1"
 check_eq "O-LOCK the neutralized copy has no lock line" "$(grep -c -E '^readonly ORACLE_LANE_LOCKED=' "$UNLOCKED")" "0"
 check_true "O-LOCK the driver READS the lock for the arm" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
 check_eq "PRISTINE copy is byte-identical to the live driver" "$(cmp -s "$PRISTINE" "$DRIVER"; echo $?)" "0"
+# The driver's comment claims the doc allowlist grammar is IDENTICAL to ci-pr-selection.sh is_doc_path — enforce it
+# byte-for-byte (a divergence between the two classifiers is exactly the drift the comment warns about).
+_lp=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$REPO_ROOT/scripts/ci-pr-selection.sh")
+_ld=$(sed -n '/^is_doc_path() {$/,/^}$/p' "$DRIVER")
+check_eq "O-DOCPARITY is_doc_path is byte-identical to ci-pr-selection.sh" "$_ld" "$_lp"
+unset _lp _ld
 # the surface and exclusion lists are committed literals in the driver (the plan's anchor): a
 # one-commit weakening must edit the driver AND defeat this sentinel.
-for _lit in "$ACCEPT" "$BASELINE" "$TAP" "scripts/ci-pr-affected-replay.py" "scripts/test-all.sh" \
+for _lit in "$ACCEPT" "$TAP" "scripts/ci-pr-affected-replay.py" "scripts/test-all.sh" \
             "plugins/soleur/scripts/lint-ratchet.py" ".github/workflows/ci.yml"; do
   check_true "O-LITERAL the driver names '$_lit'" "$(grep -qF -- "$_lit" "$PRISTINE"; echo $?)"
 done
 unset _lit
+# inverted pin: baseline.tsv is deliberately NOT a surface member (PR5z strict-zero — the only possible diff on
+# that path is the baseline-reintroduced alarm shape). The full path must NOT appear anywhere in the driver.
+check_eq "O-LITERAL baseline.tsv is NOT named anywhere in the driver (PR5z strict zero)" \
+  "$(grep -cF -- "$BASELINE" "$PRISTINE")" "0"
 check_true "O-LITERAL the driver names the AFFECTED_*_PATHS extent pattern" \
   "$(grep -qE 'AFFECTED_.*_PATHS' "$PRISTINE"; echo $?)"
 
@@ -1003,6 +1075,10 @@ else
   fail "G4 the registration authority failed: 'bash scripts/test-all.sh --enumerate' exited $? ($(head -c 120 "$SANDBOX/enum.err"))"
   : > "$REGS"
 fi
+# The argv parity authority: `run_suite "<label>" <argv>` lines from the same file — a manifest member's argv
+# must equal its registered argv verbatim (row-window drift like 387-596 vs 387-599 escapes a path-existence check).
+REGS_ARGV="$SANDBOX/registrations-argv.txt"
+grep -hE 'run_suite "' "$TEST_ALL" | sed -n 's/.*run_suite "\([^"]*\)"[[:space:]]\{1,\}\(.*\)/\1\t\2/p' > "$REGS_ARGV"
 check_true "G4 the enumerate run produced registrations (vacuity floor)" "$(rc_of test "$(grep -c 'SUITE_REGISTRATION' "$REGS")" -ge 100)"
 
 # The declared oracle-SUT set (plan §oracle-index-check membership, 14 names) and the committed
@@ -1023,20 +1099,48 @@ DECLARED_EXCLUSIONS=(
   "plugins/soleur/scripts/affected-tests.test.sh" "plugins/soleur/test/affected-tests-pool-default.test.sh"
   "scripts/audit-suite-reads" "tests/scripts/lint-ratchet" "scripts/pre-push-ratchet-lane"
   "plugins/soleur/test/ci-path-gating.test.sh"
+  # the lane driver suite is unreachable by a lane-eligible diff (driver files are in the hard-exclusion
+  # list) — it belongs in the manifest's commented exclusion list, never in the members.
+  "scripts/ci-oracle-lane"
 )
 # The name class a NEW oracle-machinery registration lands in: the parity check reads live
 # registrations whose label matches it and requires manifest-or-exclusion coverage.
-ORACLE_FAMILY_RE='affected|lint-orphan-test-suites|ci-pr|ci-path-gating'
+ORACLE_FAMILY_RE='affected|lint-orphan-test-suites|ci-pr|ci-path-gating|ci-oracle'
 
 check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
   local mf="$1" line label nmembers=0
+  local seen=" " argv atok apath tabs nf
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ''|'#'*) continue ;;
     esac
     label="${line%%[[:space:]]*}"
     nmembers=$((nmembers + 1))
+    # a label listed twice would silently run the same suite twice in the leg
+    case "$seen" in *" $label "*) printf 'MEMBER-DUPLICATE:%s\n' "$label" ;; esac
+    seen="$seen$label "
     case "$line" in *[[:space:]]*) : ;; *) printf 'MEMBER-NO-ARGV:%s\n' "$label" ;; esac
+    # the grammar is exactly label<TAB>argv: a stray third field is silently truncated by the leg's
+    # `IFS=$'\t' read -r label argv`, and a space-separated line leaves argv empty.
+    tabs="${line//[^$'\t']/}"
+    nf=$(( ${#tabs} + 1 ))
+    [ "$nf" -eq 2 ] || printf 'MEMBER-BAD-FIELDS:%s:%d\n' "$label" "$nf"
+    # the argv's first non-shell token must name a file that exists in the checkout (typo'd paths fail at leg
+    # runtime; the pin catches them here)
+    argv="${line#*$'\t'}"
+    apath=""
+    for atok in $argv; do
+      case "$atok" in bash|sh) continue ;; esac
+      apath="$atok"; break
+    done
+    if [ -n "$apath" ] && [ ! -f "$REPO_ROOT/$apath" ]; then printf 'MEMBER-BAD-ARGV:%s:%s\n' "$label" "$apath"; fi
+    # argv parity: the manifest's argv must equal the registration's argv verbatim — a row-range drift
+    # (387-596 written where the registration runs 387-599) silently runs a different window.
+    if [ -s "$REGS_ARGV" ]; then
+      local rargv
+      rargv=$(awk -F'\t' -v l="$label" '$1==l{print $2; exit}' "$REGS_ARGV")
+      if [ -n "$rargv" ] && [ "$argv" != "$rargv" ]; then printf 'MEMBER-ARGV-DRIFT:%s:%s!=%s\n' "$label" "$argv" "$rargv"; fi
+    fi
     if ! awk -v l="$label" '$2==l{f=1} END{exit !f}' "$REGS"; then
       printf 'MEMBER-NOT-REGISTERED:%s\n' "$label"
     fi
@@ -1050,7 +1154,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
     if awk -v l="$reg" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
     # comment coverage is word-boundary, not substring: `scripts/lint-orphan-test-suites` must NOT be covered by the
     # `scripts/lint-orphan-test-suites-mutations-a` exclusion comment.
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "$reg([^[:alnum:]_-]|\$)"; then covered=1; fi
+    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "${reg//./\\.}([^[:alnum:]_-]|\$)"; then covered=1; fi
     [ "$covered" = 1 ] || printf 'UNCOVERED-REGISTRATION:%s\n' "$reg"
   done < "$REGS"
   # the declared member set: each name is a member or an exclusion comment (14 plan names).
@@ -1058,7 +1162,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
   for dm in "${DECLARED_MEMBERS[@]}"; do
     covered=0
     if awk -v l="$dm" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "$dm([^[:alnum:]_-]|\$)"; then covered=1; fi
+    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "${dm//./\\.}([^[:alnum:]_-]|\$)"; then covered=1; fi
     [ "$covered" = 1 ] || printf 'DECLARED-MISSING:%s\n' "$dm"
   done
   # the committed exclusion list, each named in a comment line.
@@ -1096,6 +1200,22 @@ if [ -f "$MANIFEST" ]; then
   grep -vF 'lint-orphan-test-suites-mutations-a' "$MANIFEST" > "$_mm/no-excl.txt"
   _mt=$(check_manifest "$_mm/no-excl.txt")
   check_contains "G4 dropping a committed exclusion is caught" "$_mt" "EXCLUSION-NOT-COMMENTED:scripts/lint-orphan-test-suites-mutations-a"
+  # a member label listed twice would silently run the same suite twice in the leg
+  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash scripts/ci-pr-selection.test.sh\n'; } > "$_mm/dup.txt"
+  _mt=$(check_manifest "$_mm/dup.txt")
+  check_contains "G4 a duplicate member label is caught" "$_mt" "MEMBER-DUPLICATE:scripts/ci-pr-selection"
+  # a stray third TSV column is silently truncated by the leg's `IFS=$'\t' read -r label argv`
+  awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF==2 && !d {print $0"\tzz-extra"; d=1; next} {print}' "$MANIFEST" > "$_mm/threecol.txt"
+  _mt=$(check_manifest "$_mm/threecol.txt")
+  check_contains "G4 a stray third field is caught" "$_mt" "MEMBER-BAD-FIELDS"
+  # an argv whose first non-shell token names a nonexistent file would fail only at leg runtime
+  { cat "$MANIFEST"; printf 'scripts/ci-pr-selection\tbash zz/no-such-file.test.sh\n'; } > "$_mm/badargv.txt"
+  _mt=$(check_manifest "$_mm/badargv.txt")
+  check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-pr-selection:zz/no-such-file.test.sh"
+  # an argv that names a real file but drifts from the registration's argv (a different row window)
+  sed 's|--rows 1-193|--rows 1-195|' "$MANIFEST" > "$_mm/argvdrift.txt"
+  _mt=$(check_manifest "$_mm/argvdrift.txt")
+  check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:plugins/soleur/test/ci-pr-affected-replay-a"
 else
   fail "G4 $MANIFEST does not exist (the oracle-validation manifest is an implementation deliverable)"
 fi
@@ -1193,6 +1313,8 @@ mutate "O-EXCLUSION the exclusion list is removed"              "$PRISTINE" "$(k
 mutate "O-EXCLUSION replay.py dropped from the exclusion list"  "$PRISTINE" '/ci-pr-affected-replay\.py/d'     row_exclusions
 mutate "O-EXCLUSION ci.yml dropped from the exclusion list"     "$PRISTINE" '/workflows\/ci\.yml/d'            row_exclusions
 mutate "O-EXTENT the in-extent hunk check is removed (whole-file path test — the plan's named sharp edge)" "$PRISTINE" "$(kill_guard O-EXTENT)" row_extent_out
+mutate "O-BINARY a binary index diff passes vacuously"              "$PRISTINE" "$(kill_guard O-BINARY-INDEX)" row_elem_grammar
+mutate "O-ELEM-GRAMMAR non-grammar lines inside extents are accepted" "$PRISTINE" "$(kill_guard O-ELEM-GRAMMAR)" row_elem_grammar
 mutate "O-EXTENT-BASE the base-image half is dropped (a deleted array is not checked)" "$PRISTINE" "$(kill_guard O-EXTENT-BASE)" row_oracle_surface
 mutate "O-EXTENT-HEAD the head-image half is dropped (a new array is not checked)"     "$PRISTINE" "$(kill_guard O-EXTENT-HEAD)" row_oracle_surface
 # the doc-widening sed must hit the is_doc_path CASE PATTERN `knowledge-base/?*.md` (the comment's `**` spelling is not

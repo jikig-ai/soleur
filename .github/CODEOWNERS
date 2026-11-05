@@ -26,6 +26,9 @@
 /scripts/ci-draft-push-census.sh                       @deruelle
 /scripts/ci-draft-push-census.test.sh                  @deruelle
 /scripts/ci-push-dedupe.test.sh                         @deruelle
+/scripts/ci-oracle-lane.sh                              @deruelle
+/scripts/ci-oracle-lane.test.sh                         @deruelle
+/scripts/ci-oracle-lane-suites.txt                      @deruelle
 /scripts/followthroughs/ci-draft-light-soak-9728.sh      @deruelle
 /scripts/followthroughs/ci-draft-light-soak-9728.test.sh @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle

@@ -142,7 +142,7 @@ AGG_DIGEST="224a3a10a36457d4e37b1ca257646d9b3297fbd83cfedd07e0012855982b970d"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
 UNGATED_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard oracle-index-check oracle-selection plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
-REASONS="not_push not_main rerun bad_sha proof_error no_mg_success no_test_job legs_incomplete switch_off ok"
+REASONS="not_push not_main rerun bad_sha proof_error no_mg_success page_truncated no_test_job legs_incomplete switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 REPO_SLUG="jikig-ai/soleur"
@@ -539,8 +539,14 @@ if mode == "ocensus":
     tags = []
     for n in list(ORGATED) + ["shard-totality-mutations"]:
         if found.get("%s.if" % n, 0) != want["%s.if" % n]: tags.append("O-REF:%s.if:%d" % (n, found.get("%s.if" % n, 0)))
+    # `.if` whitelist: only the six pinned job-level conjuncts (counted above), oracle-index-check's job-level
+    # `if:` and oracle-index-check's own step ifs (the checkout gate `oracle_only == 'true'`) may read the
+    # outputs. ANY other `.if` — a step if inside a lane leg, the aggregator, or an ungated job — is a finding:
+    # it could skip work while the job still concludes `success`.
+    allowed_if = {"%s.if" % n for n in list(ORGATED) + ["shard-totality-mutations", "oracle-index-check"]}
     for loc, c in found.items():
-        if loc.endswith(".if"): continue
+        if loc in allowed_if or (loc.startswith("oracle-index-check.steps.") and loc.endswith(".if")): continue
+        if loc.endswith(".if"): tags.append("O-REF-EXTRA:%s:%d" % (loc, c)); continue
         # the aggregator's oracle env entries, and oracle-index-check's own env reads of the outputs it validates
         if not loc.startswith("test.steps.") and not loc.startswith("oracle-index-check.steps."): tags.append("O-REF-EXTRA:%s:%d" % (loc, c))
     foundidx = census2(re.compile(r"needs\s*\.\s*oracle-index-check\b|needs\s*\[\s*['\"]oracle-index-check['\"]\s*\]", re.I), d.get("jobs") or {})
@@ -566,7 +572,12 @@ if mode == "orasel":
     if set(outs) != {"oracle_only", "active", "skip_legs", "head_sha", "base_sha"}: tags.append("OSEL-OUTPUTS")
     steps = job.get("steps") or []
     runlines = [str(s.get("run", "")).strip() for s in steps if isinstance(s, dict)]
-    if not any(r == "bash scripts/ci-oracle-lane" + ".sh" for r in runlines): tags.append("OSEL-RUN")
+    # the driver step is a `run: |` block that sources the BASE-image classifier via `git show` (a PR must
+    # never rewrite the oracle that judges it); a flat `run: bash scripts/ci-oracle-lane.sh` would run the
+    # CANDIDATE tree's driver — pin the git-show mechanism, not just the path mention.
+    if not any("git show" in r and "ci-oracle-lane" + ".sh" in r for r in runlines): tags.append("OSEL-RUN")
+    # and the base must be the merge base image, spelled HEAD^1 (pull_request) or MERGE_GROUP_BASE_SHA.
+    if not any("HEAD^1" in r and "MERGE_GROUP_BASE_SHA" in r for r in runlines): tags.append("OSEL-BASE")
     cos = [s for s in steps if isinstance(s, dict) and "uses" in s and "checkout" in str(s.get("uses"))]
     if len(cos) != 1 or str((cos[0].get("with") or {}).get("fetch-depth")) != "0": tags.append("OSEL-FETCH")
     print(" ".join(tags)); sys.exit(0)
@@ -743,10 +754,12 @@ fx_flush() { assert_fixture_dir "$FXD"; jq -s '{workflow_runs: .}' "$FXD/runs.nd
 fx_jobs() {
   assert_fixture_dir "$FXD"
   local id="$1"; shift
-  if [ "$#" -eq 0 ]; then printf '{"jobs":[]}\n' > "$FXD/jobs-$id.json"; return; fi
+  if [ "$#" -eq 0 ]; then printf '{"total_count":0,"jobs":[]}\n' > "$FXD/jobs-$id.json"; return; fi
   local args=() n c
   for pair in "$@"; do n="${pair%%:*}"; c="${pair#*:}"; args+=("$n" "$c"); done
-  printf '%s\n' "${args[@]}" | jq -Rn '[inputs] as $a | {jobs: [range(0; ($a|length); 2) | {name: $a[.], conclusion: (if $a[.+1]=="null" then null else $a[.+1] end)}]}' > "$FXD/jobs-$id.json"
+  # the jobs API returns total_count alongside the page: the proof's pagination guard reads it (a run over
+  # 100 jobs truncates page 1 and must fail closed, never elide). Fixtures emit the honest count.
+  printf '%s\n' "${args[@]}" | jq -Rn '[inputs] as $a | {total_count: (($a|length)/2), jobs: [range(0; ($a|length); 2) | {name: $a[.], conclusion: (if $a[.+1]=="null" then null else $a[.+1] end)}]}' > "$FXD/jobs-$id.json"
 }
 # The canonical jobs list: every leg the oracle lane can skip must conclude `success` for the proof
 # to hold (#12156, Guard 3) — the five heavy legs plus shard-totality-mutations — alongside `test`.
@@ -950,6 +963,17 @@ battery() {
   fx_jobs "$MG_ID" shard-totality-mutations:success test:success web-platform-build:success e2e:success test-scripts-heavy:success test-scripts:success test-bun:success test-webplat:success
   fx_flush; set_env_defaults; row R18-all-success-reordered true true ok
   unset -f six_ok
+  # R19 the pagination guard: a jobs API page-1 total_count over 100 truncates the page — the proof cannot see
+  # every leg, so it fails closed (page_truncated), never elides. Boundary: 100 elides, 101 does not.
+  fx_canonical "$d"; set_env_defaults; row R19-page-boundary-100 true true ok
+  fx_canonical "$d"; jq '.total_count = 101' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  set_env_defaults; row R19-page-truncated-101 false false page_truncated
+  fx_canonical "$d"; jq '.total_count = 2000' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  set_env_defaults; row R19-page-truncated-huge false false page_truncated
+  fx_canonical "$d"; jq '.total_count = null' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  set_env_defaults; row R19-total-count-null false false page_truncated
+  fx_canonical "$d"; jq 'del(.total_count)' "$d/jobs-$MG_ID.json" > "$d/j.json" && mv "$d/j.json" "$d/jobs-$MG_ID.json"
+  set_env_defaults; row R19-total-count-absent false false page_truncated
 }
 
 # ── Extract the live body ────────────────────────────────────────────────────
@@ -1011,7 +1035,14 @@ for _l in "${SIX_LEGS[@]}"; do
   if grep -qF -- "\"$_l\"" "$SANDBOX/pristine-body.sh"; then pass; else fail "SIX-LEG PIN: the proof body never names '$_l' — the leg the oracle lane can skip is absent from the elide proof"; fi
 done
 unset _l
-if grep -qE 'oracle-selection|oracle_only' "$SANDBOX/pristine-body.sh" || true; then :; fi
+# Guard 3 leg-conclusion blindness: the proof's CODE reads job conclusions only — it must never name an oracle
+# term (lane outputs live on `oracle-selection`, not in the sibling results it sums). Comments are stripped
+# first: the Guard-3 comment block legitimately names the lane it backstops; a CODE-level hit is a real flag.
+if grep -v '^[[:space:]]*#' "$SANDBOX/pristine-body.sh" | grep -qiE 'oracle'; then
+  fail "SIX-LEG BLINDNESS: the elide proof body references an oracle term in executable code — the proof must read leg conclusions only, never lane outputs"
+else
+  pass
+fi
 # the five-name allowlist the aggregator tolerates (ORACLE-ONLY-SKIP) must equal SIX_LEGS minus
 # shard-totality-mutations — assert each name appears in the extracted aggregator body.
 chk aggbody "$WF" "$SANDBOX/live" 2>/dev/null
@@ -1511,6 +1542,13 @@ mutate_yml y-vars-job-env "$BUN_HDR" "$BUN_HDR
       SW: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:jobs.test-bun.env.
 mutate_yml y-vars-moved-read "SWITCH: \${{ vars.CI_PR_AFFECTED }}" "OTHER: \${{ vars.CI_PR_AFFECTED }}" prcensus C-VARS:jobs.pr-selection.steps.
 mutate_yml y-vars-double-read "$PRSEL_HDR_OLD" "$(prsel_hdr "$PRSEL_IF && vars.CI_PR_AFFECTED != 'x'")" prcensus C-VARS:jobs.pr-selection.if:2
+# the oracle-reference census (structural seat, #12156): a step-level `if:` reading oracle-selection outputs on a
+# NON-whitelisted step is a hidden skip — the job still concludes `success` while the work never ran. One on a lane
+# leg's run step, one inside the aggregator (test.steps.*.if is also not on the whitelist).
+mutate_yml y-orasel-step-if-leg "$BUN_RUN_ENV" "        if: needs.oracle-selection.outputs.oracle_only == 'true'
+$BUN_RUN_ENV" ocensus O-REF-EXTRA
+mutate_yml y-orasel-step-if-agg "      - name: Aggregate shard results" "      - name: Aggregate shard results
+        if: needs.oracle-selection.outputs.oracle_only == 'true'" ocensus O-REF-EXTRA
 mutate_yml y-extra-gated "    needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
 " "    needs: detect-changes

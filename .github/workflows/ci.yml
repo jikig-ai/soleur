@@ -216,9 +216,13 @@ jobs:
           reason=proof_error
           [[ "$id" =~ ^[0-9]+$ ]] || finish
           mg="$id"
-          # per_page=100 with no pagination: today ~45 job entries. Once a run exceeds 100 jobs, page-1 truncation can
-          # only drop a six-leg member's group, which lands as legs_incomplete — elide=false, the fail-closed side.
+          # per_page=100 with no pagination: today ~45 job entries. Truncation is NOT automatically fail-closed — a
+          # matrix group can split across the page boundary and still read all-green, so assert the page covers the
+          # whole run (total_count <= 100) or decline to elide.
           jobs=$(timeout 20 gh api "repos/${GH_REPO}/actions/runs/${mg}/jobs?per_page=100&filter=latest" 2>/dev/null) || finish
+          tc=$(printf '%s' "$jobs" | jq -r '.total_count' 2>/dev/null) || finish
+          reason=page_truncated
+          [[ "$tc" =~ ^[0-9]+$ && "$tc" -le 100 ]] || finish
           n=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null) || finish
           [[ "$n" =~ ^[0-9]+$ ]] || finish
           reason=no_test_job
@@ -471,7 +475,25 @@ jobs:
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           GH_REPO: ${{ github.repository }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: bash scripts/ci-oracle-lane.sh
+        run: |
+          set -uo pipefail
+          # The classifier is sourced from the BASE image, never the candidate tree: a PR (or queue batch member) must
+          # not rewrite the oracle that judges it — the same shape as shard-totality-mutations' base-sourced classifier.
+          # A base that lacks the driver (this PR's own introduction, any pre-#12156 tree) emits the fail-closed
+          # defaults itself; an honest classifier then reads every driver edit as outside-surface anyway.
+          drv="$RUNNER_TEMP/ci-oracle-lane-base.sh"
+          case "${EVENT_NAME:-}" in
+            pull_request) base="HEAD^1" ;;
+            merge_group)  base="${MERGE_GROUP_BASE_SHA:-}" ;;
+            *)            base="" ;;
+          esac
+          if [ -n "$base" ] && git show "${base}:scripts/ci-oracle-lane.sh" > "$drv" 2>/dev/null && [ -s "$drv" ]; then
+            bash "$drv"
+          else
+            printf 'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha=\n' >> "$GITHUB_OUTPUT"
+            printf '::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE event=%s switch=unreadable locked=na attempt=%s files=0 reason=no_base_driver oracle_only=false would_skip=none active=false\n' \
+              "${EVENT_NAME:-unknown}" "${GITHUB_RUN_ATTEMPT:-0}"
+          fi
 
   # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. Since PR5z (#10861) the check is
   # strict zero: no committed baseline exists — `ratchet` is green exactly when the audit is (the live set of (suite, undeclared
