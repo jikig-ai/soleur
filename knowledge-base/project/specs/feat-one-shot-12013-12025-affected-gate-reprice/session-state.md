@@ -20,7 +20,7 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x3, learnings-researche
 
 ## Work Phase
 - Status: complete
-- (suite-rate tool + test were committed here and later dropped in review, see Review Phase) rates at the pinned base recorded; one gate reading replayed (cold gate 6522 s, not met); weights and ledger in the ADR-242 amendment; Phase 5 not fired (186 s eligible saving vs a 6030 s gap)
+- (suite-rate tool + test were committed here and later dropped in review, see Review Phase) rates at the pinned base recorded; one gate reading replayed (cold gate 6522 s, not met); weights and ledger in the ADR-242 amendment; Phase 5 not fired (186 s eligible saving vs a 5922 s gap)
 - Exit gate: deferred by its own 2400 s budget after 118 of 298 suites, no red; the covering suites (replay arms a/b/c, test-all-affected-b, the new test) were run directly and pass
 - Operator leftover: the private clone /data/git-repositories/jikig-ai/measure-clone-r1 could not be deleted by the agent (safety check) and is left for the operator
 - lint-ratchet: user-ruff not adopted (relay; do not adopt unprompted)
