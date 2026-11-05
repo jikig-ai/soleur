@@ -43,3 +43,9 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 - Phase 2/3 commit 49a7b7f623: ci.yml comment, ADR-276 closing line, runbook strict-zero
 - suite -c arm v1: 8 fails — 3 stale-expectation rows repointed at baseline-reintroduced (row_rt_oracle, bl-link-in, bl-big); v2 verify running
 - Remaining: v2 green -> receipts commit -> #12128 merge -> rebase -> strict-zero assert -> review -> qa -> compound -> ship -> close-out
+
+### Post-#12128 rebase + strict-zero (2026-11-05)
+- #12128 merged 11:40:21Z via merge queue; rebased onto origin/main `fc36ec95ad` (9 commits, clean).
+- Residual absorbed: new suite `codeql-to-issues-sweep-wiring` (landed via #12070 during the queue wait) reads `.github/workflows/codeql-to-issues.yml` undeclared — real read → `AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS` edge declared (drift-disposition.tsv row 3).
+- Strict-zero asserted on the rebased tree: `test ! -f` baseline PASS; audit exit 0 `suites=732 gap_suites=0 gap_refs=0 unaudited=0 stale=0` (receipts/audit-final.txt); ratchet `exit=0 reason=pass live=0 baseline=0` + expected `oracle-inputs-changed` notice; ADR-276 closing line present; `PR_AFFECTED_LOCKED` intact; `CI_PR_AFFECTED` var 404.
+- Next: commit + push, then soleur:review → qa → compound → ship → Phase 5 close-out.
