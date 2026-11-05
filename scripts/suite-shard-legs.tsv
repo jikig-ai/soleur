@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-05T08:12:03Z
+# generated-at=2026-11-05T10:54:18Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -322,6 +322,7 @@ plugins/soleur/test/ship-prepush-secret-scan.test.sh	2
 plugins/soleur/test/sole-copy-drift-check.test.sh	1
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/technical-ruling-gate.test.sh	8
+plugins/soleur/test/technical-ruling-owner-list.test.sh	4
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
