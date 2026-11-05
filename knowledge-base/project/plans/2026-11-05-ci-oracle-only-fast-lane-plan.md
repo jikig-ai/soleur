@@ -107,8 +107,14 @@ this is a different lever, #12156 "Lever A companion").
   cannot satisfy that — e2e keeps running, ~4.2 min), every guard/lint job,
   `affected-index-ratchet` (already `pull_request || merge_group`), `pr-selection`,
   `draft-light`, `push-dedupe`.
-- **`oracle-index-check` job** (new) — `if: pull_request || merge_group`,
-  `needs: [oracle-selection]`, joins `test`'s `needs:` and `entries[]`. When
+- **`oracle-index-check` job** (new) —
+  `if: ${{ always() && !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}`,
+  `needs: [oracle-selection]`, joins `test`'s `needs:` and `entries[]`. The
+  `always()` conjunct is a CPO sign-off condition (O1): `oracle-selection` is
+  var-gated, so a literal `pull_request || merge_group` `if:` would be
+  needs-skip-propagated while `CI_ORACLE_LANE` is unset and wedge `test`'s
+  `needs:`/`entries[]` loudly; `always()` defeats the propagation and a
+  skipped/empty `oracle_only` output reads as `not-oracle-only`. When
   `oracle_only == 'true'` it runs the oracle-validation manifest
   (`scripts/ci-oracle-lane-suites.txt`: label + argv lines run serially) and its
   result gates via the aggregator; otherwise it prints `not-oracle-only` and exits 0
@@ -120,7 +126,19 @@ this is a different lever, #12156 "Lever A companion").
   `scripts/test-affected-derive`, `scripts/test-affected-derive-cache`,
   `scripts/test-affected-kb-consumers`,
   `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}`,
-  `scripts/ci-pr-selection`, `plugins/soleur/test/ci-pr-affected-preactivation`.
+  `scripts/ci-pr-selection`, `plugins/soleur/test/ci-pr-affected-preactivation.test.sh`
+  (enumerate-exact label — it registers via the `plugins/soleur/test/*.test.sh`
+  SUITE_GLOB, no `run_suite` line, so `test-all.sh --enumerate` prints the
+  `.test.sh` filename; CTO T3). The file also carries a committed, commented
+  **exclusion list** naming the evaluated candidates and why each is out:
+  `lint-orphan-test-suites-mutations-{a,b}` (SUT is the linter's detection corpus,
+  not repo state), `test-all-orphan-log-retention` (known flake per ADR-276
+  amendment 2026-10-16 item 5), `affected-tests.test.sh`,
+  `affected-tests-pool-default.test.sh`, `audit-suite-reads`,
+  `tests/scripts/lint-ratchet`, `pre-push-ratchet-lane`, `ci-path-gating.test.sh`
+  (adjacent machinery, not the oracle/selector SUT). Membership comment notes the
+  root `*.md` surface admits `AGENTS.md`/`CLAUDE.md` edits — covered by the
+  rule-corpus lints (CTO T2).
 - **`test` aggregator** — `needs:` gains `oracle-selection` and `oracle-index-check`;
   `entries[]` gains `oracle-index-check`; a second named tolerance
   **ORACLE-ONLY-SKIP**: `EVENT_NAME` in {pull_request, merge_group},
@@ -132,9 +150,13 @@ this is a different lever, #12156 "Lever A companion").
 - **`push-dedupe` proof tightening** — its elide proof today requires only the
   merge_group run's `test` job conclusion == success (`ci.yml:225-226`). An
   oracle-reduced merge_group green would otherwise elide the push run and main would
-  never see a full battery for that SHA. Extend the jobs check: all five heavy legs
-  must conclude `success` (a `skipped` leg → `elide=false`, fail closed). Update
-  `scripts/ci-push-dedupe.test.sh` accordingly.
+  never see a full battery for that SHA. Extend the jobs check: all SIX skippable
+  legs — the five heavy legs PLUS `shard-totality-mutations` (every leg the lane
+  can skip; CTO T4) — must conclude `success` (a `skipped`, absent or malformed
+  entry → `elide=false`, fail closed). Update `scripts/ci-push-dedupe.test.sh`
+  accordingly. The sentinel pins the proof's leg-name set in BOTH directions:
+  a new skippable leg requires editing the driver allowlist, the aggregator regex
+  AND this proof in the same diff.
 - **Kill-switch + lock** — repo variable `CI_ORACLE_LANE`, accepted value exactly `on`
   (ADR-276 3(c) shape; compared in bash, not the Actions `==`). Activation lock:
   `readonly ORACLE_LANE_LOCKED=1` in the driver, the `PR_AFFECTED_LOCKED` analogue;
@@ -342,8 +364,10 @@ shapes through the real step body.
 ### Guard 4 — oracle-index-check manifest parity
 
 **Property.** On an oracle-only run the validation leg executes every manifest
-member, and every manifest member is a live `run_suite` registration — a vacuous or
-stale manifest can never pass.
+member, and every manifest member is a live `run_suite`/SUITE_GLOB registration —
+a vacuous or stale manifest can never pass. The pin is BI-DIRECTIONAL (CTO T3):
+manifest ≡ the declared oracle-SUT registration set minus the committed exclusion
+list, so a NEW oracle-machinery registration cannot silently escape the leg.
 
 **Assembly.** `scripts/ci-oracle-lane-suites.txt`, the job's runner loop (the one
 chokepoint the manifest flows through), `test-all.sh --enumerate` as the
@@ -365,18 +389,26 @@ registration authority, and the sentinel's parity assertion.
 
 Amend `knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md`
 with a dated `## Amendment 2026-11-05 (oracle-only fast lane, #12156)` — a **new**
-stage amendment, not a new ADR (the change extends ADR-276's stage grammar: its
-Decision-5 `merge_group may not` statement is deliberately narrowed for oracle-only
-diffs, with the rationale the issue states: oracle data changes no executable path
-and the ratchet IS the relevant check). The amendment names: the lever, kill-switch
-`CI_ORACLE_LANE` (exact `on`), the activation lock, the dark-launch exit criterion
-(classifier telemetry audited on ≥1 real oracle repair merge), the push-dedupe
-tightening, the census/probe link for Decision-3(e) minutes reporting, and the note
-that an oracle-lane run must NEVER carry the `[full]` run-name marker when S4 PR C
-ships it (the marker asserts a full battery ran). `amended_by:` pointer to this
-change; ADR-262 gets a one-line pointer only if its admission-rule text requires it
-(check at write time — the oracle lane uses job-level `if:` gating, not the
-ADR-262 decline mechanism).
+stage amendment, not a new ADR. Per CTO T1 the amendment narrows **both**
+invariants the lane carves: Decision 5's proposed `merge_group may not` statement
+AND Decision 2's ADOPTING guardrail ("the `merge_group` run executes the full
+battery against the candidate tree") — naming only Decision 5 would leave
+adopting text asserting an invariant the code no longer holds, the exact drift the
+append-only convention exists to prevent (S2's "named exception" to Decision 2 is
+the precedent shape). The amendment names: the lever, kill-switch `CI_ORACLE_LANE`
+(exact `on`), the activation lock, the **scope bound** (oracle data only — not
+precedent for content-based merge_group selection), the dark-launch exit
+criterion (classifier `would_skip` telemetry audited on ≥1 real oracle repair
+merge — a BLOCKING exit criterion, not advisory, per the T1 dissent), the
+push-dedupe tightening, the consumer record per Decision 3(a) — consumers taught
+vs blind: `admin-merge-ready.sh`/`ci-head-verdict.sh` were never taught the
+reduced-run read and that residual is recorded explicitly — the census/probe link
+for Decision-3(e) minutes reporting, and the note that an oracle-lane run must
+NEVER carry the `[full]` run-name marker when S4 PR C ships it (the marker
+asserts a full battery ran). `amended_by:` pointer to this change; ADR-262 gets a
+one-line pointer only if its admission-rule text requires it (check at write time
+— the oracle lane uses job-level `if:` gating, not the ADR-262 decline
+mechanism).
 
 ### C4 views
 
