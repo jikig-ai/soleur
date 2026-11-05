@@ -6,7 +6,7 @@ Plan: `knowledge-base/project/plans/2026-11-05-feat-one-shot-10861-pr5z-strict-z
 
 - [ ] 0.1 `gh pr list --label s4-drain --state open` empty → `gh pr edit 12127 --add-label s4-drain` + mirror comment on #10448.
 - [ ] 0.2 `git fetch origin main`, rebase, `BASE=$(git rev-parse origin/main)` + `date -u` → `receipts/measurement-stamp.txt`.
-- [ ] 0.3 Red-gate: `audit --accept --all-refs > receipts/audit-all-refs.txt`; `ratchet --base origin/main > receipts/ratchet-initial.txt`. Expected at plan time: `stale-accept`, `live=3` (main red — #12110). If red → `gh pr view 12128 --json state`: MERGED → rebase+re-measure; OPEN → sequence after it, or absorb only uncovered residual (delete stale rows + mention-class accepts for the 3 `components.test.ts` drift pairs) — record in `receipts/drift-disposition.tsv`; never duplicate the repin.
+- [ ] 0.3 Red-gate: `audit --accept --all-refs > receipts/audit-all-refs.txt`; `ratchet --base origin/main > receipts/ratchet-initial.txt`. Expected at plan time: `stale-accept`, `live=3` (main red — #12110). If red → `gh pr view 12128 --json state`: MERGED → rebase+re-measure; OPEN → SEQUENCE after it — no pre-merge absorption (duplicates the claimed repin, collides on accept.tsv); if it stalls/closes-unmerged → absorb residual (delete stale rows + mention-class accepts for the 3 `components.test.ts` drift pairs) recorded in `receipts/drift-disposition.tsv`; never duplicate the repin. (CTO ruling — decision-challenges row 13.)
 - [ ] 0.4 `receipts/live-pairs.tsv` + `receipts/pairs-decisions.tsv` for any absorbed residual.
 
 ## Phase 1 — the deletion commit (ONE commit)
