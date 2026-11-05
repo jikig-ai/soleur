@@ -584,6 +584,12 @@ describe("wiring and contract pins", () => {
     expect(src).toContain("originTls?.closeAllConnections()");
   });
 
+  test("the plain :80 server uses the same keep-alive constant, with headersTimeout above it", () => {
+    const src = stripComments(read("server/index.ts"));
+    expect(src).toContain("server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS");
+    expect(src).toContain("server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000");
+  });
+
   test("the default container port equals the port the run sites publish as host :443", () => {
     for (const rel of ["infra/ci-deploy.sh", "infra/cloud-init.yml"]) {
       const m = read(rel).match(/-p 0\.0\.0\.0:443:(\d+)/);

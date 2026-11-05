@@ -10,7 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
-import { startOriginTlsListener } from "./origin-tls";
+import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -156,6 +156,14 @@ app.prepare().then(() => {
 
     handle(req, res, parsedUrl);
   });
+
+  // #10479 (review of #12181): idle keep-alive must outlast Cloudflare's reuse of pooled origin connections.
+  // Node's 5 s default closes them first, and Cloudflare then reuses a dead socket (intermittent 502/520) or
+  // re-handshakes constantly. Same constant as the :443 listener; headersTimeout stays above it. The
+  // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
+  // rate after the deploy.
+  server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
+  server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000;
 
   const wss = setupWebSocket(server, dev);
 

@@ -83,7 +83,11 @@ here and this change must not touch it.
 7. **Deploy safety for the new publish.** The canary does not publish host 443, so `ci-deploy.sh` checks that host 443
    is free (`host_443_preflight`) before the canary starts, refusing with `host_443_in_use` or
    `host_443_check_unavailable` while the old container still serves. Restoring the previous image when the production
-   start fails for any reason is a pre-existing gap tracked separately.
+   start fails for any reason is a pre-existing gap, **accepted here and not fixed by this change**: the arm leaves the
+   host down until a human intervenes. The pre-swap check is check-then-act (a listener that appears between the check
+   and `docker run` still reaches the arm), it is skipped when the running container already publishes 3443, and a
+   docker-proxy/iptables failure of the new publish is unguarded. A restore of the previous image needs a known previous
+   image reference and a tested rollback in the deploy script and is its own change.
 
 ## Consequences
 
@@ -102,8 +106,10 @@ here and this change must not touch it.
   restart, which is acceptable because under `strict` users would already be getting 525/526 and the canary rolls the
   deploy back.
 - Rotation is a re-mint plus a container restart, never an apply side effect.
-- The idle keep-alive on the new listener is set above Cloudflare's reuse window (905 s, unverified); the plain :80 server
-  is deliberately unchanged here (tracked separately).
+- Idle keep-alive is set above Cloudflare's reuse window (905 s, `headersTimeout` 910 s) on BOTH servers, from one shared
+  constant. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
+  conservative if the real window is lower. The canary is a health gate and does not exercise Cloudflare's connection
+  reuse, so the 502/520 rate is watched after the deploy.
 - Unverified preconditions carried forward from the plan: legacy page rules may override SSL for the app host (the
   `pagerules-ssl` check is being given its own read token), and per-host proof for `web-2`, which carries no traffic,
   can only come from PR-2's hook, not from the edge.

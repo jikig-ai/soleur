@@ -59,8 +59,8 @@ export const ORIGIN_TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
 /**
  * Idle keep-alive must outlast Cloudflare's reuse of pooled origin connections (~900 s,
  * unverified): Node's 5 s default closes them first and Cloudflare then reuses a dead socket
- * (intermittent 502/520) or re-handshakes constantly. Set on this server only; the plain :80
- * server is deliberately unchanged here (tracked separately).
+ * (intermittent 502/520) or re-handshakes constantly. The plain :80 server in index.ts uses the
+ * same constant.
  */
 export const ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS = 905_000;
 /** `1` makes absent/invalid material or a listener failure fatal at startup (the strict flip sets it). */
@@ -276,8 +276,9 @@ export function startOriginTlsListener(params: {
   // The same handlers as the plain-HTTP server, by re-emitting its events: the request handler and
   // the WebSocket upgrade listener (ws-handler.ts) are registered on `httpServer`, and ws accepts
   // any duplex socket, so a TLS socket upgrades like a plain one. Server-level options (timeouts,
-  // maxHeaderSize) are per server instance and are NOT shared: any such option later set on the
-  // plain server in index.ts must be applied here too.
+  // maxHeaderSize) are per server instance and are NOT shared: keepAliveTimeout/headersTimeout are
+  // mirrored from index.ts through one shared constant; any OTHER option later set on the plain
+  // server in index.ts must be applied here too.
   httpsServer.on("request", (req, res) => {
     if (isHealthPath(req.url)) {
       res.setHeader(ORIGIN_TRANSPORT_HEADER, negotiatedProtocol(req));
