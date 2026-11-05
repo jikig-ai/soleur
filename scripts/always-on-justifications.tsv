@@ -52,7 +52,7 @@ scripts/lint-supabase-deprecated-endpoints-unit	always-on class: corpus linters:
 scripts/lint-workflow-errexit-capture	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-workflow-issue-write-scope	always-on class: corpus linters: verdict spans a file class scanned wholesale
 scripts/lint-workflow-step-env-refs	always-on class: corpus linters: verdict spans a file class scanned wholesale
-plugins/soleur/test/boundary-prefix.test.sh	#10448 measured-verdict install (CTO ruling 2026-11-05): wholesale dir-glob sweep of .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} (~164 files); 718 ms measured, selection over the 25% bar on both PR5d readings (97/200 conservative, 48/151 excluded) — the >25% policy answer, bar unamended.
+plugins/soleur/test/boundary-prefix.test.sh	always-on class: corpus linters: wholesale dir-glob sweep of .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} (~170 files); #10448 measured-verdict install (CTO ruling 2026-11-05): 718 ms measured, selection over the 25% bar on both PR5d readings (97/200 conservative, 48/151 excluded) — bar unamended.
 plugins/soleur/test/lint-bot-synthetic-completeness.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
 plugins/soleur/test/lint-bot-synthetic-statuses.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
 plugins/soleur/test/lint-distribution-content.test.sh	always-on class: corpus linters: verdict spans a file class scanned wholesale
