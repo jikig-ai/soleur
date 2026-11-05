@@ -33,3 +33,6 @@ Phase 0 of `tasks.md`: claim `s4-drain` on #12127 + #10448 mirror, BASE stamp, r
 - **Verification findings already folded into the plan during planning** (the deepen pass confirms rather than discovers): the adoption hole is an absent check (not an arm) in `ratchet_run` :2057-2075; 42 orphaned accept rows require same-commit deletion; marker precedence requires the `! grep -q '^grown'` assertion on the reintroduced row to kill `ratchet-adoption-refused`; `origin/main` red `stale-accept live=3` (#12110, PR #12128) → Phase 0.3 coordination arm; `ci.yml` step name is load-bearing for the observation probe (`STEP=` :88).
 - **Agent fan-outs unavailable** (research/review/advisor/spec-flow/CTO): all analysis ran inline; the 8 technical decision rows in `decision-challenges.md` carry `pending - assumed` rulings for the work phase to settle or escalate.
 - **Work-ready:** yes. The one sequencing item is #12128 — if still open at work start, Phase 0.3's arm governs (never duplicate the repin).
+
+### Pipeline
+- cto_spawns=1 (technical-ruling gate batch, decision-challenges rows 9-16; 7 CONFIRM + 1 OVERRIDE)
