@@ -14,6 +14,47 @@ lane: cross-domain
 
 # ci: affected-index-ratchet fails every PR with stale-accept (main-side anchor drift)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** gate verification pass over the whole plan (no subagent fan-out —
+this harness has no Task/spawn inside a subagent; every halt gate was evaluated
+orchestrator-side and recorded below)
+
+### Gate results (deepen-plan Phases 4.x)
+
+- **4.4 Precedent-diff** — PASS: the `glob:` member and accept-row forms were
+  diffed against live siblings (`test-affected-paths.sh:1306-1309`,
+  `accept.tsv:2745-2754`); no novel pattern.
+- **4.5 Network-outage / 4.55 Downtime & Cutover** — no trigger (no SSH/provisioner
+  tokens, no production-mutating apply; the job is advisory).
+- **4.6 User-Brand halt** — PASS: section present, threshold `none` + decision line;
+  `SENSITIVE_PATH_RE` does not match `scripts/ci-pr-affected-audit.accept.tsv` or
+  `scripts/lib/test-affected-paths.sh` → no scope-out bullet required.
+- **4.7 Observability** — PASS: detection does not fire (no code-class file under the
+  gated roots; no new infra surface); skip documented in `## Observability`.
+- **4.8 PAT halt** — PASS: no PAT-shaped variable/literal.
+- **4.9 UI-wireframe halt** — PASS: no UI-surface file in either Files list.
+- **4.10 Encryption Posture** — PASS: no persistent store, no new connection.
+- **4.11 Guard Contract** — PASS: the deliverable is oracle data, not a guard.
+- **4.12 Scope Check halt** — PASS: one unfenced `## Scope Check`, all three
+  subsections, zero `unmapped`, every `descoped`/`inferred` row justified,
+  `Recommendation:` present, no `status: BLOCKED`.
+- **4.13 Task-Design** — PASS: no new autonomous-task surface.
+- **5–6 Review/research fan-out** — not runnable here (no agent spawn); orchestrator
+  self-review substituted. Recorded in `decision-challenges.md` — coverage is
+  sequential-fallback, not an independent panel.
+
+### Key improvements applied during deepen
+
+1. Cited-issue/PR verification live: #12110 OPEN; #10448 OPEN (S4 epic owning the
+   check); PR #12103 KB-only file list confirmed; PR #12128 = this branch's own draft.
+2. Rule-ID citation verified: `hr-write-boundary-sentinel-sweep-all-write-sites` is an
+   active rule (AGENTS.md + AGENTS.rules.md).
+3. markdownlint clean on plan + tasks.md + decision-challenges.md (0 issues).
+4. KB-path citations Glob-verified; one learning path corrected to its
+   `test-failures/` segment.
+
 Spec lacks valid `lane:` (no spec.md exists for this branch) — defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
