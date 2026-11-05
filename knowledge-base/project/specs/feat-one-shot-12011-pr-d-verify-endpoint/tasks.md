@@ -39,4 +39,4 @@ Scope: the check endpoint, its own bearer token, the `web-acceptance` hold gate,
 
 - [ ] 5.1 File-selected test runs; census tests; markdown lint; no path under `apps/web-platform/infra/` in the diff (AC13)
 - [ ] 5.2 Full-coverage review (single-user incident), compound, ship with `Ref #12011`; Operator Holds item linked to #12196
-- [ ] 5.3 Post-merge: `deploy-arm.sh`, the dark probe (503, not 307), `verify/185` result; then the operator items in the plan's enabling conditions
+- [ ] 5.3 Post-merge: after the first real decision, confirm the ack row exists and verifying it emits nothing (AC20); `deploy-arm.sh`, the dark probe (503, not 307), `verify/185` result; then the operator items in the plan's enabling conditions

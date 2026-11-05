@@ -10,6 +10,23 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Sections enhanced:** Research Insights (verification record), Acceptance Criteria (one post-merge item), Sharp Edges
+**Agents used:** repo-research-analyst, learnings-researcher, CTO (rulings F1 to F6 and the ADR-320 follow-up), CLO, plus the plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CPO); the deepen-plan halts 4.6 to 4.13 were run mechanically (results below)
+
+### Key improvements
+
+1. Every platform claim the design leans on was re-read from source in this pass (Next `after`, Sentry `flush`, the registry error mapping, the infra workflow trigger, Sentry initialisation under the custom server); the commands and output are quoted under Research Insights.
+2. A dead-emitter risk was named and given a post-merge check: if the production process never resolved `flush` to true, no ack would ever be written and `row_without_event` would fire for every row (AC20).
+3. The plan survived the halts: User-Brand Impact present with a valid threshold, Observability schema complete, no PAT-shaped variable, no UI surface, Encryption Posture complete, Guard Contract lint green (3 guards), Scope Check complete, all cited issues and rule ids exist.
+
+### New considerations discovered
+
+- The decide route runs inside the custom server, whose entry point imports the Sentry server config first, so `Sentry.flush` talks to the same client the events were captured on. If the DSN were ever unset, `flush` resolves false and no ack is written (correct: nothing was sent).
+- `after` is exported from `next/server` in the installed Next 16.4.3; whether it runs its callback under the custom server is checked by a test at work time, with the caught fire-and-forget promise as the fallback.
+
 ## Overview
 
 Last slice of #12011. The founder's web card (PR-C) and the write-once record (PR-B, migration 184) are live. PR-D lets a script read that record and closes the gaps PR-C named:
@@ -40,6 +57,19 @@ The PR body says `Ref #12011`, never `Closes`: #12011 stays open until the enabl
 | `lib/internal-auth.ts` is a free-standing helper | `scripts/home-census-trigger.sh` (`CENSUS_PATHS`) and its test bind `lib/internal-auth.ts` into the census gate | Task: run `home-census-trigger.test.sh` after the edit and update the bound set or its record if the pin moves |
 
 ## Research Insights
+
+**Deepening verification (2026-11-05, commands re-run in this pass).**
+
+```text
+grep '"version"' apps/web-platform/node_modules/next/package.json            -> "version": "16.4.3"
+grep -n "after" apps/web-platform/node_modules/next/server.d.ts              -> export { after } from 'next/dist/server/after'
+grep -n "function flush" node_modules/@sentry/core/build/types/exports.d.ts  -> export declare function flush(timeout?: number): Promise<boolean>;
+sed -n 135,146p apps/web-platform/server/legal-acceptance/canonical.ts       -> readFileSync inside try { } catch { throw new LegalTextError("unknown_key", ... ) }
+sed -n 14,20p .github/workflows/apply-web-platform-infra.yml                 -> on: push: branches: [main]; paths: - "apps/web-platform/infra/**"
+sed -n 1,5p apps/web-platform/server/index.ts                                -> import "../sentry.server.config";  (instrumentation.ts register() is NOT called with custom servers)
+```
+
+Verify-the-negative sweep: "the agent never sees the note" holds in the SQL (`verify_legal_acceptance` builds its jsonb from `status`, `text_hash`, `decided_at`, `row_ok` only, migration 184) and no file under `plugins/` or the agent tools references `legal_acceptance`; "no `.tf` in the PR" is enforced by AC13 as a diff-scope check. Post-edit self-audit: the dropped symbols (`verify_failed`, `ack_failed`, `HELD_UNROUTED`, the dedupe, Guard 4, Operator Hold 2) appear only in the Cut List and Plan Review Rulings, not in any phase, file list, test or acceptance criterion.
 
 **Premise validation (Phase 0.6).** #12011, #12080 and #12031 are open; draft PR #12187 is this branch's own PR (the collision pre-check reported it and foreign `test-all.sh` runs in two sibling worktrees, none touching these files). PR-C is merged as `15ce2469fa`. `verify_legal_acceptance`, `legal_acceptance_row_hash` and the four migration-184 RPCs exist on `origin/main`; migration 185 is free (latest on `origin/main` is 184; no open PR names 185). ADR-319 is the decision record for this store; ADR-320 is the newest ordinal and is relevant to the secrets plan. The mechanism (a bearer-gated read endpoint plus an evaluator kind) is the one the original plan, Phase D1/D2, already specified; none of it sits in an ADR's rejected-alternatives table.
 
@@ -549,6 +579,7 @@ Open post-merge items from the task: 8.1 ADR-319 adopting to accepted after the 
 
 - [ ] AC17: `deploy-arm.sh` confirms the delivering arm; the dark probe `curl -s -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/internal/legal-acceptance/probe` prints `503` before the secrets exist (not `307`, which would mean the middleware entry is missing) and `401` with a wrong token after they exist and the web app restarted.
 - [ ] AC18: after the approved apply, `LEGAL_ACCEPTANCE_VERIFY_TOKEN` differs between dev and prd; `LEGAL_ACCEPTANCE_FOUNDER_ID` is uuid-shaped in both and present in that project's `auth.users`, each verified by a read that prints booleans only.
+- [ ] AC20: after the first real decision in the production process, the matching `legal_acceptance_ack` row exists and verifying that row emits no `row_without_event` (this proves `flush` resolves true there; if it does not, the emitter would fire for every row and the ack path is the first thing to debug).
 - [ ] AC19: ADR-319 status moves from `adopting` to `accepted` after the first real acceptance has run end to end and the gate discharged it (8.1); counsel review before enabling beyond the canary (8.2); UX test with a non-technical founder (8.3); roadmap CP2 reads "In progress (legal-acceptance slice)" (8.4).
 
 ## Test Scenarios
@@ -582,6 +613,7 @@ Open post-merge items from the task: 8.1 ADR-319 adopting to accepted after the 
 - Markers in this file: the evaluator counts every `Hold` and `Gate` marker line in the whole file and compares with what it parsed inside the `## Operator Holds` section; examples elsewhere sit inside inline text, never at the start of a line.
 - `Sentry.flush` returns false when no client is configured (dev, tests): the ack is then not written, which is correct (no event was sent) and means dev rows are unacked by design.
 - The gate reads the token from the prd Doppler config, which the agent can also read: the token is deliberately a read-only status token; do not give it write reach without moving it out of Terraform (ADR-320).
+- If the production process never resolves `Sentry.flush` to true, every row stays unacked and the alert fires for each one: AC20 is the check, not an assumption.
 - The `accepted` event is warn-level and not paged; a Request changes row is noticed at the gate (`changes requested`) or by searching `choice:request_changes`.
 
 ## References
