@@ -6779,7 +6779,7 @@ echo "--- Restart vector (#11920) ---"
 # the live grant, not a restated literal, so drifting EITHER side goes red. An empty read
 # fails the assert arm (never vacuous).
 VR_SUDOERS="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
-VR_GRANT="$(grep -oE '/usr/bin/systemctl try-restart vector\.service' "$VR_SUDOERS" | head -1)"
+VR_GRANT="$(grep -oE '/usr/bin/systemctl try-restart vector\.service' "$VR_SUDOERS" | head -1 || true)"
 
 # Happy path + argv lockstep: active unit whose timestamp advances past the pre-verb baseline
 # → success. The sudo log must carry the grant's exact argv line and never the plain
@@ -6834,9 +6834,9 @@ jq -n '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secr
   > "$VRF_DIR/hooks.json"
 run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SUDO_LOG="$ROW_DIR/sudo" MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")" SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="'"$VRF_DIR"'/hooks.json"'
 ok=0
-_vln="$(grep -nF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
-_fln="$(grep -nF 'FANOUT: peer 10.9.9.9 accepted' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
-_sln="$(grep -nF 'SUCCESS: restart vector' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1)"
+_vln="$(grep -nF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+_fln="$(grep -nF 'FANOUT: peer 10.9.9.9 accepted' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+_sln="$(grep -nF 'SUCCESS: restart vector' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
 if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" \
      && -n "$_vln" && -n "$_fln" && -n "$_sln" \
      && "$_vln" -lt "$_fln" && "$_fln" -lt "$_sln" ]]; then ok=1; fi
