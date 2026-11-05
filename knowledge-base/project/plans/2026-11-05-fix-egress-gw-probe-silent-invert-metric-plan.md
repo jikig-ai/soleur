@@ -202,15 +202,23 @@ last until the follow-up deletes the pair (incidents close minutes after their a
 ### Soak verification probe (new; CTO F4)
 
 `scripts/followthroughs/egress-gw-probe-silent-12180.sh` is enrolled on one tracker issue. It reads the Better
-Stack incidents API (the `send-failed-alert-probe-8097.sh` pagination and projection pattern; the credentials
-`BETTERSTACK_API_TOKEN` and `GH_TOKEN` are already bound in the sweeper):
+Stack incidents API (the `send-failed-alert-probe-8097.sh` pagination and projection pattern), the Telemetry alert
+listing (does the canary alert exist live) and, for the discriminating field, `scripts/betterstack-query.sh`. The
+credentials `BETTERSTACK_API_TOKEN`, `GH_TOKEN` and the three `BETTERSTACK_QUERY_*` names are already bound in the
+sweeper. **Pre-step (UNVERIFIED host):** Better Stack's current public docs describe the incidents API at
+`https://incidents.betterstack.com/api/v3/incidents` (fields `name`, `cause`, `started_at`, `resolved_at`, `status`;
+newest first; `pagination.next`), while both repo scripts call `https://uptime.betterstack.com/api/v2/incidents`.
+Before writing the probe, make one authenticated read-only GET against each host and use the one that answers (v2 if
+it still serves, since two working scripts depend on it); record the choice in the probe header. Also unconfirmed:
+whether Logs-alert incidents appear in that list without a filter (the mirror issue for #12180 shows they do on the
+host the mirror reads).
 
 | Verdict | Exit | Condition |
 |---|---|---|
 | `pass` | 0 | incident 1047829421 resolved at least 4 h ago, no later incident named `soleur-egress-gw-probe-silent-prd`, a canary incident exists, AND the canary resources are no longer declared in the checkout's `betterstack-logs-alerts.tf` |
-| `not_yet` | 2 | incident 1047829421 still open or resolved less than 4 h ago (before the anchor, nothing is wrong yet) |
+| `not_yet` | 2 | incident 1047829421 still open (and no condition below holds) or resolved less than 4 h ago |
 | `unknown` | 3 | any read failure, unparseable payload or truncated page |
-| `action_required` | 5 | after `earliest`: incident still open (fallback: build the poller), a newer production incident (recurrence), no canary incident (evaluator blind: build the poller, leave the production alert armed), or all verification held but the canary is still declared (delete it) |
+| `action_required` | 5 | any of: `canary=absent` with `canary_alert_live=1` (evaluator blind for this shape: poller #12190, production alert stays armed); `canary=absent` with `canary_alert_live=0` (the apply never created it: fix the apply, not an evaluator finding); a production incident that started after 1047829421 resolved (recurrence); incident 1047829421 still open more than 4 h after `earliest` (poller or a pause; the tracker is then closed in favor of #12190 with its label removed, so it has no dead end); or all verification held but the canary is still declared (delete it). These do not wait for the 4-hour window: the sweeper runs from `earliest`, which is apply completion plus 30 minutes |
 | xtrace refusal | 78 | #7797 |
 
 Incidents are matched on `.attributes.name ==` the exact alert name for both the production and the canary alert
@@ -220,13 +228,29 @@ Incidents are matched on `.attributes.name ==` the exact alert name for both the
 
 The verdict line carries one field per condition so a caller can read any of them regardless of the overall
 verdict: `SOLEUR_EGRESS_GW_SILENT_SOAK verdict=<v> prod_incident=<open|resolved|unknown> resolved_age_s=<n>
-newer_prod_incident=<0|1> canary=<fired|absent|unknown> canary_declared=<0|1>`. The `canary=` field is what the
-post-merge step reads at apply completion plus 25 minutes (AC12).
+newer_prod_incident=<0|1> canary=<fired|absent|unknown> canary_alert_live=<1|0|unknown> canary_declared=<0|1>
+rows_in_window=<host:n,...>`. `rows_in_window` is read only when a production incident is open or newer: per-host
+counts (never row content) of `egress-gw-probe` rows over that incident's `started_at` to `resolved_at` (or now),
+the one field that separates an evaluator fault (rows present on both hosts) from an emitter or ingest fault (a
+host with none). The `canary=` field is what the post-merge step reads at apply completion plus 25 minutes
+(AC12). On any read failure the probe prints the HTTP status and the byte length only, never a response body.
 
 Sweeper action per code: 0 closes the tracker (so it must be unreachable while the canary is declared); 2, 3 and
 78 are transient and retried next sweep; 5 comments `ACTION REQUIRED` and leaves it open; 1 is never used (the
 sweeper reads it as FAIL and may reopen a human-closed tracker). Output is projected to
 `{id,name,started_at,resolved_at}` (public-comment discipline).
+
+### Post-apply decision table
+
+| Observation | Reading | Response |
+|---|---|---|
+| canary incident exists, 1047829421 resolves within the soak | evaluator delivers a non-zero value for an empty count; the inverted shape works | delete the canary (AC14); soak completes |
+| `canary=absent`, `canary_alert_live=1` after 25 minutes | evaluator reads 0 for this query shape | poller #12190; production alert stays armed; a green alert is not evidence of health |
+| `canary=absent`, `canary_alert_live=0` | the apply did not create it (alert-count cap refusal or a failed create) | hotfix PR; not an evaluator finding |
+| 1047829421 still open, `rows_in_window` shows rows on both hosts | empty-window read or vendor never auto-resolving (the 24-day incident 1031046761 precedent) | poller #12190, or a pause; a manual resolve is a Better Stack write needing the user's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
+| 1047829421 still open, a host has no rows | real silence | the existing runbook ladder (host repair); the alert is right |
+| new production incident while 1047829421 is already open | cannot be observed: Better Stack keeps one open incident per alert, so AC12b is read from the open incident's state, not from a second incident | as the rows above |
+| evaluator error or timeout reads 0 | false silence; undetectable by this alert | accepted residual of the CTO ruling; sibling detectors cover host death; #12190 is the tracked mitigation |
 
 ## Implementation Phases
 
@@ -290,9 +314,13 @@ silence); `betterstack-log-query.md` bullet (~321-331: replace the "lower_than .
 manually" sentences, which no longer describe this alert, with the inverted-shape and canary text; fix the
 flip-silent bullet's "same stuck-at-0 shows on egress_gw_probe_silent" sentence, ~line 359). No guard pins those
 sentences (checked with `git grep`), but the `.tf` comment at the flip-silent block says the two bullets and the
-comment are edited together.
+comment are edited together. Triage order in the rewritten `cron-egress-blocked.md` section stays no-SSH: the canary
+and incident reads (probe verdict line, `betterstack-query.sh`) come first, then Sentry, and any host-timer repair is
+named by its webhook verb, never by a `systemctl` login.
 4.4 ADR-218 amendment (below).
-4.5 Tracker issue: add the `follow-through` label and the column-0 directive (see Acceptance Criteria) at ship.
+4.5 Tracker issue #12189 (filed during planning, milestone Post-MVP / Later, labels type/chore, domain/engineering,
+priority/p2-medium, observability; open, no directive yet): at ship add the `follow-through` label and the column-0
+directive (see Acceptance Criteria). The PR body links it with `Ref #12189`, never `Closes`.
 
 ### Phase 5 - Verify
 
@@ -335,11 +363,14 @@ affected-tests runner, a scratch-worktree dry run of the Rollback recipe, and `t
 ### ADR
 
 Amend ADR-218 (do not create a new ADR): append `## Amendment - 2026-11-05 (#12180): absence alerts on a
-multiplexed source report a missing-host count; a positive-control canary accompanies any new evaluator shape`.
-Contents: the superseded standing rule from the 2026-10-12 amendment (`lower_than length(var.web_hosts)`) and what
-replaces it; the evidence (incident 1047829421, the 24-day stale incident, the paused flip-silent sibling) and the
-explicit INFERRED label on the zero-fill mechanism; the canary and its decision rule (silent 20 minutes after apply
-means build the poller; the production alert stays armed meanwhile); the evaluator-error residual; the alert count
+multiplexed source report a missing-host count; a positive-control canary accompanies any new evaluator shape`,
+scoped to sub-900 s host-roster absence alerts. Format of the 2026-10-31 dead-man amendment: a Preserved list and a
+Superseded-by-name list. Preserved: the 2026-10-12 rule to count emitting HOSTS, never rows. Superseded: only its
+comparator (`lower_than length(var.web_hosts)`) and what replaces it. It must also state the inversion of ADR-197's
+"a zero from a log surface is not evidence of absence" and the 2026-10-31 "never reads a zero as healthy" posture:
+this alert reads a zero as healthy, the accepted failure direction moves from false page to false silence, and the
+canary plus the sibling detectors are the compensating controls. Further contents: the evidence (incident 1047829421, the 24-day stale incident, the paused flip-silent sibling) and the
+explicit INFERRED label on the zero-fill mechanism; the canary and its decision rule (the Post-apply decision table above); the evaluator-error residual; the alert count
 (19 Terraform-managed once applied, 18 after the canary is deleted) with the live count read in Phase 2.4; the
 Alternatives Considered row for the feeder-fed heartbeat poller (rejected as the first move, kept as fallback) and
 for dropping `treat_as_zero` (rejected by the CTO: a fully dark window must stay detectable). Appended, not edited.
@@ -393,7 +424,7 @@ fallback pre-decided above.
 ```yaml
 liveness_signal:
   what: the production alert value (missing roster hosts, 0 when healthy) and the canary incident, both read through the Better Stack incidents API by the soak probe
-  cadence: alert checked every 300 s over a 900 s window; probe swept daily by the follow-through sweeper after earliest
+  cadence: alert checked every 300 s over a 900 s window; probe run once by the postmerge step at apply completion plus 25 minutes, then by the daily 18:00 UTC follow-through sweeper from earliest (apply completion plus 30 minutes)
   alert_target: team email plus a mirrored GitHub issue (ci/betterstack-incident, action-required, priority/p1-high)
   configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf (egress_gw_probe_silent, egress_gw_probe_silent_canary)
 
@@ -403,20 +434,23 @@ error_reporting:
 
 failure_modes:
   - mode: one roster host stops emitting (timer, Vector allowlist, journal)
-    detection: production alert value 1 for a full window
-    alert_route: email plus mirror issue
+    detection: layer 3 (vector, host journald to Better Stack): production alert value 1 for a full window
+    alert_route: email plus the mirrored issue; the soak probe's rows_in_window field names the silent host
   - mode: both hosts dark or the source dead
-    detection: production alert value 2 (aggregate always returns a row)
-    alert_route: email plus mirror issue
-  - mode: evaluator reads 0 regardless of data (blind for this query shape)
-    detection: no canary incident 25 minutes after apply completion (the postmerge probe run reads canary=absent); the sweeper probe is the backstop
-    alert_route: tracker comment from the sweeper, then the poller issue
-  - mode: evaluator error or timeout reads 0 under treat_as_zero
-    detection: none by this alert (named residual); the poller fallback would cover it
-    alert_route: not alerted; recorded in the ADR-218 amendment and runbook
-  - mode: incident 1047829421 does not clear after the change
-    detection: probe verdict action_required after earliest
-    alert_route: tracker comment; fallback is the poller, production writes need the user's per-command go-ahead
+    detection: layer 3 (vector): production alert value 2 (the aggregate always returns a row)
+    alert_route: email plus the mirrored issue
+  - mode: evaluator reads 0 regardless of data (blind for this query shape) while the canary alert exists live
+    detection: layer 6 (workflow run log of the sweeper and the postmerge probe run): canary=absent with canary_alert_live=1, 25 minutes after apply completion
+    alert_route: tracker comment (exit 5) and the postmerge report; response is the poller (#12190), production alert stays armed
+  - mode: canary alert never created (apply refused on the free-tier alert cap, or the create failed)
+    detection: layer 6 (workflow run log of the apply, and the probe's canary_alert_live=0)
+    alert_route: apply run failure; response is a hotfix PR removing the canary and then the poller, not a blindness finding
+  - mode: production incident on a healthy fleet, or incident 1047829421 not clearing (empty-window read, vendor never auto-resolving, or real silence)
+    detection: layer 6 (probe verdict line) with the discriminating field rows_in_window=<host:n,...> over that incident's started_at to resolved_at (rows present on both hosts means evaluator fault; absent means emitter or ingest fault)
+    alert_route: tracker comment (exit 5); response is the poller (#12190) or a pause, each needing the user's per-command go-ahead for any Better Stack write
+  - mode: evaluator error or timeout reads 0 under treat_as_zero (false silence)
+    detection: no layer covers this; accepted residual of the CTO ruling, the failure direction moved from false page to false silence
+    alert_route: not alerted; the sibling detectors (Sentry op egress_gw_probe_fail, the resolver's cron check-in) cover host death independently, and #12190 is the tracked mitigation
 
 logs:
   where: Better Stack Logs source 2457081 (rows tagged egress-gw-probe, one per 5 minutes per host); incident history via the uptime API
@@ -424,8 +458,8 @@ logs:
 
 discoverability_test:
   command: bash scripts/followthroughs/egress-gw-probe-silent-12180.sh
-  expected_output: verdict=pass or verdict=not_yet or verdict=action_required or verdict=unknown
-  credentials_required: BETTERSTACK_API_TOKEN (Telemetry read scope, from Doppler soleur/prd_terraform) and GH_TOKEN - the incident list is not exposed by any unauthenticated endpoint, so no anonymous probe verifies the same property
+  expected_output: SOLEUR_EGRESS_GW_SILENT_SOAK verdict=
+  credentials_required: BETTERSTACK_API_TOKEN, BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME and BETTERSTACK_QUERY_PASSWORD (read scope, from Doppler soleur/prd_terraform) - the incident list and the alert listing are not exposed by any unauthenticated endpoint, so no anonymous probe verifies the same property; the probe is a single short read sequence and fits the 15 s cap if the waiver is ever dropped
 ```
 
 ## Guard Contract
@@ -495,6 +529,9 @@ read, the clock, and every exit path of the script (a `trap`-remapped status inc
 | 6 | the probe exits 1 on any fixture | RED (exit-1-never row) |
 | 7 | curl returns HTTP 500 or empty body | RED if exit is 0 (must be 3) |
 | 8 | tracing enabled with a bearer set | exit 78 |
+| 9 | an API failure whose body contains a bearer-shaped string or credential name | the output carries the HTTP status and byte length only (no body, no echoed credential) |
+| 10 | canary absent while the canary alert is also absent from the live listing | `canary_alert_live=0`, not the blind-evaluator verdict |
+| 11 | production incident open with one roster host missing from `rows_in_window` | the field names that host; verdict stays `action_required` |
 
 **Harness rows.** (a) Suite edit that must RED: replace the shimmed incident payload with `[]` for every case; the
 healthy case must change verdict. (b) Must-PASS non-canonical: a healthy fixture whose incident ids and timestamps
@@ -596,9 +633,10 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
   evaluator errors read 0.
 - [ ] AC9. PR body: `Ref #12180` (no `Closes`), the inference disclosure, the proof counts, the expected plan
   (`2 added, 1-2 changed, 0 destroyed`), and `## Changelog`.
-- [ ] AC10. Tracker issue carries the `follow-through` label and an unfenced column-0 directive
+- [ ] AC10. Tracker issue #12189 carries the `follow-through` label and an unfenced column-0 directive
   `<!-- soleur:followthrough script=scripts/followthroughs/egress-gw-probe-silent-12180.sh earliest=<apply
-  completion + 4h30, ISO-8601 Z> secrets=BETTERSTACK_API_TOKEN,GH_TOKEN -->`; the sweeper is dry-run once
+  completion + 30 minutes, ISO-8601 Z>
+  secrets=BETTERSTACK_API_TOKEN,GH_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`; the sweeper is dry-run once
   (`dry_run=true`) and its `exit=` line read.
 
 ### Post-merge (verified by the probe and `soleur:postmerge`; no manual step)
@@ -607,14 +645,16 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
 - [ ] AC12. A canary incident exists within 20 minutes of apply completion. The executor is the `soleur:postmerge`
   step, which runs the probe once at apply completion plus 25 minutes with read credentials from Doppler
   (`prd_terraform`) and reads the `canary=` field of its verdict line (the probe prints one field per condition,
-  so no special mode exists). `canary=absent` means the evaluator is blind for this shape: leave the production
-  alert armed, build the poller (file the issue at once), and do not treat a green production alert as healthy.
-  The tracker's sweeper probe (earliest at apply completion plus 4h30) is only the backstop for this check.
-- [ ] AC12b. A NEW production incident (`soleur-egress-gw-probe-silent-prd`) opening on a healthy fleet within 25
-  minutes of apply completion disproves the inverted shape just as an absent canary does: the evaluator may be
-  scanning an empty window, in which case production and canary both read 2. The canary cannot tell a genuinely
-  silent fleet from an empty evaluator window, so this is the disconfirming signal; the response is the same
-  (revert or build the poller, never hand-resolve).
+  so no special mode exists). `canary=absent` with `canary_alert_live=1` means the evaluator is blind for this shape: leave the production
+  alert armed, build the poller (#12190 holds the deferral; start it at once), and do not treat a green production
+  alert as healthy.
+  The tracker's sweeper probe (earliest at apply completion plus 30 minutes, daily 18:00 UTC sweep) is the backstop.
+- [ ] AC12b. A production incident that stays open (1047829421) or a newer one while both hosts show rows in the
+  window (`rows_in_window`) disproves the inverted shape just as an absent canary does: the evaluator may be
+  scanning an empty window, in which case production and canary both read 2 (the canary shares the production
+  query shape and cannot tell a genuinely silent fleet from an empty window, so what it proves is non-zero delivery
+  on an empty count, not general evaluator health). Response per the Post-apply decision table: the poller or a
+  pause, a Better Stack write only with the user's per-command go-ahead, never a revert.
 - [ ] AC13. Incident 1047829421 reaches resolved without a manual action and stays resolved for at least 4 hours
   with no newer `soleur-egress-gw-probe-silent-prd` incident. If not: fall back to the poller; hand-resolving the
   incident needs the user's explicit per-command go-ahead and is not part of this plan.

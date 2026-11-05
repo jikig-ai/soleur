@@ -5,7 +5,7 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 ## Phase 1: Tests first
 
 - 1.1 Rewrite the G2 block of `apps/web-platform/test/infra/egress-gw-alert.test.sh` to the new canon; add the G2b canary block and its mutation rows (Guard 1 matrix, 13 rows); confirm RED against the unchanged `.tf`.
-- 1.2 Write `scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` (PATH-shimmed `curl`/`gh`, synthesized fixtures, Guard 2 matrix); confirm RED with the probe absent.
+- 1.2 Write `scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` (PATH-shimmed `curl`/`gh`, synthesized fixtures, Guard 2 matrix, 11 rows); confirm RED with the probe absent.
 
 ## Phase 2: Production change
 
@@ -24,7 +24,7 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 
 ## Phase 4: Probe, registration, docs
 
-- 4.1 Write `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (verdict table in the plan; `RETIREMENT:` header line); register like the 8097 probe (`scripts/test-all.sh`, `scripts/suite-shard-legs.tsv`, `scripts/lib/test-affected-paths.sh`, `scripts/lint-betterstack-emitter-read.sh`).
+- 4.1 One authenticated read-only GET against the incidents API on each host (v2 uptime host used by the existing scripts, v3 incidents host in the current docs) and record which answers; then write `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (verdict table, `rows_in_window` and `canary_alert_live` fields in the plan; `RETIREMENT:` header line); register like the 8097 probe (`scripts/test-all.sh`, `scripts/suite-shard-legs.tsv`, `scripts/lib/test-affected-paths.sh`, `scripts/lint-betterstack-emitter-read.sh`).
 - 4.2 Reword the comment above the egress step in `.github/workflows/infra-validation.yml`; keep the step name.
 - 4.3 Update `cron-egress-blocked.md` (section `soleur-egress-gw-probe-silent-prd`) and `betterstack-log-query.md` (egress bullet; flip-silent stuck-at-0 sentence); label the zero-fill mechanism an inference.
 - 4.4 Append the ADR-218 amendment (inverted absence-alert rule, canary, decision rule, residuals, alert count).
@@ -38,4 +38,5 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 ## Post-merge (probe-verified)
 
 - Apply completion plus 25 minutes: `soleur:postmerge` runs the probe once and reads `canary=`; `canary=absent` means build the poller (file the issue at once) and keep the production alert armed.
-- Once `canary=fired`, the follow-up PR (tracker #12189) deletes the canary (RETIREMENT list in the probe header); incident 1047829421 must resolve on its own and stay clear for 4 hours (sweeper probe, earliest at apply completion plus 4h30).
+- Once `canary=fired`, the follow-up PR (tracker #12189) deletes the canary (RETIREMENT list in the probe header); incident 1047829421 must resolve on its own and stay clear for 4 hours (sweeper probe, `earliest` at apply completion plus 30 minutes; it exits 5 early on a blind canary, a recurrence or a missing canary alert).
+- If the evaluator proves blind or the incident does not clear: start the poller (deferral #12190), keep the production alert armed, close #12189 in favor of it. Any Better Stack write needs the user's per-command go-ahead.
