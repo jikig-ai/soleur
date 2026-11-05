@@ -18,6 +18,21 @@ requires_cpo_signoff: true
 
 Ref #11635 (epic Ref #9601). Spec lacks a valid `lane:` (no spec.md for this one-shot branch): defaulted to `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-05
+**Method (disclosed, bounded):** the deepen halt gates were run mechanically (4.6 user-brand impact present with threshold; 4.7 observability fields present, probe verb `grep` allowlisted, literal `expected_output`, no ssh; 4.8 no PAT-shaped variable; 4.11 `lint-guard-contract.py` green with 3 guard entries; 4.12 exactly one unfenced Scope Check, no BLOCKED marker; 4.9/4.10/4.13 not triggered: no UI file, no store or connection, no new autonomous task). Every rule id, `knowledge-base/` path and issue reference in the plan was verified live (no missing rule id, no broken path, no `#`-number beyond the two permitted refs). The broad per-skill and all-agent fan-out of this skill was NOT run: the evidence base is the CTO and CPO rulings, the learnings sweep, and a five-seat plan-review panel (DHH, Kieran, code-simplicity, architecture, spec-flow) already applied to the plan; running forty more seats on a ~60-line production change was judged poor value for the cost.
+
+### Key improvements applied since the first draft
+1. One deny site instead of two (two simplification seats; CTO ruled F1b), with a per-fall-through-path test requirement.
+2. Dormancy proof and natural-repair line added; Guard 3 cut to three presence pins; the sweep folded into `tools-census.test.ts` with subset relations plus a floor.
+3. ADR-309 self-contradiction fix named (the universal "per user message" statements) and the per-runner flag-off divergence made explicit.
+
+### New considerations discovered during verification
+- `cc-dispatcher.ts` already value-imports `getFreshTenantClient` from the tenant module and `isApprovalRequiredTool`, so `gate.ts` adds no new import of a module that factory tests have not already had to mock; the residual exposure is `notify.ts` and `flag.ts` only (lazy, closure-only), reduced from the draft's wording.
+- Verify-the-negative: cc has exactly one `createSdkMcpServer(` call and `pluginMcpServerNames: []` (confirms the sweep's assembly claim); the architecture seat confirmed no `allowedTools`, `permissionMode`, hook or subagent path puts a required tool in front of `canUseTool` unguarded.
+- Wiring-absent shares the `approval-gate-failed` Sentry group with real flow failures (CTO F2b: accepted; `stage` is an extra, not a fingerprint; a dedicated op is warranted only if an alert must page on it separately).
+
 ## Overview
 
 Give the cc dispatcher (the Concierge and web-egress dispatch path) the same approval-gate dependency and a per-dispatch execution-grants object that the legacy runner already has, and make any approval-queue tool that reaches the cc `canUseTool` deny instead of falling to the in-memory review card. Today the cc path has neither, so a gated platform tool registered there later would have no grant object to read and no gate to pass.
@@ -413,7 +428,7 @@ Per the pipeline ruling, CI is the ship gate: do not wait on the slow local `--a
 
 ## Dependencies & Risks
 
-- Risk: a new import in `realSdkQueryFactory` breaks sibling tests that mock `@/lib/supabase/tenant` or `@/lib/supabase/service` partially. `gate.ts` touches both lazily inside closures, so import resolution is the only exposure; mitigated by running every test that exercises the factory (Phase 2).
+- Risk: a new import in `realSdkQueryFactory` breaks sibling tests that mock modules partially. `cc-dispatcher.ts` already imports `getFreshTenantClient`, so the exposure is `gate.ts`'s other imports (`notify.ts`, `flag.ts`), accessed lazily inside closures; mitigated by running every test that exercises the factory (Phase 2).
 - Risk: the cold import of cc-dispatcher in the sweep test exceeds the default budget (measured ~13 s cold in `tools-census`); import in `beforeAll` with a 120 s budget.
 - Risk: closure capture of workspace/repo/workspacePath at gate construction versus a mutable active workspace within a Query. Not reachable today; recorded as UNVERIFIED and as a precondition in the ADR addendum.
 - No dependency on the broker, credential vending, or any capability listed under scope-out.
