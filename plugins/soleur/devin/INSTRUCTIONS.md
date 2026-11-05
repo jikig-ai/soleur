@@ -266,7 +266,7 @@ for read-only work — on a Free plan the explore lane is a capability choice,
 not a saving — which is also why a spawn tool's `profile` argument can
 never express "cheaper": pick the profile, not a model). An explore-routed
 report comes from the router's default model, not the session model — weigh
-it accordingly).
+it accordingly.
 
 **Operator opt-in (documented, not required):** `agent.subagent_model` in
 `~/.config/devin/config.json` sets the router default — e.g.

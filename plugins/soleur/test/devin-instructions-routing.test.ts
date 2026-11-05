@@ -5,6 +5,14 @@ const INSTRUCTIONS = readFileSync(
   `${import.meta.dir}/../devin/INSTRUCTIONS.md`,
   "utf8",
 );
+const GO_MD = readFileSync(
+  `${import.meta.dir}/../commands/go.md`,
+  "utf8",
+);
+const GO_SKILL = readFileSync(
+  `${import.meta.dir}/../skills/go/SKILL.md`,
+  "utf8",
+);
 
 describe("devin/INSTRUCTIONS.md subagent routing guidance", () => {
   test("binds each profile to its tool-surface predicate, not just the vocabulary", () => {
@@ -37,9 +45,12 @@ describe("devin/INSTRUCTIONS.md subagent routing guidance", () => {
     expect(INSTRUCTIONS).not.toContain(
       "Claude model aliases are not Devin model identifiers",
     );
-    // Claim-scoped negative: a paraphrased false claim fails too.
+    // Claim-scoped negative: the false claim is "aliases don't resolve /
+    // aren't Devin model identifiers". Cover paraphrase shapes (never,
+    // cannot, aren't, bare not) while sparing true sentences like
+    // "aliases are not valid run_subagent arguments".
     expect(INSTRUCTIONS).not.toMatch(
-      /model aliases? (are|do) not (resolve|valid|supported)/i,
+      /model aliases?[^.\n]*(never|cannot|can't|aren't|don't|doesn't|do(es)? not|are not)[^.\n]*(resolve|Devin model identifiers?)/i,
     );
     // Affirmative half must be present, not just the restriction.
     expect(INSTRUCTIONS).toContain("DO resolve");
@@ -51,6 +62,16 @@ describe("devin/INSTRUCTIONS.md subagent routing guidance", () => {
     expect(INSTRUCTIONS).toMatch(
       /independent review occurred when it did not/,
     );
+  });
+
+  test("the /soleur:go dispatch surfaces carry the profile contract", () => {
+    // Devin lines inside go.md teach profile vocabulary, never the stale
+    // "with the agent id" arg shape (the Grok bullet at go.md:631 legitimately
+    // names "the agent id" for spawn_subagent — scope the negatives).
+    expect(GO_MD).toMatch(/Devin CLI[^\n]*subagent_explore[^\n]*subagent_general/);
+    expect(GO_MD).not.toMatch(/Devin CLI[^\n]*run_subagent[^\n]*with (the )?agent id/);
+    expect(GO_SKILL).toMatch(/run_subagent[^\n]*subagent_explore[^\n]*subagent_general/);
+    expect(GO_SKILL).not.toMatch(/run_subagent[^\n]*with the agent id/);
   });
 
   test("poll loops are pinned to subagent_general (they need exec)", () => {

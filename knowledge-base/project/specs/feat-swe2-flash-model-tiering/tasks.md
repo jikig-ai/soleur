@@ -28,10 +28,10 @@ date: 2026-11-05
 - [x] 1.6 `model-launch-review/SKILL.md`: Devin freshness row 7 + collateral (lines
       ~17/18, 26, 53 "2–6"→"2–7", 57, 168); description edit gated on word-budget
       measurement; `README.md` mirror line; `audit-models.sh` header comment.
-- [x] 1.7 `plugins/soleur/AGENTS.md`: Devin-mapping note — no-exec researchers map to
-      `subagent_explore` + `agent.subagent_model`; exec-needing researchers
-      (git-history-analyzer, learnings-researcher) stay `subagent_general`; `model:
-      haiku` inert on Devin.
+- [x] 1.7 `plugins/soleur/AGENTS.md`: Devin-mapping note — rule-form (shipped
+      amended at review): all five researchers stay `subagent_general` on exec/MCP
+      duties; ad-hoc read-only explores may use `subagent_explore` +
+      `agent.subagent_model`; `model: haiku` inert on Devin.
 
 ## Phase 2 — Pin + verify
 

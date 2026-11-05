@@ -67,7 +67,7 @@ Two domain leaders (Engineering/CTO, Operations/COO) assessed independently and 
   `.devin/config.json`), must be org-allowed, and overrides the router and admin default.
 - **All tiers stay `inherit` on Devin:** no `TIER_MAPS.devin` row is added. The warn→inherit
   fallback in `resolveModelTier` already covers Devin; adding a row with only `inherit`
-  values is noise. `devin-harness.test.ts`'s `"Inherit the session model"` pin stays true.
+  values is noise. `devin-harness.test.ts`'s `"Inherit the session model"` pin stays true. <!-- amended at PR #12135 review: the pin was removed by the feature commit; no occurrence remains in the devin emit path -->
 - **Fix the stale aliases claim** in `devin/INSTRUCTIONS.md`: Claude family aliases DO
   resolve on Devin. This is a standalone correction riding along because it was discovered
   here and is wrong independently of this feature.

@@ -70,7 +70,7 @@ consumes it on Devin.
 
 ## Technical Requirements
 
-- **TR1. Mixed docs+code diff: INSTRUCTIONS.md, ADR-110 addendum, SKILL.md, AGENTS.md, README.md, audit-models.sh, harness.ts emitted strings, devin-harness.test.ts re-pin, new devin-instructions-routing.test.ts pin suite, go.md + skills/go/SKILL.md stale-contract sweep (review fixes).
+- **TR1.** Mixed docs+code diff: INSTRUCTIONS.md, ADR-110 addendum, SKILL.md, AGENTS.md, README.md, audit-models.sh, harness.ts emitted strings, devin-harness.test.ts re-pin, new devin-instructions-routing.test.ts pin suite, go.md + skills/go/SKILL.md stale-contract sweep, KB artifacts (spec, tasks, brainstorm, plan), and an expenses.md verify_by row (review fixes).
   — no issue was created; delivery is inline in PR #12135.
 
 ## Open Questions
