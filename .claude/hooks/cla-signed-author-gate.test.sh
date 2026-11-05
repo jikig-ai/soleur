@@ -168,7 +168,9 @@ commit_branch() {
 
 # setup_commit <work> <msg> — fixture-setup commit with an explicit identity via
 # env, so it works on runners with no global git identity. Repo config is left
-# untouched: T15/T16 unset user.email on purpose so the hook under test sees none.
+# untouched: T15 unsets user.email on purpose and then reaches this helper (via
+# push_cla_yml), and the hook under test must still see none. T16 unsets it too
+# but only uses commit_branch, which pins its own identity.
 setup_commit() {
   local work="$1" msg="$2"
   assert_fixture_dir "$work"

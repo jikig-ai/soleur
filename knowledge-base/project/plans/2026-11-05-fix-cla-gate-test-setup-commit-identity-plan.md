@@ -63,7 +63,7 @@ other worktrees are unrelated). The failure reproduces on `origin/main`-equivale
 1. The suite passes on a machine with no global/system git identity (the CI runner shape).
 2. T15/T16 still exercise the hook with `user.email` unset in the repo (intent preserved).
 3. No fixture-visible behaviour changes: setup commits keep their prior effective identity
-   (`Test User <test@test.local>`) and sit on `main`/`cla-signatures`, outside the `main..branch`
+   (`S <setup@test.local>`) and sit on `main`/`cla-signatures`, outside the `main..branch`
    range the hook inspects.
 
 **Cut List.**
@@ -76,8 +76,8 @@ other worktrees are unrelated). The failure reproduces on `origin/main`-equivale
   git's configured identity" behaviour is deliberate (comment at the helper) and used by tests.
 
 **Learnings / conventions.** Test fixtures are synthesized-only (`cq-test-fixtures-synthesized-only`):
-the identity is the suite's existing `test@test.local` / `Test User` pair already used by
-`init_git_repo`. `scripts/ci-pr-affected-audit.accept.tsv` has two content-hash-anchored accept
+the identity is a synthetic `S` / `setup@test.local` pair (deliberately distinct from the
+`test@test.local` pair `init_git_repo` sets in repo config). `scripts/ci-pr-affected-audit.accept.tsv` has two content-hash-anchored accept
 rows for this suite (sha256 of the whitespace-collapsed source line) tied to lines naming the
 cla.yml workflow path; the new lines must not contain that path literal (a new boundary match would
 create an unaccepted gap), and the anchor is content-keyed so edits that leave those two lines
@@ -95,8 +95,8 @@ File to edit: `.claude/hooks/cla-signed-author-gate.test.sh` (only file touched)
    # helpers work when a case has unset user.email and the runner has no global identity (#12120).
    # Env, not `git config`: T15/T16 test the hook with the repo identity UNSET.
    setup_commit() {
-     env GIT_AUTHOR_NAME="Test User" GIT_AUTHOR_EMAIL=test@test.local \
-         GIT_COMMITTER_NAME="Test User" GIT_COMMITTER_EMAIL=test@test.local \
+     env GIT_AUTHOR_NAME="S" GIT_AUTHOR_EMAIL="setup@test.local" \
+         GIT_COMMITTER_NAME="S" GIT_COMMITTER_EMAIL="setup@test.local" \
        git -C "$1" commit -q -m "$2"
    }
    ```
