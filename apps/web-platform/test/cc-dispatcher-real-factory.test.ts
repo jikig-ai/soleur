@@ -853,10 +853,13 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(deps.approvalFailClosed).toBe(true);
     });
 
-    it("binds the gate to the resolved active workspace", async () => {
+    it("binds the gate to the resolved active workspace, not to the user id", async () => {
+      // A team workspace: its id differs from the user id, so binding to `args.userId` instead would be visible.
+      const TEAM_WORKSPACE = "00000000-0000-4000-8000-0000000000aa";
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: TEAM_WORKSPACE }));
       const deps = await capture();
-      // The default fixture resolves the solo workspace, whose id is the user id.
-      expect(deps.approval?.workspaceId).toBe("user-1");
+      expect(deps.approval?.workspaceId).toBe(TEAM_WORKSPACE);
+      expect(deps.approval?.workspaceId).not.toBe("user-1");
     });
 
     it("builds a distinct grants object per factory invocation (never module scope, so none leaks across Queries)", async () => {

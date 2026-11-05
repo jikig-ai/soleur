@@ -17,8 +17,9 @@ import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGra
 // SURFACE + KNOWN PARTIAL-PARITY GAP (review PR #4868): these tools register on
 // the LEGACY `agent-runner.ts` platform-tools surface where tool-capable
 // domain-leader agents run. The cc-soleur-go Concierge router (`cc-dispatcher`)
-// wires `platformToolNames: []` and `readCcMcpAllowlist() === {}` (Phase 1) by
-// design, so it exposes NO platform MCP tools — and it is BOTH the live
+// wires `platformToolNames` to the c4 edit tool and, for crm-lead chats, the CRM
+// tools (never these settings tools), with `readCcMcpAllowlist() === {}` (Phase 1)
+// by design — and it is BOTH the live
 // interactive path users converse with AND the sole consumer of the toggle.
 // Net: today a leader agent can read/set the toggle, but the Concierge a user
 // actually talks to cannot yet honor "turn on autonomous mode" via a tool — it

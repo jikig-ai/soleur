@@ -20,8 +20,9 @@ vi.mock("@/server/logger", () => ({ createChildLogger: () => log, default: log }
 vi.mock("@/server/permission-log", () => ({ logPermissionDecision: logDecision }));
 vi.mock("@/server/observability", () => ({ warnSilentFallback, reportSilentFallback }));
 
-import { createCanUseTool, type CanUseToolContext } from "@/server/permission-callback";
+import { createCanUseTool, SOLEUR_GO_SAFE_UX_TOOLS, type CanUseToolContext } from "@/server/permission-callback";
 import { APPROVAL_UNAVAILABLE_DENY } from "@/server/approval/gate-flow";
+import { APPROVAL_OPS } from "@/server/approval/ops";
 import type { ApprovalGateDeps } from "@/server/approval/gate-types";
 import { ExecutionGrants } from "@/server/approval/grants";
 import { clearAllWaiters } from "@/server/approval/waiters";
@@ -58,7 +59,6 @@ interface SetupOptions {
   reviewAnswer?: "Approve" | "Reject";
   /** A review gate that never answers (to fill the pending-gate cap). */
   hangReview?: boolean;
-  extraPlatformTools?: readonly string[];
 }
 
 function setup(opts: SetupOptions = {}) {
@@ -95,7 +95,7 @@ function setup(opts: SetupOptions = {}) {
     conversationId: CONVERSATION_ID,
     leaderId: "cto",
     workspacePath: "/tmp/ws",
-    platformToolNames: [...APPROVAL_REQUIRED_TOOLS, ...CRM_WRITES, ...(opts.extraPlatformTools ?? [])],
+    platformToolNames: [...APPROVAL_REQUIRED_TOOLS, ...CRM_WRITES],
     pluginMcpServerNames: [],
     repoOwner: "example-org",
     repoName: "example-repo",
@@ -135,6 +135,13 @@ describe("non-vacuity: the sweep is over the live approval-required set", () => 
   });
 });
 
+describe("pre-gate allow sets", () => {
+  test("no approval-required tool is in the UX allow set that is checked before the platform branch", () => {
+    expect(SOLEUR_GO_SAFE_UX_TOOLS.size).toBeGreaterThan(0);
+    for (const tool of APPROVAL_REQUIRED_TOOLS) expect(SOLEUR_GO_SAFE_UX_TOOLS.has(tool), tool).toBe(false);
+  });
+});
+
 describe("approvalFailClosed set, approval wiring ABSENT", () => {
   test.each([...APPROVAL_REQUIRED_TOOLS])("%s is denied with the static text, no card, no flag read, one wiring-absent Sentry error", async (tool) => {
     const h = setup({ failClosed: true, approval: "absent" });
@@ -142,13 +149,13 @@ describe("approvalFailClosed set, approval wiring ABSENT", () => {
     expect(res).toEqual({ behavior: "deny", message: APPROVAL_UNAVAILABLE_DENY });
     expect(h.abortableReviewGate).not.toHaveBeenCalled();
     expect(reviewCards(h)).toHaveLength(0);
-    expect(h.isEnabled).not.toHaveBeenCalled();
+    expect(logDecision).toHaveBeenCalledWith("canUseTool-platform-gated", tool, "deny", "approval flow gave no verdict");
     const events = wiringAbsentEvents();
     expect(events).toHaveLength(1);
     const [first, options] = events[0] as [unknown, { feature: string; op: string; extra: Record<string, unknown> }];
     expect(first).toBeNull();
     expect(options.feature).toBe("approval-queue");
-    expect(options.op).toBe("approval-gate-failed");
+    expect(options.op).toBe(APPROVAL_OPS.gateFailed.op);
     expect(options.extra.tool).toBe(tool);
   });
 
@@ -172,6 +179,7 @@ describe("approvalFailClosed set, approval wired, the flow gives no verdict", ()
     // A clean OFF is a dormant state, not a fault.
     expect(reportSilentFallback).not.toHaveBeenCalled();
     expect(wiringAbsentEvents()).toHaveLength(0);
+    expect(logDecision).toHaveBeenCalledWith("canUseTool-platform-gated", tool, "deny", "approval flow gave no verdict");
     expect(log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ sec: true, tool, decision: "platform-gate-approval-fail-closed", enforcing: false }),
       expect.any(String),
@@ -249,25 +257,36 @@ describe("earlier exits keep their own static text, and every one is still a den
     const h = setup({ failClosed: true, approval: "absent", nonInteractive: true });
     const res = await h.call(TOOLS.emailSend, inputFor(TOOLS.emailSend));
     expect(res.behavior).toBe("deny");
+    expect(res.message).not.toBe(APPROVAL_UNAVAILABLE_DENY);
+    expect(logDecision).toHaveBeenCalledWith("canUseTool-platform-gated", TOOLS.emailSend, "deny", "non-interactive session");
+    expect(wiringAbsentEvents()).toHaveLength(0);
     expect(reviewCards(h)).toHaveLength(0);
-    expect(h.isEnabled).not.toHaveBeenCalled();
   });
 
   test("an input that cannot be shown in full (unreviewable)", async () => {
     const h = setup({ failClosed: true, approval: "off" });
     const res = await h.call(TOOLS.emailSuppress, { recipient: 42, reason: "x" });
     expect(res.behavior).toBe("deny");
+    expect(res.message).not.toBe(APPROVAL_UNAVAILABLE_DENY);
+    expect(logDecision).toHaveBeenCalledWith("canUseTool-platform-gated", TOOLS.emailSuppress, "deny", "input not reviewable");
     expect(reviewCards(h)).toHaveLength(0);
     expect(h.isEnabled).not.toHaveBeenCalled();
   });
 
   test("the pending-gate cap is reached", async () => {
+    // The cap is MAX_PENDING_GATES (5, module-private in permission-callback.ts); five held cards fill it.
+    const CAP = 5;
     const h = setup({ failClosed: true, approval: "off", hangReview: true });
-    for (const crm of [...CRM_WRITES, ...CRM_WRITES].slice(0, 5)) void h.call(crm, CRM_INPUT[crm]);
-    await vi.waitFor(() => expect(h.abortableReviewGate).toHaveBeenCalledTimes(5));
+    for (let i = 0; i < CAP; i++) {
+      const crm = CRM_WRITES[i % CRM_WRITES.length];
+      void h.call(crm, CRM_INPUT[crm]);
+    }
+    await vi.waitFor(() => expect(h.abortableReviewGate).toHaveBeenCalledTimes(CAP));
     const res = await h.call(TOOLS.pushBranch, inputFor(TOOLS.pushBranch));
     expect(res.behavior).toBe("deny");
-    expect(h.abortableReviewGate).toHaveBeenCalledTimes(5);
+    expect(res.message).not.toBe(APPROVAL_UNAVAILABLE_DENY);
+    expect(logDecision).toHaveBeenCalledWith("canUseTool-platform-gated", TOOLS.pushBranch, "deny", "too many pending approvals");
+    expect(h.abortableReviewGate).toHaveBeenCalledTimes(CAP);
     expect(h.isEnabled).not.toHaveBeenCalled();
   });
 
@@ -284,7 +303,7 @@ describe("earlier exits keep their own static text, and every one is still a den
     const h = setup({ failClosed: true, approval: "absent", persona: "support" });
     const res = await h.call(TOOLS.emailSend, inputFor(TOOLS.emailSend));
     expect(res.behavior).toBe("deny");
-    expect(h.isEnabled).not.toHaveBeenCalled();
+    expect(res.message).not.toBe(APPROVAL_UNAVAILABLE_DENY);
     expect(reportSilentFallback).not.toHaveBeenCalled();
   });
 });

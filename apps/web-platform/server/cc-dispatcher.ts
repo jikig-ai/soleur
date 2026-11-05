@@ -354,7 +354,7 @@ export function readCcMcpAllowlist(
     // (static message; the short name is the only env echo).
     if (isApprovalRequiredTool(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309 approval)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309)`,
       );
     }
   }
@@ -2900,6 +2900,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   // One grants object per factory invocation, i.e. per Query (never module scope: it must not leak across users or
   // Queries). Sticky `enforcing` therefore spans every turn of this Query. See the ADR-309 addendum.
   const approvalGrants = new ExecutionGrants();
+  const connectedRepoSlug = connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "";
 
   const ccDeps: CanUseToolDeps = {
     abortableReviewGate: (
@@ -2973,13 +2974,13 @@ export const realSdkQueryFactory: QueryFactory = async (
       installationId: effectiveInstallationId,
       workspacePath,
     }),
-    connectedRepoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
+    connectedRepoSlug,
     // The durable approval flow's dependency, built from the same factory the legacy runner uses. Construction touches no
     // database, flag or network: everything is closure-only until an approval-required tool reaches the gate.
     approval: createApprovalGateDeps({
       userId: args.userId,
       workspaceId: activeWorkspaceId,
-      repoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
+      repoSlug: connectedRepoSlug,
       workspacePath,
       grants: approvalGrants,
     }),

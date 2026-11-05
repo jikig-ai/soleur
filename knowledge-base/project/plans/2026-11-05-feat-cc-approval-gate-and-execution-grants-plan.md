@@ -235,6 +235,13 @@ Two open code-review issues name `apps/web-platform/server/cc-dispatcher.ts`: th
 
 `soleur:engineering:review:user-impact-reviewer` is invoked at review time (single-user-incident threshold).
 
+Scoped out or carried (added after the review panel):
+
+- The three gated CRM writes registered in cc stay on the in-chat review card by design (`APPROVAL_EXEMPT_TOOLS`; each runs under an `auth.uid()`-pinned RPC, so a requester cannot reach another user's rows). In a shared workspace the requester answers that card; this change neither adds nor removes that posture.
+- Closure capture of the active workspace, repository and workspace path at gate construction is UNVERIFIED against a workspace change within one Query. It is unreachable today and is a precondition for the first cc registration of an approval-required tool (ADR-309 Addendum).
+- Where the Owner finds a pending approval raised from a Concierge chat, and what the user sees on a denied call, are product decisions for that same first registration. The derived sweep in `test/approval/tools-census.test.ts` fails the build if a required tool is registered in cc before then.
+- The Guard 1 mutation matrix above is applied by hand at work time (recorded in the PR) and is not part of the CI battery.
+
 ## Architecture Decision (ADR/C4)
 
 ### ADR

@@ -72,20 +72,20 @@ describe("Guard 2 census: every gated tool is required or exempt-with-a-reason",
   });
 });
 
+// The cc-dispatcher module is a very large import graph (~13 s cold, measured), so it is imported ONCE for the whole file
+// with its own generous budget; every test below then runs in microseconds.
+let readCcMcpAllowlist: typeof import("@/server/cc-dispatcher").readCcMcpAllowlist;
 let soleurPlatformToolsForTests: typeof import("@/server/cc-dispatcher").soleurPlatformToolsForTests;
+let buildC4Tools: typeof import("@/server/c4-concierge-tools").buildC4ConciergeTools;
+beforeAll(async () => {
+  ({ readCcMcpAllowlist, soleurPlatformToolsForTests } = await import("@/server/cc-dispatcher"));
+  ({ buildC4ConciergeTools: buildC4Tools } = await import("@/server/c4-concierge-tools"));
+}, 120_000);
 
 describe("the cc runner cannot be promoted onto an approval tool through CC_MCP_ALLOWLIST (ADR-309, sentinel discipline)", () => {
   // No cc tool builder is wired to the execution grants (the cc path has the gate and a grants object, but nothing reads a
   // grant), so a promoted approval tool could not be bound to an approval. readCcMcpAllowlist must therefore REFUSE
   // every APPROVAL_REQUIRED_TOOLS short name; it is the backstop behind the cc fail-closed switch.
-  // The guard lives in server/cc-dispatcher.ts. That module is a very large import graph (~13 s cold, measured), so it
-  // is imported ONCE here with its own generous budget instead of inside the first `it` (which flaked at the 16 s
-  // default under load); every test below then runs in microseconds.
-  let readCcMcpAllowlist: typeof import("@/server/cc-dispatcher").readCcMcpAllowlist;
-  beforeAll(async () => {
-    ({ readCcMcpAllowlist, soleurPlatformToolsForTests } = await import("@/server/cc-dispatcher"));
-  }, 120_000);
-
   for (const fqn of APPROVAL_REQUIRED_TOOLS) {
     const short = fqn.replace("mcp__soleur_platform__", "");
     it(`CC_MCP_ALLOWLIST naming ${short} throws (static message, no env echo beyond the short name)`, () => {
@@ -109,10 +109,14 @@ describe("cc registration sweep (derived from the registry function)", () => {
   const P = "mcp__soleur_platform__";
 
   /** Pure so it can be driven with a fake registry (self-test below). */
-  function sweep(registered: readonly string[]) {
+  function sweep(
+    registered: readonly string[],
+    tiers: Readonly<Record<string, string>> = TOOL_TIER_MAP,
+    exempt: Readonly<Record<string, string>> = APPROVAL_EXEMPT_TOOLS,
+  ) {
     const required = registered.filter((n) => isApprovalRequiredTool(n));
-    const notExplicitlyTiered = registered.filter((n) => !(n in TOOL_TIER_MAP));
-    const gatedNotExempt = registered.filter((n) => TOOL_TIER_MAP[n] === "gated" && !(n in APPROVAL_EXEMPT_TOOLS));
+    const notExplicitlyTiered = registered.filter((n) => !(n in tiers));
+    const gatedNotExempt = registered.filter((n) => tiers[n] === "gated" && !(n in exempt));
     return { required, notExplicitlyTiered, gatedNotExempt };
   }
 
@@ -128,12 +132,6 @@ describe("cc registration sweep (derived from the registry function)", () => {
   function buildC4ToolsForSweep() {
     return buildC4Tools({ userId: "sweep-user", installationId: 1, owner: "example-org", repo: "example-repo", workspacePath: "/tmp/ws" });
   }
-
-  let buildC4Tools: typeof import("@/server/c4-concierge-tools").buildC4ConciergeTools;
-  beforeAll(async () => {
-    ({ buildC4ConciergeTools: buildC4Tools } = await import("@/server/c4-concierge-tools"));
-    if (!soleurPlatformToolsForTests) ({ soleurPlatformToolsForTests } = await import("@/server/cc-dispatcher"));
-  }, 120_000);
 
   it("registers a non-vacuous set that includes the narration tools, the c4 tool and the CRM tools", () => {
     const names = registeredNames();
@@ -158,12 +156,15 @@ describe("cc registration sweep (derived from the registry function)", () => {
   it("self-test: the sweep reports a required tool, an untiered tool and a gated non-exempt tool", () => {
     expect(sweep([...registeredNames(), `${P}github_push_branch`]).required).toEqual([`${P}github_push_branch`]);
     expect(sweep([...registeredNames(), `${P}not_in_the_tier_map`]).notExplicitlyTiered).toEqual([`${P}not_in_the_tier_map`]);
-    const gatedNotExempt = Object.keys(TOOL_TIER_MAP).find((n) => TOOL_TIER_MAP[n] === "gated" && !(n in APPROVAL_EXEMPT_TOOLS) && !isApprovalRequiredTool(n));
-    if (gatedNotExempt) expect(sweep([gatedNotExempt]).gatedNotExempt).toEqual([gatedNotExempt]);
+    // A fabricated tier map and exempt set drive the gated-non-exempt arm: the live maps hold no such tool (the census
+    // above guarantees it), so a conditional assertion over them would silently never run.
+    const fake = `${P}fabricated_gated_tool`;
+    expect(sweep([fake], { [fake]: "gated" }, {}).gatedNotExempt).toEqual([fake]);
+    expect(sweep([fake], { [fake]: "gated" }, { [fake]: "a recorded reason" }).gatedNotExempt).toEqual([]);
     expect(sweep([`${P}narrate`]).required).toEqual([]);
   });
 
-  it("the dispatcher assembles one MCP server and no plugin servers (the sweep's blind spot, pinned structurally)", () => {
+  it("the dispatcher assembles one MCP server and permits no plugin MCP server tool (the sweep's blind spot, pinned structurally)", () => {
     const text = stripComments(readFileSync(join(__dirname, "../../server/cc-dispatcher.ts"), "utf8"));
     expect(text.match(/createSdkMcpServer\(/g)).toHaveLength(1);
     expect(text).toMatch(/pluginMcpServerNames:\s*\[\]/);

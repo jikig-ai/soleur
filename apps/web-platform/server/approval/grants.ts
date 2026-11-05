@@ -5,8 +5,8 @@
  * Why: the approval binds identifiers (and, for a push, the commit), but three handlers re-resolve something at execution
  * (`github_push_branch` pushes the workspace HEAD, `workspace_set_autonomous` and `kb_share_create` resolve the active
  * workspace). The tool zod strips extra keys and an SDK tool handler gets no reliable `tool_use_id`, so a pinned value
- * cannot ride in the tool input without letting the model supply it. This object is created once per session in
- * `agent-runner.ts` and shared BY CLOSURE between `createApprovalGateDeps` (writer) and the tool builders (readers). No
+ * cannot ride in the tool input without letting the model supply it. This object is created once per user message in
+ * `agent-runner.ts`, and once per Query (`realSdkQueryFactory`) in `cc-dispatcher.ts` (ADR-309 Addendum), and shared BY CLOSURE between `createApprovalGateDeps` (writer) and the tool builders (readers). No
  * MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot write a grant.
  *
  * Contract:

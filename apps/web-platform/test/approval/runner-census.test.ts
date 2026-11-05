@@ -65,7 +65,7 @@ describe("runner registration census", () => {
 
   test("the cc runner registers no slice-1 tool and imports none of their builders (recorded reason above)", () => {
     const cc = src("server/cc-dispatcher.ts");
-    for (const name of SHORT) expect(cc, `cc-dispatcher registers ${name} without approval wiring`).not.toMatch(new RegExp(`["'\`]${name}["'\`]`));
+    for (const name of SHORT) expect(cc, `cc-dispatcher registers ${name} without approval wiring`).not.toMatch(new RegExp(`["'\`](?:mcp__soleur_platform__)?${name}["'\`]`));
     for (const b of BUILDERS) expect(cc, `cc-dispatcher imports ${b}`).not.toMatch(new RegExp(`/${b}["']`));
   });
 
