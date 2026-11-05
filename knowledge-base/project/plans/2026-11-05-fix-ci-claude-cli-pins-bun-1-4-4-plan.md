@@ -14,7 +14,7 @@ brand_survival_threshold: aggregate pattern
 
 **Deepened on:** 2026-11-05
 **Sections enhanced:** Phase 2 (input-drift result pre-measured), Phase 3 (scratch regeneration measured), Sharp Edges, verification pass over every cited SHA, PR/issue number and label.
-**Method:** inline gate and verification pass (halt gates 4.6, 4.8, 4.12 and the Quality Checks list) plus one CTO ruling batch at plan time; the wide per-skill/per-agent fan-out was not run because the change is a three-site pin bump with measured evidence and CTO rulings F1-F4.
+**Method:** inline gate and verification pass (halt gates 4.6, 4.8, 4.12 and the Quality Checks list) plus one CTO ruling batch at plan time; the wide per-skill/per-agent fan-out was not run because the change was planned as a three-site pin bump with measured evidence and CTO rulings F1-F4.
 
 ### Key Improvements
 1. The claude-code-action input diff v1.0.236 to v1.0.263 was measured now: identical input lists, so the main risk of the 27-release bump (a renamed or removed `with:` key) is retired at plan time; the work phase only re-confirms.
@@ -30,7 +30,7 @@ brand_survival_threshold: aggregate pattern
 Issue #12102 tracks the claude runtime pins that PR 12073 deliberately left below the Bun 1.4.4 fix (CVE-2026-111497, a Brotli decoder flaw in Bun). Its dependency trigger (#12026) closed on 2026-11-05T00:52:09Z, so `scripts/followthroughs/ci-claude-cli-pins-bun-12073.sh` now reports ACTION REQUIRED (exit 5). This plan moves the remaining pins onto the shipped, already-verified pair (claude-code 2.1.311 / agent-sdk 0.3.311, Bun 1.4.4):
 
 1. `scheduled-marketplace-drift.yml` `CLI_VERSION` 2.1.228 to exactly 2.1.311, with the plugin-delivery canary re-run against the new CLI first.
-2. The `anthropics/claude-code-action` pin (four workflows plus the customer-facing constraint-scaffold template) from v1.0.236 to v1.0.263, the first release whose action runtime (Bun) and bundled CLI are both the shipped pair.
+2. The `anthropics/claude-code-action` pin (four workflows plus the customer-facing constraint-scaffold template, and, after the review round (F7), the operator-digest asset) from v1.0.236 (v1.0.101 for the asset) to v1.0.263, the first release whose action runtime (Bun) and bundled CLI are both the shipped pair.
 3. The pencil-setup engine lockfile's transitive agent-sdk 0.3.310 to 0.3.311 via an exact `overrides` entry, gated on `engine-contract-probe.sh`.
 
 Do not redo the 12026 bump, the deploy checks, or the binary probe. PR body carries `Closes #12102`; label `meta/machinery`.
@@ -61,7 +61,7 @@ Checked: #12102 (open, labels incl. `follow-through`, `meta/machinery`), #12026 
 
 ### Cut List
 - A new numeric pin-table row for the env pin -> buys no property (the row is value-agnostic by design, ADR-191 pin-table guard) -> `adhoc-npm-install-pin-table.test.ts` already covers P1's "exact semver" half.
-- A new Bun-floor guard for the CI sites -> P1 is already enforced for the shipped binaries by the standing test in `claude-cli-pin-knows-models.test.ts` (CTO F2 of #12026), and the CI sites are covered by the probe script plus the pin table; a second guard would duplicate it.
+- (Superseded by the review round, which built a lockstep guard because this PR itself grows the set it covers.) A new Bun-floor guard for the CI sites -> P1 is already enforced for the shipped binaries by the standing test in `claude-cli-pin-knows-models.test.ts` (CTO F2 of #12026), and the CI sites are covered by the probe script plus the pin table; a second guard would duplicate it.
 - `path_to_claude_code_executable` / `path_to_bun_executable` wiring (option B) -> more machinery for the same property the SHA bump buys.
 
 ### Institutional learnings applied
@@ -111,7 +111,7 @@ None. (Queried open `code-review` issues against every planned file path; no bod
 
 ## Implementation Phases
 
-Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12102-ci-claude-cli-pins/decision-challenges.md` (F1-F4, Ruled by CTO agent, 2026-11-05). Per the brief, CI's required `test` check is the gate; the local runs below are evidence for the rulings' flip conditions, not a substitute gate.
+Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12102-ci-claude-cli-pins/decision-challenges.md` (F1-F7, Ruled by CTO agent, 2026-11-05; F7 is the review-round re-ruling). Per the brief, CI's required `test` check is the gate; the local runs below are evidence for the rulings' flip conditions, not a substitute gate.
 
 ### Phase 0 - Baseline (read-only)
 
@@ -137,6 +137,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 
 ### Phase 3 - pen-cli lock (CTO F3)
 
+- Measured in the review round: SDK 0.3.310 (the version the lock already resolved) already embeds Bun 1.4.4 on linux-x64 (0.3.309 to 0.3.311 all read 1.4.4, 0.3.293 reads 1.4.3). Phase 3 is therefore pair alignment with the hosted image per ruling F3's own rationale, not an advisory fix.
 - 3.1 `plugins/soleur/skills/pencil-setup/scripts/pen-cli/package.json`: add `"@anthropic-ai/claude-agent-sdk": "0.3.311"` to `overrides` (exact, alongside undici/sharp/minimatch).
 - 3.2 Regenerate under the CI-pinned npm: `cd plugins/soleur/skills/pencil-setup/scripts/pen-cli && npx --yes npm@11.21.1 install --package-lock-only --ignore-scripts --no-audit --no-fund`. Expected diff: nine entries (`claude-agent-sdk` plus eight `-darwin/-linux/-win32` platform packages) move 0.3.310 to 0.3.311 with new `resolved`/`integrity`, and the SDK's own `engines.node` `>=18.14.0`; anything else in the diff (a different transitive moving) is a stop-and-inspect.
 - 3.3 Run `engine-contract-probe.sh` against the regenerated lock: `doppler run -p soleur -c dev -- bash plugins/soleur/skills/pencil-setup/scripts/engine-contract-probe.sh` (read-only; credential via Doppler, never printed, no xtrace). If it cannot run, label the lock bump `unverified`, drop Phase 3 from this PR, and say why in the PR body (do not ship an unprobed customer lockfile); the PR still closes #12102 only if the remaining AC items are met, otherwise the issue keeps its open item via `Ref`, never silent.
@@ -152,7 +153,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 - 5.1 PR body (not the title) contains `Closes #12102`, the bundled-Bun statement ("v1.0.236 shipped Bun 1.3.14 and CLI 2.1.284; v1.0.263 ships Bun 1.4.4 and CLI 2.1.311; whether the jobs decode a network Brotli response stays unverified and is moot after the bump"), the canary scratch-run result, the engine-contract-probe result, the `test-pretooluse-hooks` dispatch result, the expected-non-required `claude-code-review` note, and the customer reinstall note. Label `meta/machinery`; semver label per ship (patch).
 - 5.2 Do not push to a PR that is in the merge queue (dequeue via GraphQL `dequeuePullRequest` first). Check each push's real exit code (no `| tail`). `cd` into the worktree before git writes. Do not touch PR 10926 or any other open tracker.
 - 5.3 (amended by F7, review round) The `operator-digest.workflow.yml` pin is bumped IN this PR to the v1.0.263 tag-object SHA after the CTO's three conditions (allowlist covers every command the skill runs; `operator-digest-workflow.test.sh` and the lockstep guard pass; the PR body states the mangling finding and that already-provisioned copies stay on v1.0.101 until re-provisioned). File ONE follow-up issue (labels `domain/engineering`, `type/security`, `deferred-scope-out`, `follow-through`) with two checklist items: a real dispatched run in the private operator-digest repo after re-provisioning completes with no permission-denied tool errors, and a refresh path (or documented manual step) for repositories already scaffolded from the constraint-scaffold template. Net-issue-flow: the PR closes one issue and files one (net 0).
-- 5.4 Registry files (`scripts/ci-pr-affected-audit.accept.tsv`, `suite-durations.tsv`, `suite-shard-legs.tsv`): no new suite or workflow is added, so no rows are expected; if a registry check reds, insert the row in sorted position, never appended.
+- 5.4 Registry files (`scripts/ci-pr-affected-audit.accept.tsv`, `suite-durations.tsv`, `suite-shard-legs.tsv`): the review round added one repo-wide vitest suite (`claude-pin-lockstep.test.ts`, registered in `test/repo-wide-suites.ts` in sorted position) and one follow-through probe script; no `.tsv` registry row was needed; if a registry check reds, insert the row in sorted position, never appended.
 - 5.5 Read the non-required `infra-validation` and `sandbox-canary-capture-gate` runs on the pushed head by hand; required checks are `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`.
 
 ## Files to Edit
@@ -182,8 +183,8 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 
 - [x] `grep -c 'CLI_VERSION: "2.1.311"' .github/workflows/scheduled-marketplace-drift.yml` returns 1 and the file contains no `2.1.228`.
 - [x] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (result recorded in commit a766f83147 and copied into the PR body at ship); the scratch binary reports `Bun v1.4.4` via the corrected probe.
-- [x] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the five files carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
-- [x] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (recorded in commit a766f83147; summarised in the PR body at ship); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
+- [x] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the six carriers (four workflows, the template, the operator-digest asset) carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
+- [x] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the carriers still exists (recorded in commit a766f83147; summarised in the PR body at ship); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
 - [ ] `pen-cli/package.json` `overrides` has the exact `@anthropic-ai/claude-agent-sdk: 0.3.311` entry; the lock shows `node_modules/@anthropic-ai/claude-agent-sdk` and its eight platform packages at 0.3.311, regenerated under npm 11.21.1; `lockfile-sync` is green.
 - [x] `engine-contract-probe.sh` passes against the regenerated lock (145 PASS, 0 FAIL on 2026-11-05; the refreshed transcript is deliberately not committed, the result goes in the PR body).
 - [x] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
@@ -204,7 +205,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** CTO ruled F1-F4 on 2026-11-05 (see decision-challenges.md). Pin-only change on CI and a customer lockfile; no product, marketing, legal, finance or sales implications. No new user-facing surface (Product/UX gate: NONE). No regulated-data surface (GDPR gate not triggered; no data flow added).
+**Assessment:** CTO ruled F1-F7 on 2026-11-05 (see decision-challenges.md). Pin-only change on CI and a customer lockfile; no product, marketing, legal, finance or sales implications. No new user-facing surface (Product/UX gate: NONE). No regulated-data surface (GDPR gate not triggered; no data flow added).
 
 ## Observability
 

@@ -33,6 +33,9 @@ Branch: `feat-one-shot-12102-ci-claude-cli-pins` | Draft PR 12136 | PR body uses
 
 ## Phase 4 - Ship wiring
 
+- 3.5 (review round) Add `apps/web-platform/test/claude-pin-lockstep.test.ts` (carrier discovery, one pair at or above v1.0.263, CLI/Dockerfile/install-line/override/lock agreement), register it, mutation-prove each assertion.
+- 3.6 (review round, F7) Bump `operator-digest.workflow.yml` to v1.0.263 and double-quote its `--allowedTools` value; pin the quoting in `operator-digest-workflow.test.sh`.
+- 3.7 (review round) Dated ADR-182/ADR-191/runbook addenda, Art. 30 pin update, model-launch-review rule alignment, follow-through probe for issue 12146.
 - 4.1 (amended by F7) The operator-digest pin is folded into this PR. File ONE follow-up issue: post-merge dispatched run in the private operator-digest repo, and a constraint-scaffold refresh path. Net 0 against Closes #12102.
 - 4.2 PR body: `Closes #12102`, Brotli statement, canary/probe/dispatch results, expected-non-required `claude-code-review` note, customer reinstall note. Label `meta/machinery`.
 - 4.3 Read non-required `infra-validation` and `sandbox-canary-capture-gate` on the pushed head; required checks: test, lockfile-sync, markdown-lint, tenant-integration-required.
