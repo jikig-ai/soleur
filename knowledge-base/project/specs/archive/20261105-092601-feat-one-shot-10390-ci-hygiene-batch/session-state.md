@@ -119,3 +119,9 @@
 - Merged-head CI new failures: Doppler-CLI install flakes (reran runs 42045321402/42045323465), Terraform validate, build-check (Candidate build), sentry-destroy-required aggregate (investigate plan counts), infra-validate-required (derivative), shard reds (non-required).
 - Required checks green at last verified head: tenant-integration-required, service-role-allowlist-gate, enforce.
 - Remaining: fix tf-validate + sentry-destroy + build-check -> push -> queue -> postmerge verification -> epic status. Operator step: #10136 zot confirmation. Residual #12092.
+
+## Shard-Failure Sweep (2026-11-05)
+- The queued local gate never completed under advisory-lock contention, so ~8 real regressions shipped: constraint-scaffold template/dogfood desync, heartbeat-reconcile ||-arm contradicting designed fail-closed, phantom action_sends columns (created_at/source_ref -> clicked_at), missing ${X:?} env guards, always-on floor, stale c4 render + sentry prose counts, verification-scaffold audit row, 4 printf|grep -q SIGPIPE sites, cryptsetup PRODUCER_JOIN row + PJ_TRIPLES.
+- All fixed in one commit; every named suite re-run green locally (142/82/621/62/3/10 + tsc + eslint + env-refs 0).
+- Lesson recorded: never ship with the affected gate still queued on the advisory lock — wait for the ticket.
+- Remaining: merge poll -> postmerge verification -> epic status. Operator step: #10136 zot confirmation. Residual #12092.
