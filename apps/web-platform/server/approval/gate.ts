@@ -47,7 +47,7 @@ export interface CreateApprovalGateDepsArgs {
   /** `owner/name` of the connected repository, or "" when none is connected. */
   repoSlug: string;
   workspacePath: string;
-  /** The per-session execution grants (created once in agent-runner, shared with the tool builders). */
+  /** The execution grants: one per user message in agent-runner, one per Query in the cc dispatcher; shared with the tool builders. */
   grants: ExecutionGrants;
   /** Test seams. */
   isEnabled?: () => Promise<boolean>;
