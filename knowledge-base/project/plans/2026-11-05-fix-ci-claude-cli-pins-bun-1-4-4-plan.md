@@ -66,7 +66,7 @@ Checked: #12102 (open, labels incl. `follow-through`, `meta/machinery`), #12026 
 
 ### Institutional learnings applied
 - `learnings/security-issues/2026-11-04-a-native-binary-carries-its-own-runtime-and-the-issues-probe-could-not-read-it.md`: use `strings <bin> | grep -m1 -E '^Bun v[0-9]+\.[0-9]+\.[0-9]+'`; a package version does not prove the embedded runtime.
-- `learnings/workflow-patterns/2026-11-03-base-image-cve-bump-is-a-pin-census-not-a-digest-edit.md`: census every pin site; the template copy is the one the brief missed.
+- `learnings/2026-11-03-base-image-cve-bump-is-a-pin-census-not-a-digest-edit.md`: census every pin site; the template copy is the one the brief missed.
 - `learnings/2026-04-18-action-pin-sync-with-model-bump.md`: action SHA pins and `--model` must stay compatible; all four uses pass `--model claude-sonnet-5-5` and v1.0.263 post-dates that model.
 - `learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md` and `workflow-patterns/2026-06-30-update-branch-drifts-lockfiles-and-npm11-pin.md`: regenerate the lock under the CI-pinned npm 11.21.1 (the local npm is 11.20.0), not the operator's npm.
 - `claude-code-action-auth.test.sh` header: the OIDC `id-token: write` / `github_token:` requirement is unchanged across versions; the census suite must stay green.
@@ -104,7 +104,7 @@ None. (Queried open `code-review` issues against every planned file path; no bod
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a customer running the pencil-setup `--auto` install gets a failed or wrong `npm ci` of the headless Pencil engine (design tooling unavailable until fixed), or the maintainers' own PR review and drain automation stops running; no hosted-product surface changes.
+- **If this lands broken, the user experiences:** a customer running the pencil-setup `--auto` install gets a failed or wrong `npm ci` of the headless Pencil engine (design tooling unavailable until fixed), or the maintainers' own PR review and drain automation stops running; no hosted-product surface changes. Only NEW `soleur:constraint-scaffold` installs receive the v1.0.263 template: the script refuses to overwrite an existing artifact, so repositories scaffolded earlier keep v1.0.236 until someone re-emits it (tracked in the follow-up issue).
 - **If this leaks, the user's data is exposed via:** no new exposure vector; nothing here reads or writes user data. The pins reduce an existing risk (a Bun Brotli decoder flaw in runtimes that handle network responses).
 - **Brand-survival threshold:** aggregate pattern
 - **Threshold decision (challengeable):** a bad lockfile would affect every customer installing the engine (a pattern, not one user's data incident), and no tenant data or credential path is touched, so it does not reach single-user incident.
@@ -133,7 +133,7 @@ Technical rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12
 - 2.3 Replace the SHA in `claude-code-review.yml`, `test-pretooluse-hooks.yml`, `scheduled-machinery-drain.yml`, `fix-constraints-stage-a.yml` and `constraint-scaffold/references/fix-constraints-stage-a.template` (one `sed` over exact literal `20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236`; census: `git grep -c` must show zero remaining before and five replacements after). Leave the historical "measured at v1.0.236" comments in `scheduled-machinery-drain.yml` and `claude-code-action-auth.test.sh` as they are (dated measurements).
 - 2.4 Check `knowledge-base/legal/article-30-register.md` (it mentions `scheduled-machinery-drain.yml`): if it cites the pinned version as a current fact, update the number; if it cites it as a dated snapshot, leave it.
 - 2.5 Run `bash plugins/soleur/test/claude-code-action-auth.test.sh`, `bash plugins/soleur/skills/constraint-scaffold/test/parity.test.sh` and the model-launch-review pin-freshness audit (`plugins/soleur/skills/model-launch-review/scripts/audit-models.sh`, section 2 is flag-only) to confirm nothing else reads the old SHA.
-- 2.6 Expected on this PR, non-required: `claude-code-review.yml` cannot validate against the default-branch copy while the PR edits that very file, so the review job is expected to skip/fail workflow validation; record that in the PR body so it is not mistaken for a regression. Real verification of the bumped action is the `workflow_dispatch` of `test-pretooluse-hooks.yml` (manual-only, small API spend) on the pushed branch head, whose result goes in the PR body.
+- 2.6 Expected on this PR, non-required: `claude-code-review.yml` cannot validate against the default-branch copy while the PR edits that very file, so the review job is expected to skip/fail workflow validation; record that in the PR body so it is not mistaken for a regression. A branch dispatch of `test-pretooluse-hooks.yml` is NOT verification: it edits that same file, so the action prints "Skipping action due to workflow validation" and exits 0 without installing the CLI or running any guard test, and the `continue-on-error` step still reports `success` (measured on run 42008804290: only the deterministic F2 telemetry steps ran). It proves at most that the pinned SHA downloads. The real verification is a dispatch on `main` after merge (see the Post-merge criteria).
 
 ### Phase 3 - pen-cli lock (CTO F3)
 
@@ -176,11 +176,11 @@ None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowled
 ### Pre-merge (PR)
 
 - [x] `grep -c 'CLI_VERSION: "2.1.311"' .github/workflows/scheduled-marketplace-drift.yml` returns 1 and the file contains no `2.1.228`.
-- [x] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (output pasted in the PR body); the scratch binary reports `Bun v1.4.4` via the corrected probe.
+- [x] The scratch canary run against CLI 2.1.311 exits 0 with `compared` > 0 and no `installpath_unresolved` (result recorded in commit a766f83147 and copied into the PR body at ship); the scratch binary reports `Bun v1.4.4` via the corrected probe.
 - [x] `git grep -c '20f0b248c5003db4b9ca43c45e17949bcdc36d2d'` outside `knowledge-base/` returns nothing; the five files carry `anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263`.
-- [x] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (noted in the PR body); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
+- [x] The v1.0.236-to-v1.0.263 input diff (plan-time result: identical input lists) shows every `with:` key used in the five files still exists (recorded in commit a766f83147; summarised in the PR body at ship); `claude-code-action-auth.test.sh` and the constraint-scaffold parity test pass.
 - [ ] `pen-cli/package.json` `overrides` has the exact `@anthropic-ai/claude-agent-sdk: 0.3.311` entry; the lock shows `node_modules/@anthropic-ai/claude-agent-sdk` and its eight platform packages at 0.3.311, regenerated under npm 11.21.1; `lockfile-sync` is green.
-- [x] `engine-contract-probe.sh` passes against the regenerated lock (or Phase 3 is dropped with the stated reason and the PR body says so).
+- [x] `engine-contract-probe.sh` passes against the regenerated lock (145 PASS, 0 FAIL on 2026-11-05; the refreshed transcript is deliberately not committed, the result goes in the PR body).
 - [x] `adhoc-npm-install-pin-table.test.ts` passes unchanged (no edit to it is part of the diff).
 - [ ] CI required checks green: `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`; non-required `infra-validation` and `sandbox-canary-capture-gate` read by hand.
 - [ ] PR body contains `Closes #12102`, the Brotli statement, and the customer-reinstall note; label `meta/machinery` applied; follow-up issue for `operator-digest.workflow.yml` filed and referenced.
@@ -189,6 +189,7 @@ None (spec artifacts `decision-challenges.md` and `tasks.md` live under `knowled
 
 - [ ] `bash scripts/followthroughs/ci-claude-cli-pins-bun-12073.sh` with the ambient `gh` token exits 0 (PASS) against `main`.
 - [ ] `gh workflow run scheduled-marketplace-drift.yml` dispatch (CTO F1 production check) completes green on `main`; arm a Monitor on the run id (do not poll in a background shell) and read the canary job's verdict output.
+- [ ] `gh workflow run test-pretooluse-hooks.yml --ref main` completes and its log shows NO "Skipping action due to workflow validation" line and the Test 1-5 guard rows reported PASS by the agent (the only run that exercises v1.0.263; arm a Monitor on the run id, and read the log, not the step `conclusion`, which `continue-on-error` pins to `success`).
 - [ ] #12102 is closed by the merge.
 
 ## Domain Review
@@ -236,7 +237,7 @@ discoverability_test:
 
 - The "pin-table test row" is value-agnostic. Do not add a literal row or a version to the env row to satisfy the brief's wording; that would make every future CLI bump a two-file edit for no added guarantee.
 - `claude_code_version` does not exist as an action input. A plan, PR body, or comment that claims to have "set" it is wrong; the lever is the action SHA.
-- The action SHA convention here is the annotated tag object, not the peeled commit (`8041f1d17e0e7d2f2cfe35002962e9f26237c0bb` for v1.0.263). Mixing forms across the five files would leave `audit-models.sh` (which reads only the first pin it finds) reporting on one form while others differ; use the tag object everywhere and re-resolve it at work time.
+- For `claude-code-action` specifically the pin convention is the annotated tag object, not the peeled commit (`8041f1d17e0e7d2f2cfe35002962e9f26237c0bb` for v1.0.263); the repo's other action pins use peeled commit SHAs, so this is not a repo-wide rule. Mixing forms across the five files would leave `audit-models.sh` (which reads only the first pin it finds) reporting on one form while others differ; use the tag object everywhere and re-resolve it at work time.
 - Local npm is 11.20.0 and CI pins 11.21.1; a lockfile regenerated locally can still fail `lockfile-sync`. Regenerate with `npx --yes npm@11.21.1`.
 - `scheduled-marketplace-drift.yml` steps declare no `shell:` key (errexit-on by default); the edit is a one-token change and must not touch the `set +e` bracket.
 - The follow-through probe reads `main`, so its PASS is only observable after merge; do not claim it passed from the branch.

@@ -99,9 +99,10 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # The job's own contents:read GITHUB_TOKEN, passed explicitly so the
           # action's setupGitHubToken early-returns BEFORE getOidcToken()
-          # (verified at pins 20f0b248 and 3b7e1a45; token.ts byte-identical).
-          # `id-token: write` is DELIBERATELY withheld in this untrusted pull_request context: PR-head code could
-          # mint an OIDC token that Anthropic's app-token exchange upgrades to
+          # (verified at v1.0.263; token.ts identical to v1.0.236).
+          # `id-token: write` is DELIBERATELY withheld in this untrusted
+          # pull_request context: PR-head code could mint an OIDC token that
+          # Anthropic's app-token exchange upgrades to
           # contents:write/pull-requests:write/issues:write — breaking ADR-074.
           github_token: ${{ github.token }}
           # Model pin + action SHA mirror claude-code-review.yml verbatim (CI-validated).

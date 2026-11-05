@@ -161,7 +161,7 @@ Only item 1 is applied by `--fix`. Items 2–6 are reported in the PR body for a
    explicit `UNKNOWN` when `gh` is missing or unauthenticated — an unreachable API is
    never a freshness pass.
 
-   Bump a pin only when a `--model` swap lands in the same workflow (#2540), and only after the CTO ruling on the bump (recorded in the PR body of the PR that carries it). The agent applies the bump by hand after that ruling; `--fix` never does. A pin bump is a supply-chain change and is never applied silently.
+   Bump a pin only when a `--model` swap lands in the same workflow (#2540), and only after the CTO ruling on the bump (recorded in the PR body of the PR that carries it). The agent applies the bump by hand after that ruling; `--fix` never does. A pin bump is a supply-chain change and is never applied silently. The coupling governs this freshness pass; a bump forced by a vulnerability in the action's bundled runtime is a different change, needs no `--model` swap, and still needs the recorded CTO ruling (#12102).
 
 5. **Open a CI-gated PR** under operator identity (`worktree-manager.sh create` + `gh pr create`).
    The PR body lists the model-ID diff plus a **flag section** (pin freshness, pricing drift,

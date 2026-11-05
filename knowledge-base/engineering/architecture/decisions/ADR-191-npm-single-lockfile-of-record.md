@@ -225,3 +225,12 @@ overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside 
 by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
 (`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
 reaches a patched `sharp`; bump it only after a green probe, as for `undici`.
+
+**Addendum 2026-11-05 (#12102): a fourth `overrides` entry, `@anthropic-ai/claude-agent-sdk`.** The engine's own range is
+`@anthropic-ai/claude-agent-sdk ^0.3.293`, and 0.3.310 embeds a Bun below the Brotli-decoder fix (1.4.4). `pen-cli/package.json`
+now overrides the SDK to `0.3.311`, the version the hosted image already ships (CLI 2.1.311 and SDK 0.3.311 are one pair, both
+reading Bun 1.4.4). The pin is inside the engine's declared range, so unlike `sharp` it is not a step outside what upstream
+supports. It is not needed for `npm ci` determinism, because the committed lockfile already fixes the version; its job is to stop a
+later lockfile regeneration floating the SDK back up to whatever the range resolves to. Bump it only together with the hosted
+image's SDK pin and after a green `engine-contract-probe.sh`; drop it when the engine's own range requires an SDK at or above
+the version the hosted image ships.

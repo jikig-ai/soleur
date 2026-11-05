@@ -364,3 +364,9 @@ the mirrored files between a `fetch` and `sync`; and all checkouts share one `la
 cache file, so a checkout on a moving HEAD re-checks once per new commit. Under the opt-in, the hash of a
 local, possibly never-pushed commit goes into the GitHub compare URL; the privacy policy, GDPR policy and
 data-protection disclosure say so.
+
+**Addendum 2026-11-05 (#12102): the canary now installs CLI 2.1.311.** The measurements above are dated and were taken on
+CLI 2.1.228; they were not repeated. What was re-run is the delivery canary itself, against a scratch install of 2.1.311 before
+`CLI_VERSION` moved: `compared=2084 expected=2084`, completeness, integrity and freshness all green, no
+`installpath_unresolved`. That shows the canary still parses this CLI's output and still compares the delivered plugin; it
+does not show the destruction half or the `autoUpdate` behaviour above still hold on 2.1.311.

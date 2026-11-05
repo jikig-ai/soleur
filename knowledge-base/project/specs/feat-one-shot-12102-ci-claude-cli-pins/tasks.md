@@ -22,7 +22,7 @@ Branch: `feat-one-shot-12102-ci-claude-cli-pins` | Draft PR 12136 | PR body uses
 - 2.3 Replace `20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236` in the four workflows and `constraint-scaffold/references/fix-constraints-stage-a.template`.
 - 2.4 Check `knowledge-base/legal/article-30-register.md` for a current-fact mention of the pinned version.
 - 2.5 Run `claude-code-action-auth.test.sh`, constraint-scaffold `parity.test.sh`, `audit-models.sh` section 2.
-- 2.6 Push; dispatch `test-pretooluse-hooks.yml` on the branch; arm a Monitor on the run.
+- 2.6 Push. A branch dispatch of `test-pretooluse-hooks.yml` is skip-masked (the PR edits it) and proves nothing about v1.0.263; the real dispatch is on `main` after merge (Phase 5).
 
 ## Phase 3 - pen-cli lock (CTO F3)
 
@@ -41,5 +41,5 @@ Branch: `feat-one-shot-12102-ci-claude-cli-pins` | Draft PR 12136 | PR body uses
 ## Phase 5 - Post-merge
 
 - 5.1 Probe script with ambient `gh` token exits 0 against `main`.
-- 5.2 `gh workflow run scheduled-marketplace-drift.yml` on `main`; Monitor the run; read the canary verdict.
+- 5.2 `gh workflow run scheduled-marketplace-drift.yml` on `main`; Monitor the run; read the canary verdict. Then `gh workflow run test-pretooluse-hooks.yml --ref main` and confirm from the log (not the step conclusion) that the action was not skipped and the guard rows passed.
 - 5.3 #12102 closed by the merge.
