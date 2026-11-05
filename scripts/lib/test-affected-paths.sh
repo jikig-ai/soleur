@@ -210,6 +210,11 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-errexit-capture"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
+  # #10448 boundary-prefix sweeps .claude/hooks{,/lib} and plugins/soleur/scripts{,/lib}
+  # wholesale (4 dir globs, ~164 files) — a file class scanned wholesale like the ratchets
+  # above. Measured-verdict install (CTO ruling 2026-11-05): 718 ms measured, ~48%
+  # selection rate — the policy's own >25% answer, never an amended bar.
+  "plugins/soleur/test/boundary-prefix.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
