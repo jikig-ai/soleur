@@ -103,11 +103,15 @@ fi
 # BOTH tokens in the SAME row, each with its token boundary: `probe_schema=9( |$)` does not match
 # `probe_schema=9x`, and `data_luks=crypto_LUKS( |$)` is the exact accepting value the ledger's
 # live_verification reads. `data_luks=n/a` (web rows) and `data_luks=__UNREADABLE__` cannot pass.
-ok="$(printf '%s\n' "$mine" | grep -E 'probe_schema=9( |$)' | grep -cE 'data_luks=crypto_LUKS( |$)')"
+# The conjunct is read off the NEWEST schema-9 row, not any row in the window —
+# an hourly emitter overflows the row limit, so an any-row PASS would keep the
+# gate green for days after a replace onto a non-LUKS disk (review P3).
+newest9="$(printf '%s\n' "$mine" | grep -E 'probe_schema=9( |$)' | tail -1)"
+ok="$(printf '%s' "$newest9" | grep -cE 'data_luks=crypto_LUKS( |$)')"
 case "$ok" in ''|*[!0-9]*) ok=0 ;; esac
 
 if [[ "$ok" -gt 0 ]]; then
-  echo "PASS: ${HOST_NAME} emitted ${ok} schema-9 row(s) with data_luks=crypto_LUKS in ${WINDOW}."
+  echo "PASS: ${HOST_NAME}'s newest schema-9 row carries data_luks=crypto_LUKS."
   echo "      #8525's live verdict holds: /mnt/data rides a LUKS container on the serving host."
   exit 0
 fi

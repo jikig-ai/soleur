@@ -113,7 +113,7 @@ epic: 10390
   `spawn-dead-letter.ts` COVERAGE + failure-reason list + triage runbook;
   test battery incl. live-run-must-survive row.
 - [x] 6.6 (#9943) `git-data-cutover.yml` flip preconditions: heartbeat `up`
-  + post-`boot_complete` `state=ok first=1` predicate, refuse
+  + post-`boot_complete` `state=ok` predicate, refuse
   `verdict=liveness_unproven`, unreadable reads refuse closed; update the
   runbook hard item + `git-data-flag-precheck.sh` verdict docs if needed.
 

@@ -90,6 +90,8 @@ export interface StaleSettleResult {
   skipped: number;
   /** Selected rows left for the next tick (the per-tick cap bound the work). */
   deferred: number;
+  /** Rows whose settle threw (poison rows — retried next tick, reported). */
+  failed: number;
 }
 
 /** The Working triple the Today card and the shared settle both use. */
@@ -139,6 +141,7 @@ interface SelectRow extends StaleRow {
 export async function cronAgentSpawnStaleSettleHandler({
   step,
   logger,
+  attempt,
 }: HandlerArgs): Promise<StaleSettleResult> {
   // Step 1: the Working set, filtered stale in-process. "Working" is the
   // `.is(null)` triple the Today card and the shared settle both use; the
@@ -150,6 +153,13 @@ export async function cronAgentSpawnStaleSettleHandler({
     async (): Promise<{ ok: true; rows: StaleRow[] } | { ok: false }> => {
       try {
         const sb = getServiceClient();
+        // created_at < cutoff is a NECESSARY condition for staleness
+        // (current_turn_started_at >= created_at), so it belongs in SQL:
+        // bounds the unindexed Working scan and pins the PostgREST max-rows
+        // truncation to the OLDEST rows, never an arbitrary subset.
+        const cutoffIso = new Date(
+          Date.now() - (FINISH_TIMEOUT_MS + STALE_WORKING_MARGIN_MS),
+        ).toISOString();
         const { data, error } = await sb
           .from("action_sends")
           .select(
@@ -157,7 +167,10 @@ export async function cronAgentSpawnStaleSettleHandler({
           )
           .is("failure_reason", null)
           .is("acknowledged_at", null)
-          .is("undone_at", null);
+          .is("undone_at", null)
+          .lt("created_at", cutoffIso)
+          .order("created_at", { ascending: true })
+          .limit(500);
         if (error) throw error;
         const now = Date.now();
         const stale = ((data ?? []) as SelectRow[])
@@ -187,52 +200,80 @@ export async function cronAgentSpawnStaleSettleHandler({
         logger,
       });
     });
-    return { ok: false, candidates: 0, settled: 0, skipped: 0, deferred: 0 };
+    return { ok: false, candidates: 0, settled: 0, skipped: 0, deferred: 0, failed: 0 };
   }
 
   const rows = selected.rows.slice(0, MAX_SETTLE_PER_TICK);
   const deferred = Math.max(0, selected.rows.length - MAX_SETTLE_PER_TICK);
   let settled = 0;
   let skipped = 0;
+  let failed = 0;
 
   for (const row of rows) {
     // One memoized step per row — the shared settle path, never a new write.
-    const outcome = await settleOrphanedSpawn(
-      step,
-      {
-        actionSendId: row.id,
-        founderId: row.user_id,
-        messageId: row.message_id,
-        // A pending Stop is honoured exactly as the lifecycle path honours it:
-        // cancelled_by_operator reports at warning level and pages no one.
-        stopEligible: true,
-      },
-      0,
-      `settle-stale-${row.id}`,
-    );
+    // Wrapped: a persistently-failing row must not wedge every later stale row
+    // this tick (the sibling caller pages (settle_failed); the sweep reports
+    // and CONTINUES — the poison row retries next tick).
+    let outcome: { wrote: boolean; reason: Parameters<typeof reportSpawnDeadLetter>[0]["reason"] };
+    try {
+      outcome = await settleOrphanedSpawn(
+        step,
+        {
+          actionSendId: row.id,
+          founderId: row.user_id,
+          messageId: row.message_id,
+          // stopEligible FALSE: a live run honouring Stop settles itself via
+          // the lifecycle path, so a row that is stale WITH a pending Stop is a
+          // lost run the Stop never reached — it pages leader_internal_error,
+          // never the warning-level cancelled_by_operator (review P2).
+          stopEligible: false,
+          // Atomic re-verification of the age predicate on the UPDATE itself:
+          // a row freshened by a late-starting run's first turn write between
+          // select and update writes 0 rows instead of settling (TOCTOU).
+          staleBeforeIso: new Date(
+            Date.now() - (FINISH_TIMEOUT_MS + STALE_WORKING_MARGIN_MS),
+          ).toISOString(),
+        },
+        attempt ?? 0,
+        `settle-stale-${row.id}`,
+      );
+    } catch (err) {
+      failed += 1;
+      reportSilentFallback(err instanceof Error ? err : new Error(String(err)), {
+        feature: "spawn-agent",
+        op: "agent-spawn-stale-settle",
+        message: `cron-agent-spawn-stale-settle: settle threw for row ${row.id}`,
+        tags: { reason: "settle_row_failed" },
+        extra: { cron: CRON_NAME, actionSendId: row.id },
+      });
+      continue;
+    }
     if (!outcome.wrote) {
       skipped += 1;
       continue;
     }
     settled += 1;
-    // After the memoized steps so a replay never re-reports (the #8841
-    // convention). reason is leader_internal_error (paged) unless a Stop was
-    // pending (cancelled_by_operator, warning) — the settle decided.
-    reportSpawnDeadLetter({
-      reason: outcome.reason,
-      actionClass: row.action_class ?? "unknown",
-      err: new Error(
-        "spawn row stale on Working past finish-timeout+margin — no Inngest lifecycle event settled it (#8839 backstop)",
-      ),
-      lifecycle: "stale_working",
-      extra: {
-        founderId: row.user_id,
-        messageId: row.message_id,
-        sourceRef: row.source_ref,
-        actionSendId: row.id,
-        currentTurnStartedAt: row.current_turn_started_at,
-        createdAt: row.created_at,
-      },
+    // The report is its own memoized step: on an attempt retry the settle
+    // steps replay wrote:true but this step does NOT re-run its body, so a
+    // memoized report never double-fires (the #8841 convention, extended to
+    // the loop).
+    await step.run(`report-stale-${row.id}`, async () => {
+      reportSpawnDeadLetter({
+        reason: outcome.reason,
+        actionClass: row.action_class ?? "unknown",
+        err: new Error(
+          "spawn row stale on Working past finish-timeout+margin — no Inngest lifecycle event settled it (#8839 backstop)",
+        ),
+        lifecycle: "stale_working",
+        extra: {
+          founderId: row.user_id,
+          messageId: row.message_id,
+          sourceRef: row.source_ref,
+          actionSendId: row.id,
+          currentTurnStartedAt: row.current_turn_started_at,
+          createdAt: row.created_at,
+        },
+      });
     });
   }
 
@@ -245,7 +286,7 @@ export async function cronAgentSpawnStaleSettleHandler({
     });
   });
 
-  return { ok: true, candidates: selected.rows.length, settled, skipped, deferred };
+  return { ok: true, candidates: selected.rows.length, settled, skipped, deferred, failed };
 }
 
 export const cronAgentSpawnStaleSettle = inngest.createFunction(

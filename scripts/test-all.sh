@@ -6077,6 +6077,7 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  run_suite "scripts/inngest-luks-field-8525" bash scripts/followthroughs/inngest-luks-field-8525.test.sh
   # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
   # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would

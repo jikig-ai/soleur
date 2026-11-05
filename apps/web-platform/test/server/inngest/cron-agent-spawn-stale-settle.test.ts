@@ -69,7 +69,19 @@ const db = vi.hoisted(() => ({
 }));
 
 function matches(row: Row, filters: Filter[]): boolean {
-  return filters.every(({ col, val }) => (row as Record<string, unknown>)[col] === val);
+  return filters.every(({ col, op, val }) => {
+    const cell = (row as Record<string, unknown>)[col];
+    if (op === "lt") return String(cell) < String(val);
+    if (op === "or") {
+      // Minimal evaluator for the staleBeforeIso conjunct:
+      // and(current_turn_started_at.is.null,created_at.lt.X) OR
+      // current_turn_started_at.lt.X
+      const iso = String(val).match(/lt\.([^,)]+)/)?.[1] ?? "";
+      const ctsa = row.current_turn_started_at as string | null;
+      return (ctsa == null && String(row.created_at) < iso) || (ctsa != null && ctsa < iso);
+    }
+    return cell === val;
+  });
 }
 
 class FakeQuery {
@@ -93,6 +105,20 @@ class FakeQuery {
   }
   is(col: string, val: unknown) {
     this.filters.push({ col, op: "is", val });
+    return this;
+  }
+  lt(col: string, val: unknown) {
+    this.filters.push({ col, op: "lt", val });
+    return this;
+  }
+  or(expr: string) {
+    this.filters.push({ col: "__or__", op: "or", val: expr });
+    return this;
+  }
+  order(_col: string, _opts?: unknown) {
+    return this;
+  }
+  limit(_n: number) {
     return this;
   }
   maybeSingle() {
@@ -239,15 +265,15 @@ describe("cronAgentSpawnStaleSettleHandler", () => {
     expect(postSentryHeartbeat).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
 
-  it("honours a pending Stop as cancelled_by_operator (warning, no page)", async () => {
+  it("a stale row with a pending Stop settles leader_internal_error (lost run — the Stop never reached it)", async () => {
     vi.setSystemTime(NOW);
     db.rows = [row({ cancellation_requested_at: new Date(NOW - BOUND_MS - 1).toISOString() })];
     const out = await drive();
     const v = out.value as { settled: number };
     expect(v.settled).toBe(1);
-    expect((db.rows[0] as Row).failure_reason).toBe("cancelled_by_operator");
+    expect((db.rows[0] as Row).failure_reason).toBe("leader_internal_error");
     expect(reportSpawnDeadLetter).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cancelled_by_operator", lifecycle: "stale_working" }),
+      expect.objectContaining({ reason: "leader_internal_error", lifecycle: "stale_working" }),
     );
   });
 
