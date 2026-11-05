@@ -43,3 +43,10 @@ Branch: feat-one-shot-11636-cc-github-push-branch. One PR, `fix(approval):` pref
 - 4.3 Check whether any `real-sdk-ask-probe` push-path file changed; add the Guard 1 table row and run the suite with `timeout 580` only if so
 - 4.4 Pre-push token grep must print nothing; commit trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`
 - 4.5 PR body per the plan's Ship Notes (no flag, environment, migration, toggle or legal change; `closingIssuesReferences = []`)
+
+## Progress (implementation agent, Phases 0-2)
+
+- Phase 0 done: baseline 13 files / 307 tests green; `--check-anchors` 228 rows apply.
+- Phase 1 done: all RED tests written first and observed RED for the right reason (missing builder / registrar module); 1.10 (b) lives in `cc-dispatcher-real-factory.test.ts` next to the live factory.
+- Phase 2 done: 2.1 `buildGithubPushBranchTool` + `requireGrant`; 2.2 `server/cc-github-push.ts`; 2.3 dispatcher wiring (grants hoisted, registrar call wrapped in a fail-closed try/catch, `approvalTools`, `platformToolNames`, addendum, per-conversation Map with accessor `getCcRegisteredApprovalTools`, `readCcMcpAllowlist` relaxation); 2.4 three mutant rows `G1-RG1..RG3` killed with `--only`, floors raised for the four census files, `--check-anchors` 231 rows apply.
+- Phase 3 (ADR / C4 / markdown lint) and Phase 4 (probe, PR body) are NOT done here.

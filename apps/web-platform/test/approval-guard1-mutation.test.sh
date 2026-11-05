@@ -471,6 +471,11 @@ M("G1-ST7-grants-required-builder-takes-another-type", GHT, E("export function b
 M("G1-PG1-push-grant-without-a-commit-pushes-head", GHT, E('if (grant.kind === "granted" && !grant.binding.headSha) {', "if (false) {"), T_PUSHG, ["a grant that carries no headSha REFUSES (never pushes HEAD) and is reported as commit_mismatch"])
 M("G1-PG2-push-grant-without-a-commit-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_mismatch");', ""), T_SINK, ["commit_mismatch: a push grant that carries no headSha refuses (never pushes HEAD)"])
 M("G1-PG3-approved-commit-unavailable-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_unavailable");', ""), T_SINK, ["commit_unavailable: the approved commit cannot be pushed"])
+# ---- 12b. cc strict push handler (#11636): `requireGrant` makes a `legacy` (no gate-written grant) outcome a refusal -----------
+K_RG = ["buildGithubPushBranchTool (requireGrant: true, the cc registration) enforcing false + no grant => refused as grant_missing, reported, and pushBranch is NOT called"]
+M("G1-RG1-cc-push-handler-runs-without-a-gate-grant", GHT, E('if (grant.kind === "legacy" && requireGrant) {', "if (false) {"), T_PUSHG, K_RG)
+M("G1-RG2-cc-push-handler-strict-refusal-unreported", GHT, E('reportGrantRefused(toolName, "grant_missing");', ""), T_PUSHG, K_RG)
+M("G1-RG3-grants-required-require-grant-optional", GHT, E("\n  requireGrant: boolean;", "\n  requireGrant?: boolean;"), T_BGR, ["the cc push builder takes a REQUIRED boolean `requireGrant` (a forgotten wiring does not compile)"])
 M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
 M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
 M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
@@ -806,8 +811,8 @@ declare -A FLOOR=(
   ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
   ["test/approval/migration-180-approval-request.test.ts"]=91
-  ["test/approval/tools-census.test.ts"]=18
-  ["test/approval/runner-census.test.ts"]=10
+  ["test/approval/tools-census.test.ts"]=32
+  ["test/approval/runner-census.test.ts"]=17
   ["test/approval/flag.test.ts"]=5
   ["test/approval/decide-boundary.test.ts"]=52
   ["test/approval/render.test.ts"]=44
@@ -817,13 +822,13 @@ declare -A FLOOR=(
   ["test/approval/execution-grant-handlers.test.ts"]=10
   ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=7
+  ["test/github-tools-push-grant.test.ts"]=15
   ["test/push-branch-pinned.test.ts"]=4
   ["test/approval/gate-deps.test.ts"]=29
   ["test/approval/approval-ops-real-sink.test.ts"]=13
   ["test/approval/ops-sink.test.ts"]=37
   ["test/approval/gate-flow-payload.test.ts"]=4
-  ["test/approval/builder-grants-required.test.ts"]=9
+  ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
 )

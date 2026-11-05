@@ -306,6 +306,11 @@ import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { isApprovalRequiredTool } from "./approval/tools";
 import { createApprovalGateDeps } from "./approval/gate";
 import { ExecutionGrants } from "./approval/grants";
+import {
+  CC_GRANT_WIRED_APPROVAL_TOOLS,
+  CC_PUSH_PROMPT_ADDENDUM,
+  resolveCcGithubPushRegistration,
+} from "./cc-github-push";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -318,9 +323,13 @@ import { ExecutionGrants } from "./approval/grants";
  * whitespace-only env. Throws a plain Error if any short-name in the env
  * resolves to (a) a member of `CC_ROUTER_TIER3_DENYLIST` (the 3 Plausible
  * tools — cross-tenant credentials by construction), or (b) an
- * approval-required tool (`isApprovalRequiredTool`; ADR-309: no cc tool builder
- * is wired to the execution grants, so a promoted approval tool could not be
- * bound to an approval). Phase 1 does NOT yet build a populated
+ * approval-required tool (`isApprovalRequiredTool`; ADR-309: a promoted approval
+ * tool could not be bound to an approval unless a cc builder is wired to the
+ * execution grants). The ONE exception is `CC_GRANT_WIRED_APPROVAL_TOOLS`
+ * (`github_push_branch`, #11636): it is registered through the gated registrar in
+ * `cc-github-push.ts`, never through this env route (this function still returns
+ * `{}`), so naming it here is accepted; every other approval-required name, in any
+ * position of a mixed list, still throws. Phase 1 does NOT yet build a populated
  * `soleur_platform` server even when valid names are present — promotion is
  * Phase 2 (#3722).
  *
@@ -349,12 +358,12 @@ export function readCcMcpAllowlist(
         `CC_MCP_ALLOWLIST contains permanent Tier 3 denylist tool "${name}" — see CC_ROUTER_TIER3_DENYLIST in tool-tiers.ts`,
       );
     }
-    // No cc tool builder is wired to the execution grants (the gate and the grants object exist on this path, but nothing
-    // reads a grant), so a promoted approval tool could not be bound to an approval. Refuse it here as the backstop
-    // (static message; the short name is the only env echo).
-    if (isApprovalRequiredTool(fqn)) {
+    // Only the grant-wired tool has a cc builder that reads a grant (and it registers through the gated registrar, not this
+    // route), so a promoted approval tool could not otherwise be bound to an approval. Refuse every OTHER approval-required
+    // name here as the backstop (static message; the short name is the only env echo). The denylist check above stays first.
+    if (isApprovalRequiredTool(fqn) && !(CC_GRANT_WIRED_APPROVAL_TOOLS as readonly string[]).includes(fqn)) {
       throw new Error(
-        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — no cc tool builder is wired to execution grants (ADR-309)`,
+        `CC_MCP_ALLOWLIST contains approval-required tool "${name}" — this tool has no grant-wired cc builder (ADR-309)`,
       );
     }
   }
@@ -1391,6 +1400,19 @@ function makeAckPostureKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
 }
 
+// #11636 — the approval-required platform tool FQNs the factory registered for each live conversation (the push tool, when
+// its registrar said yes). Written by `realSdkQueryFactory` (cold build only) and consulted by the `onToolUse`
+// unregistered-tool mirror on warm turns, where the factory does not run: a registered push call must not false-positive as
+// an "unregistered platform tool". NEVER an input to `canUseTool`'s `platformToolNames` (that list comes from the registrar's
+// result at build time). Deleted at the START of every cold build and set only once the Query is about to be built; drained
+// at the same sites as `_ccAutonomousAckPosture` (close hook, factory throw, test reset).
+const _ccRegisteredApprovalTools = new Map<string, readonly string[]>();
+
+/** The approval-required FQNs registered for this conversation's live Query (empty when none). Exported for the warm-path mirror and tests. */
+export function getCcRegisteredApprovalTools(userId: string, conversationId: string): readonly string[] {
+  return _ccRegisteredApprovalTools.get(makeAckPostureKey(userId, conversationId)) ?? [];
+}
+
 // #10455 (a) — which seccomp artifact each live conversation's sandbox config is PAIRED with, so the classified
 // bash-tool-result mirror event can carry it (the only seccompArtifact surface that reaches Sentry / Better Stack).
 // The factory (`realSdkQueryFactory`) and the tool_result observer (`dispatchSoleurGo`) are different scopes, hence a
@@ -1773,6 +1795,7 @@ export function cleanupCcBashGatesForConversation(
   // conversation (and a reused conversationId can't inherit a prior ack).
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
   _ccSeccompArtifact.delete(makeAckPostureKey(userId, conversationId));
+  _ccRegisteredApprovalTools.delete(makeAckPostureKey(userId, conversationId));
 }
 
 /**
@@ -1861,18 +1884,22 @@ export function handleCcCloseQuery({
 
 /**
  * Tool list passed to the soleur_platform `createSdkMcpServer`. Narration,
- * then c4, then crm_* only when `crmLead` is true. `userId` stays in the
+ * then c4, then the gated push tool (only when its registrar registered it),
+ * then crm_* only when `crmLead` is true. `userId` stays in the
  * builder closure — it is not a schema key.
  */
 export function soleurPlatformToolsForTests(args: {
   userId: string;
   crmLead: boolean;
   c4Tools?: readonly { name: string }[];
+  /** #11636: the gated registrar's tools (the push tool), placed after `c4Tools`. Absent or empty => identical output. */
+  approvalTools?: readonly { name: string }[];
 }): { name: string }[] {
   const narration = buildNarrationTools({ userId: args.userId });
   const c4 = args.c4Tools ?? [];
+  const approval = args.approvalTools ?? [];
   const crm = args.crmLead ? buildCrmTools({ userId: args.userId }) : [];
-  return [...narration, ...c4, ...crm];
+  return [...narration, ...c4, ...approval, ...crm];
 }
 
 /** FQNs canUseTool will tier. Empty unless this dispatch is a crm-lead chat.
@@ -2600,9 +2627,22 @@ export const realSdkQueryFactory: QueryFactory = async (
   // tool input — so the agent cannot redirect the commit. Gated by the
   // c4-visualizer flag resolved against the dispatch user's real role (the
   // dev-cohort segment), fail-closed: any resolution error → no write tool.
+  // One grants object per factory invocation, i.e. per Query (never module scope: it must not leak across users or
+  // Queries). Sticky `enforcing` therefore spans every turn of this Query. See the ADR-309 addendum. Constructed HERE, above
+  // the tool build (#11636), because the gated push registrar below takes the SAME object the gate deps are built from
+  // (`createApprovalGateDeps({... grants: approvalGrants})` in `ccDeps`): a handler that consulted another object than the
+  // one the gate writes to would never see a grant.
+  const approvalGrants = new ExecutionGrants();
+  const connectedRepoSlug = connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "";
+  // #11636 — forget a stale published set from an unclean earlier build of this conversation before deciding afresh.
+  _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
   const c4McpServers = readCcMcpAllowlist();
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
+  // #11636 — the gated `github_push_branch` registration (flag + entitlement + repo + installation + non-support persona).
+  let approvalTools: readonly { name: string }[] = [];
+  let approvalToolNames: readonly string[] = [];
+  let pushPromptAddendum: string | undefined;
   {
     // feat-reasoning-chat-boxes (#5370): the `soleur_platform` server is now
     // built UNCONDITIONALLY so the always-on narrate/summarize tools are
@@ -2706,6 +2746,42 @@ export const realSdkQueryFactory: QueryFactory = async (
         c4ToolName = C4_TOOL_FQN;
         c4PromptAddendum = C4_PROMPT_ADDENDUM;
       }
+
+      // #11636 (ADR-309 addendum): the approval-gated push tool, registered through its own module so the decision (flag,
+      // entitlement, persona, repo, installation, default-branch lookup) and its machine reason live in one place. Dark by
+      // construction: with any condition false `approvalTools` stays empty and every list below is byte-identical to a build
+      // without it. `grants` is the one per-Query object the gate deps below are built from; `workspaceId` is the active
+      // workspace id this factory resolved ONCE (a const, never reassigned), the same id the gate binds.
+      try {
+        const pushRegistration = await resolveCcGithubPushRegistration({
+          userId: args.userId,
+          workspaceId: activeWorkspaceId,
+          persona: args.persona,
+          owner,
+          repo,
+          installationId: effectiveInstallationId,
+          workspacePath,
+          webEgressEntitled,
+          grants: approvalGrants,
+        });
+        if (pushRegistration.registered) {
+          approvalTools = pushRegistration.tools;
+          approvalToolNames = pushRegistration.toolNames;
+          pushPromptAddendum = CC_PUSH_PROMPT_ADDENDUM;
+        }
+      } catch (err) {
+        // Fail closed AND visible: a defect in the optional push registration (its own checks are already fail-closed) must
+        // never break the Concierge's Query construction, and must never leave a half-registered tool.
+        approvalTools = [];
+        approvalToolNames = [];
+        pushPromptAddendum = undefined;
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "cc-push-registration-failed",
+          extra: { userId: args.userId },
+          message: "cc github_push_branch registration threw; tool not registered",
+        });
+      }
     }
 
     const platformServer = createSdkMcpServer({
@@ -2717,6 +2793,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         userId: args.userId,
         crmLead: args.crmLead === true,
         c4Tools,
+        approvalTools,
       }) as NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>,
     });
     (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
@@ -2785,6 +2862,10 @@ export const realSdkQueryFactory: QueryFactory = async (
   // prompt sections so the model isn't told about a tool it cannot call.
   if (c4PromptAddendum) {
     effectiveSystemPrompt += `\n\n${c4PromptAddendum}`;
+  }
+  // #11636: likewise for the gated push tool: advertised only when the registrar registered it.
+  if (pushPromptAddendum) {
+    effectiveSystemPrompt += `\n\n${pushPromptAddendum}`;
   }
   // Routines "Draft a routine" tab (#5402): scope the agent to routine
   // authoring (create = propose-as-PR; run/verify existing = gated routine_run).
@@ -2896,11 +2977,6 @@ export const realSdkQueryFactory: QueryFactory = async (
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
     gitAskpassScriptPath = writeAskpassScriptTo(askpassDir, ".soleur-askpass.sh");
   }
-
-  // One grants object per factory invocation, i.e. per Query (never module scope: it must not leak across users or
-  // Queries). Sticky `enforcing` therefore spans every turn of this Query. See the ADR-309 addendum.
-  const approvalGrants = new ExecutionGrants();
-  const connectedRepoSlug = connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "";
 
   const ccDeps: CanUseToolDeps = {
     abortableReviewGate: (
@@ -3056,6 +3132,12 @@ export const realSdkQueryFactory: QueryFactory = async (
       );
     },
   };
+
+  // #11636: publish the registered approval-tool set for the warm-path mirror, only now that the registrar succeeded and the
+  // Query is about to be built; an empty set leaves the key absent (deleted above), and a throw below drains it.
+  if (approvalToolNames.length > 0) {
+    _ccRegisteredApprovalTools.set(makeAckPostureKey(args.userId, args.conversationId), approvalToolNames);
+  }
 
   try {
     // Build SDK options through the shared `buildAgentQueryOptions`
@@ -3326,6 +3408,9 @@ export const realSdkQueryFactory: QueryFactory = async (
           // is auto-approve; writeC4Diagram enforces the diagrams-dir scope).
           platformToolNames: [
             ...(c4ToolName ? [c4ToolName] : []),
+            // #11636: ONLY the registrar's result (never a separate re-resolve). The tier map keeps it gated, so `canUseTool`
+            // routes it to the approval gate; it never enters `allowedTools`.
+            ...approvalToolNames,
             ...crmLeadPermissionToolNames(args.crmLead === true),
           ],
           pluginMcpServerNames: [],
@@ -3378,6 +3463,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // No-op when the ack posture was never registered (e.g. threw before line ~1734).
     _ccAutonomousAckPosture.delete(makeAckPostureKey(args.userId, args.conversationId));
     _ccSeccompArtifact.delete(makeAckPostureKey(args.userId, args.conversationId));
+    // #11636 — same leak class: the published registered-approval-tool set belongs to a Query that never entered `activeQueries`.
+    _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
@@ -4676,7 +4763,14 @@ async function dispatchSoleurGoInner(
       // the c4 FQN when eligible this dispatch), NOT the c4-less module constant —
       // otherwise a legitimate edit_c4_diagram call false-positives. The cell is
       // resolved cold+warm above (see `registeredPlatformToolNames`).
-      if (shouldMirrorUnregisteredPlatformToolUse(block.name, registeredPlatformToolNames)) {
+      // #11636: the third source is the set the cold factory published for this conversation (the gated push tool); the
+      // factory does not run on a warm turn, and the per-dispatch re-resolve above knows nothing about it.
+      if (
+        shouldMirrorUnregisteredPlatformToolUse(block.name, [
+          ...registeredPlatformToolNames,
+          ...getCcRegisteredApprovalTools(userId, conversationId),
+        ])
+      ) {
         const safeToolName = sanitizeToolNameForLog(block.name);
         mirrorWithDebounce(
           null,
@@ -5455,6 +5549,7 @@ export function __resetDispatcherForTests(): void {
   _ccBashGates.clear();
   _ccAutonomousAckPosture.clear();
   _ccSeccompArtifact.clear();
+  _ccRegisteredApprovalTools.clear();
   // Held worktree-lease records registered via the
   // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.
   _ccWorktreeLeases.clear();
