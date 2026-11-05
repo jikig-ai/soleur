@@ -84,8 +84,9 @@
 #       -target on an address with no configuration plans its DELETE), remove them in a later PR (the #11631 then #11672
 #       sequence). The deletion plan shows 2 destroyed and needs a standalone [ack-destroy] line in the merge commit.
 #   (3) tests/scripts/test-infra-privileged-tier-census.sh: add the two logtail addresses to INTENDED_DESTROYS for that
-#       window, remove them with the targets; re-run apps/web-platform/infra/betterstack-alert-structure.test.sh rows 21-22
-#       (they tolerate a bare -target only for a listed address; whether they accept a logtail_* row is unverified today).
+#       window, remove them with the targets. VERIFIED 2026-11-05 in a scratch worktree: without the entries the structure
+#       suite's apply-parity row rejects the bare logtail targets; with them it and the census pass.
+#   (3b) apps/web-platform/infra/betterstack-alert-structure.test.sh: CENSUS_FLOOR_ALERTS and CENSUS_FLOOR_EXPLORATIONS 19 -> 18.
 #   (4) apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh: EXPECT_BLOCKS 19 -> 18 and re-derive MIN_PASSES.
 #   (5) apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh: count == 19 -> 18 and its comment list.
 #   (6) apps/web-platform/test/infra/egress-gw-alert.test.sh: delete the G2b canary block and its mutation rows; re-derive

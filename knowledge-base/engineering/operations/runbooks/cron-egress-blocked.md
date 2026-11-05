@@ -974,8 +974,11 @@ their two `-target` lines in `apply-web-platform-infra.yml` for one apply (a bar
 `-target` on an address with no configuration plans its DELETE), and put
 `[ack-destroy]` on its own line in the merge commit (the plan shows 2 destroyed). Move
 `EXPECT_BLOCKS` 19 to 18 in `logs-alert-query-period-ceiling.test.sh`, the `== 19`
-anchor to 18 in `betterstack-send-failed-alert-mutation.test.sh`, and drop the G2b block
-and rows from `egress-gw-alert.test.sh`; a later PR removes the two `-target` lines. The
+anchor to 18 in `betterstack-send-failed-alert-mutation.test.sh`, both census floors 19 to 18 in
+`betterstack-alert-structure.test.sh`, add the two canary addresses to `INTENDED_DESTROYS` in
+`tests/scripts/test-infra-privileged-tier-census.sh` (without them the structure suite rejects the
+bare targets; checked in a scratch worktree), and drop the G2b block and rows from
+`egress-gw-alert.test.sh`; a later PR removes the two `-target` lines and the census entries. The
 full site list is the `RETIREMENT:` line in the probe header.
 
 **Decode ladder:**
