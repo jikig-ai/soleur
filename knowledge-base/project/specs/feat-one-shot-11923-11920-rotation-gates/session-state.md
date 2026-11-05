@@ -34,3 +34,4 @@
 - Review: BLOCKED→fixed. P1-1 !cancelled() plan-path + evaluator revert; P1-2 rebased onto main. P2-1 content-level env verify; P2-2 inngest envverify step; P2-3 previous_not_staged. Fix-round: second P1 (approve-failure leaking to reboot/apply2/redeploy) fixed + approve-fails matrix rows. HEAD=5ef3082cd8 pushed.
 - Suites: key-rotate 639/0, inngest 478/0, ci-deploy 743/0, parity 360-tests/365-pass, c4 35/0.
 - Next: soleur:qa -> soleur:compound -> soleur:ship -> postmerge -> DONE.
+- QA: skipped per qa/SKILL.md rule — Test Scenarios are prose-only G/W/T (no Browser:/API verify: steps); covered by executed suites + post-merge live checks (env protection_rules, first restart vector dispatch, PREVIOUS empty post-clear).
