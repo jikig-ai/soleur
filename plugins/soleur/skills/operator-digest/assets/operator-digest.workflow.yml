@@ -63,9 +63,12 @@ jobs:
           plugins: 'soleur@soleur-marketplace'
           # The allowlist deliberately OMITS `gh issue create`: the agent CANNOT post.
           # It may read PRs/issues and git log, and write files (digest.md) only.
+          # The value is QUOTED on purpose: the action tokenises claude_args like a shell, so an
+          # unquoted `Bash(gh pr list:*)` is split at its spaces on every release (and on v1.0.101
+          # the parentheses were dropped too, widening the rule to bare `Bash`).
           claude_args: >-
             --max-turns 30
-            --allowedTools Write,Read,Glob,Grep,Bash(date:*),Bash(ls:*),Bash(gh pr list:*),Bash(gh issue list:*),Bash(git log:*)
+            --allowedTools "Write,Read,Glob,Grep,Bash(date:*),Bash(ls:*),Bash(gh pr list:*),Bash(gh issue list:*),Bash(git log:*)"
           prompt: |
             Run /soleur:operator-digest on the checked-out jikig-ai/soleur repository.
             Read the six sources, synthesize the six plain-language sections, and write the

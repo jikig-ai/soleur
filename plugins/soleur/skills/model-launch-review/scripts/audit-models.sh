@@ -358,7 +358,7 @@ if [[ ${#pins[@]} -gt 0 ]]; then
   else
     echo "    pin freshness: UNKNOWN (gh not on PATH) — NOT a freshness pass."
   fi
-  echo "    bump a pin ONLY when coupled to a --model swap in the same workflow (#2540 invariant)."
+  echo "    bump a pin ONLY when coupled to a --model swap in the same workflow (#2540 invariant), or when a CTO ruling links a vulnerability in the action's bundled runtime (#12102)."
 else
   echo "  no claude-code-action pins under .github (or scanning a test root)."
 fi

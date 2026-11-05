@@ -227,7 +227,7 @@ by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screensho
 reaches a patched `sharp`; bump it only after a green probe, as for `undici`.
 
 **Addendum 2026-11-05 (#12102): a fourth `overrides` entry, `@anthropic-ai/claude-agent-sdk`.** The engine's own range is
-`@anthropic-ai/claude-agent-sdk ^0.3.293`, and 0.3.310 embeds a Bun below the Brotli-decoder fix (1.4.4). `pen-cli/package.json`
+`@anthropic-ai/claude-agent-sdk ^0.3.293`. The lock already resolved 0.3.310, which embeds Bun 1.4.4 too (measured on the linux-x64 package: 0.3.309 to 0.3.311 all read 1.4.4, 0.3.293 reads 1.4.3), so this is pair alignment with the hosted image, not an advisory fix; the lockstep guard `apps/web-platform/test/claude-pin-lockstep.test.ts` carries the Bun reading across by version equality. `pen-cli/package.json`
 now overrides the SDK to `0.3.311`, the version the hosted image already ships (CLI 2.1.311 and SDK 0.3.311 are one pair, both
 reading Bun 1.4.4). The pin is inside the engine's declared range, so unlike `sharp` it is not a step outside what upstream
 supports. It is not needed for `npm ci` determinism, because the committed lockfile already fixes the version; its job is to stop a

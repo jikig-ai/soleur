@@ -69,6 +69,8 @@ assert "plugins id targets the soleur-marketplace entry" \
 CODE="$(grep -vE '^[[:space:]]*#' "$WF")"
 
 # Agent allowlist grants Write (the agent writes digest.md).
+assert "--allowedTools value is double-quoted (spaced Bash(...) rules survive claude_args tokenising)" \
+  '--allowedTools[[:space:]]+"[^"]*Bash\(gh pr list:\*\)[^"]*Bash\(gh issue list:\*\)[^"]*Bash\(git log:\*\)[^"]*"'
 if printf '%s\n' "$CODE" | grep -E 'allowedTools' | grep -cE >/dev/null '\bWrite\b'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: --allowedTools must contain Write" >&2; fi
 
