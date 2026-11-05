@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-models.sh — deterministic auditor for the per-Anthropic-model-release checklist.
+# audit-models.sh — deterministic auditor for the Anthropic side of the per-model-release checklist (xAI item 6 and Devin item 7 are agent-run, not in this script).
 #
 # Modes:
 #   (default)   full audit report to stdout; every check group is named (no silent green).
@@ -457,6 +457,8 @@ echo "  - tier-map: re-check cron model literals + ADR-053 / plugins/soleur/AGEN
 echo "    (workflow-model-pins.test.ts PIN_ALLOWLIST is a don't-mutate invariant, not a pricing surface.)"
 echo "  - dormant: gh issue list --state open -L 200 --search 'deferred model OR pricing'"
 echo "  - grok tier-map (item 6, agent-run): compare 'grok models' + docs.x.ai against TIER_MAPS.grok."
+echo "  - devin subagent-model freshness (item 7, agent-run): compare 'devin models'"
+echo "    against Devin slugs Soleur references (no TIER_MAPS.devin row by design)."
 echo "  - thinking-API shape: the REQUEST side sets no thinking params, but the CLI applies each"
 echo "    model row's default_effort: re-decide AUDIT_EFFORT (apps/web-platform/server/inngest/"
 echo "    model-tiers.ts) and update REVIEWED_DEFAULT_EFFORT in claude-cli-pin-knows-models.test.ts (#8603)."

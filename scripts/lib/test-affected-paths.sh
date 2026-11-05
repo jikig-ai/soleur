@@ -780,6 +780,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/server/agent-runner-sandbox-config.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-flow.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-types.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/ops.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/tools.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-classifier.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-lane.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
