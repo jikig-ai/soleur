@@ -52,10 +52,10 @@ Cleanup after the merged constraint-scaffold pair PR (#12177, squash `04fc68d782
 
 ### Premise Validation (Phase 0.6)
 
-- Cited trackers #12155, #10865, #10859, #12129: all OPEN. #12146 CLOSED. PRs #12153 and #12149 OPEN (both touch the accept TSV). #12160 is an OPEN PR (owner-run merge freeze), not an issue.
+- Cited trackers #12155, #10865, #10859, #12129: all OPEN. #12146 CLOSED. #12153 was OPEN at plan time and #12149 has since merged (both touch the accept TSV). #12160 is an OPEN issue (owner-run merge freeze), not a PR.
 - **Stale premise, item 1.** Merge-group ratchet runs at `04fc68d782` (run 42118698053) and `4542477be1` (run 42127357840) printed `live=12` (11 pair-PR pairs plus `cloudflare-readonly.test.sh` to `seo-config-rules.tf`). The run at `cffdf2705a` (run 42168400997, job 127730192388) printed `SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=2`. The two are `plugins/soleur/test/terraform-target-parity.test.ts:4583` to `.github/workflows/build-inngest-bootstrap-image.yml` and `scripts/lint-gh-dedupe-shape.test.sh:733` to `.github/workflows/scheduled-zot-restart-loop.yml`. PR #12212 declared exactly those two edges and **merged at 07:52:55Z (`511db9f84f`)**; the merge_group ratchet runs for #12212 and for #12149 then printed `exit=0 reason=pass live=0 baseline=0`. The brief's "13 findings, other 2 = cloudflare-readonly and real-sdk-ask-probe" matches none of the current verdicts.
 - **Local confirmation.** `python3 -I scripts/ci-pr-affected-replay.py ratchet` from this worktree (HEAD = main `cffdf2705a` + init commit) took 8m05s and printed `live=2`, same two pairs. The CTO's `audit --accept scripts/ci-pr-affected-audit.accept.tsv` read `gap_suites=2 gap_refs=2 accepted=1579 stale=0`; a plain `audit` without `--accept` prints `accepted=0` and says nothing about stale rows.
-- **Sort order.** The accept TSV is sorted by (suite, path). Seven adjacent inversions already exist (lines 626/627, 637/638, 974/975, 1029/1030, 1084/1085, 3029/3030, 3048/3049), including the split of the generator / emit-fix-constraints rows across the two refresh-stage-a blocks. `load_accept` (`scripts/ci-pr-affected-replay.py`:1487) merges rows into a dict per suite and rejects only duplicate (suite, path, anchor, ordinal) tuples; no test enforces order. The split is cosmetic and is left alone to avoid conflicts with #12153 / #12149.
+- **Sort order.** The accept TSV is sorted by (suite, path). Seven adjacent inversions already exist (line numbers as of `cffdf2705a`: 626/627, 637/638, 974/975, 1029/1030, 1084/1085, 3029/3030, 3048/3049), including the split of the generator / emit-fix-constraints rows across the two refresh-stage-a blocks. `load_accept` (`scripts/ci-pr-affected-replay.py`:1487) merges rows into a dict per suite and rejects only duplicate (suite, path, anchor, ordinal) tuples; no test enforces order. The split is cosmetic and is left alone to avoid conflicts with #12153 / #12149.
 - **Stale premise, item 3.** `plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh` line 51 defines `[github_token]` (`ghp|gho|ghu|ghs|ghr` and `github_pat_`) and is in `SECRET_ORDER`. The workflow asset checks out with `persist-credentials: false` (line 49, pinned by `plugins/soleur/test/operator-digest-workflow.test.sh`:52). The half that holds: `anthropics/claude-code-action` v1.0.263 (pinned SHA `3b7e1a45ca6f231c62605aabcf79e6a41b08c7da`), `src/github/operations/git-config.ts` lines 132-133, runs `git remote set-url origin https://x-access-token:${githubToken}@...` unless `ALLOWED_NON_WRITE_USERS` is set, so the job's short-lived `GITHUB_TOKEN` is in `.git/config` during the agent step.
 - **Collision pre-check** (state at deepen time: #12212 and #12149 MERGED, #12153 OPEN, #12217 draft OPEN) (`collision-precheck.sh`, exit 10 on #12155 / #10865 / #12129): open PR #12217 (`feat-one-shot-10865-constraint-scaffold-pairs`, a draft with only an init commit and a live `test-all.sh` in its worktree) names #10865 and is plausibly a parallel run of the same stale brief; open PR #12212 names #10865 and owns the two live pairs. This plan edits neither the accept TSV nor `test-affected-paths.sh`, so it cannot conflict with either; the work phase must still re-run the pre-check and report the hit.
 
@@ -132,11 +132,11 @@ Ruled: do not file. Record the flip criterion in `decision-challenges.md` so a f
 
 ### Phase 4: PR body and final report content
 
-- PR body: `Ref #12155`, `Ref #10865`, `Ref #10859`, `Ref #12129` (never `Closes`); a Changelog line (`semver:patch`, plugin docs only). State that item 1 was found already resolved and name `cffdf2705a`, and that #12212 owns the remaining two pairs. Do not file a new tracker.
+- PR body: `Ref #12155`, `Ref #10865`, `Ref #10859`, `Ref #12129` (never `Closes`); a Changelog line (`semver:patch`, plugin docs only). State that item 1 was found already resolved and name `cffdf2705a`, and that #12212 (merged) owned the remaining two pairs. Do not file a new tracker.
 - Final-report unresolved notes (carry verbatim):
   - Better Stack incident `soleur-egress-gw-probe-silent-prd` (id 1047829421) still open; API `started_at` 2026-11-05T17:15Z versus the brief's 2026-10-12, unexplained, out of scope. Not independently re-queried by the planner.
   - Issues 2737, 12008, 12007, 12006 untouched (all OPEN as of 2026-11-06).
-  - The `rf-window-hold` owner-run merge freeze (#12160, an OPEN PR) did not block the pair PR.
+  - The `rf-window-hold` owner-run merge freeze (#12160, an OPEN issue) did not block the pair PR.
   - Review trailers on the pair PR: see "Pair PR review-trailer check" above; report the nuanced finding.
   - The feature-tweet gate did not apply to the pair PR (it carried only `semver:patch`, no `app:web-platform` label); this PR is likewise plugin-docs only.
   - Collision: open draft PR #12217 (`feat-one-shot-10865-constraint-scaffold-pairs`) overlaps the brief's topic.
@@ -177,7 +177,7 @@ None. Queried open `code-review` issues for `work-test-harness-sharp-edges` and 
 
 ### Pre-merge (PR)
 
-- [ ] The diff is limited to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md` plus `knowledge-base/project/{plans,specs}/` artifacts (`git diff --name-only origin/main...HEAD`); the accept TSV, `test-affected-paths.sh`, SKILL.md, the budget JSON and `claude-pin-lockstep.test.ts` are absent from it.
+- [ ] The diff is limited to `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md` plus `knowledge-base/project/{plans,specs,learnings}/` artifacts (`git diff --name-only origin/main...HEAD`); the accept TSV, `test-affected-paths.sh`, SKILL.md, the budget JSON and `claude-pin-lockstep.test.ts` are absent from it.
 - [ ] The extended bullet contains the strings `DEFERRED dir`, `PROMOTED_FILES` and `MAX_DEFERRED` (here-string `grep`, no bare pipe into `grep -q`).
 - [ ] `python3 scripts/lint-skill-body-budget.py --base origin/main` exits 0.
 - [ ] The newest executed `affected-index-ratchet` log shows no verdict naming a `constraint-scaffold/test/*.test.sh` suite and no `stale-accept` / `star-row` verdict (the log lines are quoted in the PR body).
@@ -207,7 +207,7 @@ None. Queried open `code-review` issues for `work-test-harness-sharp-edges` and 
 ## References
 
 - Pair PR: #12177 (`04fc68d782`); tracker #12146 (CLOSED)
-- Ratchet repair on main: `cffdf2705a` (#12166); open repair PR #12212 (two live pairs); parallel draft #12217
+- Ratchet repair on main: `cffdf2705a` (#12166); repair PR #12212 (merged; it declared the two live pairs); parallel draft #12217
 - Runbook: `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` section 7
 - Budget lint: `scripts/lint-skill-body-budget.py`, `plugins/soleur/test/skill-body-budget.json` (work = 359189, file = 359177)
 - CTO rulings: `knowledge-base/project/specs/feat-one-shot-bun-pair-ratchet-accept-cleanup/decision-challenges.md`
