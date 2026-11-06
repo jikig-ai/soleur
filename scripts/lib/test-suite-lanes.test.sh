@@ -212,49 +212,47 @@ else
   fail "empty-token overrides '$(tr '\n' ' ' <<<"$empty_labels")' != replay arms '$(tr '\n' ' ' <<<"$arm_labels")'"
 fi
 
-# 7. Start-first order of the replay arms (#12013). Registration order IS start order: the pool starts a suite as the
-#    registration stream reaches it, and a queued `*` suite blocks every later registration, so arms registered late
-#    start late (they were at rows 113-115 of 160, behind the `*` suite, and ended the run). Over the runner's REAL raw
-#    registration stream (--enumerate-commands all, not the label-deduplicated map): each arm appears exactly once, the
-#    bare suite path appears zero times, each arm's 1-based row is at most the pool width, and no row before the last
-#    arm carries a `*` token. Nothing is asserted about any other suite, the total, or the --rows ranges (the totality
-#    suite tiles those and ci-oracle-lane compares each arm's argv).
-SF_W=4   # the gate's pool width (SOLEUR_TEST_JOBS=4); the guard cannot detect a change of that width
+# 7. Start-first order of the replay arms (#12013). In the pooled gate a suite starts as the registration stream reaches it
+#    and a queued `*` (drain-barrier) suite blocks every later launch; the replay arms are the longest suites, so they are
+#    registered first. Over the runner's REAL raw registration stream (--enumerate-commands all, not the label-deduplicated
+#    map): every label under the arm prefix (at least three) appears exactly once, no registration runs the whole battery
+#    (by label, or by argv without --rows), each arm's 1-based row is at most the pool width, and no row before the last arm
+#    carries a `*` token. Nothing is asserted about any other suite's order, the total, or the --rows ranges (the totality
+#    suite tiles those; ci-oracle-lane compares each arm's argv). Rationale and measurements: ADR-242, decision 29.
+SF_W=4   # the local gate's pool width: the SOLEUR_TEST_JOBS default of the affected-tests wrapper; the guard cannot detect a change of it
 SF_ARM_PREFIX="${replay_file%.test.sh}-"
-# start_first_ok — stdin: one `label<TAB>tokens` row per registration, in order. Prints one violation per line.
+# start_first_ok — stdin: one `label<TAB>tokens<TAB>argv` row per registration, in order. Prints one violation per line.
 start_first_ok() {
-  local row l t i a last=0 n_arms=0 sf_gate
-  local -a labels=() toks=() viol=()
-  local -A cnt=() first=()
-  while IFS= read -r row || [[ -n "$row" ]]; do
+  local row rest l t a i last=0 n_arms=0 sf_gate
+  local -a labels=() toks=() argvs=() viol=()
+  local -A cnt=()
+  while IFS= read -r row; do
     [[ -n "$row" ]] || continue
-    l="${row%%$'\t'*}"; t=""
-    if [[ "$row" == *$'\t'* ]]; then t="${row#*$'\t'}"; fi
-    labels+=("$l"); toks+=("$t")
+    l="${row%%$'\t'*}"; rest=""; t=""; a=""
+    if [[ "$row" == *$'\t'* ]]; then rest="${row#*$'\t'}"; t="${rest%%$'\t'*}"; fi
+    if [[ "$rest" == *$'\t'* ]]; then a="${rest#*$'\t'}"; fi
+    labels+=("$l"); toks+=("$t"); argvs+=("$a")
   done
   for (( i = 0; i < ${#labels[@]}; i++ )); do
     l="${labels[i]}"
-    if [[ "$l" == "$replay_file" ]]; then viol+=("bare: $l is registered as a plain suite at row $((i + 1))"); fi
-    for a in a b c; do
-      [[ "$l" == "${SF_ARM_PREFIX}${a}" ]] || continue
-      cnt[$a]=$(( ${cnt[$a]:-0} + 1 ))
-      if [[ -z "${first[$a]:-}" ]]; then
-        first[$a]=$((i + 1))
+    if [[ "$l" == "$replay_file" || ( "${argvs[i]}" == *"$replay_file"* && "${argvs[i]}" != *"--rows"* ) ]]; then
+      viol+=("bare: $l runs the whole replay battery as a plain suite at row $((i + 1))")
+    fi
+    if [[ "$l" == "${SF_ARM_PREFIX}"* ]]; then
+      cnt[$l]=$(( ${cnt[$l]:-0} + 1 ))
+      if (( cnt[$l] == 1 )); then
+        n_arms=$((n_arms + 1))
         if (( i + 1 > last )); then last=$((i + 1)); fi
+        if (( i + 1 > SF_W )); then viol+=("index: $l is at row $((i + 1)), past the pool width $SF_W"); fi
+      else
+        viol+=("count: $l is registered ${cnt[$l]} times (exactly once required)")
       fi
-    done
-  done
-  for a in a b c; do
-    if (( ${cnt[$a]:-0} != 1 )); then viol+=("count: ${SF_ARM_PREFIX}${a} is registered ${cnt[$a]:-0} times (exactly once required)"); fi
-    if [[ -n "${first[$a]:-}" ]]; then
-      n_arms=$((n_arms + 1))
-      if (( first[$a] > SF_W )); then viol+=("index: ${SF_ARM_PREFIX}${a} is at row ${first[$a]}, past the pool width $SF_W"); fi
     fi
   done
   # Written as a statement, not as an `if` counter floor, so guard-vacuity-floor does not read it as one.
   sf_gate=1
-  (( n_arms == 3 )) || sf_gate=0
-  (( sf_gate == 1 )) || viol+=("arms: $n_arms of 3 replay arms found in the registration stream")
+  (( n_arms >= 3 )) || sf_gate=0
+  (( sf_gate == 1 )) || viol+=("arms: only $n_arms replay arms (label prefix $SF_ARM_PREFIX) in the registration stream, at least 3 required")
   for (( i = 0; i + 1 < last; i++ )); do
     case " ${toks[i]} " in
       *" * "*) viol+=("star: ${labels[i]} (row $((i + 1))) carries the * drain token before the last arm (row $last)") ;;
@@ -263,20 +261,35 @@ start_first_ok() {
   if (( ${#viol[@]} > 0 )); then printf '%s\n' "${viol[@]}"; return 1; fi
   return 0
 }
-# sf_rows <label|tokens>... — rows as DATA (the pipe becomes the TAB), so the live check and the synthetic cases run
+# sf_rows <label|tokens|argv>... — rows as DATA (the pipe becomes the TAB), so the live check and the synthetic cases run
 # the SAME function. sf_run records the verdict in SF_RC / SF_OUT.
 sf_rows() { printf '%s\n' "$@" | tr '|' '\t'; }
 sf_run() { SF_RC=0; SF_OUT="$(start_first_ok)" || SF_RC=$?; }
+# sf_emit_rows — stdin: --enumerate-commands lines; stdout: `label<TAB>tokens<TAB>argv` rows. Tokens come from section 1's
+# map; `-` and not `:-`, so the replay arms' EMPTY token set stays a value and only a label the map lacks fails closed to `*`.
+sf_emit_rows() {
+  local r line l a
+  while IFS= read -r r; do
+    [[ "$r" == "SUITE_COMMAND"$'\t'* ]] || continue
+    line="${r#SUITE_COMMAND$'\t'}"; l="${line%%$'\t'*}"; a=""
+    if [[ "$line" == *$'\t'* ]]; then a="${line#*$'\t'}"; a="${a//$'\t'/ }"; fi
+    [[ -n "$l" ]] || continue
+    printf '%s\t%s\t%s\n' "$l" "${tok_of[$l]-*}" "$a"
+  done
+}
 SFA="${SF_ARM_PREFIX}a"; SFB="${SF_ARM_PREFIX}b"; SFC="${SF_ARM_PREFIX}c"
 
 # 7.H Must-PASS inputs that are NOT the canonical order: the function must not reject everything.
 sf_h_ok=1
-sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "x|" "y|lock:test-all" "z|*");              (( SF_RC == 0 )) || sf_h_ok=0   # * and lock rows AFTER the arms
-sf_run < <(sf_rows "$SFC|" "$SFA|" "$SFB|" "x|");                                      (( SF_RC == 0 )) || sf_h_ok=0   # any order among the arms
-sf_run < <(sf_rows "s1|" "$SFA|" "$SFB|" "$SFC|");                                     (( SF_RC == 0 )) || sf_h_ok=0   # a token-free suite above the arms is intended
-sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "foo-replay-thing|" "p|" "q|artifact:_site" "r|" "s|" "t|"); (( SF_RC == 0 )) || sf_h_ok=0   # longer list, a label that merely contains replay
+sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "x|" "y|lock:test-all" "z|*");  (( SF_RC == 0 )) || sf_h_ok=0   # * and lock rows AFTER the arms
+sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "star|*");                      (( SF_RC == 0 )) || sf_h_ok=0   # a * on the row right after the last arm
+sf_run < <(sf_rows "$SFC|" "$SFA|" "$SFB|" "x|");                          (( SF_RC == 0 )) || sf_h_ok=0   # any order among the arms
+sf_run < <(sf_rows "s1|" "$SFA|" "$SFB|" "$SFC|");                         (( SF_RC == 0 )) || sf_h_ok=0   # a token-free suite above the arms is intended
+sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "${SF_ARM_PREFIX}d|");          (( SF_RC == 0 )) || sf_h_ok=0   # the arm set is derived: a fourth arm is accepted
+sf_run < <(sf_rows "$SFA||$replay_file --rows 1" "$SFB|" "$SFC|");  (( SF_RC == 0 )) || sf_h_ok=0   # the battery with --rows is an arm, not the bare suite
+sf_run < <(sf_rows "$SFA|" "$SFB|" "$SFC|" "foo-replay-thing|" "p|" "q|artifact:_site" "r|" "s|" "t|"); (( SF_RC == 0 )) || sf_h_ok=0   # a label that merely contains replay
 if (( sf_h_ok == 1 )); then
-  pass "start-first guard instrument: non-canonical valid orders pass (arms in any order, token-free suite above them, * and lock rows after them)"
+  pass "start-first guard instrument: non-canonical valid orders pass (arm order, a suite or a derived fourth arm, * and lock rows after the arms)"
 else
   fail "start-first guard instrument rejects a valid order: rc=$SF_RC out=$SF_OUT"
 fi
@@ -291,66 +304,72 @@ sf_expect_red() {   # <desc> <expected-clause-prefix> <rows...>
     fail "start-first guard did not go RED on $desc via the $clause clause: rc=$SF_RC out=$SF_OUT"
   fi
 }
-sf_expect_red "arms registered last"                                    index "x1|" "x2|" "x3|" "x4|" "x5|" "$SFA|" "$SFB|" "$SFC|"
-sf_expect_red "a and b first, c past the pool width"                    index "$SFA|" "$SFB|" "x1|" "x2|" "$SFC|"
-sf_expect_red "an arm registered twice (counted on raw rows)"           count "$SFA|" "$SFA|" "$SFB|" "$SFC|"
-sf_expect_red "the bare suite path registered as a plain suite as well" bare  "$SFA|" "$SFB|" "$SFC|" "$replay_file|"
-sf_expect_red "a * row before the last arm, arms still within the width" star "$SFA|" "star1|*" "$SFB|" "$SFC|"
-sf_expect_red "empty input (no arms found)"                             arms
-sf_expect_red "labels that match no arm"                                arms "x1|" "x2|" "${SF_ARM_PREFIX}d|"
+sf_expect_red "a and b first, c past the pool width"                      index "$SFA|" "$SFB|" "x1|" "x2|" "$SFC|"
+sf_expect_red "an arm registered twice (counted on raw rows)"             count "$SFA|" "$SFA|" "$SFB|" "$SFC|"
+sf_expect_red "the whole battery registered under the bare suite label"   bare  "$SFA|" "$SFB|" "$SFC|" "$replay_file|"
+sf_expect_red "the whole battery registered under another label"          bare  "$SFA|" "$SFB|" "$SFC|" "whole||$replay_file"
+sf_expect_red "a * row between the arms, all arms within the width"       star  "$SFA|" "star1|*" "$SFB|" "$SFC|"
+sf_expect_red "a * row first, above the arms"                             star  "star0|*" "$SFA|" "$SFB|" "$SFC|"
+sf_expect_red "a * row on the row just before the last arm"               star  "$SFA|" "$SFB|" "s|*" "$SFC|"
+sf_expect_red "empty input (no arms found)"                               arms
 
-# 7.R Runner-copy mutant: the pre-change layout (arms registered by the glob loop's special case) built from the real
-#     runner under the file's own temp dir. The runner resolves its libs and shard tables beside itself, so the copy gets
-#     the repo's lib directory by symlink and the tables by copy. It must change the enumeration and go RED.
-sf_sb="$_h_dir/sf-sandbox"
-assert_fixture_dir "$_h_dir"
-mkdir -p "$sf_sb/scripts"
-# The runner reads its shard and duration tables beside itself; copy them by glob so this suite names none of them
-# (the PR-affected audit would otherwise record each as a file this suite reads).
-cp "$REPO_ROOT"/scripts/suite-*.tsv "$sf_sb/scripts/"
-ln -s "$REPO_ROOT/scripts/lib" "$sf_sb/scripts/lib"
-sf_mut_ok=1; sf_mut_why=""
-REPLAY_FILE="$replay_file" ARM_PREFIX="$SF_ARM_PREFIX" python3 -I - "$REPO_ROOT/scripts/test-all.sh" "$sf_sb/scripts/test-all.sh" <<'PY' || { sf_mut_ok=0; sf_mut_why="mutator refused"; }
+# 7.R Runner-copy mutants, built from the real runner under the file's own temp dir. The runner resolves its libs and shard
+#     tables beside itself, so the copy gets the repo's lib directory by symlink and the tables by glob copy (the glob names
+#     none of them, so the PR-affected audit records no new pair). Each mutant must change the runner, enumerate a plausible
+#     population, and go RED on its own clause. glob = the pre-change layout (arms registered by the glob loop's special
+#     case); star = a new unclassified suite (its tokens fail closed to `*`) registered above the arms.
+sf_mutant() {   # <mode> <expected-clause-prefix>; sets SF_MUT_WHY on failure
+  local mode="$1" clause="$2" sb="$_h_dir/sf-sandbox-$1" enum n
+  SF_MUT_WHY=""
+  assert_fixture_dir "$sb"
+  mkdir -p "$sb/scripts"
+  cp "$REPO_ROOT"/scripts/suite-*.tsv "$sb/scripts/" 2>/dev/null || { SF_MUT_WHY="no shard or duration tables to copy"; return 1; }
+  ln -s "$REPO_ROOT/scripts/lib" "$sb/scripts/lib"
+  MODE="$mode" REPLAY_FILE="$replay_file" ARM_PREFIX="$SF_ARM_PREFIX" python3 -I - "$REPO_ROOT/scripts/test-all.sh" "$sb/scripts/test-all.sh" <<'PY' || { SF_MUT_WHY="mutator refused"; return 1; }
 import os, re, sys
 src, dst = sys.argv[1:3]
-s = open(src).read()
-pre, rf = os.environ["ARM_PREFIX"], os.environ["REPLAY_FILE"]
-pat = re.compile(r'^[ ]*run_suite "' + re.escape(pre) + r'[abc]" bash [^\n]*\n', re.M)
+s = open(src, encoding="utf-8").read()
+pre, rf, mode = os.environ["ARM_PREFIX"], os.environ["REPLAY_FILE"], os.environ["MODE"]
+pat = re.compile(r'^[ ]*run_suite "' + re.escape(pre) + r'[a-z]+" bash [^\n]*\n', re.M)
 lines = [m.group(0).strip() for m in pat.finditer(s)]
-assert len(lines) == 3, f"expected exactly 3 arm registrations, found {len(lines)}"
-s2 = pat.sub('', s)
-anchor = 'if [[ "$f" == "' + rf + '" ]]; then\n'
-assert s2.count(anchor) == 1, "glob-loop special case not found exactly once"
-s2 = s2.replace(anchor, anchor + ''.join('      ' + l + '\n' for l in lines))
-open(dst, 'w').write(s2)
+assert len(lines) >= 3, f"expected at least 3 arm registrations, found {len(lines)}"
+if mode == "glob":
+    s2 = pat.sub('', s)
+    anchor = 'if [[ "$f" == "' + rf + '" ]]; then\n'
+    assert s2.count(anchor) == 1, "glob-loop special case not found exactly once"
+    s2 = s2.replace(anchor, anchor + ''.join('      ' + l + '\n' for l in lines))
+elif mode == "star":
+    first = pat.search(s)
+    s2 = s[:first.start()] + '  run_suite "scripts/zz-sf-star-fixture" bash scripts/zz-sf-star-fixture.test.sh\n' + s[first.start():]
+else:
+    raise SystemExit("unknown mode " + mode)
+open(dst, 'w', encoding="utf-8").write(s2)
 PY
-if (( sf_mut_ok == 1 )) && cmp -s "$REPO_ROOT/scripts/test-all.sh" "$sf_sb/scripts/test-all.sh"; then
-  sf_mut_ok=0; sf_mut_why="the mutation did not change the runner (the start-first layout is absent)"
-fi
-if (( sf_mut_ok == 1 )); then
-  sf_mut_enum="$(cd "$REPO_ROOT" && TEST_TIMING_LOG=/dev/null timeout 300 bash "$sf_sb/scripts/test-all.sh" --enumerate-commands all 2>/dev/null || true)"
-  while IFS=$'\t' read -r _tag sf_l _rest; do
-    [[ "$_tag" == "SUITE_COMMAND" ]] || continue
-    printf '%s\t%s\n' "$sf_l" "${tok_of[$sf_l]-*}"
-  done <<<"$sf_mut_enum" > "$_h_dir/sf-mut-rows.tsv"
-  sf_run < "$_h_dir/sf-mut-rows.tsv"
-  if (( SF_RC == 0 )) || ! grep -q '^index:' <<<"$SF_OUT"; then
-    sf_mut_ok=0; sf_mut_why="the mutant enumeration was not RED on the index clause: rc=$SF_RC"
+  if cmp -s "$REPO_ROOT/scripts/test-all.sh" "$sb/scripts/test-all.sh"; then SF_MUT_WHY="the mutation did not change the runner"; return 1; fi
+  enum="$(cd "$REPO_ROOT" && TEST_TIMING_LOG=/dev/null timeout 300 bash "$sb/scripts/test-all.sh" --enumerate-commands all 2>"$sb/enum.err")" \
+    || { SF_MUT_WHY="mutant enumeration exited non-zero: $(head -c 200 "$sb/enum.err")"; return 1; }
+  n="$(grep -c '^SUITE_COMMAND' <<<"$enum" || true)"
+  if (( n < 100 )); then SF_MUT_WHY="mutant enumeration returned only $n registrations"; return 1; fi
+  sf_run < <(sf_emit_rows <<<"$enum")
+  if (( SF_RC == 0 )) || ! grep -q "^${clause}:" <<<"$SF_OUT"; then
+    SF_MUT_WHY="the mutant was not RED on the $clause clause: rc=$SF_RC out=$(head -c 200 <<<"$SF_OUT")"; return 1
   fi
-fi
-if (( sf_mut_ok == 1 )); then
+  return 0
+}
+if sf_mutant glob index; then
   pass "start-first guard RED on the runner-copy mutant (arms moved back into the glob loop)"
 else
-  fail "start-first guard runner-copy mutant: $sf_mut_why"
+  fail "start-first guard runner-copy mutant (glob): $SF_MUT_WHY"
+fi
+if sf_mutant star star; then
+  pass "start-first guard RED on the runner-copy mutant (an unclassified suite registered above the arms)"
+else
+  fail "start-first guard runner-copy mutant (star): $SF_MUT_WHY"
 fi
 
-# 7.L The live check, over the real raw registration stream (duplicates kept; tokens from section 1's map, fail-closed `*` ONLY for a label the map lacks: the replay arms' EMPTY set is a value, so the lookup is `-` not `:-`).
-{
-  for r in "${rows[@]}"; do
-    IFS=$'\t' read -ra fields <<<"$r"
-    printf '%s\t%s\n' "${fields[1]}" "${tok_of[${fields[1]}]-*}"
-  done
-} > "$_h_dir/sf-live-rows.tsv"
+# 7.L The live check, over the real raw registration stream (duplicates kept).
+assert_fixture_dir "$_h_dir"
+printf '%s\n' "${rows[@]}" | sf_emit_rows > "$_h_dir/sf-live-rows.tsv"
 sf_run < "$_h_dir/sf-live-rows.tsv"
 if (( SF_RC == 0 )); then
   pass "start-first: the replay arms start with the pool in the real registration stream"
@@ -359,8 +378,8 @@ else
 fi
 
 # Dispatch floor, reported directly (never through fail()): deleting a block of assertions lowers PASSES.
-# 12 assertions before section 7, plus the 10 it adds (instrument, 7 synthetic, runner-copy mutant, live check).
-(( PASSES < 22 )) && { printf '[FATAL] only %s assertions passed, expected at least 22\n' "$PASSES"; exit 1; }
+# 12 assertions before section 7, plus the 12 it adds (instrument, 8 synthetic, 2 runner-copy mutants, live check).
+(( PASSES < 24 )) && { printf '[FATAL] only %s assertions passed, expected at least 24\n' "$PASSES"; exit 1; }
 echo ""
 echo "=== test-suite-lanes: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1

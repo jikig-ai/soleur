@@ -5602,20 +5602,20 @@ fi
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
-  # START-FIRST (#12013): registration order IS start order. The pool starts a suite
-  # as the registration stream reaches it, and a queued `*` (drain barrier) suite
-  # blocks every later registration, so these arms, the longest suites of the gate
-  # (about 1.5 ks / 0.7 ks / 0.65 ks pooled, empty lane-token set), sat at rows
-  # 113-115 of 160 behind a `*` suite and a long lock:test-all chain and ended the
-  # run. Registered first they start with the pool. The three move together:
-  # hoisting only -a leaves -b and -c behind the barrier. The position is pinned
-  # by scripts/lib/test-suite-lanes.test.sh section 7 (arms at most the pool width
-  # from the top, no `*` row before them); other suites' order is not pinned.
+  # START-FIRST (#12013): these arms are registered first on purpose. In the pooled
+  # local gate a suite starts as the registration stream reaches it, and a queued `*`
+  # (drain barrier) suite blocks every later launch; an empty-token suite such as an
+  # arm starts as soon as a slot is free. The arms are the longest suites of the
+  # gate, so registered late they ended the run. The three move together: hoisting
+  # only -a leaves -b and -c behind the barrier. Applies to a pooled run only (the
+  # local --affected gate); serial runs and CI shard legs get the same order but no
+  # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
+  # numbers and rationale: ADR-242, decision 29.
   #
   # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
   # battery was the test-scripts shard's worst leg, so it registers THREE times —
-  # the -a/-b/-c arms below carrying complementary --rows ranges over its
-  # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
+  # the -a/-b/-c arms that follow carrying complementary --rows ranges over its
+  # DECLARED_TOTAL gated sites. Unconditional (no relevance gate,
   # so no skip_suite pairing — the suite is never declined). The boundary lives in
   # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
   # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
@@ -7514,11 +7514,10 @@ if want_scripts; then
         continue
       fi
     fi
-    # The replay battery's three arms are registered at the top of this shard (the
-    # start-first block under `Pre-suite bash/python tests`), not here; this arm only
-    # keeps the suite file out of the plain registration below. The test expression on
-    # the next line is what lint-orphan-test-suites.sh and scripts-shard-totality read
-    # to subtract the glob member, so the `if` stays.
+    # The replay arms register at the top of this shard (start-first block); this arm
+    # keeps the bare suite file out of the plain registration below. The test on the
+    # next line is read by lint-orphan-test-suites.sh and scripts-shard-totality, so
+    # the `if` stays.
     if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
       continue
     fi

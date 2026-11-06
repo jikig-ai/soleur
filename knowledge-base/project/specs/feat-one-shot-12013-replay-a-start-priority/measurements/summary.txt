@@ -13,11 +13,14 @@ Method (a measurement method only; it bypasses nothing in a ship path):
   no synthetic load; the machine carried its ordinary sibling-session load (recorded at each start and end in `*.notes.txt`).
   Pool start = the `[parallel] mode engaged` line. The 18k-line stamped logs are not committed.
 - The second control was not run: the treatment's pool-phase gain (821 s) is far outside the 150 s band around the 300 s bar, and the
-  load averages at start and end did not differ materially (control 8.4 to 5.7, treatment 5.7 to 8.7). One control, one treatment.
+  readings were not visibly disturbed (start loads 8.4 and 5.7, end loads 5.7 and 8.7; summed suite walls 6593 s and 6183 s; the control ran first, so
+  OS caches were warmer for the treatment). One control, one treatment: read the gain as at least the 300 s bar, probably 500 to 800 s.
 - Caveat: the treatment tree `da5462990e` has the runner edit; the guard in `scripts/lib/test-suite-lanes.test.sh` was changed after
-  it (a table-copy line, so the guard names no tsv file); the runner is byte-identical in the PR head.
+  it (a table-copy line, so the guard names no tsv file); the runner in the PR head differs from `da5462990e` only by the registration merged from main (#12180) and the comment edits made at review.
 
-Derived by /var/tmp/m12013/derive.sh from the stamped logs (copied from its output):
+Derived by `derive.sh` (beside this file) from the stamped logs, which are not committed; per-suite start and end offsets are in
+`control1.suites.tsv` and `treatment.suites.tsv`. The planning-time `model/` inputs `enum.txt` and `tokens.tsv` were dropped as duplicates of
+`before.enum.tsv` and regenerable with `model/tok.sh`. Output copied below:
 
 reading=control1 rc=1 head=name=control1 commit=3d4a9567ba head=48e914d33b origin_main=3d4a9567ba
 wall_s=2992 cold_derive_s=278 engaged_at_s=289 suite_phase_s=2703
@@ -47,7 +50,7 @@ Comparison (pool phase = wall minus the `engaged` offset):
 - wall: 2992 s -> 2134 s (-858 s); pool phase 2703 s -> 1882 s (-821 s); cold derive 278 s -> 244 s (not the lever).
 - replay-a start offset from pool start: 1296 s -> 0 s. replay-b and -c: 1297/1298 s -> 0 s.
 - Seconds with at most one suite live after engagement: 1098 s -> 112 s.
-- replay-a pooled wall 1404 s -> 1513 s (it now shares the machine with more suites at its start). It ends at +1765 s in the treatment while the run ends at +2134 s: the arms are no longer the run's tail, and the last suites are the web-platform group's.
+- replay-a pooled wall 1404 s -> 1513 s (it now shares the machine with more suites at its start). It ends at +1765 s in the treatment while the run ends at +2134 s: the arms are no longer the run's tail; the last suites to finish (operator-script, ship-phase-7-poll-fixtures, dev-ledger-parity) register after the `*` barrier (test-all-capacity-signal).
 - Failures: the same single suite in both readings, `apps/web-platform [repo-wide+component]`, the known clone artifact.
 - Landed criteria (plan AC8): replay-a starts within 120 s of pool start: yes (0 s). Pool-phase wall at least 300 s below the control: yes
   (821 s, one control). No failure the control does not share: yes.
