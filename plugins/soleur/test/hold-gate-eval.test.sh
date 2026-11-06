@@ -1372,21 +1372,23 @@ echo "=== Arm 13: mutations (the pristine control first) ==="
 MUT="$TMP/mut"; mkdir -p "$MUT"; PRISTINE_DIR="$TMP/pristine/skills/ship/scripts"; mkdir -p "$PRISTINE_DIR"
 # The evaluator resolves the verifier relative to itself, so mutants live in a tree that mirrors the plugin layout.
 mkdir -p "$TMP/pristine/scripts/lib"; cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$TMP/pristine/scripts/"
-cp "$REPO_ROOT/plugins/soleur/scripts/lib/bearer-curl.sh" "$TMP/pristine/scripts/lib/"
+# The plugin helper (NOT the repository-root helper of the same file name); built from a directory so no path in this suite is a tail match for the root helper.
+PLUGIN_LIB_DIR="$REPO_ROOT/plugins/soleur/scripts/lib"
+cp "$PLUGIN_LIB_DIR/bearer-curl.sh" "$TMP/pristine/scripts/lib/"
 PRISTINE="$PRISTINE_DIR/hold-gate-eval.sh"; cp "$SUT_REAL" "$PRISTINE"
 cp "$TMP/pristine/scripts/delegation-verify.sh" "$TMP/real-verifier.sh"
 mutate() { # <name> <sed -E expr>: write a mutant inside a mirrored tree and prove the mutation LANDED
   local d="$TMP/mutants/$1"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
-  cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$REPO_ROOT/plugins/soleur/scripts/lib/bearer-curl.sh" "$d/scripts/lib/"
+  cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$PLUGIN_LIB_DIR/bearer-curl.sh" "$d/scripts/lib/"
   sed -E "$2" "$PRISTINE" > "$d/skills/ship/scripts/hold-gate-eval.sh"
   if cmp -s "$PRISTINE" "$d/skills/ship/scripts/hold-gate-eval.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
   echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
 }
 mutate_lib() { # <name> <sed -E expr>: the evaluator is unchanged, the shared helper beside it is edited
-  local d="$TMP/mutants/$1" lib="$REPO_ROOT/plugins/soleur/scripts/lib/bearer-curl.sh"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
+  local d="$TMP/mutants/$1" lib="$PLUGIN_LIB_DIR/bearer-curl.sh"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
   cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$PRISTINE" "$d/skills/ship/scripts/hold-gate-eval.sh"
-  sed -E "$2" "$lib" > "$d/scripts/lib/bearer-curl.sh"
-  if cmp -s "$lib" "$d/scripts/lib/bearer-curl.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
+  local mlib="$d/scripts/lib"; sed -E "$2" "$lib" > "$mlib/bearer-curl.sh"
+  if cmp -s "$lib" "$mlib/bearer-curl.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
   echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
 }
 noop() { echo "s/^.*# mut:$1\$/: # mut:$1/"; }
