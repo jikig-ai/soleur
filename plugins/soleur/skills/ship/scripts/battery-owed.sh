@@ -98,12 +98,13 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a
 # and at any `#` heading; a SECOND `## Operator Constraints` section voids the token (n must be 1), so text appended later
 # cannot become one. The filter runs BEFORE the emptiness test, so whitespace-only, control-only or non-ASCII-only words
 # are no token. The reader prints only the matching line; a symlinked file or directory is not read at all.
+# Accepted: only comment markers void the token, so a section inside another invisible HTML block (<style>, <pre>) still reads; the file is pipeline-written, and the infra refusal still stands.
 OPERATOR_CI_WORDS=""
 _br="$(git branch --show-current 2>/dev/null)"
 _tp="$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && pwd -P)"
 _ss="${_tp}/knowledge-base/project/specs/${_br}/session-state.md"
 _sd="$(cd "${_ss%/*}" 2>/dev/null && pwd -P)"
-if [[ -n "$_br" && -n "$_tp" && "$_sd" == "$_tp"/* && -f "$_ss" && ! -L "$_ss" ]]; then
+if [[ -n "$_br" && -n "$_tp" && "$_sd" == "${_ss%/*}" && -f "$_ss" && ! -L "$_ss" ]]; then
   OPERATOR_CI_WORDS="$(LC_ALL=C awk '
     function runlen(t, c,   i) { for (i = 1; substr(t, i, 1) == c; i++); return i - 1 }
     /<!--|-->/ { bad = 1; next }
@@ -280,12 +281,13 @@ INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra
 if [[ -n "$OPERATOR_CI_WORDS" ]]; then
   _top="$(git rev-parse --show-toplevel 2>/dev/null)" \
     && _un="$(git -C "$_top" ls-files -u)" \
-    && _w1="$(git -C "$_top" diff -z --no-renames --name-only refs/remotes/origin/main...HEAD -- | tr '\0' '\n')" \
-    && _w2="$(git -C "$_top" diff -z --no-renames --name-only HEAD -- | tr '\0' '\n')" \
+    && _w1="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only refs/remotes/origin/main...HEAD -- | tr '\0' '\n')" \
+    && _w2="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only HEAD -- | tr '\0' '\n')" \
     && _w3="$(git -C "$_top" ls-files -z -o --exclude-standard | tr '\0' '\n')" \
-    && _w4="$(git -C "$_top" diff -z --no-renames --name-only --cached HEAD -- | tr '\0' '\n')" \
+    && _w4="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only --cached HEAD -- | tr '\0' '\n')" \
     || undecidable "operator ci-is-the-gate set but the working-tree scope check failed"
-  if [[ -n "$_un" ]] || git -C "$_top" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  if [[ -n "$_un" ]] || git -C "$_top" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+     || [[ -e "$(git -C "$_top" rev-parse --absolute-git-dir)/MERGE_HEAD" ]]; then
     owed "operator ci-is-the-gate set, but a merge is in progress or paths are unmerged"
   fi
   _all="${_w1}"$'\n'"${_w2}"$'\n'"${_w3}"$'\n'"${_w4}"

@@ -1184,6 +1184,25 @@ assert_eq "$SKIPPABLE" "$( ( cd "$W18gv" || exit 9
     GIT_DIR="$R18gv/no-such-gitdir" GIT_INDEX_FILE="$R18gv/no-such-index" PATH="$S18gv:$PATH" bash "$GATE" >/dev/null 2>&1
     printf '%s' "$?" ) )" "T18x an inherited GIT_DIR / GIT_INDEX_FILE cannot redirect the gate's reads -> SKIPPABLE"
 
+# (h) verification-pass gaps: an in-repo symlinked directory, a corrupt MERGE_HEAD, a gitlink hidden by ignore=all.
+new_fixture_root R18ld; W18ld="$(build_fixture "$R18ld")"; S18ld="$R18ld/stub"
+make_stub "$S18ld" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+in_fixture "$W18ld" bash -c 'mkdir -p knowledge-base/project/specs-real/feat-fixture knowledge-base/project/specs && printf "## Operator Constraints\n\n- ci-is-the-gate: via in-repo link\n" > knowledge-base/project/specs-real/feat-fixture/session-state.md && ln -s ../specs-real/feat-fixture knowledge-base/project/specs/feat-fixture && git add -A && git commit --quiet -m inrepolink' || true
+reject18 "T18x an in-repo symlinked spec directory" "$W18ld" "$S18ld"
+new_fixture_root R18mh; W18mh="$(build_fixture "$R18mh")"; S18mh="$R18mh/stub"
+ss18_write "$W18mh" "$TOK18" commit
+make_stub "$S18mh" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$SKIPPABLE" "$(run_gate "$W18mh" "$S18mh")" "T18x (control) a clean tree with the token -> SKIPPABLE"
+in_fixture "$W18mh" bash -c 'echo garbage > "$(git rev-parse --absolute-git-dir)/MERGE_HEAD"' || true
+assert_eq "$OWED" "$(run_gate "$W18mh" "$S18mh")" "T18x a corrupt MERGE_HEAD file -> OWED"
+assert_reason "$W18mh" "$S18mh" "a merge is in progress or paths are unmerged" "T18x (corrupt MERGE_HEAD) the refusal names itself"
+new_fixture_root R18sm; W18sm="$(build_fixture "$R18sm")"; S18sm="$R18sm/stub"
+ss18_write "$W18sm" "$TOK18"
+make_stub "$S18sm" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+in_fixture "$W18sm" bash -c 'git init --quiet ../subsrc && git -C ../subsrc -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m s && mkdir -p apps/web-platform/infra && git -c protocol.file.allow=always submodule add --quiet ../subsrc apps/web-platform/infra/sub && git config -f .gitmodules submodule.apps/web-platform/infra/sub.ignore all && git add -A && git commit --quiet -m gitlink' || true
+assert_eq "$OWED" "$(run_gate "$W18sm" "$S18sm")" "T18x a gitlink under the infra surface hidden by ignore=all -> OWED"
+assert_reason "$W18sm" "$S18sm" "the diff touches the infra surface" "T18x (hidden gitlink) the refusal names the infra surface"
+
 # --- T18o: the words are printed as untrusted ASCII, cut at 200 bytes --------
 new_fixture_root R18o; W18o="$(build_fixture "$R18o")"; S18o="$R18o/stub"
 make_stub "$S18o" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
@@ -1226,4 +1245,4 @@ assert_eq "$OWED" "$(parity_rc "$R18p/ref-renamed.md" "$W18p" "$S18p")" "T18p a 
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 213
+print_results 221
