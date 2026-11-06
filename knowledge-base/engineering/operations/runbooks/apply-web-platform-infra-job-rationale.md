@@ -1257,6 +1257,8 @@ with queueing), because a bound below the ceiling reads a healthy slow run as "n
 
 ## ack-destroy-steer
 
+<!-- lint-infra-ignore start -->
+
 The generic `[ack-destroy]` instruction is only surfaced when a delete/nested-removal component exists — ack is the correct resolution there. On a PURE reboot trip (`reboot_updates > 0` with zero deletes) the generic line contradicts the reboot-specific steer, so it is suppressed: ack-through would execute the transitively-included reboot on the unattended apply.
 
 STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line containing exactly '[ack-destroy]' ... or revert the trigger commit." During a scoped host retirement BOTH of its options are wrong, and this is the only instruction the operator sees:
@@ -1265,3 +1267,4 @@ STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line containing exactly '
 - "revert the trigger commit" blames an INNOCENT merge. While config says N hosts and state still says N+1, EVERY merge trips this. The trigger is not the cause.
 
 The safe resolution is to skip THAT merge's apply and let the supervised operator-local full-scope apply complete the retirement. `[ack-destroy]` is still offered (it remains correct for an ordinary intentional delete) but never bare — it carries the partial warning. (Relocated from the workflow file's inline comment, 2026-11-06, per the 490,000-byte workflow-size gate.)
+<!-- lint-infra-ignore end -->
