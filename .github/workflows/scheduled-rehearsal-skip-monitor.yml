@@ -338,7 +338,8 @@ jobs:
           # `fail`/`broken` title. A failed edit is not fatal -- the comment's first line still names
           # the verdict -- but it is surfaced.
           if [ -n "$existing" ] && { [ "$VERDICT" = fail ] || [ "$VERDICT" = broken ]; }; then
-            cur_title=$(gh issue view "$existing" --repo "${{ github.repository }}" --json title --jq .title 2>/dev/null) || cur_title=""
+            cur_title=$(gh issue view "$existing" --repo "${{ github.repository }}" --json title --jq .title 2>/dev/null) \
+              || { echo "::warning::could not read the title of issue #${existing} — skipping the retitle; the comment's first line still names the current verdict."; cur_title=""; }
             if [ -n "$cur_title" ] && [ "$cur_title" != "$title" ]; then
               gh issue edit "$existing" --repo "${{ github.repository }}" --title "$title" >/dev/null 2>&1 \
                 || echo "::warning::could not retitle issue #${existing} to '${title}'; the comment's first line names the current verdict."
