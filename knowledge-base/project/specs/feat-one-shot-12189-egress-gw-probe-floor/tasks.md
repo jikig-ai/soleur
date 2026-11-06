@@ -18,7 +18,7 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12189-egress-gw-probe-floor
   - 1.3.3 pass-path rows: rc non-zero / credentials unbound / non-row answer / empty roster -> 3; roster host at zero -> 5; extra host does not cover a roster host
   - 1.3.4 floor and canary checks -> 3: floor after now, floor before anchor start, canary `created_at` missing / unparseable / too early, duplicate canary alerts, canary incident too early, anchor open-state disagreement
   - 1.3.5 retired canary -> distinct exit 5; declared variant keeps old text
-- 1.4 Pins: 12-field order regex; `APPLY_FLOOR_EPOCH=` once at column 0 digits; SUT does not read `SOLEUR_FT_EARLIEST` or `updated_at`; RETIREMENT block lists the pin; negative controls for new helpers
+- 1.4 Pins: 12-field order regex; `APPLY_FLOOR_EPOCH=` once at column 0 digits; RETIREMENT block lists the pin; appended field values pinned to digits / `-1` / fixed tokens; behavioral rows (not source greps) for `SOLEUR_FT_EARLIEST` and `updated_at`; negative controls for new helpers
 - 1.5 Confirm the suite is RED against the unmodified probe; re-pin `MIN_ASSERTIONS` only after Phase 2 is green
 
 ## Phase 2: Probe (GREEN)
