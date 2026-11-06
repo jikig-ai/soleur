@@ -75,9 +75,10 @@ for (( i = 0; i < ${#args[@]}; i++ )); do
   esac
 done
 rc_file="$cfg/curl.rc"; [[ -f "$rc_file" ]] && { rc="$(<"$rc_file")"; [[ "$rc" != "0" ]] && exit "$rc"; }
-# curl.term: signal the PROBE's main shell (this stub's grandparent: probe -> $( ) subshell -> curl), then keep it waiting
-if [[ -f "$cfg/curl.term" ]]; then
-  kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d ' ')" 2>/dev/null
+# curl.term: signal the PROBE's main shell, then keep it waiting. The target is the pid the runner recorded for the
+# probe (run_case execs the SUT behind a pid-recording shell), never an ancestor walk or a $PPID hop.
+if [[ -f "$cfg/curl.term" && -s "$cfg/probe.pid" ]]; then
+  kill -TERM "$(<"$cfg/probe.pid")" 2>/dev/null
   sleep 1
 fi
 page="$(printf '%s' "$url" | sed -nE 's/.*[?&]page=([0-9]+).*/\1/p')"
@@ -204,7 +205,8 @@ run_case() {
       BETTERSTACK_QUERY_HOST=dummy-host BETTERSTACK_QUERY_USERNAME=dummy-user BETTERSTACK_QUERY_PASSWORD=dummy-pass \
       BETTERSTACK_API_TOKEN=dummy-token EGRESS_GW_SILENT_BQ="$MOCK" EGRESS_GW_SILENT_TF="$TF" \
       EGRESS_GW_SILENT_NOW_EPOCH="$NOW" EGRESS_GW_SILENT_ANCHOR_ID="$ANCHOR_ID" \
-      EGRESS_GW_SILENT_ROSTER="soleur-web-platform soleur-web-2" "$@" "$SUT" 2>&1)" || rc=$?
+      EGRESS_GW_SILENT_ROSTER="soleur-web-platform soleur-web-2" "$@" \
+      bash -c 'printf "%s" "$$" > "$1"; shift; exec "$@"' _ "$WORK/probe.pid" "$SUT" 2>&1)" || rc=$?
   LAST_OUT="$out"; LAST_RC="$rc"
   if [[ "$rc" -eq 1 ]]; then fail "$desc -- exit 1 is FORBIDDEN (the sweeper reads it as FAIL) :: ${out:0:300}"; return; fi
   if [[ "$expected" == any ]]; then pass "$desc (exit=$rc)"
@@ -400,7 +402,7 @@ run_case "a non-numeric clock seam is refused -> unknown" 3 EGRESS_GW_SILENT_NOW
 reset_defaults; build_fixtures
 rc=0; out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" BETTERSTACK_API_TOKEN=dummy-token EGRESS_GW_SILENT_TF="$TF" EGRESS_GW_SILENT_NOW_EPOCH="$NOW" bash -x "$SUT" 2>&1)" || rc=$?
 if [[ "$rc" -eq 78 ]]; then pass "row 8: tracing enabled with a bearer set -> exit 78"; else fail "row 8: tracing enabled with a bearer set -> expected 78 got $rc :: ${out:0:300}"; fi
-if printf '%s' "$out" | grep -qF -- 'dummy-token'; then fail "xtrace refusal leaks the token"; else pass "xtrace refusal does not leak the token"; fi
+if grep -qF -- 'dummy-token' < <(printf '%s' "$out"); then fail "xtrace refusal leaks the token"; else pass "xtrace refusal does not leak the token"; fi
 rc=0; out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" BETTERSTACK_QUERY_PASSWORD=dummy-pass EGRESS_GW_SILENT_TF="$TF" bash -x "$SUT" 2>&1)" || rc=$?
 if [[ "$rc" -eq 78 ]]; then pass "xtrace with only the query password set -> exit 78"; else fail "xtrace with only the query password set -> expected 78 got $rc"; fi
 
