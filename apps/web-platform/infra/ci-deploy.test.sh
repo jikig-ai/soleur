@@ -13310,7 +13310,10 @@ SRVEOF
     RELAY_PROBE_PEER=127.0.0.1 RELAY_PROBE_PORT="$1" PROXY_TLS_CERT="$2" RELAY_PROBE_TIMEOUT_MS=1500 timeout 20 node -e "$(cat "$PE_DIR/probe.js")" 2>/dev/null
   }
   PE_CA="$(cat "$PE_DIR/c.pem")"; PE_CA2="$(cat "$PE_DIR/c2.pem")"
-  for PE_X in "ok|$PE_PORT_BASE|$PE_CA" "denied|$((PE_PORT_BASE + 1))|$PE_CA" "refused|$((PE_PORT_BASE + 2))|$PE_CA" "refused|$((PE_PORT_BASE + 9))|$PE_CA" \
+  # Doppler's docker env format collapses a multi-line PEM to ONE line with literal backslash-n (measured 2026-11-06; same defect as
+  # #12220 in the app). The probe reads that exact form from the container env, so it must expand it before pinning.
+  PE_CA_COLLAPSED="${PE_CA//$'\n'/\\n}"; PE_CA_COLLAPSED_CRLF="${PE_CA//$'\n'/\\r\\n}"
+  for PE_X in "ok|$PE_PORT_BASE|$PE_CA" "ok|$PE_PORT_BASE|$PE_CA_COLLAPSED" "ok|$PE_PORT_BASE|$PE_CA_COLLAPSED_CRLF" "tls|$PE_PORT_BASE|${PE_CA2//$'\n'/\\n}" "denied|$((PE_PORT_BASE + 1))|$PE_CA" "refused|$((PE_PORT_BASE + 2))|$PE_CA" "refused|$((PE_PORT_BASE + 9))|$PE_CA" \
               "tls|$PE_PORT_BASE|$PE_CA2" "tls|$PE_PORT_BASE|" "timeout|$((PE_PORT_BASE + 3))|$PE_CA"; do
     PE_WANT="${PE_X%%|*}"; PE_REST="${PE_X#*|}"; PE_P="${PE_REST%%|*}"; PE_PEM="${PE_REST#*|}"
     PE_GOT="$(pe_js "$PE_P" "$PE_PEM")"
@@ -13319,7 +13322,7 @@ SRVEOF
   kill "${PE_PIDS[@]}" 2>/dev/null || true
   wait "${PE_PIDS[@]}" 2>/dev/null || true
 fi
-pe_row "PE-10" "$PE_OK" "the in-container node probe maps a peer to ok / denied / refused (non-101, closed port) / tls (untrusted cert, no pinned cert) / timeout against local TLS fixtures" "$PE_MSG"
+pe_row "PE-10" "$PE_OK" "the in-container node probe maps a peer to ok / denied / refused (non-101, closed port) / tls (untrusted cert, no pinned cert) / timeout against local TLS fixtures; a pinned cert in the collapsed one-line env form (literal backslash-n, LF or CRLF) still pins (ok) and a collapsed untrusted cert is still tls" "$PE_MSG"
 
 # PE-11: the publish and bind lines in the script text itself (comment-stripped), beside the closed-world gate that parses them.
 PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
