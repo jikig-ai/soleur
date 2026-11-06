@@ -228,26 +228,16 @@ resource "doppler_service_token" "rehearsal" {
   access = "read"
 }
 
-# --- The two volumes ---------------------------------------------------------
+# --- The volume --------------------------------------------------------------
 # `rehearsal_inngest_luks` is the volume the rendered template resolves and (with no pointer, on a
 # `rehearsal_*` config) luksFormats; it is RAW (no `format` — the blkid signature IS the LUKS
 # discriminator; declaring ext4 would make the resolver's empty arm unreachable, see
 # inngest-redis-luks.tf's header note).
-# `rehearsal_inngest` is UNUSED since #9786: it used to mirror prod's retired plaintext AOF volume, and
-# the template no longer takes its id (the `inngest_volume_id` key is gone), so it is attached and
-# never read. It is kept for now only because removing it changes the rehearsal's attach topology, its
-# plan-shape fixtures and two ledger rows; removal is tracked in #10112.
+# It is the rehearsal root's ONLY volume since #10112: the second (plaintext) scratch volume that
+# used to mirror prod's retired plaintext AOF volume was never read post-#9786 — the
+# `inngest_volume_id` key is gone from the template — and was removed with its ledger row and
+# plan-shape fixtures.
 # Size matches prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
-resource "hcloud_volume" "rehearsal_inngest" {
-  name     = "${local.rehearsal_host_name}-store"
-  size     = 10
-  location = var.location
-
-  labels = {
-    app = "soleur-inngest-provision-rehearsal"
-  }
-}
-
 resource "hcloud_volume" "rehearsal_inngest_luks" {
   name     = "${local.rehearsal_host_name}-luks"
   size     = 10
@@ -325,12 +315,6 @@ resource "hcloud_server" "rehearsal" {
   labels = {
     app = "soleur-inngest-provision-rehearsal"
   }
-}
-
-resource "hcloud_volume_attachment" "rehearsal_inngest" {
-  volume_id = hcloud_volume.rehearsal_inngest.id
-  server_id = hcloud_server.rehearsal.id
-  automount = false
 }
 
 resource "hcloud_volume_attachment" "rehearsal_inngest_luks" {

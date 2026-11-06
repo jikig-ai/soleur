@@ -68,7 +68,8 @@ gh run watch <run-id>
 ## What a real run does
 
 1. **Phase A (`nic_attached=false`)** — `terraform apply` births
-   `soleur-inngest-rehearsal-<run_id>` with the deny-all firewall, two scratch volumes, the
+   `soleur-inngest-rehearsal-<run_id>` with the deny-all firewall, one scratch volume (the
+   LUKS store — the unused plaintext scratch volume was removed in #10112), the
    scratch Doppler environment `rehearsal_<runid>` (a *non-inheriting* root config in
    project `soleur-inngest` holding exactly five secrets), and **no private NIC**. The
    provision unit arms, its runcmd NIC wait exhausts (`private_nic_timeout`), and the unit
@@ -208,8 +209,27 @@ A label-scoped reclaim dispatch (so step 3 needs no ad hoc API call) is a candid
 | Symptom in the run | Meaning | First read |
 |---|---|---|
 | Phase-A plan refused by plan-shape | A non-rehearsal or non-additive change would be applied | `::error::plan-shape` line names the address |
+| Phase-A plan refused naming a `delete` of `hcloud_volume.rehearsal_inngest` | The root's R2 state still holds the scratch volume removed in #10112 (an earlier dispatch stranded it) — the additive guard correctly refuses a delete | the stranded-state note below |
 | Phase-B plan refused | The delta is not exactly the NIC attachment — the evidence claim would be false | same |
 | `provision-env-MISSING` / `provision-attempt-exit-*` rows in phase A | The expected failure arrived through the wrong arm | Better Stack rows for the host; check `why=` |
 | Phase-B times out after the attach | The NIC converged but zot/isolation/bootstrap failed | capture output's last `WAIT:` lines |
 | Post-reboot TRANSIENT forever | The restage anchor never re-emitted — the boot ran or it did not; the capture cannot tell | Hetzner console log for the host |
 | Orphan assertion fails in teardown | Objects leaked past `terraform destroy` | the printed `kind: name` list |
+
+### Stranded pre-#10112 volume in state
+
+If a dispatch created `hcloud_volume.rehearsal_inngest` before the volume was removed
+(#10112) and its teardown never completed, the root's R2 state still holds it: the next
+Phase-A plan legitimately proposes a `delete`, which the additive plan-shape refuses as a
+non-additive change. Steady state (teardown ran) shows no diff at all. To clear the orphan,
+drop it from state — from the rehearsal root — and confirm the Hetzner API has no
+`soleur-inngest-rehearsal-*` volume for it, before re-dispatching:
+
+```bash
+terraform -chdir=apps/web-platform/infra/inngest-provision-rehearsal state rm \
+  hcloud_volume.rehearsal_inngest hcloud_volume_attachment.rehearsal_inngest
+```
+
+Alternatively destroy it via the teardown-only arm (`teardown_only=true` dispatch above),
+which destroys everything in state — the two are equivalent here because the rehearsal
+stack is per-run scratch.
