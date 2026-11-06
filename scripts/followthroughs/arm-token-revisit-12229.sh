@@ -11,14 +11,15 @@
 #   2 = NOT YET / targets gone  (none of the three members is in config)
 #   3 = CANNOT ESTABLISH        (a tracked file could not be read)
 #   5 = ACTION REQUIRED         (any member is still in config: the revisit decision is owed)
-#   This probe NEVER exits 0 or 1: it must not close the tracker (revocation and the recorded
+#   (78 under xtrace: the refusal below.) This probe NEVER exits 0 or 1: it must not close the tracker (revocation and the recorded
 #   decision are human acts) and it must not read as a failure of the sweep.
 #
 # Members (a probe that stops at the first one is the defect; removing the -target lines alone
 # does not revoke, so the declaration counts too):
-#   1. the line  -target=doppler_service_token.inngest_arm_write
-#   2. the line  -target=github_actions_secret.doppler_token_inngest_arm
-#      (both in .github/workflows/apply-web-platform-infra.yml)
+#   1. a non-comment line carrying  -target=doppler_service_token.inngest_arm_write
+#   2. a non-comment line carrying  -target=github_actions_secret.doppler_token_inngest_arm
+#      (both in .github/workflows/apply-web-platform-infra.yml; the name must end at a boundary, so
+#      a longer name such as ..._v2 is not a member; quoted and space forms count)
 #   3. the declaration  resource "doppler_service_token" "inngest_arm_write"
 #      (in apps/web-platform/infra/inngest-arm-write-token.tf)
 # Comment lines are not members.
@@ -33,8 +34,8 @@
 # RETIREMENT: when the arm token is revoked and this tracker is closed, delete every site together:
 #   scripts/followthroughs/arm-token-revisit-12229.sh (this file),
 #   scripts/followthroughs/arm-token-revisit-12229.test.sh, the run_suite line in scripts/test-all.sh,
-#   the row in scripts/suite-shard-legs.tsv, the registration in scripts/lib/test-affected-paths.sh,
-#   and the directive in the tracker body.
+#   the rows in scripts/suite-shard-legs.tsv and scripts/suite-durations.tsv (the affected-set edge is
+#   derived from the file names, so there is no declared registration), and the directive in the tracker body.
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
@@ -54,11 +55,11 @@ TF="${ARM_TOKEN_REVISIT_TF:-$ROOT/apps/web-platform/infra/inngest-arm-write-toke
 
 m1=0; m2=0; m3=0
 
-if [ ! -f "$WF" ] || [ ! -r "$WF" ]; then
+if [ ! -f "$WF" ] || [ ! -r "$WF" ] || [ ! -s "$WF" ]; then
   echo "CANNOT ESTABLISH: the apply workflow could not be read"
   exit 3
 fi
-if [ ! -f "$TF" ] || [ ! -r "$TF" ]; then
+if [ ! -f "$TF" ] || [ ! -r "$TF" ] || [ ! -s "$TF" ]; then
   echo "CANNOT ESTABLISH: the arm-token Terraform file could not be read"
   exit 3
 fi
@@ -66,14 +67,16 @@ fi
 wf_text="$(tr -d '\r' < "$WF")" || { echo "CANNOT ESTABLISH: the apply workflow could not be read"; exit 3; }
 tf_text="$(tr -d '\r' < "$TF")" || { echo "CANNOT ESTABLISH: the arm-token Terraform file could not be read"; exit 3; }
 
-has() { # text regex -> 0 present, 1 absent
-  grep -qE -- "$2" <<<"$1"
+has() { # text regex -> 0 present, 1 absent (comment lines are not members)
+  local body
+  body="$(grep -vE '^[[:space:]]*#' <<<"$1")"
+  grep -qE -- "$2" <<<"$body"
 }
 
-has "$wf_text" '^[[:space:]]*-target=doppler_service_token\.inngest_arm_write([[:space:]\\]|$)'; rc=$?
+has "$wf_text" '-target[= ]["'"'"']?doppler_service_token\.inngest_arm_write(["'"'"'[:space:]\\;]|$)'; rc=$?
 if [ "$rc" -eq 0 ]; then m1=1; elif [ "$rc" -ne 1 ]; then echo "CANNOT ESTABLISH: member 1 could not be searched"; exit 3; fi
 
-has "$wf_text" '^[[:space:]]*-target=github_actions_secret\.doppler_token_inngest_arm([[:space:]\\]|$)'; rc=$?
+has "$wf_text" '-target[= ]["'"'"']?github_actions_secret\.doppler_token_inngest_arm(["'"'"'[:space:]\\;]|$)'; rc=$?
 if [ "$rc" -eq 0 ]; then m2=1; elif [ "$rc" -ne 1 ]; then echo "CANNOT ESTABLISH: member 2 could not be searched"; exit 3; fi
 
 has "$tf_text" '^[[:space:]]*resource[[:space:]]+"doppler_service_token"[[:space:]]+"inngest_arm_write"'; rc=$?
@@ -84,5 +87,5 @@ if [ $((m1 + m2 + m3)) -eq 0 ]; then
   exit 2
 fi
 
-echo "ACTION REQUIRED: the arm-token revisit is due and the token is still in config (token -target line: $m1, secret -target line: $m2, resource declaration: $m3). Record the decision on #12158: revoke with its change linked, or keep with a new date at most 90 days out and a freshly enrolled tracker."
+echo "ACTION REQUIRED: the arm-token revisit is due and the token is still in config (token -target line: $m1, secret -target line: $m2, resource declaration: $m3). Record the decision on #12158: revoke with its change linked, or keep with a new date at most 90 days out and a freshly enrolled tracker. Revoke only if the four preconditions in arm-token-replacement-design-12158.md (The revisit question) hold; otherwise keep with a new date."
 exit 5

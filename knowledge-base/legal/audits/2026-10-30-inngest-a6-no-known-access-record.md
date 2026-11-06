@@ -22,7 +22,7 @@ unsigned, owner sentence pending
 > `knowledge-base/engineering/operations/runbooks/inngest-server.md`), as to how this record is signed. The history below is left as written.**
 > "Owner-signed" (line "What this record is"), "Signed by the owner (human, not an agent)" (Signature block), "An in-session instruction transcribed
 > by an agent is not the owner's signature" (CLO review of 2026-10-31) and "Post `S6-A6-DONE`" (After signing) no longer describe the only route.
-> The owner's knowledge sentence ("I know of no other access") is still ONLY the owner's own words: an agent never drafts it, so the "Statement
+> The owner's knowledge sentence is still ONLY the owner's own words: an agent never drafts it, so the "Statement
 > (to be adopted by the owner)" below is evidence-framing text, not a sentence the owner adopts by agreeing. The owner gives that sentence once in
 > session; an agent posts the record under a provenance block that quotes it verbatim ("Posted by ... on the owner's instruction given in session at ...
 > Owner's words, verbatim: ... Agent-drafted text: yes/no. Not typed by the owner into this thread"), then posts `S6-A6-RELAYED:` (never `S6-A6-DONE:`)
@@ -34,8 +34,7 @@ unsigned, owner sentence pending
 ## What this record is
 
 The A6 row of the post-merge production-envelope table in `knowledge-base/engineering/operations/runbooks/inngest-server.md`
-asks for one owner-signed statement that, as far as the owner knows, nobody outside the intended
-operator set has access to the Hetzner project that holds `hcloud_volume.inngest_redis_luks`
+asks for the owner's own knowledge sentence about access to the Hetzner project that holds `hcloud_volume.inngest_redis_luks`
 (volume `106903269`), the only copy of the Inngest queue and run state. It is linked from #10382 and #10136.
 The member list below is an evidence section of this file, not a second record.
 
@@ -69,7 +68,7 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 
 ## Related measured items (the A6 row's prerequisites)
 
-| Prerequisite | State as of 2026-10-31 | Owner fills in |
+| Prerequisite | State (cells updated 2026-11-06) | Owner fills in |
 |---|---|---|
 | A5 complete | recorded complete on #10136 (updated 2026-11-06): `S5-A5-DONE` 2026-11-02T14:28:00Z (agent-posted at owner delegation) and `S5-A5-RELAYED` 2026-11-02T21:51:04Z (owner's words). It covers the dedicated Inngest key pair only; the other exposed keys are still rotating, see `knowledge-base/legal/audits/2026-11-02-a6-no-known-access-record-inngest-keys.md` and the CLO re-assessment due 2026-11-08 | owner re-checks A5 at signing |
 | Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; the 2026-11-02 keys record holds a tls-health re-read (`nft_rules=7`, `legacy_8288_packets=0`) that is available as evidence (updated 2026-11-06) | owner links one or marks "n/a" |
@@ -85,8 +84,10 @@ An agent-written evidence-framing block stood here from 2026-10-30 until 2026-11
 
 ## Signature block
 
-- Signed by the owner (human, not an agent), by their own GitHub comment on #10136 that posts the statement above verbatim: ____________________ (comment URL)   UTC date and time: ____________Z
-- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the statement and claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
+- Signed by the owner (human, not an agent), by their own GitHub comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: ____________________ (comment URL)   UTC date and time: ____________Z
+- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
+
+Superseded 2026-11-06: the two lines above used to refer to a "statement above"; that block was removed. They now point at the owner's own sentence field, which stays empty until the owner gives it in their own words.
 
 ## CLO review, 2026-10-31
 
@@ -96,7 +97,7 @@ DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the 
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
 resubmission once the owner's own comment exists and A5 is done.
 
-Superseded in part 2026-11-06: the A5 reason is resolved (see the A5 cell); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653).
+Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653).
 
 ## After signing (owner)
 

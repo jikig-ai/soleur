@@ -13,10 +13,10 @@ The exposure that makes the question worth asking is stated once, verbatim, in t
 | Credential | Consumers | Re-derive |
 |---|---|---|
 | `doppler_service_token.inngest_arm_write` (repo secret `DOPPLER_TOKEN_INNGEST_ARM`) | `op=rollback` and `op=resume` only, via the step "Export Inngest arm token (gated ops only)" in `.github/workflows/cutover-inngest.yml` | `git grep -n DOPPLER_TOKEN_INNGEST_ARM -- .github scripts` |
-| flip-read token (`DOPPLER_TOKEN_INNGEST_FLIP_READ`) | the step "Preflight - inherited-done check, fails closed on a blind instrument" of job `inngest_host_replace` | `git grep -n DOPPLER_TOKEN_INNGEST_FLIP_READ -- .github` |
+| flip-read token (`DOPPLER_TOKEN_INNGEST_FLIP_READ`) | the step whose name begins "Preflight - inherited-done check, fails closed on a blind instrument" of job `inngest_host_replace` | `git grep -n DOPPLER_TOKEN_INNGEST_FLIP_READ -- .github` |
 | the Terraform mint and its two `-target` lines | `.github/workflows/apply-web-platform-infra.yml` | `git grep -n 'inngest_arm_write\|doppler_token_inngest_arm' -- .github` |
 
-The two verbs read a flag and make exactly three writes: set `INNGEST_CUTOVER_FLIP=rollback`, delete `INNGEST_HEARTBEAT_URL`, set `INNGEST_CUTOVER_FLIP=flushed`. Their reads could use the flip-read token today; only the three writes need a write token. `scripts/cutover-inngest.sh` has five sites in the `rollback)` and `resume)` arms (`git grep -n DOPPLER_TOKEN_INNGEST_ARM -- scripts/cutover-inngest.sh`). Doppler tokens are scoped to a config, not to keys, so the replacement cannot be narrower than the arm token: the gain is in delivery, not in blast radius.
+The two verbs read a flag and make exactly three writes: set `INNGEST_CUTOVER_FLIP=rollback`, delete `INNGEST_HEARTBEAT_URL`, set `INNGEST_CUTOVER_FLIP=flushed`. Their reads could use the flip-read token today; only the three writes need a write token. `scripts/cutover-inngest.sh` has eight executable references in the `rollback)` and `resume)` arms (six authenticated Doppler calls and two empty-checks) (`git grep -n DOPPLER_TOKEN_INNGEST_ARM -- scripts/cutover-inngest.sh`). Doppler tokens are scoped to a config, not to keys, so the replacement cannot be narrower than the arm token: the gain is in delivery, not in blast radius.
 
 ## The chosen path (by pointer)
 
@@ -32,7 +32,7 @@ Requirements that are not in those rows:
 
 Decision D2, with the precondition list per step. Only documents may land before the window.
 
-0. Window preconditions (ADR-282 addendum, D6): #12213 closed by its owner after a green run on a main SHA containing PR 12210; the userdata-budget check on the dispatch SHA; the probe-carrying config bundle and digest promotion (#11266) with the dead-man alert PR (tracked in #12230); the Better Stack dead-man probe write (owner-authorised for the window, re-asked in session); a per-command in-session go naming the exact command line.
+0. Window preconditions (ADR-282 addendum, D6): #12213 closed by its owner after a green run on a main SHA containing PR 12210; the userdata-budget check (`apps/web-platform/infra/inngest-userdata-budget.sh`) on the dispatch SHA; the probe-carrying config bundle and digest promotion (#11266) with the dead-man alert PR (tracked in #12230); the Better Stack dead-man probe write (owner-authorised for the window, re-asked in session); a per-command in-session go naming the exact command line.
 1. Host replace plus `op=resume`. Planning only, not dispatched; dispatch is the owner's per-command in-session go.
 2. Build and prove the new write path: one green gated run of `op=resume` or `op=rollback`, or an authenticated Doppler API check that the new token is read/write on `soleur-inngest/prd`.
 3. Move flip-read to Tier B: the `inngest_host_replace` job already runs under `environment: infra-privileged`, so its preflight reads the key from the loader once it is seeded into `soleur-infra-privileged/prd`.
@@ -43,6 +43,8 @@ A change to `cutover-inngest.yml`, to the inherited-done preflight, a new secret
 ## The revoke change and its rollback
 
 The change removes `doppler_service_token.inngest_arm_write` and `github_actions_secret.doppler_token_inngest_arm` from config, removes their two `-target` lines from `apply-web-platform-infra.yml`, drops the export step, keeps `github_repository_environment.inngest_cutover` and `github_repository_environment_deployment_policy.inngest_cutover_main` with their `-target` lines (the environment still gates `op=backup`, rollback and resume), and rewrites the file header. `inngest-arm-write-token.tf` is never deleted whole. Removing the `-target` lines alone does not revoke: the destroy is a separate owner-gated apply, or `doppler configs tokens revoke`.
+
+If the resource is renamed or moved in that change, update the revisit probe's members in the same change (it reads the `-target` lines and the declaration by name).
 
 Named rollback: re-mint with `-replace=doppler_service_token.inngest_arm_write` (documented in the file), then re-run the relay for the secret. Record date and evidence on #12158 when it happens.
 
@@ -60,7 +62,7 @@ Listed once; each moves with the change it pins.
 - The Tier-B loader step stays `if: inputs.op == 'backup'`; no op arm combines the loader with the new secret.
 - No `github_actions_secret` or `github_actions_environment_secret` resource carries the key (static grep).
 - `tests/scripts/test-infra-privileged-tier-census.sh` gains an environment-scoped-name clause, and `DOPPLER_TOKEN_INNGEST_ARM` leaves `REPO_SCOPED_PRIV` in the revoke change.
-- `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, `inngest-host-replace-preflight.test.sh` and `test-inngest-host-replace-gate.sh` move with the changes they pin.
+- `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, `apps/web-platform/infra/inngest-host-replace-preflight.test.sh` and `tests/scripts/test-inngest-host-replace-gate.sh` move with the changes they pin.
 - To check at build, not assumed: whether the census or the credential-tiers record requires every environment secret to be registered by name, and that `DOPPLER_TOKEN_INFRA_PRIVILEGED` is present on the `inngest-cutover` environment.
 - The new token needs its own revisit coverage once it exists; the revisit probe watches only the arm token.
 

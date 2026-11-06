@@ -34,9 +34,9 @@ Plan: `knowledge-base/project/plans/2026-11-06-chore-record-owner-decisions-a6-r
 
 ## 5. Revisit probe
 
-- 5.1 Failing suite first: `scripts/followthroughs/arm-token-revisit-<N>.test.sh` (seven mutants, about five cases, exit-set {2,3,5}, mode 100755 assertion, synthesized fixtures, test-only path override).
+- 5.1 Failing suite first: `scripts/followthroughs/arm-token-revisit-<N>.test.sh` (six mutants, about five cases, exit-set {2,3,5}, mode 100755 assertion, synthesized fixtures, test-only path override).
 - 5.2 Probe from the stub template, header with notify-only / credential posture / residuals / RETIREMENT; `chmod 755`.
-- 5.3 Register: `run_suite` in `scripts/test-all.sh` (beside zot-soak), `scripts/suite-shard-legs.tsv` row, `scripts/lib/test-affected-paths.sh` block and `ALWAYS_ON_SUITES` entry; `lint-orphan-test-suites.sh` after `git add`.
+- 5.3 Register: `run_suite` in `scripts/test-all.sh` (beside zot-soak), `scripts/suite-shard-legs.tsv` row, `scripts/lib/test-affected-paths.sh` (amended by D3-r2a: no declared block; the edge is derived); `lint-orphan-test-suites.sh` after `git add`.
 - 5.4 If registration exceeds that footprint, split the probe into its own PR.
 
 ## 6. Review and ship hand-off
