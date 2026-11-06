@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1261
-# generated-at=2026-11-05T17:51:21Z
+# generated-at=2026-11-05T21:50:00Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -174,7 +174,7 @@ plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor
-plugins/soleur/test/boundary-prefix.test.sh	1222	floor
+plugins/soleur/test/boundary-prefix.test.sh	718	measured
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	13	measured
 plugins/soleur/test/c4-count-parity.test.sh	1120	measured
 plugins/soleur/test/c4-from-components.test.sh	14478	measured
