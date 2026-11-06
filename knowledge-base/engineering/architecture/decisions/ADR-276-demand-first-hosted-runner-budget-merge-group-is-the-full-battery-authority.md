@@ -63,6 +63,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-10-16 S4 PR C evidence recorded, verdict NO-GO (#9729; see `## Amendment 2026-10-16 (S4 PR C, #9729)` below): the go/no-go is NO-GO on index completeness (CTO-confirmed), the lock stays, nothing is activated and stage 2 was not built; `S4 live` is NOT recorded and the follow-on decision is #10448
 - 2026-10-22 S4 index completion PR3a amended (#10448, Ref #9729; see `## Amendment 2026-10-22 (S4 index completion ratchet, #10448)` below): the audit ratchet ships as the ADVISORY job `affected-index-ratchet` with a committed shrink-only baseline; nothing is activated, the lock, `CI_PR_AFFECTED`, PR D (#10414) and the ruleset are untouched; `S4 live` is NOT recorded and the ratchet becomes a required context only in PR3b (#10859)
 - 2026-11-04 demand-lever evaluation recorded (#12030; see `## Amendment 2026-11-04 (#12030 demand-lever evaluation)` below): no new stage and no status change; no safe demand-trim lever was found beyond S2 and S3, and the residual risk is delivered runner concurrency; S4 stays NO-GO and unactivated
+- 2026-11-05 S4 index completion PR5z strict zero (#10861): the drain series ended at strict zero — `scripts/ci-pr-affected-audit.baseline.tsv` deleted, the adoption arm replaced by the unconditional `baseline-reintroduced` verdict; audit exits 0, ratchet strict; replay and go/no-go re-ruling pending
 
 ## Context
 

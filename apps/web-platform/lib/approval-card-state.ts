@@ -16,6 +16,7 @@
  */
 
 import { AGENT_WAIT_MINUTES } from "@/lib/approval-copy";
+import type { LegalCardStateWire, LegalChoiceWire } from "@/lib/legal-acceptance-wire";
 import type { ApprovalDecideOutcomeWire, ApprovalDecisionWire, ApprovalWireStatus } from "@/lib/types";
 
 export { AGENT_WAIT_MINUTES };
@@ -154,3 +155,59 @@ export function revealInvisible(text: string): string {
 
 /** Past this many lines a long block scrolls inside the card with a visible "N more lines" marker (wireframe note 2). */
 export const BLOCK_VISIBLE_LINES = 14;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Founder legal-acceptance card (#12011 PR-C, ADR-319, wireframe 16). A separate, smaller state machine: the card is
+// derived from the founder's `legal_acceptance` rows and the registry entry, never stored. Pure: the caller injects `now`.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The one fact about a stored row that decides the state. */
+export interface LegalRowForState {
+  textHash: string;
+  choice: LegalChoiceWire;
+}
+
+export interface LegalCardStateInput {
+  /** The text hash THIS card shows: the registry's current hash for the live card, an older row's hash for a "replaced" card. */
+  cardHash: string;
+  /** The registry's current hash for the key. */
+  currentHash: string;
+  /** The registry entry's `valid_until` (YYYY-MM-DD, current through the END of that UTC day) or null. */
+  validUntil: string | null;
+  /** All of the founder's rows for the key. */
+  rows: ReadonlyArray<LegalRowForState>;
+  now: Date;
+}
+
+/**
+ * True once the whole of the `valid_until` day (UTC) has passed. Same rule as `isCurrent` in the server registry
+ * (`server/legal-acceptance/canonical.ts`), duplicated on purpose: that module imports node:fs and node:crypto, so this
+ * client-safe file cannot import it. Change the two together.
+ */
+export function legalValidUntilPassed(validUntil: string | null, now: Date): boolean {
+  if (validUntil === null) return false;
+  const start = Date.parse(`${validUntil}T00:00:00Z`);
+  if (Number.isNaN(start)) return false;
+  return now.getTime() >= start + 86_400_000;
+}
+
+/**
+ * Exactly one of six states. A card for an OLDER text (its hash is not the registry's current one) is `replaced` whatever
+ * the row says: the answer stays on record as given and the new version needs its own. For the current text a row wins
+ * over expiry (an answer outlives `valid_until`); with no row the card is `expired` after `valid_until`, else `pending`.
+ */
+export function deriveLegalCardState(i: LegalCardStateInput): LegalCardStateWire {
+  if (i.cardHash !== i.currentHash) return "replaced";
+  const row = i.rows.find((r) => r.textHash === i.currentHash);
+  if (row) {
+    switch (row.choice) {
+      case "accept":
+        return "accepted";
+      case "decline":
+        return "declined";
+      case "request_changes":
+        return "changes_requested";
+    }
+  }
+  return legalValidUntilPassed(i.validUntil, i.now) ? "expired" : "pending";
+}

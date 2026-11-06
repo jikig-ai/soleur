@@ -1962,6 +1962,116 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "legal-acceptance-failure-burst": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "legal-acceptance"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "decide_rejected,reauth_failed"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 45,
+    "name": "legal-acceptance-failure-burst",
+    "triggerConditions": [
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 3
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "single"
+  },
+  "legal-acceptance-row-without-event": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "legal-acceptance"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "row_without_event"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 46,
+    "name": "legal-acceptance-row-without-event",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "local-cache-reload-rate": {
     "actionFilters": [
       {

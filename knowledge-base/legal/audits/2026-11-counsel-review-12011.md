@@ -13,6 +13,7 @@ non_blocking:
   - "N2 — statutory-response-catalog.md#dsar routes a Web Platform account holder to the self-serve export or the DSAR worker and has no route for rows held in tables excluded from both (the PA-40 email route). It also has no Art. 21 section (already acknowledged in the LIA). Owed before the first erasure request or objection."
   - "N3 — Art. 20 is cited next to Art. 15 in register (h). The basis is Art. 6(1)(f), so Art. 20 does not apply; harmless, left as drafted."
 open_follow_ups: ["deletion path for a retained row at the end of the retention period, including redaction of the free-text note (not built; tracked in #12080)", "external anchor for the row checksum (deferred; ADR-319 says no issue tracks it)", "deletion of legal_reauth_event rows on erasure (not built; the 30-day opportunistic purge is built)", "Register Maintenance item 17 (a) to (g) (external counsel)"]
+addenda: ["2026-11-05 PR-C addendum (PR #12148, fires on its merge): see the section 'Addendum 2026-11-05 (PR-C)' at the end; it does not change this PR-B disposition"]
 re_evaluation_triggers: "First arms-length user (any founder other than the Jikigai operator) OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something (PR-D wired into a gate) OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept OR a second free-text field or a change to the note cap."
 ---
 
@@ -111,5 +112,57 @@ Before any founder other than the Jikigai operator: Privacy Policy, Data Protect
 | compliance-posture.md row | Accurate after correction |
 
 **Disposition: DISCHARGED**, conditioned on Condition 1. No code, SQL or ADR was changed. Problems in those files: none found that make a legal artifact false; N1 notes one ADR sentence read in context.
+
+*Draft material for internal attestation; not legal advice. External counsel re-review follows the frontmatter triggers and counsel item 17.*
+
+## Addendum 2026-11-05 (PR-C)
+
+v1 internal counsel-review attestation under the ship Phase 5.5 gate for PR #12148 (PR-C of #12011: the web card and the in-place email-code check behind the `approval-queue` flag). The plan declares `brand_survival_threshold: single-user incident`. Authority and limits are as stated above: CLO agent function, operator veto retained, external counsel reserved for the frontmatter triggers and counsel item 17. This addendum is conditioned on the merge of PR #12148; the text above is unchanged. Draft material, not legal advice. It clears no PROVISIONAL, DRAFT or counsel-placeholder marker.
+
+**Method.** The prose in the five legal artifacts was read against `apps/web-platform/server/legal-acceptance/reauth.ts` (`resolveIdentity`, `AttemptCeiling`, `SendFailureMemory`, `sendReauthCode`, `verifyReauthCode`), `service.ts` (`decideLegal`, `normaliseNote`), the two routes under `apps/web-platform/app/api/legal-acceptance/[key]/`, the two pages under `apps/web-platform/app/(dashboard)/dashboard/approvals/legal/`, `server/approval/flag.ts` and `LEGAL_OPS` in `server/approval/ops.ts`, `lib/legal-acceptance-copy.ts`, `server/legal-acceptance/texts/` and the ADR-319 PR-C amendment. The two notice strings in `LEGAL_COPY` were compared character by character with parts (c) and (c-2) of `2026-11-founder-legal-acceptance-dsar-and-notice-note.md`: identical (the retention placeholder `[period to be confirmed by counsel]` is present). No migration, SQL or DSAR allowlist change is in the diff, so migration 184 claims from the PR-B review stand and the `docs/legal/**` lockstep gates are not engaged.
+
+### Facts checked
+
+| Fact | Finding |
+|---|---|
+| Per-host verify ceiling carries its caveat everywhere | `AttemptCeiling` is an in-process map (10 per 15 minutes per user); the code says so. Caveat was missing in two places and is now present: the LIA web-screen paragraph and the gdpr-gate exit body. Present already in the register amendment, LIA safeguards, attestation property 12, ADR-319. The database bounds (5 per challenge, 3 challenges per 15 minutes) are the hard limit. Read in context: PA-8 records web-2 as an out-of-band standby at serving weight 0, so multiplication across hosts may be theoretical today; a restart or deploy resets the counter, so the "soft brake" wording stays right. |
+| Address for the code comes from the session only | TRUE. `resolveIdentity` takes the email from `getUser()` on the user-context client; the reauth route reads only `step`, `resend`, `code` from the body. The 422 `otp_disabled` branch returns `sent`, as stated. |
+| Note not delivered to the team until PR-D | TRUE (no delivery code exists), and the card says "saved with your decision". Stated in the posture row and ADR-319 already; **added** to the register amendment, the LIA and the attestation (not-attested list). |
+| Flag effectively global | TRUE. Both routes and both pages call `isApprovalQueueEnabled({ userId, workspaceId: null })`. The posture row and ADR-319 said so; the register amendment, LIA and attestation property 10 did not, and "operator first" read as if the flag enforced it. **Corrected**; the gdpr-gate exit's earlier "flag read per user" now carries a pointer to its own addendum. |
+| Notice wording is the counsel-pinned text | TRUE (string comparison above; `legal-copy.test.ts` pins it). Not edited. |
+| No real legal text committed | TRUE. `texts/` holds only `README.md` and `.gitattributes`; every key answers not-found. |
+| Card copy PROVISIONAL behind the flag | TRUE (`LEGAL_COPY.PROVISIONAL` is true, both sign-offs null). |
+| Event count | **Corrected.** The register and LIA listed `row_without_event` among events "the screen reports". The screen emits `accepted`, `decide_rejected`, `reauth_failed` and `page_read_failed`; `row_without_event` is defined but nothing emits it until the PR-D check endpoint. Events carry ids and tags, not the text, code, address or note; user ids are pseudonymised at the Sentry boundary under PA-8. |
+| Resend not named in the gdpr-gate exit | Added (mail relay for the Supabase code email, already a listed processor; no new recipient). |
+
+### Per-artifact verdicts
+
+| Artifact | Verdict |
+|---|---|
+| article-30-register.md (PA-40 scope note and Status) | Accurate after correction (event count, flag scope, note delivery). |
+| compliance-posture.md row | Accurate; no edit. |
+| LIA | Accurate after correction (ceiling caveat, flag scope, note delivery, event count, address-from-session, a trigger clarified). |
+| Attestation record | Accurate after correction (property 10, not-attested list). Still a drafted record; sign-off block blank and untouched. |
+| gdpr-gate exit | Accurate after correction (ceiling caveat, flag line, Resend). Heuristic gate output, says so. |
+| DSAR and notice note (not in the diff) | Unchanged; the card carries it word for word. |
+
+### Determinations
+
+- **Lawful basis.** Art. 6(1)(f) with the standalone LIA remains supportable for the operator. The card improves the expectation-gap limb because both notices now precede the choice, but the limb is closed only in part: the retention period shown is a placeholder, and the notice has not been tested with a reader other than the drafter. A Yes on the card is acceptance of a legal text, not GDPR consent: no processing here rests on Art. 6(1)(a), so no Art. 7(3) withdrawal mechanics are owed, and "final once recorded" is not an Art. 7 defect. Whether an email-code Yes forms an enforceable acceptance is a contract question outside this review.
+- **Notice (Art. 13).** The card-level notice (c-2) names the account identifier, text version and fingerprint, time, and the code-confirmation time for a Yes. The row also holds the sign-in session identifier and the checksum; the erasure reply lists them, the card notice does not. It also states no legal basis and does not link the privacy documents. Acceptable for the operator under the Art. 13(4) fallback; for any other founder the wording must be completed by counsel. Wording is pinned and was not edited. Recorded as non-blocking N4.
+- **Retention.** Unchanged and not decided: life of the instrument plus 5 years, cap 10, unconfirmed (item 17(a)). No deletion path exists (#12080). The notice that the record is kept after account deletion is accurate against the code (no erasure step touches the tables).
+- **Erasure.** Unchanged: Art. 17(3)(e) with Art. 6(1)(f) stays a counsel item (17(b)); PA-40 item 17 and #12080 remain open.
+
+### Disposition
+
+**DISCHARGED for the merge of PR #12148**, as the PR-B discharge was: the card is dark by default (flag off, no real text committed), the copy is PROVISIONAL, and every counsel-owned decision stays open. Not external counsel; the attestation sign-off block stays blank.
+
+Conditions (enabling gates, not the merge):
+
+1. The retention period and the erasure path for a retained row (PA-40 item 17, #12080) remain counsel decisions. No real row before the period is filled in the card-level notice or the "to be confirmed" line is removed from the display text, or the operator records an express deferral (PR-B condition 2 stands).
+2. Because the flag is effectively global, the card must stay dark for any founder other than the operator. Do not switch `approval-queue` on in production, and do not commit a real text to `server/legal-acceptance/texts/`, until either the flag is confirmed confined to the operator or the non-operator gates are met (final-form Privacy Policy, Data Protection Disclosure and GDPR Policy with mirrors and SHA pins; LIA re-run; notice wording completed per N4).
+3. The Request changes note must either have a delivery path (PR-D) or the card copy must stop implying the team will read it, before the first real Request changes.
+4. The ADR-319 enabling conditions stand, including confirming the Supabase single-session-per-user setting is off.
+5. Open items from the PR-B audit (N2, #12080, item 17 (a) to (g)) are unchanged.
 
 *Draft material for internal attestation; not legal advice. External counsel re-review follows the frontmatter triggers and counsel item 17.*

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-05T08:12:03Z
+# generated-at=2026-11-05T17:51:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -125,6 +125,7 @@ plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	1
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	2
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	7
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	2
+plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh	5
 plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	4
 plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	5
 plugins/soleur/skills/eval-harness/test/extract-block.test.sh	1
@@ -140,6 +141,7 @@ plugins/soleur/skills/git-worktree/test/no-repo-fail-loud.test.sh	2
 plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh	7
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	2
 plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh	2
+plugins/soleur/skills/incident/test/pull-card.test.sh	5
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	2
 plugins/soleur/skills/launch-check/test/baseline.test.sh	1
 plugins/soleur/skills/launch-check/test/identity.test.sh	1
@@ -322,6 +324,7 @@ plugins/soleur/test/ship-prepush-secret-scan.test.sh	2
 plugins/soleur/test/sole-copy-drift-check.test.sh	1
 plugins/soleur/test/sync-pr-behind.test.sh	3
 plugins/soleur/test/technical-ruling-gate.test.sh	8
+plugins/soleur/test/technical-ruling-owner-list.test.sh	4
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3

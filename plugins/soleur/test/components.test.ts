@@ -948,19 +948,19 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
   });
 
-  test("Cloudflare Credentials clause names exactly the three bound token variables, and CF_API_TOKEN is never one of them", () => {
+  test("Cloudflare Credentials clause names exactly the four bound token variables, and CF_API_TOKEN is never one of them", () => {
     const cred = paragraph(sectionRaw(readRel(SD), "## 9."), "Credentials.");
     const clause = slice(cred, "Cloudflare reads use only the token variable bound to the subcommand", "An absent bound token makes the read `unverified`.");
     expect(clause, "the Credentials paragraph lost the Cloudflare clause (or its closing sentence)").not.toBe("");
     const vars = backticked(clause).filter((t) => /^CF_[A-Z_]+$/.test(t));
-    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort()).toEqual(["CF_API_TOKEN_AUDIT", "CF_API_TOKEN_RULESETS", "CF_API_TOKEN_ZONE_SETTINGS"]);
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort()).toEqual(["CF_API_TOKEN_AUDIT", "CF_API_TOKEN_PAGERULES_READ", "CF_API_TOKEN_RULESETS", "CF_API_TOKEN_ZONE_SETTINGS"]);
     expect(clause.includes("`CF_API_TOKEN` is never used"), "the Credentials clause lost `CF_API_TOKEN` is never used").toBe(true);
-    // The first (binding) sentence lists only the three; the bare CF_API_TOKEN belongs to the prohibition after it.
+    // The first (binding) sentence lists only the four; the bare CF_API_TOKEN belongs to the prohibition after it.
     const binding = slice(clause, "Cloudflare reads use only", ");");
     expect(binding.includes("`CF_API_TOKEN`"), "the binding list names the bare `CF_API_TOKEN`").toBe(false);
     // The doc's names are compared with what the WRAPPER binds (its TOKVAR assignments), not with a literal in this test.
     const bound = [...new Set([...codeOnly(readFileSync(WRAPPER, "utf-8")).matchAll(/\bTOKVAR=(CF_[A-Z_]+)/g)].map((m) => m[1]))].sort();
-    expect(bound.length, "the wrapper must bind three token variables (TOKVAR=CF_...)").toBe(3);
+    expect(bound.length, "the wrapper must bind four token variables (TOKVAR=CF_...)").toBe(4);
     expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort(), "doc token variables vs the wrapper's TOKVAR assignments").toEqual(bound);
     expect(bound.includes("CF_API_TOKEN"), "the wrapper binds the bare CF_API_TOKEN").toBe(false);
   });

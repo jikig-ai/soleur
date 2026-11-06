@@ -86,7 +86,7 @@ PR3A=10851
 DRAIN_SENTINEL=11226   # PR5: carries the label s4-drain, merged 2026-10-26T21:59:35Z; an independent lower bound for the restart floor (drain_sentinel_check); retired with the probe
 JOB="affected-index-ratchet"
 STEP="Ratchet the audit against the committed baseline"
-BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"
+BASELINE="scripts/ci-pr-affected-audit.baseline.tsv"   # repo-path: runtime -- resolved via the Contents API at remote refs (absence-at-tip is the PR5z end state), never read from this checkout
 # the SUT's RATCHET_ORACLE (a parity row in the replay suite compares this list with the SUT's own): a PR touching one of these cannot count as evidence
 ORACLE=(".github/workflows/ci.yml" "scripts/ci-pr-affected-replay.py" "plugins/soleur/scripts/lint-ratchet.py" "scripts/ci-pr-affected-audit.accept.tsv" "scripts/lib/test-affected-paths.sh" "scripts/test-all.sh" "$BASELINE")
 MIN_PR=3

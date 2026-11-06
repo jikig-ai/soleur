@@ -134,6 +134,7 @@ EXCLUDED|apps/web-platform/server/tool-tiers.ts|not a Bash-lane decider (assertA
 EXCLUDED|apps/web-platform/server/approval/gate-flow.ts|durable-approval slice (ADR-309), flag-gated, separate from the destroy-ask lane
 EXCLUDED|apps/web-platform/server/approval/gate-types.ts|type declarations of the durable-approval slice
 EXCLUDED|apps/web-platform/server/approval/tools.ts|tool list of the durable-approval slice
+EXCLUDED|apps/web-platform/server/approval/ops.ts|Sentry fault ops and log markers of the durable-approval slice, emitted after a verdict is reached; no permission decision
 EXCLUDED|apps/web-platform/server/safe-bash.ts|safe-Bash allowlist grammar; the probe's control cases exercise it, a regression reaches the weekly cron (CANDIDATE to widen: see the PR notes)
 EXCLUDED|apps/web-platform/server/permission-callback-bash-batch.ts|batch-grant cache container; the stale-grant case exercises it, a regression reaches the weekly cron (CANDIDATE to widen: see the PR notes)
 EXCLUDED|apps/web-platform/server/workspace-mode.ts|persona/mode resolution input; the probe pins its own fixtures, a regression reaches the weekly cron (CANDIDATE to widen: see the PR notes)

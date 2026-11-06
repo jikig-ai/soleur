@@ -182,7 +182,11 @@ export interface ApprovalOpContext {
   conversationId?: string;
   workspaceId?: string;
   userId?: string;
+  /** Extra low-cardinality Sentry TAGS (searchable), merged after `approval_id`. Static enum values only, never user content. */
+  tags?: Record<string, string>;
   extra?: Record<string, unknown>;
+  /** `reportLegalOp` only: sets the severity of ONE report (default: the op's own level). Ignored by `reportApprovalOp`. */
+  level?: "error" | "warn";
 }
 
 /**
@@ -212,7 +216,7 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
     feature: FEATURE,
     op: def.op,
     message: def.message,
-    tags: ctx.approvalId ? { approval_id: ctx.approvalId } : undefined,
+    tags: ctx.approvalId || ctx.tags ? { ...(ctx.approvalId ? { approval_id: ctx.approvalId } : {}), ...ctx.tags } : undefined,
     extra: {
       ...(ctx.toolName ? { tool: ctx.toolName } : {}),
       ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
@@ -224,6 +228,69 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
   };
   try {
     if (def.level === "error") reportSilentFallback(null, options);
+    else warnSilentFallback(null, options);
+  } catch {
+    // Observability must never turn a deny into a throw.
+  }
+}
+
+/**
+ * Founder legal acceptance ops (#12011, ADR-319). A separate registry and helper, NOT members of APPROVAL_OPS: the Sentry
+ * alert rules match `feature=legal-acceptance` plus the op, while every gate op keeps `feature=approval-queue` (the gate's
+ * alert and its contract tests iterate APPROVAL_OPS). Same rules as above: one static message per op, no database text,
+ * the thrown value contributes only `{code, fn, errName}`, and never the note, the code, the address or the text.
+ */
+export const LEGAL_OPS = {
+  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row with no matching event is `row_without_event`. */
+  accepted: {
+    op: "accepted",
+    message: "Legal acceptance: a founder decision was recorded",
+    level: "warn",
+  },
+  /** A decision was not recorded; `tags.reason` is one of DecideRejectReason (hash_mismatch, replaced, expired, denied_42501, db_error, unexpected, ...). */
+  decideRejected: {
+    op: "decide_rejected",
+    message: "Legal acceptance: a founder decision was not recorded",
+    level: "warn",
+  },
+  /** The email-code step failed for a reason other than a wrong code; `extra.errorClass` is the provider error class, never the address. */
+  reauthFailed: {
+    op: "reauth_failed",
+    message: "Legal acceptance: the email code step failed at the auth service; nothing was recorded",
+    level: "error",
+  },
+  /** Reconciliation found a legal_acceptance row with no matching `accepted` event (reported by the verify endpoint, PR-D). */
+  rowWithoutEvent: {
+    op: "row_without_event",
+    message: "Legal acceptance: a recorded decision has no matching accepted event",
+    level: "error",
+  },
+  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  pageReadFailed: {
+    op: "page_read_failed",
+    message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
+    level: "error",
+  },
+} as const satisfies Record<string, ApprovalOp>;
+
+export type LegalOpKey = keyof typeof LEGAL_OPS;
+
+export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
+  const def: ApprovalOp = LEGAL_OPS[key];
+  const level = ctx.level ?? def.level;
+  const options = {
+    feature: "legal-acceptance",
+    op: def.op,
+    message: def.message,
+    tags: ctx.tags,
+    extra: {
+      ...(ctx.userId ? { userId: ctx.userId } : {}),
+      ...describeError(err),
+      ...ctx.extra,
+    },
+  };
+  try {
+    if (level === "error") reportSilentFallback(null, options);
     else warnSilentFallback(null, options);
   } catch {
     // Observability must never turn a deny into a throw.

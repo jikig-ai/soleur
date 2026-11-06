@@ -708,10 +708,11 @@ G1J_USES = re.compile(r"^[ \t]*-?[ \t]*uses:[ \t]*\./\.github/actions/infra-cred
 # including the unbound `|| ''` one that binds no environment, where ENV-scoped secrets are
 # unreachable but these three are not. The name set: DOPPLER_TOKEN_WRITE and
 # DOPPLER_TOKEN_GIT_DATA_ROOT, plus DOPPLER_TOKEN_INNGEST_ARM — a third repo-scoped read/write
-# Doppler token (github_actions_secret, inngest-arm-write-token.tf). Case-insensitive: the
+# Doppler token (github_actions_secret, inngest-arm-write-token.tf) — and DOPPLER_TOKEN_INNGEST_FLIP_READ,
+# the repo-scoped READ-ONLY flip-flag token (#9927): read-only, but repo-scoped, so an unbound `|| ''` consumer still resolves it. Case-insensitive: the
 # secrets context resolves `secrets.doppler_token_write` as happily as the canonical spelling.
 REPO_SCOPED_PRIV = re.compile(
-    r"(?<![A-Za-z0-9_])(?:DOPPLER_TOKEN_WRITE|DOPPLER_TOKEN_GIT_DATA_ROOT|DOPPLER_TOKEN_INNGEST_ARM)(?![A-Za-z0-9_])",
+    r"(?<![A-Za-z0-9_])(?:DOPPLER_TOKEN_WRITE|DOPPLER_TOKEN_GIT_DATA_ROOT|DOPPLER_TOKEN_INNGEST_ARM|DOPPLER_TOKEN_INNGEST_FLIP_READ)(?![A-Za-z0-9_])",
     re.I)
 g1j_jobs, g1j_bad = [], []
 for j in jobs:
@@ -3247,6 +3248,13 @@ if mutate g1-2j-empty-arm-inngest-arm-token "$MUTDIR/tree/.github/workflows/tier
   fixcensus "$MUTDIR" "$T/mut/g1-2j.tsv" ""
   mutant_red g1-2j-empty-arm-inngest-arm-token wf_row "$T/mut/g1-2j.tsv" "G1j:"
 fi
+# Row 2k — DOPPLER_TOKEN_INNGEST_FLIP_READ (the repo-scoped read-only flip-flag token, #9927) is in the
+# same ban set: a job OUTSIDE the one that binds it, running on an unbound `|| ''` dispatch, must not consume it.
+MUTDIR="$(fixcopy g1-2k)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2k-empty-arm-inngest-flip-read-token "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}\n        run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2k.tsv" ""
+  mutant_red g1-2k-empty-arm-inngest-flip-read-token wf_row "$T/mut/g1-2k.tsv" "G1j:"
+fi
 # Row 3 — delete the `workspaces_luks_cutover_main` policy while the environment stays in the set.
 MUTDIR="$(fixcopy g1-3)"; assert_fixture_dir "$MUTDIR"
 if mutate g1-3-policy-deleted "$MUTDIR/tree/apps/web-platform/infra/environments.tf" 5 '/^resource "github_repository_environment_deployment_policy" "workspaces_luks_cutover_main"/,/^\}/d'; then
@@ -4857,7 +4865,8 @@ fi
 #   sentinel), g1-2e (run:-inline secrets interpolation), g1-2f (job-level env:), g1-2g
 #   (caller-job secrets: block), g1-2h (secrets: inherit), g1-2i (lowercase spelling),
 #   g1-2j (DOPPLER_TOKEN_INNGEST_ARM name); 1 landing each. Measured: 163 ran.
-MUTANT_FLOOR=163
+# 163 -> 164 (#9927 review): g1-2k (DOPPLER_TOKEN_INNGEST_FLIP_READ name in REPO_SCOPED_PRIV); 1 landing.
+MUTANT_FLOOR=164
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4912,7 +4921,8 @@ _ran=$((passes + fails))
 # 402 -> 404 (#9755): g1-2b (1 landing + 1 verdict). Measured: 404 ran.
 # 404 -> 406 (#9755 review): g1-2c (1 landing + 1 verdict). Measured: 406 ran.
 # 406 -> 420 (#9755 review round 2): g1-2d..g1-2j (7 landings + 7 verdicts). Measured: 420 ran.
-FLOOR=420
+# 420 -> 422 (#9927 review): g1-2k (1 landing + 1 verdict). Measured: 422 ran.
+FLOOR=422
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
