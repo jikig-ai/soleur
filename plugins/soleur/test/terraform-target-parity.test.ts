@@ -116,7 +116,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // inngest_config_signing + release_publish inside DP-11 F8, the two job<->environment bindings
 // (reusable-release.yml::release, build-inngest-bootstrap-image.yml::build), and the three
 // -target= presence pins for the new environment resources.
-const TEST_FLOOR = 358;
+// 358 -> 366 (#11923/#11920, +6 incl. the #8780 merge, exact): the key-rotate-approval + egress-PREVIOUS -target pins (2) and the
+// Guard-5 satellite derivation rows (the must-PASS satellite conformance + three mutation rows).
+const TEST_FLOOR = 366;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -4261,6 +4263,11 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     "inngest_cutover",
     "inngest_config_signing",
     "web_platform_infra_apply",
+    // #11923 — the key-rotation route's approval gate. Reviewer-gated from birth:
+    // the `approve` jobs of key-rotate.yml / inngest-key-rotate.yml bind it, and an
+    // empty reviewers.users would convert the sole human authorization on a
+    // production credential rotate into an auto-approve.
+    "key_rotate_approval",
   ]);
 
   // (#8780 review) The mirror ratchet: environments that are reviewer-less BY
@@ -4329,6 +4336,9 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // population for the same reason: deleting release-publish-environment.tf would
     // silently drop the reviewer-less limb's second member with the suite still green.
     expect(names).toContain("release_publish");
+    // (#11923) The rotation-approval environment must be IN the population — its
+    // ratchet membership is only load-bearing if the extractor actually sees it.
+    expect(names).toContain("key_rotate_approval");
     // And the policy extractor must have found something, or every environment would
     // trivially satisfy the branch-policy limb and the check would pass for the wrong
     // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
@@ -4611,6 +4621,43 @@ describe("publish-path jobs declare a main-only admission environment (#8780)", 
         `missing -target=${addr} in apply-web-platform-infra.yml's allow-list`,
       ).toBe(true);
     }
+  });
+});
+
+/**
+ * #11923 + #11920 — the rotation-approval environment, its main-only deployment
+ * policy and the egress PREVIOUS grace secret must all ride the apply job's
+ * saved-plan `-target` allow-list. A bare *.tf in this root is NEVER applied (the
+ * -target filter prunes it): an environment a workflow references but the
+ * allow-list omits auto-creates UNPROTECTED on first use — the #6780 vacuous-gate
+ * class the run-time `kk_chk_approval` protection_rules read exists to catch —
+ * and an un-targeted `doppler_secret` stays absent, so the rotate apply's
+ * `-replace` would have nothing to write. The dispatch-stripped per-merge set
+ * must see them too: a -target line inside a dispatch-only job cannot masquerade
+ * as routine coverage (stripDispatchJobs).
+ */
+describe("key-rotate-approval env + egress PREVIOUS secret are per-merge -targeted (#11923, #11920)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(
+    stripComments(extractJobBlock(wf, "apply")),
+    /^\s*terraform plan\b.*-out=tfplan/,
+  );
+  const planTargets = extractAllTargets(savedPlan);
+  const perMerge = extractAllTargets(stripDispatchJobs(wf));
+  const ADDRS = [
+    "github_repository_environment.key_rotate_approval",
+    "github_repository_environment_deployment_policy.key_rotate_approval_main",
+    "doppler_secret.egress_audit_ingest_token_previous",
+  ];
+
+  test("all three addresses are -targeted inside the apply job's saved plan", () => {
+    expect(planTargets.has("github_repository_environment.web_platform_infra_apply")).toBe(true); // non-vacuity
+    expect(ADDRS.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("and the dispatch-stripped per-merge coverage set sees the same three", () => {
+    expect(perMerge.has("github_repository_environment.infra_privileged")).toBe(true); // non-vacuity
+    expect(ADDRS.filter((a) => !perMerge.has(a))).toEqual([]);
   });
 });
 
@@ -10170,12 +10217,23 @@ function keyRotateViolations(rows: KrRow[], copies: KrCopy[], sibling: KrRow[], 
   const inTable = new Set(rows.map((r) => r.address));
   const siblingIds = new Set(sibling.map((r) => r.address));
   const keys = [...new Set(rows.map((r) => r.key))];
+  // #11920 — a `doppler_secret.<key>_previous` SATELLITE of a rotatable key: the grace-window
+  // previous-value secret of the CURRENT+PREVIOUS rotation pair (egress_audit_ingest_token).
+  // Its value comes from var.<key>_previous, never from random_id.<key>, so it is NOT a
+  // referrer the closure below can demand; its lifecycle is the same
+  // ignore_changes=[value] + -replace-to-write pattern the four inngest_* secrets use, so the
+  // flag rule below derives `replace` for it identically. It is also NOT a KK_COPIES member —
+  // a "copy" holds the key's CURRENT value and PREVIOUS must differ from it by design — so the
+  // closure and the copies-count both run on referrer rows only.
+  const isSatellite = (key: string, addr: string): boolean =>
+    addr === `doppler_secret.${key}_previous` &&
+    new RegExp(`\\bvar\\.${key}_previous\\b`).test(byAddr.get(addr)?.body ?? "");
   for (const r of rows) {
     if (!byAddr.has(r.address)) v.push(`address-missing:${r.address}`);
     if (/^(hcloud_|terraform_data\.)/.test(r.address)) v.push(`forbidden-type:${r.address}`);
     if (r.flag !== "replace" && r.flag !== "target") v.push(`bad-flag:${r.address}`);
     if (r.phase === "A" && (r.flag !== "replace" || !r.address.startsWith("random_id."))) v.push(`phase-A-not-random_id-replace:${r.address}`);
-    if (r.phase === "B" && r.address.startsWith("doppler_secret.")) {
+    if (r.address.startsWith("doppler_secret.")) {
       const body = byAddr.get(r.address)?.body ?? "";
       const ignores = /ignore_changes\s*=\s*\[[^\]]*\bvalue\b/.test(body);
       if (ignores && !(r.flag === "replace" && r.actions === "delete,create")) v.push(`ignore_changes-secret-not-replace:${r.address}`);
@@ -10186,7 +10244,8 @@ function keyRotateViolations(rows: KrRow[], copies: KrCopy[], sibling: KrRow[], 
     const rid = `random_id.${key}`;
     const refs = new RegExp(`\\brandom_id\\.${key}\\.(?:hex|id|b64_url|b64_std|dec)\\b`);
     const referrers = blocks.filter((b) => refs.test(b.body)).map(blockAddr);
-    const want = rows.filter((r) => r.key === key && r.phase === "B").map((r) => r.address).sort();
+    const bRows = rows.filter((r) => r.key === key && r.phase === "B").map((r) => r.address);
+    const want = bRows.filter((a) => !isSatellite(key, a)).sort();
     if (JSON.stringify([...referrers].sort()) !== JSON.stringify(want)) v.push(`closure:${key}: HCL referrers ${JSON.stringify([...referrers].sort())} != table ${JSON.stringify(want)}`);
     if (!rows.some((r) => r.key === key && r.address === rid && r.phase === "A")) v.push(`no-A-row:${key}`);
     const cp = copies.filter((c) => c.key === key);
@@ -10213,7 +10272,9 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
   const real = krTables(KEY_ROTATE_SCRIPT);
 
   test("the real table, copies and HCL are conformant (closure over every referencing block, flags follow ignore_changes, every random_id has a disposition)", () => {
-    expect(real.rows.length).toBe(15);
+    // 15 -> 16 (#11920): the egress_audit_ingest_token_previous satellite row — a phase-B
+    // doppler_secret admitted into the table without a random_id referrer or a KK_COPIES member.
+    expect(real.rows.length).toBe(16);
     expect(keyRotateViolations(real.rows, real.copies, real.sibling, hclTexts())).toEqual([]);
   });
 
@@ -10265,6 +10326,35 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
     expect(keyRotateViolations(b, real.copies, real.sibling, hclTexts())).toContain("plain-secret-not-update:doppler_secret.kb_drift_ingest_signing_key");
     const c = real.rows.map((r) => (r.address === "random_id.kb_drift_ingest_signing_key" ? { ...r, flag: "target" } : r));
     expect(keyRotateViolations(c, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("phase-A"))).toBe(true);
+  });
+
+  const PREV = "doppler_secret.egress_audit_ingest_token_previous";
+  const prevRow = (flag: string, actions: string): KrRow => ({ phase: "B", key: "egress_audit_ingest_token", address: PREV, flag, actions });
+
+  // #11920 — the egress PREVIOUS secret is a satellite of egress_audit_ingest_token: it never
+  // references random_id.egress_audit_ingest_token, so the closure must admit its phase-B row
+  // anyway; its flag still derives from ignore_changes=[value] exactly like the four inngest_*
+  // secrets. GREEN today (the row is admitted but not required — the runtime gate's
+  // `replace_not_requested` refuses a missing -replace), and stays green once the table row
+  // itself lands.
+  test("the egress PREVIOUS satellite row (replace/delete,create) is conformant — admitted into the closure without a random_id referrer (#11920)", () => {
+    expect(keyRotateViolations([...real.rows, prevRow("replace", "delete,create")], real.copies, real.sibling, hclTexts())).toEqual([]);
+  });
+
+  test("mutation: the same satellite row with flag target/update is red — the flag derives from the HCL lifecycle, not the table spelling", () => {
+    expect(keyRotateViolations([...real.rows, prevRow("target", "update")], real.copies, real.sibling, hclTexts())).toContain(
+      `ignore_changes-secret-not-replace:${PREV}`,
+    );
+  });
+
+  test("mutation: the satellite row filed under a different key is red — it is that key's neither referrer nor satellite", () => {
+    const rows = [...real.rows, { ...prevRow("replace", "delete,create"), key: "github_webhook_secret" }];
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("closure:github_webhook_secret"))).toBe(true);
+  });
+
+  test("mutation: a non-satellite non-referrer phase-B row for the egress key is still a closure red — satellite admission is narrow", () => {
+    const rows = [...real.rows, { phase: "B", key: "egress_audit_ingest_token", address: "doppler_secret.kb_drift_ingest_signing_key", flag: "target", actions: "update" }];
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("closure:egress_audit_ingest_token"))).toBe(true);
   });
 });
 

@@ -410,6 +410,7 @@ scripts/dogfood/grok-gpu-bootstrap	54	measured
 scripts/dogfood/grok-measure	36	measured
 scripts/domain-model-drift	1066	measured
 scripts/egress-audit-retention-check	1222	floor
+scripts/egress-gw-probe-silent-12180	1251	floor
 scripts/ensure-doppler	103	measured
 scripts/ensure-kb-index	1753	measured
 scripts/expenses-verify-by-check	257	measured
