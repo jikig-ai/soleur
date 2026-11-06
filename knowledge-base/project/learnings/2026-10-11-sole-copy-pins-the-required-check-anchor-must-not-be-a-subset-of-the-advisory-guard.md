@@ -29,6 +29,7 @@ one sat in a FIX commit or in a guard written to catch the previous round's esca
 - G2e now rejects `ignore_changes`, depth-0 `count/for_each/provider/provisioner` and counts braces on a
   code-only view; `G2E_PINS` is asserted equal to `SOLE_COPY_ADDRS` and the census literal. Sunset marker: fold
   into Guard 1 when it becomes required (#9927).
+  Superseded 2026-11-06: G2e is kept permanently, no sunset (CTO ruling, #9927).
 - One lexer change (code-only brace counting, heredoc-blanked scans) shared by Guard 1 and web-1's Guard B4,
   with a regression row on each side.
 - The jq create-halt now includes `random_password.inngest_redis_luks`; a create of the Doppler copy alone

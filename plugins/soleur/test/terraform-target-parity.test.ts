@@ -5462,6 +5462,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 // could weaken it. Original wording: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
 // it holds what one diff must not weaken (delete_protection, prevent_destroy, no ignore_changes, no depth-0 count/for_each/provider/
 // provisioner, the attachment unpinned), over exactly the six addresses G2 and census G4h name (tied below).
+// Superseded 2026-11-06 (CTO ruling, #9927): G2e is kept permanently as the independent different-language anchor; no sunset.
 
 /**
  * HCL with comments removed: whole-line and trailing `#` and `//`, and `/* ... *\/` (newlines kept). Strings are copied whole (a
