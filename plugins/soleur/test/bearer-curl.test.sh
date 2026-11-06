@@ -36,7 +36,7 @@ BASH_BIN="$(command -v bash)"
   || { printf 'FATAL: assert_eq cannot fail -- dispatch is neutered\n' >&2; exit 2; }
 [[ -f "$LIB_REAL" ]] || { echo "  FAIL: helper missing: $LIB_REAL"; FAIL=$((FAIL + 1)); print_results 1; exit 1; }
 
-TOKEN='SYNTHtok0123456789abcdefghijklmnopqrstuvwxyzQ9x3'
+TOKEN='SYNTHtoken'"$(printf 'a%.0s' $(seq 1 40))"  # synthetic, 50 chars, deliberately low entropy
 
 # --- the hermetic PATH: symlinks to the usual tools, and NO curl, NO doppler -------------------------
 mkbin() { # <dir> <tools to leave out...>
