@@ -533,7 +533,7 @@ else
   if [ "$drc" -eq 0 ] && [ "$(printf '%s' "$djson" | jq -r '.state // empty' 2>/dev/null)" = closed ]; then
     dcomment="$(api "repos/$REPO/issues/comments/$WALL_DISCHARGE_COMMENT")"; drc=$?
     case "$drc" in
-      0)  printf '%s' "$dcomment" | jq -r '.body // empty' 2>/dev/null | grep -q 'soleur-cto-ruling' \
+      0)  grep -q 'soleur-cto-ruling' <<<"$(printf '%s' "$dcomment" | jq -r '.body // empty' 2>/dev/null)" \
             && wall_discharge="accepted-spend-$WALL_DISCHARGE_ISSUE" ;;
       44|45) ;;                     # the ruling comment is gone: the numeric legs stand
       46) nots+=("read budget ended during the wall-discharge check (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1 ;;
