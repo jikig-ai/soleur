@@ -112,6 +112,9 @@ jobs:
 
           gh label create needs-attention --repo "$GH_REPO" \
             --color D93F0B --description "Requires operator action" 2>/dev/null || true
-          gh issue edit "$track_num" --repo "$GH_REPO" --add-label needs-attention 2>/dev/null || true
+          # A swallowed label-edit failure would post the sentinel comment and
+          # no-op every future run while the flag is silently missing — warn.
+          gh issue edit "$track_num" --repo "$GH_REPO" --add-label needs-attention 2>/dev/null \
+            || echo "::warning::needs-attention label apply failed on #${track_num} (transient?) — flag may be missing"
           printf '%s' "$body" | gh issue comment "$track_num" --repo "$GH_REPO" --body-file -
           echo "Pinged tracking issue #${track_num} — ${UPSTREAM}#${UPSTREAM_ISSUE} closed."

@@ -783,15 +783,15 @@ fi
 # `matches=` keep-open read's outside-`||` arm, codeql-1537-revisit-watch.yml
 # › the `track_num` lookup's outside-`||` arm) or `# dedupe:`-marked
 # (scheduled-supabase-watchdog.yml › `CANDIDATES`,
-# scheduled-actions-queue-health.yml › the open-issues read,
+# scheduled-actions-queue-health.yml › the `matches=` open-issues read,
 # scheduled-devin-docs-drift.yml › the two `list_rc` reads,
 # scheduled-marketplace-drift.yml › the three `list_rc` reads,
 # scheduled-prod-version-drift.yml › the four `list_rc` reads). Adjacent
 # out-of-class reads (scheduled-inngest-health.yml › `HAS_ESCALATION`,
 # scheduled-rehearsal-skip-monitor.yml › `cur_title`,
-# scheduled-supabase-watchdog.yml › the `COUNT` read, auto-label-security.yml
-# › the `^sec:` title check + `HAS_LABEL` marker) were marked/normalized as
-# recorded decisions and were never advisory rows. The pin is EQUALITY
+# scheduled-supabase-watchdog.yml › the `HAS_ESC`/`HAS_ESC_RC` marker,
+# auto-label-security.yml › the `^sec:` title check + `HAS_LABEL` marker)
+# were marked/normalized as recorded decisions and were never advisory rows. The pin is EQUALITY
 # (mutation row 5): raising the constant above the live count reds the
 # suite — a bump needs a review-gated reason, not a silent edit.
 ADVISORY_CEILING=0
@@ -991,7 +991,7 @@ for escape in workflows github; do
   r="$(mkfix "link$escape")"
   case "$escape" in
     workflows)
-      mkdir -p "$TMP/outside-wf"
+      mkdir -p "$TMP/outside-wf" || { echo "FATAL: mkdir outside-wf failed"; exit 2; }
       assert_fixture_dir "$TMP/outside-wf"
       cat > "$TMP/outside-wf/evil.yml" <<'YAML'
 name: evil
@@ -1007,7 +1007,7 @@ YAML
       ln -s "$TMP/outside-wf" "$r/.github/workflows" || { echo "FATAL: ln -s failed"; exit 2; }
       ;;
     github)
-      mkdir -p "$TMP/outside-gh/workflows"
+      mkdir -p "$TMP/outside-gh/workflows" || { echo "FATAL: mkdir outside-gh failed"; exit 2; }
       assert_fixture_dir "$TMP/outside-gh"
       cat > "$TMP/outside-gh/workflows/evil.yml" <<'YAML'
 name: evil
@@ -1025,10 +1025,11 @@ YAML
   esac
   out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
   if [[ "$rc" == "2" ]] && grep -q 'zero scan targets' <<<"$out" \
+     && grep -q 'symlink skipped' <<<"$out" \
      && ! grep -q 'evil.yml' <<<"$out"; then
-    pass "H11 a symlinked .github/$escape refuses rc=2 (zero targets), not a scan"
+    pass "H11 a symlinked .github/$escape dir refuses rc=2 (zero targets), not a scan"
   else
-    fail "H11 a symlinked .github/$escape refuses rc=2 (zero targets), not a scan" \
+    fail "H11 a symlinked .github/$escape dir refuses rc=2 (zero targets), not a scan" \
       "rc=2 + 'zero scan targets' + no evil.yml rows" "rc=$rc; $(printf '%s' "$out" | tr '\n' ' ')"
   fi
 done
@@ -1059,7 +1060,6 @@ runs:
       run: |
         EXISTING=$(gh issue list --json number)
 YAML
-rm -rf "$r/.github/actions" 2>/dev/null
 ln -s "$TMP/outside-actions" "$r/.github/actions" \
   || { echo "FATAL: ln -s failed"; exit 2; }
 out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
@@ -1071,6 +1071,72 @@ if [[ "$rc" == "0" ]] && grep -q 'symlink skipped' "$TMP/linka.txt" \
 else
   fail "H12 a symlinked .github/actions skips the actions census only" \
     "rc=0 + 'symlink skipped' advisory + no evil/action.yml rows" "rc=$rc; $(tr '\n' ' ' < "$TMP/linka.txt")"
+fi
+
+# H13 -- symlinked FILE leaves are skipped too: `_add`'s leaf islink guard
+# covers a linked .yml in workflows/ and a linked action.yml inside a REAL
+# action dir (H10-H12 pin directory links; a file-link mutant would otherwise
+# survive green). Outside content must never read as an in-root row.
+r="$(mkfix linkfile)"
+mkdir -p "$r/.github/actions/real" "$r/.github/actions/linked" "$TMP/outside-file" \
+  || { echo "FATAL: mkdir failed"; exit 2; }
+assert_fixture_dir "$r"
+assert_fixture_dir "$TMP/outside-file"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$TMP/outside-file/evil.yml" <<'YAML'
+name: evil
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number)
+YAML
+cat > "$TMP/outside-file/action.yml" <<'YAML'
+name: evil
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number)
+YAML
+cat > "$r/.github/actions/real/action.yml" <<'YAML'
+name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+ln -s "$TMP/outside-file/evil.yml" "$r/.github/workflows/evil.yml" \
+  || { echo "FATAL: ln -s wf failed"; exit 2; }
+# The actions census only enumerates the literal action.yml/action.yaml
+# names — the linked leaf must carry that name inside its own sub_dir.
+ln -s "$TMP/outside-file/action.yml" "$r/.github/actions/linked/action.yml" \
+  || { echo "FATAL: ln -s act failed"; exit 2; }
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/linkf.txt"
+# The skip advisories print the LINK path (contains 'evil'), so the no-scan
+# check keys on census/advisory ROW shape (`<path>:<line>:`), not the name.
+if [[ "$rc" == "0" ]] && [[ "$(grep -c 'symlink skipped' "$TMP/linkf.txt")" -ge 2 ]] \
+   && ! grep -qE 'workflows/evil\.yml:[0-9]+:|linked/action\.yml:[0-9]+:' "$TMP/linkf.txt" \
+   && ! grep -q 'unclassified: [1-9]' "$TMP/linkf.txt"; then
+  pass "H13 symlinked .yml/action.yml file leaves are skipped with an advisory"
+else
+  fail "H13 symlinked .yml/action.yml file leaves are skipped with an advisory" \
+    "rc=0 + >=2 'symlink skipped' advisories + no census rows on linked files" "rc=$rc; $(tr '\n' ' ' < "$TMP/linkf.txt")"
 fi
 
 # --- verdict ----------------------------------------------------------------
