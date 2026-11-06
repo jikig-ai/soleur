@@ -7,6 +7,7 @@ amended_by:
   - "ADR-262 (2026-09-30, #9323) — CI's required `test` context no longer runs five self-test mutation batteries on a pull_request event when the diff misses their subject paths; see ## Amendment — 2026-09-30"
   - "ADR-276 S4 (2026-10-14, #9729) — once activated, CI's required `test` context on a pull_request event is no longer necessarily the full battery for the PR head; `merge_group` stays the authority; see ## Amendment — 2026-10-14"
   - "ADR-196 addendum (2026-10-28, #10924 P4d) — a local battery REFUSED for sibling contention may be recorded as \"CI is the gate\" after a bounded wait, except on the infra surface and under `--full` or a force-all log"
+  - "ADR-242 amendment (2026-11-06, #12246) — an operator `ci-is-the-gate` token in session-state.md may waive the local battery at ship Phase 4 without CI evidence, except on the infra surface and under `--full`; see ## Amendment — 2026-11-06"
 ---
 
 # ADR-183: The full suite runs at ship, not at the implementation exit

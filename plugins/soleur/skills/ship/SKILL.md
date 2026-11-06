@@ -398,7 +398,7 @@ from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. C
 therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
 run, and those are the same tree only when `origin/main` is already an ancestor of
 HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
-a claim it establishes rather than assumes. Re-run savings need `main` synced
+a claim it establishes rather than assumes (no-token path). Re-run savings need `main` synced
 first.
 
 Branch on the exit code, never on the prose:

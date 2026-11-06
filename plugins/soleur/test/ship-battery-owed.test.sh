@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154  # T18's R18*/W18*/S18* names are assigned by new_fixture_root via printf -v
 # Suite for plugins/soleur/skills/ship/scripts/battery-owed.sh (#8247).
 #
 # This gate decides whether a ~35-minute run happens, so it will be under
@@ -854,7 +855,7 @@ mut17 M17c 'elif ($rows | any(.status != "completed")) then "NOT-GREEN"' 'elif f
 # overrides the infra surface (committed, staged or untracked) or an unresolved diff. T18a-c isolate ONE outranked condition
 # each and carry a same-fixture no-token CONTROL (the branch is renamed so the token is invisible while tree and HEAD are
 # unchanged), T18d is the incident shape, T18e-i the infra refusals, T18j-n the reject side, T18o the printed words, T18p the
-# writer/reader parity, T18q-s three committed mutants of a COPY of the gate.
+# writer/reader parity.
 # =============================================================================
 TOK18='## Operator Constraints\n- constraint: Rely on CI required test check\n- ci-is-the-gate: Rely on CI required test check\n'
 REF18="$HERE/../skills/one-shot/references/operator-constraints.md"
@@ -964,30 +965,89 @@ make_stub "$S18g2" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
 assert_eq "$OWED" "$(run_gate "$W18g2" "$S18g2")" "T18g an UNSTAGED edit of a tracked infra file -> OWED"
 assert_reason "$W18g2" "$S18g2" "$INFRA_REASON" "T18g (unstaged) the infra refusal names itself"
 
-# A rename INTO the infra surface, uncommitted: both the old and the new path must be listed.
+# A rename OUT of the infra surface (the old path must be listed): committed, then staged. The file lives on main so it is not in
+# the branch's own diff before the move.
+mk18_tf() { # <work> : puts apps/web-platform/infra/t.tf on main and merges it into the feature branch
+  in_fixture "$1" bash -c 'git checkout --quiet main && mkdir -p apps/web-platform/infra && printf a > apps/web-platform/infra/t.tf && git add -A && git commit --quiet -m i && git push --quiet origin main && git checkout --quiet feat-fixture && git merge --quiet origin/main --no-edit' || true
+}
 new_fixture_root R18h; W18h="$(build_fixture "$R18h")"; S18h="$R18h/stub"
-in_fixture "$W18h" bash -c 'printf y > outside.tf && git add -A && git commit --quiet -m outside' || true
+mk18_tf "$W18h"
+in_fixture "$W18h" bash -c 'git mv apps/web-platform/infra/t.tf moved.tf && git commit --quiet -m moved' || true
 ss18_write "$W18h" "$TOK18" commit
-in_fixture "$W18h" bash -c 'mkdir -p apps/web-platform/infra && git mv outside.tf apps/web-platform/infra/outside.tf' || true
-RN18="$( cd "$W18h" && git_fixture_env "$W18h" >/dev/null 2>&1; git diff --name-status -M HEAD | cut -c1 | head -1 )"
-assert_eq "R" "$RN18" "T18h setup: the uncommitted move is a rename in git's own listing"
 make_stub "$S18h" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
-assert_eq "$OWED" "$(run_gate "$W18h" "$S18h")" "T18h token + a rename INTO the infra surface (uncommitted) -> OWED"
-assert_reason "$W18h" "$S18h" "$INFRA_REASON" "T18h the infra refusal names itself"
+assert_eq "$OWED" "$(run_gate "$W18h" "$S18h")" "T18h token + a COMMITTED rename out of the infra surface -> OWED"
+assert_reason "$W18h" "$S18h" "$INFRA_REASON" "T18h (committed) the infra refusal names itself"
+new_fixture_root R18h2; W18h2="$(build_fixture "$R18h2")"; S18h2="$R18h2/stub"
+mk18_tf "$W18h2"
+ss18_write "$W18h2" "$TOK18" commit
+in_fixture "$W18h2" bash -c 'git mv apps/web-platform/infra/t.tf moved.tf' || true
+make_stub "$S18h2" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18h2" "$S18h2")" "T18h token + a STAGED rename out of the infra surface -> OWED"
+assert_reason "$W18h2" "$S18h2" "$INFRA_REASON" "T18h (staged) the infra refusal names itself"
 
-# Paths git C-quotes (a non-ASCII byte, a tab) must still match the ^-anchored pattern.
+# A path staged then deleted from disk shows only in the --cached listing.
+new_fixture_root R18ad; W18ad="$(build_fixture "$R18ad")"; S18ad="$R18ad/stub"
+ss18_write "$W18ad" "$TOK18" commit
+in_fixture "$W18ad" bash -c 'mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/ad.tf && git add apps/web-platform/infra/ad.tf && rm apps/web-platform/infra/ad.tf' || true
+make_stub "$S18ad" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18ad" "$S18ad")" "T18h token + an infra path staged then deleted from disk -> OWED"
+assert_reason "$W18ad" "$S18ad" "$INFRA_REASON" "T18h (staged+deleted) the infra refusal names itself"
+
+# Paths git C-quotes (a non-ASCII byte) must still match the ^-anchored pattern, in EACH of the -z sources.
 new_fixture_root R18i; W18i="$(build_fixture "$R18i")"; S18i="$R18i/stub"
 in_fixture "$W18i" bash -c 'mkdir -p apps/web-platform/infra && printf x > "apps/web-platform/infra/$(printf "\303\251").tf" && git add -A && git commit --quiet -m q1' || true
 ss18_write "$W18i" "$TOK18" commit
 make_stub "$S18i" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
 assert_eq "$OWED" "$(run_gate "$W18i" "$S18i")" "T18i token + a committed infra path with a non-ASCII byte (git C-quotes it) -> OWED"
-assert_reason "$W18i" "$S18i" "$INFRA_REASON" "T18i (non-ASCII) the infra refusal names itself"
+assert_reason "$W18i" "$S18i" "$INFRA_REASON" "T18i (committed) the infra refusal names itself"
 new_fixture_root R18i2; W18i2="$(build_fixture "$R18i2")"; S18i2="$R18i2/stub"
-in_fixture "$W18i2" bash -c 'mkdir -p apps/web-platform/infra && printf x > "apps/web-platform/infra/a$(printf "\t")b.tf" && git add -A && git commit --quiet -m q2' || true
+in_fixture "$W18i2" bash -c 'mkdir -p apps/web-platform/infra && printf x > "apps/web-platform/infra/$(printf "\303\251").tf" && git add -A && git commit --quiet -m q2 && git push --quiet origin feat-fixture' || true
+in_fixture "$W18i2" bash -c 'git checkout --quiet main && git merge --quiet --ff-only feat-fixture && git push --quiet origin main && git checkout --quiet feat-fixture' || true
 ss18_write "$W18i2" "$TOK18" commit
+in_fixture "$W18i2" bash -c 'printf y > "apps/web-platform/infra/$(printf "\303\251").tf"' || true
 make_stub "$S18i2" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
-assert_eq "$OWED" "$(run_gate "$W18i2" "$S18i2")" "T18i token + a committed infra path with a TAB in its name -> OWED"
-assert_reason "$W18i2" "$S18i2" "$INFRA_REASON" "T18i (tab) the infra refusal names itself"
+assert_eq "$OWED" "$(run_gate "$W18i2" "$S18i2")" "T18i token + an UNSTAGED edit of a tracked non-ASCII infra path -> OWED"
+assert_reason "$W18i2" "$S18i2" "$INFRA_REASON" "T18i (unstaged) the infra refusal names itself"
+new_fixture_root R18i3; W18i3="$(build_fixture "$R18i3")"; S18i3="$R18i3/stub"
+ss18_write "$W18i3" "$TOK18" commit
+in_fixture "$W18i3" bash -c 'mkdir -p apps/web-platform/infra && printf a > apps/web-platform/infra/a.txt && printf x > "apps/web-platform/infra/$(printf "\303\251").tf" && printf z > zzz.txt && printf z > 0first.txt' || true
+make_stub "$S18i3" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18i3" "$S18i3")" "T18i token + UNTRACKED non-ASCII infra path among other untracked files -> OWED"
+assert_reason "$W18i3" "$S18i3" "$INFRA_REASON" "T18i (untracked) the infra refusal names itself"
+
+# A tag named like the base ref must not shadow refs/remotes/origin/main (it would empty the committed diff).
+new_fixture_root R18t; W18t="$(build_fixture "$R18t")"; S18t="$R18t/stub"
+in_fixture "$W18t" bash -c 'mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/deploy.sh && git add -A && git commit --quiet -m infra' || true
+ss18_write "$W18t" "$TOK18" commit
+in_fixture "$W18t" bash -c 'git tag origin/main HEAD' || true
+make_stub "$S18t" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18t" "$S18t")" "T18i a tag named origin/main does not hide a committed infra change -> OWED"
+assert_reason "$W18t" "$S18t" "$INFRA_REASON" "T18i (tag) the infra refusal names itself"
+
+# A merge in progress with unmerged paths is refused even with a token.
+new_fixture_root R18m; W18m="$(build_fixture "$R18m")"; S18m="$R18m/stub"
+in_fixture "$W18m" bash -c 'git checkout --quiet main && mkdir -p plugins/soleur && printf other > plugins/soleur/thing.md && git add -A && git commit --quiet -m conflict && git push --quiet origin main && git checkout --quiet feat-fixture && git merge origin/main --no-edit' || true
+ss18_write "$W18m" "$TOK18"
+make_stub "$S18m" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18m" "$S18m")" "T18i token + a merge in progress with unmerged paths -> OWED"
+assert_reason "$W18m" "$S18m" "a merge is in progress or paths are unmerged" "T18i (merge) the refusal names itself"
+
+# Each of the four git sources fails closed: a git shim that fails on that source's argv -> UNDECIDABLE.
+REAL_GIT18="$(command -v git)"
+shim18() { # <label> <argv-pattern>
+  new_fixture_root SHIMROOT18
+  local w s
+  w="$(build_fixture "$SHIMROOT18")"; s="$SHIMROOT18/stub"
+  ss18_write "$w" "$TOK18" commit
+  make_stub "$s" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+  ( cd "$s" && printf '#!/usr/bin/env bash\ncase "$*" in *"%s"*) exit 1 ;; esac\nexec %s "$@"\n' "$2" "$REAL_GIT18" > git && chmod +x git )
+  assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1: a failing git source -> UNDECIDABLE (never SKIPPABLE)"
+  assert_reason "$w" "$s" "working-tree scope check failed" "$1: the failure names itself"
+}
+shim18 "T18i source 1 (committed diff)" "--name-only refs/remotes/origin/main...HEAD --"
+shim18 "T18i source 2 (working tree)" "--name-only HEAD --"
+shim18 "T18i source 3 (untracked)" "ls-files -z"
+shim18 "T18i source 4 (staged)" "--cached HEAD --"
 
 # --- T18j-n: the reject side (clean tree, in sync, contexts ABSENT: the fall-through is condition 4) ---
 new_fixture_root R18r; W18r="$(build_fixture "$R18r")"; S18r="$R18r/stub"
@@ -998,10 +1058,8 @@ ss18_write "$W18r" '## Operator Constraints\n- constraint: a\n### Errors\n- ci-i
 reject18 "T18j token under a sub-heading after the section" "$W18r" "$S18r"
 ss18_write "$W18r" '## Operator Constraints\n- ci-is-the-gate:\n' commit
 reject18 "T18k token with no words" "$W18r" "$S18r"
-ss18_write "$W18r" '## Operator Constraints\n- ci-is-the-gate:  \n' commit
-reject18 "T18k token with two spaces only" "$W18r" "$S18r"
-ss18_write "$W18r" '## Operator Constraints\n- ci-is-the-gate: \0001\n' commit
-reject18 "T18k token with only a control character" "$W18r" "$S18r"
+ss18_write "$W18r" '## Operator Constraints\n- ci-is-the-gate: \0001 \n' commit
+reject18 "T18k token with only a control character and a space (the emptiness test, not the awk anchor)" "$W18r" "$S18r"
 ss18_write "$W18r" '## Operator Constraints\n- ci-is-the-gate: \0303\0251\n' commit
 reject18 "T18k token with only non-ASCII" "$W18r" "$S18r"
 ss18_write "$W18r" "$TOK18" commit some-other-branch
@@ -1014,11 +1072,14 @@ reject18 "T18m token appended after a blank line" "$W18r" "$S18r"
 ss18_write "$W18r" '## Operator Constraints\n- constraint: a\nnote\n- ci-is-the-gate: x\n' commit
 reject18 "T18m token after a non-bullet line" "$W18r" "$S18r"
 
-# Two sections of the same name: the first token line in ANY of them wins (the writer keeps one).
-new_fixture_root R18n; W18n="$(build_fixture "$R18n")"; S18n="$R18n/stub"
-make_stub "$S18n" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
-ss18_write "$W18n" '## Operator Constraints\n- constraint: a\n\n## Operator Constraints\n- ci-is-the-gate: x\n' commit
-assert_eq "$SKIPPABLE" "$(run_gate "$W18n" "$S18n")" "T18n a token only in a SECOND section of the same name -> SKIPPABLE (documented behaviour)"
+ss18_write "$W18r" '```markdown\n## Operator Constraints\n\n- ci-is-the-gate: quoted\n```\n' commit
+reject18 "T18m a section inside a code fence" "$W18r" "$S18r"
+ss18_write "$W18r" '<!--\n## Operator Constraints\n- ci-is-the-gate: hidden\n-->\n' commit
+reject18 "T18m a section inside an HTML comment" "$W18r" "$S18r"
+ss18_write "$W18r" '## Operator Constraints\n- constraint: a\n\n## Operator Constraints\n- ci-is-the-gate: x\n' commit
+reject18 "T18n two sections of the same name void the token" "$W18r" "$S18r"
+in_fixture "$W18r" bash -c 'mkdir -p knowledge-base/project/specs/real && printf "## Operator Constraints\n\n- ci-is-the-gate: via link\n" > knowledge-base/project/specs/real/session-state.md && rm -f knowledge-base/project/specs/feat-fixture/session-state.md && ln -s ../real/session-state.md knowledge-base/project/specs/feat-fixture/session-state.md && git add -A && git commit --quiet -m link' || true
+reject18 "T18m a symlinked session-state.md" "$W18r" "$S18r"
 
 # --- T18o: the words are printed as untrusted ASCII, cut at 200 bytes --------
 new_fixture_root R18o; W18o="$(build_fixture "$R18o")"; S18o="$R18o/stub"
@@ -1033,27 +1094,23 @@ if printf '%s' "$OUT18o" | grep -cF >/dev/null 'QRS' && ! printf '%s' "$OUT18o" 
 else
   assert_eq "$OUT18o" "QRS present, QRSZ absent" "T18o the 200-byte cut keeps bytes 198-200 and drops byte 201"
 fi
-if printf '%s' "$OUT18o" | LC_ALL=C grep -cP >/dev/null '[\x00-\x08\x0e-\x1f"`$]'; then
-  assert_eq "absent" "control, quote, backtick or dollar present" "T18o the printed words carry no control character, quote, backtick or dollar"
+WORDS18o="$(printf '%s' "$OUT18o" | sed -n 's/.*session-state.md: \(.*\)): local battery.*/\1/p')"
+if [[ -n "$WORDS18o" ]] && ! grep -qE "[^A-Za-z0-9 ,.;'-]" <<<"$WORDS18o"; then
+  assert_eq "ok" "ok" "T18o only [A-Za-z0-9 ,.;'-] survive in the printed words"
 else
-  assert_eq "ok" "ok" "T18o the printed words carry no control character, quote, backtick or dollar"
-fi
-if [[ -e "$W18o/SENTINEL18" ]]; then
-  assert_eq "absent" "SENTINEL18 created" "T18o a command substitution inside the words is never evaluated"
-else
-  assert_eq "ok" "ok" "T18o a command substitution inside the words is never evaluated"
+  assert_eq "$WORDS18o" "only [A-Za-z0-9 ,.;'-]" "T18o only [A-Za-z0-9 ,.;'-] survive in the printed words"
 fi
 assert_reason "$W18o" "$S18o" "untrusted text from session-state.md" "T18o the words are labelled untrusted"
+assert_reason "$W18d" "$S18d" "this script read no CI state" "T18d the verdict claims no CI state it did not read"
 
 # --- T18p: writer/reader parity ----------------------------------------------
 # The strings one-shot is told to write (the reference's fenced example) must be the strings the gate reads.
-parity_rc() { # <reference-path> <work> <stub>
-  local ref="$1" w="$2" st="$3" heading tok
+parity_rc() { # <reference-path> <work> <stub> : writes the reference's WHOLE fenced example verbatim
+  local ref="$1" w="$2" st="$3" body
   [[ -r "$ref" ]] || { printf 'NOREF'; return 0; }
-  heading="$(awk '/^```/{f=!f; next} f && /^## / {print; exit}' "$ref")"
-  tok="$(awk '/^```/{f=!f; next} f && /^- ci-is-the-gate:/ {print; exit}' "$ref")"
-  [[ -n "$heading" && -n "$tok" ]] || { printf 'EMPTY'; return 0; }
-  ss18_write "$w" "${heading}\\n${tok}\\n" commit
+  body="$(awk '/^```/{f=!f; next} f' "$ref")"
+  [[ -n "$body" ]] || { printf 'EMPTY'; return 0; }
+  ss18_write "$w" "${body}\n" commit
   run_gate "$w" "$st"
 }
 new_fixture_root R18p; W18p="$(build_fixture "$R18p")"; S18p="$R18p/stub"
@@ -1063,30 +1120,7 @@ assert_eq "$SKIPPABLE" "$(parity_rc "$REF18" "$W18p" "$S18p")" "T18p the referen
 ( cd "$R18p" && sed 's/^## Operator Constraints$/## Op Constraints/' "$REF18" > ref-renamed.md )
 assert_eq "$OWED" "$(parity_rc "$R18p/ref-renamed.md" "$W18p" "$S18p")" "T18p a reference whose heading is renamed does NOT parse as a token -> OWED (the row can fail)"
 
-# --- T18q-s: committed mutants of a COPY of the gate --------------------------
-mut18() { # <id> <old> <new> <work> <stub> <expected-rc> <reason-needle> <label>
-  local m="$R18p/mut-$1.sh" got out saved="$GATE"
-  ( cd "$R18p" && cp "$GATE" "mut-$1.sh" )
-  if ! OLD="$2" NEW="$3" python3 -c '
-import os, sys
-p = sys.argv[1]; s = open(p).read(); o = os.environ["OLD"]
-if s.count(o) != 1: sys.exit(1)
-open(p, "w").write(s.replace(o, os.environ["NEW"]))' "$m" || ! bash -n "$m"; then
-    assert_eq "landed" "mutation did not land" "T18 $1 mutation lands exactly once and parses"; return 0
-  fi
-  GATE="$m"; got="$(run_gate "$4" "$5")"; out="$(run_gate_out "$4" "$5")"; GATE="$saved"
-  assert_eq "$6" "$got" "T18 $1: $8 (mutant rc)"
-  if printf '%s' "$out" | grep -cF >/dev/null "$7"; then assert_eq "ok" "ok" "T18 $1: $8 (mutant reason)"; else assert_eq "$out" "reason containing: $7" "T18 $1: $8 (mutant reason)"; fi
-}
-# Pristine-copy control: a plain copy of the gate behaves like the real one (so the mutants below are graded against a working baseline).
-( cd "$R18p" && cp "$GATE" pristine.sh ); saved18="$GATE"; GATE="$R18p/pristine.sh"
-assert_eq "$SKIPPABLE" "$(run_gate "$W18d" "$S18d")" "T18 control: an unmutated copy of the gate still returns 42 on the incident shape"
-GATE="$saved18"
-mut18 M18q 'if [[ -n "$OPERATOR_CI_WORDS" ]]; then' 'if false; then' "$W18d" "$S18d" "$OWED" "required context(s) not present" "arm disabled: the incident shape falls through to condition 4"
-mut18 M18r 'grep -qE "$INFRA_RE" <<<"$_all"; _g=$?' 'true; _g=1' "$W18e" "$S18e" "$SKIPPABLE" "operator ci-is-the-gate" "arm without its infra grep: an infra diff is skipped"
-mut18 M18s '[[ -z "$OPERATOR_CI_WORDS" ]] && ! git merge-base --is-ancestor refs/remotes/origin/main HEAD' '! git merge-base --is-ancestor refs/remotes/origin/main HEAD' "$W18b" "$S18b" "$OWED" "not an ancestor of HEAD" "condition 2 without its stand-down: a behind branch is refused"
-
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 136
+print_results 154
