@@ -2197,11 +2197,20 @@ jobs:
           # fetch-depth: 0 is LOAD-BEARING (#12274): manifest suites exercise
           # scripts/test-all.sh's `origin/main...HEAD` diff read, and at depth 1
           # origin/main is not a ref — every detection-dependent arm degrades to
-          # undecidable-diff and reds the leg. The `git fetch origin main` below
-          # covers the case where the target ref's own history is complete but
-          # the base ref itself was never materialised. Same failure mode the
-          # lockfile-sync job documents; same fix shape as rule-body-lint.
+          # undecidable-diff and reds the leg. The fetch step below covers the
+          # case where the target ref's own history is complete but the base ref
+          # itself was never materialised. Same failure mode the lockfile-sync
+          # job documents; same fix shape as rule-body-lint.
           fetch-depth: 0
+
+      - name: Fetch origin/main for the manifest's diff reads
+        # Deliberately a STEP, not a line in the manifest run block: the
+        # ci-oracle-lane guard suite replays that block verbatim in a bare
+        # sandbox where `git fetch` exits 128. Same oracle_only gate, so
+        # non-oracle runs stay a no-op. Public repo — persist-credentials:false
+        # does not break the fetch (#12274).
+        if: needs.oracle-selection.outputs.oracle_only == 'true'
+        run: git fetch --no-tags --quiet origin main
 
       - name: Run the oracle-validation manifest
         shell: bash
@@ -2215,9 +2224,6 @@ jobs:
             printf 'oracle-index-check: not-oracle-only (oracle_only=%s) — the validation manifest does not run on this diff\n' "${ORACLE_ONLY:-empty}"
             exit 0
           fi
-          # Placed after the early exit so non-oracle runs stay a no-op. The repo is public,
-          # so persist-credentials:false does not break this fetch (#12274).
-          git fetch --no-tags --quiet origin main
           manifest="scripts/ci-oracle-lane-suites.txt"
           ran=0
           rc=0
