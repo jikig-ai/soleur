@@ -32,7 +32,12 @@ lives in
   list + count too)
 - `suite-shard-legs.tsv` + `regenerate-shard-manifest.py --incremental --write`
 - `PROMOTED_FILES` promotion only *after `git add`* — the derivation reads
-  `git ls-files` and cannot see untracked files
+  `git ls-files` and cannot see untracked files. A floor-bearing suite under
+  a DEFERRED dir (`DEFERRED_DIRS` in `guard-vacuity-floor.test.sh`, e.g.
+  `plugins/soleur/skills/*/test/`, `apps/web-platform/infra/`, `.claude/hooks/`)
+  grows the deferred ledger and reddens ARM 5c: add the file to `PROMOTED_FILES`
+  (one edit to the single canonical line there; on merge conflict keep main's
+  set plus yours), never raise `MAX_DEFERRED` (#12146)
 - no `producer | grep -q` in a policy hook (`grep-q-pipe-guard`)
 - `mktemp` needs an owning EXIT trap (`lint-trap-tempfile-ownership`)
 - `assert_fixture_dir` on same-function `git -C "${work}"` fixture writes

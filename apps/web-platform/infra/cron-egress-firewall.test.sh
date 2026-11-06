@@ -396,6 +396,7 @@ ip daddr $BRIDGE_GW tcp dport 8288 accept
 ip daddr 10.0.1.40 tcp dport 8288 accept
 ip daddr 10.0.1.40 tcp dport 8443 accept
 ip daddr 10.0.1.20 tcp dport 22 accept
+ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept
 ip daddr @soleur_egress_allow accept
 ip daddr @soleur_egress_allow_cidr accept
 ip daddr ${EGRESS_GW_IP} tcp dport 8443 accept
@@ -409,7 +410,7 @@ PIN
 )"
 gd_pins_ok() { [[ "$(gd_accept_set "$1")" == "$GD_ACCEPT_PIN" && "$(gd_early_verdicts "$1")" == "$GD_EARLY_PIN" ]]; }
 if gd_pins_ok "$LOADER"; then
-  PASS=$((PASS + 1)); echo "  PASS: the loader's whole accept set equals the reviewed pin (11 rules) and only the pinned drops precede the git-data accept"
+  PASS=$((PASS + 1)); echo "  PASS: the loader's whole accept set equals the reviewed pin (12 rules) and only the pinned drops precede the git-data accept"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: the loader's accept set or the verdicts ahead of the git-data accept drifted from the reviewed pin"
   diff <(gd_accept_set "$LOADER") <(printf '%s\n' "$GD_ACCEPT_PIN") | head -6; gd_early_verdicts "$LOADER" | head -6
@@ -424,6 +425,58 @@ if [[ "$GD_MUT_OK" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: mutation: a sibling /24 accept after, or a shadowing /24 drop before, the git-data accept is visible to the pins"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: mutation: a sibling accept or a shadowing drop around the git-data accept is NOT visible to the pins (vacuous)"
+fi
+# #12167 PR-F: the host-to-host session-proxy relay. proxyClientToOwner dials wss://<peer private ip>:8443 from INSIDE the app container, so
+# it traverses SOLEUR-EGRESS and needs ITS OWN accept (the Inngest 10.0.1.40 and egress-gateway 8443 accepts are different daddrs and must not
+# satisfy this). One anonymous set (the var.web_hosts private IPs), one port, no prefix. A bash literal like the Inngest/git-data hosts, with the
+# roster parity pinned here against variables.tf. The mutation block below proves each pin goes RED on the mistake it names.
+PIN_RELAY='ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay'
+assert_grep "web peer session-proxy relay :8443 accept (#12167)" "$PIN_RELAY" "$LOADER"
+relay_roster() { awk '/^variable "web_hosts"/ { v = 1 } v && /^[[:space:]]*default[[:space:]]*=[[:space:]]*\{/ { d = 1; next } d && /^[[:space:]]*\}/ { exit } d' "$SCRIPT_DIR/variables.tf" | sed -nE 's/^[[:space:]]*"web-[0-9]+"[[:space:]]*=[[:space:]]*\{.*private_ip[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' | LC_ALL=C sort -V; }
+relay_loader_set() { grep -vE '^[[:space:]]*#' "$1" | sed -nE 's/.*add rule ip filter SOLEUR-EGRESS ip daddr \{ ([0-9., ]+) \} tcp dport 8443 accept.*/\1/p' | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort -V; }
+relay_early_verdicts() { grep -E '^add rule ip filter SOLEUR-EGRESS ' "$1" | awk '/ tcp dport 8443 accept comment "soleur-egress: web peer/ { seen=1 } !seen { print }' | gd_norm | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+relay_line() { grep -n -- 'tcp dport 8443 accept comment "soleur-egress: web peer' "$1" | sed -n '1p' | cut -d: -f1; }
+relay_drop_line() { grep -n 'counter drop comment "soleur-egress: default drop"' "$1" | sed -n '1p' | cut -d: -f1; }
+# the whole relay contract of ONE loader file: the exact rule once, the peer set == var.web_hosts (2+ hosts), before the terminal drop, no other
+# non-comment line names a web-peer address, and the whole accept set + early verdicts still equal the reviewed pin (sibling/shadow rules)
+relay_pins_ok() {
+  local f="$1" rl dl
+  [[ "$(grep -vE '^[[:space:]]*#' "$f" | grep -cE -- "$PIN_RELAY")" -eq 1 ]] || return 1
+  [[ "$(relay_roster | grep -c .)" -ge 2 && "$(relay_roster)" == "$(relay_loader_set "$f")" ]] || return 1
+  rl="$(relay_line "$f")"; dl="$(relay_drop_line "$f")"
+  [[ -n "$rl" && -n "$dl" && "$rl" -lt "$dl" ]] || return 1
+  [[ "$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '10\.0\.1\.1[01]([^0-9]|$)')" -eq 1 ]] || return 1
+  [[ "$(relay_early_verdicts "$f")" == "$GD_EARLY_PIN" ]] || return 1
+  gd_pins_ok "$f"
+}
+if relay_pins_ok "$LOADER"; then
+  PASS=$((PASS + 1)); echo "  PASS: the relay accept is present once, its peer set equals var.web_hosts, it precedes the default drop and nothing else names a web peer"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the relay accept pins drifted (rule text, var.web_hosts parity, order, or sibling/shadow rules)"
+fi
+RELAY_MUT_OK=1; relay_pins_ok "$LOADER" || RELAY_MUT_OK=0   # the unmutated loader must be green first, or a red mutant proves nothing
+RELAY_FULL='add rule ip filter SOLEUR-EGRESS ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay (#12167)"'
+relay_mut() {   # relay_mut <name> <python-free sed script on the loader copy>; the pins must go RED and the copy must differ
+  sed -E "$2" "$LOADER" > "$SUITE_SCRATCH/loader-relay-mut.sh"
+  if cmp -s "$LOADER" "$SUITE_SCRATCH/loader-relay-mut.sh" || relay_pins_ok "$SUITE_SCRATCH/loader-relay-mut.sh"; then RELAY_MUT_OK=0; echo "        not caught: $1"; fi
+}
+relay_mut "rule missing" '/web peer session-proxy relay/d'
+relay_mut "wrong port 8444" 's/(ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport )8443/\18444/'
+relay_mut "every port (port match dropped)" 's/(ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \}) tcp dport 8443 accept comment "soleur-egress: web peer/\1 accept comment "soleur-egress: web peer/'
+relay_mut "set widened to 10.0.1.0/24" 's/ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443/ip daddr 10.0.1.0\/24 tcp dport 8443/'
+relay_mut "wrong member (.12)" 's/\{ 10\.0\.1\.10, 10\.0\.1\.11 \}/{ 10.0.1.10, 10.0.1.12 }/'
+relay_mut "web-2 omitted" 's/ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443/ip daddr 10.0.1.10 tcp dport 8443/'
+relay_mut "third host added" 's/\{ 10\.0\.1\.10, 10\.0\.1\.11 \}/{ 10.0.1.10, 10.0.1.11, 10.0.1.40 }/'
+relay_mut "destination dropped (any host on 8443)" 's/ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} (tcp dport 8443 accept comment "soleur-egress: web peer)/\1/'
+relay_mut "sibling /24 8443 accept after the relay rule" "/web peer session-proxy relay/a add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 tcp dport 8443 accept comment \"x\""
+relay_mut "shadowing drop before the relay rule" "/web peer session-proxy relay/i add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.11 counter drop comment \"x\""
+# accept AFTER the terminal drop (dead rule): move the relay line to follow the default-drop line
+awk -v pat='web peer session-proxy relay' 'index($0, pat) { held = $0; next } { print } /counter drop comment "soleur-egress: default drop"/ { if (held != "") print held }' "$LOADER" > "$SUITE_SCRATCH/loader-relay-mut.sh"
+if cmp -s "$LOADER" "$SUITE_SCRATCH/loader-relay-mut.sh" || relay_pins_ok "$SUITE_SCRATCH/loader-relay-mut.sh"; then RELAY_MUT_OK=0; echo "        not caught: relay accept after the default drop"; fi
+if [[ "$RELAY_MUT_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: mutation: missing / wrong-port / any-port / widened / wrong / short / long peer set / any-destination / sibling /24 / shadowing drop / after-the-drop relay accepts are all visible to the pins"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: mutation: a relay-accept mutant (see 'not caught' above) is NOT visible to the pins (vacuous)"
 fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
@@ -1924,7 +1977,20 @@ case "$*" in
     if [[ -n "${GA_NOGD:-}" ]]; then
       emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.21 tcp dport 22 accept ; ip daddr 10.0.1.20 tcp dport 2222 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0
     fi
-    emit 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept ; cidr allowlist ; counter drop comment "soleur-egress: default drop"'; exit 0 ;;
+    # #12167 PR-F: the web-peer session-proxy relay accept (one anonymous set, one port). Each GA_RELAY* mode breaks exactly ONE aspect of
+    # it and keeps every other accept intact, so only the relay sentinel can see it.
+    RLY_BASE='log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept'
+    RLY_ACC='ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay (#12167)"'
+    RLY_TAIL='cidr allowlist ; counter drop comment "soleur-egress: default drop"'
+    if [[ -n "${GA_NORELAY:-}" ]]; then emit "$RLY_BASE ; ip daddr 10.9.9.9 tcp dport 8443 accept ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYPORT:-}" ]]; then emit "$RLY_BASE ; ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8444 accept ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYWIDE:-}" ]]; then emit "$RLY_BASE ; ip daddr 10.0.1.0/24 tcp dport 8443 accept ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYWIDESET:-}" ]]; then emit "$RLY_BASE ; ip daddr { 10.0.1.10, 10.0.1.11, 10.0.1.40 } tcp dport 8443 accept ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYONE:-}" ]]; then emit "$RLY_BASE ; ip daddr 10.0.1.10 tcp dport 8443 accept ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYDROP:-}" ]]; then emit "$RLY_BASE ; ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 drop ; $RLY_TAIL"; exit 0; fi
+    if [[ -n "${GA_RELAYAFTER:-}" ]]; then emit "$RLY_BASE ; $RLY_TAIL ; $RLY_ACC"; exit 0; fi
+    if [[ -n "${GA_RELAYDECOY:-}" ]]; then emit "$RLY_BASE ; ip daddr 10.9.9.9 tcp dport 8443 accept comment \"note: ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept\" ; $RLY_TAIL"; exit 0; fi
+    emit "$RLY_BASE ; $RLY_ACC ; $RLY_TAIL"; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -2140,6 +2206,34 @@ GA_OK=1
 grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: the git-data rule text only inside another rule's comment (the real accept is for a different host) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
 
+# Row B2g (#12167 PR-F): the web-peer session-proxy relay accept. Each mutant breaks exactly one aspect and keeps every other accept (incl. the
+# Inngest :8443 and git-data :22 ones) intact, so only the new sentinel can see it: rule missing (a different host's 8443 accept does not
+# count), wrong port, destination widened to the /24, a third host in the set, web-2 omitted, a DROP rule, accept listed AFTER the default
+# drop (dead rule), the text only inside another rule's comment. The healthy fixture (row A) carries the exact rule and stays green.
+ga_relay_case() {   # ga_relay_case <GA_ mode> -> GA_OK=1 iff the assert exits non-zero naming the relay sentinel (ga_row stays at column 0 below: the CASES counter reads call sites)
+  GA_D="$(ga_setup "relay-${1,,}")"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+  ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" "GA_$1=1"
+  GA_OK=1
+  [[ "$GA_RC" -ne 0 ]] || GA_OK=0
+  grep -q 'ASSERT-FAILED: web-peer-relay-8443-accept' <<<"$GA_OUT" || GA_OK=0
+}
+ga_relay_case NORELAY
+ga_row "post-apply assert: no web-peer relay accept (another host's :8443 accept does not count) -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYPORT
+ga_row "post-apply assert: relay accept on the wrong port (8444) -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYWIDE
+ga_row "post-apply assert: relay peer set widened to 10.0.1.0/24 -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYWIDESET
+ga_row "post-apply assert: relay peer set with a third host (10.0.1.40) -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYONE
+ga_row "post-apply assert: relay peer set missing web-2 -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYDROP
+ga_row "post-apply assert: a DROP rule for the web peers :8443 (no accept) -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYAFTER
+ga_row "post-apply assert: the relay accept listed AFTER the default drop (dead rule) -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+ga_relay_case RELAYDECOY
+ga_row "post-apply assert: the relay rule text only inside another rule's comment -> ASSERT-FAILED: web-peer-relay-8443-accept, non-zero exit" "$GA_OK"
+
 # Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
 GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_JUMPOLD=1
@@ -2351,8 +2445,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 410 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 410. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 421 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 421. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

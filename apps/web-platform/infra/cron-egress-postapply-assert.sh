@@ -66,6 +66,11 @@ nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8443 accep
 # BEFORE the terminal default drop, or it is a dead rule. awk reads the whole listing (no early exit, so no SIGPIPE flake). This proves the
 # rule TEXT is in the live chain in the right place, not that a container reaches the host; that is a container-originated probe's job.
 nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr 10\.0\.1\.20 tcp dport 22 accept/ { a = NR } /comment "soleur-egress: default drop"/ { d = NR } END { exit !(a && d && a < d) }' || { echo 'ASSERT-FAILED: dedicated-git-data-22-accept'; exit 1; }
+# #12167 PR-F: the web-peer session-proxy relay accept (the app container dials wss://<peer private ip>:8443 through this chain). Anchored on the
+# rule's line start AND the EXACT peer set (the var.web_hosts private IPs: a /24, a third host, one host only, another port, a drop, or the text
+# inside another rule's comment does not satisfy it) AND positional: listed BEFORE the terminal default drop, or it is a dead rule. awk reads the
+# whole listing (no early exit, so no SIGPIPE flake). Proves the rule TEXT is live in the right place, not that a container reaches the peer.
+nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443 accept/ { a = NR } /comment "soleur-egress: default drop"/ { d = NR } END { exit !(a && d && a < d) }' || { echo 'ASSERT-FAILED: web-peer-relay-8443-accept'; exit 1; }
 nft list set ip filter soleur_egress_allow | grep -cE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' >/dev/null || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -c 'cidr allowlist' >/dev/null || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set
