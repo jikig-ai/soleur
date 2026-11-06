@@ -75,18 +75,33 @@ Build ONE dispatch-only workflow, `.github/workflows/key-rotate.yml`, with body 
   no absent-secret window. "Replace both" stays for the four `inngest_*` secrets that carry `ignore_changes=[value]`. The parity test
   in `terraform-target-parity.test.ts` derives each row's flag from the HCL and closes over every block that references the
   `random_id`. A dev plan rehearsal that shows anything other than `["update"]` with `after_unknown.value` reverses this.
-- **F2, egress is plan-only.** `mode=plan` covers it; `mode=rotate` refuses `egress_rotate_unsupported_no_vector_restart_lever`
-  (#11920). A Doppler CLI write of `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` is not acceptable (an untracked mutation of state Terraform
-  should own). Flip evidence: a verified no-host-shell restart lever plus a Terraform-managed previous-token secret rotated by
-  `-replace` in the same apply.
-- **G6 and H2, the authorization posture, stated plainly.** The typed confirm is a fat-finger guard, not an authorization. The
-  `infra-privileged` environment has zero required reviewers, a personal-access-token dispatch is indistinguishable from the owner's,
-  and "an agent never dispatches rotate" is a policy, not a mechanism. The bounds that are mechanisms: a `main`-only ref rung, a
-  bot-actor refusal, a committed exact-match owner-login allowlist checked against both `github.actor` and
-  `github.triggering_actor`, an `authorization_stale` bound (the UTC date and at most 60 minutes since the guard), and
-  `approval_environment_missing` for `inngest_manual_trigger_secret_prd`, `kb_drift_ingest_signing_key` and `github_webhook_secret`
-  until the reviewer-gated environment of #11923 exists
-  (lifted by a one-line change in the PR that binds the apply job to it). The dev keys follow parity with ADR-307.
+- **F2, egress — amended 2026-11-05 (#11920): now fully rotatable.** Both flip criteria are met and the
+  `egress_rotate_unsupported_no_vector_restart_lever` refusal is removed. The no-host-shell restart lever is `ci-deploy.sh`'s
+  existing `restart` action extended to component `vector`: it runs `sudo /usr/bin/systemctl try-restart vector.service` — the
+  exact argv of the already-live `DROPIN_TRY_RESTART` sudoers grant — fans out to every web host through the existing peers
+  channel, and verifies `is-active` plus an `ActiveEnterTimestamp` delta per host through merged deploy-status frames. The
+  Terraform-managed previous-token secret is `doppler_secret.egress_audit_ingest_token_previous` in `egress-audit.tf`, fed by a
+  sensitive variable (`default = ""`, `ignore_changes=[value]`, written only by `-replace`). A Doppler CLI write of
+  `EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` remains unacceptable — an untracked mutation of state Terraform should own. The ordering is
+  lossless: apply-A writes PREVIOUS=old AND CURRENT=new in one apply, the fleet redeploys (the app then accepts both), vector
+  restarts on every host, and only then a clear apply `-replace`s PREVIOUS back to the empty default. Any host failing the restart
+  or its verify ends the run non-success with PREVIOUS retained, so an old-token send is never rejected.
+- **G6 and H2, the authorization posture, stated plainly — amended 2026-11-05 (#11923).** The typed confirm is a fat-finger
+  guard, not an authorization. The reviewer-gated environment now exists and is bound: `key-rotate-approval`
+  (Terraform-provisioned, `required_reviewers` = user 54279, a `main`-only custom deployment-branch policy, `prevent_destroy` on
+  the policy), bound by a dedicated credential-free `approve` job between `guard` and the first production-mutating job of
+  `key-rotate.yml` (`mode=rotate`) and `inngest-key-rotate.yml` (rotate + converge); `mode=plan` never gates. The env deliberately
+  holds no secrets — `DOPPLER_TOKEN_INFRA_PRIVILEGED` is an env-scoped secret the TF GitHub App cannot write (ADR-100 fix-forward,
+  ADR-241 Tier-B) — which is why a separate `approve` job binds it rather than rebinding `apply`'s `environment:`. `kk_chk_approval`
+  is now a live verify of the environment's `protection_rules`, refusing `approval_environment_unprotected` when
+  `required_reviewers` or `branch_policy` is absent, fail-closed on API error — `approval_environment_missing` and the three
+  unrotatable keys it named are gone. `authorization_stale` measures from the approve job's `approval_epoch` output, not the
+  guard's clock, so a queued approval of any length cannot self-refuse. The other bounds are unchanged mechanisms: a `main`-only
+  ref rung, a bot-actor refusal, a committed exact-match owner-login allowlist checked against both `github.actor` and
+  `github.triggering_actor`. Residual, stated plainly: a personal-access-token dispatch still STARTS the run, but it now parks at
+  `approve` — the reviewer gate bounds it to a distinct human act; a PAT *approval* of that job remains the owner's click by
+  design. "An agent never dispatches rotate" remains policy, now backed by a mechanism that does not trust the dispatch. The dev
+  keys follow parity with ADR-307.
 - **F3, the `_dev` keys redeploy too.** A dev rotation is the shakedown of the whole route and does not count unless `track.sh`
   reports success; a dev rotation that skips the redeploy would not exercise the route's last leg. The production redeploy gives a
   dev key no pickup (no production container reads `soleur/dev`); making it skippable once the route has run is #11927.
@@ -127,6 +142,13 @@ Suite timing: the suite's weight row is an estimate that has never been measured
 15-minute ceiling so a hung suite fails by name. The first CI wall time of the suite's leg must be recorded here; if the leg exceeds about
 700 s the suite moves to a lighter leg.
 
+Amendment (2026-11-05, #11923 + #11920): F2 and G6/H2 are rewritten in place above. The approval gate's mechanism is the dedicated
+credential-free `approve` job — rebinding `apply`'s `environment:` to the gated env was considered and rejected because it would force
+the Tier-B env secret onto a second environment the TF GitHub App cannot write. The vector-restart lever reuses the existing `restart`
+grammar plus the live `DROPIN_TRY_RESTART` sudoers argv — a new webhook hook, a new sudoers alias and an SSH-delivered provisioner were
+all considered and rejected (the whole point is zero SSH-delivered artifacts). `infra-privileged` keeps zero reviewers: its
+reviewerlessness is load-bearing for the unattended apply-on-merge and scheduled drift paths.
+
 ## Consequences
 
 - Seven more secrets rotate without a Terraform stream in a log, with an exact gate, a recovery arm for an interrupted replace, and one
@@ -135,7 +157,14 @@ Suite timing: the suite's weight row is an estimate that has never been measured
   evolving the sibling rises by one deliberate update. The reverse test-selection edge keeps that visible on the PR that makes it.
 - The webhook secret has a real gap window (single secret in the verifier, #11922) that the workflow narrows but cannot close; the
   owner step stays open and blocks a second rotate until closed.
-- Until #11923, three keys cannot be rotated at all through this route; that is the intended failure direction.
+- An absent or drifted-unprotected `key-rotate-approval` environment (the #6780 auto-create class, or a reviewers/policy edit)
+  refuses every rotate dispatch at guard with `approval_environment_unprotected` — before anything is written, fail-closed on API
+  error. Every rotate/converge dispatch then parks at `approve` until a listed reviewer clicks in the Actions UI; an abandoned run
+  writes nothing, and the wait cannot self-refuse because `authorization_stale` measures from `approval_epoch`.
+- A web host that fails `try-restart` or its verify ends an egress rotate non-success BEFORE the clear apply: PREVIOUS is retained
+  and the old token stays accepted — the lossless direction. A failed or skipped clear apply leaves PREVIOUS populated
+  indefinitely (the old token stays valid); the run ends non-success and the action-required issue is the record, with
+  `doppler secrets get EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS` non-empty as the detector.
 - The dev shakedown carries two unverified premises (`-replace` of an `ignore_changes` secret recreates it with the new value;
   `-replace` of an address absent from state plans a plain create); `value_unchanged` and the recovery arm are the detectors.
 
