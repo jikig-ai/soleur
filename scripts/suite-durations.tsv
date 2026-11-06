@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-06T02:40:05Z
+# generated-at=2026-11-06T08:31:32Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -358,6 +358,7 @@ scripts/alarm-issue-filing-guard	2320	measured
 scripts/always-on-ledger	1222	floor
 scripts/anthropic-admin-key-6297	1883	measured
 scripts/anthropic-double-bill-8611	92	measured
+scripts/arm-token-revisit-12229	1251	floor
 scripts/assert-dependabot-drain-live	40	measured
 scripts/assert-dependabot-drain-unit	1352	measured
 scripts/audit-dev-scheduled-shapes	1222	floor

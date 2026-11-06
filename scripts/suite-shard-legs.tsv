@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-06T04:41:28Z
+# generated-at=2026-11-06T08:31:32Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -360,6 +360,7 @@ scripts/alarm-issue-filing-guard	1
 scripts/always-on-ledger	3
 scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
+scripts/arm-token-revisit-12229	5
 scripts/assert-dependabot-drain-live	3
 scripts/assert-dependabot-drain-unit	2
 scripts/audit-dev-scheduled-shapes	1
