@@ -208,8 +208,18 @@ discoverability_test:
 Detection fired via `infra/github/ruleset-ci-required.tf` (`.tf$` glob). The change edits ruleset *context names* — no persistent store is introduced and no new cross-component/network connection is created (the ruleset already exists; the workflows already post check runs on the same events under the same token).
 
 ```yaml
-at_rest: "none — no persistent store introduced"
-in_transit: "unchanged — same GitHub Actions runners and check-run reporting over the platform TLS channel; no new endpoint, credential, or connection"
+at_rest:
+  mechanism: "none — no persistent store is introduced (ruleset context names are configuration, not data)"
+  evidence: "the diff edits context strings and workflow job topology only; no volume/db/bucket/queue/cache/log-sink resource is added"
+  defends_against: "n/a — there is no stored data to defend"
+  does_not_defend: "the CI run/check-run data GitHub itself persists is outside this change and unchanged by it"
+  disclosed_as: "not a data store — no docs/legal disclosure needed"
+  live_verification: "terraform plan post-merge shows a context-list update on the existing ruleset and nothing else"
+in_transit:
+  tls: "unchanged — same GitHub Actions runners and check-run reporting over the platform TLS channel"
+  cert_verification: "on (platform default — no new endpoint, credential, or connection is introduced)"
+  does_not_defend: "check-run contents (job logs, annotations) remain as exposed to repo collaborators as before"
+  disclosed_as: "no new connection — nothing to disclose"
 exception: ~
 ```
 
@@ -367,3 +377,33 @@ Check deferred to `soleur:work` start (the `## Files to Edit` list is final here
 - Parity guards: `tests/scripts/test-audit-ruleset-bypass.sh` (T-mq-1/T-rsc), `plugins/soleur/test/required-checks-canonical-parity.test.sh`, `scripts/probe-merge-group-coverage.sh`
 - Fold precedent: `lint-bot-statuses` job (`.github/workflows/ci.yml:608-699`, #8149)
 - Checks-API precedent (synthetics only): `.github/workflows/merge-queue-cla-synthetics.yml`, `scripts/merge-queue-cla-verify.sh`
+
+## Enhancement Summary (deepen-plan, 2026-11-06)
+
+**Deepened on:** 2026-11-06 (in-process — Task subagents cannot nest on this harness; all mechanical gates executed directly, research/rulings performed in-session)
+
+### Gate results (deepen-plan §§4.6–4.13)
+
+- §4.6 User-Brand Impact: PASS (section present, `single-user incident`, sensitive-path `secret-scan.yml` addressed).
+- §4.7 Observability: PASS (5 fields, `bash` allowlisted verb, literal expected_output).
+- §4.8 PAT-shaped variable: PASS (zero hits; apply rides existing `app_auth`).
+- §4.9 UI wireframe: SKIP (no UI-surface paths).
+- §4.10 Encryption Posture: PASS (section present with full field schema — no store/connection introduced).
+- §4.11 Guard Contract: PASS (`scripts/lint-guard-contract.py` rc=0, 2 guard entries; assemblies name chokepoints).
+- §4.12 Scope Check: PASS (exactly 1 unfenced section; all asks mapped or descoped-with-justification; recommendation present).
+- §4.13 Task Design: SKIP (no NEW autonomous-task surface — existing workflows edited only).
+- §4.5 network-outage: fired on `timeout` token — no SSH hypothesis exists; telemetry emitted.
+- §4.55 downtime/cutover: SKIP (no serving surface taken offline).
+- §4.4 precedent-diff: fold pattern has sibling precedent (`lint-bot-statuses`, ci.yml:608); no new scheduled job.
+- §4.45 verify-the-negative: plan's negative claims ("no API posting", "fork-safe", "no merge_queue change") are all diff-verifiable ACs (AC10); the consumer sweep is enumerated, not asserted.
+
+### Citation verification performed this pass
+
+- #12089 OPEN (wallclock-p90 tracker, 15 breaches); #10865 OPEN (observation window).
+- `CI_ORACLE_LANE` = `on` since 2026-11-06T14:30:42Z (`gh api .../actions/variables/CI_ORACLE_LANE`); oracle-selection queued on post-arm runs; zero completed SOLEUR_ORACLE_LANE notices.
+- Rule IDs verified: `hr-ssh-diagnosis-verify-firewall`, `hr-observability-as-plan-quality-gate`, `hr-github-app-auth-not-pat` active; `wg-architecture-decision-is-a-plan-deliverable` migrated-but-active.
+- GitHub docs verified live (web): `grouping_strategy` ALLGREEN/HEADGREEN semantics; "Merge limits do not combine merge_group builds"; build-concurrency dispatches checks_requested per queue position.
+
+### Agent fan-out note
+
+Phases 2, 3, 4, 5, 6 (skill/learnings/research/review Task fan-out) could not run: this process is a subagent and cannot spawn subagents. In-process substitutes performed: repo research (direct file reads of all cited surfaces), learnings application (grep over `knowledge-base/project/learnings/`), the three technical rulings (acting ruling seat, recorded in `decision-challenges.md`), and the review-equivalent self-audit (sharp-edges catalogue pass + mechanical gates above). The interactive `plan-review` panel is likewise unspawnable; flagged for the parent pipeline.
