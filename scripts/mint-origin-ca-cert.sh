@@ -36,6 +36,11 @@
 # redirect the bearer token with it.
 
 set -uo pipefail
+
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 umask 077
 
 readonly MC_HOST="app.soleur.ai"
@@ -143,7 +148,9 @@ mc_cf() {
   [[ -n "$body" ]] && args+=(--data-binary "@$body")
   # No retry on the create: a retry after a lost response would mint a second certificate. GETs retry.
   [[ "$method" == GET ]] && args+=(--retry 2 --retry-delay 2)
-  code="$(curl "${args[@]}" "${MC_CF_API}${path}" 2>/dev/null)" || rc=$?
+  # --disable FIRST (skip ~/.curlrc) and --noproxy '*' (no CURL_PROXY / *_proxy route): this call carries the Cloudflare bearer token,
+  # so neither a config file nor a proxy variable may redirect it (#7797 transport confinement).
+  code="$(curl --disable --noproxy '*' "${args[@]}" "${MC_CF_API}${path}" 2>/dev/null)" || rc=$?
   [[ "$rc" == 0 ]] || { printf '000'; return 0; }
   printf '%s' "$code"
 }

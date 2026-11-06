@@ -107,9 +107,9 @@ while (( $# )); do
     -o) out="$2"; shift 2 ;;
     -X) method="$2"; shift 2 ;;
     -K) cfg="$2"; shift 2 ;;
-    -H|-w|--max-time|--retry|--retry-delay|--proto) shift 2 ;;
+    -H|-w|--max-time|--retry|--retry-delay|--proto|--noproxy) shift 2 ;;
     --data-binary) body="${2#@}"; shift 2 ;;
-    --silent|--tlsv1.2) shift ;;
+    --silent|--tlsv1.2|--disable) shift ;;
     *) url="$1"; shift ;;
   esac
 done
@@ -211,6 +211,14 @@ leak_scan() { # over every captured stream: nothing secret outside ::add-mask:: 
   eq "B-leak no protected string in any stream or argv of $n scenarios" "$bad_n" 0
   eq "B-leak the scan covered every scenario" "$n" "$SC"
 }
+
+# #7797: xtrace refusal and transport confinement of the credentialed curl.
+XOUT="$(env -i PATH="$PATH" bash -x "$BODY" guard 2>&1)"; XRC=$?
+eq "A23 the body refuses to run under xtrace (exit 78)" "$XRC" 78
+has "A23b the refusal names #7797" "$XOUT" "refusing to run under xtrace"
+eq "A24 the credentialed curl starts with --disable --noproxy '*'" "$(grep -c "curl --disable --noproxy '\*' \"\${args\[@\]}\"" "$BODY")" 1
+eq "A24b every curl invocation with arguments is the confined form" "$(grep -v '^\s*#' "$BODY" | grep -cE 'curl -')" "$(grep -v '^\s*#' "$BODY" | grep -cE "curl --disable --noproxy '\*' ")"
+has "A24c the curl config carries the header, not argv" "$(grep -v '^\s*#' "$BODY")" '-K "$MC_TMP/curl.cfg"'
 
 echo "B. guard"
 guard() { # name value env...
