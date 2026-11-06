@@ -602,8 +602,10 @@ describe("createIsolatedPushDir", () => {
 
     test("an oversized shallow (over 64 KiB), a non-hex line, a short hex line, an uppercase line and a symlinked shallow", () => {
       const shallow = join(ws, ".git", "shallow");
-      writeFileSync(shallow, `${shaA}\n`.repeat(1700)); // 41 * 1700 = 69 700 bytes
-      expect(statSync(shallow).size).toBeGreaterThan(64 * 1024);
+      const oversized = `${shaA}\n`.repeat(1700); // 41 * 1700 = 69 700 bytes
+      writeFileSync(shallow, oversized);
+      // The size comes from the content written, not from a stat of the path (a stat-then-write on one path is a file-system race to CodeQL).
+      expect(Buffer.byteLength(oversized)).toBeGreaterThan(64 * 1024);
       expect(reasonOf()).toBe("shallow_invalid");
       for (const bad of ["not-a-sha\n", `${shaA}\n${"c".repeat(39)}\n`, `${"A".repeat(40)}\n`, `${shaA} extra\n`]) {
         writeFileSync(shallow, bad);
