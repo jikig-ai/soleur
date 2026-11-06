@@ -862,7 +862,7 @@ wa_init() { # after scn: the stubs, the token, a strict URL check and an accepte
   mkwa wa
 }
 wa_calls() { { cat "$STUB_DIR/$1" 2>/dev/null || true; } | grep -c "^$2" || true; }
-no_wa_miss() { ! { cat "$STUB_DIR/curl-argv.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; } | grep -q 'STUB-MISS'; }
+no_wa_miss() { ! grep -q 'STUB-MISS' < <({ cat "$STUB_DIR/curl-argv.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; }); }
 no_secret_out() { # the canonical token AND the one this scenario put in the secret store (a refused token must not be printed either)
   local h="$TMP/.hay" t2=""
   { cat "$TMP/o" "$TMP/e" "$STUB_DIR/curl-argv.log" "$STUB_DIR/curl-url.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; } > "$h"
@@ -1374,21 +1374,21 @@ MUT="$TMP/mut"; mkdir -p "$MUT"; PRISTINE_DIR="$TMP/pristine/skills/ship/scripts
 mkdir -p "$TMP/pristine/scripts/lib"; cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$TMP/pristine/scripts/"
 # The plugin helper (NOT the repository-root helper of the same file name); built from a directory so no path in this suite is a tail match for the root helper.
 PLUGIN_LIB_DIR="$REPO_ROOT/plugins/soleur/scripts/lib"
-cp "$PLUGIN_LIB_DIR/bearer-curl.sh" "$TMP/pristine/scripts/lib/"
+cp "$PLUGIN_LIB_DIR/bearer-fetch.sh" "$TMP/pristine/scripts/lib/"
 PRISTINE="$PRISTINE_DIR/hold-gate-eval.sh"; cp "$SUT_REAL" "$PRISTINE"
 cp "$TMP/pristine/scripts/delegation-verify.sh" "$TMP/real-verifier.sh"
 mutate() { # <name> <sed -E expr>: write a mutant inside a mirrored tree and prove the mutation LANDED
   local d="$TMP/mutants/$1"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
-  cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$PLUGIN_LIB_DIR/bearer-curl.sh" "$d/scripts/lib/"
+  cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$PLUGIN_LIB_DIR/bearer-fetch.sh" "$d/scripts/lib/"
   sed -E "$2" "$PRISTINE" > "$d/skills/ship/scripts/hold-gate-eval.sh"
   if cmp -s "$PRISTINE" "$d/skills/ship/scripts/hold-gate-eval.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
   echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
 }
 mutate_lib() { # <name> <sed -E expr>: the evaluator is unchanged, the shared helper beside it is edited
-  local d="$TMP/mutants/$1" lib="$PLUGIN_LIB_DIR/bearer-curl.sh"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
+  local d="$TMP/mutants/$1" lib="$PLUGIN_LIB_DIR/bearer-fetch.sh"; mkdir -p "$d/skills/ship/scripts" "$d/scripts/lib"
   cp "$REPO_ROOT/plugins/soleur/scripts/delegation-verify.sh" "$d/scripts/"; cp "$PRISTINE" "$d/skills/ship/scripts/hold-gate-eval.sh"
-  local mlib="$d/scripts/lib"; sed -E "$2" "$lib" > "$mlib/bearer-curl.sh"
-  if cmp -s "$lib" "$mlib/bearer-curl.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
+  local mlib="$d/scripts/lib"; sed -E "$2" "$lib" > "$mlib/bearer-fetch.sh"
+  if cmp -s "$lib" "$mlib/bearer-fetch.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
   echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
 }
 noop() { echo "s/^.*# mut:$1\$/: # mut:$1/"; }
@@ -1650,7 +1650,7 @@ mutate wa-valid-day "$(noop wa-valid-day)" && { killed wa-valid-day "$PCANT" w_b
 mutate wa-valid-last 's/got = 1; last = v/last = (got ? last : v); got = 1/' && { killed wa-valid-last "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-dup $(blobhash wa-dup) (decided DATE)" w_dup r_wa; killed wa-valid-last "1|holds: x 1 discharged: 0 standing: 1 why=only a person can settle this (the accepted text has passed its last valid day; a revised text is needed)" w_dup2 r_wa; }
 mutate wa-valid-fm 's/NR == 1 \{ if \(\$0 == "---"\) \{ f = 1; next \} else exit \} f && \$0 == "---" \{ exit \} f && //' && killed wa-valid-fm "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-bodyvu $(blobhash wa-bodyvu) (decided DATE)" w_bodyvu r_wa
 if day_stable; then mutate wa-today-utc 's/date -u \+%F/date +%F/' && killed wa-today-utc "0|holds: x rcs=0 1" w_tz r_tz; else day_skip wa-today-utc; fi
-mutate wa-bind-case 's/tr .A-Z. .a-z. \| grep -Eq "\(\^/grep -Eq "(^/' && killed wa-bind-case "$P_OK" w_bindcase r_wa
+mutate wa-bind-case '/# mut:wa-bind$/ s/ \| tr .A-Z. .a-z.//' && killed wa-bind-case "$P_OK" w_bindcase r_wa
 mutate wa-file "$(noop wa-file)" && killed wa-file "2|holds: x 1 discharged: 0 standing: 1 why=a recorded decision on a legal text cannot back a production step" s_filepath r_wafile
 mutate tab-val 's~gsub\(/\\t/, " ", s\); ~~' && killed tab-val "$PSHAPE" w_tab r_wa
 mutate wa-expired "$(noop wa-expired)" && killed wa-expired "1|holds: x 1 discharged: 0 standing: 1 why=only a person can settle this (the accepted text has passed its last valid day; a revised text is needed)" w_expired r_wa

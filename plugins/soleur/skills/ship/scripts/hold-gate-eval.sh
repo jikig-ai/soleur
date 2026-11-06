@@ -34,7 +34,7 @@
 # a decision about one text must not clear a wait about something else), or the gate is UNEVAL. If the text's front matter
 # carries `valid_until: YYYY-MM-DD` and that day is past, the gate is PERSON (a revised text is needed). It asks
 # https://app.soleur.ai/api/internal/legal-acceptance/<key>?hash=<hash> with a read-only bearer token read from the secret
-# store (lib/bearer-curl.sh); the base URL is a literal. `none` or a text that changed since the gate was written is FALSE
+# store (lib/bearer-fetch.sh); the base URL is a literal. `none` or a text that changed since the gate was written is FALSE
 # (stands); `declined` and `changes_requested` are PERSON (a person must decide; stands, exit 1, a revised text is needed);
 # `invalid` (the record failed its checksum), an unavailable check, a rejected sign-in and every answer that is not exactly
 # the four-key shape are UNEVAL (exit 2). Key and hash shapes are the same predicate as the database CHECK (migration 184)
@@ -142,7 +142,7 @@ WA_TOKEN_NAME='LEGAL_ACCEPTANCE_VERIFY_TOKEN'
 WA_RUNBOOK='knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md'
 WA_CANT='the saved text is not in the project'
 WA_DMG='the saved text is damaged'
-BEARER_LIB="$SCRIPT_DIR/../../../scripts/lib/bearer-curl.sh"
+BEARER_LIB="$SCRIPT_DIR/../../../scripts/lib/bearer-fetch.sh"
 WA_HASH=""
 
 GRES=""; GWHY=""; GNOTE=""; GLINE=""; WA_HOLD_TEXT=""
@@ -208,7 +208,7 @@ gate_web_acceptance() {
   if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain text name and fingerprint"; return; fi # mut:wa-shape
   # CTO ruling D1: the hold's own words (cleaned of control and bidi characters, but NOT cut at the 160-character display limit, so a key beyond that limit still binds; accepted residual of the lexical rule) must name this text's key as a whole
   # token, so a decision about one text cannot clear a wait about another thing. A letter, digit, hyphen or underscore beside the key makes it part of a longer word.
-  clean_uncut "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z' | grep -Eq "(^|[^a-z0-9_-])${key}([^a-z0-9_-]|\$)" || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about; ask the plan's author to put the text name $key in the hold's words"; return; } # mut:wa-bind
+  grep -Eq "(^|[^a-z0-9_-])${key}([^a-z0-9_-]|\$)" < <(clean_uncut "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z') || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about; ask the plan's author to put the text name $key in the hold's words"; return; } # mut:wa-bind
   WA_HASH="$hash"
   path="$WA_TEXTS/$key.md"
   top="$(git rev-parse --show-toplevel </dev/null 2>/dev/null)" || top="" # a pathspec is relative to the working directory, so list from the top

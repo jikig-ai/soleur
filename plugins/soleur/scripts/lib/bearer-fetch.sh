@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # BC_* are the helper's outputs, read by the sourcing script
-# bearer-curl.sh -- SOURCED helper (never executed): read ONE read-only bearer token from the secret store and send ONE
+# bearer-fetch.sh -- SOURCED helper (never executed): read ONE read-only bearer token from the secret store and send ONE
 # hardened HTTPS GET with it. Consumer: skills/ship/scripts/hold-gate-eval.sh (the `web-acceptance` gate). Suite:
-# plugins/soleur/test/bearer-curl.test.sh. Precedent for the token handling: skills/trigger-cron/scripts/trigger.sh.
+# plugins/soleur/test/bearer-fetch.test.sh. Precedent for the token handling: skills/trigger-cron/scripts/trigger.sh.
 #
 # Why this file exists beside scripts/lib/bearer-curl.sh (the repository-root helper, `bc_curl`, used by the workflow YAML
 # and CI): this plugin ships to customer machines, which have the plugin directory and nothing of the repository root, so
@@ -38,7 +38,7 @@
 # Refuse to be loaded under xtrace. `return` ends a `source`; `exit` covers a direct execution.
 case "$-" in
   *x*)
-    printf 'bearer-curl: refusing to run under xtrace: this helper handles a live credential and -x would print it (see #7797). No secret has been read.\n' >&2
+    printf 'bearer-fetch: refusing to run under xtrace: this helper handles a live credential and -x would print it (see #7797). No secret has been read.\n' >&2
     return 78 2>/dev/null || exit 78 # mut:xtrace-source
     ;;
 esac

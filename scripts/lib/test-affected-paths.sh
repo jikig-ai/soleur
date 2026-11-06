@@ -497,10 +497,10 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/linear-fetch/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
-AFFECTED_PLUGINS_SOLEUR_TEST_BEARER_CURL_TEST_SH_PATHS=(
-  "plugins/soleur/scripts/lib/bearer-curl.sh"  # SUT (plugins/soleur/test/bearer-curl.test.sh:32)
-  "plugins/soleur/test/bearer-curl.test.sh"
-  "scripts/lib/bearer-curl.sh"  # real read: the env -u list parity test (plugins/soleur/test/bearer-curl.test.sh:292)
+AFFECTED_PLUGINS_SOLEUR_TEST_BEARER_FETCH_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # SUT (plugins/soleur/test/bearer-fetch.test.sh:32)
+  "plugins/soleur/test/bearer-fetch.test.sh"
+  "scripts/lib/bearer-curl.sh"  # real read: the env -u list parity test (plugins/soleur/test/bearer-fetch.test.sh:292)
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
@@ -562,7 +562,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
   "knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"  # real read: the runbook wording pin (plugins/soleur/test/hold-gate-eval.test.sh:914)
-  "plugins/soleur/scripts/lib/bearer-curl.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)
   "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"  # SUT
   "plugins/soleur/test/hold-gate-eval.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE

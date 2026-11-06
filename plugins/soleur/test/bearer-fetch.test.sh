@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2016,SC2329  # A && B || C is the assertion idiom; stub bodies are single-quoted on purpose; setup functions are dispatched indirectly
-# Suite for plugins/soleur/scripts/lib/bearer-curl.sh (the sourced helper that reads one read-only bearer token from the
+# Suite for plugins/soleur/scripts/lib/bearer-fetch.sh (the sourced helper that reads one read-only bearer token from the
 # secret store and sends ONE hardened GET). Consumer: skills/ship/scripts/hold-gate-eval.sh (web-acceptance gate).
 #
 # THE SEAM: `doppler` and `curl` are PATH stubs that answer only the exact argv shapes the helper is expected to use and
@@ -29,7 +29,7 @@ set +e
 assert_fixture_dir "$TMP"
 
 REPO_ROOT="$(cd -P "$SUITE_DIR/../../.." && pwd -P)"
-LIB_REAL="$REPO_ROOT/plugins/soleur/scripts/lib/bearer-curl.sh"
+LIB_REAL="$REPO_ROOT/plugins/soleur/scripts/lib/bearer-fetch.sh"
 BASH_BIN="$(command -v bash)"
 
 ( assert_eq a b "control" >/dev/null; [[ $FAIL -eq 1 ]] ) \
@@ -216,7 +216,7 @@ echo "=== Arm 3: xtrace ==="
 scn; drive "$LIB_REAL" 'true'
 assert_eq "0" "$DRC" "X0: control: sourcing without xtrace is fine"
 scn; ( cd "$TMP" && env -i HOME="$TMP" PATH="$BIN" STUB_DIR="$STUB_DIR" "$BASH_BIN" -x -c ". \"$LIB_REAL\"; echo \"src-rc=\$?\"" ) >"$TMP/drv.out" 2>"$TMP/drv.err"
-assert_eq "1" "$(outs | grep -c '^bearer-curl: refusing to run under xtrace')" "X1: sourcing under xtrace says it refuses (and never reads a token)"
+assert_eq "1" "$(outs | grep -c '^bearer-fetch: refusing to run under xtrace')" "X1: sourcing under xtrace says it refuses (and never reads a token)"
 assert_eq "0" "$(calls_of doppler-argv.log 'doppler')" "X1b: no secret was read"
 scn; ( cd "$TMP" && env -i HOME="$TMP" PATH="$BIN" STUB_DIR="$STUB_DIR" "$BASH_BIN" -c ". \"$LIB_REAL\"; set -x; bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo \"rc=\$?\"; set +x" ) >"$TMP/drv.out" 2>"$TMP/drv.err"
 assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "X2: xtrace turned on after sourcing refuses the token read"
@@ -299,11 +299,11 @@ assert_eq "$root_set" "$plugin_set" "H4: the two helpers hide exactly the same e
 assert_eq "1" "$([[ "$(printf '%s\n' "$plugin_set" | sed 's/-u LD_AUDIT //')" != "$root_set" ]] && echo 1 || echo 0)" "H4b: instrument: a list missing one name would differ"
 
 echo "=== Arm 6: mutations (each marked line is edited; the targeted check must go RED) ==="
-LIBP="$TMP/pristine/bearer-curl.sh"; mkdir -p "$TMP/pristine" "$TMP/mutants"; cp "$LIB_REAL" "$LIBP"
+LIBP="$TMP/pristine/bearer-fetch.sh"; mkdir -p "$TMP/pristine" "$TMP/mutants"; cp "$LIB_REAL" "$LIBP"
 mlib() { # <name> <sed -E expr>: a mutant copy of the helper; prove the mutation LANDED and the mutant still parses
-  local d="$TMP/mutants/$1"; mkdir -p "$d"; sed -E "$2" "$LIBP" > "$d/bearer-curl.sh"
-  if cmp -s "$LIBP" "$d/bearer-curl.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
-  bash -n "$d/bearer-curl.sh" 2>/dev/null || { echo "  FAIL: mutation $1 does not parse"; FAIL=$((FAIL + 1)); return 1; }
+  local d="$TMP/mutants/$1"; mkdir -p "$d"; sed -E "$2" "$LIBP" > "$d/bearer-fetch.sh"
+  if cmp -s "$LIBP" "$d/bearer-fetch.sh"; then echo "  FAIL: mutation $1 did not land"; FAIL=$((FAIL + 1)); return 1; fi
+  bash -n "$d/bearer-fetch.sh" 2>/dev/null || { echo "  FAIL: mutation $1 does not parse"; FAIL=$((FAIL + 1)); return 1; }
   echo "  PASS: mutation $1 landed"; PASS=$((PASS + 1))
 }
 # kill_mut <name> <setup-fn> <snippet> <pinned>: the pristine helper gives <pinned>, the mutant must not
@@ -311,7 +311,7 @@ kill_mut() {
   local name="$1" setup="$2" snippet="$3" pinned="$4" got
   "$setup"; drive "$LIBP" "$snippet"; got="$(tr '\n' ' ' < "$TMP/drv.out")"
   if [[ "$got" != "$pinned" ]]; then echo "  FAIL: $name: the pristine helper gives '$got', not the pinned '$pinned'"; FAIL=$((FAIL + 1)); return; fi
-  "$setup"; drive "$TMP/mutants/$name/bearer-curl.sh" "$snippet"; got="$(tr '\n' ' ' < "$TMP/drv.out")"
+  "$setup"; drive "$TMP/mutants/$name/bearer-fetch.sh" "$snippet"; got="$(tr '\n' ' ' < "$TMP/drv.out")"
   if grep -qE 'command not found|syntax error|unbound variable' "$TMP/drv.err"; then echo "  FAIL: mutant $name CRASHED; a crash is not a kill"; FAIL=$((FAIL + 1))
   elif [[ "$got" != "$pinned" ]]; then echo "  PASS: mutant $name killed ('$got')"; PASS=$((PASS + 1))
   else echo "  FAIL: mutant $name SURVIVED ('$got')"; FAIL=$((FAIL + 1)); fi
@@ -325,7 +325,7 @@ Q_read='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 Q_http='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "http://app.soleur.ai/x"; echo "rc=$?"'
 Q_err='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
 Q_xt='set -x; bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"; set +x'
-mkdir -p "$TMP/mutants/ctrl"; cp "$LIBP" "$TMP/mutants/ctrl/bearer-curl.sh"
+mkdir -p "$TMP/mutants/ctrl"; cp "$LIBP" "$TMP/mutants/ctrl/bearer-fetch.sh"
 ( b=$FAIL; kill_mut ctrl S_ok "$Q_get" "never " >/dev/null; [[ $FAIL -gt $b ]] ) || { printf 'FATAL: kill cannot report a pristine that differs from its pin\n' >&2; exit 2; }
 ( b=$FAIL; kill_mut ctrl S_ok "$Q_get" "rc=0 status=200 " >/dev/null; [[ $FAIL -gt $b ]] ) || { printf 'FATAL: kill cannot report a survivor\n' >&2; exit 2; }
 ( b=$FAIL; mlib ctrl2 's/zz-no-such-text-zz/y/' >/dev/null; [[ $FAIL -gt $b ]] ) || { printf 'FATAL: mlib cannot report a mutation that did not land\n' >&2; exit 2; }
@@ -341,7 +341,7 @@ mlib scheme 's/^(.*)# mut:scheme$/ : # mut:scheme/' && kill_mut scheme S_ok "$Q_
 src_x() { scn; ( cd "$TMP" && env -i HOME="$TMP" PATH="$BIN" STUB_DIR="$STUB_DIR" "$BASH_BIN" -x -c ". \"$1\"; echo \"src-rc=\$?\"" ) 2>&1 | grep -c '^src-rc=78$'; }
 mlib xtrace-source 's/^(.*)# mut:xtrace-source$/ : # mut:xtrace-source/' && {
   if [[ "$(src_x "$LIBP")" != 1 ]]; then echo "  FAIL: xtrace-source: the pristine helper does not refuse to be sourced under xtrace"; FAIL=$((FAIL + 1))
-  elif [[ "$(src_x "$TMP/mutants/xtrace-source/bearer-curl.sh")" != 1 ]]; then echo "  PASS: mutant xtrace-source killed"; PASS=$((PASS + 1))
+  elif [[ "$(src_x "$TMP/mutants/xtrace-source/bearer-fetch.sh")" != 1 ]]; then echo "  PASS: mutant xtrace-source killed"; PASS=$((PASS + 1))
   else echo "  FAIL: mutant xtrace-source SURVIVED"; FAIL=$((FAIL + 1)); fi; }
 mlib xtrace-read 's/^(.*)# mut:xtrace-read$/ : # mut:xtrace-read/' && kill_mut xtrace-read S_ok "$Q_xt" "rc=1 "
 S_tls() { scn; DRV_ENV="SSLKEYLOGFILE=/x CURL_CA_BUNDLE=/x SSL_CERT_FILE=/x"; }

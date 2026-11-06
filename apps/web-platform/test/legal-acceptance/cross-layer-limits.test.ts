@@ -6,7 +6,7 @@
  *  - SQL: the CHECK constraints of migration 184 and the argument checks of the RPCs in 184 and 185;
  *  - bash: the `=~` patterns inside `gate_web_acceptance` in plugins/soleur/skills/ship/scripts/hold-gate-eval.sh.
  * The bearer token length is the same kind of shared limit: `TOKEN_RE` in the verify route and the two `bc_shape_ok` length
- * lines in plugins/soleur/scripts/lib/bearer-curl.sh are extracted and both must say 48 to 256.
+ * lines in plugins/soleur/scripts/lib/bearer-fetch.sh are extracted and both must say 48 to 256.
  * An empty extraction FAILS (a regex that no longer finds anything must not read as "all layers agree").
  * The boundary is pinned the same way everywhere: a key of 63 characters is accepted and one of 64 is refused.
  */
@@ -26,7 +26,7 @@ const M185 = read(path.join(WEB, "supabase/migrations/185_legal_acceptance_ack.s
 const GATE_PATH = path.join(REPO, "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh");
 const GATE_SRC = read(GATE_PATH);
 const ROUTE_SRC = read(path.join(WEB, "app/api/internal/legal-acceptance/[key]/route.ts"));
-const HELPER_SRC = read(path.join(REPO, "plugins/soleur/scripts/lib/bearer-curl.sh"));
+const HELPER_SRC = read(path.join(REPO, "plugins/soleur/scripts/lib/bearer-fetch.sh"));
 
 // ── extractors (each throws on an empty result) ─────────────────────────────────────────────────────────────────
 
