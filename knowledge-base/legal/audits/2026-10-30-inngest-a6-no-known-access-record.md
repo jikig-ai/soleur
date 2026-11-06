@@ -65,7 +65,7 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 | Other roles (Member, Restricted) | 0 |
 | Sign-in protection (two-factor) on the account | Active |
 | API tokens listed for the project | 2 (count only: 1 Read, 1 Read & Write, as posted by the owner on #9927 on 2026-10-29) |
-| Console re-read of members, two-factor and API tokens | PENDING, owner's own signed-in browser. No agent fills this cell. |
+| Console re-read of members, two-factor and API tokens | PENDING, filled from the owner's own browser session. No agent fills this cell. |
 
 ## Related measured items (the A6 row's prerequisites)
 

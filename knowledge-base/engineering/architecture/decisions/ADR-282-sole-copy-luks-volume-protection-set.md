@@ -635,14 +635,14 @@ The other arm-write uses that do not touch the flag change too: `op=luks-cutover
 
 On the merge of PR 12219 this addendum records six owner decisions given in session on 2026-11-06 and the same-day CTO and CLO rulings behind them. Nothing above it is edited except the dated `Superseded` markers. Queue and run state is held on a single volume with no off-project copy; recoverability after a project or account loss is not established. The full rows are in `knowledge-base/project/specs/feat-one-shot-9927-record-owner-decisions-a6-refresh/decision-challenges.md` (row ids below); the design for the arm-token replacement is `arm-token-replacement-design-12158.md` in the same folder.
 
-**Decisions.** Each is an owner decision given in session 2026-11-06 (relayed by the agent; not a signed record).
+**Decisions.** Each line carries the label and a status word.
 
-1. A6 Hetzner-project record (O1): decided - the owner will sign it in their own words. The agent refreshes the unsigned draft only; the owner's sentence field stays empty and no agent drafts or attests it.
-2. Off-project ciphertext copy, header plus data (O2, item 1b): funded in principle, no spend committed, build gated on C1 to C11 below.
-3. Host replace (O3): planning only, not dispatched - one bundled window is agreed to be planned. No date is set. Dispatching `apply_target=inngest-host-replace` is not authorised (O4) and stays a per-command in-session go. The Better Stack dead-man probe write (O5) is owner-authorised for the window and is not run here.
-4. Arm token `doppler_service_token.inngest_arm_write` (O6, R1): kept, revisit trigger - revisit at the next host replace or 2027-01-08, whichever is first. No revoke, scope-down or deletion is authorised.
-5. G2e attribute pin (O9, R2, D5): pinned permanently, no sunset.
-6. Epic #9927 (O7, R6): stays open; it closes only on the conditions below, and the agent never closes it.
+1. A6 Hetzner-project record (O1), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): decided - the owner will sign it in their own words. The agent refreshes the unsigned draft only; the owner's sentence field stays empty and no agent drafts or attests it.
+2. Off-project ciphertext copy, header plus data (O2, item 1b), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): funded in principle, no spend committed, build gated on C1 to C11 below.
+3. Host replace (O3), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): planning only, not dispatched - one bundled window is agreed to be planned. No date is set. Dispatching `apply_target=inngest-host-replace` is not authorised (O4) and stays a per-command in-session go. The Better Stack dead-man probe write (O5) is owner-authorised for the window and is not run here.
+4. Arm token `doppler_service_token.inngest_arm_write` (O6, R1), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): kept, revisit trigger - revisit at the next host replace or 2027-01-08, whichever is first. No revoke, scope-down or deletion is authorised.
+5. G2e attribute pin (O9, R2, D5), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): pinned permanently, no sunset.
+6. Epic #9927 (O7, R6), owner decision given in session 2026-11-06 (relayed by the agent; not a signed record): stays open; it closes only on the conditions below, and the agent never closes it.
 
 Ask-to-row map: ask 1 = O1, ask 2 = O2, ask 3 = O3 + O4 + O5, ask 4 = O6, ask 5 = O9, ask 6 = O7. O8 is the rename override: the CLO ruled that the A6 draft keeps its file name until the signing event (L1 dissent), so the brief's rename is deferred to that event.
 
@@ -680,7 +680,7 @@ Ask-to-row map: ask 1 = O1, ask 2 = O2, ask 3 = O3 + O4 + O5, ask 4 = O6, ask 5 
 - C10 two-factor and a named owner on the provider account.
 - C11 the counsel-review attestation sits on the activating PR.
 
-**Epic close conditions** (R6). #9927 closes only after the replace window, and when all hold: (1) the replace delivered items 2 and 4, or the owner drops them explicitly; (2) the A6 record is signed and linked; (3) the off-project copy is recorded as funded or declined; (4) the arm-token decision is recorded with the follow-up tracker carrying the rest; (5) the G2e outcome is recorded; (6) the header backup is built or declined; (7) every deferral has its own open issue (#12158, #12229, #12230, #11265, #11266).
+**Epic close conditions** (R6). #9927 closes only after the replace window, and when all hold: (1) the replace delivered items 2 and 4, or the owner drops them explicitly; (2) the A6 record is signed and linked; (3) the owner's decision on the off-project copy is recorded, to proceed in principle or to decline; (4) the arm-token decision is recorded with the follow-up tracker carrying the rest; (5) the G2e outcome is recorded; (6) the header backup is built or declined; (7) every deferral has its own open issue (#12158, #12229, #12230, #11265, #11266).
 
 **Standing exposure of the arm token** (CTO D4, verbatim). The standing token is `access = "read/write"` (`doppler_service_token.inngest_arm_write` in `inngest-arm-write-token.tf`). It reads every key in `soleur-inngest/prd`, including `INNGEST_REDIS_LUKS_KEY`, `INNGEST_TLS_KEY` and `INNGEST_SIGNING_KEY`; it is a repo-level secret, so any workflow an actor can push to a branch can resolve it; the `inngest-cutover` reviewer gate covers only jobs that declare the environment. Write is the larger risk: overwriting the LUKS key would leave the sole-copy volume unopenable on the next boot; the history that would let someone recover the old value sits in Doppler (not verified).
 
