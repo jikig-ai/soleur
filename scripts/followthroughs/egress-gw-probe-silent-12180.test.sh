@@ -130,8 +130,22 @@ alert() { # <name> <paused> [operator] [value] [created_epoch]   (updated_at is 
     '{id:"1",type:"alert",attributes:{name:$n,paused:$p,operator:$op,value:$v,created_at:$ca,updated_at:$ua}}'
 }
 patch() { # <file> <jq filter> [jq args...]  -- a fixture edit that fails to apply is a failure, never a silent no-op
-  local f="$1" flt="$2"; shift 2
-  if jq -c "$@" "$flt" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; then :; else fail "fixture patch did not apply: ${flt:0:70}"; fi
+  local f="$1" flt="$2" before; shift 2
+  before="$(cat "$f" 2>/dev/null)"
+  if jq -c "$@" "$flt" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; then
+    [[ "$(cat "$f")" != "$before" ]] || fail "fixture patch changed nothing: ${flt:0:70}"
+  else fail "fixture patch did not apply: ${flt:0:70}"; fi
+}
+make_mutant() { # <out> <old> <new> -- a copy of the probe with exactly ONE occurrence replaced; a mutant that does not land is a failure
+  local out="$1" old="$2" new="$3"
+  if OLD="$old" NEW="$new" python3 - "$SUT" "$out" <<'PYEOF'
+import os, sys
+s = open(sys.argv[1]).read()
+o, n = os.environ["OLD"], os.environ["NEW"]
+assert s.count(o) == 1, "anchor count %d" % s.count(o)
+open(sys.argv[2], "w").write(s.replace(o, n))
+PYEOF
+  then chmod 0755 "$out"; else fail "probe mutant did not land: ${old:0:60}"; fi
 }
 
 # The default fixture is the REAL exit-0 shape: the apply (the floor) was FLOOR_AGE seconds ago, the anchor was resolved
@@ -238,7 +252,7 @@ run_case() {
       BETTERSTACK_API_TOKEN=dummy-token EGRESS_GW_SILENT_BQ="$MOCK" EGRESS_GW_SILENT_TF="$TF" \
       EGRESS_GW_SILENT_NOW_EPOCH="$NOW" EGRESS_GW_SILENT_ANCHOR_ID="$ANCHOR_ID" EGRESS_GW_SILENT_FLOOR_EPOCH="$FLOOR" \
       EGRESS_GW_SILENT_ROSTER="soleur-web-platform soleur-web-2" "$@" \
-      bash -c 'printf "%s" "$$" > "$1"; shift; if [[ -n "${EGS_DROP_STDERR:-}" ]]; then exec "$@" 2>/dev/null; fi; exec "$@"' _ "$WORK/probe.pid" "$SUT" 2>&1)" || rc=$?
+      bash -c 'printf "%s" "$$" > "$1"; shift; if [[ -n "${EGS_DROP_STDERR:-}" ]]; then exec "$@" 2>/dev/null; fi; exec "$@"' _ "$WORK/probe.pid" "${RUN_SUT:-$SUT}" 2>&1)" || rc=$?
   LAST_OUT="$out"; LAST_RC="$rc"
   if [[ "$rc" -eq 1 ]]; then fail "$desc -- exit 1 is FORBIDDEN (the sweeper reads it as FAIL) :: ${out:0:300}"; return; fi
   if [[ "$expected" == any ]]; then pass "$desc (exit=$rc)"
@@ -764,6 +778,7 @@ NOW=$NOW_SAVED
 # quiet_since and the open-incident set are PRODUCTION-only: unrelated and canary incidents never move either
 reset_defaults; build_fixtures
 patch "$WORK/incidents.json" '.data |= map(if .id == "7001" or .id == "5555" then .attributes.resolved_at = $r else . end) | .data += [{id:"7004",type:"incident",attributes:{name:"Unrelated monitor",started_at:$s,resolved_at:null,cause:"x"}}]' --arg r "$(iso $((NOW - 100)))" --arg s "$(iso $((FLOOR - 4000)))"
+if jq -e '[.data[] | select(.id == "7001" or .id == "5555") | .attributes.resolved_at] | length == 2 and all(. != null)' "$WORK/incidents.json" >/dev/null; then pass "fixture: the unrelated and canary incidents really carry a resolved_at near NOW"; else fail "fixture: the unrelated/canary resolved_at patch did not land"; fi
 run_case "unrelated and canary incidents resolved 100 s ago plus an unrelated open pre-floor incident -> PASS, quiet_since is production-only" 0
 field_is "quiet_age_s=20000"; field_is "pre_floor_open_prod_incident=0"
 # an open anchor that started INSIDE the slack window is still an open pre-floor incident (the anchor is excluded from the recurrence set by id)
@@ -838,8 +853,33 @@ expect_calls "the incident listing asks for 50 per page" "per_page=50"
 if [[ "$(printf '%s\n' "$LAST_OUT" | grep -c '^SOLEUR_EGRESS_GW_SILENT_SOAK ')" == 1 ]]; then pass "exactly one verdict line per run"; else fail "the verdict line is not printed exactly once"; fi
 run_case "stdout-only probe (stderr dropped)" 0 EGS_DROP_STDERR=1
 expect_out "the verdict line is on stdout, not stderr" '^SOLEUR_EGRESS_GW_SILENT_SOAK verdict=pass '
-# source pins for two internal guards no input can reach (defense in depth)
-if grep -qF 'paired with exit' "$SUT" && grep -qF 'the pass preconditions were not all established' "$SUT"; then pass "the verdict pairing refusal and the pass-precondition assertion are present"; else fail "the verdict pairing refusal or the pass-precondition assertion is missing"; fi
+# the two internal backstops no input can reach are DRIVEN, not source-grepped: a copy of the probe is handed a bad state
+# (a word/exit pairing that would close the tracker; a pass whose preconditions are not all established)
+reset_defaults; build_fixtures
+make_mutant "$WORK/sut-ctl.sh" "# Defense in depth: the ladder above tests the BAD value" "# Defense in depth: the ladder above tests the BAD value"
+RUN_SUT="$WORK/sut-ctl.sh"; run_case "control: an identity-mutated copy of the probe still passes the compliant fixture" 0; RUN_SUT=""
+make_mutant "$WORK/sut-pair.sh" $'\nverdict pass 0\n' $'\nverdict action_required 0\n'
+RUN_SUT="$WORK/sut-pair.sh"; run_case "a call site pairing action_required with exit 0 is refused -> unknown (3), never a tracker-closing 0" 3; RUN_SUT=""
+verdict_is unknown; expect_out "the refusal names the pairing" 'internal: verdict action_required paired with exit 0'
+make_mutant "$WORK/sut-precond.sh" "# Defense in depth: the ladder above tests the BAD value" $'PRE_OPEN=1\n# Defense in depth: the ladder above tests the BAD value'
+RUN_SUT="$WORK/sut-precond.sh"; run_case "a pass whose preconditions are not all established is refused -> unknown (3)" 3; RUN_SUT=""
+verdict_is unknown; expect_out "the refusal names the pass preconditions" 'pass preconditions were not all established'
+make_mutant "$WORK/sut-xcheck.sh" "# Defense in depth: the ladder above tests the BAD value" $'XCHECK_MSG=leftover\n# Defense in depth: the ladder above tests the BAD value'
+RUN_SUT="$WORK/sut-xcheck.sh"; run_case "a leftover canary cross-check message at the pass is refused -> unknown (3)" 3; RUN_SUT=""
+# the default roster is the canonical set behind var.web_hosts (in the manner of the #6608 allowlist parity)
+VARTF="$HERE/../../apps/web-platform/infra/variables.tf"
+CANON_ROSTER="$(awk '/^variable "web_hosts"/,/^}/' "$VARTF" 2>/dev/null | sed 's/#.*//' | grep -oE '^[[:space:]]*"web-[0-9]+"[[:space:]]*=[[:space:]]*\{' | grep -oE 'web-[0-9]+' | while read -r k; do if [[ "$k" == web-1 ]]; then echo soleur-web-platform; else echo "soleur-$k"; fi; done | sort | paste -sd' ')"
+PROBE_ROSTER="$(sed -nE 's/^ROSTER_RAW="\$\{EGRESS_GW_SILENT_ROSTER:-([^}]*)\}"$/\1/p' "$SUT" | tr ' ' '\n' | sort | paste -sd' ')"
+if [[ -n "$CANON_ROSTER" && "$CANON_ROSTER" == *" "* && "$CANON_ROSTER" == "$PROBE_ROSTER" ]]; then pass "the probe's default roster equals the host names derived from var.web_hosts"; else fail "the probe's default roster ('${PROBE_ROSTER}') differs from the names derived from var.web_hosts ('${CANON_ROSTER}')"; fi
+# a non-string pagination.next, a 20-digit clock and a negative row count
+reset_defaults; build_fixtures
+patch "$WORK/alerts.json" '.pagination = {next: false}'
+run_case "an alerts body whose pagination.next is false -> unknown (not an end-of-list)" 3
+reset_defaults; build_fixtures
+run_case "a 20-digit clock seam is refused (it would wrap in bash arithmetic) -> unknown" 3 "EGRESS_GW_SILENT_NOW_EPOCH=99999999999999999999"
+reset_defaults; ROSTER_BQ='[{"host":"soleur-web-platform","n":"41"},{"host":"soleur-web-2","n":"-5"},{"host":"soleur-web-2","n":"7"}]'; build_fixtures
+run_case "a negative row count is clamped to zero, not netted against a real count -> PASS" 0
+field_is "rows_in_window=soleur-web-2:7,soleur-web-platform:41"
 
 # ── negative controls: every assertion helper must RED on a deliberately wrong input ─────────
 # The floor counts assertions; it cannot tell a helper that stopped asserting from one that works. Each control runs a
@@ -861,6 +901,8 @@ neg_control "verdict_is REDs on a wrong verdict" verdict_is action_required
 neg_control "run_case REDs on a wrong expected exit" run_case "x" 5
 neg_control "run_case REDs on a forbidden exit 1" run_case "x" 0 BETTERSTACK_API_TOKEN=
 neg_control "patch REDs when the jq filter cannot apply" patch "$WORK/no-such-fixture.json" '.'
+neg_control "patch REDs when the filter changes nothing" patch "$WORK/err500.json" '.'
+neg_control "make_mutant REDs when its anchor is absent" make_mutant "$WORK/never.sh" "THIS-ANCHOR-IS-ABSENT-FROM-THE-PROBE" "x"
 if grep -qxF '[[ "$fails" -eq 0 ]]' "$0"; then pass "the suite's last line is its exit status"; else fail "the suite's last line is not the failure check"; fi
 
 # ── source-level pins on the SUT (cheap, and they catch a refactor that drops a safeguard) ───
@@ -890,7 +932,7 @@ if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then f
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=415
+MIN_ASSERTIONS=430
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1
