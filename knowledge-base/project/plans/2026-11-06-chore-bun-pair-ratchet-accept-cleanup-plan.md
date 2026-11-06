@@ -13,13 +13,38 @@ requires_cpo_signoff: false
 
 # chore: close out the Bun 1.4.4 pair arc cleanup
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Method:** gate pass (Phases 4.6-4.13) plus live re-verification of every cited number, SHA, path and state; no further research fan-out (the diff is one documentation bullet, the CTO already ruled all three forks, and a wide agent sweep would add cost without recall).
+
+### Key improvements
+
+1. **The done-when condition is already met on main.** #12212 merged at 2026-11-06T07:52:55Z (`511db9f84f`) and the merge_group runs for #12212 (run 42178796263, job 127763326947) and #12149 (run 42178975746, job 127763900345) both print `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=0 baseline=0`. #12149 has also merged; only #12153 is still open on the accept TSV.
+2. Scope Check gained the mandatory `Recommendation:` line (Phase 4.12 would have halted without it).
+3. Every cited rule, ADR and learning file was confirmed to exist (ADR-127, ADR-151, ADR-229, five learnings); attribution of the 22 refresh-stage-a rows to `cffdf2705a` confirmed by `git show` (0 rows at `cffdf2705a^`, 22 at `cffdf2705a`).
+
+### Gate results
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | present, threshold `none`, diff not on the sensitive-path regex |
+| 4.7 Observability | not triggered: the only edited file is a skill reference document, not code or infra under `apps/*/server`, `apps/*/src`, `apps/*/infra` or `plugins/*/scripts` (plan Phase 2.9 trigger set) |
+| 4.8 PAT-shaped variables | no hits |
+| 4.9 UI wireframe | no UI-surface file |
+| 4.10 Encryption posture | no store or connection |
+| 4.11 Guard contract | no guard authored |
+| 4.12 Scope check | compliant after the `Recommendation:` fix |
+| 4.13 Task design | no autonomous task surface |
+| 4.4 / 4.55 | no pattern-bound behaviour, no downtime-inducing operation |
+
 ## Overview
 
 Cleanup after the merged constraint-scaffold pair PR (#12177, squash `04fc68d782`, deployed; tracker #12146 CLOSED). The brief named three items. Research (below) shows two of the three rest on stale or wrong premises, so the PR shrinks to one documentation edit plus recorded decisions:
 
 | Brief item | Finding | Disposition |
 |---|---|---|
-| 1. Add accept rows / edges for the 11 pair-PR new-pair findings | Already done on main by `cffdf2705a` (#12166), which added 22 refresh-stage-a rows and the generator / emit-fix-constraints rows (`scripts/ci-pr-affected-audit.accept.tsv` lines ~627-654). The ratchet on main reads `live=2`, neither of them pair-PR pairs. | Verify-only. No edit to the accept TSV or `scripts/lib/test-affected-paths.sh`. |
+| 1. Add accept rows / edges for the 11 pair-PR new-pair findings | Already done on main by `cffdf2705a` (#12166), which added 22 refresh-stage-a rows and the generator / emit-fix-constraints rows (`scripts/ci-pr-affected-audit.accept.tsv` lines ~627-654). The ratchet read `live=2` at `cffdf2705a` (neither a pair-PR pair) and `live=0` after #12212 merged. | Verify-only. No edit to the accept TSV or `scripts/lib/test-affected-paths.sh`. |
 | 2. Extend `work/SKILL.md` bullet 6.7 (optional) | SKILL.md has 12 bytes of headroom and the budget lint reads ceilings from the merge base (a ceiling can only be lowered). Not cheap there. | Put the sentence in the on-demand reference `plugins/soleur/skills/work/references/work-test-harness-sharp-edges.md` at zero SKILL.md byte cost. |
 | 3. File a digest-scrub follow-up (optional) | Premise half wrong: `digest-scrub.sh` has a `github_token` class. The residual (encoded-form exfil) is already tracked by #6045 and #7124. | Do not file. |
 
@@ -28,11 +53,11 @@ Cleanup after the merged constraint-scaffold pair PR (#12177, squash `04fc68d782
 ### Premise Validation (Phase 0.6)
 
 - Cited trackers #12155, #10865, #10859, #12129: all OPEN. #12146 CLOSED. PRs #12153 and #12149 OPEN (both touch the accept TSV). #12160 is an OPEN PR (owner-run merge freeze), not an issue.
-- **Stale premise, item 1.** Merge-group ratchet runs at `04fc68d782` (run 42118698053) and `4542477be1` (run 42127357840) printed `live=12` (11 pair-PR pairs plus `cloudflare-readonly.test.sh` to `seo-config-rules.tf`). The run at `cffdf2705a` (run 42168400997, job 127730192388) printed `SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=2`. The two are `plugins/soleur/test/terraform-target-parity.test.ts:4583` to `.github/workflows/build-inngest-bootstrap-image.yml` and `scripts/lint-gh-dedupe-shape.test.sh:733` to `.github/workflows/scheduled-zot-restart-loop.yml`. Open PR #12212 declares exactly those two edges (its own PR run was green, local `live=0`). The brief's "13 findings, other 2 = cloudflare-readonly and real-sdk-ask-probe" matches none of the current verdicts.
+- **Stale premise, item 1.** Merge-group ratchet runs at `04fc68d782` (run 42118698053) and `4542477be1` (run 42127357840) printed `live=12` (11 pair-PR pairs plus `cloudflare-readonly.test.sh` to `seo-config-rules.tf`). The run at `cffdf2705a` (run 42168400997, job 127730192388) printed `SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=2`. The two are `plugins/soleur/test/terraform-target-parity.test.ts:4583` to `.github/workflows/build-inngest-bootstrap-image.yml` and `scripts/lint-gh-dedupe-shape.test.sh:733` to `.github/workflows/scheduled-zot-restart-loop.yml`. PR #12212 declared exactly those two edges and **merged at 07:52:55Z (`511db9f84f`)**; the merge_group ratchet runs for #12212 and for #12149 then printed `exit=0 reason=pass live=0 baseline=0`. The brief's "13 findings, other 2 = cloudflare-readonly and real-sdk-ask-probe" matches none of the current verdicts.
 - **Local confirmation.** `python3 -I scripts/ci-pr-affected-replay.py ratchet` from this worktree (HEAD = main `cffdf2705a` + init commit) took 8m05s and printed `live=2`, same two pairs. The CTO's `audit --accept scripts/ci-pr-affected-audit.accept.tsv` read `gap_suites=2 gap_refs=2 accepted=1579 stale=0`; a plain `audit` without `--accept` prints `accepted=0` and says nothing about stale rows.
 - **Sort order.** The accept TSV is sorted by (suite, path). Seven adjacent inversions already exist (lines 626/627, 637/638, 974/975, 1029/1030, 1084/1085, 3029/3030, 3048/3049), including the split of the generator / emit-fix-constraints rows across the two refresh-stage-a blocks. `load_accept` (`scripts/ci-pr-affected-replay.py`:1487) merges rows into a dict per suite and rejects only duplicate (suite, path, anchor, ordinal) tuples; no test enforces order. The split is cosmetic and is left alone to avoid conflicts with #12153 / #12149.
 - **Stale premise, item 3.** `plugins/soleur/skills/operator-digest/scripts/digest-scrub.sh` line 51 defines `[github_token]` (`ghp|gho|ghu|ghs|ghr` and `github_pat_`) and is in `SECRET_ORDER`. The workflow asset checks out with `persist-credentials: false` (line 49, pinned by `plugins/soleur/test/operator-digest-workflow.test.sh`:52). The half that holds: `anthropics/claude-code-action` v1.0.263 (pinned SHA `3b7e1a45ca6f231c62605aabcf79e6a41b08c7da`), `src/github/operations/git-config.ts` lines 132-133, runs `git remote set-url origin https://x-access-token:${githubToken}@...` unless `ALLOWED_NON_WRITE_USERS` is set, so the job's short-lived `GITHUB_TOKEN` is in `.git/config` during the agent step.
-- **Collision pre-check** (`collision-precheck.sh`, exit 10 on #12155 / #10865 / #12129): open PR #12217 (`feat-one-shot-10865-constraint-scaffold-pairs`, a draft with only an init commit and a live `test-all.sh` in its worktree) names #10865 and is plausibly a parallel run of the same stale brief; open PR #12212 names #10865 and owns the two live pairs. This plan edits neither the accept TSV nor `test-affected-paths.sh`, so it cannot conflict with either; the work phase must still re-run the pre-check and report the hit.
+- **Collision pre-check** (state at deepen time: #12212 and #12149 MERGED, #12153 OPEN, #12217 draft OPEN) (`collision-precheck.sh`, exit 10 on #12155 / #10865 / #12129): open PR #12217 (`feat-one-shot-10865-constraint-scaffold-pairs`, a draft with only an init commit and a live `test-all.sh` in its worktree) names #10865 and is plausibly a parallel run of the same stale brief; open PR #12212 names #10865 and owns the two live pairs. This plan edits neither the accept TSV nor `test-affected-paths.sh`, so it cannot conflict with either; the work phase must still re-run the pre-check and report the hit.
 
 ### Property List (Phase 0.6b)
 
@@ -81,14 +106,15 @@ All items are `asked` except the reference-file placement in Phase 2, which is t
 
 ### Split Assessment
 
-One small PR. No split.
+- Files to Edit: 1; Files to Create: 3 (planning artifacts only); independent deliverables: 1 (the reference bullet), the rest are verifications and recorded decisions.
+- Recommendation: single PR, no split.
 
 ## Implementation Phases
 
 ### Phase 1: Ratchet verification (no file edit)
 
 1. `git fetch origin main`; read the newest `CI` merge_group run on main whose `affected-index-ratchet` job executed (push runs skip it): `gh run list --workflow=ci.yml --event merge_group -L 10`, then `gh run view <run> --json jobs` and `gh run view <run> --job <id> --log`, grep `^new-pair|^stale-accept|^SOLEUR_PR_AFFECTED_RATCHET`.
-2. Pass condition: no verdict names `constraint-scaffold/test/{refresh-stage-a,generator,emit-fix-constraints}.test.sh`. Expected today: `live=2` (or `live=0` once #12212 merges), none pair-attributed. The local `ratchet` command is a fallback (about 8 minutes locally, 3-4 in CI); do not start it while another copy runs.
+2. Pass condition: no verdict names `constraint-scaffold/test/{refresh-stage-a,generator,emit-fix-constraints}.test.sh`. Expected: `exit=0 reason=pass live=0` (already observed at `511db9f84f`); any other pair appearing is from other work. The local `ratchet` command is a fallback (about 8 minutes locally, 3-4 in CI); do not start it while another copy runs.
 3. If a pair-attributed verdict has reappeared (a later main moved the anchors), rebuild the rows from `audit --all-refs --accept scripts/ci-pr-affected-audit.accept.tsv` on the merged tree, add them in sorted (suite, path) position next to the existing refresh-stage-a block, and keep the diff to those lines only. This branch is conditional and not expected.
 4. Do not touch the `cloudflare-readonly` or `real-sdk-ask-probe-workflow` pairs, nor the two #12212 pairs.
 
@@ -156,13 +182,13 @@ None. Queried open `code-review` issues for `work-test-harness-sharp-edges` and 
 - [ ] `python3 scripts/lint-skill-body-budget.py --base origin/main` exits 0.
 - [ ] The newest executed `affected-index-ratchet` log shows no verdict naming a `constraint-scaffold/test/*.test.sh` suite and no `stale-accept` / `star-row` verdict (the log lines are quoted in the PR body).
 - [ ] PR body carries `Ref #12155`, `Ref #10865`, `Ref #10859`, `Ref #12129` and no `Closes` / `Fixes` / `Resolves`; no new tracker issue is created.
-- [ ] Required checks green on the PR head: `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`. `affected-index-ratchet` is advisory (`continue-on-error`) and a red `live=2` from #12212's pairs does not block; it is reported, not fixed here.
+- [ ] Required checks green on the PR head: `test`, `lockfile-sync`, `markdown-lint`, `tenant-integration-required`. `affected-index-ratchet` is advisory (`continue-on-error`) and a red verdict from other work does not block; it is reported, not fixed here.
 - [ ] `decision-challenges.md` rows match the CTO rulings.
 
 ### Post-merge (operator-free)
 
 - [ ] The `CI` run on the merge commit is `success` and no deploy is triggered or needed (plugin docs only; PR `Blast Radius: plugin`): verify with `gh run list --branch main -L 3` and, if `web-platform-release.yml` ran for the merge SHA, `curl -s https://app.soleur.ai/health` returns the healthy payload.
-- [ ] After #12212 lands, the next executed merge_group ratchet shows `live=0`, or `live=2` while it is still open; record whichever it is in the ship summary.
+- [ ] The next executed merge_group ratchet after this PR's merge shows no pair-PR-attributed verdict (last observed: `live=0`); record the marker line in the ship summary.
 
 ## Test Scenarios
 
@@ -173,7 +199,7 @@ None. Queried open `code-review` issues for `work-test-harness-sharp-edges` and 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6; this one is filled (`none`, with a reason).
-- Do not "fix" the live=2 pairs here: they belong to #12212, and a duplicate edge edit would conflict with it and with #12153 / #12149.
+- Do not add edges or accept rows for pairs that belong to other work: the former live=2 pairs were #12212's and are now declared; any edit to the accept TSV would conflict with open #12153.
 - The ratchet's log lists only the first 25 entries of each class; the totals come from the marker line `live=<n>`.
 - Anchors in the accept TSV are line-content hashes; any later edit to a refresh-stage-a, generator or emit-fix-constraints line (or to `constraint-scaffold.sh` line 672-674) turns the matching row stale. Nothing in this plan edits those files.
 - `plugins/soleur/skills/work/SKILL.md` bullet 6.7 stays exactly as it is; do not "restore" the reverted extension (commit `abadc63ddf`).

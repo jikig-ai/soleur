@@ -20,3 +20,7 @@ The rulings below are copied from the agent's reply.
 - The brief said `digest-scrub.sh` has no GitHub-token pattern. It has one (line 51).
 - The brief said the checkout token sits in `.git/config`. The workflow's checkout persists nothing; the token lands there through claude-code-action's own git auth step.
 - Open draft PR #12217 (`feat-one-shot-10865-constraint-scaffold-pairs`) overlaps the topic of item 1; this plan makes no edit to the files it would touch.
+
+## Deepen-plan update (2026-11-06)
+
+- #12212 merged at 07:52:55Z (`511db9f84f`) and #12149 merged; the merge_group ratchet runs for both print `exit=0 reason=pass live=0 baseline=0` (runs 42178796263 and 42178975746). D1 stands and is now stronger: the ratchet is green on main, so the "DONE WHEN" ratchet condition needs no edit from this PR. No CTO ruling changed.
