@@ -24,11 +24,19 @@ import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env"
 type Rec = { args: string[]; opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } };
 const h = vi.hoisted(() => ({
   execCalls: [] as unknown[],
+  syncCalls: [] as string[][],
   authCalls: [] as Array<{ args: string[]; id: number; opts: { hardened?: { gitDir: string; alternateObjectDirectory: string }; cwd?: string; timeout?: number } }>,
   authImpl: null as null | (() => Promise<Buffer>),
-  reports: [] as Array<[unknown, { feature: string; op: string; extra?: Record<string, unknown> }]>,
+  reports: [] as Array<[unknown, { feature: string; op: string; message?: string; tags?: Record<string, string>; extra?: Record<string, unknown> }]>,
   disposeThrows: false,
+  disposeCode: undefined as string | undefined,
   handles: [] as string[],
+  /** Fault injection for the async commit check: the callback receives this error instead of running git. */
+  execFileFault: null as null | Record<string, unknown>,
+  /** Test seam passed to the real creator (the object-walk entry cap). */
+  limits: {} as { objectWalkEntryCap?: number },
+  /** Makes the creator refuse with this reason (to exercise a reason push-branch does not know). */
+  creatorThrows: null as null | string,
 }));
 
 vi.mock("child_process", async () => {
@@ -37,7 +45,18 @@ vi.mock("child_process", async () => {
     ...actual,
     execFileSync: (cmd: string, args: string[], opts: Rec["opts"]) => {
       h.execCalls.push({ args, opts });
+      h.syncCalls.push(args);
       return actual.execFileSync(cmd, args, { ...opts, env: opts.env ?? gitFixtureEnv(opts.cwd ?? "/") });
+    },
+    // The hardened commit check is async: observed here the same way (recorded, then delegated to the real execFile).
+    execFile: (cmd: string, args: string[], opts: Rec["opts"], cb: (err: unknown) => void) => {
+      h.execCalls.push({ args, opts });
+      if (h.execFileFault) {
+        const fault = h.execFileFault;
+        queueMicrotask(() => cb(Object.assign(new Error("Command failed"), fault)));
+        return undefined;
+      }
+      return actual.execFile(cmd, args, { ...opts, env: opts.env ?? gitFixtureEnv(opts.cwd ?? "/") }, cb as never);
     },
   };
 });
@@ -60,13 +79,14 @@ vi.mock("../server/git-isolated-push-dir", async (importOriginal) => {
   return {
     ...actual,
     createIsolatedPushDir: (ws: string) => {
-      const real = actual.createIsolatedPushDir(ws);
+      if (h.creatorThrows) throw new actual.IsolatedPushDirRefusal(h.creatorThrows as never);
+      const real = actual.createIsolatedPushDir(ws, h.limits);
       h.handles.push(real.gitDir);
       if (!h.disposeThrows) return real;
       return Object.assign(Object.create(Object.getPrototypeOf(real)), real, {
         dispose: () => {
           real.dispose();
-          throw new Error(`EBUSY at ${real.gitDir}`);
+          throw Object.assign(new Error(`EBUSY at ${real.gitDir}`), h.disposeCode ? { code: h.disposeCode } : {});
         },
       });
     },
@@ -81,6 +101,25 @@ const git = (cwd: string, ...args: string[]): string =>
   realExec("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
 
 const STATIC_PLAIN = "Workspace git directory is not a plain repository directory";
+const PREPARE_FAILED = "Push could not be prepared (server-side setup problem); nothing was pushed";
+
+/** The exact shape of one hardened-push report: its own static message, the closed enum as a tag AND in extra, no Error object. */
+const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";
+const refusedReport = (reason: string) => [
+  null,
+  { feature: "cc-push", op: "isolated-dir-refused", message: REFUSED_MESSAGE, tags: { reason }, extra: { reason } },
+];
+const DISPOSE_MESSAGE = "cc-push: the isolated push directory could not be removed";
+const failedReport = (cls: string) => [
+  null,
+  {
+    feature: "cc-push",
+    op: "push-failed-after-consume",
+    message: "cc-push: the hardened push failed after the Owner's approval was consumed",
+    tags: { class: cls },
+    extra: { class: cls },
+  },
+];
 
 describe("pushBranch hardened", () => {
   let root: string;
@@ -120,6 +159,10 @@ describe("pushBranch hardened", () => {
     h.handles.length = 0;
     h.authImpl = null;
     h.disposeThrows = false;
+    h.disposeCode = undefined;
+    h.execFileFault = null;
+    h.limits = {};
+    h.creatorThrows = null;
     root = realpathSync(mkdtempSync(join(tmpdir(), "push-hard-")));
     home = join(root, "home");
     mkdirSync(home);
@@ -151,7 +194,7 @@ describe("pushBranch hardened", () => {
   });
 
   describe("the flow", () => {
-    test("pushes <sha>:refs/heads/<branch> from the isolated directory (no cwd), after ONE cat-file in that directory and NO git config call", async () => {
+    test("pushes <sha>:refs/heads/<branch> from the isolated directory (no cwd), after ONE commit check in that directory and NO git config call", async () => {
       process.env.SOLEUR_TEST_SECRET_CANARY = "canary-value";
       await pushBranch(hardenedOpts());
       expect(h.authCalls).toHaveLength(1);
@@ -164,11 +207,11 @@ describe("pushBranch hardened", () => {
       expect(dir.gitDir.startsWith(`${home}${sep}.soleur-push${sep}run-`)).toBe(true);
 
       const calls = h.execCalls as Rec[];
-      expect(calls.map((c) => c.args.filter((a) => ["cat-file", "config"].includes(a)))).toEqual([["cat-file"]]);
+      expect(calls.map((c) => c.args.filter((a) => ["rev-parse", "cat-file", "config"].includes(a)))).toEqual([["rev-parse"]]);
       const c = calls[0];
       expect(c.args.slice(0, GIT_HARDENING_ARGS.length)).toEqual([...GIT_HARDENING_ARGS]);
       expect(c.args.slice(0, HARDENED_GIT_ARGS.length)).toEqual([...HARDENED_GIT_ARGS]);
-      expect(c.args.slice(-3)).toEqual(["cat-file", "-e", `${sha}^{commit}`]);
+      expect(c.args.slice(-4)).toEqual(["rev-parse", "--verify", "--quiet", `${sha}^{commit}`]);
       expect(c.opts.cwd).toBe(dir.gitDir);
       expect(c.opts.timeout).toBe(10_000);
       const env = c.opts.env as NodeJS.ProcessEnv;
@@ -182,6 +225,13 @@ describe("pushBranch hardened", () => {
       expect(env.GIT_NO_REPLACE_OBJECTS).toBe("1");
       expect(env.GIT_COMMON_DIR).toBeUndefined();
       expect(h.reports).toEqual([]);
+    });
+
+    test("the commit check is ASYNC (the event loop is not blocked): the hardened path runs no execFileSync at all", async () => {
+      h.syncCalls.length = 0;
+      await pushBranch(hardenedOpts());
+      expect(h.syncCalls).toEqual([]);
+      expect((h.execCalls as Rec[]).filter((c) => c.args.includes("rev-parse"))).toHaveLength(1);
     });
 
     test("EVERY git child of a hardened push runs from the isolated directory, never with the workspace as cwd or GIT_DIR", async () => {
@@ -252,7 +302,7 @@ describe("pushBranch hardened", () => {
       expect(reports).toHaveLength(2);
       for (const [err, o] of reports) {
         expect(err).toBeNull(); // the Error object is never passed (#8629 class)
-        expect(o).toEqual({ feature: "cc-push", op: "isolated-dir-refused", extra: { reason } });
+        expect([err, o]).toEqual(refusedReport(reason));
         expect(JSON.stringify(o)).not.toContain(root);
         expect(JSON.stringify(o)).not.toContain(sha);
       }
@@ -360,7 +410,7 @@ describe("pushBranch hardened", () => {
       const p = pushBranch(opts({ hardened: true, ...(bad === undefined ? {} : { commitSha: bad }) }));
       await expect(p).rejects.toBeInstanceOf(ApprovedCommitUnavailableError);
       await expect(p).rejects.toThrow(/^Approved commit is not a valid full commit sha$/);
-      expect(h.reports).toEqual([[null, { feature: "cc-push", op: "isolated-dir-refused", extra: { reason: "sha_invalid" } }]]);
+      expect(h.reports).toEqual([refusedReport("sha_invalid")]);
       expect(h.authCalls).toHaveLength(0);
       expect(h.execCalls).toHaveLength(0);
       expect(h.handles).toHaveLength(0);
@@ -372,7 +422,7 @@ describe("pushBranch hardened", () => {
         name: "ApprovedCommitUnavailableError",
         message: "Approved commit is not present in the workspace repository",
       });
-      expect(h.reports).toEqual([[null, { feature: "cc-push", op: "isolated-dir-refused", extra: { reason: "commit_absent" } }]]);
+      expect(h.reports).toEqual([refusedReport("commit_absent")]);
       expect(h.authCalls).toHaveLength(0);
       expect(leftovers()).toEqual([]);
     });
@@ -390,9 +440,9 @@ describe("pushBranch hardened", () => {
       expect(err).toBeInstanceOf(Error);
       expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
       expect((err as Error).name).toBe("Error");
-      expect((err as Error).message).toBe("Push could not be prepared");
+      expect((err as Error).message).toBe(PREPARE_FAILED);
       expect((err as Error).cause).toBeUndefined();
-      expect(h.reports).toEqual([[null, { feature: "cc-push", op: "isolated-dir-refused", extra: { reason: "setup_failed" } }]]);
+      expect(h.reports).toEqual([refusedReport("setup_failed")]);
       expect(h.authCalls).toHaveLength(0);
       expect(readdirSync(join(root, "tmp"))).toEqual([]);
     });
@@ -403,11 +453,78 @@ describe("pushBranch hardened", () => {
       const savedPath = process.env.PATH;
       process.env.PATH = `${bin}:${savedPath ?? ""}`;
       try {
-        await expect(pushBranch(hardenedOpts())).rejects.toMatchObject({ name: "Error", message: "Push could not be prepared" });
+        await expect(pushBranch(hardenedOpts())).rejects.toMatchObject({ name: "Error", message: PREPARE_FAILED });
       } finally {
         process.env.PATH = savedPath;
       }
-      expect(h.reports).toEqual([[null, { feature: "cc-push", op: "isolated-dir-refused", extra: { reason: "env_path_unsafe" } }]]);
+      expect(h.reports).toEqual([refusedReport("env_path_unsafe")]);
+    });
+
+    test("an object store above the walk cap is infrastructure (object_store_too_large), not a tamper refusal", async () => {
+      h.limits = { objectWalkEntryCap: 3 };
+      let err: unknown;
+      try {
+        await pushBranch(hardenedOpts());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect((err as Error).message).toBe(PREPARE_FAILED);
+      expect(h.reports).toEqual([refusedReport("object_store_too_large")]);
+      expect(h.authCalls).toHaveLength(0);
+      expect(leftovers()).toEqual([]);
+    });
+
+    test("a refusal reason push-branch does not know defaults to the plain infrastructure error (never to 'commit not available')", async () => {
+      h.creatorThrows = "some_future_reason";
+      let err: unknown;
+      try {
+        await pushBranch(hardenedOpts());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect((err as Error).message).toBe(PREPARE_FAILED);
+      expect(h.reports).toEqual([refusedReport("some_future_reason")]);
+    });
+
+    test.each([
+      ["a timeout (killed by the 10 s bound)", { killed: true, signal: "SIGTERM", code: null }, "commit_check_timeout"],
+      ["git missing from PATH (spawn ENOENT)", { code: "ENOENT" }, "commit_check_failed"],
+      ["EMFILE on spawn", { code: "EMFILE" }, "commit_check_failed"],
+      ["exit status 128 (a broken object store)", { code: 128 }, "commit_check_failed"],
+    ])("the commit check ending in %s is infrastructure, NOT commit_absent: plain error, own reason, directory removed", async (_label, fault, reason) => {
+      h.execFileFault = fault;
+      let err: unknown;
+      try {
+        await pushBranch(hardenedOpts());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect((err as Error).message).toBe(PREPARE_FAILED);
+      expect(h.reports).toEqual([refusedReport(reason)]);
+      expect(h.authCalls).toHaveLength(0);
+      expect(existsSync(h.handles[0])).toBe(false);
+      expect(leftovers()).toEqual([]);
+    });
+
+    test("exit status 1 (git's answer for 'not a valid commit here') IS commit_absent", async () => {
+      h.execFileFault = { code: 1 };
+      await expect(pushBranch(hardenedOpts())).rejects.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect(h.reports).toEqual([refusedReport("commit_absent")]);
+    });
+
+    test("a REAL spawn failure (git not found on PATH) is commit_check_failed, not commit_absent", async () => {
+      const savedPath = process.env.PATH;
+      process.env.PATH = join(root, "no-such-bin");
+      try {
+        await expect(pushBranch(hardenedOpts())).rejects.toMatchObject({ name: "Error", message: PREPARE_FAILED });
+      } finally {
+        process.env.PATH = savedPath;
+      }
+      expect(h.reports).toEqual([refusedReport("commit_check_failed")]);
+      expect(leftovers()).toEqual([]);
     });
   });
 
@@ -461,8 +578,25 @@ describe("pushBranch hardened", () => {
       h.disposeThrows = true;
       await expect(pushBranch(hardenedOpts())).resolves.toEqual({ branch: "feat-x", pushed: true });
       const r = h.reports.filter(([, o]) => o.op === "isolated-dir-dispose-failed");
-      expect(r).toEqual([[null, { feature: "cc-push", op: "isolated-dir-dispose-failed", extra: { class: "Error" } }]]);
+      expect(r).toEqual([
+        [null, { feature: "cc-push", op: "isolated-dir-dispose-failed", message: DISPOSE_MESSAGE, tags: { class: "unknown" }, extra: { class: "unknown" } }],
+      ]);
       expect(JSON.stringify(r)).not.toContain(home);
+    });
+
+    test("a throwing dispose() with an errno code is reported by that code (the class name would always be 'Error')", async () => {
+      h.disposeThrows = true;
+      h.disposeCode = "EBUSY";
+      await expect(pushBranch(hardenedOpts())).resolves.toEqual({ branch: "feat-x", pushed: true });
+      const r = h.reports.filter(([, o]) => o.op === "isolated-dir-dispose-failed");
+      expect(r).toHaveLength(1);
+      expect(r[0][1].tags).toEqual({ class: "EBUSY" });
+      expect(r[0][1].extra).toEqual({ class: "EBUSY" });
+      expect(JSON.stringify(r)).not.toContain(home);
+      h.reports.length = 0;
+      h.disposeCode = "not an errno /etc/passwd";
+      await pushBranch(hardenedOpts());
+      expect(h.reports.filter(([, o]) => o.op === "isolated-dir-dispose-failed")[0][1].tags).toEqual({ class: "unknown" });
     });
 
     test("a throwing dispose() does not mask the push failure either", async () => {
@@ -493,17 +627,56 @@ describe("pushBranch hardened", () => {
       failing(stderr);
       await expect(pushBranch(hardenedOpts())).rejects.toThrow(/^Git push failed: /);
       const r = h.reports.filter(([, o]) => o.op === "push-failed-after-consume");
-      expect(r).toEqual([[null, { feature: "cc-push", op: "push-failed-after-consume", extra: { class: cls } }]]);
+      expect(r).toEqual([failedReport(cls)]);
+    });
+
+    test("the REAL GitHub 403 (no contents:write) classifies as auth, not other", async () => {
+      failing(
+        "remote: Permission to o/r.git denied to soleur-app[bot].\nfatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403\n",
+      );
+      await expect(pushBranch(hardenedOpts())).rejects.toThrow(/^Git push failed: /);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("auth")]);
+    });
+
+    test.each([
+      "fatal: unable to access 'https://github.com/o/r.git/': Failed to connect to github.com port 443 after 129000 ms: Connection timed out",
+      "fatal: unable to access 'https://github.com/o/r.git/': Connection timed out after 30001 milliseconds",
+    ])("a connect timeout (nothing landed) is NOT class timeout and does not say the push MAY HAVE been pushed", async (stderr) => {
+      failing(stderr);
+      const p = pushBranch(hardenedOpts());
+      await expect(p).rejects.toThrow(/^Git push failed: /);
+      await expect(p).rejects.not.toThrow(/MAY HAVE been pushed/);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("other")]);
+    });
+
+    test.each([
+      ["killed", { killed: true }],
+      ["SIGTERM", { signal: "SIGTERM" }],
+      ["ETIMEDOUT", { code: "ETIMEDOUT" }],
+      ["the execFile timeout marker", { message: "Command failed: git push\ntimeout exceeded" }],
+    ])("class timeout comes from the child (%s), with no stderr at all", async (_label, extra) => {
+      failing("", extra);
+      await expect(pushBranch(hardenedOpts())).rejects.toThrow(/MAY HAVE been pushed/);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("timeout")]);
+    });
+
+    test.each([
+      ["a branch named like a class in a ref-status line", "unpack-fix", " ! [remote rejected] abcdef0 -> unpack-fix (protected branch hook declined)"],
+      ["a branch named non-fast-forward echoed by the host", "non-fast-forward", "remote: error: GH013: Repository rule violations found for refs/heads/non-fast-forward."],
+      ["a branch named unpack in the failed-to-push echo and a remote-rejected line", "unpack", "error: failed to push some refs to 'https://github.com/o/r.git'\n ! [remote rejected] abc -> unpack (some other reason)"],
+    ])("%s cannot forge the class (agent-chosen names are not matched)", async (_label, branch, stderr) => {
+      failing(stderr);
+      await expect(pushBranch(hardenedOpts({ branch }))).rejects.toThrow(/^Git push failed: /);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("other")]);
     });
 
     test("a timeout says the push MAY have landed (never reads as 'nothing landed') and is reported as class timeout", async () => {
       failing("", { killed: true, signal: "SIGTERM" });
       const p = pushBranch(hardenedOpts());
-      await expect(p).rejects.toThrow(/MAY have landed/);
+      await expect(p).rejects.toThrow(/MAY HAVE been pushed/);
+      await expect(p).rejects.toThrow(/Check the remote branch before asking for a new approval/);
       await expect(p).rejects.toThrow(/^Git push failed: /);
-      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([
-        [null, { feature: "cc-push", op: "push-failed-after-consume", extra: { class: "timeout" } }],
-      ]);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("timeout")]);
     });
 
     test("the legacy path reports nothing and keeps its error shape", async () => {

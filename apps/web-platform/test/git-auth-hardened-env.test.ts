@@ -231,7 +231,7 @@ describe("gitWithInstallationAuth child env and argv", () => {
     }
   });
 
-  test("buildIsolatedGitEnv: `extra` can add a non-reserved key but can never overwrite a pinned one", () => {
+  test("buildIsolatedGitEnv: extra can add a non-reserved key but can never overwrite a pinned one", () => {
     const evil = {
       GIT_DIR: "/ws/parent/work/.git",
       HOME: "/home/evil",

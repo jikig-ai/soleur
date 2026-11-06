@@ -15,10 +15,16 @@
 import { execFileSync } from "child_process";
 
 import { COMMIT_SHA_RE } from "./approval/canonical";
+import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
 import { HARDENED_GIT_ARGS, buildIsolatedGitEnv } from "./git-hardened-env";
-import { IsolatedPushDirRefusal, createIsolatedPushDir, type IsolatedPushDirHandle } from "./git-isolated-push-dir";
+import {
+  IsolatedPushDirRefusal,
+  createIsolatedPushDir,
+  type IsolatedPushDirHandle,
+  type IsolatedPushDirReason,
+} from "./git-isolated-push-dir";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -81,58 +87,158 @@ export interface PushResult {
 // Hardened (isolated GIT_DIR) helpers
 // ---------------------------------------------------------------------------
 
-/** Upper bound of each synchronous git child on the hardened path: a stalled child costs at most this long, not indefinitely. */
-const HARDENED_SYNC_GIT_TIMEOUT_MS = 10_000;
-
-/** Exactly 40 lowercase hex: the hardened push is sha1-only (a 64-hex id is refused here, and the gate reader refuses to show one). */
-const HARDENED_COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
+/** Upper bound of the hardened commit check: a stalled child costs at most this long, not indefinitely. */
+const HARDENED_COMMIT_CHECK_TIMEOUT_MS = 10_000;
 
 const PUSH_FEATURE = "cc-push";
 
-/** The ONE place a hardened-push refusal is reported: a closed `reason`, never the Error (#8629 class), no path, no sha. */
-function reportIsolatedRefusal(reason: string): void {
-  log.warn({ reason }, "Hardened push refused before the push ran");
-  reportSilentFallback(null, { feature: PUSH_FEATURE, op: "isolated-dir-refused", extra: { reason } });
+/** Static, per-op Sentry messages: a Sentry group is one condition, never the shared `cc-push silent fallback` default. */
+const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";
+const PUSH_FAILED_MESSAGE = "cc-push: the hardened push failed after the Owner's approval was consumed";
+const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not be removed";
+
+/** Shown to the model for an infrastructure refusal (the server's state, not the workspace): static, no path, no cause. */
+const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem); nothing was pushed";
+const PUSH_TIMED_OUT_TEXT =
+  "Git push failed: the push timed out and the branch MAY HAVE been pushed to the remote. Check the remote branch before asking for a new approval.";
+
+/** Every reason a hardened push can be refused before the push ran: the creator's, the sha check's and the commit check's. */
+export type IsolatedRefusalReason =
+  | IsolatedPushDirReason
+  | "sha_invalid"
+  | "commit_absent"
+  | "commit_check_failed"
+  | "commit_check_timeout";
+
+/**
+ * The workspace-tamper reasons: the agent (or a bad actor in the workspace) caused the refusal, and the model is told the
+ * approved commit is unavailable. An EXPLICIT allowlist: a reason added later is infrastructure (the plain error that does
+ * not say "do not retry") until someone argues it belongs here.
+ */
+const TAMPER_REASONS: ReadonlySet<IsolatedRefusalReason> = new Set<IsolatedRefusalReason>([
+  "git_dir_not_plain",
+  "object_store_redirect",
+  "alternate_path_unsafe",
+  "shallow_invalid",
+]);
+
+/** The ONE place a hardened-push refusal is reported: a closed `reason` (tag and extra), never the Error (#8629 class), no path, no sha. */
+function reportIsolatedRefusal(reason: IsolatedRefusalReason): void {
+  reportSilentFallback(null, {
+    feature: PUSH_FEATURE,
+    op: "isolated-dir-refused",
+    message: REFUSED_MESSAGE,
+    tags: { reason },
+    extra: { reason },
+  });
 }
 
 type PushFailureClass = "unpack" | "auth" | "non_fast_forward" | "timeout" | "other";
 
-/** A closed enum derived from the child's failure; stderr is only pattern-matched here and never emitted. */
-function classifyPushFailure(err: unknown, stderr: string): PushFailureClass {
-  const e = err as { killed?: boolean; signal?: string; code?: unknown } | null;
-  if (e?.killed === true || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT" || /timeout exceeded|timed out/i.test(stderr)) {
+/** The git-authored text of a push failure: ref-status lines contribute only their status word and trailing reason. */
+function gitAuthoredText(stderr: string, redact: readonly string[]): string {
+  let text = stderr;
+  for (const r of redact) if (r) text = text.split(r).join("");
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const status = /^\s*! \[(rejected|remote rejected)\]/.exec(line);
+    if (status) {
+      // ` ! [remote rejected] <sha> -> <name> (<reason>)`: the name is agent-chosen, the parenthetical at the end is git's or the host's.
+      const reason = /\s\(([^()]*)\)\s*$/.exec(line);
+      out.push(`${status[1]} ${reason ? reason[1] : ""}`);
+    } else if (/^(fatal|error|remote): /.test(line)) {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
+/**
+ * A closed enum derived from the child's failure; stderr is only pattern-matched here and never emitted. `timeout` comes from the
+ * child's own kill signal or timeout marker, never from a substring of stderr (a connect timeout means nothing landed). Agent-chosen
+ * names (the branch, the repository, ref-status lines) are removed or ignored before matching; text a remote echoes from the
+ * pushed content (for example a file name in a `remote:` line) can still influence the class, which is diagnostic only.
+ */
+function classifyPushFailure(err: unknown, stderr: string, redact: readonly string[]): PushFailureClass {
+  const e = err as { killed?: boolean; signal?: string; code?: unknown; message?: unknown } | null;
+  const message = typeof e?.message === "string" ? e.message : "";
+  if (e?.killed === true || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT" || /timeout exceeded/i.test(message)) {
     return "timeout";
   }
-  if (/unpack|unpacker error|eof before pack header/i.test(stderr)) return "unpack";
-  if (/Authentication failed|could not read (Username|Password)|terminal prompts disabled|HTTP 40[13]|Invalid username or token/i.test(stderr)) {
+  const text = gitAuthoredText(stderr, redact);
+  if (/unpack|unpacker error|eof before pack header/i.test(text)) return "unpack";
+  if (
+    /Authentication failed|could not read (Username|Password)|terminal prompts disabled|HTTP 40[13]|returned error: 40[13]|Invalid username or token|Permission to .+ denied/i.test(
+      text,
+    )
+  ) {
     return "auth";
   }
-  if (/non-fast-forward|fetch first|\[rejected\]/i.test(stderr)) return "non_fast_forward";
+  if (/non-fast-forward|fetch first|^rejected\b/im.test(text)) return "non_fast_forward";
   return "other";
 }
 
-/** A failing `dispose()` never changes the push result: it is reported by class name only (no path). */
+/** A failing `dispose()` never changes the push result: it is reported by errno code only (no path, no message). */
 function disposeIsolated(isolated: IsolatedPushDirHandle | undefined): void {
   if (!isolated) return;
   try {
     isolated.dispose();
   } catch (err) {
-    const cls = (err as Error | undefined)?.name ?? "unknown";
-    log.warn({ class: cls }, "Isolated push directory could not be removed");
-    reportSilentFallback(null, { feature: PUSH_FEATURE, op: "isolated-dir-dispose-failed", extra: { class: cls } });
+    const code = (err as { code?: unknown } | undefined)?.code;
+    const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";
+    reportSilentFallback(null, {
+      feature: PUSH_FEATURE,
+      op: "isolated-dir-dispose-failed",
+      message: DISPOSE_FAILED_MESSAGE,
+      tags: { class: cls },
+      extra: { class: cls },
+    });
   }
+}
+
+type CommitCheck = "present" | "absent" | "timeout" | "failed";
+
+/**
+ * `git rev-parse --verify --quiet <sha>^{commit}` in the isolated directory (async: the event loop is never blocked, and a stalled
+ * child is killed at the timeout). Exit status 1 is git's documented answer for "not a valid commit here"; any other outcome (a
+ * timeout, a spawn failure such as ENOENT or EMFILE, exit 128 for a broken store) says nothing about the commit and is not
+ * `absent`. (`cat-file -e <sha>^{commit}` is not used: for a missing object it exits 128, the same status as every other fatal error.)
+ */
+async function checkCommitPresent(isolated: IsolatedPushDirHandle, commitSha: string): Promise<CommitCheck> {
+  const { execFile } = await import("node:child_process");
+  return new Promise<CommitCheck>((resolve) => {
+    try {
+      execFile(
+        "git",
+        [...HARDENED_GIT_ARGS, "rev-parse", "--verify", "--quiet", `${commitSha}^{commit}`],
+        {
+          cwd: isolated.gitDir,
+          env: buildIsolatedGitEnv(isolated),
+          timeout: HARDENED_COMMIT_CHECK_TIMEOUT_MS,
+        },
+        (err) => {
+          if (!err) return resolve("present");
+          const e = err as { code?: unknown; killed?: boolean; signal?: string };
+          if (e.killed === true || e.signal === "SIGTERM") return resolve("timeout");
+          resolve(e.code === 1 ? "absent" : "failed");
+        },
+      );
+    } catch {
+      resolve("failed");
+    }
+  });
 }
 
 /**
  * Hardened path only: validate the approved sha, create the isolated directory and prove the commit exists through it (the
- * alternate). Refusals carry static text (no path echo). The four workspace-tamper reasons are typed so the tool handler
- * reports them as `commit_unavailable`; an infrastructure failure (`setup_failed`, `env_path_unsafe`: the environment is the
- * server's, not the agent's) is a plain static error that flows through the tool-error path. On ANY throw the directory is
- * already removed. Not an atomic guarantee: a sandbox process that outlives the tool call can swap the workspace object store
- * after the check (ADR-309 9b residual, object bytes only).
+ * alternate). Refusals carry static text (no path echo). The workspace-tamper reasons (`TAMPER_REASONS`) and an absent commit are typed
+ * so the tool handler reports them as `commit_unavailable`; every other reason (`setup_failed`, `env_path_unsafe`,
+ * `object_store_too_large`, a commit check that timed out or could not run) is a plain static error that flows through the
+ * tool-error path. On ANY throw the directory is already removed. Not an atomic guarantee: a sandbox process that outlives the
+ * tool call can swap the workspace object store after the check (ADR-309 9b residual, object bytes only).
  */
-function prepareIsolatedPush(workspacePath: string, commitSha: string | undefined): IsolatedPushDirHandle {
-  if (commitSha === undefined || !HARDENED_COMMIT_SHA_RE.test(commitSha)) {
+async function prepareIsolatedPush(workspacePath: string, commitSha: string | undefined): Promise<IsolatedPushDirHandle> {
+  if (commitSha === undefined || !HEX40.test(commitSha)) {
     reportIsolatedRefusal("sha_invalid");
     throw new ApprovedCommitUnavailableError("Approved commit is not a valid full commit sha");
   }
@@ -140,25 +246,22 @@ function prepareIsolatedPush(workspacePath: string, commitSha: string | undefine
   try {
     isolated = createIsolatedPushDir(workspacePath);
   } catch (err) {
-    const reason = err instanceof IsolatedPushDirRefusal ? err.reason : "setup_failed";
+    const reason: IsolatedRefusalReason = err instanceof IsolatedPushDirRefusal ? err.reason : "setup_failed";
     reportIsolatedRefusal(reason);
-    if (reason === "setup_failed" || reason === "env_path_unsafe") throw new Error("Push could not be prepared");
-    throw new ApprovedCommitUnavailableError("Workspace git directory is not a plain repository directory");
+    if (TAMPER_REASONS.has(reason)) {
+      throw new ApprovedCommitUnavailableError("Workspace git directory is not a plain repository directory");
+    }
+    throw new Error(PREPARE_FAILED_TEXT);
   }
-  const gitCwd = isolated.gitDir;
-  try {
-    execFileSync("git", [...HARDENED_GIT_ARGS, "cat-file", "-e", `${commitSha}^{commit}`], {
-      cwd: gitCwd,
-      stdio: "pipe",
-      env: buildIsolatedGitEnv(isolated),
-      timeout: HARDENED_SYNC_GIT_TIMEOUT_MS,
-    });
-  } catch {
-    disposeIsolated(isolated);
+  const check = await checkCommitPresent(isolated, commitSha);
+  if (check === "present") return isolated;
+  disposeIsolated(isolated);
+  if (check === "absent") {
     reportIsolatedRefusal("commit_absent");
     throw new ApprovedCommitUnavailableError("Approved commit is not present in the workspace repository");
   }
-  return isolated;
+  reportIsolatedRefusal(check === "timeout" ? "commit_check_timeout" : "commit_check_failed");
+  throw new Error(PREPARE_FAILED_TEXT);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +319,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   let isolated: IsolatedPushDirHandle | undefined;
   try {
     if (hardened) {
-      isolated = prepareIsolatedPush(workspacePath, commitSha);
+      isolated = await prepareIsolatedPush(workspacePath, commitSha);
     } else {
       // 3b. A pinned commit must be a full sha that exists in the workspace repository.
       if (commitSha !== undefined) {
@@ -266,10 +369,16 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
       const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
       if (isolated) {
         // The approval was consumed before this handler ran: classify (closed enum) for diagnosis, never the Error or stderr.
-        const failureClass = classifyPushFailure(err, rawStderr);
-        reportSilentFallback(null, { feature: PUSH_FEATURE, op: "push-failed-after-consume", extra: { class: failureClass } });
+        const failureClass = classifyPushFailure(err, rawStderr, [branch, `${owner}/${repo}`]);
+        reportSilentFallback(null, {
+          feature: PUSH_FEATURE,
+          op: "push-failed-after-consume",
+          message: PUSH_FAILED_MESSAGE,
+          tags: { class: failureClass },
+          extra: { class: failureClass },
+        });
         // A timeout or killed child can fail the call after the remote already accepted the ref.
-        if (failureClass === "timeout") throw new Error("Git push failed: the push timed out and MAY have landed on the remote");
+        if (failureClass === "timeout") throw new Error(PUSH_TIMED_OUT_TEXT);
       }
       throw new Error(`Git push failed: ${stderr || (err as Error).message}`);
     }

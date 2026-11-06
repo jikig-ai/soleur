@@ -168,13 +168,13 @@ function assertEnvPathsSafe(roots: readonly string[]): void {
 type EntryKind = "file" | "dir" | "other";
 
 /**
- * What an entry is. Only a regular file or a directory is acceptable: a symlink, FIFO, socket or device is not an object (a FIFO
- * at an object path blocks git's open). A filesystem that reports no entry type falls back to `lstat` (never follows a link).
+ * What an entry is. Only a regular file or a directory is acceptable. Anything else (a symlink could name another store, a FIFO
+ * at an object path blocks git's open, sockets and devices are not objects) is asked of `lstat`, which never follows a link and
+ * also answers for a filesystem whose directory listing carries no entry type.
  */
 function kindOf(parent: string, e: Dirent): EntryKind {
   if (e.isFile()) return "file";
   if (e.isDirectory()) return "dir";
-  if (e.isSymbolicLink() || e.isFIFO() || e.isSocket() || e.isBlockDevice() || e.isCharacterDevice()) return "other";
   const st = lstatSync(join(parent, e.name));
   return st.isFile() ? "file" : st.isDirectory() ? "dir" : "other";
 }

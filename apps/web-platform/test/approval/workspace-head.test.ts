@@ -294,7 +294,7 @@ describe("readWorkspaceHeadSha: fail-closed refusals (each with a closed reason,
     expect(refusal(dir).reason).toBe("ref_invalid");
   });
 
-  test("a symlinked refs/heads directory leading to a SIBLING whose name merely starts with .git (`.git2`) is refused (containment needs the separator)", () => {
+  test("a symlinked refs/heads directory leading to a SIBLING whose name merely starts with .git (the .git2 directory) is refused (containment needs the separator)", () => {
     const { dir } = mkRepo();
     const sibling = join(dir, ".git2");
     mkdirSync(sibling);
