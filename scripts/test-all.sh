@@ -4231,7 +4231,8 @@ _aff_runner_banner() {
 # token-drift-workflow-causes, grep-q-pipe-guard, lint-encryption-posture, gitleaks-merge-commit,
 # lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
 # #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
+_MIN_ALWAYS_ON_DECLARED=112
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate

@@ -70,6 +70,9 @@ export const SENSITIVE_KEY_NAMES = [
   // the value is what the helper's confidentiality leans on (Recital 26).
   "SENTRY_USERID_PEPPER",
   "pepper",
+  // Origin TLS private key (#10479): base64 of the PEM, delivered through the container env-file.
+  // The listener deletes it from process.env after boot; this keeps an env dump from shipping it.
+  "ORIGIN_TLS_KEY_B64",
   // Inbound email triage (feat-operator-inbox-delegation #5103). The
   // Inngest sentry-correlation middleware ships ctx.event.data to Sentry as
   // `extra` on every captured pipeline error (sentry-correlation.ts:76,135)

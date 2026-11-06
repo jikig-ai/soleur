@@ -153,7 +153,8 @@ if (known.length !== only.size) {
 // and must be kept in sync with it by hand (a builder the runner gains has to be added here); the tool NAMES come from those builders, so a
 // tool added to an already-listed builder is in the `:prod` and `:raw` lists without editing this file. A builder that fails to import is
 // CANT-RUN (never a silent fall back to the eight FQNs, which would measure a smaller list than production passes).
-// cc-dispatcher (cc-soleur-go): soleurPlatformToolsForTests = narration + (flag-gated) c4 + (crm-lead only) crm. Informational only.
+// cc-dispatcher (cc-soleur-go): soleurPlatformToolsForTests = narration + (flag-gated) c4 + (when the gated registrar registered it, #11636) the
+// approval-gated github_push_branch + (crm-lead only) crm. The probe call below passes no `approvalTools`, so its `cc=` column does NOT show the push tool. Informational only.
 const LEGACY = new Set<string>();
 const LEGACY_PLUGIN_SERVERS = ["context7"]; // one plugin MCP server, so the wildcard entry is part of the measured composition
 async function registration(): Promise<void> {

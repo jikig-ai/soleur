@@ -210,6 +210,12 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-errexit-capture"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
+  # #10448 boundary-prefix sweeps .claude/hooks{,/lib} and plugins/soleur/scripts{,/lib}
+  # wholesale (4 dir globs, ~170 files) — a file class scanned wholesale like the ratchets
+  # above. Measured-verdict install (CTO ruling 2026-11-05): 718 ms measured,
+  # selection over the 25% bar on both PR5d readings (97/200 conservative,
+  # 48/151 excluded) — the policy's own >25% answer, never an amended bar.
+  "plugins/soleur/test/boundary-prefix.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
@@ -500,12 +506,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
-# plugins/soleur/test/cloudflare-readonly.test.sh — the snapshot-drift pin (#10479) greps live rule counts out of the
-# committed Terraform file, so a seo-config-rules.tf edit without a header update is meant to red this suite; declared
-# edge, not a name (the audit's stale-accept report surfaced it on #12156 — the check never runs on push, so the pair
-# was already live on main unobserved).
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
-  "apps/web-platform/infra/seo-config-rules.tf"  # plugins/soleur/test/cloudflare-readonly.test.sh:350
+  "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
   "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
@@ -4193,6 +4196,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# Retained per deferred-item AC 6 while the suite is ALWAYS_ON (dead for selection — rung 1
+# short-circuits — and moot to the audit census; the #11648 demotion precedent keeps the edge
+# set for a future re-pricing). KNOWN under-declaration by design: the suite sweeps
+# .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} wholesale (the always_on install's
+# reason) but this block only declares the named hooks edges — if the suite is ever withdrawn
+# to edge-selection, plugins/soleur/scripts/ diffs would silently under-select until widened.
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".claude/hooks/brand-hex-commit-gate.sh"

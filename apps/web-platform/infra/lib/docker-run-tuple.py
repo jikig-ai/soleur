@@ -119,14 +119,14 @@ TUPLES = {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
         "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
-        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS_APP,
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443"}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
         "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}},
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443"}, "scalars": _SCALARS,
     },
 }
 TUPLE_ORDER = ("canary", "prod", "first-boot")
