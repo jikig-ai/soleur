@@ -135,12 +135,33 @@ function reportIsolatedRefusal(reason: IsolatedRefusalReason): void {
 
 type PushFailureClass = "unpack" | "auth" | "non_fast_forward" | "timeout" | "other";
 
+/** The agent-chosen names that must not steer the classifier. */
+interface PushFailureNames {
+  readonly branch: string;
+  readonly slug: string;
+}
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+
+/**
+ * Replaces the agent-chosen names with a placeholder that cannot join its neighbours into a class word. The branch is removed only
+ * as a whole ref token (optionally spelled `refs/heads/<branch>`), bounded by characters that cannot be part of a ref name, so a
+ * one-letter branch never eats letters out of "Authentication"; the `owner/repo` slug contains a slash and is removed as a whole.
+ */
+function redactAgentNames(text: string, names: PushFailureNames): string {
+  let out = text;
+  if (names.branch) {
+    const token = `(?<![A-Za-z0-9_./-])(?:refs/heads/)?${escapeRegExp(names.branch)}(?![A-Za-z0-9_/-])(?!\\.[A-Za-z0-9])`;
+    out = out.replace(new RegExp(token, "g"), " ");
+  }
+  if (names.slug) out = out.split(names.slug).join(" ");
+  return out;
+}
+
 /** The git-authored text of a push failure: ref-status lines contribute only their status word and trailing reason. */
-function gitAuthoredText(stderr: string, redact: readonly string[]): string {
-  let text = stderr;
-  for (const r of redact) if (r) text = text.split(r).join("");
+function gitAuthoredText(stderr: string, names: PushFailureNames): string {
   const out: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of redactAgentNames(stderr, names).split(/\r?\n/)) {
     const status = /^\s*! \[(rejected|remote rejected)\]/.exec(line);
     if (status) {
       // ` ! [remote rejected] <sha> -> <name> (<reason>)`: the name is agent-chosen, the parenthetical at the end is git's or the host's.
@@ -155,17 +176,15 @@ function gitAuthoredText(stderr: string, redact: readonly string[]): string {
 
 /**
  * A closed enum derived from the child's failure; stderr is only pattern-matched here and never emitted. `timeout` comes from the
- * child's own kill signal or timeout marker, never from a substring of stderr (a connect timeout means nothing landed). Agent-chosen
- * names (the branch, the repository, ref-status lines) are removed or ignored before matching; text a remote echoes from the
- * pushed content (for example a file name in a `remote:` line) can still influence the class, which is diagnostic only.
+ * child's own kill signal or error code, never from text: Node's execFile error `message` is `Command failed: <cmd>\n<stderr>`, so a
+ * marker searched in it would be stderr by another route (a real timeout carries none). Agent-chosen names (the branch, the
+ * repository) are removed, and ref-status lines contribute only their status word and trailing reason, before matching; text a remote
+ * echoes from the pushed content (for example a file name in a `remote:` line) can still influence the class, which is diagnostic only.
  */
-function classifyPushFailure(err: unknown, stderr: string, redact: readonly string[]): PushFailureClass {
-  const e = err as { killed?: boolean; signal?: string; code?: unknown; message?: unknown } | null;
-  const message = typeof e?.message === "string" ? e.message : "";
-  if (e?.killed === true || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT" || /timeout exceeded/i.test(message)) {
-    return "timeout";
-  }
-  const text = gitAuthoredText(stderr, redact);
+function classifyPushFailure(err: unknown, stderr: string, names: PushFailureNames): PushFailureClass {
+  const e = err as { killed?: boolean; signal?: string; code?: unknown } | null;
+  if (e?.killed === true || e?.signal === "SIGTERM" || e?.code === "ETIMEDOUT") return "timeout";
+  const text = gitAuthoredText(stderr, names);
   if (/unpack|unpacker error|eof before pack header/i.test(text)) return "unpack";
   if (
     /Authentication failed|could not read (Username|Password)|terminal prompts disabled|HTTP 40[13]|returned error: 40[13]|Invalid username or token|Permission to .+ denied/i.test(
@@ -369,7 +388,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
       const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
       if (isolated) {
         // The approval was consumed before this handler ran: classify (closed enum) for diagnosis, never the Error or stderr.
-        const failureClass = classifyPushFailure(err, rawStderr, [branch, `${owner}/${repo}`]);
+        const failureClass = classifyPushFailure(err, rawStderr, { branch, slug: `${owner}/${repo}` });
         reportSilentFallback(null, {
           feature: PUSH_FEATURE,
           op: "push-failed-after-consume",

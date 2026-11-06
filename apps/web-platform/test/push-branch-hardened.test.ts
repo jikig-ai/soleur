@@ -653,11 +653,54 @@ describe("pushBranch hardened", () => {
       ["killed", { killed: true }],
       ["SIGTERM", { signal: "SIGTERM" }],
       ["ETIMEDOUT", { code: "ETIMEDOUT" }],
-      ["the execFile timeout marker", { message: "Command failed: git push\ntimeout exceeded" }],
     ])("class timeout comes from the child (%s), with no stderr at all", async (_label, extra) => {
       failing("", extra);
       await expect(pushBranch(hardenedOpts())).rejects.toThrow(/MAY HAVE been pushed/);
       expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("timeout")]);
+    });
+
+    test.each([
+      "remote: error: File timeout exceeded.bin is 120.00 MB; this exceeds GitHub's file size limit",
+      "fatal: unable to access 'https://github.com/o/r.git/': timeout exceeded",
+    ])("stderr text that says 'timeout exceeded' cannot forge class timeout (Node puts stderr into the error message): %s", async (stderr) => {
+      // Node's execFile error message is `Command failed: <cmd>\n<stderr>`, so the stderr text is in `message` as well. A real
+      // timeout carries killed/SIGTERM and no such marker.
+      failing(stderr, { message: `Command failed: git push\n${stderr}` });
+      const p = pushBranch(hardenedOpts());
+      await expect(p).rejects.toThrow(/^Git push failed: /);
+      await expect(p).rejects.not.toThrow(/MAY HAVE been pushed/);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("other")]);
+    });
+
+    test.each(["a", "e", "r", "o"])(
+      "a one-letter branch (%s) does not eat letters out of the git-authored words: 'Authentication failed' stays class auth",
+      async (branch) => {
+        failing("fatal: Authentication failed for 'https://github.com/o/r.git/'");
+        await expect(pushBranch(hardenedOpts({ branch }))).rejects.toThrow(/^Git push failed: /);
+        expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("auth")]);
+      },
+    );
+
+    test.each([
+      ["a one-letter branch against the 'remote:' line prefix", "e", "remote: Permission to o/r.git denied to x."],
+      ["the ref spelled refs/heads/<branch> in a host echo", "unpack", "remote: error: GH013: Repository rule violations found for refs/heads/unpack."],
+    ])("%s", async (label, branch, stderr) => {
+      failing(stderr);
+      await expect(pushBranch(hardenedOpts({ branch }))).rejects.toThrow(/^Git push failed: /);
+      const cls = label.startsWith("a one-letter") ? "auth" : "other";
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport(cls)]);
+    });
+
+    test("a repository named like a class cannot forge it through the remote URL echo (owner/repo is removed as a slug)", async () => {
+      failing("fatal: repository 'https://github.com/o/unpack.git/' not found");
+      await expect(pushBranch(hardenedOpts({ repo: "unpack" }))).rejects.toThrow(/^Git push failed: /);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("other")]);
+    });
+
+    test("removing the slug cannot JOIN its neighbours into a class word ('unp' + 'a/r' + 'ack' must not become 'unpack')", async () => {
+      failing("error: remote unpa/rack failed");
+      await expect(pushBranch(hardenedOpts({ owner: "a", repo: "r" }))).rejects.toThrow(/^Git push failed: /);
+      expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("other")]);
     });
 
     test.each([

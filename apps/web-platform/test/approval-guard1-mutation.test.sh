@@ -594,8 +594,8 @@ M("G1-ISO39-commit-check-timeout-reads-as-failed", PUSH, E('          if (e.kill
 M("G1-ISO40-any-commit-check-failure-reads-as-commit-absent", PUSH, E('          resolve(e.code === 1 ? "absent" : "failed");', '          resolve("absent");'), T_HARD, ["git missing from PATH (spawn ENOENT) is infrastructure, NOT commit_absent", "EMFILE on spawn is infrastructure, NOT commit_absent", "exit status 128 (a broken object store) is infrastructure, NOT commit_absent", "a REAL spawn failure (git not found on PATH) is commit_check_failed, not commit_absent"])
 M("G1-ISO41-exit-status-one-is-not-commit-absent", PUSH, E('          resolve(e.code === 1 ? "absent" : "failed");', '          resolve(e.code === 2 ? "absent" : "failed");'), T_HARD, ["exit status 1 (git's answer for 'not a valid commit here') IS commit_absent"])
 M("G1-ISO42-a-github-403-does-not-classify-as-auth", PUSH, E('|returned error: 40[13]|Invalid username or token|Permission to .+ denied/i.test(', '|Invalid username or token/i.test('), T_HARD, ["the REAL GitHub 403 (no contents:write) classifies as auth, not other"])
-M("G1-ISO43-a-connect-timeout-classifies-as-timeout", PUSH, E('|| /timeout exceeded/i.test(message)', '|| /timeout exceeded|timed out/i.test(stderr)'), T_HARD, ["a connect timeout (nothing landed) is NOT class timeout and does not say the push MAY HAVE been pushed"])
-M("G1-ISO44-agent-chosen-names-are-matched-by-the-classifier", PUSH, E('  for (const r of redact) if (r) text = text.split(r).join("");\n', ""), T_HARD, ["a branch named non-fast-forward echoed by the host cannot forge the class (agent-chosen names are not matched)"])
+M("G1-ISO43-a-connect-timeout-classifies-as-timeout", PUSH, E('|| e?.code === "ETIMEDOUT") return "timeout";', '|| e?.code === "ETIMEDOUT" || /timed out/i.test(stderr)) return "timeout";'), T_HARD, ["a connect timeout (nothing landed) is NOT class timeout and does not say the push MAY HAVE been pushed"])
+M("G1-ISO44-agent-chosen-names-are-matched-by-the-classifier", PUSH, E('  for (const line of redactAgentNames(stderr, names).split(/\\r?\\n/)) {\n', '  for (const line of stderr.split(/\\r?\\n/)) {\n'), T_HARD, ["a branch named non-fast-forward echoed by the host cannot forge the class (agent-chosen names are not matched)"])
 M("G1-ISO45-refusal-reason-is-not-a-searchable-tag", PUSH, E('    tags: { reason },\n    extra: { reason },\n', '    extra: { reason },\n'), T_HARD, ["a valid sha that is not in the object store is refused (reason commit_absent) and the directory is removed"])
 M("G1-ISO46-dispose-failure-reported-by-class-name", PUSH, E('    const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";', '    const cls = (err as Error | undefined)?.name ?? "unknown";'), T_HARD, ["a throwing dispose() with an errno code is reported by that code (the class name would always be 'Error')"])
 M("G1-ISO47-push-failure-report-has-no-own-message", PUSH, E('      message: PUSH_FAILED_MESSAGE,\n', ""), T_HARD, ["the REAL GitHub 403 (no contents:write) classifies as auth, not other"])
@@ -609,6 +609,11 @@ M("G1-ISO54-creator-accepts-a-relative-home", ISOD, E('if (!homeEnv || !isAbsolu
 M("G1-ISO55-env-allowlist-drops-a-forwarded-key", HENV, E('export const HARDENED_ENV_ALLOWLIST: readonly string[] = [\n  "PATH",\n', 'export const HARDENED_ENV_ALLOWLIST: readonly string[] = [\n'), T_GAH, ["the allowlist is EXACTLY the forwarded set (dropping or adding any key is a red test)"])
 M("G1-ISO56-creator-accepts-an-unsafe-isolated-directory-path", ISOD, E('    if (!isSafeGitPath(dir)) throw new IsolatedPushDirRefusal("setup_failed");\n', ""), T_ISO, ["a HOME whose real path contains ':' or a double quote refuses as setup_failed (the directory would be an unsafe GIT_DIR)"])
 M("G1-ISO57-env-leaf-imports-fs", HENV, E('import { basename, dirname, isAbsolute, normalize, sep } from "node:path";\n', 'import { basename, dirname, isAbsolute, normalize, sep } from "node:path";\nimport { readFileSync } from "node:fs";\n'), T_GAH, ["git-hardened-env.ts is a leaf: it imports only node:path and the shared hardening constants, never the creator or fs"])
+M("G1-ISO58-timeout-class-is-read-from-the-error-message", PUSH, E('|| e?.code === "ETIMEDOUT") return "timeout";', '|| e?.code === "ETIMEDOUT" || /timeout exceeded/i.test(String((err as Error | undefined)?.message))) return "timeout";'), T_HARD, ["stderr text that says 'timeout exceeded' cannot forge class timeout"])
+M("G1-ISO59-branch-redaction-is-a-blind-substring-removal", PUSH, E('    out = out.replace(new RegExp(token, "g"), " ");', '    out = out.split(names.branch).join("");'), T_HARD, ["a one-letter branch (a) does not eat letters", "a one-letter branch (e) does not eat letters", "a one-letter branch (o) does not eat letters"])
+M("G1-ISO60-slug-removal-joins-its-neighbours", PUSH, E('  if (names.slug) out = out.split(names.slug).join(" ");', '  if (names.slug) out = out.split(names.slug).join("");'), T_HARD, ["removing the slug cannot JOIN its neighbours into a class word"])
+M("G1-ISO61-branch-redaction-misses-the-refs-heads-spelling", PUSH, E('(?:refs/heads/)?${escapeRegExp', '${escapeRegExp'), T_HARD, ["the ref spelled refs/heads/<branch> in a host echo"])
+M("G1-ISO62-branch-redaction-has-no-left-boundary", PUSH, E('(?<![A-Za-z0-9_./-])(?:refs/heads/)?', '(?:refs/heads/)?'), T_HARD, ["a one-letter branch against the 'remote:' line prefix"])
 M("G1-WH11-packed-refs-cap-is-8-mib", WH, E('const PACKED_REFS_MAX_BYTES = 1024 * 1024;', 'const PACKED_REFS_MAX_BYTES = 8 * 1024 * 1024;'), T_WH, ["a packed-refs file over 1 MiB is not read (ref_unresolvable)"])
 M("G1-WH12-loose-ref-containment-ignores-the-separator", WH, E('    if (!realRef.startsWith(gitDir + sep)) throw new WorkspaceHeadUnreadable("ref_invalid");\n', '    if (!realRef.startsWith(gitDir)) throw new WorkspaceHeadUnreadable("ref_invalid");\n'), T_WH, ["a symlinked refs/heads directory leading to a SIBLING whose name merely starts with .git (the .git2 directory) is refused (containment needs the separator)"])
 M("G1-WH1-head-reader-accepts-a-symlinked-git-dir", WH, E("    if (realpathSync(gitDir) !== gitDir || !statSync(gitDir).isDirectory()) {", "    if (!statSync(gitDir).isDirectory()) {"), T_WH, ["a SYMLINKED .git to a complete repository (both sides of a later containment compare would resolve to the other repo)"])
@@ -935,8 +940,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 333 rows today (the 9b isolated-push change deleted 2 and added 38: G1-ISO1..ISO25, G1-WH1..WH10, G1-GD29, G1-GD30 and the ISO7b equivalent; the review round added 34: G1-ISO26..ISO57, G1-WH11, G1-WH12); the floor is the count. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=333
+# 338 rows today (the 9b isolated-push change deleted 2 and added 38: G1-ISO1..ISO25, G1-WH1..WH10, G1-GD29, G1-GD30 and the ISO7b equivalent; review round 1 added 34: G1-ISO26..ISO57, G1-WH11, G1-WH12; review round 2 added 5 so far: G1-ISO58..ISO62); the floor is the count. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=338
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -971,14 +976,14 @@ declare -A FLOOR=(
   ["test/push-branch-pinned.test.ts"]=4
   ["test/approval/gate-deps.test.ts"]=35
   ["test/approval/approval-ops-real-sink.test.ts"]=13
-  ["test/approval/ops-sink.test.ts"]=37
+  ["test/approval/ops-sink.test.ts"]=39
   ["test/approval/gate-flow-payload.test.ts"]=4
   ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
   ["test/cc-dispatcher-real-factory.test.ts"]=106
   ["test/cc-github-push.test.ts"]=61
-  ["test/push-branch-hardened.test.ts"]=70
+  ["test/push-branch-hardened.test.ts"]=79
   ["test/git-auth-hardened-env.test.ts"]=11
   ["test/git-auth-hardened.test.ts"]=10
   ["test/git-isolated-push-dir.test.ts"]=52
@@ -1109,15 +1114,15 @@ fi
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
 EXPECT_EQUIV=4
 EXPECT_RESID=2
-MIN_KILLED=327
+MIN_KILLED=332
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1
 fi
 
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
-# 717 = 382 checks before the mutant loop (19 harness, 35 controls, 327 rows with a named detector, harness row b = 382; the 6 equivalent / residual rows name none) + 333 mutants + 2 after the loop (tracked-status, harness row c).
-MIN_CHECKS=717
+# 727 = 387 checks before the mutant loop (19 harness, 35 controls, 332 rows with a named detector, harness row b = 387; the 6 equivalent / residual rows name none) + 338 mutants + 2 after the loop (tracked-status, harness row c).
+MIN_CHECKS=727
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1
