@@ -14,7 +14,7 @@ lane: cross-domain
 
 ## Overview
 
-Close out the remaining residuals of #9786 tracked in #10112, whose trigger (the plaintext-resolver-arm strip, PR #10081) merged 2026-10-15. Item 1 of the issue (strip plaintext vocabulary from the image-baked `inngest-luks-cutover.sh` + image release + pin bump) is already satisfied: the cutover trio was retired from the image by the host-replace-window prework that merged 2026-10-24, and no `inngest-luks-cutover.*` artifact exists on `origin/main`. The epic's residual "delete `scripts/followthroughs/inngest-verify-clean-10390.sh` on the next inngest PR" is likewise already satisfied — the file is absent on `origin/main` (retired by the inngest@4 upgrade PR); this change carries the verification note, not a deletion.
+Close out the remaining residuals of #9786 tracked in #10112, whose trigger (the plaintext-resolver-arm strip, PR #10081) merged 2026-10-15. Item 1 of the issue (strip plaintext vocabulary from the image-baked `inngest-luks-cutover.sh` + image release + pin bump) is already satisfied: the cutover trio was retired from the image by the host-replace-window prework that merged 2026-10-26, and no `inngest-luks-cutover.*` artifact exists on `origin/main`. The epic's residual "delete `scripts/followthroughs/inngest-verify-clean-10390.sh` on the next inngest PR" is likewise already satisfied — the file is absent on `origin/main` (retired by the inngest@4 upgrade PR); this change carries the verification note, not a deletion.
 
 Remaining scope, three items:
 
@@ -34,7 +34,7 @@ Remaining scope, three items:
 - Trigger confirmed: PR #10081 `MERGED` 2026-10-15T18:39:40Z ("PARKED: strip the dead plaintext-volume resolver arm").
 - `hcloud_volume.rehearsal_inngest` + `hcloud_volume_attachment.rehearsal_inngest` present in `apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf` with the "UNUSED since #9786 … removal is tracked in #10112" comment — item 2 premise holds.
 - `scripts/encryption-posture-ledger.json` carries **one** `stores[]` row for `hcloud_volume.rehearsal_inngest` (mechanism `plaintext-exception`, `disposed` exception block, `tracking_issue` retired #8285); no second row in `non_iac_stores` or `connections` — see Reconciliation.
-- `unpointed_raw_refused` arm present in `cloud-init-inngest.yml` (the `case '${inngest_doppler_config}' in rehearsal_*)` allowlist); `inngest_doppler_config = "prd"` is a literal in `main.tf` — item 3 premise holds.
+- `unpointed_raw_refused` arm present in `cloud-init-inngest.yml` (the `case '${inngest_doppler_config}' in rehearsal_*)` allowlist); `inngest_doppler_config = "prd"` is a literal in `inngest-host.tf` — item 3 premise holds.
 - Both resolver copies present: `write_files` block `/usr/local/bin/inngest-luks-open.sh` ("Same authority as in the runcmd resolver") and the runcmd `STAGE=resolve` + pointer/unpointed arms — item 4 premise holds.
 - Item 1 already satisfied: no `inngest-luks-cutover.{sh,service,timer}` anywhere in the tree (`git ls-tree -r origin/main | grep -i luks` — the trio is gone; the 2026-10-15 ADR-142 addendum records the whole-executor deletion).
 - `scripts/followthroughs/inngest-verify-clean-10390.sh` absent on `origin/main` — the epic residual is already discharged; the epic body still records it as "still owed" (lines dated 2026-10-27).
@@ -63,7 +63,7 @@ Remaining scope, three items:
 - `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` — the "After the host replace that carries #9786" block (~line 818-828) containing the placeholder "needs a disaster-recovery procedure written when it is ever needed".
 - `knowledge-base/engineering/architecture/decisions/ADR-142-inngest-redis-aof-zero-data-loss-luks-migration.md` — addendum lineage (2026-09-03, 2026-09-18, 2026-10-10, 2026-10-12, 2026-10-13, 2026-10-15 addenda exist).
 - `apps/web-platform/infra/cloud-init-inngest.yml` — READ-ONLY in this change (both resolver copies at the `inngest-luks-open.sh` write_files block and the `STAGE=resolve`/unpointed arm ~line 2577-2700; `unpointed_raw_refused` allowlist ~line 2690); edited only if the parent ruling flips item 4 to "share" or a later DR event patches the allowlist.
-- `apps/web-platform/infra/main.tf` — `inngest_doppler_config = "prd"` literal (~line 391; read-only, anchors the DR recipe's allowlist patch).
+- `apps/web-platform/infra/inngest-host.tf` — `inngest_doppler_config = "prd"` literal (~line 391; read-only, anchors the DR recipe's allowlist patch).
 - `apps/web-platform/infra/inngest-host.tf` — `inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id` (~line 373; read-only, anchors the DR recipe).
 - `scripts/lint-encryption-posture.py` — the enforcing lint (positive-work floor from `*.tf` census; `unledgered store` FAIL; plaintext-exception `disclosed_as` R5 check) — read-only.
 - `scripts/inngest-provision-plan-shape.sh` — the SUT under test by the fixtures; no `rehearsal_inngest` references inside it — read-only.
@@ -77,7 +77,7 @@ Remaining scope, three items:
 
 ## Problem Statement / Motivation
 
-Issue #10112 filed four deliberately-parked residuals of the #9786 plaintext-resolver strip, gated on PR #10081 landing. That trigger merged 2026-10-15; item 1 was independently discharged 2026-10-24 (the cutover trio was deleted from the image entirely, which subsumes the "strip its plaintext vocabulary" ask). Three items remain, each a small, verified, code-and-docs change — none a defect in shipped behaviour, but each a rot vector if left: an attached-never-read scratch volume that costs a real Hetzner volume per rehearsal dispatch and keeps a stale plaintext-exception row in the encryption audit surface; a documented gap where the next blank-`prd`-volume incident would be improvised under pressure; and a two-copy resolver decision whose divergence is currently unwritten, so a future edit could drift one copy while every suite stays green.
+Issue #10112 filed four deliberately-parked residuals of the #9786 plaintext-resolver strip, gated on PR #10081 landing. That trigger merged 2026-10-15; item 1 was independently discharged 2026-10-26 (the cutover trio was deleted from the image entirely, which subsumes the "strip its plaintext vocabulary" ask). Three items remain, each a small, verified, code-and-docs change — none a defect in shipped behaviour, but each a rot vector if left: an attached-never-read scratch volume that costs a real Hetzner volume per rehearsal dispatch and keeps a stale plaintext-exception row in the encryption audit surface; a documented gap where the next blank-`prd`-volume incident would be improvised under pressure; and a two-copy resolver decision whose divergence is currently unwritten, so a future edit could drift one copy while every suite stays green.
 
 ## Proposed Solution
 
@@ -93,7 +93,7 @@ Three independent but atomic-in-one-PR edits:
 |---|---|---|
 | "the two rows in `scripts/encryption-posture-ledger.json`" | One `stores[]` row (`hcloud_volume.rehearsal_inngest`, with `device_binding` + `plaintext-exception` + exception block); no reference in `non_iac_stores`/`connections` | Delete the one row; work phase re-greps the whole ledger for `rehearsal_inngest\b` before staging |
 | "the rehearsal test" needs updating | `inngest-provision-rehearsal.test.sh` has zero `rehearsal_inngest` references; the affected fixture file is `tests/scripts/test-inngest-provision-plan-shape.sh` | Update the plan-shape fixtures; re-run the sentinel test to prove no hidden volume-count pin |
-| item 1 needs an image release + pin bump | Already discharged — trio deleted from the image build 2026-10-24; absent on main | Verify-only AC; recorded in the PR body |
+| item 1 needs an image release + pin bump | Already discharged — trio deleted from the image build 2026-10-26; absent on main | Verify-only AC; recorded in the PR body |
 | item 4: "each carry their own copy of the resolver arms" | Both copies remain; post-#10081 the shared helpers (`wait_dev`, `luks_type`, `open_as`, `ensure_mount`, emit/fail) are also duplicated-but-pinned (D5), and only the stage has a format arm | Disposition scoped to the *resolver decision* duplication; helper duplication already posture-covered |
 | epic residual: delete `inngest-verify-clean-10390.sh` | Already absent on main (retired by the inngest@4 upgrade PR); epic body still says "still owed" | Verify + record; ship phase posts the epic note/ticks the line |
 

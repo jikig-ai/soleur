@@ -172,7 +172,7 @@ residual line (epic stays open).
 ### AC9 — cutover trio absent verified (PR-body material) — VERIFIED
 
 `git ls-tree -r origin/main --name-only | grep -E 'inngest-luks-cutover\.(sh|service|timer)$'`
-returns zero hits — item 1 closed upstream by the 2026-10-24 host-replace
+returns zero hits — item 1 closed upstream by the 2026-10-26 host-replace
 prework. Ship phase folds this into the PR body with `Closes #10112`.
 
 ### Gate re-run note

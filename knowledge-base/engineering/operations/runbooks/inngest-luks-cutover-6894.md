@@ -867,7 +867,9 @@ sequence end to end.
    protection lift runs first in its own reviewed change(s) — Hetzner `delete_protection` off, let the
    per-merge apply land it, then `prevent_destroy` off in a second PR — the §5c "Deliberate unprotect"
    two-step, never one change and never an out-of-band lift. A *new* volume resource created alongside
-   the old one needs no lift.
+   the old one needs no lift — but it renders nothing until `inngest_luks_volume_id`
+   (`inngest-host.tf`) is re-pointed at it in the same change; otherwise `$DEV` still resolves the old
+   volume and the blank one sits attached-never-read.
 
 ### Procedure
 
@@ -877,11 +879,16 @@ sequence end to end.
    are ever reached. The pointer must be absent for the resolver to take `mode=unpointed` at all.
 2. **A reviewed PR widens the allowlist for the window**: `case '${inngest_doppler_config}' in
    rehearsal_*)` → `rehearsal_*|prd)` in `cloud-init-inngest.yml`, and in the SAME diff the literal pins
-   that fail closed on an incomplete change — the `_D6_HEAD` pin and the D6-case literal in
+   that fail closed on an incomplete change — the `_D6_HEAD` pin, the D6-case literal, **T1.16i** (the
+   driven config table puts `prd` in the refuse-expectation arm; under the widen it reaches format)
+   and **T1.16k** (the `in rehearsal_*) ;; *) echo` glob-agreement pin) in
    `inngest-redis-luks.test.sh`, and the UNP5/UNP5b expectations in
    `inngest-redis-luks-loopback.test.sh` (under the widened glob a `prd` config formats, so UNP5's
-   refuse-expectation moves to a config still outside the glob). The PR opens a dated revert
-   follow-through before it merges: once `prd` satisfies the glob, nothing alerts if it stays.
+   refuse-expectation moves to a config still outside the glob). Every named pin fails closed — an
+   unexplained red on widen or revert means the change is incomplete, not that the suite is wrong.
+   The PR opens a dated revert follow-through before it merges: once `prd` satisfies the glob,
+   nothing alerts if it stays — the follow-through script should assert the literal on main is back
+   to `rehearsal_*)`, not only remind.
 3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`. The host is
    born with the new blank volume attached; `STAGE=resolve` takes `mode=unpointed`, the widened
    allowlist admits `prd`, and the unpointed arm runs its format path.
@@ -903,7 +910,8 @@ route.
 ## 2026-11-06 — the two-copy resolver decision is deliberate (#10112)
 
 `/usr/local/bin/inngest-luks-open.sh` (a `write_files` entry in `cloud-init-inngest.yml`, run by
-`inngest-luks-open.service` on every boot after the first) and the first-boot runcmd `STAGE=resolve`
+`inngest-luks-open.service`, `WantedBy=multi-user.target` so it runs from boot 1 onward — as
+`reopen_noop` until boot ≥2) and the first-boot runcmd `STAGE=resolve`
 block each carry their own copy of the resolver decision — pointer absent → the one rendered volume;
 pointer `== LUKS_ID` → the pointer arm; anything else → refuse. The duplication is **accepted in
 writing** (this section is that acceptance; ADR-142 addendum 2026-11-06 records the same disposition),

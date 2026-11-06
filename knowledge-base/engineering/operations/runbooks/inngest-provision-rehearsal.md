@@ -221,15 +221,23 @@ A label-scoped reclaim dispatch (so step 3 needs no ad hoc API call) is a candid
 If a dispatch created `hcloud_volume.rehearsal_inngest` before the volume was removed
 (#10112) and its teardown never completed, the root's R2 state still holds it: the next
 Phase-A plan legitimately proposes a `delete`, which the additive plan-shape refuses as a
-non-additive change. Steady state (teardown ran) shows no diff at all. To clear the orphan,
-drop it from state — from the rehearsal root — and confirm the Hetzner API has no
-`soleur-inngest-rehearsal-*` volume for it, before re-dispatching:
+non-additive change. Steady state (teardown ran) shows no diff at all. Check the Hetzner API
+for a `soleur-inngest-rehearsal-*` volume FIRST — the arm depends on the answer, and the order
+is load-bearing:
+
+- **Volume still exists API-side:** destroy it while it is still in state — the
+  `teardown_only=true` dispatch above (which destroys everything in state, and needs `terraform
+  init` plus the `zot_pull_token` var). `state rm` here would orphan a live, paid volume: state
+  is what `destroy` reads, so removing the row first strands the object outside Terraform's
+  managed delete path.
+- **Volume already absent API-side** (the common case — teardown destroyed the object but not
+  the state rows): drop it from state, from the rehearsal root:
 
 ```bash
 terraform -chdir=apps/web-platform/infra/inngest-provision-rehearsal state rm \
   hcloud_volume.rehearsal_inngest hcloud_volume_attachment.rehearsal_inngest
 ```
 
-Alternatively destroy it via the teardown-only arm (`teardown_only=true` dispatch above),
-which destroys everything in state — the two are equivalent here because the rehearsal
-stack is per-run scratch.
+Either way the post-teardown orphan assertion in the next run confirms the result — but run
+the API check first, because `state rm` on a live object manufactures exactly the orphan that
+assertion exists to catch.

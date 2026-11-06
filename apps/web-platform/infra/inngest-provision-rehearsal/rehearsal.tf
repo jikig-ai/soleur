@@ -13,8 +13,8 @@
 # bytes; it is destroyed when the run ends.
 #
 # ONLY THE IDENTITY IS THROWAWAY, NOT THE MECHANISM. The template is the PRODUCTION
-# cloud-init-inngest.yml rendered through terraform's own templatefile, the volumes are real
-# Hetzner volumes, and the Doppler reads/writes are real — a stub anywhere in that chain
+# cloud-init-inngest.yml rendered through terraform's own templatefile, the volume is a real
+# Hetzner volume, and the Doppler reads/writes are real — a stub anywhere in that chain
 # would rehearse a boot that does not exist and report it as the real one.
 
 locals {
