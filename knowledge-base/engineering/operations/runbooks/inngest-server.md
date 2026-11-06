@@ -31,6 +31,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | `apply_target=inngest-host-replace` fails at the inherited-`done` preflight naming `DOPPLER_TOKEN_INNGEST_FLIP_READ` | [§ The inherited-`done` preflight, repair line](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-8252-9927) |
 | First boot or reboot fails with `stage=unpointed_raw_refused`, `reopen_not_luks` or `inngest-luks-FAILED` (after the #9786 host replace) | read the stage and its `detail=` in Better Stack ([log query](betterstack-log-query.md)); meaning of each refusal: [cutover runbook, "After the host replace that carries #9786"](inngest-luks-cutover-6894.md) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
+| Pre-drafted user notice after a total loss (#10664) | [notice runbook](inngest-store-total-loss-user-notice.md) — text, constraints and fill fields; send conditions are the CLO's call |
 
 ## Inherited `done` after a host replace (#7228)
 
