@@ -947,6 +947,7 @@ Raw rows: `knowledge-base/project/specs/archive/20261106-052833-feat-one-shot-12
 | r3 | backfill | 3174 s | 232 s | 2942 s | 40 percent | +1207 s / 1956 s | 9.5 to 38.2 (a sibling spike at the end) |
 
 What it shows, and its limits:
+
 - **Most of the gain comes from freeing the replay arms and the pool, not from backfill alone.** The control (FIFO, but with the arms already free) is 3291 s; backfill gives 3063 s and 3174 s. The difference of 128 to 228 s (4 to 7 percent) is of the same order as the spread between the two backfill readings (111 s) and the load differences, so it is a direction, not a precise gain. The share of the pool phase with at most one suite live is the sturdier signal: 34 and 40 percent with backfill against 55 percent for the control and 78 percent at baseline.
 - **The suite phase is now close to the packing floor.** The 160 suites' walls sum to 7294, 6437 and 7501 s; divided by the pool width 4 that is 1824, 1609 and 1875 s, against suite phases of 2728, 2964 and 2942 s.
 - **The tail is one suite.** `replay-a` takes 1549 to 1956 s and starts 1207 to 1588 s into the run, because it is late in registration order, so the run ends when it ends. This is the next lever: start the longest suites first (longest-processing-time ordering, or a declared start priority for a small named set), recorded on #12013.
