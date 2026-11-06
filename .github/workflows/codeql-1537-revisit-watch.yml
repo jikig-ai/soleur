@@ -83,7 +83,7 @@ jobs:
           # so this survives issue re-creation).
           track_num="$(gh issue list --repo "$GH_REPO" --state open --limit 20 \
             --label "$TRACK_LABEL" --json number --jq '.[0].number // empty')" \
-            || { echo "::warning::codeql-1537-watch: tracking-issue lookup failed (transient?) — no-op this run"; track_num=""; }
+            || { echo "::warning::codeql-1537-watch: tracking-issue lookup failed (transient?) — no-op this run"; track_num=""; exit 0; }
           if [[ -z "$track_num" ]]; then
             echo "::warning::No open issue labelled '${TRACK_LABEL}' found — cannot ping. Create the tracking issue (see the ADR-270 re-tighten recipe)."
             exit 0

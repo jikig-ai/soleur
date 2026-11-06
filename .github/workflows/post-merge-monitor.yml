@@ -137,8 +137,8 @@ jobs:
           fi
 
           # Verify the issue has a bot-fix label (defense-in-depth)
-          # dedupe: fail-closed — a failed label read yields empty, the -z arm below treats it
-          # as "no bot-fix label" and warns + skips: the gate never acts on a blind read.
+          # dedupe: benign — close-path label read: a failed read yields empty, the -z arm below
+          # treats it as "no bot-fix label" and warns + skips (visible; gate never acts blind).
           HAS_BOT_LABEL=$(gh issue view "$ISSUE_NUM" \
             --json labels \
             --jq '[.labels[].name] | any(startswith("bot-fix/")) // empty' 2>/dev/null || true)

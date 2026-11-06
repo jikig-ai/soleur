@@ -565,6 +565,14 @@ def collect(root: str, quiet: bool = False):
     if os.path.isdir(act_dir):
         for sub in sorted(os.listdir(act_dir)):
             sub_dir = os.path.join(act_dir, sub)
+            if os.path.islink(sub_dir):
+                # isdir() follows links — a linked dir would let the census
+                # read outside the scan root under an in-root path.
+                if not quiet:
+                    print("dedupe-shape: advisory: symlink skipped: "
+                          f"{sub_dir} — the census covers tracked files, "
+                          "not linked content")
+                continue
             if not os.path.isdir(sub_dir):
                 continue
             for name in ("action.yml", "action.yaml"):
@@ -590,7 +598,7 @@ def main() -> int:
 
     targets = collect(root, args.quiet)
     if not targets:
-        print(f"lint-gh-dedupe-shape: zero workflow files under {root} — "
+        print(f"lint-gh-dedupe-shape: zero scan targets under {root} — "
               "refusing to report a clean sweep of nothing.", file=sys.stderr)
         return 2
 
@@ -603,9 +611,9 @@ def main() -> int:
         advisory.extend(a)
 
     if not census:
-        print("lint-gh-dedupe-shape: zero census sites under "
-              f"{root}/.github/workflows — a 0-match census is a broken "
-              "detector, not a clean tree (vacuity).", file=sys.stderr)
+        print("lint-gh-dedupe-shape: zero census sites in the scan root "
+              f"under {root} — a 0-match census is a broken detector, "
+              "not a clean tree (vacuity).", file=sys.stderr)
         return 2
 
     n_handled = sum(1 for *_, v in census if v == "handled")

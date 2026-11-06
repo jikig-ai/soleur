@@ -24,3 +24,8 @@
 
 ## Technical-Ruling Gate
 - One batched `soleur:engineering:cto` spawn ruled all 7 `pending - assumed` rows — every assumed ruling CONFIRMED with cited evidence; rows rewritten `Ruled by CTO agent, 2026-11-06` in decision-challenges.md. Gate re-run: PASS.
+
+## Review Phase (in progress)
+- Code-class 8-seat panel spawned (background). Reported so far: performance-oracle CLEAN; security-sentinel P3 (symlinked action dir) FIXED; data-integrity CLEAN; code-quality 3×P3 FIXED (message wording, H6 comment, `(:31)` cite); git-history P2 (H6 `-le`→`-eq` equality pin) FIXED + 3×P3 FIXED; agent-native P2 (codeql double-warning → `exit 0` in arm) FIXED + 2×P3 (post-merge-monitor relabel benign — FIXED; symlink guard — same fix). Pending seats: pattern-recognition, architecture-strategist.
+- Post-fix verify: lint unclassified:0 / advisory 0; suite 65/65 green.
+- seats=8 spawned this phase.

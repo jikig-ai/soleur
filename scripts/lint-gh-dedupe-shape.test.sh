@@ -770,17 +770,21 @@ fi
 # bump in this file (architecture/pattern seats: unmeasured re-growth
 # channel).
 # Ceiling is the post-resolution live count (#12092): all 13 prior advisory
-# sites are dispositioned — normalized (machinery-drain:188, codeql-1537:84,
-# inngest-health:699, rehearsal-skip-monitor:341) or `# dedupe:`-marked
-# (supabase-watchdog:512/440, actions-queue-health:228, devin-docs-drift:400/467,
-# marketplace-drift:612/813/904, prod-version-drift:263/427/563/607,
-# auto-label-security:31/34). A new undispositioned quoted capture reds here.
+# sites were dispositioned — normalized (machinery-drain:188, codeql-1537:84)
+# or `# dedupe:`-marked (supabase-watchdog:512, actions-queue-health:228,
+# devin-docs-drift:400/465, marketplace-drift:612/811/901,
+# prod-version-drift:263/426/561/604). Adjacent out-of-class reads
+# (inngest-health:699, rehearsal-skip-monitor:341, supabase-watchdog:440,
+# auto-label-security:31/34) were marked/normalized as recorded decisions and
+# were never advisory rows. The pin is EQUALITY (mutation row 5): raising the
+# constant above the live count reds the suite — a bump needs a review-gated
+# reason, not a silent edit.
 ADVISORY_CEILING=0
 adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
 # No advisory section at all means zero sites — the section is suppressed
 # when the list is empty, and an unparsed empty is 0, not a missing count.
 adv_n="${adv_n:-0}"
-if [[ "$adv_n" -le "$ADVISORY_CEILING" ]]; then
+if [[ "$adv_n" -eq "$ADVISORY_CEILING" ]]; then
   pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
 else
   fail "H6 live quoted-advisory count <= $ADVISORY_CEILING" "<=$ADVISORY_CEILING" "$adv_n"

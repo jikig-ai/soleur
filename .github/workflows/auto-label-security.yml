@@ -30,7 +30,7 @@ jobs:
           # dedupe: fail-closed — deliberate bare capture: the event guarantees the issue exists; a failed read fails the step (visible)
           TITLE=$(gh issue view "$ISSUE_NUMBER" --json title --jq '.title')
           if echo "$TITLE" | grep -ci '^sec:' >/dev/null; then
-            # dedupe: benign — a failed read yields HAS_LABEL=0 and re-applies an already-held label (idempotent); the title prefix (:31) is the gate
+            # dedupe: benign — a failed read yields HAS_LABEL=0 and re-applies an already-held label (idempotent); the `^sec:` title-prefix check above is the gate
             HAS_LABEL=$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' | grep -c '^type/security$' || true)
             if [ "$HAS_LABEL" = "0" ]; then
               gh issue edit "$ISSUE_NUMBER" --add-label "type/security"
