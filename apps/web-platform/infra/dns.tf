@@ -221,6 +221,20 @@ resource "cloudflare_record" "google_site_verification" {
   ttl     = 1
 }
 
+# Google Workspace recovery-domain verification for the GCP startup-credits
+# request (Google Workspace Support, 2026-10-20). CNAME is the method Google
+# marked preferred. The host label is the token, so this does not touch the
+# apex (mail, SPF, or the site). DNS-only: a proxied CNAME hides google.com
+# and the ownership check fails.
+resource "cloudflare_record" "google_gws_recovery" {
+  zone_id = var.cf_zone_id
+  name    = "76624499"
+  content = "google.com"
+  type    = "CNAME"
+  proxied = false
+  ttl     = 3600
+}
+
 # ProtonMail domain ownership verification (apex TXT). Required to enable
 # Proton Mail on soleur.ai.
 resource "cloudflare_record" "protonmail_verification" {
