@@ -3445,6 +3445,7 @@ AFFECTED_SCRIPTS_LIB_TEST_SUITE_LANES_TEST_SH_PATHS=(
   "scripts/lib/test-suite-lanes.sh"
   "scripts/test-all.sh"
   "apps/web-platform/infra/run-registered-suites.sh"   # lane_declare `*` override subject — a rename stales it
+  "plugins/soleur/test/ci-pr-affected-replay.test.sh"  # read by the empty-override premise checks (#12013): no lock entry point, no test-contention, per-run mktemp -d
   "scripts/lib/test-affected-paths.sh"
 )
 
