@@ -221,6 +221,8 @@ fi
 #    suite tiles those; ci-oracle-lane compares each arm's argv). Scope limits, stated: an arm is any label under the arm prefix
 #    (section 6 shares that coupling); a whole-battery registration under another label WITH a --rows range is the totality
 #    suite's to catch (its tiling check), not this guard's. Rationale and measurements: ADR-242, decision 29.
+#    Keep this section free of a literal range flag, of an exec-shaped replay path and of literal shard-table names: the
+#    totality census and the PR-affected ratchet read them as registrations and as files this suite opens.
 SF_W=4   # the local gate's pool width: the SOLEUR_TEST_JOBS default of the affected-tests wrapper; the guard cannot detect a change of it
 SF_ARM_PREFIX="${replay_file%.test.sh}-"
 # start_first_ok — stdin: one `label<TAB>tokens<TAB>argv` row per registration, in order. Prints one violation per line.
