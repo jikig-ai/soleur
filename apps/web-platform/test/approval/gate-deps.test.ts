@@ -74,9 +74,13 @@ import { buildKbShareTools } from "@/server/kb-share-tools";
 import type { ApprovalRpcClient, RpcResult } from "@/server/approval/service";
 import { clearAllWaiters } from "@/server/approval/waiters";
 import { reportSilentFallback } from "@/server/observability";
+import { APPROVAL_OPS } from "@/server/approval/ops";
 import { CONVERSATION_ID, MESSAGE_ID, OTHER_WORKSPACE_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
 
 const HEAD = "d".repeat(40);
+/** The registered `approval-head-read-failed` op, exactly as `reportApprovalOp` hands it to the sink: own message, reason as tag and extra, no Error. */
+const headReadFailed = (reason: string) =>
+  [null, { feature: "approval-queue", op: "approval-head-read-failed", message: APPROVAL_OPS.headReadFailed.message, tags: { reason }, extra: { reason } }] as const;
 const REPO = "example-org/example-repo";
 const HASH = "a".repeat(64);
 
@@ -395,7 +399,7 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     renameSync(join(file.dir, ".git"), moved);
     writeFileSync(join(file.dir, ".git"), `gitdir: ${moved}\n`);
     await expect(bindingFor(file.dir)).rejects.toThrow();
-    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "git_dir_not_plain" } });
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(...headReadFailed("git_dir_not_plain"));
 
     const link = repo(1);
     const copy = join(mkdtempSync(join(tmpdir(), "gate-deps-copy-")), "git");
@@ -403,7 +407,7 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     renameSync(join(link.dir, ".git"), copy);
     symlinkSync(copy, join(link.dir, ".git"));
     await expect(bindingFor(link.dir)).rejects.toThrow();
-    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "git_dir_not_plain" } });
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(...headReadFailed("git_dir_not_plain"));
   });
 
   it("ADR-309 9b: an unborn HEAD is reported as ref_unresolvable and never passes a path or the Error to the reporter", async () => {
@@ -416,7 +420,7 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     expect(reportSilentFallback).toHaveBeenCalledTimes(1);
     const [err, opts] = vi.mocked(reportSilentFallback).mock.calls[0];
     expect(err).toBeNull();
-    expect(opts).toEqual({ feature: "approval", op: "head-read-failed", extra: { reason: "ref_unresolvable" } });
+    expect([err, opts]).toEqual(headReadFailed("ref_unresolvable"));
     expect(JSON.stringify(opts)).not.toContain(dir);
   });
 
@@ -427,7 +431,7 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     expect(reportSilentFallback).not.toHaveBeenCalled();
     writeFileSync(join(a.dir, ".git", "HEAD"), `${"a".repeat(64)}\n`);
     await expect(bindingFor(a.dir)).rejects.toThrow();
-    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "not_hex40" } });
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(...headReadFailed("not_hex40"));
   });
 });
 
