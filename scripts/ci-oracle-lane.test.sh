@@ -1157,7 +1157,7 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
     if awk -v l="$reg" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
     # comment coverage is word-boundary, not substring: `scripts/lint-orphan-test-suites` must NOT be covered by the
     # `scripts/lint-orphan-test-suites-mutations-a` exclusion comment.
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "${reg//./\\.}([^[:alnum:]_-]|\$)"; then covered=1; fi
+    if [ "$covered" = 0 ] && grep -qE -- "${reg//./\\.}([^[:alnum:]_-]|\$)" < <(grep -E '^[[:space:]]*#' "$mf"); then covered=1; fi
     [ "$covered" = 1 ] || printf 'UNCOVERED-REGISTRATION:%s\n' "$reg"
   done < "$REGS"
   # the declared member set: each name is a member or an exclusion comment (14 plan names).
@@ -1165,13 +1165,13 @@ check_manifest() {  # $1=manifest path; prints tag lines (empty = clean)
   for dm in "${DECLARED_MEMBERS[@]}"; do
     covered=0
     if awk -v l="$dm" '!/^[[:space:]]*#/ && NF && $1==l{f=1} END{exit !f}' "$mf"; then covered=1; fi
-    if [ "$covered" = 0 ] && grep -E '^[[:space:]]*#' "$mf" | grep -qE -- "${dm//./\\.}([^[:alnum:]_-]|\$)"; then covered=1; fi
+    if [ "$covered" = 0 ] && grep -qE -- "${dm//./\\.}([^[:alnum:]_-]|\$)" < <(grep -E '^[[:space:]]*#' "$mf"); then covered=1; fi
     [ "$covered" = 1 ] || printf 'DECLARED-MISSING:%s\n' "$dm"
   done
   # the committed exclusion list, each named in a comment line.
   local de
   for de in "${DECLARED_EXCLUSIONS[@]}"; do
-    grep -E '^[[:space:]]*#' "$mf" | grep -qF -- "$de" || printf 'EXCLUSION-NOT-COMMENTED:%s\n' "$de"
+    grep -qF -- "$de" < <(grep -E '^[[:space:]]*#' "$mf") || printf 'EXCLUSION-NOT-COMMENTED:%s\n' "$de"
   done
 }
 

@@ -1038,7 +1038,7 @@ unset _l
 # Guard 3 leg-conclusion blindness: the proof's CODE reads job conclusions only — it must never name an oracle
 # term (lane outputs live on `oracle-selection`, not in the sibling results it sums). Comments are stripped
 # first: the Guard-3 comment block legitimately names the lane it backstops; a CODE-level hit is a real flag.
-if grep -v '^[[:space:]]*#' "$SANDBOX/pristine-body.sh" | grep -qiE 'oracle'; then
+if grep -qiE 'oracle' < <(grep -v '^[[:space:]]*#' "$SANDBOX/pristine-body.sh"); then
   fail "SIX-LEG BLINDNESS: the elide proof body references an oracle term in executable code — the proof must read leg conclusions only, never lane outputs"
 else
   pass
