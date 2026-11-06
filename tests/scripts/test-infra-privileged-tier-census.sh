@@ -1236,6 +1236,8 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
         "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
+        "logtail_exploration_alert.egress_gw_probe_silent_canary": "#12189 retire the #12180 canary pair",
+        "logtail_exploration.egress_gw_probe_silent_canary": "#12189 retire the #12180 canary pair",
     },
 }
 # RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway

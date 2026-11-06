@@ -629,7 +629,7 @@ cases=$((cases + 1))
 _parsed="$(sed -n 's/^blocks parsed=\([0-9]*\) naive=.*/\1/p' "$WORK/out")"
 # EXACT, not "at least": the measured count of alert blocks in the shipped tree. A removed block (a lexer that
 # stopped seeing one) trips it; a legitimately added or removed alert means editing this number.
-EXPECT_BLOCKS=19
+EXPECT_BLOCKS=18
 if [[ "$_parsed" =~ ^[0-9]+$ ]] && (( _parsed == EXPECT_BLOCKS )); then pass "anti-vacuity: the lexer parsed exactly $EXPECT_BLOCKS alert blocks (the naive and the line-anchored counts agree)"
 else fail "anti-vacuity: parsed '$_parsed' blocks, the exact count is $EXPECT_BLOCKS"; fi
 cases=$((cases + 1))
