@@ -60,3 +60,9 @@
 - Deferred nits: #12276 (+ fix-round residual comment). Deferred issue #12269 (max_entries_to_build experiment).
 - Next: soleur:qa → soleur:compound → soleur:ship. Merge via operator raw `gh pr merge --admin` (documented; admin-merge-ready.sh refuses by design on ABSENT old names).
 - Census baseline (task 3.5): shell 3d50b2 census run — check result, attach to #12089 before merge.
+
+## Ship Phase (in progress)
+- KB archived (13c79eb9a8), PR ready, title+semver:patch set, origin/main merged (TSV conflicts regenerated, cca3e01201).
+- CI head 7fd8c97071: fixed affected-index-ratchet (declared AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS), body-vs-diff (PR body backticks), orphan-test lint (was stale/transient — 0 orphans locally).
+- OPEN: shard-totality-mutations leg (29-42) fail on run 42310015463 — likely my lint registration shifted mutation row boundary. Repro locally: plugins/soleur/test/scripts-shard-totality.test.sh (battery: scripts-shard-totality-mutations.sh; classify: scripts/ci-shard-totality-classify.sh).
+- After green: operator `gh pr merge --admin` (raw, outside admin-merge-ready.sh gate — documented). Then: apply-github-infra apply-watch, queue inspection (task 3.3), merge_group canary (3.4), post-merge census delta on #12089 (3.5), postmerge verify, <promise>DONE</promise>.
