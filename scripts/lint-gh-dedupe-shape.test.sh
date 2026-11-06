@@ -987,10 +987,10 @@ fi
 # `.github/workflows` as a symlink leaves zero in-root targets, and the
 # zero-targets refusal (rc=2) beats reading outside content. Also pins the
 # 'zero scan targets' refusal message (renamed this PR).
-for escape in workflows github; do
-  r="$(mkfix "link$escape")"
+for escape in ".github/workflows" ".github"; do
+  r="$(mkfix "link$(basename "$escape")")"
   case "$escape" in
-    workflows)
+    ".github/workflows")
       mkdir -p "$TMP/outside-wf" || { echo "FATAL: mkdir outside-wf failed"; exit 2; }
       assert_fixture_dir "$TMP/outside-wf"
       cat > "$TMP/outside-wf/evil.yml" <<'YAML'
@@ -1006,7 +1006,7 @@ YAML
       rm -rf "$r/.github/workflows"
       ln -s "$TMP/outside-wf" "$r/.github/workflows" || { echo "FATAL: ln -s failed"; exit 2; }
       ;;
-    github)
+    ".github")
       mkdir -p "$TMP/outside-gh/workflows" || { echo "FATAL: mkdir outside-gh failed"; exit 2; }
       assert_fixture_dir "$TMP/outside-gh"
       cat > "$TMP/outside-gh/workflows/evil.yml" <<'YAML'
@@ -1027,9 +1027,9 @@ YAML
   if [[ "$rc" == "2" ]] && grep -q 'zero scan targets' <<<"$out" \
      && grep -q 'symlink skipped' <<<"$out" \
      && ! grep -q 'evil.yml' <<<"$out"; then
-    pass "H11 a symlinked .github/$escape dir refuses rc=2 (zero targets), not a scan"
+    pass "H11 a symlinked $escape dir refuses rc=2 (zero targets), not a scan"
   else
-    fail "H11 a symlinked .github/$escape dir refuses rc=2 (zero targets), not a scan" \
+    fail "H11 a symlinked $escape dir refuses rc=2 (zero targets), not a scan" \
       "rc=2 + 'zero scan targets' + no evil.yml rows" "rc=$rc; $(printf '%s' "$out" | tr '\n' ' ')"
   fi
 done
