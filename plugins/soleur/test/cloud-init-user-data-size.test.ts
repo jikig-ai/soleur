@@ -188,7 +188,16 @@ const HETZNER_CAP = 32_768;
 // poweroff -f) is boot-time runcmd logic — irreducibly inline. Comments trimmed first
 // (render 24,364 → 24,268 local); CI ≈ local + 32 → ~24,300; 24,500 restores ~200 B of
 // headroom and stays ~8.2 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_500;
+// #12167 PR-G: +500 B modest re-baseline (24,500 -> 25,000). The host sysctl net.ipv4.ip_nonlocal_bind=1
+// (/etc/sysctl.d/99-soleur-nonlocal-bind.conf write_files entry + its first-boot `sysctl -p` runcmd) must be
+// IRREDUCIBLY inline: it is a 2-line boot-time kernel setting that has to exist before docker.service starts
+// the container publishing on the not-yet-leased private NIC, so it cannot ride the baked-script seed
+// (installed later, by soleur-host-bootstrap.sh). Comments trimmed first (the in-file comment is one line;
+// the YAML explanation lives in the paragraph here, not in cloud-init.yml). Measured 24,752 B local without the
+// one-line in-file comment (the baseline was under the 24,500 budget; the comment adds a few tens of bytes), so
+// ~24,790 with it; CI ~= local + 32 -> ~24,820; 25,000 leaves ~180 B of headroom (the same margin the earlier
+// raises used) and stays ~7.7 KB below HETZNER_CAP, so a ~1.5 KB re-inlined blob still trips it.
+const WEB_GZIP_BUDGET = 25_000;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
