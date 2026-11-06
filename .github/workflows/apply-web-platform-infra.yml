@@ -1239,6 +1239,8 @@ jobs:
               -target=terraform_data.luks_monitor_install \
               -target=terraform_data.workspaces_boot_unlock_install \
               -target=terraform_data.egress_gateway \
+              -target=terraform_data.nonlocal_bind_sysctl \
+              -target=terraform_data.nonlocal_bind_sysctl_web2 \
               -target=terraform_data.egress_gateway_web2 2>&1 | tf_redact_random_ids
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
