@@ -633,7 +633,7 @@ The other arm-write uses that do not touch the flag change too: `op=luks-cutover
 
 ## Addendum - 2026-11-06 (#9927 owner decisions, items 1b, 4, 8, 10)
 
-On the merge of PR 12219 this addendum records six owner decisions given in session on 2026-11-06 and the same-day CTO and CLO rulings behind them. Nothing above it is edited except the dated `Superseded` markers. Queue and run state is held on a single volume with no off-project copy; recoverability after a project or account loss is not established. The full rows are in `knowledge-base/project/specs/feat-one-shot-9927-record-owner-decisions-a6-refresh/decision-challenges.md` (row ids below); the design for the arm-token replacement is `arm-token-replacement-design-12158.md` in the same folder.
+On the merge of PR 12219 this addendum records six owner decisions given in session on 2026-11-06 and the same-day CTO and CLO rulings behind them. Nothing above it is edited except the dated `Superseded` markers. Queue and run state is held on a single volume with no off-project copy; recoverability after a project or account loss is not established. The full rows are in `knowledge-base/project/specs/archive/20261106-103523-feat-one-shot-9927-record-owner-decisions-a6-refresh/decision-challenges.md` (row ids below); the design for the arm-token replacement is `arm-token-replacement-design-12158.md` in the same folder.
 
 **Decisions.** Each line carries the label and a status word.
 
