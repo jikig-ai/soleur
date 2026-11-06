@@ -1173,6 +1173,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
+  "plugins/soleur/skills/one-shot/references/operator-constraints.md"  # T18p derives the writer strings from it
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
