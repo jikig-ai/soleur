@@ -318,16 +318,31 @@ Live standing alarms over this source:
   CONNECT to metadata/RFC1918/ULA destinations. Dark-launch baseline is ~1 row per 5-min probe pair,
   so 20 clears only a real burst. Decode + revocation path:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
-- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than length(var.web_hosts)`
-  over 900 s, missing data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when fewer
-  DISTINCT `host_name`s emitted an `egress_gw_probe` row (`SYSLOG_IDENTIFIER=egress-gw-probe`, one
-  row per 5 min per host) than the fleet roster over 15+ min — a dead timer, dead Vector pipeline
-  (a stale birth-frozen vector.toml allowlist is a measured failure mode), or dead host journal can
-  never read as green, and one host's beats cannot mask the other's silence. Defined in
-  `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, inverted 2026-11-05 in #12180:
+  `higher_than 0` over 900 s, missing data counts as zero): `soleur-egress-gw-probe-silent-prd`. The
+  value is the number of roster hosts that did NOT emit an `egress_gw_probe` row
+  (`SYSLOG_IDENTIFIER=egress-gw-probe`, one row per 5 min per host) in the last 15+ min, floored at 0
+  (healthy 0, one host dark 1, all dark `length(var.web_hosts)`), so a dead timer, dead Vector
+  pipeline (a stale birth-frozen vector.toml allowlist is a measured failure mode) or dead host
+  journal pages, and one host's beats cannot mask the other's silence. The metric was inverted
+  because the old `lower_than` shape paged on a healthy fleet (incident 1047829421), and its earlier
+  incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
+  evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
+  unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
+  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, runs the same
+  query against an identifier no host emits; it must fire. Until it has fired, a green production
+  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here; the
+  sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
+  or journal).
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary decision
+  table:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
-  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
-  Resolve only if every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of `var.web_hosts`) shows an `egress-gw-probe` row in the last 15 minutes; if any host has none, the silence is real, so leave the incident open.
+  An open incident does not by itself mean a host is silent: read `rows_in_window` from
+  `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which
+  remaps `BETTERSTACK_API_TOKEN_READONLY` onto the name the probe reads, is in the runbook), or run `betterstack-query.sh`, and check that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
+  `var.web_hosts`) shows an `egress-gw-probe` row. Rows on both hosts point at the evaluator, not the
+  fleet. Resolving a Better Stack incident by hand is a vendor write that needs the owner's explicit
+  per-command go-ahead.
 - **`logtail_exploration_alert.egress_gw_probe_fail`** (#9534 review, `higher_than 0` over 900 s,
   missing data counts as zero): `soleur-egress-gw-probe-fail-prd`. Pages on any `egress-gw-probe`
   row carrying `result=fail` (allow leg refused, or deny leg BYPASSED — Squid accepted a denied
@@ -356,7 +371,7 @@ Live standing alarms over this source:
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
   **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
   `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
-  stuck-at-0 shows on `egress_gw_probe_silent` (no `JSONType`), so the cause is not yet isolated and no
+  stuck-at-0 showed on `egress_gw_probe_silent` (no `JSONType`) before #12180 inverted it, so the cause is not yet isolated and no
   replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON

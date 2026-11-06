@@ -73,6 +73,9 @@ export const SENSITIVE_KEY_NAMES = [
   // Origin TLS private key (#10479): base64 of the PEM, delivered through the container env-file.
   // The listener deletes it from process.env after boot; this keeps an env dump from shipping it.
   "ORIGIN_TLS_KEY_B64",
+  // Session-proxy TLS private key (PEM, #12167), delivered through the container env-file.
+  // PROXY_TLS_CERT is the public certificate and is deliberately NOT listed.
+  "PROXY_TLS_KEY",
   // Inbound email triage (feat-operator-inbox-delegation #5103). The
   // Inngest sentry-correlation middleware ships ctx.event.data to Sentry as
   // `extra` on every captured pipeline error (sentry-correlation.ts:76,135)

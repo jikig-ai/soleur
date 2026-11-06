@@ -81,7 +81,7 @@ SOURCED_CALLED="kr_tf kr_init kr_cleanup kr_tf_prepare kr_scrub kr_gate_rows kr_
 SOURCED_PIN="d7cf46c63bd4992fd408405dcce8b3fef2ea0429823b7c2a870c456305986ad3"
 OVERRIDES="kr_refuse kr_ok kr_print_contract main kr_chk_confirm kr_stop_sentence kr_post_write_stop kr_file_issue kr_verdict_recipe kr_converge_cmd kr_cmd_notify"
 KEYS="inngest_manual_trigger_secret_dev inngest_manual_trigger_secret_prd inngest_signing_key_dev inngest_event_key_dev kb_drift_ingest_signing_key egress_audit_ingest_token github_webhook_secret"
-ROTATABLE="inngest_manual_trigger_secret_dev inngest_manual_trigger_secret_prd inngest_signing_key_dev inngest_event_key_dev kb_drift_ingest_signing_key github_webhook_secret"
+ROTATABLE="inngest_manual_trigger_secret_dev inngest_manual_trigger_secret_prd inngest_signing_key_dev inngest_event_key_dev kb_drift_ingest_signing_key egress_audit_ingest_token github_webhook_secret"
 # key|project|config|name : the copies each key's value lives in (the HCL is the independent side, Guard 5)
 COPIES_LIT="inngest_manual_trigger_secret_dev|soleur|dev|INNGEST_MANUAL_TRIGGER_SECRET
 inngest_manual_trigger_secret_prd|soleur|prd|INNGEST_MANUAL_TRIGGER_SECRET
@@ -92,20 +92,20 @@ kb_drift_ingest_signing_key|soleur|prd|KB_DRIFT_INGEST_SIGNING_KEY
 egress_audit_ingest_token|soleur|prd|EGRESS_AUDIT_INGEST_TOKEN
 github_webhook_secret|soleur|prd|GITHUB_APP_WEBHOOK_SECRET"
 # the four secrets that carry lifecycle.ignore_changes=[value] (their rows are replace-both); the other three update in place
-IGNORE_SET="doppler_secret.inngest_manual_trigger_secret_dev doppler_secret.inngest_manual_trigger_secret_prd doppler_secret.inngest_signing_key_dev doppler_secret.inngest_event_key_dev"
-TOKENS="guard_ok ref_refused inputs_invalid actor_refused actor_not_owner rerun_refused confirm_mismatch quiet_window_missing egress_rotate_unsupported_no_vector_restart_lever approval_environment_missing webhook_patch_not_ready owner_step_open kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed owner_step_pending issue_unfiled rotate_ok job_cancelled internal_error"
+IGNORE_SET="doppler_secret.inngest_manual_trigger_secret_dev doppler_secret.inngest_manual_trigger_secret_prd doppler_secret.inngest_signing_key_dev doppler_secret.inngest_event_key_dev doppler_secret.egress_audit_ingest_token_previous"
+TOKENS="guard_ok ref_refused inputs_invalid actor_refused actor_not_owner rerun_refused confirm_mismatch quiet_window_missing approval_environment_unprotected webhook_patch_not_ready owner_step_open kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed vector_restarted previous_not_cleared previous_not_staged owner_step_pending issue_unfiled rotate_ok job_cancelled internal_error"
 # tokens only the SOURCED code emits (the script reaches them through kr_chk_attempt, kr_chk_quiet and kr_tf_prepare)
 TOKENS_SOURCED_ONLY="rerun_refused quiet_window_missing credential_absent"
 PROJECTED_FIELDS="address actions action_reason before_null after_unknown_value"
 OWNER_LOGIN="deruelle"
 # budgets in whole minutes: guard step/job, apply step/job, redeploy step/job, notify step/job
-MIN_GUARD_STEP=15; MIN_GUARD_JOB=25; MIN_APPLY_STEP=40; MIN_APPLY_JOB=50; MIN_REDEPLOY_STEP=85; MIN_REDEPLOY_JOB=105; MIN_NOTIFY_STEP=5; MIN_NOTIFY_JOB=15
+MIN_GUARD_STEP=15; MIN_GUARD_JOB=25; MIN_APPROVE_STEP=1; MIN_APPROVE_JOB=11; MIN_APPLY_STEP=40; MIN_APPLY_JOB=50; MIN_REDEPLOY_STEP=85; MIN_REDEPLOY_JOB=120; MIN_VECTOR_STEP=15; MIN_CLEAR_STEP=40; MIN_CLEAR_JOB=50; MIN_NOTIFY_STEP=5; MIN_NOTIFY_JOB=15
 # the apply step is init 300 + plan 900 + apply 900 + slack 300 seconds; the pre-write rule refuses when elapsed + 900 + 240 exceeds it
 APPLY_STEP_S=2400; APPLY_BOUND_S=900; APPLY_MARGIN_S=240
 REDACTION_LABELS="tainted-must-be-replaced deposed-will-be-destroyed drift-has-changed"
 # the 12 tokens an apply can end with before the write (the tokens notify must never turn into a "write happened" issue) plus the three
 # this review added: internal_error (no write_started marker), the egress refusal and the approval refusal
-PREWRITE_TOKENS="rerun_refused authorization_stale credential_absent copy_unreadable plan_gate_refused replace_not_requested terraform_failed run_in_flight run_list_unreadable kb_drift_cron_window kb_drift_walker_in_flight inputs_invalid internal_error egress_rotate_unsupported_no_vector_restart_lever approval_environment_missing"
+PREWRITE_TOKENS="rerun_refused authorization_stale credential_absent copy_unreadable plan_gate_refused replace_not_requested terraform_failed run_in_flight run_list_unreadable kb_drift_cron_window kb_drift_walker_in_flight inputs_invalid internal_error approval_environment_unprotected"
 ROWS_KB=3; ROWS_OTHER=2
 SHA256_OF() { sha256sum | cut -c1-64; }
 
@@ -132,7 +132,7 @@ wqc() { jq -S -c "$1" "$TMP/wf.json"; }
 
 eq "A1 triggers are exactly workflow_dispatch plus a registration push" "$(wqc '.on | keys')" '["push","workflow_dispatch"]'
 eq "A2 the push trigger is main-only and scoped to this file alone" "$(wqc '.on.push | [.branches, .paths]')" '[["main"],[".github/workflows/key-rotate.yml"]]'
-eq "A3 the jobs are exactly guard, apply, redeploy, notify" "$(wqc '.jobs | keys')" '["apply","guard","notify","redeploy"]'
+eq "A3 the jobs are exactly guard, approve, apply, redeploy, clear, notify" "$(wqc '.jobs | keys')" '["apply","approve","clear","guard","notify","redeploy"]'
 eq "A4 every job carries an if: (its truth is EVALUATED in A20-A21, not matched as text)" "$(wqc '[.jobs[] | has("if")] | all')" 'true'
 eq "A5 the dispatch inputs are mode, key, confirm, quiet_window, webhook_patch_ready (no reason input)" "$(wqc '.on.workflow_dispatch.inputs | keys')" '["confirm","key","mode","quiet_window","webhook_patch_ready"]'
 eq "A6 mode is {plan, rotate} and key is the seven names, both required with no default" "$(wqc '.on.workflow_dispatch.inputs | [.mode.options, .key.options, .mode.required, .key.required, (.mode|has("default")), (.key|has("default"))]')" \
@@ -141,9 +141,9 @@ eq "A7 quiet_window and webhook_patch_ready are booleans that default to false" 
 eq "A8 run-name starts with key-rotate (inngest-link-flip.sh Guard 3 keys on ^inngest-key-rotate plan)" "$(wq '."run-name"')" 'key-rotate ${{ inputs.mode }} ${{ inputs.key }}'
 check "A9 run-name does not match ^inngest-key-rotate" bash -c "! jq -e '.\"run-name\" | test(\"^inngest-key-rotate\")' '$TMP/wf.json'"
 eq "A10 workflow permissions are contents:read; each job widens only what it needs" "$(wqc '.permissions')" '{"contents":"read"}'
-eq "A11 only the notify job holds issues:write; the guard reads issues; the write jobs hold no issues scope" "$(wqc '[.jobs[] | .permissions.issues // "none"] ')" '["read","none","none","write"]'
-eq "A12 per-job permissions are the exact closed sets" "$(wqc '.jobs | [.guard.permissions, .apply.permissions, .redeploy.permissions, .notify.permissions]')" \
-  '[{"actions":"read","contents":"read","issues":"read"},{"actions":"read","contents":"read"},{"actions":"read","contents":"read"},{"issues":"write"}]'
+eq "A11 only the notify job holds issues:write; the guard reads issues; the write jobs hold no issues scope" "$(wqc '[.jobs[] | .permissions.issues // "none"] ')" '["read","none","none","none","none","write"]'
+eq "A12 per-job permissions are the exact closed sets" "$(wqc '.jobs | [.guard.permissions, .approve.permissions, .apply.permissions, .redeploy.permissions, .clear.permissions, .notify.permissions]')" \
+  '[{"actions":"read","contents":"read","issues":"read"},{"contents":"read"},{"actions":"read","contents":"read"},{"actions":"read","contents":"read"},{"actions":"read","contents":"read"},{"issues":"write"}]'
 eq "A13 every remote action is pinned to a 40-hex SHA" "$(wqc '[.jobs[].steps[] | select(has("uses")) | .uses | select(startswith("./") | not) | split("@")[1] | split(" ")[0] | length == 40] | all')" 'true'
 eq "A14 the action set is checkout, setup-terraform and the credential loader (no Doppler CLI action, no artifact or cache action)" "$(wqc '[.jobs[].steps[] | select(has("uses")) | .uses | split("@")[0]] | unique')" '["./.github/actions/infra-credentials","actions/checkout","hashicorp/setup-terraform"]'
 eq "A15 no expression of any kind is interpolated into a run: body (everything arrives through env:)" "$(wqc '[.jobs[].steps[] | select(has("run")) | .run | contains("${{")] | any')" 'false'
@@ -158,7 +158,7 @@ check "A19 nothing is uploaded: no upload-artifact, no cache step, and no Terraf
 cat > "$TMP/wfeval.py" <<'PY'
 import re, sys, json
 d = json.load(open(sys.argv[1])); jobs = d["jobs"]; mode = sys.argv[2]
-ORDER = ["guard", "apply", "redeploy", "notify"]
+ORDER = ["guard", "approve", "apply", "redeploy", "clear", "notify"]
 STATUS = {"always", "cancelled", "failure", "success"}
 def tokenize(src):
     toks, i = [], 0
@@ -227,15 +227,21 @@ def run(scn):
             if name == "success": return all(res.get(n) == "success" for n in needs)
             raise ValueError("unknown function " + name)
         ok, used = expr(jobs[j]["if"], var, fn)
+        # GitHub semantics: a job-level if: with no status-check function is implicitly success() && <expr>; a SKIPPED need
+        # makes success() false, and a needs.<job>.result READ does not suppress the implicit gate (only a status function
+        # such as !cancelled() does) — plan's apply1/apply run because they pair the mode disjunct with !cancelled().
         if not (used & STATUS) and not all(res.get(n) == "success" for n in needs): ok = False
         if j == "guard": res[j] = scn.get("guard_result", "success") if ok else "skipped"
         else: res[j] = scn.get("force", {}).get(j, "success") if ok else "skipped"
         if j == "guard" and res[j] != "skipped": outs[j] = scn["gout"]
+        if j == "approve" and res[j] != "skipped": outs[j] = {"approval_epoch": "1"}
         if j == "apply": outs[j] = {"write_started": "true"}
         if j == "redeploy": outs[j] = {"verdict": "rotate_ok"}
+        if j == "clear": outs[j] = {"verdict": "rotate_ok"}
     return res
-PLAN = {"go": "true", "mode": "plan", "run_apply": "true", "run_redeploy": "false", "redaction_ok": "true"}
-ROT = {"go": "true", "mode": "rotate", "run_apply": "true", "run_redeploy": "true", "redaction_ok": "true"}
+PLAN = {"go": "true", "mode": "plan", "key": "inngest_manual_trigger_secret_dev", "run_apply": "true", "run_redeploy": "false", "redaction_ok": "true"}
+ROT = {"go": "true", "mode": "rotate", "key": "inngest_manual_trigger_secret_dev", "run_apply": "true", "run_redeploy": "true", "redaction_ok": "true"}
+EGR = {"go": "true", "mode": "rotate", "key": "egress_audit_ingest_token", "run_apply": "true", "run_redeploy": "true", "redaction_ok": "true"}
 D = "workflow_dispatch"
 SC = [
  ("plan", dict(event=D, gout=PLAN)),
@@ -243,6 +249,9 @@ SC = [
  ("rotate/apply-fails", dict(event=D, gout=ROT, force={"apply": "failure"})),
  ("rotate/apply-cancelled", dict(event=D, gout=ROT, force={"apply": "cancelled"})),
  ("rotate/redeploy-fails", dict(event=D, gout=ROT, force={"redeploy": "failure"})),
+ ("rotate-egress", dict(event=D, gout=EGR)),
+ ("rotate-egress/redeploy-fails", dict(event=D, gout=EGR, force={"redeploy": "failure"})),
+ ("rotate-egress/clear-fails", dict(event=D, gout=EGR, force={"clear": "failure"})),
  ("rotate/redaction-not-ok", dict(event=D, gout=dict(ROT, redaction_ok="false"))),
  ("rotate/redaction-missing", dict(event=D, gout={k: v for k, v in ROT.items() if k != "redaction_ok"})),
  ("guard-refused", dict(event=D, gout={"go": "false"}, guard_result="failure")),
@@ -254,16 +263,19 @@ for name, scn in SC:
     print("%-26s %s" % (name, " ".join("%s=%s" % (j, r[j]) for j in ORDER)))
 PY
 cat > "$TMP/matrix.expected" <<'EOF'
-plan                       guard=success apply=success redeploy=skipped notify=skipped
-rotate                     guard=success apply=success redeploy=success notify=success
-rotate/apply-fails         guard=success apply=failure redeploy=skipped notify=success
-rotate/apply-cancelled     guard=success apply=cancelled redeploy=skipped notify=success
-rotate/redeploy-fails      guard=success apply=success redeploy=failure notify=success
-rotate/redaction-not-ok    guard=success apply=skipped redeploy=skipped notify=success
-rotate/redaction-missing   guard=success apply=skipped redeploy=skipped notify=success
-guard-refused              guard=failure apply=skipped redeploy=skipped notify=skipped
-guard-ok-no-go             guard=success apply=skipped redeploy=skipped notify=skipped
-push                       guard=skipped apply=skipped redeploy=skipped notify=skipped
+plan                       guard=success approve=skipped apply=success redeploy=skipped clear=skipped notify=skipped
+rotate                     guard=success approve=success apply=success redeploy=success clear=skipped notify=success
+rotate/apply-fails         guard=success approve=success apply=failure redeploy=skipped clear=skipped notify=success
+rotate/apply-cancelled     guard=success approve=success apply=cancelled redeploy=skipped clear=skipped notify=success
+rotate/redeploy-fails      guard=success approve=success apply=success redeploy=failure clear=skipped notify=success
+rotate-egress              guard=success approve=success apply=success redeploy=success clear=success notify=success
+rotate-egress/redeploy-fails guard=success approve=success apply=success redeploy=failure clear=skipped notify=success
+rotate-egress/clear-fails  guard=success approve=success apply=success redeploy=success clear=failure notify=success
+rotate/redaction-not-ok    guard=success approve=success apply=skipped redeploy=skipped clear=skipped notify=success
+rotate/redaction-missing   guard=success approve=success apply=skipped redeploy=skipped clear=skipped notify=success
+guard-refused              guard=failure approve=skipped apply=skipped redeploy=skipped clear=skipped notify=skipped
+guard-ok-no-go             guard=success approve=skipped apply=skipped redeploy=skipped clear=skipped notify=skipped
+push                       guard=skipped approve=skipped apply=skipped redeploy=skipped clear=skipped notify=skipped
 EOF
 matrix_of() { python3 "$TMP/wfeval.py" "$1" x 2>&1; }
 MATRIX_NOW="$(matrix_of "$TMP/wf.json")"
@@ -277,12 +289,15 @@ wf_variant no_redaction '.jobs.apply.if |= sub(" && needs.guard.outputs.redactio
 wf_variant notify_plan '.jobs.notify.if |= sub(" && needs.guard.outputs.mode == '"'"'rotate'"'"'"; "")'
 wf_variant no_dispatch '.jobs.guard.if = "${{ true }}"'
 wf_variant redeploy_nosuccess '.jobs.redeploy.if |= sub(" && needs.apply.result == '"'"'success'"'"'"; "")'
-for v in if_always no_redaction notify_plan no_dispatch redeploy_nosuccess; do
+# P1-1: without !cancelled() the implicit success() gate (a needs.<job>.result read does NOT suppress it) sees the
+# skipped approve job and plan's apply never runs — the mutant flips plan's apply to skipped
+wf_variant no_cancelled '.jobs.apply.if |= sub("!cancelled\\(\\) && "; "")'
+for v in if_always no_redaction notify_plan no_dispatch redeploy_nosuccess no_cancelled; do
   [[ "$(matrix_of "$TMP/wfv-$v.json")" != "$MATRIX_NOW" ]] && ok "A21 matrix mutant $v changes the evaluated matrix" || bad "A21 matrix mutant $v is invisible to the evaluated matrix"
 done
-eq "A22 timeouts are the literals of the budget (guard 15/25, apply 40/50, redeploy 85/105, notify 5/15 minutes)" \
-  "$(wqc '[.jobs.guard."timeout-minutes", (.jobs.guard.steps[] | select(.id == "guard") | ."timeout-minutes"), .jobs.apply."timeout-minutes", (.jobs.apply.steps[] | select(.id == "apply") | ."timeout-minutes"), .jobs.redeploy."timeout-minutes", (.jobs.redeploy.steps[] | select(.id == "track") | ."timeout-minutes"), .jobs.notify."timeout-minutes", (.jobs.notify.steps[] | select(has("run")) | ."timeout-minutes")]')" \
-  "[$MIN_GUARD_JOB,$MIN_GUARD_STEP,$MIN_APPLY_JOB,$MIN_APPLY_STEP,$MIN_REDEPLOY_JOB,$MIN_REDEPLOY_STEP,$MIN_NOTIFY_JOB,$MIN_NOTIFY_STEP]"
+eq "A22 timeouts are the literals of the budget (guard 15/25, approve 1/11, apply 40/50, redeploy 85/120 +vector 15, clear 40/50, notify 5/15 minutes)" \
+  "$(wqc '[.jobs.guard."timeout-minutes", (.jobs.guard.steps[] | select(.id == "guard") | ."timeout-minutes"), .jobs.approve."timeout-minutes", (.jobs.approve.steps[] | select(.id == "approve") | ."timeout-minutes"), .jobs.apply."timeout-minutes", (.jobs.apply.steps[] | select(.id == "apply") | ."timeout-minutes"), .jobs.redeploy."timeout-minutes", (.jobs.redeploy.steps[] | select(.id == "track") | ."timeout-minutes"), (.jobs.redeploy.steps[] | select(.id == "vector") | ."timeout-minutes"), .jobs.clear."timeout-minutes", (.jobs.clear.steps[] | select(.id == "clear") | ."timeout-minutes"), .jobs.notify."timeout-minutes", (.jobs.notify.steps[] | select(has("run")) | ."timeout-minutes")]')" \
+  "[$MIN_GUARD_JOB,$MIN_GUARD_STEP,$MIN_APPROVE_JOB,$MIN_APPROVE_STEP,$MIN_APPLY_JOB,$MIN_APPLY_STEP,$MIN_REDEPLOY_JOB,$MIN_REDEPLOY_STEP,$MIN_VECTOR_STEP,$MIN_CLEAR_JOB,$MIN_CLEAR_STEP,$MIN_NOTIFY_JOB,$MIN_NOTIFY_STEP]"
 eq "A23 every run and loader step carries its own timeout-minutes" "$(wqc '[.jobs[].steps[] | select(has("run") or ((.uses // "") | startswith("./"))) | has("timeout-minutes")] | all')" 'true'
 STEPSUM_FILTER='[.jobs | to_entries[] | {job: .key, steps: ([.value.steps[] | (."timeout-minutes" // 0)] | add), bound: .value."timeout-minutes"} | select(.steps > .bound) | .job] | join(",")'
 eq "A23b no job step timeouts sum to more than the job own timeout (a job bound below its step sum is a dead bound)" "$(wq "$STEPSUM_FILTER")" ''
@@ -304,34 +319,34 @@ def ev(expr, event, mode):
     lhs, rhs = re.fullmatch(r"(\S+)\s*==\s*'([^']*)'", cond).groups()
     val = {"github.event_name": event, "needs.guard.outputs.mode": mode}[lhs]
     return a if val == rhs else (b if b is not None else "RUNID")
-wf = d["concurrency"]["group"]; ap = d["jobs"]["apply"]["concurrency"]["group"]; rd = d["jobs"]["redeploy"]["concurrency"]["group"]
-print(ev(wf, "workflow_dispatch", ""), ev(wf, "push", ""), ev(ap, "workflow_dispatch", "rotate"), ev(ap, "workflow_dispatch", "plan"), rd)
+wf = d["concurrency"]["group"]; ap = d["jobs"]["apply"]["concurrency"]["group"]; rd = d["jobs"]["redeploy"]["concurrency"]["group"]; cl = d["jobs"]["clear"]["concurrency"]["group"]
+print(ev(wf, "workflow_dispatch", ""), ev(wf, "push", ""), ev(ap, "workflow_dispatch", "rotate"), ev(ap, "workflow_dispatch", "plan"), rd, cl)
 PY
 eq "A25 groups EVALUATED: dispatch=inngest-key-rotate, push=key-rotate-registration, apply=terraform-apply-web-platform-host for rotate only (a plan gets a per-run group), redeploy=web-1-swap" \
-  "$(python3 "$TMP/grp.py" "$TMP/wf.json" 2>&1)" "inngest-key-rotate key-rotate-registration terraform-apply-web-platform-host RUNID web-1-swap"
-eq "A26 environments: only the apply job runs in infra-privileged (the Tier-B environment); guard, redeploy and notify hold none" "$(wqc '[.jobs[] | .environment // "none"]')" '["none","infra-privileged","none","none"]'
-eq "A27 the credential loader runs in the apply job only" "$(wqc '[.jobs[] | [.steps[] | select((.uses // "") | startswith("./.github/actions/infra-credentials"))] | length]')" '[0,1,0,0]'
+  "$(python3 "$TMP/grp.py" "$TMP/wf.json" 2>&1)" "inngest-key-rotate key-rotate-registration terraform-apply-web-platform-host RUNID web-1-swap terraform-apply-web-platform-host"
+eq "A26 environments: apply and clear run in infra-privileged (the Tier-B environment), approve runs in key-rotate-approval; guard, redeploy and notify hold none" "$(wqc '[.jobs[] | .environment // "none"]')" '["none","key-rotate-approval","infra-privileged","none","infra-privileged","none"]'
+eq "A27 the credential loader runs in the apply and clear jobs only" "$(wqc '[.jobs[] | [.steps[] | select((.uses // "") | startswith("./.github/actions/infra-credentials"))] | length]')" '[0,0,1,0,1,0]'
 SECRETS_OF() { jq -r --arg j "$1" '[.jobs[$j] | tostring | scan("secrets\\.([A-Z0-9_]+)") | .[0]] | unique | join(",")' "$TMP/wf.json"; }
-eq "A28 secrets by job: the guard holds none; apply holds the Tier-A token and the loader token; redeploy holds the deploy webhook trio only; notify none" \
-  "$(SECRETS_OF guard)|$(SECRETS_OF apply)|$(SECRETS_OF redeploy)|$(SECRETS_OF notify)" "|DOPPLER_TOKEN,DOPPLER_TOKEN_INFRA_PRIVILEGED|CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET,WEBHOOK_DEPLOY_SECRET|"
+eq "A28 secrets by job: guard and approve hold none; apply and clear hold the Tier-A token and the loader token; redeploy holds the deploy webhook trio only; notify none" \
+  "$(SECRETS_OF guard)|$(SECRETS_OF approve)|$(SECRETS_OF apply)|$(SECRETS_OF redeploy)|$(SECRETS_OF clear)|$(SECRETS_OF notify)" "||DOPPLER_TOKEN,DOPPLER_TOKEN_INFRA_PRIVILEGED|CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET,WEBHOOK_DEPLOY_SECRET|DOPPLER_TOKEN,DOPPLER_TOKEN_INFRA_PRIVILEGED|"
 eq "A29 every use of the secrets context is the dotted form secrets.NAME" "$(grep -oE 'secrets[^.A-Za-z_]|secrets$' "$WF" | wc -l | tr -d ' ')" '0'
 # The trio (CTO F7): in exactly ONE step's env of exactly the redeploy job (the track.sh step), with no GH_TOKEN and no Doppler token there.
-eq "A30 the deploy trio appears in exactly one step's env: the redeploy job's track step; that step holds no GH_TOKEN and no Doppler token" \
+eq "A30 the deploy trio appears only in the redeploy job's track and vector steps; those steps hold no GH_TOKEN and no Doppler token" \
   "$(wqc '[.jobs | to_entries[] | .key as $j | .value.steps[] | select(.env // {} | keys | any(. == "WEBHOOK_DEPLOY_SECRET" or . == "CF_ACCESS_CLIENT_ID" or . == "CF_ACCESS_CLIENT_SECRET")) | [$j, .id, (.env | keys)]]')" \
-  '[["redeploy","track",["CF_ACCESS_CLIENT_ID","CF_ACCESS_CLIENT_SECRET","WEBHOOK_DEPLOY_SECRET"]]]'
+  '[["redeploy","track",["CF_ACCESS_CLIENT_ID","CF_ACCESS_CLIENT_SECRET","WEBHOOK_DEPLOY_SECRET"]],["redeploy","vector",["CF_ACCESS_CLIENT_ID","CF_ACCESS_CLIENT_SECRET","EFF_KEY","EFF_MODE","WEBHOOK_DEPLOY_SECRET"]]]'
 eq "A31 the trio is not at workflow or job level and the apply job never names it" "$(wqc '[(.env // {} | keys), (.jobs | to_entries[] | .value.env // {} | keys)] | flatten | map(select(test("WEBHOOK_DEPLOY|CF_ACCESS"))) | length')|$(grep -c 'WEBHOOK_DEPLOY\|CF_ACCESS' <(wqc '.jobs.apply'))" '0|0'
 eq "A32 WEB_HOST_PRIVATE_IPS is the pinned literal in the redeploy job env (web-hosts-fanout-parity.test.sh compares it with var.web_hosts)" "$(wq '.jobs.redeploy.env.WEB_HOST_PRIVATE_IPS')" '10.0.1.10,10.0.1.11'
-eq "A33 the redeploy job's three steps run in the order: re-checks, track, verdict; the verdict step always runs and the track step needs the re-checks" \
-  "$(wqc '[.jobs.redeploy.steps[] | select(has("id")) | [.id, (.if // "")]]')" '[["recheck",""],["track","${{ steps.recheck.outcome == '"'"'success'"'"' }}"],["final","${{ always() }}"]]'
+eq "A33 the redeploy job's four steps run in the order: re-checks, track, vector, verdict; the verdict step always runs and the vector step needs the track for egress only" \
+  "$(wqc '[.jobs.redeploy.steps[] | select(has("id")) | [.id, (.if // "")]]')" '[["recheck",""],["track","${{ steps.recheck.outcome == '"'"'success'"'"' }}"],["vector","${{ steps.track.outcome == '"'"'success'"'"' && needs.guard.outputs.key == '"'"'egress_audit_ingest_token'"'"' }}"],["final","${{ always() }}"]]'
 eq "A34 the apply step holds no deploy webhook secret and no write-scoped token; its GH_TOKEN is the job token under actions:read" "$(wq '.jobs.apply.steps[] | select(.id == "apply") | .env.GH_TOKEN')" '${{ github.token }}'
 eq "A35 the guard job's redaction step is after checkout and before the ladder, holds no env at all (no GH_TOKEN, no secrets), and the ladder step is last" \
   "$(wqc '[.jobs.guard.steps[] | [(.id // "-"), ((.env // {}) | keys | length)]]')" '[["-",0],["pre",0],["guard",6]]'
 eq "A36 the guard job exports go, mode, key, run_apply, run_redeploy, guard_epoch and redaction_ok (redaction_ok from the redaction step, the rest from the ladder)" "$(wqc '.jobs.guard.outputs | to_entries | map([.key, (.value | capture("steps\\.(?<s>[a-z]+)\\.").s)])')" \
   '[["go","guard"],["mode","guard"],["key","guard"],["run_apply","guard"],["run_redeploy","guard"],["guard_epoch","guard"],["redaction_ok","pre"]]'
-eq "A37 the run bodies are exactly one script subcommand each" "$(wqc '[.jobs[].steps[] | select(has("run")) | .run | gsub("\\s+$"; "")]')" \
-  '["bash scripts/key-rotate.sh precondition","bash scripts/key-rotate.sh guard","bash scripts/key-rotate.sh apply","bash scripts/key-rotate.sh redeploy recheck","bash scripts/key-rotate.sh redeploy track","bash scripts/key-rotate.sh redeploy verdict","bash scripts/key-rotate.sh notify"]'
-eq "A38 setup-terraform is present with the pinned TERRAFORM_VERSION (positive row for the scoped Terraform check) and the apply step is the only Terraform-running step" \
-  "$(wqc '[(.env.TERRAFORM_VERSION), ([.jobs.apply.steps[] | select((.uses // "") | startswith("hashicorp/setup-terraform"))] | length)]')" '["1.10.5",1]'
+eq "A37 the run bodies: the approve stamp plus one script subcommand each" "$(wqc '[.jobs[].steps[] | select(has("run")) | .run | gsub("\\s+$"; "")]')" \
+  '["bash scripts/key-rotate.sh precondition","bash scripts/key-rotate.sh guard","echo \"approval_epoch=$(date +%s)\" >> \"$GITHUB_OUTPUT\"","bash scripts/key-rotate.sh apply","bash scripts/key-rotate.sh redeploy recheck","bash scripts/key-rotate.sh redeploy track","bash scripts/key-rotate.sh redeploy vector","bash scripts/key-rotate.sh redeploy verdict","bash scripts/key-rotate.sh clear","bash scripts/key-rotate.sh notify"]'
+eq "A38 setup-terraform is present with the pinned TERRAFORM_VERSION (positive row for the scoped Terraform check) in the apply and clear jobs (the two Terraform-running jobs)" \
+  "$(wqc '[(.env.TERRAFORM_VERSION), ([.jobs[].steps[] | select((.uses // "") | startswith("hashicorp/setup-terraform"))] | length)]')" '["1.10.5",2]'
 # The scoped Terraform check: PARSED run: bodies only, command-position regex, closed set; bypass-shape control rows prove the regex sees them.
 TF_RE='(^|[;&|(]|[[:space:]])(command[[:space:]]+|env[[:space:]]+|exec[[:space:]]+|sudo[[:space:]]+)?(\$TF|\$\{TF\}|terraform)[[:space:]]+(init|plan|apply|show|refresh|destroy|import|state|output|console|-chdir)'
 tf_hits_in_runs() { jq -r '.jobs[].steps[] | select(has("run")) | .run' "$1" | grep -Ec "$TF_RE" || true; }
@@ -383,16 +398,16 @@ b9_join() { sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ta}'; }
 eq "B9 no terraform command anywhere in the script, in any form the workflow-side check knows (-chdir and other flags, command/env/exec/sudo prefixes, a TF variable bare or quoted, a line continuation): the sourced kr_tf is the one chokepoint" "$(code_only "$BODY" | b9_join | grep -Ec "$B9_RE")|$(code_only "$BODY" | grep -c 'doppler run')" '0|0'
 eq "B9b control rows: the script-side regex sees terraform -chdir=x show -json, a prefixed command, a TF variable, a QUOTED TF variable, env terraform, a flagged plan and a backslash-continued terraform -chdir=x (7 must-match) and misses kr_tf, a token name and plain prose (3 must-not-match)" "$(printf '%s\n' 'terraform -chdir=x show -json p' 'command terraform apply' '$TF plan' '"$TF" show -json p' 'env terraform show -json p' 'terraform -chdir=x -no-color plan' 'terraform -chdir=x \' '  show -json p' | b9_join | grep -Ec "$B9_RE")|$(printf '%s\n' 'echo terraform' 'kr_tf plan' 'a terraform_failed show' | b9_join | grep -Ec "$B9_RE")" '7|0'
 eq "B12 no Terraform stream file is ever printed: no cat/head/tail/tee/printf/echo/sed/grep of a tf-*.out|err" "$(code_only "$BODY" | grep -Ec '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9${}_-]*\.(out|err)')" '0'
-eq "B13 every doppler secrets get is the exact value-silent form (| sha256sum | cut -c1-64) and there is exactly one" "$(code_only "$BODY" | grep -c 'doppler secrets get')|$(code_only "$BODY" | grep -c 'doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64)')" '1|1'
+eq "B13 doppler secrets get appears exactly twice: the sha256-silent classification form and the egress PREVIOUS feed's value capture (into a variable, never printed)" "$(code_only "$BODY" | grep -c 'doppler secrets get')|$(code_only "$BODY" | grep -c 'doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64')|$(code_only "$BODY" | grep -c 'doppler secrets get EGRESS_AUDIT_INGEST_TOKEN --plain -p soleur -c prd')" '2|1|1'
 # gate table
 GATE_ROWS="$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s\n" "${KR_GATE_TABLE[@]}"' _ "$BODY")"
-eq "B14 the gate table has 15 rows: per key 1 phase-A row (random_id) plus 1 phase-B row per copy (kb_drift has 2 copies)" "$(wc -l <<<"$GATE_ROWS" | tr -d ' ')|$(grep -c '^A|' <<<"$GATE_ROWS")|$(grep -c '^B|' <<<"$GATE_ROWS")" '15|7|8'
+eq "B14 the gate table has 16 rows: per key 1 phase-A row (random_id) plus 1 phase-B row per copy (kb_drift has 2 copies)" "$(wc -l <<<"$GATE_ROWS" | tr -d ' ')|$(grep -c '^A|' <<<"$GATE_ROWS")|$(grep -c '^B|' <<<"$GATE_ROWS")" '16|7|9'
 ROWS_OK=0
 for k in $KEYS; do
-  n="$(grep -c "^[AB]|$k|" <<<"$GATE_ROWS")"; want=$ROWS_OTHER; [[ "$k" == kb_drift_ingest_signing_key ]] && want=$ROWS_KB
+  n="$(grep -c "^[AB]|$k|" <<<"$GATE_ROWS")"; want=$ROWS_OTHER; [[ "$k" == kb_drift_ingest_signing_key || "$k" == egress_audit_ingest_token ]] && want=$ROWS_KB
   [[ "$n" == "$want" ]] || { ROWS_OK=1; bad "B15 key $k has $n gate rows, want $want (literal)"; }
 done
-[[ "$ROWS_OK" == 0 ]] && ok "B15 the expected row count per key is pinned from literals: 3 for kb_drift_ingest_signing_key, 2 for every other key"
+[[ "$ROWS_OK" == 0 ]] && ok "B15 the expected row count per key is pinned from literals: 3 for kb_drift_ingest_signing_key and egress_audit_ingest_token (PREVIOUS rides apply-A), 2 for every other key"
 BAD_FLAG="$(while IFS='|' read -r ph key addr flag acts; do
   case "$ph:$addr" in A:random_id.*) [[ "$flag|$acts" == "replace|delete,create" ]] || echo "bad-A:$addr" ;; B:doppler_secret.*)
     if grep -qw -- "$addr" <<<"$IGNORE_SET"; then [[ "$flag|$acts" == "replace|delete,create" ]] || echo "bad-ign:$addr"; else [[ "$flag|$acts" == "target|update" ]] || echo "bad-upd:$addr"; fi ;; *) echo "bad-shape:$addr" ;; esac
@@ -408,7 +423,7 @@ eq "B20 the plan projection keeps exactly these five fields (the full plan JSON 
 PRINTED="$(env -i PATH=/usr/bin:/bin bash "$BODY" --print-contract 2>&1)"
 eq "B21 --print-contract prints the key-rotate header" "$(head -1 <<<"$PRINTED")" 'key-rotate verdict-tokens'
 eq "B22 the printed token set equals the literal 35 (set equality, no duplicates)" "$(tail -n +2 <<<"$PRINTED" | sort | tr '\n' ' ')|$(tail -n +2 <<<"$PRINTED" | sort | uniq -d | wc -l | tr -d ' ')" "$(tr ' ' '\n' <<<"$TOKENS" | sort | tr '\n' ' ')|0"
-eq "B22b there are exactly 35 tokens" "$(wc -w <<<"$TOKENS" | tr -d ' ')" '35'
+eq "B22b there are exactly 37 tokens" "$(wc -w <<<"$TOKENS" | tr -d ' ')" '37'
 RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/key-rotation.md"
 # a token counts only when it is a backticked cell of a table row in the Refusals / Verdicts sections (prose elsewhere does not count)
 rb_rows() { sed -n '/^## Refusals (nothing written)/,/^## The GitHub webhook owner step/p' "$1" | grep '^|'; }
@@ -455,7 +470,7 @@ eq "B31 the script's budget table in minutes equals the literal workflow timeout
 eq "B32 no test seam (KR_*, KK_*) is set anywhere in the workflow's code (comments may name the budget table)" "$(grep -v '^ *#' "$WF" | grep -cE '\bK[RK]_[A-Z_]+')" '0'
 eq "B33 the Terraform plan variables come only from the loader and doppler run: the workflow sets no TF_VAR and no TF_LOG" "$(grep -cE 'TF_VAR_|TF_LOG' "$WF")" '0'
 eq "B34 the redaction row labels the precondition requires are the literal three (tainted, deposed, drift)" "$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "${KK_REDACTION_LABELS[*]}"' _ "$BODY")" "$REDACTION_LABELS"
-eq "B35 KK_APPROVAL_ENV_BOUND is false while the apply job binds infra-privileged (zero required reviewers, #11923): flipping it needs a reviewer-gated environment named in the workflow AND this row" "$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "$KK_APPROVAL_ENV_BOUND"' _ "$BODY")|$(wq '.jobs.apply.environment')" 'false|infra-privileged'
+eq "B35 KK_APPROVAL_ENV_BOUND is true now that the approve job binds the reviewer-gated key-rotate-approval environment (#11923); the apply job keeps infra-privileged" "$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "$KK_APPROVAL_ENV_BOUND"' _ "$BODY")|$(wq '.jobs.apply.environment')|$(wq '.jobs.approve.environment')" 'true|infra-privileged|key-rotate-approval'
 # kb_drift window parity: the walker's cron and job timeout, parsed from its workflow, must sit inside [KK_KB_WIN_START_S, +KK_KB_WIN_LEN_S]
 WALKER_WF="$REPO_ROOT/.github/workflows/kb-drift-walker.yml"
 win_covers() { # <cron> <timeout-minutes> <win-start-s> <win-len-s> -> covered|outside|not-daily
@@ -498,7 +513,7 @@ eq "B37b N3 the redeploy poll skips web-platform-release.yml and apply-deploy-pi
   "$(swap_probe "$BODY" | grep -c 'apply-web-platform-infra.yml' || true)|$(grep -c 'routine .apply. job in apply-web-platform-infra.yml is enrolled' "$PARITY")" '0|1'
 bud2_of() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_KB_BUDGET_APPLY_S $KK_KB_BUDGET_PREAPPLY_S $KK_RECHECK_STEP_S $KK_REDEPLOY_JOB_S"' _ "$1"; }
 RECHECK_MIN="$(wq '.jobs.redeploy.steps[] | select(.id == "recheck") | ."timeout-minutes"')"
-eq "B31b N12 the kb_drift window budgets include the Re-checks step: apply 8100 s (2400 + 600 + 5100), pre-apply 6900 s (900 + 300 + 600 + 5100), the step is 600 s = the workflow's 10 minutes, the redeploy job 6300 s" "$(bud2_of "$BODY")|$RECHECK_MIN" '8100 6900 600 6300|10'
+eq "B31b N12 the kb_drift window budgets include the Re-checks step: apply 8100 s (2400 + 600 + 5100), pre-apply 6900 s (900 + 300 + 600 + 5100), the step is 600 s = the workflow's 10 minutes, the redeploy job 7200 s (6300 + the 900 s vector leg)" "$(bud2_of "$BODY")|$RECHECK_MIN" '8100 6900 600 7200|10'
 rd_probe() { env -i PATH="$PATH" bash -c 'source "$1"; echo "$KK_REDEPLOY_WAIT_S $KK_REDEPLOY_ITER_S $KK_GH_POLL_S"' _ "$1"; }
 rd_fits() { local w i g; read -r w i g <<<"$(rd_probe "$1")"; echo "$w $i $g $(( w + i <= RECHECK_MIN * 60 ? 1 : 0 ))"; }
 eq "B38 N6 the redeploy wait (480 s) plus one poll iteration (five run lists at the 20 s cap = 100 s) fits the Re-checks step's 10-minute timeout" "$(rd_fits "$BODY")" '480 100 20 1'
@@ -506,7 +521,7 @@ eq "B38 N6 the redeploy wait (480 s) plus one poll iteration (five run lists at 
 printf '\n=== C0. --print-contract: offline, credential-free, fast ===\n'
 T0=$SECONDS
 PC_OUT="$(env -i PATH=/usr/bin:/bin bash "$BODY" --print-contract 2>&1)"; PC_RC=$?
-eq "C0.1 --print-contract exits 0 under an empty environment, prints the header and 35 snake_case tokens, one per line, within 15 s" "$PC_RC|$(tail -n +2 <<<"$PC_OUT" | grep -Ec '^[a-z][a-z0-9]*(_[a-z0-9]+)+$')|$(( SECONDS - T0 < 15 ? 1 : 0 ))" '0|35|1'
+eq "C0.1 --print-contract exits 0 under an empty environment, prints the header and 37 snake_case tokens, one per line, within 15 s" "$PC_RC|$(tail -n +2 <<<"$PC_OUT" | grep -Ec '^[a-z][a-z0-9]*(_[a-z0-9]+)+$')|$(( SECONDS - T0 < 15 ? 1 : 0 ))" '0|37|1'
 
 # ---------------------------------------------------------------------------------------------------------------------------
 printf '\n=== C. behaviour against stubs: the world ===\n'
@@ -529,6 +544,17 @@ make_world() {
     printf '%s' "${OLD_PFX}-${p}-${c}-${n}" > "$d/state/copy_${p}_${c}_${n}"
   done <<<"$COPIES_LIT"
   printf '[{"name":"action-required"},{"name":"owner_step_pending"}]' > "$d/state/labels.json"
+  # the live environment verify (kk_chk_approval): protected by default; scenarios overwrite for unprotected arms
+  printf '%s' '{"protection_rules":[{"type":"required_reviewers","reviewers":[{"type":"User","reviewer":{"login":"rev-user","id":54279}}]},{"type":"branch_policy"}]}' > "$d/state/env_protection.json"
+  # the deployment-branch-policies endpoint: main-only by default
+  printf '%s' '{"count":1,"branch_policies":[{"id":1,"name":"main","type":"branch"}]}' > "$d/state/env_policies.json"
+  # the PREVIOUS secret exists (created by the merge apply, value ""); the apply-A replace fills it, the clear empties it
+  : > "$d/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"
+  printf '%s' "${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN" > "$d/state/old_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN"
+  # the vector leg's per-host frames (stale: start_ts 1, the previous component)
+  printf '%s' '10.0.1.10' > "$d/state/vself"
+  printf '{"component":"web-platform","reason":"ok","start_ts":1,"exit_code":0}\n' > "$d/state/vframe_10.0.1.10"
+  printf '{"component":"web-platform","reason":"ok","start_ts":1,"exit_code":0}\n' > "$d/state/vframe_10.0.1.11"
   cat > "$d/bin/adv" <<'SH'
 #!/usr/bin/env bash
 echo "sleep $1" >> "$STUB/sleep.log"
@@ -602,6 +628,7 @@ copy_of() { case "$1" in # address -> project_config_name (the file stem)
   doppler_secret.kb_drift_ingest_signing_key) echo soleur_prd_kb_drift_walker_KB_DRIFT_INGEST_SIGNING_KEY ;;
   doppler_secret.kb_drift_ingest_signing_key_app_runtime) echo soleur_prd_KB_DRIFT_INGEST_SIGNING_KEY ;;
   doppler_secret.egress_audit_ingest_token) echo soleur_prd_EGRESS_AUDIT_INGEST_TOKEN ;;
+  doppler_secret.egress_audit_ingest_token_previous) echo soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS ;;
   doppler_secret.github_app_webhook_secret) echo soleur_prd_GITHUB_APP_WEBHOOK_SECRET ;;
 esac; }
 sub="$1"; shift
@@ -690,6 +717,15 @@ case "$sub" in
           if [[ -f "$S/lag_reads" ]]; then printf '%s' "$old" > "$S/old_$stem"; cp "$S/lag_reads" "$S/lag_$stem"; fi
         done
       done < "$def"
+      # a directly-replaced doppler_secret whose parent is NOT replaced (the egress PREVIOUS row) takes the TF_VAR-fed
+      # value: the old CURRENT at apply-A, "" at the clear (the var default)
+      for a in $(grep '^R doppler_secret' "$def" | cut -d' ' -f2 | sort -u); do
+        par="$(parent_of "$a")"
+        grep -q "^R $par\$" "$def" && continue
+        stem="$(copy_of "$a")"
+        [[ -f "$S/apply_skip_$a" ]] && continue
+        printf '%s' "${TF_VAR_egress_audit_ingest_token_previous:-}" > "$S/copy_$stem"
+      done
     fi
     for f in "$S"/apply_dropcopy_*; do [[ -f "$f" ]] || continue; rm -f "$S/copy_$(copy_of "${f##*/apply_dropcopy_}")"; done
     [[ -f "$S/post_get_fail" ]] && for a in $(grep '^[TR] doppler_secret' "$def" | cut -d' ' -f2 | sort -u); do echo 1 > "$S/get_rc_$(copy_of "$a")"; done
@@ -723,6 +759,17 @@ echo "gh $*" >> "$STUB/gh.log"
 S="$STUB/state"
 refuse() { echo "gh REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 arg_after() { local k="$1" prev=""; shift; for a in "$@"; do [[ "$prev" == "$k" ]] && { printf '%s' "$a"; return 0; }; prev="$a"; done; return 1; }
+if [[ "$1" == api ]]; then # the environment live verify (no --repo flag; the paths are exact)
+  case "$*" in
+    "api repos/acme/repo/environments/key-rotate-approval")
+      [[ -f "$S/env_api_rc" ]] && exit "$(cat "$S/env_api_rc")"
+      cat "$S/env_protection.json"; exit 0 ;;
+    "api repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies"|"api --paginate repos/acme/repo/environments/key-rotate-approval/deployment-branch-policies")
+      [[ -f "$S/env_pol_api_rc" ]] && exit "$(cat "$S/env_pol_api_rc")"
+      cat "$S/env_policies.json"; exit 0 ;;
+    *) refuse "$@" ;;
+  esac
+fi
 [[ "$(arg_after --repo "$@")" == acme/repo ]] || refuse "$@"
 case "$1 $2" in
   "run list")
@@ -764,6 +811,37 @@ case "$1 $2" in
   *) refuse "$@" ;;
 esac
 exit 0
+SH
+  cat > "$d/bin/curl" <<'SH'
+#!/usr/bin/env bash
+# STRICT: GET */hooks/deploy-status and POST */hooks/deploy only. The merged status is composed from per-host frames:
+#   state/vself           the responding host's ip;  state/vframe_<ip>  one JSON frame per host
+#   state/vskip_<ip>      when present, a "restart vector" POST does NOT update this host's frame
+cat >/dev/null 2>&1 || true   # the --config - channel (stdin)
+S="$STUB/state"; method=GET; out=""; data=""; url=""
+prev=""; for a in "$@"; do case "$prev" in -X) method="$a" ;; -o) out="$a" ;; -d|--data-binary) data="$a" ;; esac; [[ "$a" == http* ]] && url="$a"; prev="$a"; done
+echo "curl $method $url" >> "$STUB/curl.log"
+refuse() { echo "curl REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
+emit() { [[ -n "$out" ]] && printf '%s' "$2" > "$out"; printf '%s' "$1"; }
+compose() {
+  local self base ip f pj
+  self="$(cat "$S/vself")"; base="$(cat "$S/vframe_$self")"; pj='{}'
+  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"; [[ "$ip" == "$self" ]] && continue; pj="$(jq -c --arg ip "$ip" --argjson fr "$(cat "$f")" '. + {($ip): $fr}' <<<"$pj")"; done
+  jq -nc --argjson base "$base" --argjson pj "$pj" '$base + {peers: $pj}'
+}
+if [[ "$method" == POST && "$url" == */hooks/deploy ]]; then
+  [[ "$(jq -r '.command // ""' <<<"$data")" == "restart vector _ _" ]] || refuse "$@"
+  echo "webhook restart-vector peers=$(jq -r '.peers // ""' <<<"$data")" >> "$STUB/webhook.log"
+  [[ -f "$S/post_rc" ]] && exit "$(cat "$S/post_rc")"
+  ts="$(cat "$S/now")"
+  for f in "$S"/vframe_*; do ip="${f##*/vframe_}"; [[ -f "$S/vskip_$ip" ]] && continue; printf '{"component":"vector","reason":"success","start_ts":%s,"exit_code":0}\n' "$ts" > "$f"; done
+  printf '202'; exit 0
+fi
+if [[ "$method" == GET && "$url" == */hooks/deploy-status ]]; then
+  [[ -f "$S/status_rc" ]] && { printf '%s' "$(cat "$S/status_rc")"; exit 0; }
+  emit 200 "$(compose)"; exit 0
+fi
+refuse "$@"
 SH
   cat > "$d/bin/track.sh" <<'SH'
 #!/usr/bin/env bash
@@ -832,8 +910,7 @@ run_script() {
   echo x >> "$TMP/runs.cnt"; LAST_LABEL="$sub"
   : > "$D/gh_output"; : > "$D/summary"
   # The apply job refuses the three approval-gated keys (approval_environment_missing, M7) on the real tree. Every apply scenario that is
-  # not ABOUT that rung runs the LIFTED tree (the one-line flag the #11923 PR flips) for those keys; NOLIFT=1 keeps the real tree.
-  if [[ "$sub" == apply && "$RT" == "$RT_REAL" && -z "${NOLIFT:-}" && " $* " =~ \ EFF_KEY=(inngest_manual_trigger_secret_prd|kb_drift_ingest_signing_key|github_webhook_secret)\  ]]; then rt_use="$RT_LIFT"; fi
+
   # shellcheck disable=SC2086
   OUT="$(env -i PATH="$D/bin:$PATH" HOME="$D" STUB="$D" TMPDIR="$D/rt" RUNNER_TEMP="$D/rt" \
     KR_NOW="cat $D/state/now" KR_SLEEP="$D/bin/adv" KR_TRACK="$D/bin/track.sh" KR_INFRA_DIR="$D/infra" \
@@ -922,9 +999,21 @@ fresh; guard_row C2.9g "a confirm typed for another key on the right date" confi
 fresh; guard_row C2.9h "a confirm without the key (the old form)" confirm_mismatch "$DEVK" "INPUT_CONFIRM=ROTATE-$TODAY"
 fresh; guard_row C2.10 "quiet_window=false" quiet_window_missing "$DEVK" INPUT_QUIET_WINDOW=false
 fresh; guard_row C2.11 "GH_TOKEN missing (the run-list reads need it)" credential_absent "$DEVK" GH_TOKEN=
-fresh; guard_row C2.12 "egress_audit_ingest_token cannot be rotated (no Vector restart lever without SSH, #11920)" egress_rotate_unsupported_no_vector_restart_lever egress_audit_ingest_token
-for k in inngest_manual_trigger_secret_prd kb_drift_ingest_signing_key github_webhook_secret; do fresh; guard_row C2.13 "$k needs the reviewer-gated environment (#11923)" approval_environment_missing "$k"; done
-for k in inngest_manual_trigger_secret_dev inngest_signing_key_dev inngest_event_key_dev; do fresh; run_g guard g_rotate "$k"; guard_pass && ok "C2.14 the dev key $k is NOT subject to approval_environment_missing" || bad "C2.14 $k refused: $(verdict_of)"; done
+fresh; run_g guard g_rotate egress_audit_ingest_token; guard_pass && ok "C2.12 egress_audit_ingest_token is rotatable now (the no-SSH vector restart lever landed, #11920)" || bad "C2.12 egress refused: $(verdict_of)"
+fresh; run_g guard g_rotate egress_audit_ingest_token; guard_pass && ok "C2.12b a protected key-rotate-approval environment passes the live verify" || bad "C2.12b refused: $(verdict_of)"
+fresh; set_state env_protection.json '{"protection_rules":[{"type":"branch_policy"}]}'; guard_row C2.12c "a branch-policy-only environment (no required_reviewers) is unprotected" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_protection.json '{"protection_rules":[{"type":"required_reviewers"}]}'; guard_row C2.12d "a reviewers-only environment (no branch policy) is unprotected" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_api_rc 1; guard_row C2.12e "the environment API read fails (fail closed)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_protection.json '{"protection_rules":[{"type":"required_reviewers","reviewers":[]},{"type":"branch_policy"}]}'; guard_row C2.12f "a required_reviewers rule with an EMPTY reviewer list (type-presence is not protection)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":2,"branch_policies":[{"id":1,"name":"main","type":"branch"},{"id":2,"name":"release/*","type":"branch"}]}'; guard_row C2.12g "a deployment branch policy that admits a non-main ref" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":1,"branch_policies":[{"id":1,"name":"v1.0","type":"tag"}]}'; guard_row C2.12h "a deployment branch policy that admits a TAG instead of main" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_pol_api_rc 1; guard_row C2.12i "the deployment-branch-policies read fails (fail closed)" approval_environment_unprotected egress_audit_ingest_token
+fresh; set_state env_policies.json '{"count":0,"branch_policies":[]}'; guard_row C2.12j "an EMPTY branch policy list (main is not even allowed)" approval_environment_unprotected egress_audit_ingest_token
+for k in inngest_manual_trigger_secret_prd kb_drift_ingest_signing_key github_webhook_secret; do
+  fresh; set_state env_protection.json '{"protection_rules":[]}'; guard_row C2.13 "$k on an unprotected key-rotate-approval environment (#11923)" approval_environment_unprotected "$k"
+  fresh; run_g guard g_rotate "$k"; guard_pass && ok "C2.13b $k passes with the protected environment" || bad "C2.13b $k refused: $(verdict_of)"
+done
+for k in inngest_manual_trigger_secret_dev inngest_signing_key_dev inngest_event_key_dev; do fresh; run_g guard g_rotate "$k"; guard_pass && ok "C2.14 the dev key $k passes the live environment verify" || bad "C2.14 $k refused: $(verdict_of)"; done
 # the later rungs of the three gated keys are reached through a LIFTED tree (the one-line flag the #11923 PR flips)
 LIFT_BODY="$TMP/lift-key-rotate.sh"
 mutate_file() { # out-file src anchor replacement [func-name]: a landing-checked exact-once edit; prints nothing on success, a reason on failure
@@ -946,9 +1035,11 @@ PY
 }
 MUT_FAIL=""
 mut_ok() { local why; why="$(mutate_file "$@")" || { MUT_FAIL="$MUT_FAIL [$1: $why]"; bad "mutation did not land: $(basename "$1")" "$why"; return 1; }; }
-mut_ok "$LIFT_BODY" "$BODY" 'KK_APPROVAL_ENV_BOUND=false' 'KK_APPROVAL_ENV_BOUND=true'
+cp "$BODY" "$LIFT_BODY"
 RT_LIFT="$TMP/rt-lift"; mk_tree "$RT_LIFT" "$LIFT_BODY"
-eq "B35b control: the lifted copy (the flag flipped to true, the workflow unchanged) violates the B35 pin" "$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "$KK_APPROVAL_ENV_BOUND"' _ "$RT_LIFT/scripts/key-rotate.sh")|$(wq '.jobs.apply.environment')" 'true|infra-privileged'
+sed 's/^KK_APPROVAL_ENV_BOUND=true$/KK_APPROVAL_ENV_BOUND=false/' "$BODY" > "$TMP/unbound-key-rotate.sh"
+RT_UNBOUND="$TMP/rt-unbound"; mk_tree "$RT_UNBOUND" "$TMP/unbound-key-rotate.sh"
+eq "B35b control: a copy with the flag flipped back to false violates the B35 pin" "$(env -i PATH="$PATH" bash -c 'source "$1"; printf "%s" "$KK_APPROVAL_ENV_BOUND"' _ "$RT_UNBOUND/scripts/key-rotate.sh")|$(wq '.jobs.apply.environment')" 'false|infra-privileged'
 fresh; run_g guard g_rotate github_webhook_secret; RT="$RT_LIFT" run_g guard g_rotate github_webhook_secret
 guard_pass && ok "C2.15 the lifted tree passes the approval rung (the flag is the only difference) for the webhook secret" || bad "C2.15 lifted tree: $(verdict_of)"
 fresh; RT="$RT_LIFT" guard_row C2.16 "github_webhook_secret without webhook_patch_ready" webhook_patch_not_ready github_webhook_secret INPUT_WEBHOOK_PATCH_READY=false
@@ -1014,10 +1105,11 @@ eq "C3.3b an inngest_* key replaces BOTH the random_id and the secret (the obser
 fresh; run_g apply a_env rotate github_webhook_secret
 eq "C3.3c github_webhook_secret: the plan replaces the random_id only (the secret updates in place, no absent window)" "$(grep '^plan ' "$D/tf.log" | grep -oE 'R (random_id|doppler_secret)\.[a-z_]+' | wc -l | tr -d ' ')" '1'
 fresh; run_g apply a_env rotate egress_audit_ingest_token
-eq "C3.4 egress_audit_ingest_token rotate is refused at apply too (defense in depth), nothing applied" "$RC|$(verdict_of)|$(tfapplied)" '1|egress_rotate_unsupported_no_vector_restart_lever|0'
-for k in inngest_manual_trigger_secret_prd $KB github_webhook_secret; do
-  fresh; NOLIFT=1 run_g apply a_env rotate "$k"
-  eq "C3.4b $k: approval_environment_missing is repeated at apply on the REAL tree (defense in depth, like the egress rung), no Terraform call, no write_started" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)|$(out_of write_started)|$(refusals)" '1|approval_environment_missing|0||0'
+eq "C3.4 egress_audit_ingest_token applies: the plan replaces the random_id AND the PREVIOUS row (2 -replace)" "$(grep '^plan ' "$D/tf.log" | grep -oE 'R (random_id|doppler_secret)\.[a-z_]+' | wc -l | tr -d ' ')|$RC|$(tfapplied)" '2|0|1'
+eq "C3.4aa apply-A staged the old CURRENT into PREVIOUS (the CURRENT+PREVIOUS grace window)" "$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" "$(cat "$D/state/old_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN")"
+for k in inngest_manual_trigger_secret_prd $KB github_webhook_secret egress_audit_ingest_token; do
+  fresh; set_state env_protection.json '{"protection_rules":[]}'; run_g apply a_env rotate "$k"
+  eq "C3.4b $k: approval_environment_unprotected is repeated at apply on the REAL tree (defense in depth), no Terraform call, no write_started" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)|$(out_of write_started)|$(refusals)" '1|approval_environment_unprotected|0||0'
 done
 fresh; run_g apply a_env rotate tunnel_secret
 eq "C3.4c kk_valid_inputs at apply: a key outside the seven (an API dispatch bypasses the choice list) refuses inputs_invalid before any Terraform call" "$RC|$(verdict_of)|$(nlog "$D/tf.log" .)" '1|inputs_invalid|0'
@@ -1078,8 +1170,9 @@ plan_would() { # id desc want key setup [VAR=val ...]
   eq "$id R2 $desc" "$RC|$(verdict_of)|$(grep -o 'rotate_would_refuse=[a-z_]*' <<<"$OUT" | head -1)|$(grep -c 'verdict=plan_ok .*rotate_would_refuse=[a-z_]*$' <<<"$OUT")" "0|plan_ok|rotate_would_refuse=$want|1"
 }
 plan_would C3.15 "a dev key with nothing in the way reports none" none "$DEVK" :
-plan_would C3.15b "egress_audit_ingest_token reports its refusal token (plan stays exit 0)" egress_rotate_unsupported_no_vector_restart_lever egress_audit_ingest_token :
-NOLIFT=1 plan_would C3.15c "a prd key reports approval_environment_missing on the real tree" approval_environment_missing inngest_manual_trigger_secret_prd :
+plan_would C3.15b "egress_audit_ingest_token reports none on a protected environment (rotatable now)" none egress_audit_ingest_token :
+fresh; set_state env_protection.json '{"protection_rules":[]}'; mapfile -t _e < <(a_env plan egress_audit_ingest_token); run_script apply "${_e[@]}"; eq "C3.15bb egress reports approval_environment_unprotected on an unprotected environment" "$(grep -o 'rotate_would_refuse=[a-z_]*' <<<"$OUT" | head -1)" rotate_would_refuse=approval_environment_unprotected
+fresh; set_state env_protection.json '{"protection_rules":[]}'; mapfile -t _e < <(a_env plan inngest_manual_trigger_secret_prd); run_script apply "${_e[@]}"; eq "C3.15c a prd key reports approval_environment_unprotected on an unprotected environment" "$(grep -o 'rotate_would_refuse=[a-z_]*' <<<"$OUT" | head -1)" rotate_would_refuse=approval_environment_unprotected
 plan_would C3.15d "kb_drift at 02:50 UTC reports kb_drift_cron_window" kb_drift_cron_window "$KB" st_now_0250 EFF_GUARD_EPOCH="$(at 02:50:00)"
 plan_would C3.15e "a related run in flight reports run_in_flight" run_in_flight "$DEVK" st_rel_inflight
 plan_would C3.15f "N9 a guard epoch older than 60 minutes is NOT evaluated by plan (it would measure the plan run's own guard age): reports none" none "$DEVK" : EFF_GUARD_EPOCH=$((NOW0 - 3601))
@@ -1204,7 +1297,7 @@ eq "C5.6c apply_failed with an unchanged copy is still apply_failed (not value_u
 fresh; touch_state apply_noeffect; touch_state "apply_dropcopy_doppler_secret.$DEVK"; run_g apply a_env rotate "$DEVK"
 eq "C5.6d precedence: an absent copy outranks an unchanged one (partial_absent_state before value_unchanged)" "$(verdict_of)" 'partial_absent_state'
 eq "C5.6e M8 a single-copy key with its copy absent: the recovery rotate IS the way out and the sentence says so; it never claims no consumer is affected" "$(grep -c 'run the recovery rotate now' <<<"$OUT")|$(grep -c 'No production consumer' <<<"$OUT")" '1|0'
-declare -A CONSEQ=([inngest_manual_trigger_secret_dev]='no production container reads soleur/dev' [inngest_manual_trigger_secret_prd]='old containers answer 401 on /api/internal' [inngest_signing_key_dev]='a dev server started while the copy is absent' [inngest_event_key_dev]='a dev server started while the copy is absent' [kb_drift_ingest_signing_key]='03:00 UTC kb-drift walker run is rejected' [github_webhook_secret]='GitHub does not retry')
+declare -A CONSEQ=([inngest_manual_trigger_secret_dev]='no production container reads soleur/dev' [inngest_manual_trigger_secret_prd]='old containers answer 401 on /api/internal' [inngest_signing_key_dev]='a dev server started while the copy is absent' [inngest_event_key_dev]='a dev server started while the copy is absent' [kb_drift_ingest_signing_key]='03:00 UTC kb-drift walker run is rejected' [github_webhook_secret]='GitHub does not retry' [egress_audit_ingest_token]='still accepts the old token through PREVIOUS')
 for k in $ROTATABLE; do
   fresh; set_state apply_rc 1; run_g apply a_env rotate "$k"
   eq "C5.7 M1+M3 $k: the apply_failed stop sentence keeps confirm=ROTATE-<KEY>-YYYY-MM-DD intact (the command is appended after the scrub), carries no <token-redacted>, names this key's consequence and never claims no consumer is affected" \
@@ -1365,6 +1458,68 @@ eq "C8.7 NO-STREAM: no run so far leaked a key-shaped string into stdout, stderr
 [[ "$(wc -c < "$STREAMS")" -gt 20000 && "$(grep -c 'key-rotate verdict=' "$STREAMS")" -gt 50 ]] && ok "C8.8 the scanner saw real traffic (floor: > 20 kB of streams and > 50 verdict lines)" || bad "C8.8 scanner floor: $(wc -c < "$STREAMS") bytes"
 
 # ---------------------------------------------------------------------------------------------------------------------------
+printf '\n=== C9. the reviewer gate, the vector restart leg and the PREVIOUS clear (egress, #11923/#11920) ===\n'
+
+eq "C9.1 the approve job binds key-rotate-approval, holds no secrets and stamps approval_epoch" \
+  "$(wq '.jobs.approve.environment')|$(wq '[.jobs.approve.steps[].env // {} | keys] | add')|$(wq '.jobs.approve.outputs.approval_epoch')" \
+  'key-rotate-approval|[]|${{ steps.approve.outputs.approval_epoch }}'
+eq "C9.1b apply needs approve; EFF_GUARD_EPOCH comes from the approval stamp for rotate (guard_epoch stays the plan fallback)" \
+  "$(wqc '.jobs.apply.needs')|$(wq '.jobs.apply.steps[] | select(.id == "apply") | .env.EFF_GUARD_EPOCH')" \
+  '["guard","approve"]|${{ needs.approve.outputs.approval_epoch || needs.guard.outputs.guard_epoch }}'
+
+VEC_ENV=(EFF_MODE=rotate EFF_KEY=egress_audit_ingest_token WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11 WEBHOOK_DEPLOY_SECRET=fx CF_ACCESS_CLIENT_ID=fx CF_ACCESS_CLIENT_SECRET=fx)
+fresh; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.2 the vector leg dispatches restart vector _ _ over the webhook and confirms every host on a fresh component=vector success frame" \
+  "$RC|$(grep -c 'webhook restart-vector peers=10.0.1.10,10.0.1.11' "$D/webhook.log")" '0|1'
+fresh; touch_state "vskip_10.0.1.11"; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.3 a host that never reports a fresh frame keeps the leg non-green (the clear job never runs on this path)" \
+  "$RC|$(grep -c 'PREVIOUS stays set' <<<"$OUT")" '1|1'
+fresh; set_state post_rc 1; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.3b a rejected webhook dispatch fails the leg" "$RC" '1'
+fresh; set_state status_rc 503; run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.3c an unreadable baseline fails closed" "$RC" '1'
+fresh; run_script "redeploy vector" "${VEC_ENV[@]/egress_audit_ingest_token/inngest_signing_key_dev}"
+eq "C9.3d the vector leg refuses a non-egress key" "$RC|$(verdict_of)" '1|internal_error'
+
+fresh; printf 'stale-previous-value' > "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; run_g clear a_env rotate egress_audit_ingest_token
+eq "C9.4 the clear replaces PREVIOUS with the var default and verifies it reads empty" \
+  "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")|$(tfapplied)" '0|rotate_ok||1'
+fresh; printf 'stale-previous-value' > "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; touch_state apply_noeffect; run_g clear a_env rotate egress_audit_ingest_token
+eq "C9.4b a clear that leaves PREVIOUS populated reports previous_not_cleared" \
+  "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" '1|previous_not_cleared|stale-previous-value'
+fresh; run_g clear a_env rotate inngest_signing_key_dev
+eq "C9.4c the clear refuses a non-egress key" "$RC|$(verdict_of)" '1|internal_error'
+
+fresh; run_g apply a_env rotate egress_audit_ingest_token
+CUR="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN")"; PRV="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")"
+eq "C9.5 apply-A: CURRENT is new and PREVIOUS carries the old CURRENT" \
+  "$([[ "$CUR" != "${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN" ]] && echo new)|$PRV" "new|${OLD_PFX}-soleur-prd-EGRESS_AUDIT_INGEST_TOKEN"
+# the post-apply PREVIOUS verify (P2-3): apply-A staged nothing or the wrong value -> previous_not_staged, apply still counted done
+fresh; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous"; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5d an apply that leaves PREVIOUS empty reports previous_not_staged (the old token is accepted nowhere - the lossy direction), not a green apply" \
+  "$RC|$(verdict_of)|$(tfapplied)|$(grep -c 'accepted nowhere' <<<"$OUT")" '1|previous_not_staged|1|2'
+fresh; printf 'stale-previous-value' > "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous"; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5e an apply that leaves a STALE value in PREVIOUS (not the staged old CURRENT) reports previous_not_staged" \
+  "$RC|$(verdict_of)" '1|previous_not_staged'
+fresh; touch_state "apply_skip_doppler_secret.egress_audit_ingest_token_previous" "get_rc_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"; set_state "get_rc_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS" 1; run_g apply a_env rotate egress_audit_ingest_token
+eq "C9.5f an unreadable PREVIOUS read-back is post_hash_unreadable (the value is unknown, not unstaged)" \
+  "$RC|$(verdict_of)" '1|post_hash_unreadable'
+fresh; run_g notify n_env egress_audit_ingest_token rotate failure true previous_not_staged skipped ""
+eq "C9.5g notify on a failed apply with verdict previous_not_staged files the action-required issue" \
+  "$RC|$(cut -d'|' -f1 "$D/issues_created.log" 2>/dev/null | grep -c previous_not_staged)" '0|1'
+run_script "redeploy vector" "${VEC_ENV[@]}"
+eq "C9.5b the vector leg confirms every host after the redeploy" "$RC" '0'
+run_g clear a_env rotate egress_audit_ingest_token
+eq "C9.5c the clear empties PREVIOUS and reports rotate_ok" \
+  "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" '0|rotate_ok|'
+fresh; run_g notify n_env egress_audit_ingest_token rotate success true "" success vector_restarted EFF_RESULT_CLEAR=success EFF_CLEAR_VERDICT=rotate_ok
+eq "C9.6 notify on the green egress sequence closes earlier issues and files none" \
+  "$RC|$(nlog "$D/issues_created.log" .)|$(nlog "$D/issues_closed.log" .)" '0|0|0'
+fresh; run_g notify n_env egress_audit_ingest_token rotate success true "" success vector_restarted EFF_RESULT_CLEAR=failure EFF_CLEAR_VERDICT=previous_not_cleared
+eq "C9.6b notify on a failed clear files previous_not_cleared" "$RC|$(cut -d'|' -f1 "$D/issues_created.log" 2>/dev/null | grep -c previous_not_cleared)" '0|1'
+fresh; run_g notify n_env egress_audit_ingest_token rotate success true "" failure rotated_redeploy_failed EFF_RESULT_CLEAR=skipped
+eq "C9.6c notify on a failed vector leg files rotated_redeploy_failed" "$RC|$(cut -d'|' -f1 "$D/issues_created.log" 2>/dev/null | grep -c rotated_redeploy_failed)" '0|1'
+
 printf '\n=== D. mutations: each guard is removed in a COPY; the scenario that depends on it must change ===\n'
 # scenario(script_path -> RT tree): run once against the REAL tree (expect the literal "stops" outcome) and once against a mutated
 # COPY made by a landing-checked edit (exactly-once anchor, bash -n, inside the target function); the mutant's outcome is a literal too, so
@@ -1393,7 +1548,7 @@ MUT_N=0
 # V4: the two clauses the other controls leave unguarded. guard_row's `go == false` and gate_row's `-z write_started` each get a tree that gets
 # the VERDICT right but breaks only that clause (go=true on a refusal; a write_started marker on a refusal), built outside the subshell.
 mt ctlgo body $'  kr_out go false\n  kk_chk_ref || return 1' $'  kr_out go true\n  kk_chk_ref || return 1' kk_cmd_guard; RT_CTL_GO="$MT_TREE"
-mt ctlws body $'  kk_pre_state || return 1\n  kk_gate_plan "$key" p || return 1\n' $'  kk_pre_state || return 1\n  kr_out write_started true\n  kk_gate_plan "$key" p || return 1\n' kk_cmd_apply; RT_CTL_WS="$MT_TREE"
+mt ctlws body $'  kk_pre_state || return 1\n  [[ "$key" == egress_audit_ingest_token ]] && { kk_egress_previous_feed || return 1; }\n  kk_gate_plan "$key" p || return 1\n' $'  kk_pre_state || return 1\n  [[ "$key" == egress_audit_ingest_token ]] && { kk_egress_previous_feed || return 1; }\n  kr_out write_started true\n  kk_gate_plan "$key" p || return 1\n' kk_cmd_apply; RT_CTL_WS="$MT_TREE"
 ctl_guard_row_go() { RT="$RT_CTL_GO"; fresh; guard_row CTL4 "ctl" confirm_mismatch "$DEVK" INPUT_CONFIRM=; }   # right verdict, but go=true on the refusal
 ctl_gate_row_ws() { RT="$RT_CTL_WS"; gate_row CTL4 "ctl" plan_gate_refused "$DEVK" st_extra; }   # right verdict, but a write_started marker on the refusal
 ctl_report "guard_row() with go=true on a refusal" "$(ctl_moves_fail ctl_guard_row_go)"
@@ -1409,6 +1564,9 @@ sc_confirm() { case "$1" in
   other) sc_guard "$DEVK" "INPUT_CONFIRM=ROTATE-$(UPPER inngest_signing_key_dev)-$TODAY" ;; esac; }
 sc_actor() { local a="$1"; [[ "$a" == BOT ]] && a='x[bot]'; [[ "$a" == EMPTY ]] && a=''; sc_guard "$DEVK" "GITHUB_ACTOR=$a" "GITHUB_TRIGGERING_ACTOR=$a"; }
 sc_apply() { local k="$1" setup="$2"; shift 2; fresh; "$setup"; mapfile -t _e < <(a_env rotate "$k"); run_script apply "${_e[@]}" "$@"; a_out; }
+sc_guard_unprot() { local k="$1"; fresh; set_state env_protection.json '{"protection_rules":[]}'; mapfile -t _b < <(g_rotate "$k"); run_script guard "${_b[@]}"; v; }
+sc_apply_unprot() { local k="$1"; fresh; set_state env_protection.json '{"protection_rules":[]}'; mapfile -t _e < <(a_env rotate "$k"); run_script apply "${_e[@]}"; a_out; }
+sc_would_unprot() { local k="$1"; fresh; set_state env_protection.json '{"protection_rules":[]}'; mapfile -t _e < <(a_env plan "$k"); run_script apply "${_e[@]}"; grep -o 'rotate_would_refuse=[a-z_]*' <<<"$OUT" | head -1; }
 sc_apply_tf() { sc_apply "$@"; printf ':tf%s' "$(nlog "$D/tf.log" '^terraform ')"; }
 sc_obs() { fresh; mapfile -t _e < <(a_env rotate "$DEVK"); run_script apply "${_e[@]}"; grep -o 'proj=[0-9]' "$D/apply_obs.log" | head -1; }
 sc_redeploy_recheck() { fresh; mapfile -t _e < <(r_env "$1"); [[ -n "${2:-}" && "$2" != NONE ]] && set_state now "$(at "$2")"; run_script "redeploy recheck" "${_e[@]}" "${@:3}"; [[ "$RC" == 0 ]] && printf passed || printf '%s' "$(v)"; }
@@ -1493,10 +1651,8 @@ sc_ref() { sc_guard "$DEVK" GITHUB_REF=refs/heads/feature INPUT_MODE=apply; }
 M D3.4a "remove ref_refused from the guard: another rung answers first" "sc_ref" body ref_refused inputs_invalid $'  kr_out go false\n  kk_chk_ref || return 1\n' $'  kr_out go false\n'
 sc_pre_ref() { fresh; run_script precondition GITHUB_REF=refs/heads/feature; v; }
 M D3.4b "remove ref_refused from the precondition step" "sc_pre_ref" body ref_refused rc0 $'  kr_out redaction_ok false\n  kk_chk_ref || return 1\n' $'  kr_out redaction_ok false\n'
-M D3.5a "remove the egress refusal from the guard" "sc_guard egress_audit_ingest_token" body egress_rotate_unsupported_no_vector_restart_lever guard_ok $'    kk_check key_rotatable kk_chk_egress || return 1\n' ''
-for k in inngest_manual_trigger_secret_prd $KB github_webhook_secret; do
-  M "D3.5b" "remove approval_environment_missing: $k proceeds" "sc_guard $k" body approval_environment_missing guard_ok $'    kk_check approval_environment_bound kk_chk_approval || return 1\n' ''
-done
+M D3.5a "remove the approval-environment live verify from the guard: an unprotected env proceeds" "sc_guard_unprot egress_audit_ingest_token" body approval_environment_unprotected guard_ok $'    kk_check approval_environment_bound kk_chk_approval || return 1\n' ''
+M D3.5b "remove the approval rung from apply (an unprotected env proceeds to the write)" "sc_apply_unprot inngest_manual_trigger_secret_prd" body approval_environment_unprotected applied $'    kk_chk_approval "$key" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' ''
 BASE_BODY="$LIFT_BODY"
 sc_webhook_ready() { RT="${RT_X:-$RT}"; sc_guard github_webhook_secret INPUT_WEBHOOK_PATCH_READY=false; }
 mt mw body $'    kk_check webhook_patch_ready kk_chk_webhook_ready || return 1\n' '' && { real="$(RT="$RT_LIFT"; sc_webhook_ready)"; mut="$(RT="$MT_TREE"; sc_webhook_ready)"; [[ "$real" == webhook_patch_not_ready && "$mut" == guard_ok ]] && ok "D3.5c remove webhook_patch_not_ready (lifted tree): the webhook rotate proceeds without the attestation" || bad "D3.5c webhook_patch_ready" "real='$real' mut='$mut'"; }
@@ -1509,7 +1665,7 @@ mt mo body $'  [[ "$key" == github_webhook_secret ]] && { kk_check owner_step_cl
 mt ml body $'  if ! jq -e \'any(.[]; .name == "owner_step_pending")\' <<<"$labels" >/dev/null 2>&1; then' '  if false; then' && { real="$(RT="$RT_LIFT"; sc_label_missing)"; mut="$(RT="$MT_TREE"; sc_label_missing)"; [[ "$real" == owner_step_open && "$mut" == guard_ok ]] && ok "D3.9b delete the label-exists check: a missing label proceeds" || bad "D3.9b label" "real='$real' mut='$mut'"; }
 BASE_BODY=""
 BASE_BODY="$LIFT_BODY"
-M D3.6a "an unknown subcommand falls through to success (the '0 checked and green' mutant)" "sc_main bogus" body rc64 rc0 $'    *) printf \'usage: %s --print-contract|precondition|guard|apply|redeploy recheck|track|verdict|notify\\n\' "${0##*/}" >&2; return 64 ;;' '    *) return 0 ;;' main
+M D3.6a "an unknown subcommand falls through to success (the '0 checked and green' mutant)" "sc_main bogus" body rc64 rc0 $'    *) printf \'usage: %s --print-contract|precondition|guard|apply|redeploy recheck|track|vector|verdict|clear|notify\\n\' "${0##*/}" >&2; return 64 ;;' '    *) return 0 ;;' main
 M D3.6b "an empty mode is accepted (rotate-only checks are skipped as if it were plan)" "sc_guard $DEVK INPUT_MODE=" body inputs_invalid guard_ok '  case "${1:-}" in plan|rotate) ;; *) kr_refuse inputs_invalid "mode must be plan or rotate"; return 1 ;; esac' '  case "${1:-}" in plan|rotate) ;; *) ;; esac' kk_valid_inputs
 # reorder: the gate AFTER the apply, observed inside the window
 M D3.7a "REORDER: the gate runs after the apply (the stub apply observes whether the projection existed)" "sc_obs" body "proj=1" "proj=0" $'  kk_gate_plan "$key" p || return 1\n  if [[ "$mode" == plan ]]; then' $'  if [[ "$mode" == plan ]]; then'
@@ -1553,17 +1709,17 @@ BASE_BODY=""
 # --- Review round 1: the guards added by the fix pass. Each mutant is a COPY with one landing-checked edit; the scenario must turn.
 BASE_BODY=""; BASE_SIB=""
 sc_apply_nolift() { NOLIFT=1 sc_apply "$1" st_none; }
-M D5.1 "M7 remove the approval rung from apply (the guard alone would be trusted): a prd rotate dispatched around the guard is applied" "sc_apply_nolift inngest_manual_trigger_secret_prd" body approval_environment_missing applied $'    kk_chk_approval "$key" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }\n' '' kk_cmd_apply
+M D5.1 "M7 neuter kk_chk_approval's live verify (it passes unconditionally): an unprotected env proceeds at the guard" "sc_guard_unprot inngest_manual_trigger_secret_prd" body approval_environment_unprotected guard_ok $'kk_chk_approval() {\n  local out pol\n' $'kk_chk_approval() {\n  return 0\n  local out pol\n' kk_chk_approval
 sc_apply_badkey() { fresh; mapfile -t _e < <(a_env rotate tunnel_secret); run_script apply "${_e[@]}"; a_out; }
 M D5.2 "M2 remove kk_valid_inputs at apply (an API dispatch bypasses the choice list): a key outside the seven reaches the plan" "sc_apply_badkey" body inputs_invalid plan_gate_refused $'  kk_valid_inputs "$mode" "$key" || return 1\n  kr_init || return 1\n  if [[ "$mode" == rotate ]]; then\n    kk_require_attempt || return 1' $'  kr_init || return 1\n  if [[ "$mode" == rotate ]]; then\n    kk_require_attempt || return 1' kk_cmd_apply
 M D5.3 "M2 remove the EFF_MODE==rotate check at the redeploy re-checks: plan passes as if it were a rotate" "sc_redeploy_recheck $DEVK NONE EFF_MODE=plan" body internal_error passed $'  [[ "${EFF_MODE:-}" == rotate ]] || { kr_refuse internal_error "redeploy runs for rotate only"; return 1; }\n' ''
 sc_roster() { fresh; run_script "redeploy track" 'WEB_HOST_PRIVATE_IPS=10.0.1.10,10.0.1.11;x'; printf 'track=%s' "$(nlog "$D/track.log" .)"; }
-M D5.4 "M2 drop the end anchor of the roster pattern: a roster with a trailing non-address calls track.sh" "sc_roster" body "track=0" "track=1" '=~ ^[0-9.]+(,[0-9.]+)*$ ]]' '=~ ^[0-9.]+(,[0-9.]+)* ]]' kk_redeploy_track
+M D5.4 "M2 drop the end anchor of the roster pattern: a roster with a trailing non-address calls track.sh" "sc_roster" body "track=0" "track=1" $'=~ ^[0-9.]+(,[0-9.]+)*$ ]] \\\n    || { kk_say "WEB_HOST_PRIVATE_IPS is unset or malformed; a single-host redeploy' $'=~ ^[0-9.]+(,[0-9.]+)* ]] \\\n    || { kk_say "WEB_HOST_PRIVATE_IPS is unset or malformed; a single-host redeploy' kk_redeploy_track
 sc_nprewrite() { fresh; mapfile -t _e < <(n_env "$DEVK" rotate failure "" "$1" skipped ""); run_script notify "${_e[@]}"; printf 'filed=%s' "$(nlog "$D/issues_created.log" .)"; }
 M D5.5a "M2 run_in_flight dropped from the pre-write list: the commonest refusal files a spurious write-happened issue" "sc_nprewrite run_in_flight" body "filed=0" "filed=1" '|terraform_failed|run_in_flight|run_list_unreadable|' '|terraform_failed|run_list_unreadable|' kk_prewrite_token
-M D5.5b "M2 internal_error dropped from the pre-write list" "sc_nprewrite internal_error" body "filed=0" "filed=1" '|inputs_invalid|internal_error|egress' '|inputs_invalid|egress' kk_prewrite_token
-M D5.5c "M2 the egress refusal dropped from the pre-write list" "sc_nprewrite egress_rotate_unsupported_no_vector_restart_lever" body "filed=0" "filed=1" '|internal_error|egress_rotate_unsupported_no_vector_restart_lever|approval' '|internal_error|approval' kk_prewrite_token
-M D5.5d "M2 approval_environment_missing dropped from the pre-write list" "sc_nprewrite approval_environment_missing" body "filed=0" "filed=1" '|approval_environment_missing) return 0 ;;' ') return 0 ;;' kk_prewrite_token
+M D5.5b "M2 internal_error dropped from the pre-write list" "sc_nprewrite internal_error" body "filed=0" "filed=1" '|inputs_invalid|internal_error|approval' '|inputs_invalid|approval' kk_prewrite_token
+M D5.5c "M2 approval_environment_unprotected dropped from the pre-write list (head anchor)" "sc_nprewrite approval_environment_unprotected" body "filed=0" "filed=1" '|internal_error|approval_environment_unprotected) return 0 ;;' '|internal_error) return 0 ;;' kk_prewrite_token
+M D5.5d "M2 approval_environment_unprotected dropped from the pre-write list (tail anchor)" "sc_nprewrite approval_environment_unprotected" body "filed=0" "filed=1" '|inputs_invalid|internal_error|approval_environment_unprotected) return 0 ;;' '|inputs_invalid|internal_error) return 0 ;;' kk_prewrite_token
 sc_nunknown() { fresh; mapfile -t _e < <(n_env "$DEVK" rotate weird "" "" skipped ""); run_script notify "${_e[@]}"; printf 'filed=%s' "$(nlog "$D/issues_created.log" .)"; }
 M D5.5e "M2 an unknown apply result no longer fails toward filing" "sc_nunknown" body "filed=1" "filed=0" 'case "$ra" in success|cancelled|unknown) wrote=1 ;; esac' 'case "$ra" in success|cancelled) wrote=1 ;; esac' kr_cmd_notify
 sc_nquiet() { fresh; printf '%s' "[{\"number\":7,\"title\":\"key-rotate $DEVK apply_failed (run 9001)\"}]" > "$D/state/issues.json"; mapfile -t _e < <(n_env "$DEVK" rotate failure true apply_failed skipped "" GITHUB_RUN_ATTEMPT=2); run_script notify "${_e[@]}"; printf 'comments=%s' "$(nlog "$D/issues_commented.log" .)"; }
@@ -1583,7 +1739,7 @@ sc_kr_out() { kr_out_probe "$RT/scripts/key-rotate.sh"; }
 M D5.11a "M6 the verdict value pattern removed from kr_out: a 64-hex value under verdict reaches GITHUB_OUTPUT" "sc_kr_out" body 'go=true;mode=rotate;key=inngest_signing_key_dev;guard_epoch=1793620800;write_started=true;write_started=;verdict=plan_ok;' 'verdict=a b;verdict='"$(printf 'x%.0s' {1..80})"';verdict=ok_1;go=true;verdict='"$S_HEX"';verdict='"$S_B64"';mode=rotate;key=inngest_signing_key_dev;guard_epoch=1793620800;write_started=true;write_started=;verdict=plan_ok;' $'    verdict) kr_token_known "$2" || return 0 ;;' '    verdict) ;;' kr_out
 sc_caps() { fresh; mapfile -t _e < <(a_env plan "$DEVK"); run_script apply "${_e[@]}"; printf 'show=%s,get=%s,list=%s' "$(grep -c -- '--kill-after=30 120 doppler run .* terraform show' "$D/timeout.log")" "$(grep -c '^timeout 60 doppler secrets get ' "$D/timeout.log")" "$(grep -c '^timeout 60 doppler secrets --only-names ' "$D/timeout.log")"; }
 M D5.12a "R3 the terraform show cap removed (the sourced plan bound applies)" "sc_caps" body "show=1,get=1,list=1" "show=0,get=1,list=1" 'KR_TF_T="$KK_TF_SHOW_S" kr_tf "show-${name}"' 'kr_tf "show-${name}"' kk_gate_plan
-M D5.12b "R3 the Doppler read cap removed from the value read" "sc_caps" body "show=1,get=1,list=1" "show=1,get=0,list=1" 'timeout "$KK_DOPPLER_READ_S" doppler secrets get' 'doppler secrets get' kk_copy_state
+M D5.12b "R3 the Doppler read cap removed from the value read" "sc_caps" body "show=1,get=1,list=1" "show=1,get=0,list=1" 'timeout "$KK_DOPPLER_READ_S" doppler secrets get "$3" --plain' 'doppler secrets get "$3" --plain' kk_copy_state
 M D5.12c "R3 the Doppler read cap removed from the name listing" "sc_caps" body "show=1,get=1,list=1" "show=1,get=1,list=0" 'timeout "$KK_DOPPLER_READ_S" doppler secrets --only-names' 'doppler secrets --only-names' kk_copy_state
 sc_tfclass() { fresh; printf 'Error: Error acquiring the state lock\n' > "$D/state/tf_err_text"; set_state plan_rc 1; mapfile -t _e < <(a_env rotate "$DEVK"); run_script apply "${_e[@]}"; grep -o 'cause class: [a-z_]*' <<<"$OUT" | head -1; }
 M D5.13a "M14 the state_lock pattern broken: the class degrades to other" "sc_tfclass" body "cause class: state_lock" "cause class: other" "'Error acquiring the state lock|state lock'" "'zz-no-match-zz'" kk_tf_class
@@ -1594,14 +1750,14 @@ M D5.14 "the drift label dropped from KK_REDACTION_LABELS: a suite without the d
 sc_prefix() { fresh; rm -f "$D/state/copy_soleur_dev_INNGEST_MANUAL_TRIGGER_SECRET"; : > "$D/state/copy_soleur_dev_OLD_INNGEST_MANUAL_TRIGGER_SECRET"; touch_state "state_absent_random_id.$DEVK"; mapfile -t _e < <(a_env plan "$DEVK"); run_script apply "${_e[@]}"; v; }
 M D5.15 "the leading name anchor removed from kk_copy_state: a PREFIX-superset name reads as present" "sc_prefix" body plan_ok copy_unreadable '"(^|[^A-Za-z0-9_])${3}([^A-Za-z0-9_]|\$)"' '"${3}([^A-Za-z0-9_]|\$)"' kk_copy_state
 sc_would() { local k="$1" setup="$2"; shift 2; fresh; "$setup"; mapfile -t _e < <(a_env plan "$k"); run_script apply "${_e[@]}" "$@"; grep -o 'rotate_would_refuse=[a-z_]*' <<<"$OUT" | head -1; }
-sc_would_approval() { NOLIFT=1 sc_would inngest_manual_trigger_secret_prd st_none; }
+sc_would_approval() { sc_would_unprot inngest_manual_trigger_secret_prd; }
 sc_would_inflight() { sc_would "$DEVK" st_rel_inflight; }
 sc_would_stale() { sc_would "$DEVK" st_none "EFF_GUARD_EPOCH=$((NOW0 - 3601))"; }
-sc_would_egress() { sc_would egress_audit_ingest_token st_none; }
-M D5.16a "R2 the approval branch removed from the would-refuse evaluation" "sc_would_approval" body "rotate_would_refuse=approval_environment_missing" "rotate_would_refuse=none" $'  elif ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"\n' '' kk_rotate_would_refuse
+sc_would_egress() { sc_would_unprot egress_audit_ingest_token; }
+M D5.16a "R2 the approval branch removed from the would-refuse evaluation (a prd key)" "sc_would_approval" body "rotate_would_refuse=approval_environment_unprotected" "rotate_would_refuse=none" $'  if ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"\n  elif' $'  if ! true; then tok="$KR_CHECK_TOKEN"\n  elif' kk_rotate_would_refuse
 M D5.16b "R2 the re-check branch removed from the would-refuse evaluation" "sc_would_inflight" body "rotate_would_refuse=run_in_flight" "rotate_would_refuse=none" $'  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' '' kk_rotate_would_refuse
 M D5.16c "N9 the staleness rung is NOT evaluated by plan: re-adding it (a plan run would report its own guard age) turns the field" "sc_would_stale" body "rotate_would_refuse=none" "rotate_would_refuse=authorization_stale" $'  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' $'  elif ! kk_stale_test; then tok="$KR_CHECK_TOKEN"\n  elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"\n' kk_rotate_would_refuse
-M D5.16d "R2 the egress branch removed from the would-refuse evaluation" "sc_would_egress" body "rotate_would_refuse=egress_rotate_unsupported_no_vector_restart_lever" "rotate_would_refuse=none" '  if ! kk_chk_egress "$1"; then tok="$KR_CHECK_TOKEN"' '  if false; then tok="$KR_CHECK_TOKEN"' kk_rotate_would_refuse
+M D5.16d "R2 the approval branch removed from the would-refuse evaluation (egress scoped)" "sc_would_egress" body "rotate_would_refuse=approval_environment_unprotected" "rotate_would_refuse=none" $'  if ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"\n  elif' $'  if ! true; then tok="$KR_CHECK_TOKEN"\n  elif' kk_rotate_would_refuse
 sc_lower_status() { fresh; printf '%s' '[{"databaseId":8000}]' > "$D/state/runs_key-rotate.yml_$1.json"; mapfile -t _b < <(g_rotate "$DEVK"); run_script guard "${_b[@]}"; v; }
 for st in in_progress waiting pending requested; do
   rest="$(for x in queued waiting pending requested in_progress; do [[ "$x" == "$st" ]] || printf '%s ' "$x"; done | sed 's/ $//')"
@@ -1718,18 +1874,28 @@ gh issue comment "$num" --repo "$repo" --body-file "$KR_TMP/issue.md" >/dev/null
 gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || true
 f="$KR_TMP/redaction.out"
 KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-p" || rc=$?
+http="$(kk_vector_status "$KR_TMP/vbase.json")"
+KK_VBASE_SELF="$(jq -r '.start_ts // 0' "$KR_TMP/vbase.json" 2>/dev/null)"
+b="$(jq -r --arg ip "$ip" '.peers[$ip].start_ts // empty' "$KR_TMP/vbase.json" 2>/dev/null)"
+http="$(kk_vector_status "$KR_TMP/vpoll.json")"
+if [[ "$http" == 200 ]] && kk_vector_green "$KR_TMP/vpoll.json"; then
+kr_tf "plan-clear" plan -no-color -input=false -out="$KR_TMP/tfplan-clear" -var="ssh_key_path=${KR_TMP}/ci_ssh_key.pub" \
+KR_TF_T="$KK_TF_SHOW_S" kr_tf "show-clear" show -json "$KR_TMP/tfplan-clear" || rc=$?
+local proj="$KR_TMP/proj-clear.json"
+( umask 077; jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-clear.out" > "$proj" 2>/dev/null ) || rc=$?
+KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-clear" || rc=$?
 ALLOW
 kr_tmp_refs() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan" | grep -v '^ *#' | sed -E 's/^([^"'"'"']*[^"'"'"' ]) +#[^"'"'"']*$/\1/' | sed -E 's/^[[:space:]]+//' | grep -E "$KR_TMP_RE"; }
 tf_stream_outside() { kr_tmp_refs "$1" | grep -vxFf "$KR_TMP_ALLOW" | grep -c . || true; }
 tf_allow_present() { kr_tmp_refs "$1" | grep -xFf "$KR_TMP_ALLOW" | sort -u | wc -l | tr -d ' '; }
-tf_plan_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan kk_cmd_apply" | grep -v '^ *#' | grep -Ec 'tfplan-'; }
+tf_plan_outside() { strip_fns "$1" "kk_tf_class kk_tf_clean kk_gate_plan kk_cmd_apply kk_cmd_clear" | grep -v '^ *#' | grep -Ec 'tfplan-'; }
 tf_class_readers() { # lines of kk_tf_class that use "$f" other than as the file of a fixed-pattern grep -c or a -f test
   fn_text kk_tf_class "$1" | sed -E "s/grep -Eic '[^']*' \"\\\$f\"//g; s/\[\[ -f \"\\\$f\" \]\]//g" | grep -c '"\$f"'; }
 tf_gate_readers() { fn_text kk_gate_plan "$1" | grep -o 'tf-' | wc -l | tr -d ' '; }
 tf_clean_lines() { fn_text kk_tf_clean "$1" | grep 'tf-' | grep -vc '^  rm -f -- '; }
 tf_fn_tmp_lines() { fn_text "$1" "$2" | grep -v '^ *#' | grep -Ec 'KR_TMP|\*\.(out|err)'; }   # per-function pin: the lines that reach the temp dir
-eq "D6.3 N1 static (allow-list): no line outside kk_tf_class, kk_tf_clean and kk_gate_plan reaches the temp dir except the 5 pinned ones (all 5 present); the saved plan nowhere outside those and kk_cmd_apply; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once and has exactly 4 temp-dir lines; kk_tf_class 1; kk_tf_clean 2, both rm's" \
-  "$(tf_stream_outside "$BODY")|$(tf_allow_present "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")|$(tf_fn_tmp_lines kk_gate_plan "$BODY")|$(tf_fn_tmp_lines kk_tf_class "$BODY")|$(tf_fn_tmp_lines kk_tf_clean "$BODY")" '0|5|0|0|1|0|4|1|2'
+eq "D6.3 N1 static (allow-list): no line outside kk_tf_class, kk_tf_clean and kk_gate_plan reaches the temp dir except the 15 pinned ones (all 15 present); the saved plan nowhere outside those, kk_cmd_apply and kk_cmd_clear; kk_tf_class only hands its file to a fixed-pattern grep -c; kk_gate_plan names a stream once and has exactly 4 temp-dir lines; kk_tf_class 1; kk_tf_clean 2, both rm's" \
+  "$(tf_stream_outside "$BODY")|$(tf_allow_present "$BODY")|$(tf_plan_outside "$BODY")|$(tf_class_readers "$BODY")|$(tf_gate_readers "$BODY")|$(tf_clean_lines "$BODY")|$(tf_fn_tmp_lines kk_gate_plan "$BODY")|$(tf_fn_tmp_lines kk_tf_class "$BODY")|$(tf_fn_tmp_lines kk_tf_clean "$BODY")" '0|15|0|0|1|0|4|1|2'
 tfm_n=0
 tfm_try() { # id desc inserted-line(s): the line is added to kk_cmd_apply right after the apply call; the allow-list check must see exactly one unlisted line
   local f="$TMP/m/tfm$((++tfm_n)).body"
@@ -1747,7 +1913,7 @@ tfm_try D6.3h 'a quoted-prefix reader ("$KR_TMP/tf-"x)' '  cat "$KR_TMP/tf-"x >&
 tfm_try D6.3i 'a for-loop over "$KR_TMP"/*' '  for f in "$KR_TMP"/*; do cat "$f" >&2; done'
 tfm_try D6.3j 'an alias of the temp dir (d="$KR_TMP"; cat "$d"/*)' '  d="$KR_TMP"; cat "$d"/* >&2'
 # a pinned allow-list line removed from the script leaves the list stale: the presence count (5) is what notices
-mut_ok "$TMP/m/tfmk.body" "$BODY" $'f="$KR_TMP/redaction.out"' $'f="$KR_TMP/redaction.log"' && eq "D6.3k mutant: an allow-list line edited in the script is seen twice (one unlisted line, one stale entry: presence 4)" "$(tf_stream_outside "$TMP/m/tfmk.body")|$(tf_allow_present "$TMP/m/tfmk.body")" '1|4'
+mut_ok "$TMP/m/tfmk.body" "$BODY" $'f="$KR_TMP/redaction.out"' $'f="$KR_TMP/redaction.log"' && eq "D6.3k mutant: an allow-list line edited in the script is seen twice (one unlisted line, one stale entry: presence 4)" "$(tf_stream_outside "$TMP/m/tfmk.body")|$(tf_allow_present "$TMP/m/tfmk.body")" '1|14'
 # the post-apply clean runs BEFORE the post-state read (the EXIT-trap shim reads at exit only, so a move would stay green at runtime)
 order_clean_post() { fn_text kk_cmd_apply "$1" | awk '/^  kk_tf_clean$/ { c = NR } /^  kk_post_state$/ { p = NR } END { print (c && p && c < p) ? "clean-first" : "post-first" }'; }
 eq "D6.2f N1 static: in kk_cmd_apply the post-apply kk_tf_clean precedes kk_post_state (the stream files are gone before the Doppler read-back starts)" "$(order_clean_post "$BODY")" 'clean-first'
@@ -1802,8 +1968,8 @@ mut_ok "$TMP/m/ret4.body" "$BODY" 'KK_RETRIES=3' 'KK_RETRIES=4' && eq "D6.10a mu
 POSTWRITE_TOKENS="$(comm -23 <(tr ' ' '\n' <<<"$TOKENS" | sort) <(tr ' ' '\n' <<<"$PREWRITE_TOKENS" | sort) | tr '\n' ' ')"
 pw_rc() { env -i PATH="$PATH" bash -c 'source "$1"; kk_prewrite_token "$2"; echo $?' _ "$1" "$2"; }
 pw_neg_bad() { local t r=""; for t in $POSTWRITE_TOKENS; do [[ "$(pw_rc "$1" "$t")" == 1 ]] || r="$r $t"; done; printf '%s' "$r"; }
-eq "D6.11 N10 every token that is NOT one of the 15 pre-write tokens (the other 20 of the 35, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '20|'
-mut_ok "$TMP/m/pw.body" "$BODY" '|approval_environment_missing) return 0 ;;' '|approval_environment_missing|apply_failed) return 0 ;;' && eq "D6.11a mutant: apply_failed added to the pre-write list is seen" "$(pw_neg_bad "$(ptree pw "$TMP/m/pw.body")")" ' apply_failed'
+eq "D6.11 N10 every token that is NOT one of the 14 pre-write tokens (the other 23 of the 37, apply_failed, post_hash_unreadable, value_unchanged, copies_differ, partial_absent_state, job_cancelled ... among them) returns 1 from kk_prewrite_token" "$(wc -w <<<"$POSTWRITE_TOKENS" | tr -d ' ')|$(pw_neg_bad "$BODY")" '23|'
+mut_ok "$TMP/m/pw.body" "$BODY" '|approval_environment_unprotected) return 0 ;;' '|approval_environment_unprotected|apply_failed) return 0 ;;' && eq "D6.11a mutant: apply_failed added to the pre-write list is seen" "$(pw_neg_bad "$(ptree pw "$TMP/m/pw.body")")" ' apply_failed'
 # N10: the confirm neutralizer is scoped to the stop sentence
 # D6.12 drives the REAL scan_streams (V3), in a subshell with its own TMP so the suite's scan/run census (D9.1) and leak log are untouched:
 # d612_entries <ALL text> [function-definition override] -> the number of leak-log entries scan_streams records for that text
@@ -1832,7 +1998,7 @@ eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=603
+FLOOR=639
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

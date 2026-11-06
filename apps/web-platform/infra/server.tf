@@ -2990,6 +2990,99 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Host sysctl net.ipv4.ip_nonlocal_bind=1 for the session-relay publish (#12167 PR-G).
+# The web container publishes `-p "${PROXY_BIND:-127.0.0.1}:8443:8443"` with PROXY_BIND set to the
+# host's Hetzner PRIVATE address (10.0.1.x). That NIC is a post-boot hot attach (cloud-init.yml,
+# RequiredForOnline=no) and nothing orders docker.service after it, so on a reboot a publish on a
+# not-yet-configured IP makes docker-proxy fail to bind and the WHOLE container (80/443/3000 too)
+# fails to start. With ip_nonlocal_bind=1 docker-proxy can bind the absent address, DNAT matches
+# once the lease lands, and the source IP is preserved (the peer allowlist keeps working).
+# systemd-sysctl runs in sysinit, before docker.service, so the boot-time file is enough.
+#
+# THREE COPIES OF ONE FILE, pinned byte-for-byte by nonlocal-bind-sysctl.test.sh: this resource
+# (web-1: cloud-init is frozen, ignore_changes=[user_data]), nonlocal_bind_sysctl_web2 below, and the
+# cloud-init.yml write_files entry (fresh hosts). Shape mirrors cron_egress_firewall: config_hash
+# folds the delivered file, server_id re-fires on a replaced VM (hr-fresh-host-provisioning).
+# The final remote-exec applies the value NOW (no reboot) and reads it back — `sysctl -w` exiting 0
+# is not proof the kernel holds 1, so the assertion fails the apply loudly if it does not.
+resource "terraform_data" "nonlocal_bind_sysctl" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/99-soleur-nonlocal-bind.conf"),
+    ]))
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/99-soleur-nonlocal-bind.conf"
+    destination = "/etc/sysctl.d/99-soleur-nonlocal-bind.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "chmod 0644 /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "grep -qx 'net.ipv4.ip_nonlocal_bind=1' /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "sysctl -w net.ipv4.ip_nonlocal_bind=1",
+      "test \"$(sysctl -n net.ipv4.ip_nonlocal_bind)\" = '1' || { echo 'FATAL: net.ipv4.ip_nonlocal_bind is not 1 after sysctl -w' >&2; exit 1; }",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (#12167 PR-G). web-2's cloud-init is frozen too, so without
+# this twin a running web-2 gets the sysctl only on its next -replace. Reached over the web-1
+# bastion forward that apply-web-platform-infra.yml's SSH stage opens (as for journald_persistent_web2).
+# Identical artifact and commands; only the host identity differs. Carries no credential material
+# (web-host-provisioner-parity.test.sh W2_CRED_RE).
+resource "terraform_data" "nonlocal_bind_sysctl_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/99-soleur-nonlocal-bind.conf"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-nonlocal-bind-sysctl-web2-%RAND%.sh"
+    # web-2's SSH route is slow (~70s per dial); two dials here.
+    timeout = "10m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/99-soleur-nonlocal-bind.conf"
+    destination = "/etc/sysctl.d/99-soleur-nonlocal-bind.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "chmod 0644 /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "grep -qx 'net.ipv4.ip_nonlocal_bind=1' /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "sysctl -w net.ipv4.ip_nonlocal_bind=1",
+      "test \"$(sysctl -n net.ipv4.ip_nonlocal_bind)\" = '1' || { echo 'FATAL: net.ipv4.ip_nonlocal_bind is not 1 after sysctl -w' >&2; exit 1; }",
+    ]
+  }
+}
+
 # Egress gateway delivery to the RUNNING web-1 (#9534). Fresh hosts get the
 # gateway via the baked set + cloud-init runcmd; web-1's cloud-init is frozen
 # (ignore_changes = [user_data]), so this provisioner is the sanctioned path.
@@ -3073,6 +3166,8 @@ resource "terraform_data" "egress_gateway" {
 #     (the Source-4 tag allowlist; without it a running web-2 ships only the
 #     tags its birth config knew — measured 2026-10-12: egress-gw-probe emitted
 #     to the journal every 5 min and dropped at the Vector filter for days)
+#   terraform_data.nonlocal_bind_sysctl_web2 — /etc/sysctl.d/99-soleur-nonlocal-bind.conf
+#     + `sysctl -w` now (#12167 PR-G; the private-NIC publish must survive a reboot)
 # Everything else reaches a running web-2 only via -replace (birth set) or
 # not at all by role. web-host-provisioner-parity.test.sh forces every new
 # web-1 SSH provisioner through this classification — add the twin here or

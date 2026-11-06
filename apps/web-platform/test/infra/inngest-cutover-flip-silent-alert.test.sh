@@ -34,7 +34,7 @@
 #
 # WHAT THIS FILE DOES NOT PROVE: that the alert is paused IN PRODUCTION (set by the merge apply), why the
 # evaluator reads 0 (#11869; `JSONType` is the first use in the file but the sibling `egress_gw_probe_silent`
-# shows the same stuck-at-0 without it), nor that a real row reaches Better Stack. It compares values one diff can edit together — consistency, not
+# showed the same stuck-at-0 without it, until #12180 inverted it to a missing-host count), nor that a real row reaches Better Stack. It compares values one diff can edit together — consistency, not
 # integrity.
 #
 # Mutation rows live at the bottom. Each COPIES one source file into a scratch dir, mutates the COPY, and

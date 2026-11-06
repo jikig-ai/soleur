@@ -7,7 +7,14 @@
  * cert (cq-test-fixtures-synthesized-only) — public material, no private key.
  */
 
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+
+import { REDACT_PATHS, SENSITIVE_LOWER } from "@/server/sensitive-keys";
 
 import {
   loadProxyTlsServerOptions,
@@ -75,5 +82,85 @@ describe("getProxyCertNotAfter", () => {
   test("returns null on unparseable PEM", () => {
     expect(getProxyCertNotAfter("not-a-cert")).toBeNull();
     expect(getProxyCertNotAfter("")).toBeNull();
+  });
+});
+
+// ci-deploy.sh loads Doppler prd with `doppler secrets download --format docker` + `docker
+// --env-file`: a multi-line PEM arrives as ONE line of literal backslash-n pairs, and
+// https.createServer throws ERR_OSSL_PEM_NO_START_LINE on it. The loaders repair it.
+describe("collapsed (docker env-file) PEM is normalised on load", () => {
+  let dir: string;
+  let KEY: string;
+  let CERT: string;
+  const collapse = (pem: string) => pem.trim().replace(/\r?\n/g, "\\n");
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "proxy-tls-pem-"));
+    execFileSync(
+      "openssl",
+      ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+       "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-days", "1", "-subj", "/CN=pem-load-test"],
+      { stdio: "ignore" },
+    );
+    KEY = readFileSync(join(dir, "k.pem"), "utf8").trim();
+    CERT = readFileSync(join(dir, "c.pem"), "utf8").trim();
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("the collapsed form really is what node cannot load (the measured failure)", () => {
+    expect(collapse(KEY)).not.toContain("\n");
+    expect(() => createServer({ key: collapse(KEY), cert: collapse(CERT) })).toThrow();
+  });
+
+  test("collapsed key + cert load as real multi-line PEM and a real https server accepts them", () => {
+    vi.stubEnv("PROXY_TLS_KEY", collapse(KEY));
+    vi.stubEnv("PROXY_TLS_CERT", collapse(CERT));
+    const opts = loadProxyTlsServerOptions();
+    expect(opts).toEqual({ key: KEY, cert: CERT });
+    expect(() => createServer(opts!)).not.toThrow();
+  });
+
+  test("collapsed client CA loads normalised, and getProxyCertNotAfter sees the normalised form", () => {
+    vi.stubEnv("PROXY_TLS_CERT", collapse(CERT));
+    const ca = loadProxyTlsClientCa();
+    expect(ca).toBe(CERT);
+    expect(getProxyCertNotAfter(ca!)).toBeInstanceOf(Date);
+  });
+
+  test("a trailing literal backslash-n (docker format artefact) is trimmed away", () => {
+    vi.stubEnv("PROXY_TLS_CERT", `${collapse(CERT)}\\n`);
+    expect(loadProxyTlsClientCa()).toBe(CERT);
+  });
+
+  test("literal CRLF pairs collapse to the same PEM as LF pairs", () => {
+    vi.stubEnv("PROXY_TLS_CERT", CERT.replace(/\n/g, "\\r\\n"));
+    expect(loadProxyTlsClientCa()).toBe(CERT);
+  });
+
+  test("a real multi-line PEM is untouched (inner text never rewritten)", () => {
+    vi.stubEnv("PROXY_TLS_KEY", KEY);
+    vi.stubEnv("PROXY_TLS_CERT", `${CERT}\n`);
+    expect(loadProxyTlsServerOptions()).toEqual({ key: KEY, cert: CERT });
+    const withBackslashN = `${CERT.split("\n")[0]}\nliteral\\ntext\n${CERT.split("\n").slice(1).join("\n")}`;
+    vi.stubEnv("PROXY_TLS_CERT", withBackslashN);
+    expect(loadProxyTlsClientCa()).toBe(withBackslashN);
+  });
+
+  test("a real multi-line CRLF PEM is accepted by node and left as-is", () => {
+    const crlfKey = KEY.replace(/\n/g, "\r\n");
+    const crlfCert = CERT.replace(/\n/g, "\r\n");
+    vi.stubEnv("PROXY_TLS_KEY", crlfKey);
+    vi.stubEnv("PROXY_TLS_CERT", crlfCert);
+    const opts = loadProxyTlsServerOptions();
+    expect(opts).toEqual({ key: crlfKey, cert: crlfCert });
+    expect(() => createServer(opts!)).not.toThrow();
+  });
+});
+
+describe("PROXY_TLS_KEY is a sensitive key; the public cert is not", () => {
+  test("listed for pino/Sentry redaction", () => {
+    expect(SENSITIVE_LOWER.has("proxy_tls_key")).toBe(true);
+    expect(SENSITIVE_LOWER.has("proxy_tls_cert")).toBe(false);
+    expect(REDACT_PATHS).toContain("PROXY_TLS_KEY");
   });
 });

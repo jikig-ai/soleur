@@ -6175,6 +6175,10 @@ if want_scripts; then
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
   # returning the right codes is not optional coverage.
   run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #12229: exit-code harness for the arm-token revisit probe (notify-only; exits 2, 3 or 5, never 0 or 1).
+  # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
+  # while the token is still in config.
+  run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
   # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
   # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
   # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
@@ -6295,6 +6299,12 @@ if want_scripts; then
   # SCOPED (an inngest-only source is channel_dark, never row_absent); incident matching is
   # anchored on the row's own dt; raw incident objects are projected before they reach stdout.
   run_suite "scripts/send-failed-alert-probe-8097" bash scripts/followthroughs/send-failed-alert-probe-8097.test.sh
+  # #12180: verdict harness for the egress-gw probe-silence soak follow-through. Registered explicitly
+  # (orphan-suite class above). Its exit code is the closure of the tracker (0 closes; 2 not yet; 3 =
+  # an unanswered read; 5 = a named cause; 1 is NEVER emitted). Load-bearing arms: the 4 h window
+  # boundary on non-collinear fixtures, a truncated incident list is unknown never pass, exact-name
+  # incident matching, the canary-still-declared exit 5, and no response body or credential in output.
+  run_suite "scripts/egress-gw-probe-silent-12180" bash scripts/followthroughs/egress-gw-probe-silent-12180.test.sh
   # #8076: fixture harness for the run-report-exit first-contact follow-through. Registered
   # explicitly (orphan-suite class above). Its load-bearing arm is ROW SHAPE: the live Better
   # Stack row nests the pino payload under `.message` of the decoded `raw`, and the probe's

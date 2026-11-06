@@ -1725,6 +1725,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
+  # S4 manifest member (test-argv-bearer-sweep.sh:4336,5466): the stage names the script in S4_SCRIPT_MANIFEST /
+  # S4_REPLAY_FILES and executes/scans its real content under the recording curl.
+  "scripts/key-rotate.sh"
   # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
   # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
   "scripts/betterstack-ingest-probe.sh"
@@ -2424,6 +2427,21 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/constraint-scaffold/references/"
   "plugins/soleur/skills/constraint-scaffold/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh — derived edges could not reach its real inputs
+# (they are composed through $REAL_SCRIPTS/$REAL_REFS/$OLD_FIXTURE, never literal); declared from the paths it reads:
+# the SUT and the whole scripts/+references/ dirs it `cp -R`s into per-case sandboxes (:142), the pinned emitted
+# fixture, and the sourced git-fixture-env (:96). Fixture-shape apps/web-platform literals (:129, :368) are scratch-repo
+# mentions — accept rows, not edges (suite :8 "the real apps/web-platform tree is never touched").
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_REFRESH_STAGE_A_TEST_SH_PATHS=(
+  "plugins/soleur/skills/constraint-scaffold/references/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/"
+  "plugins/soleur/skills/constraint-scaffold/test/fixtures/"
+  "plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
   "scripts/test-all.sh"
 )
 

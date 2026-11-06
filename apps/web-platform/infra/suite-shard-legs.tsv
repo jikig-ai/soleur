@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=4000
-# generated-at=2026-11-05T14:23:52Z
+# generated-at=2026-11-06T10:18:19Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -131,6 +131,7 @@ apps/web-platform/infra/luks-monitor-install.test.sh	3
 apps/web-platform/infra/luks-monitor.test.sh	3
 apps/web-platform/infra/mu1-runbook-cleanup.test.sh	2
 apps/web-platform/infra/nic-wait-gate.test.sh	1
+apps/web-platform/infra/nonlocal-bind-sysctl.test.sh	1
 apps/web-platform/infra/origin-tls-probe.test.sh	1
 apps/web-platform/infra/orphan-reaper.test.sh	2
 apps/web-platform/infra/pages-build-identity-probe.test.sh	3

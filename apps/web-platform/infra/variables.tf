@@ -852,3 +852,25 @@ variable "inngest_luks_cutover_complete" {
   type        = bool
   default     = true
 }
+
+# --- #11920 — egress_audit_ingest_token PREVIOUS grace secret --------------------
+# NAMING: ends `_previous`, never `_token`/`_pat` — the name is the only thing
+# distinguishing the grace-window feed from a credential an operator might think they
+# are expected to mint by hand (the `github_plan_actions_credential` precedent). The
+# value is never operator-minted: scripts/key-rotate.sh reads the OLD current token
+# value-silently out of Doppler and exports it as
+# TF_VAR_egress_audit_ingest_token_previous for the rotate apply only
+# (hr-tf-variable-no-operator-mint-default).
+#
+# The `""` DEFAULT IS LOAD-BEARING, not convenience: the whole root resolves every
+# TF_VAR before -target pruning, so a no-default dark variable would fail every
+# unrelated `terraform plan`/apply between merge and the first rotate — the #6780 P2
+# lesson var.inngest_config_digest records above. Empty is also the honest cleared
+# sentinel the clear apply `-replace`s back to, and the resource's
+# `ignore_changes = [value]` keeps routine applies diff-free on it in every state.
+variable "egress_audit_ingest_token_previous" {
+  description = "Grace-window PREVIOUS egress-audit ingest token (soleur/prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS). Fed ONLY by scripts/key-rotate.sh at rotate apply time (value-silent read of the old CURRENT) and cleared by the clear apply; default empty, written via -replace under ignore_changes=[value]. Same-host-hop credential, ADR-288."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

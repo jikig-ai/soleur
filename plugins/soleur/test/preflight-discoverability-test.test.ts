@@ -3125,7 +3125,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the probe reads the Cloudflare `alerting/v3/policies` list via
   // CF_API_TOKEN/CF_ACCOUNT_ID (Doppler soleur/prd_terraform) to verify the web_lb_health policy
   // exists enabled. NO SUBSTITUTE: the CF alerting API has no unauthenticated read surface. Genuine.
-  const BASELINE_DECLARED_PROBES = 94;
+  // #12180 (2026-11-05): +1 (94 -> 95) for `2026-11-05-fix-egress-gw-probe-silent-invert-metric-plan.md` — the egress-gw probe-silence soak probe.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`) reads the Better Stack incidents API and the
+  // Telemetry alert listing with BETTERSTACK_API_TOKEN plus the three BETTERSTACK_QUERY_* secrets (Doppler soleur/prd_terraform).
+  // NO SUBSTITUTE: neither the incident list nor the alert listing has an unauthenticated read surface. Genuine.
+  const BASELINE_DECLARED_PROBES = 95;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

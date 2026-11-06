@@ -322,6 +322,16 @@ write_files:
       RouteMetric=1024
     owner: root:root
     permissions: '0644'
+  # (#12167 PR-G) Lets docker-proxy bind the private-NIC session-relay address before the hot-attached
+  # NIC has its lease. BYTE-IDENTICAL copy of 99-soleur-nonlocal-bind.conf (pinned by
+  # nonlocal-bind-sysctl.test.sh); also SSH-delivered to the running hosts by
+  # terraform_data.nonlocal_bind_sysctl / _web2 in server.tf. systemd-sysctl applies it in sysinit.
+  - path: /etc/sysctl.d/99-soleur-nonlocal-bind.conf
+    content: |
+      # Terraform-managed (#12167): lets docker-proxy bind the private-NIC address before its lease lands.
+      net.ipv4.ip_nonlocal_bind=1
+    owner: root:root
+    permissions: '0644'
 
   # (#5921) The journald persistent drop-in was moved out of inline write_files: (its 2.4 KB
   # base64 blob was the biggest remaining user_data expansion). It is now baked and installed
@@ -631,6 +641,8 @@ runcmd:
   # (#6459 Phase 2.2) fresh-boot parity: orphan-workspace reaper + bwrap userns sysctl (baked units).
   - systemctl enable --now orphan-reaper.timer
   - systemctl enable --now bwrap-userns-sysctl.service
+  # (#12167 PR-G) write_files lands AFTER the sysinit systemd-sysctl pass on first boot; load it now.
+  - sysctl -p /etc/sysctl.d/99-soleur-nonlocal-bind.conf
 
   # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 5 web-host probes (#6438/#6548, #10455 b). The baked
   # web-probe-envwrite.sh writes the 5 probe EnvironmentFiles (per-host token +

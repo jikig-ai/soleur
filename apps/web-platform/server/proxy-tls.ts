@@ -25,6 +25,26 @@ export interface ProxyTlsServerOptions {
   cert: string;
 }
 
+// Exactly space, tab, CR, LF (the same four characters normalizeGitDataKey trims).
+const PEM_END_WS = /^[ \t\r\n]+|[ \t\r\n]+$/g;
+
+/**
+ * Repair a PEM as the container receives it. ci-deploy.sh loads Doppler prd with
+ * `doppler secrets download --format docker` + `docker --env-file`, which collapses a
+ * multi-line PEM into ONE line holding literal backslash-n pairs; node's
+ * `https.createServer` then throws ERR_OSSL_PEM_NO_START_LINE. A value with NO real
+ * newline that contains a literal `\n` (or `\r\n`) pair gets each pair expanded to a real
+ * newline; a real multi-line value (LF or CRLF) is returned trimmed and otherwise
+ * untouched. Same rule as `normalizeGitDataKey`. "" when unset or blank.
+ */
+function normalizeProxyPem(raw: string | undefined | null): string {
+  const trimmed = (raw ?? "").replace(PEM_END_WS, "");
+  if (!trimmed.includes("\n") && trimmed.includes("\\n")) {
+    return trimmed.replace(/(?:\\r)?\\n/g, "\n").replace(PEM_END_WS, "");
+  }
+  return trimmed;
+}
+
 /**
  * Load the proxy TLS server key + cert from the container env, or `null` when
  * either is absent (dev / single-host before the 3.A material is delivered) — in
@@ -32,8 +52,8 @@ export interface ProxyTlsServerOptions {
  * Both must be present to stand up the TLS proxy server.
  */
 export function loadProxyTlsServerOptions(): ProxyTlsServerOptions | null {
-  const key = process.env.PROXY_TLS_KEY?.trim();
-  const cert = process.env.PROXY_TLS_CERT?.trim();
+  const key = normalizeProxyPem(process.env.PROXY_TLS_KEY);
+  const cert = normalizeProxyPem(process.env.PROXY_TLS_CERT);
   if (!key || !cert) return null;
   return { key, cert };
 }
@@ -45,8 +65,7 @@ export function loadProxyTlsServerOptions(): ProxyTlsServerOptions | null {
  * (never `rejectUnauthorized: false`).
  */
 export function loadProxyTlsClientCa(): string | null {
-  const cert = process.env.PROXY_TLS_CERT?.trim();
-  return cert || null;
+  return normalizeProxyPem(process.env.PROXY_TLS_CERT) || null;
 }
 
 /**

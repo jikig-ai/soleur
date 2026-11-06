@@ -3,7 +3,9 @@
 # Drift guard for the egress-gateway Better Stack Logs alerts
 # (apps/web-platform/infra/betterstack-logs-alerts.tf):
 #   * logtail_exploration_alert.egress_gw_deny_spike   (#9534)
-#   * logtail_exploration_alert.egress_gw_probe_silent (#9534, host-attributed 2026-10-12)
+#   * logtail_exploration_alert.egress_gw_probe_silent (#9534, host-attributed 2026-10-12,
+#     inverted to a missing-host count 2026-11-05, #12180)
+#   * logtail_exploration_alert.egress_gw_probe_silent_canary (#12180, THROWAWAY positive control)
 #   * logtail_exploration_alert.egress_gw_probe_fail   (#9534 review follow-up)
 #
 # WHAT THE ALERTS ARE FOR. The gateway's security surface is its deny decisions
@@ -23,13 +25,19 @@
 #     logger -t site; result=fail / reason=gw_absent / TCP_DENIED needles), so a
 #     one-sided reword reds here instead of disarming the page.
 #   * The silent alert's host-attributed shape is pinned whole: whole-window
-#     scalar (toDateTime({{end_time}}) AS time, NO GROUP BY), count(DISTINCT
-#     JSONExtractString(raw, 'host_name')), threshold lower_than
-#     length(var.web_hosts). Dropping DISTINCT, re-adding GROUP BY, or pinning
-#     a literal host count all red.
+#     scalar (toDateTime({{end_time}}) AS time, NO GROUP BY) whose value is the
+#     number of roster hosts that did NOT emit, greatest(toInt64(roster) -
+#     toInt64(count(DISTINCT host_name)), 0), threshold higher_than 0. Dropping
+#     DISTINCT, the floor or the casts, re-adding GROUP BY, pinning a literal
+#     roster size, or flipping back to lower_than all red. The metric is
+#     inverted so an evaluator step that reads 0 (INFERRED zero-fill, #12180)
+#     reads healthy instead of paging; the query is proven, the evaluator is not.
+#   * The canary pair runs the SAME query against an identifier no host emits,
+#     so it must read the roster size and fire; its SQL is derived with
+#     replace() from the production local (one producer) and pinned as one line.
 #   * The fail alert pages on >0 verdict rows in 900 s with the sibling paging
 #     semantics (threshold, treat_as_zero, unpaused, email, free/paid ternary).
-#   * All six resources are in the apply workflow's MAIN plan -target=
+#   * All eight resources are in the apply workflow's MAIN plan -target=
 #     allowlist; this guard is the only enforcement for logtail resources.
 #   * The runbook URL's anchor resolves to a real heading in
 #     cron-egress-blocked.md, and that runbook is in infra-validation.yml's
@@ -66,6 +74,8 @@ WF="${EGW_GUARD_WF:-$REPO/.github/workflows/apply-web-platform-infra.yml}"
 RB="${EGW_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md}"
 CR="${EGW_GUARD_CR:-$REPO/apps/web-platform/infra/cron-egress-resolve.sh}"
 IV="${EGW_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
+PR="${EGW_GUARD_PR:-$REPO/scripts/followthroughs/egress-gw-probe-silent-12180.sh}"
+INFRA="${EGW_GUARD_INFRA:-$(dirname "$TF")}"   # the tree scanned for emitters of the canary identifier, and the .tf files counted
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -85,7 +95,7 @@ assert_fixture_dir() {
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
-assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$RB"; assert_fixture_dir "$CR"; assert_fixture_dir "$IV"
+assert_fixture_dir "$TF"; assert_fixture_dir "$WF"; assert_fixture_dir "$RB"; assert_fixture_dir "$CR"; assert_fixture_dir "$IV"; assert_fixture_dir "$PR"
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -97,7 +107,7 @@ pass=$_p0; fail=$_f0; FAILED=()
 
 command -v python3 >/dev/null 2>&1 || { printf '[FATAL] python3 missing — the mutation battery needs it
 ' >&2; exit 2; }
-for f in "$TF" "$WF" "$RB" "$CR" "$IV"; do
+for f in "$TF" "$WF" "$RB" "$CR" "$IV" "$PR"; do
   [ -r "$f" ] || { printf '[FATAL] unreadable: %s\n' "$f" >&2; exit 2; }
 done
 
@@ -137,7 +147,7 @@ for _o in   "egress_gw_deny_spike_sql[[:space:]]*=[[:space:]]*<<[-]SQL"   "egres
   _n="$(grep -cE "$_o" "$TF")"
   [ "$_n" -eq 1 ]     && ok "exactly one ${_o%%[*]} heredoc opener in the file (decoy copies count)"     || no "${_o%%[*]} opener count is $_n, want 1 — a decoy local exists"
 done
-for _r in   "logtail_exploration egress_gw_deny_spike"   "logtail_exploration_alert egress_gw_deny_spike"   "logtail_exploration egress_gw_probe_silent"   "logtail_exploration_alert egress_gw_probe_silent"   "logtail_exploration egress_gw_probe_fail"   "logtail_exploration_alert egress_gw_probe_fail"; do
+for _r in   "logtail_exploration egress_gw_deny_spike"   "logtail_exploration_alert egress_gw_deny_spike"   "logtail_exploration egress_gw_probe_silent"   "logtail_exploration_alert egress_gw_probe_silent"   "logtail_exploration egress_gw_probe_silent_canary"   "logtail_exploration_alert egress_gw_probe_silent_canary"   "logtail_exploration egress_gw_probe_fail"   "logtail_exploration_alert egress_gw_probe_fail"; do
   _n="$(grep -cE "resource \"${_r%% *}\" \"${_r##* }\"" "$TF")"
   [ "$_n" -eq 1 ]     && ok "exactly one resource ${_r} header in the file"     || no "resource ${_r} header count is $_n, want 1 — a decoy resource exists"
 done
@@ -194,30 +204,32 @@ SILENT_EXPL="$(res_block logtail_exploration egress_gw_probe_silent)"
   && ok "G2: egress_gw_probe_silent_sql heredoc is readable" \
   || no "egress_gw_probe_silent_sql: heredoc not found — the G2 rows below would be vacuous"
 
-# Whole-window scalar: one value per window = DISTINCT emitting hosts. The two
-# pieces are BOTH load-bearing: count(DISTINCT host_name) without the scalar
-# head would still bucket by time; the scalar head without DISTINCT would still
-# count rows, where one host's beats mask the other's silence.
-sql_has "$SILENT_SQL" "SELECT toDateTime\(\{\{end_time\}\}\) AS time, count\(DISTINCT JSONExtractString\(raw, 'host_name'\)\) AS value" \
-  && ok "G2: silence counts DISTINCT host_name (one host's beats cannot mask the other)" \
-  || no "G2: the silent predicate is not count(DISTINCT JSONExtractString(raw,'host_name')) — the host-mask defect is back"
+# Whole-window scalar: one value per window = the number of roster hosts that did NOT emit
+# (#12180). The pieces are ALL load-bearing: count(DISTINCT host_name) without the scalar head
+# would still bucket by time; the scalar head without DISTINCT would count rows, where one host's
+# beats mask the other's silence; the greatest(..., 0) floor and the toInt64 casts stop an
+# unsigned wrap (ClickHouse count() is unsigned) when more hosts emit than the roster names.
+sql_has "$SILENT_SQL" "SELECT toDateTime\(\{\{end_time\}\}\) AS time, greatest\(toInt64\(\\\$\{length\(var\.web_hosts\)\}\) - toInt64\(count\(DISTINCT JSONExtractString\(raw, 'host_name'\)\)\), 0\) AS value" \
+  && ok "G2: silence reports the MISSING-host count (roster - DISTINCT host_name, floored at 0)" \
+  || no "G2: the silent predicate is not greatest(toInt64(roster) - toInt64(count(DISTINCT host_name)), 0) — the metric regressed or the host-mask defect is back"
 ! sql_has "$SILENT_SQL" "GROUP BY" \
   && ok "G2: silence predicate is a whole-window scalar (no GROUP BY)" \
   || no "G2: GROUP BY reintroduced — per-bucket counts regress to row-masking"
 sql_has "$SILENT_SQL" "JSONExtractString\(raw, 'SYSLOG_IDENTIFIER'\) = 'egress-gw-probe'" \
   && ok "G2: silence keeps the egress-gw-probe tag conjunct" \
   || no "G2: the SYSLOG_IDENTIFIER='egress-gw-probe' conjunct is missing"
-[ "$(printf '%s' "$SILENT_SQL" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')" = "SELECT toDateTime({{end_time}}) AS time, count(DISTINCT JSONExtractString(raw, 'host_name')) AS value FROM {{source}} WHERE dt BETWEEN {{start_time}} AND {{end_time}} AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'" ] \
-  && ok "G2: silent predicate is byte-exact (whole-window scalar, DISTINCT host_name, tag conjunct)" \
+SILENT_FLAT="$(printf '%s' "$SILENT_SQL" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+[ "$SILENT_FLAT" = "SELECT toDateTime({{end_time}}) AS time, greatest(toInt64(\${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, 'host_name'))), 0) AS value FROM {{source}} WHERE dt BETWEEN {{start_time}} AND {{end_time}} AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'" ] \
+  && ok "G2: silent predicate is byte-exact (whole-window scalar, floored missing-host count, interpolated roster, tag conjunct)" \
   || no "G2: silent predicate drifted from the pinned text"
-param "$SILENT_ALERT" 'operator' '"lower_than"' \
-  && param "$SILENT_ALERT" 'value' 'length\(var\.web_hosts\)' \
-  && ok "G2: silence fires when emitting hosts < the fleet roster (length(var.web_hosts))" \
-  || no "G2: the silent alert is not lower_than length(var.web_hosts) — a literal count decouples from fleet growth, a row count reintroduces masking"
+param "$SILENT_ALERT" 'operator' '"higher_than"' \
+  && param "$SILENT_ALERT" 'value' '0' \
+  && ok "G2: silence fires when at least one roster host is missing (higher_than 0)" \
+  || no "G2: the silent alert is not higher_than 0 — a lower_than shape pages on a zero-filled evaluator step; a raised value lets a dead host through"
 param "$SILENT_ALERT" 'on_missing_data' '"treat_as_zero"' \
   && param "$SILENT_ALERT" 'paused' 'false' \
   && param "$SILENT_ALERT" 'email' 'true' \
-  && ok "G2: silence keeps treat_as_zero / unpaused / email (absence pages)" \
+  && ok "G2: silence keeps treat_as_zero (CTO ruling) / unpaused / email" \
   || no "G2: the silent alert lost treat_as_zero, is paused, or stopped emailing"
 [ "$(printf '%s\n' "$SILENT_ALERT" | grep -c 'paused')" -eq 1 ] \
   && ok "G2: the string 'paused' occurs exactly once in the silent alert block (a commented or duplicated decoy counts)" \
@@ -229,10 +241,154 @@ param "$SILENT_EXPL" 'sql_query' 'replace\(trimspace\(local\.egress_gw_probe_sil
 param "$SILENT_ALERT" 'exploration_id' 'logtail_exploration\.egress_gw_probe_silent\.id' \
   && ok "G2: silent alert watches ITS OWN exploration" \
   || no "G2: silent alert's exploration_id re-pointed"
+param "$SILENT_ALERT" 'name' '"soleur-egress-gw-probe-silent-prd"' \
+  && param "$SILENT_EXPL" 'name' '"soleur-egress-gw-probe-silent-prd"' \
+  && ok "G2: the production alert and its exploration are named soleur-egress-gw-probe-silent-prd (the name the soak probe matches)" \
+  || no "G2: the production silent alert or exploration name drifted — the soak probe matches incidents on it exactly"
+param "$SILENT_ALERT" 'alert_type' '"threshold"' \
+  && param "$SILENT_ALERT" 'check_period' '300' \
+  && param "$SILENT_ALERT" 'query_period' '900' \
+  && param "$SILENT_ALERT" 'confirmation_period' '0' \
+  && param "$SILENT_ALERT" 'recovery_period' '900' \
+  && param "$SILENT_ALERT" 'push' 'false' \
+  && param "$SILENT_ALERT" 'call' 'false' \
+  && param "$SILENT_ALERT" 'sms' 'false' \
+  && param "$SILENT_ALERT" 'critical_alert' 'false' \
+  && ok "G2: the production alert's windows (300/900/0/900) and channels (email only) are pinned" \
+  || no "G2: the production silent alert's windows or channels drifted (a changed confirmation_period delays or swallows the page)"
+# Every .tf under the infra dir, comments dropped: a consumer in a SECOND file counts the same as one in the first.
+ALL_TF="$(cat "$(dirname "$TF")"/*.tf 2>/dev/null | grep -vE '^[[:space:]]*(#|//)' || true)"
+[ "$(grep -cE '^[[:space:]]*exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.egress_gw_probe_silent\.id' <<< "$ALL_TF")" -eq 1 ] \
+  && [ "$(grep -c 'local\.egress_gw_probe_silent_sql' <<< "$ALL_TF")" -eq 2 ] \
+  && ok "G2: exactly one alert watches the production exploration, and the production SQL local has exactly two consumers (that exploration and the canary derivation)" \
+  || no "G2: a second alert watches the production exploration, or a third consumer reads the production SQL local (any .tf under the infra dir)"
+param "$SILENT_EXPL" 'team_name' '"Your team"' \
+  && param "$SILENT_EXPL" 'chart_type' '"line_chart"' \
+  && param "$SILENT_EXPL" 'query_type' '"sql_expression"' \
+  && param "$SILENT_EXPL" 'source_variable' '"source"' \
+  && param "$SILENT_EXPL" 'variable_type' '"source"' \
+  && [ "$(printf '%s\n' "$SILENT_EXPL" | grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"source"[[:space:]]*$')" -eq 1 ] \
+  && ok "G2: the production exploration's remaining attributes (team, chart, query type, source variable) are pinned" \
+  || no "G2: the production exploration's team_name, chart_type, query_type, source_variable or variable block drifted"
 grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
   && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
   && ok "G2: both silent -target lines in the apply allowlist" \
   || no "G2: a silent -target line is missing"
+grep -qF 'The INFERRED mechanism is that' <<< "$SILENT_ALERT" \
+  && ok "G2: the alert block labels the zero-fill mechanism INFERRED (the query is proven, the evaluator is not)" \
+  || no "G2: the silent alert block no longer labels the evaluator zero-fill mechanism INFERRED"
+
+# ── G2b: egress_gw_probe_silent_canary — THROWAWAY positive control (#12180) ───────────────
+# Same query as production against an identifier no host emits, so it reads the roster size and
+# MUST fire. If it never fires, the evaluator is blind for this query shape. Reversible: deleting
+# the two resources (see the RETIREMENT line in scripts/followthroughs/egress-gw-probe-silent-12180.sh).
+CANARY_ALERT="$(res_block logtail_exploration_alert egress_gw_probe_silent_canary)"
+CANARY_EXPL="$(res_block logtail_exploration egress_gw_probe_silent_canary)"
+CANARY_LINE='  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, "'"'"'egress-gw-probe'"'"'", "'"'"'egress-gw-probe-canary-absent'"'"'")'
+[ "$(grep -cFx -- "$CANARY_LINE" "$TF")" -eq 1 ] \
+  && ok "G2b: the canary SQL is derived by ONE whole-line replace() of the production local (single producer)" \
+  || no "G2b: the canary derivation line is missing, duplicated or reworded — the canary may not equal production-with-one-swap"
+[ "$(grep -cE '^[[:space:]]*egress_gw_probe_silent_canary_sql[[:space:]]*=' "$TF")" -eq 1 ] \
+  && ok "G2b: egress_gw_probe_silent_canary_sql is assigned exactly once" \
+  || no "G2b: egress_gw_probe_silent_canary_sql assignment count != 1 — a decoy producer exists"
+[ "$(grep -cE 'local\.egress_gw_probe_silent_canary_sql' "$TF")" -eq 1 ] \
+  && ok "G2b: the canary local is consumed exactly once (by the canary exploration)" \
+  || no "G2b: the canary local is consumed !=1 time"
+# The swap target must be a real substring of the production SQL (else replace() is a silent
+# no-op and the canary equals production), and the canary identifier must never be a real tag.
+[ "$(printf '%s\n' "$SILENT_SQL" | grep -cF "'egress-gw-probe'")" -eq 1 ] \
+  && ok "G2b: the replace() target occurs exactly once in the production SQL (the swap lands)" \
+  || no "G2b: the production SQL no longer holds exactly one 'egress-gw-probe' literal — replace() would silently no-op or over-swap"
+! grep -qF 'egress-gw-probe-canary-absent' "$CR" \
+  && ok "G2b: no resolver emits the canary identifier (it matches nothing, by construction)" \
+  || no "G2b: cron-egress-resolve.sh contains the canary identifier — the canary would read real rows"
+[ "$(printf '%s\n' "$CANARY_ALERT" | grep -c .)" -gt 0 ] && [ "$(printf '%s\n' "$CANARY_EXPL" | grep -c .)" -gt 0 ] \
+  && ok "G2b: both canary resource blocks exist" \
+  || no "G2b: a canary resource block is missing"
+param "$CANARY_ALERT" 'exploration_id' 'logtail_exploration\.egress_gw_probe_silent_canary\.id' \
+  && param "$CANARY_ALERT" 'name' '"soleur-egress-gw-probe-silent-canary-prd"' \
+  && param "$CANARY_EXPL" 'name' '"soleur-egress-gw-probe-silent-canary-prd"' \
+  && ok "G2b: canary alert watches ITS OWN exploration; both are named soleur-egress-gw-probe-silent-canary-prd" \
+  || no "G2b: canary exploration_id or name drifted"
+param "$CANARY_EXPL" 'sql_query' 'replace\(trimspace\(local\.egress_gw_probe_silent_canary_sql\), "/\\\\s\+/", " "\)' \
+  && param "$CANARY_EXPL" 'values' '\[local\.vector_prd_source_id\]' \
+  && ok "G2b: canary exploration carries the derived local + the prd source" \
+  || no "G2b: canary exploration's sql_query or source drifted"
+param "$CANARY_ALERT" 'alert_type' '"threshold"' \
+  && param "$CANARY_ALERT" 'operator' '"higher_than"' \
+  && param "$CANARY_ALERT" 'value' '0' \
+  && param "$CANARY_ALERT" 'check_period' '300' \
+  && param "$CANARY_ALERT" 'query_period' '900' \
+  && param "$CANARY_ALERT" 'confirmation_period' '0' \
+  && param "$CANARY_ALERT" 'recovery_period' '900' \
+  && ok "G2b: canary fires on higher_than 0 with the production windows (300/900/0/900)" \
+  || no "G2b: canary operator/value/windows drifted from production — it no longer exercises the same evaluation"
+param "$CANARY_ALERT" 'on_missing_data' '"treat_as_zero"' \
+  && param "$CANARY_ALERT" 'paused' 'false' \
+  && param "$CANARY_ALERT" 'email' 'true' \
+  && param "$CANARY_ALERT" 'push' 'false' \
+  && param "$CANARY_ALERT" 'call' 'false' \
+  && param "$CANARY_ALERT" 'sms' 'false' \
+  && param "$CANARY_ALERT" 'critical_alert' 'false' \
+  && ok "G2b: canary keeps treat_as_zero / unpaused / email-only (a paused canary proves nothing)" \
+  || no "G2b: canary paging semantics drifted (paused, no email, or an escalating channel on a throwaway)"
+[ "$(printf '%s\n' "$CANARY_ALERT" | grep -c 'paused')" -eq 1 ] \
+  && ok "G2b: the string 'paused' occurs exactly once in the canary alert block" \
+  || no "G2b: 'paused' occurs !=1 time in the canary alert block — a commented pinned-line decoy exists"
+param "$CANARY_ALERT" 'policy_id' 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
+  && param "$CANARY_ALERT" 'team_name' 'var\.betterstack_paid_tier \? null : "Your team"' \
+  && ok "G2b: canary escalation is the free/paid ternary every sibling uses (ADR-218)" \
+  || no "G2b: canary escalation_target drifted from the sibling ternary"
+grep -qF 'THROWAWAY CANARY (#12180)' <<< "$CANARY_ALERT" \
+  && ok "G2b: the canary incident text says it is a throwaway canary, not an outage" \
+  || no "G2b: the canary incident_cause no longer begins as THROWAWAY CANARY (#12180) — an on-call reader would treat it as an outage"
+grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_silent_canary \\$' <<< "$APPLY_JOB" \
+  && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_silent_canary \\$' <<< "$APPLY_JOB" \
+  && ok "G2b: both canary -target lines in the apply allowlist" \
+  || no "G2b: a canary -target line is missing — the canary would never apply"
+# The canary must exercise the SAME evaluation as production: compare the two alert blocks with comments dropped and
+# only name / exploration_id / incident_cause removed. A drift on either side (a window, a channel, the operator) reds.
+strip_diff_lines() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^[[:space:]]*(name|exploration_id|incident_cause)[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/'; }
+[ -n "$CANARY_ALERT" ] && [ -n "$SILENT_ALERT" ] && [ "$(strip_diff_lines "$CANARY_ALERT")" = "$(strip_diff_lines "$SILENT_ALERT")" ] \
+  && ok "G2b: the canary alert block equals the production alert block except name / exploration_id / incident_cause" \
+  || no "G2b: the canary alert block differs from the production alert block beyond name / exploration_id / incident_cause — it no longer exercises the same evaluation"
+# The two EXPLORATIONS must also be the same chart, query shape and source: only name and the SQL local reference differ.
+strip_expl_lines() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^[[:space:]]*(name|sql_query)[[:space:]]*=[[:space:]]*(replace\(|"soleur-egress-gw-probe-silent)' | sed -E 's/^resource .*\{$/resource {/'; }
+[ -n "$CANARY_EXPL" ] && [ -n "$SILENT_EXPL" ] && [ "$(strip_expl_lines "$CANARY_EXPL")" = "$(strip_expl_lines "$SILENT_EXPL")" ] \
+  && ok "G2b: the canary exploration equals the production exploration except name / sql_query" \
+  || no "G2b: the canary exploration differs from the production exploration beyond name / sql_query — it no longer exercises the same chart and source"
+# The canary identifier must be emitted by NOTHING in the infra tree (the resolver row is checked above through the CR seam).
+# Every file type, not an extension list: a .tftpl, .service, .conf or a second .tf counts. The one file allowed to
+# NAME the identifier is the alerts .tf itself (its derivation line) and this guard's own siblings.
+CANARY_EMITTERS="$(grep -rIlF 'egress-gw-probe-canary-absent' "$INFRA" 2>/dev/null | grep -vE '\.test\.sh$' | grep -vxF "$TF" || true)"
+[ -z "$CANARY_EMITTERS" ] \
+  && ok "G2b: no file under the infra tree (any type) contains the canary identifier" \
+  || no "G2b: a non-test file under the infra tree contains the canary identifier: $(printf '%s' "$CANARY_EMITTERS" | tr '\n' ' ')"
+# Anti-vacuity: the scan must have looked at a real tree (skipped when a mutation row points it at a scratch dir).
+if [ -n "${EGW_GUARD_INFRA:-}" ] || [ -n "${EGW_GUARD_TF:-}" ]; then
+  ok "G2b: the emitter scan runs on a scratch root here (the real-tree coverage row runs on the unmutated tree)"
+elif [ "$(find "$INFRA" -type f 2>/dev/null | wc -l)" -ge 50 ] && [ "$(grep -rIlF 'egress-gw-probe' "$INFRA" 2>/dev/null | wc -l)" -ge 3 ]; then
+  ok "G2b: the emitter scan covered a real infra tree (>= 50 files, >= 3 naming the real tag)"
+else
+  no "G2b: the emitter scan saw an empty or tiny tree — it would pass over a planted emitter"
+fi
+# The soak probe matches incidents on exact alert names and reads the emitter tag: each literal is assigned EXACTLY ONCE at
+# column 0 and equals the Terraform value (a later re-assignment would otherwise win at run time).
+probe_lit() { [ "$(grep -cE "^$1=" "$PR")" -eq 1 ] && sed -nE "s/^$1=\"([^\"]*)\".*/\1/p" "$PR"; }
+[ "$(probe_lit PROD_NAME)" = "soleur-egress-gw-probe-silent-prd" ] \
+  && [ "$(probe_lit CANARY_NAME)" = "soleur-egress-gw-probe-silent-canary-prd" ] \
+  && [ "$(probe_lit CANARY_RESOURCE)" = "egress_gw_probe_silent_canary" ] \
+  && [ "$(probe_lit EMITTER_TAG)" = "egress-gw-probe" ] \
+  && sql_has "$SILENT_SQL" "JSONExtractString\(raw, 'SYSLOG_IDENTIFIER'\) = '$(probe_lit EMITTER_TAG)'" \
+  && ok "G2b: the soak probe's PROD_NAME / CANARY_NAME / CANARY_RESOURCE / EMITTER_TAG are each assigned once and equal the Terraform values" \
+  || no "G2b: the soak probe's alert-name or emitter-tag literals drifted (or are assigned more than once) — it would match no incident and close its tracker over a live recurrence"
+
+# Exact count: the structure suite's resource-count rows are FLOORS and rows 9-10 pass for a second
+# canary that brings its own exploration, so a stray extra pair is only visible here.
+[ "$(grep -cE '^resource "logtail_exploration(_alert)?" "egress_gw_probe_silent[A-Za-z0-9_]*" \{' <<< "$ALL_TF")" -eq 4 ] \
+  && [ "$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"soleur-egress-gw-probe-silent' <<< "$ALL_TF")" -eq 4 ] \
+  && ok "G2b: exactly four egress_gw_probe_silent* resources (production pair + one canary pair)" \
+  || no "G2b: the egress_gw_probe_silent* resource count is not 4, or the name literal count is not 4 — a second canary-like pair (under any resource label, in any .tf) exists, or one is missing"
 
 # ── G3: egress_gw_probe_fail — the previously-Sentry-only verdict failure ────────────────
 FAIL_SQL="$(sql_local egress_gw_probe_fail_sql)"
@@ -306,8 +462,8 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_fail \\$' <<
   || no "G3: a fail -target line is missing — the alert would never apply"
 
 # NEGATIVE row: no count/for_each/lifecycle/ignore_changes token inside ANY resource block.
-if [ "$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$DENY_EXPL" "$DENY_ALERT" "$SILENT_EXPL" "$SILENT_ALERT" "$FAIL_EXPL" "$FAIL_ALERT" | grep -cE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)[[:space:]]*[= {]')" -eq 0 ]; then
-  ok "no count/for_each/lifecycle/ignore_changes mute knob inside any of the six resource blocks"
+if [ "$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$DENY_EXPL" "$DENY_ALERT" "$SILENT_EXPL" "$SILENT_ALERT" "$CANARY_EXPL" "$CANARY_ALERT" "$FAIL_EXPL" "$FAIL_ALERT" | grep -cE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)[[:space:]]*[= {]')" -eq 0 ]; then
+  ok "no count/for_each/lifecycle/ignore_changes mute knob inside any of the eight resource blocks"
 else
   no "a count/for_each/lifecycle/ignore_changes token sits inside a resource block — a mute knob the provider would honor silently"
 fi
@@ -443,6 +599,9 @@ if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t egressgwalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
   trap 'rm -rf "$MUT_DIR"' EXIT
+  # The emitter scan root for every single-file mutation row: an EMPTY dir, because MUT_DIR also holds logs and other
+  # rows' mutated copies that legitimately name the canary identifier. The scan itself is exercised by the planted rows.
+  mkdir -p "$MUT_DIR/scan-empty"
 
   # INSTRUMENT CONTROL — the inner run against the PRISTINE tree must exit 0, or every row below
   # would grade a broken invocation as "mutation RED".
@@ -468,7 +627,11 @@ FAILLOC = "  egress_gw_probe_fail_sql = <<\x2dSQL"
 SILLOC = "  egress_gw_probe_silent_sql = <<\x2dSQL"
 SQLEND = "\n  SQL\n"
 FAILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_fail\" {"
-SILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent\" {"'
+SILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent\" {"
+CANRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent_canary\" {"
+SILEXPL = "resource \"logtail_exploration\" \"egress_gw_probe_silent\" {"
+CANEXPL = "resource \"logtail_exploration\" \"egress_gw_probe_silent_canary\" {"
+CANLINE = "  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, \"\x27egress-gw-probe\x27\", \"\x27egress-gw-probe-canary-absent\x27\")\n"'
 
   _red_verdict() {
     case "$1" in
@@ -487,6 +650,7 @@ SILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent\" {"'
       RB)  src="$RB";  copy="$MUT_DIR/cron-egress-blocked.md" ;;
       CR)  src="$CR";  copy="$MUT_DIR/cron-egress-resolve.sh" ;;
       IV)  src="$IV";  copy="$MUT_DIR/infra-validation.yml" ;;
+      PR)  src="$PR";  copy="$MUT_DIR/egress-gw-probe-silent-12180.sh" ;;
       *) printf '[FATAL] mutate_red: unknown target %s\n' "$which" >&2; exit 2 ;;
     esac
     cp "$src" "$copy" || { printf '[FATAL] mutate_red: cp %s failed\n' "$src" >&2; exit 2; }
@@ -500,7 +664,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" "EGW_GUARD_INFRA=$MUT_DIR/scan-empty" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
     case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
       red:red) ok "mutation RED: $label" ;;
       wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
@@ -529,7 +693,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" "EGW_GUARD_INFRA=$MUT_DIR/scan-empty" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -580,23 +744,151 @@ assert "count(DISTINCT" in blk
 s = s[:i] + "    SELECT 1\n" + s[j:]' \
     "drifted from the pinned"
 
-  # ── Silent-alert rows ──────────────────────────────────────────────────────────────────────
-  mutate_red "silent: DISTINCT host_name regresses to count(*) (the host-mask defect)" TF \
-    'old = "count(DISTINCT JSONExtractString(raw, \x27host_name\x27)) AS value"
+  # ── Silent-alert rows (inverted metric, #12180) ────────────────────────────────────────────
+  mutate_red "silent: operator reverted to lower_than (a zero-filled evaluator step pages again)" TF \
+    's = edit(s, SILRES, "operator            = \"higher_than\"", "operator            = \"lower_than\"")' \
+    "higher_than 0"
+  mutate_red "silent: value raised from 0 to 1 (one missing host no longer pages)" TF \
+    's = edit(s, SILRES, "value               = 0\n", "value               = 1\n")' \
+    "higher_than 0"
+  mutate_red "silent: the greatest(..., 0) floor dropped (surplus emitters yield a negative or wrapped value)" TF \
+    'old = "greatest(toInt64(${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27))), 0) AS value"
 assert s.count(old) == 1
-s = s.replace(old, "count(*) AS value")' \
+s = s.replace(old, "(toInt64(${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27)))) AS value")' \
+    "silent predicate"
+  mutate_red "silent: the toInt64 casts removed (unsigned count() wraps on a surplus of emitters)" TF \
+    'old = "greatest(toInt64(${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27))), 0) AS value"
+assert s.count(old) == 1
+s = s.replace(old, "greatest(${length(var.web_hosts)} - count(DISTINCT JSONExtractString(raw, \x27host_name\x27)), 0) AS value")' \
+    "silent predicate"
+  mutate_red "silent: the roster interpolation replaced by a literal 2 (fleet growth silently detaches it)" TF \
+    'old = "greatest(toInt64(${length(var.web_hosts)}) - toInt64("
+assert s.count(old) == 1
+s = s.replace(old, "greatest(toInt64(2) - toInt64(")' \
+    "silent predicate"
+  mutate_red "silent: DISTINCT host_name regresses to count(*) (the host-mask defect)" TF \
+    'old = "toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27)))"
+assert s.count(old) == 1
+s = s.replace(old, "toInt64(count(*))")' \
     "host-mask defect"
   mutate_red "silent: GROUP BY time reintroduced (per-bucket row counts again)" TF \
     'old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27egress-gw-probe\x27\n  SQL\n\n  # Verdict failures"
 assert s.count(old) == 1
 s = s.replace(old, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27egress-gw-probe\x27\n    GROUP BY time\n  SQL\n\n  # Verdict failures")' \
     "GROUP BY reintroduced"
-  mutate_red "silent: threshold pinned to a literal 1 (fleet growth silently detaches it)" TF \
-    's = edit(s, SILRES, "value               = length(var.web_hosts)", "value               = 1")' \
-    "literal count"
-  mutate_red "silent: operator flipped to higher_than (a healthy fleet pages)" TF \
-    's = edit(s, SILRES, "operator            = \"lower_than\"", "operator            = \"higher_than\"")' \
-    "lower_than"
+  mutate_red "silent: on_missing_data no longer treat_as_zero (a fully dark window stops evaluating)" TF \
+    's = edit(s, SILRES, "on_missing_data     = \"treat_as_zero\"", "on_missing_data     = \"keep_last_value\"")' \
+    "lost treat_as_zero"
+  mutate_red "silent: alert paused" TF \
+    's = edit(s, SILRES, "  paused = false\n", "  paused = true\n")' \
+    "lost treat_as_zero"
+  mutate_red "silent: the INFERRED label removed from the alert block (the evaluator claim reads as fact)" TF \
+    's = edit(s, SILRES, "INFERRED", "established")' \
+    "labels the evaluator zero-fill mechanism INFERRED"
+
+  mutate_red "silent: the production alert renamed (the soak probe matches on the name)" TF \
+    's = edit(s, SILRES, "name           = \"soleur-egress-gw-probe-silent-prd\"", "name           = \"soleur-egress-gw-probe-silent-v2-prd\"")' \
+    "production silent alert or exploration name drifted"
+  mutate_red "silent: confirmation_period raised (the page is delayed while the canary still fires)" TF \
+    's = edit(s, SILRES, "confirmation_period = 0", "confirmation_period = 3600")' \
+    "windows or channels drifted"
+  mutate_red "silent: query_period shortened (production no longer sees what the canary sees)" TF \
+    's = edit(s, SILRES, "query_period        = 900", "query_period        = 300")' \
+    "windows or channels drifted"
+  mutate_red "silent: push channel enabled on the production alert" TF \
+    's = edit(s, SILRES, "push           = false", "push           = true")' \
+    "windows or channels drifted"
+  mutate_red "silent: a SECOND alert watching the production exploration is added" TF \
+    's = s + "\nresource \"logtail_exploration_alert\" \"zz_second\" {\n  exploration_id = logtail_exploration.egress_gw_probe_silent.id\n}\n"' \
+    "second alert watches the production exploration"
+  mutate_red "canary: a window drift on the production side alone (canary-equals-production comparison)" TF \
+    's = edit(s, SILRES, "recovery_period     = 900", "recovery_period     = 1800")' \
+    "windows or channels drifted"
+  mutate_red "probe: the PROD_NAME literal no longer equals the Terraform name" PR \
+    's = s.replace("PROD_NAME=\"soleur-egress-gw-probe-silent-prd\"", "PROD_NAME=\"soleur-egress-gw-probe-silent-v2-prd\"")' \
+    "alert-name or emitter-tag literals drifted"
+
+  # ── Canary rows (G2b, #12180) ──────────────────────────────────────────────────────────────
+  mutate_red "canary: the derivation line deleted (the resource would point at the production local)" TF \
+    'assert s.count(CANLINE) == 1
+s = s.replace(CANLINE, "")' \
+    "canary derivation line is missing"
+  mutate_red "canary: the replace() target no longer matches (silent no-op, canary equals production)" TF \
+    'assert s.count(CANLINE) == 1
+s = s.replace(CANLINE, CANLINE.replace("\"\x27egress-gw-probe\x27\"", "\"\x27egress-gw-probex\x27\"", 1))' \
+    "canary derivation line is missing"
+  mutate_red "canary: the replacement identifier set to the REAL tag (it would read live rows and never fire)" TF \
+    'assert s.count(CANLINE) == 1
+s = s.replace(CANLINE, CANLINE.replace("\x27egress-gw-probe-canary-absent\x27", "\x27egress-gw-probe\x27"))' \
+    "canary derivation line is missing"
+  mutate_red "canary: a resolver starts emitting the canary identifier (anti-collision)" CR \
+    's = s.replace("logger -t egress-gw-probe", "logger -t egress-gw-probe-canary-absent -p x; logger -t egress-gw-probe", 1)' \
+    "contains the canary identifier"
+  mutate_red "canary: alert paused (a paused canary proves nothing)" TF \
+    's = edit(s, CANRES, "  paused = false\n", "  paused = true\n")' \
+    "canary paging semantics drifted"
+  mutate_red "canary: operator flipped to lower_than (it would not fire on the roster-size value)" TF \
+    's = edit(s, CANRES, "operator            = \"higher_than\"", "operator            = \"lower_than\"")' \
+    "canary operator/value/windows drifted"
+  mutate_red "canary: the exploration re-pointed at the production local (derivation bypassed)" TF \
+    'old = "replace(trimspace(local.egress_gw_probe_silent_canary_sql)"
+assert s.count(old) == 1
+s = s.replace(old, "replace(trimspace(local.egress_gw_probe_silent_sql)")' \
+    "canary local is consumed"
+  mutate_red "canary: exploration dropped from the apply allowlist" WF \
+    'old = "              -target=logtail_exploration.egress_gw_probe_silent_canary \\\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "canary -target line is missing"
+  mutate_red "canary: alert dropped from the apply allowlist" WF \
+    'old = "              -target=logtail_exploration_alert.egress_gw_probe_silent_canary \\\n"
+assert s.count(old) == 1
+s = s.replace(old, "")' \
+    "canary -target line is missing"
+  mutate_red "canary: a SECOND canary-like pair is added after the compliant first (exact count)" TF \
+    's = s + "\nresource \"logtail_exploration\" \"egress_gw_probe_silent_canary2\" {\n}\n\nresource \"logtail_exploration_alert\" \"egress_gw_probe_silent_canary2\" {\n}\n"' \
+    "resource count is not 4"
+
+  mutate_red "canary: a second alert carrying the canary's name under a different label (name-literal count)" TF \
+    's = s + "\nresource \"logtail_exploration_alert\" \"zz_other\" {\n  name = \"soleur-egress-gw-probe-silent-canary-prd\"\n}\n"' \
+    "name literal count is not 4"
+  mutate_red "canary: the canary exploration's chart type drifts (the pair no longer shares a chart)" TF \
+    's = edit(s, CANEXPL, "chart_type = \"line_chart\"", "chart_type = \"bar_chart\"")' \
+    "canary exploration differs from the production exploration"
+  mutate_red "silent: the production exploration's variable type drifts" TF \
+    's = edit(s, SILEXPL, "variable_type = \"source\"", "variable_type = \"text\"")' \
+    "production exploration's team_name, chart_type"
+  mutate_red "silent: the production exploration's team drifts" TF \
+    's = edit(s, SILEXPL, "team_name = \"Your team\"", "team_name = \"Other team\"")' \
+    "production exploration's team_name, chart_type"
+  mutate_red "canary: an extra attribute on the canary alert alone (canary-equals-production comparison)" TF \
+    's = edit(s, CANRES, "  paused = false\n", "  paused = false\n  sms_extra = 1\n")' \
+    "differs from the production alert block"
+  mutate_red "silent: a third consumer of the production SQL local appears in a locals block" TF \
+    's = s + "\nlocals {\n  zz_third = local.egress_gw_probe_silent_sql\n}\n"' \
+    "third consumer reads the production SQL local"
+  mutate_red "probe: a later PROD_NAME re-assignment wins at run time (assigned more than once)" PR \
+    's = s + "\nPROD_NAME=\"decoy\"\n"' \
+    "alert-name or emitter-tag literals drifted"
+  mutate_red "probe: the EMITTER_TAG literal no longer equals the tag the alert reads" PR \
+    's = s.replace("EMITTER_TAG=\"egress-gw-probe\"", "EMITTER_TAG=\"egress-gw-probe-v2\"")' \
+    "alert-name or emitter-tag literals drifted"
+
+  # The emitter scan covers every file TYPE under the infra tree: plant the canary identifier in types the old
+  # extension list skipped (a .service unit, a .conf drop-in, a .tftpl, a second .tf) and each must red.
+  for ext in service conf tftpl tf; do
+    mkdir -p "$MUT_DIR/infra-$ext" && printf 'logger -t egress-gw-probe-canary-absent x\n' > "$MUT_DIR/infra-$ext/planted.$ext"
+    cp "$TF" "$MUT_DIR/infra-$ext/betterstack-logs-alerts.tf"
+    rc=0; env "EGW_GUARD_TF=$MUT_DIR/infra-$ext/betterstack-logs-alerts.tf" "EGW_GUARD_INFRA=$MUT_DIR/infra-$ext" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/inner.log" 2>&1 || rc=$?
+    case "$(_red_verdict "$rc" "$MUT_DIR/inner.log" "contains the canary identifier")" in
+      red) ok "mutation RED: the canary identifier planted in a .$ext file under the infra tree" ;;
+      wrong) no "mutation went red for the WRONG reason: the canary identifier planted in a .$ext file" ;;
+      survived) no "mutation SURVIVED: the canary identifier planted in a .$ext file — the emitter scan skips that file type" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc): the canary identifier planted in a .$ext file" ;;
+    esac
+    # The scratch tree lives under MUT_DIR, which the later rows scan recursively: drop it before they run.
+    rm -rf "${MUT_DIR:?}/infra-$ext"
+  done
 
   # ── Fail-alert rows ────────────────────────────────────────────────────────────────────────
   mutate_red "fail: the tag conjunct dropped (any row would page)" TF \
@@ -747,6 +1039,12 @@ s = s.replace(old, "\ndefaults:\n  run:\n    shell: bash\nenv:\n  TERRAFORM_VERS
   # ── must-PASS rows ─────────────────────────────────────────────────────────────────────────
   mutate_green "a comment-only edit to the tf" TF \
     's = s + "\n# control comment\n"'
+  mutate_green "whitespace reflow of the silent heredoc (still equal after flattening)" TF \
+    'i = s.index(SILLOC); j = s.index(SQLEND, i)
+blk = s[i:j]
+old = "\n    FROM {{source}}"
+assert blk.count(old) == 1
+s = s[:i] + blk.replace(old, "\n\n      FROM   {{source}}") + s[j:]'
   mutate_green "whitespace reflow of the deny heredoc" TF \
     'i = s.index("  egress_gw_deny_spike_sql = <<\x2dSQL"); j = s.index(SQLEND, i)
 blk = s[i:j]
@@ -761,8 +1059,8 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
 # row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
-PRESENCE_ROWS=58
-MUT_ROWS=42
+PRESENCE_ROWS=85
+MUT_ROWS=78
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

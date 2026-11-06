@@ -178,6 +178,7 @@ scripts/compound-promote	knowledge-base/project/promotion-config.yml
 scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
 scripts/compound-promote-draft-edit-10552	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/content-publisher-residue	knowledge-base/marketing/distribution-content
+scripts/egress-gw-probe-silent-12180	knowledge-base/project
 scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/followthrough-varq-ban	knowledge-base/project
@@ -292,6 +293,7 @@ tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
+tests/scripts/argv-bearer-sweep	knowledge-base/project
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
