@@ -164,7 +164,7 @@ done
 # export, a `declare -gx`, or a third mention anywhere breaks this, whatever it is spelled as.
 mentions="$(sed -e 's/^[[:space:]]*#.*$//' "$GATE" | grep -n 'SOLEUR_TEST_JOBS' || true)"
 n_ment="$(printf '%s\n' "$mentions" | grep -c . || true)"
-scoped_re='^[0-9]+:[[:space:]]*SOLEUR_TEST_JOBS="\$\{SOLEUR_TEST_JOBS:-4\}" affected_bound bash "\$RUNNER" "\$_flag" \|\| rc=\$\?$'
+scoped_re='^[0-9]+:[[:space:]]*(SOLEUR_PJ_PROVISIONAL_FILE="\$PROVISIONAL_FILE" )?SOLEUR_TEST_JOBS="\$\{SOLEUR_TEST_JOBS:-4\}" affected_bound bash "\$RUNNER" "\$_flag" \|\| rc=\$\?$'
 n_scoped="$(printf '%s\n' "$mentions" | grep -cE "$scoped_re" || true)"
 if [[ "$n_ment" == 2 && "$n_scoped" == 1 ]]; then
   pass "C6 — the variable appears on exactly two code lines and only as a call prefix (never exported)"

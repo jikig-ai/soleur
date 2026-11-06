@@ -1,0 +1,9 @@
+label=r2-fifo-control fifo=1 sha=3010ff00caecb578ceb1fcd8dbf80dc3bb55b8af pick=7af192071d start=1793885318
+loadavg_start=8.76 10.48 12.94 nproc=16
+heavy_processes_start:
+2602923    2054 bash scripts/test-all.sh --affected
+2812768    1968 bash scripts/test-all.sh --affected
+2602921    2054 timeout -k 10 2400 bash scripts/test-all.sh --affected
+end=1793888609 wall_s=3291
+loadavg_end=9.69 14.15 14.54
+rc=1

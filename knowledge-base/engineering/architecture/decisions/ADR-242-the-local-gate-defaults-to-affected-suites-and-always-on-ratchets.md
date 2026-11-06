@@ -924,3 +924,45 @@ Their edge set (declared plus derived, as the selector prints it) includes the w
 **Correction to the brief.** Only `scripts/image-cve-verdict-consumers` is in `ALWAYS_ON_SUITES`. `scripts/image-cve-verdict` is edge-selected (21.6 percent), so no demotion was ever needed to price it; its 1223 ms `floor` row in `suite-durations.tsv` is a CI shard-balancing defect, tracked in #12106.
 
 Next levers, in order (the decision rule above governs only the conditional lib edit of the #12025 re-pricing; these levers are not gated by it): (1) break the serial `lock:test-all` chain: narrow the replay arms' edge set (the first re-pricing target, 1806 s per PR) and, separately, let token-free suites launch behind a blocked head and split the self-SUT token; (2) seed or share the affected-derive cache for fresh worktrees (cold derive was 543 s here; it matters most for diffs that select few edge suites and is not the gate for (1)); (3) make a budget kill report an already-printed red as a failure (finding 4). Re-evaluation: after (1) lands, repeat the measurement; the lib edit is judged at a cold derive and a pool that runs more than one suite for most of the suite phase.
+
+## Amendment — 2026-11-05 (#12013)
+
+Raw rows: `knowledge-base/project/specs/archive/20261106-052833-feat-one-shot-12013-affected-gate-lock-chain/measurements/` (`summary.txt` holds the method and the derived figures; every number below comes from it). Rulings by the CTO agent on 2026-11-05 are in that spec's `decision-challenges.md` (F1 to F5 and two review dissents). This amendment supersedes by reference the previous amendment's "Known limit" paragraph on the serial `lock:test-all` chain and the budget-kill note; it does not rewrite them.
+
+**Outcome.** The 10-minute bar of #12013 is still not met. Three cold readings of the same replayed diff (160 of 733 suites) at commit `3010ff00ca` took 3063 s and 3174 s with backfill and 3291 s for the strict-FIFO control, against 6522 s for the single earlier reading: the gate is about 52 percent faster and about 5.2 times over the bar. #12013 stays open at that measured gap. A budget kill after a red now exits 1 instead of 6.
+
+### What changed
+
+1. **Conservative backfill (`_pj_fill`), default on.** A queued suite launches only if a slot is free, its tokens conflict with no live suite, and they conflict with nothing still queued ahead of it, so suites that share a token keep registration order and a queued `*` still blocks everything after it. One pass over the queue, linear in its length. `SOLEUR_PJ_FIFO=1` restores the previous strict FIFO; it is the A/B control of the measurement, read once, and demoted from the environment of every suite. `_pj_drain` fills until empty so a torn reap cannot strand a queued suite. Unconditional skip-ahead was rejected (it breaks the `*` barrier), as was a default-off knob (no gain without it).
+2. **The three `ci-pr-affected-replay-{a,b,c}` arms carry an explicit empty lane-token set** (their derived set is exactly `lock:test-all`), because each arm runs in its own `mktemp -d` sandbox, never calls the advisory lock and only reads the real tree. `_lane_derive` is split out of `lane_tokens_for` so a guard compares the override with the live classifier. Narrowing the derivation itself (so that other `lock:test-all` holders are freed) was rejected for now: 59 of the 160 selected suites hold the token and a false "mention only" call becomes a deadlock of up to 3600 s.
+3. **The sidecar contract.** `affected-tests.sh` creates a fresh `mktemp` file per run, hands its path to the runner as `SOLEUR_PJ_PROVISIONAL_FILE`, and drops any inherited value before any arm runs. The runner appends `label<TAB>rc<TAB>epoch` for each red it reaps, only for its own `failed` class (`suite_exit_class`: rc 128, 193..255 and unnamed signals are reds; a named signal never is, ADR-177), never in an interrupted run, and demotes the variable from the environment of every suite. On a runner exit of 124 or 137 the gate exits 1 `failed-before-budget` if any record has rc 1..255 and an epoch strictly before the deadline; otherwise it keeps exit 6 `budget-deferred`. The CTO ruled the sidecar over a stderr tee (a tee parses display text that monitors also parse) and, on review, that the writer and the drain verdict share one classifier. Unchanged: a run is still never reported green by this path, and CI's required `test` check remains the only merge gate.
+
+### Measurement
+
+| Reading | Mode | Wall | Cold derive | Suite phase | At most one suite live | `replay-a` start / wall | Load average (start to end) |
+|---|---|---|---|---|---|---|---|
+| baseline (2026-11-04, one reading) | FIFO, replay arms serial | 6522 s | 543 s | 5979 s | 78 percent | late, behind `lock:test-all` | 8 burners plus siblings |
+| r1 | backfill | 3063 s | 335 s | 2728 s | 34 percent | +1511 s / 1549 s | 13.7 to 8.8 |
+| r2 (control) | `SOLEUR_PJ_FIFO=1`, replay arms parallel | 3291 s | 327 s | 2964 s | 55 percent | +1588 s / 1700 s | 8.8 to 9.7 |
+| r3 | backfill | 3174 s | 232 s | 2942 s | 40 percent | +1207 s / 1956 s | 9.5 to 38.2 (a sibling spike at the end) |
+
+What it shows, and its limits:
+
+- **Most of the gain comes from freeing the replay arms and the pool, not from backfill alone.** The control (FIFO, but with the arms already free) is 3291 s; backfill gives 3063 s and 3174 s. The difference of 128 to 228 s (4 to 7 percent) is of the same order as the spread between the two backfill readings (111 s) and the load differences, so it is a direction, not a precise gain. The share of the pool phase with at most one suite live is the sturdier signal: 34 and 40 percent with backfill against 55 percent for the control and 78 percent at baseline.
+- **The suite phase is now close to the packing floor.** The 160 suites' walls sum to 7294, 6437 and 7501 s; divided by the pool width 4 that is 1824, 1609 and 1875 s, against suite phases of 2728, 2964 and 2942 s.
+- **The tail is one suite.** `replay-a` takes 1549 to 1956 s and starts 1207 to 1588 s into the run, because it is late in registration order, so the run ends when it ends. This is the next lever: start the longest suites first (longest-processing-time ordering, or a declared start priority for a small named set), recorded on #12013.
+- **Pool-concurrent walls (not standalone weights).** `replay-a` / `-b` / `-c` took 1549 / 710 / 643 s (r1), 1700 / 697 / 661 s (r2) and 1956 / 790 / 748 s (r3) while sharing the machine with three other suites; the standalone weights of the previous amendment (1301.3 / 479.6 / 446.0 s) stay the pricing basis. No weight in `suite-durations*.tsv` changed.
+- **Lever 3 (derive cache) stays unbuilt.** Cold derive was 10.9, 9.9 and 7.3 percent of the cold gate, under the 25 percent tracker line (the 2026-11-04 amendment's share was 8 percent). Re-measure after each lever lands.
+- **Failures at the measured commit.** `lint-trap-tempfile-ownership` and `grep-q-pipe-guard` failed because of defects in this PR's own new tests at `3010ff00ca`; both were fixed in `34fcc5b27e` and verified standalone. `apps/web-platform [repo-wide+component]` is the known clone artifact. `scratch-residue` failed once (r2) on an unreproduced load flake (232/232 standalone). The gate's three-reading criterion "no new failures across readings" is met for the changed behaviour: the same four suites, or fewer, failed in every reading.
+- **Not claimed:** the 600 s bar, a general speed-up on machines with different load, a result for diffs that select a different suite mix, or that the readings at `3010ff00ca` describe the later commits byte for byte (they changed tests, the sidecar predicate, the FIFO knob's demotion and a de-duplication of the token unions; launch decisions are unchanged).
+
+### Known limits and next levers
+
+- Finished workers are reaped only when the pool saturates or at drain, so a stale token holder can delay later suites until then (pre-existing under FIFO). Follow-up recorded on #12013 with its evidence bar.
+- Edge narrowing for the replay arms (the `^plugins/soleur/` prefix) and narrowing the `lock:test-all` derivation are deferred as #12151 and #12152, blocked on #12110 and its fix.
+- Longest-first ordering (above) and the 2400 s budget counting queue wait are not addressed here.
+- A red that finished before a budget kill but was not yet reaped is not in the sidecar (lazy reap), so that case still reads rc 6, the fail-safe direction.
+
+### Alternatives considered
+
+Unconditional skip-ahead (breaks the `*` barrier); a stderr tee instead of a sidecar (parses display text, process-substitution status hazard); a suite-result memo (rejected twice before); narrowing the token derivation to exec-shaped references (a rough 32 versus 144 classification, deadlock cost); a default-off backfill knob (no measured gain without it); mirroring the signal-name predicate in the gate reader (two copies drift; the writer owns it).

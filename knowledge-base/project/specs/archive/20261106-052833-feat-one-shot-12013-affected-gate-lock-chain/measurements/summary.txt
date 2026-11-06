@@ -1,0 +1,58 @@
+# Measurements: local affected gate, three cold readings (Ref #12013)
+
+Method (a measurement method only; it bypasses nothing in a ship path):
+- Each reading is a fresh `git clone` of the worktree at the PR commit `3010ff00ca` into its own directory, so it has its own
+  git-common-dir (its own advisory lock, which is the only way the pool engages) and an empty per-worktree derive cache (cold).
+- `origin/main` in the clone is set to the PR commit, so the PR's own runner edit is part of the base and the gate is not degraded to full.
+- The replay is the pick of the 2026-11-04 amendment: the web-platform median pick `7af192071d` (8 files); its added files are removed and
+  its modified files restored to the parent's content, then committed. Selection: 160 of 733 (always-on 116, edge 44), as in the baseline.
+- Command: `env -u CI SOLEUR_PJ_FIFO=<0|1> SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<file> bash scripts/test-all.sh --affected`, output stamped per line.
+- Order in one session: r1 backfill, r2 `SOLEUR_PJ_FIFO=1` control, r3 backfill. No synthetic CPU burners; the machine carried its ordinary
+  sibling-session load (loadavg is recorded at each start and end).
+- Per-suite walls are the `*.timing.tsv` files (`suite<TAB>wall_ms<TAB>tmp_delta=...`, skipped rows included). The raw 18k-line
+  stamped logs are not committed.
+
+Derived by /var/tmp scripts from the stamped logs (numbers below are copied from that output):
+
+reading=r1-backfill fifo=0 sha=3010ff00ca
+wall_s=3063 cold_derive_s=335 engaged_at_s=345 suite_phase_s=2728
+loadavg_start=13.66 11.60 12.14 loadavg_end=8.83 10.52 12.97
+seconds_with_at_most_one_suite_live=925 of 2718 (34 percent of the pool phase)
+AFFECTED_SUMMARY selected=160 of=733 always_on=116 edge=44 fallback=none
+=== 745 suites: 157 passed, 3 failed, 0 killed (unresolved — coverage not obtained), 585 skipped (declined — not relevant to this diff), 573
+replay-a: start=+1511s end=+3060s wall_ms=1548687
+replay-b: start=+1512s end=+2221s wall_ms=709707
+replay-c: start=+1513s end=+2156s wall_ms=643048
+failed_suites=.claude/hooks/grep-q-pipe-guard.test.sh; apps/web-platform [repo-wide+component]; scripts/lint-trap-tempfile-ownership
+
+reading=r2-fifo-control fifo=1 sha=3010ff00ca
+wall_s=3291 cold_derive_s=327 engaged_at_s=335 suite_phase_s=2964
+loadavg_start=8.76 10.48 12.94 loadavg_end=9.69 14.15 14.54
+seconds_with_at_most_one_suite_live=1628 of 2956 (55 percent of the pool phase)
+AFFECTED_SUMMARY selected=160 of=733 always_on=116 edge=44 fallback=none
+=== 745 suites: 156 passed, 4 failed, 0 killed (unresolved — coverage not obtained), 585 skipped (declined — not relevant to this diff), 573
+replay-a: start=+1588s end=+3288s wall_ms=1699772
+replay-b: start=+1589s end=+2286s wall_ms=697282
+replay-c: start=+1590s end=+2251s wall_ms=660709
+failed_suites=.claude/hooks/grep-q-pipe-guard.test.sh; apps/web-platform [repo-wide+component]; scripts/lint-trap-tempfile-ownership; tests/scripts/scratch-residue
+
+reading=r3-backfill fifo=0 sha=3010ff00ca
+wall_s=3174 cold_derive_s=232 engaged_at_s=240 suite_phase_s=2942
+loadavg_start=9.47 14.03 14.50 loadavg_end=38.24 26.04 19.47
+seconds_with_at_most_one_suite_live=1196 of 2934 (40 percent of the pool phase)
+AFFECTED_SUMMARY selected=160 of=733 always_on=116 edge=44 fallback=none
+=== 745 suites: 157 passed, 3 failed, 0 killed (unresolved — coverage not obtained), 585 skipped (declined — not relevant to this diff), 573
+replay-a: start=+1207s end=+3163s wall_ms=1956184
+replay-b: start=+1208s end=+1998s wall_ms=790426
+replay-c: start=+1210s end=+1958s wall_ms=748466
+failed_suites=.claude/hooks/grep-q-pipe-guard.test.sh; apps/web-platform [repo-wide+component]; scripts/lint-trap-tempfile-ownership
+
+Sum of the 160 suites' walls: r1 7294 s, r2 6437 s, r3 7501 s (baseline 8671 s). Pool packing floor (sum / 4): 1824 s, 1609 s, 1875 s.
+
+Failed suites at the measured commit (3 or 4 of 160):
+- `scripts/lint-trap-tempfile-ownership` and `.claude/hooks/grep-q-pipe-guard.test.sh`: defects in this PR's own new test code at
+  `3010ff00ca`, found by these readings and fixed in `34fcc5b27e` (verified standalone: both green).
+- `apps/web-platform [repo-wide+component]`: the clone artifact the 2026-11-04 baseline recorded (a real-git push test and a ledger-branch
+  test the private clone lacks).
+- `tests/scripts/scratch-residue` (r2 only): the `[bun-runtime-plugin]` leaf exited 1 under load in the clone; standalone in the worktree it
+  is 232/232. Unreproduced; recorded, not explained.

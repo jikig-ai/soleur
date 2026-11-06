@@ -128,6 +128,22 @@ lane_declare "scripts/test-all-parallel-contention" "lock:test-all" \
 lane_declare "scripts/test-all-parallel-benchmark" "lock:test-all" \
   "self-SUT: times sandboxed runner arms — wall-clock is the measurement"
 
+# #12013: the three ci-pr-affected-replay arms. Their derived set is exactly `lock:test-all` (the suite file
+# names scripts/test-all.sh), but that token exists for suites that take the REAL advisory lock or drive the
+# shared live tree, and these arms do neither: each arm builds a distinct `mktemp -d` sandbox
+# (ci-pr-affected-replay.test.sh, SANDBOX), the test-all.sh references in the file are planted fixture copies
+# or read-only reads of the real file, and the file never calls tc_acquire. Measured cost of the token: the
+# three arms cost 2227 s standalone (3281 s inside the contended measured run) and ran one at a time while the pool idled (ADR-242, 2026-11-04). An
+# override REPLACES the whole set, so the empty set here is derived minus lock:test-all. Pinned against the live
+# classifier by scripts/lib/test-suite-lanes.test.sh (override == _lane_derive minus the token, per label).
+# The other `lock:test-all` holders keep the token; narrowing the derivation itself is a separate decision.
+lane_declare "plugins/soleur/test/ci-pr-affected-replay-a" "" \
+  "sandboxed arm: distinct mktemp -d root, no tc_acquire, test-all.sh mentions are planted fixtures or reads"
+lane_declare "plugins/soleur/test/ci-pr-affected-replay-b" "" \
+  "sandboxed arm: distinct mktemp -d root, no tc_acquire, test-all.sh mentions are planted fixtures or reads"
+lane_declare "plugins/soleur/test/ci-pr-affected-replay-c" "" \
+  "sandboxed arm: distinct mktemp -d root, no tc_acquire, test-all.sh mentions are planted fixtures or reads"
+
 # --- The classifier ----------------------------------------------------------
 
 # _lane_suite_file <argv...> — map a registration's argv to the suite's readable
@@ -221,6 +237,13 @@ lane_tokens_for() {
       return 0
     fi
   done
+  _lane_derive "$@"
+}
+
+# _lane_derive <argv...> — the classifier WITHOUT the override lookup: the token set the suite's own source
+# derives. lane_tokens_for calls it after the lookup misses (behaviour unchanged); a guard calls it directly to ask
+# what the classifier derives for a label whose override would otherwise mask the answer (#12013).
+_lane_derive() {
   local f
   f="$(_lane_suite_file "$@")"
   if [[ -z "$f" || ! -r "$f" || -d "$f" ]]; then

@@ -15,6 +15,7 @@
 - Per-suite exit codes, `[FAIL]`/`[KILLED]`/`[ok]`/`[skip]` lines, per-suite log files, durable-log retention, `TEST_TIMING_LOG` rows, and the `=== N/M suites passed ===` epilogue are produced by the same code as serial mode — just ordered after a drain.
 - Concurrency is capped from **measured** host capacity: `min(nproc, MemAvailable/512MB, 8)`, clamped further if you ask for more.
 - Shared-resource suites serialize by resource token (`scripts/lib/test-suite-lanes.sh`); a `*` suite gets a drained pool.
+- Launch order is a conservative **backfill** (#12013): a suite blocked on a token no longer idles free slots; a later suite launches only if it conflicts with no live suite and with nothing still queued ahead of it, so suites that share a token keep registration order and a queued `*` still blocks everything after it. `SOLEUR_PJ_FIFO=1` restores the previous strict FIFO (the A/B control of a timing measurement; not a tuning knob). Finished workers are reaped only when the pool saturates or at drain, so a stale token holder can delay later suites until then (known limit, tracked under #12013).
 - A run goes wide **only while holding the repo-global advisory lock** — cross-worktree serialization is never weakened.
 
 ## Serial fallback — every way to get it
