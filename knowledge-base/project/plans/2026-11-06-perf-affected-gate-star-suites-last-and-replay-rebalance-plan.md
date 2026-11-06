@@ -8,6 +8,21 @@ type: perf
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Research and review agents used:** learnings-researcher, CTO (three rounds), plan-review panel (DHH, Kieran, code-simplicity, CTO devex), sharp-edges verification pass, architecture-strategist, test-design-reviewer (with scratch-runner experiments).
+
+### Key improvements
+1. The release rule is one post-loop step (CTO V2) instead of a pre-scan with a dead conjunct; `_pj_draining` is declared in the pre-splice state block.
+2. The mutation matrix is rebuilt from measured kills: the equivalent mutant removed, and the `skip_tok`-only, stagger-dependent, torn-reap and signal kills given arms that actually kill them (blocked-head star, long-holder, last-non-star tear, star-first-registered signal arm).
+3. Lever 2 is gated by a paper check (the CTO's what-if says an equal split is 78 s worse); the `budget_seconds` AC points at the files it lives in; the exemption-cap row and `corpus-weight-budget` suite join the rebalance commit.
+
+### New considerations discovered
+- Six `*` overrides, not five; two of them read the runner itself.
+- C3 in the contention suite would pass vacuously if `bar` never started; the `many` arm's cost ceiling is 15x too loose after parking.
+- A budget kill before the drain now leaves every `*` suite unrun (CI covers them).
+
 Spec lacks a valid `lane:` (no spec.md on this branch) - defaulted to cross-domain (TR2 fail-closed). The domain sweep below found Engineering only.
 
 ## Overview
@@ -108,8 +123,9 @@ One open code-review issue names a planned file: **#7942** (two mutation batteri
 
 ### ADR
 Amend **ADR-242** with an "Amendment - 2026-11-06 (#12231)" holding **Decision 30**: a `*` (drain barrier) suite is parked by the
-pooled scheduler and launches solo at the drain, after every non-`*` job, in registration order; registration order, render order and
-verdicts are unchanged; `SOLEUR_PJ_FIFO=1` stays strict FIFO. It also marks the Decision 29 sentence "Every `*` suite now waits for
+pooled scheduler and launches solo at the drain, after every non-`*` job, in registration order; token-sharing non-`*` suites keep
+registration order, a `*` is exclusive but ordered last (so the 2026-11-05 amendment's "a queued `*` still blocks everything after it" and
+Decision 29's "behind the `*` barrier" sentences are marked superseded by name); registration order, render order and verdicts are unchanged; `SOLEUR_PJ_FIFO=1` stays strict FIFO. It states that parking is a single-class launch deferral, not the priority or weight-ordered buffering Decision 29 rejected (registration, streaming and `stamp_lock_holder` timing are untouched), and its consequences: a budget kill before the drain leaves every `*` suite unrun and out of the provisional sidecar, so a red `*` suite can only defer to CI, never reach `failed-before-budget`. It also marks the Decision 29 sentence "Every `*` suite now waits for
 the arms to drain" superseded. The decision text is written in the C-impl commit (it is true whatever the readings say); figures and
 the protocol live only in `measurements/summary.txt` with a pointer. **Decision 31** (the `--rows` re-split) is added only if the
 rebalance lands. No new ADR: this extends the decision that owns the scheduler.
@@ -140,43 +156,59 @@ modified files restored to the parent's content, committed; expected `AFFECTED_S
 
 ### Phase 1 - RED: the scheduler arms (scripts/test-all-parallel-scheduler.test.sh)
 Edit the suite before the runner. Every `tl_check` carries a plain-language label naming the clause (a RED line reads "star-last: `*`
-started before an independent ended", with the timeline dumped), so a contributor knows which property broke.
-- **Retarget** the old bf3 arm (`holdQ, starS, indA2`) to the new contract: `indA2` starts while `holdQ` is live, `starS` starts after both
-  end. **Retarget** the A4b `star` arm (`indA, starS, indB, indC`) to also assert `starS` starts after `indB`/`indC` end and verdict lines
-  stay in registration order. (The existing `many` arm is the conflict-call cost ceiling; leave it alone and do not reuse its name.)
-- **two stars** (`indA, starS, indB, starT, indC`, `starT` a derived `*`: no override, unreadable source - this arm expects a `[FAIL]`
-  verdict and a non-zero exit for it since the source cannot run): the stars never overlap each other or anything, `starS` before `starT`.
-- **drain-order** (`holdT, starS, headT`): `headT` (token-blocked behind `holdT`, registered after the star) runs before `starS`.
-- **star-first** (`starS` registered first, then ten `ok` suites that stamp no timeline): the observation is runner-written and ordered,
-  `[run] ok9 done` precedes `[run] starS started` in `ARM_OUT`.
-- **torn reap** (`holdT, headT, starS`, the existing `torn` shape plus a parked `*`): `starS` runs, rc 0, no `[UNACCOUNTED]`.
-- **signal while parked** (`sigred`-style with a `starS` registered): parked entries render `[UNACCOUNTED]`, accounting parity holds.
-- **multi-token set** (only if `lane_declare` accepts `"* artifact:x"`; else record that it cannot be declared): parked like any `*`.
-- **FIFO control**: `SOLEUR_PJ_FIFO=1` on the star fixture reproduces the frozen strict-FIFO launch order (new literal, recorded by
-  running this arm against the UNMODIFIED runner in this phase - that run is the anchor); verdict lines and exit code equal backfill's.
+started before an independent ended", with the timeline dumped). Raise `MIN_PASSES_FLOOR` (currently 64) in the same edit as the arms.
+Measured at deepen time on scratch runner copies (CTO-ruled V2: each shape below passes V2 and the named mutant reddens it); the shapes
+are chosen so each kill is structural (release files, runner-written `[run]` lines, one long live holder), not a sleep-stagger race.
+- **Retarget** the old bf3 arm (`holdQ, starS, indA2`): `indA2` starts while `holdQ` is live, `starS` starts after both end. **Retarget**
+  the A4b `star` arm to a long-holder shape (`indA, starS, slowL, indB`, `slowL` 1.2 s so an overlap window is at least 0.8 s): `starS`
+  starts after `indB` and `slowL` end, the `*` never overlaps, verdict lines stay in registration order, rc 0, the terminal
+  `=== N/N suites passed ===` marker and the `TEST_TIMING_LOG` rows stay in registration order, and the parked star's `tmp_delta` is numeric
+  (it launched solo).
+- **blocked-head star** (`holdT, headT, starS, indA2`): a token-blocked non-star ahead of the star, then an independent after it; `indA2`
+  must not wait for the star (kills the `skip_tok`-only mutant).
+- **two stars** (both override `*`, with timeline fixtures so both stamp; `starT` declared in the prelude): they never overlap each other or
+  anything, `S:starT>=E:starS`, and registration order among stars holds. A separate small **derived-`*`** arm (unreadable source, no
+  override) asserts by `[run]` line order that it is parked until the drain, and expects a `[FAIL]` verdict and a non-zero exit (the source
+  cannot run, so it stamps nothing).
+- **drain-order** (`holdT, starS, headT`, with a release-file holder so it does not wait out the 2 s timeout): `headT` runs before `starS`.
+- **star-first** (`starS` registered first, then ten `ok` suites that stamp nothing): `[run] ok9 done` precedes `[run] starS started` in
+  `ARM_OUT`. The `many` arm (60 `ok` suites behind a first `*`) now measures nothing at its 3000-call ceiling (about 60 conflict calls
+  under parking vs about 1890 before): re-seed the ceiling to about 200, fix its comment, and give `many` the same `[run]`-order assertion
+  rather than adding a duplicate fixture.
+- **torn reap** (`holdT, starS`): the tear hits the last non-star and `starS` still runs, rc 0, no `[UNACCOUNTED]` (a release only in the
+  normal `_pj_reap` path would miss it).
+- **signal while parked** (`starS` registered FIRST, then `sigred, indA`, so it is parked before the signal): `[run] starS started` is absent
+  and the verdict is `[UNACCOUNTED]`; accounting parity holds.
+- **multi-token** (`holdQ, starM, indA2` with `lane_declare "starM" "* artifact:x"`; `lane_declare` accepts any string): parked like any `*`.
+  Mandatory, not conditional.
+- **FIFO control**: `SOLEUR_PJ_FIFO=1` on the star fixture reproduces the frozen strict-FIFO launch order (new literal, recorded by running
+  this arm against the UNMODIFIED runner in this phase - that run is the anchor); verdict lines and exit code equal backfill's.
 - Must-PASS fixtures: a `*` suite registered last, and a run with zero `*` suites, both keep registration-order verdicts.
-- Instrument self-test extended: the timeline checker FAILS on a sequential timeline and on a missing `star` label.
+- Instrument self-test: the existing A10 self-test already fails a sequential timeline and a missing label; add the missing-`star`-label case.
 Run against the unmodified runner: the new arms must be RED for their own reason (the FIFO, must-PASS and instrument rows GREEN).
+Also update `scripts/test-all-parallel-contention.test.sh` C3: its header says the barrier is "queued mid-walk" (it now runs at the end) and
+its checker passes vacuously if `bar` never starts - add an assertion that `[run] bar started` and `[run] bar done` both appear.
 
 ### Phase 2 - GREEN: park and release (scripts/test-all.sh)
 Per CTO Q1/Q2 and batch-2 R1 (variant V2), backfill branch of `_pj_fill` only (the `_pj_fifo == 1` branch and `_pj_launchable` untouched):
-- New global `_pj_draining=0`, set to 1 at the top of `_pj_drain` after the `_pj_mode` guard, never reset (`_pj_drain` is called once).
+- New global `_pj_draining=0`, declared in the pre-splice state block beside `_pj_fifo` (the `TESTALL_TARGET_OVERRIDE` sandboxes splice the runner
+  under `set -u`; an undeclared global aborts them), set to 1 at the top of `_pj_drain` after the `_pj_mode` guard, never reset (`_pj_drain` is called once).
 - In the pass, a candidate whose token set contains `*` (the word-bounded test `" $tok " == *" * "*`, the existing idiom) is **always
   parked**: `rest+=("$idx"); continue`. It is not added to `skip_tok` and does not set `any_q`.
 - After the pass: if `_pj_draining == 1` and `_pj_live_n == 0` and `rest` is non-empty, launch `rest[0]` and drop it from `rest`. With an
   empty pool the first non-`*` candidate always launches (`lane_tokens_conflict` of a non-`*` set against an empty live set is false), so
   `rest` can then hold only parked `*` entries; launching the head of a pool-empty queue is legal in any case, so the step is also a
   deadlock-breaker. One `*` is released per fill; the next reap's fill releases the next.
-- `_pj_launch`, `_pj_reap`, `_pj_submit`, solo / tmp attribution and `stamp_lock_holder` are untouched. Add no `_pj_sig` conjunct.
+- `_pj_launch`, `_pj_reap`, `_pj_submit`, solo / tmp attribution and `stamp_lock_holder` are untouched. Add no `_pj_sig` conjunct. Accepted edge (recorded): `_pj_fill` has no `_pj_sig` check, so a reap fill can launch a star after the flag is set; `_pj_drain`'s signal branch then TERMs it, as for any suite.
 - Write the invariant once, in the `_pj_fill` comment block: "a parked `*` is invisible to backfill until the drain and is released
   only when the pool is empty after the pass"; the other stale sites point to it (see Files to Edit for the full list).
 Run the Phase 1 suite: GREEN. Then `scripts/test-all-parallel-contention.test.sh` (C3 asserts only non-overlap), `-benchmark`,
 `scripts/lib/test-suite-lanes.test.sh`, `scripts/test-all-capacity-signal.test.sh`, `scripts/orphan-process-reaper.test.sh` and
 `-mutation.test.sh` (the two that read the runner), and every suite that copies or splices it
-(`grep -l "TESTALL_TARGET_OVERRIDE\|test-all.sh" scripts/*.test.sh plugins/soleur/test/*.sh`).
+(`grep -l "TESTALL_TARGET_OVERRIDE\|test-all.sh" scripts/*.test.sh plugins/soleur/test/*.sh`). Also restate the ordering invariant where it is written: token-sharing non-`*` suites keep registration order, a `*` is exclusive but ordered last (the `_pj_fill` comment (iii), the `lane_tokens_conflict` header in `scripts/lib/test-suite-lanes.sh`, the runbook launch-order bullet).
 
 ### Phase 3 - Mutants and enumeration (evidence for Guard 1)
-Run each Guard 1 mutant (one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`) and put the outcome table in `summary.txt` (no
+Run each Guard 1 mutant (one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`; the deepen-time scratch builder is a starting point, not a deliverable) and put the outcome table in `summary.txt` (no
 committed mutant harness). Re-take the enumeration: diff empty.
 
 ### Phase 4 - Rebalance (one droppable commit, gated)
@@ -198,8 +230,8 @@ stays 599; arms stay three.
 substitution from the manifest's first range so it still edits the argv); hand-edit the three arm rows in `scripts/suite-durations.tsv`
 (`src=estimate`, never `measured`); re-derive the `plugins/soleur/test/ci-pr-affected-replay-a` row of
 `scripts/suite-weight-exemptions.tsv` (`cap_ms` at most 1.3 x the new weight, or delete it when the new weight fits the default cap;
-keep the #11679 reason). `regenerate-shard-manifest.py --incremental --write` is only run as a check that it reports no diff (labels and
-leg pins are unchanged). Do not edit the battery while any arm runs.
+keep the #11679 reason). `python3 scripts/regenerate-shard-manifest.py --incremental` (dry-run, no `--write`) is run as a check that it reports
+`0 moved, 0 new, 0 no longer registered` (labels and leg pins are unchanged; verified at deepen time on the current tree). Do not edit the battery while any arm runs.
 4.4 Run `scripts-shard-totality.test.sh`, `scripts/ci-oracle-lane.test.sh`, `scripts/lib/test-suite-lanes.test.sh`,
 `scripts/test-all-weight-drift.test.sh`, `scripts/test-all-corpus-weight-budget.test.sh`, the affected-index ratchet / `ci-pr-affected-audit`
 (labels unchanged, so no new accept rows are expected), and one standalone run of each new arm.
@@ -265,17 +297,25 @@ source, and from the `|| printf '*'` fallback in `_pj_submit` (unreachable witho
 quantifies over the resolved token set, not a label list: the arms cover an override `*` and a derived `*`. `_pj_fill` has two branches
 (FIFO and backfill): FIFO is pinned unchanged by the frozen order, backfill by the arms.
 
-**Mutation matrix** (one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`, each must turn the named arm RED; derived from the design):
+**Mutation matrix** (one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`, each must turn the named arm RED; derived from the design;
+the mutant found equivalent at deepen time - park plus `any_q` only - is not in the matrix):
 
 | # | Edit to the runner copy | Must redden |
 |---|---|---|
-| M1 | delete the park, or park but still add the `*` to `skip_tok` / set `any_q` | star-last (retargeted A4b) and bf3 arms |
+| M1a | revert the park (a `*` handled as before) | star-last (retargeted A4b) and bf3 arms |
+| M1b | park, but still add the parked `*` to `skip_tok` | blocked-head star arm (`indA2` waits for the star) |
+| M1c | park, but still add to `skip_tok` AND set `any_q` | bf3 and the retargeted A4b arm |
 | M2 | post-loop release without `_pj_draining` (release whenever the pool is empty) | star-first arm |
-| M3 | post-loop release without the `_pj_live_n == 0` check, or launching ALL of `rest` (second member: a second `*` beside the first) | two-stars arm and the A4/C3 non-overlap checks |
+| M3a | post-loop release without the `_pj_live_n == 0` check | retargeted A4b long-holder arm (overlap window at least 0.8 s) |
+| M3b | second member: launch ALL of `rest`, not `rest[0]` | two-stars arm (`[run]` and timeline order) |
+| M3c | release `rest[-1]` instead of `rest[0]` | two-stars arm (registration order among stars) |
+| M3d | release without dropping `rest[0]` (same index launched twice) | two-stars arm and the accounting-parity check |
 | M4 | REORDER: run the post-loop release step before the pass | drain-order arm (`starS` before `headT`) - deleting the step would redden any suite, moving it reddens only one that observes the order |
 | M5 | park inside the `_pj_fifo == 1` branch / `_pj_launchable` | FIFO frozen-order literal |
 | M6 | set `_pj_draining=1` at the top of `_pj_submit` instead of `_pj_drain` | star-first arm |
-| M7 | test `$tok == "*"` instead of the word-bounded match (only if the multi-token arm is declarable) | multi-token arm |
+| M7 | test `$tok == "*"` instead of the word-bounded match | multi-token arm |
+| M8 | move the release out of `_pj_fill` into the normal `_pj_reap` path only | torn-reap arm |
+| M9 | add a `_pj_sig` conjunct that parks a star after the flag | signal-while-parked arm (absence of `[run] starS started`) |
 
 **Harness rows.** H1 (edit to the SUITE): flip an expected order in the star-last `tl_check`; the arm must go RED. H2 (must-PASS,
 non-canonical): a `*` registered last and a run with zero `*` suites stay green with registration-order verdicts. H3 (the arm's own
@@ -349,7 +389,7 @@ same suites. **Anchor.** `DECLARED_TOTAL=599` lives in the battery, outside this
 
 - [ ] AC1: Phase 1 arms RED on the unmodified runner, each for its own named reason; FIFO, must-PASS and instrument rows GREEN there.
 - [ ] AC2: `bash scripts/test-all-parallel-scheduler.test.sh` GREEN after Phase 2; `test-all-parallel-contention`, `-benchmark`, `lib/test-suite-lanes.test.sh`, `test-all-capacity-signal`, `orphan-process-reaper` and `-mutation` GREEN.
-- [ ] AC3: Guard 1 mutants M1 to M6 (M7 if declarable) all die; H1 reddens, H2 stays green; the outcome table is in `summary.txt`.
+- [ ] AC3: Guard 1 mutants M1a to M9 all die; H1 reddens, H2 stays green; the outcome table is in `summary.txt`.
 - [ ] AC4: the sorted enumeration diff is empty after C-impl; after C-rebalance only the three `--rows` argv cells differ.
 - [ ] AC5: backfill and FIFO print identical verdict lines in identical order with the same exit code on the star fixtures; the FIFO literal matches the unmodified-runner run (Phase 1).
 - [ ] AC6: the T1 pool log shows every `*` suite launching with nothing else live, after the last non-`*` suite ended (a structural property, pinned deterministically by the Phase 1 fixtures). "Seconds with at most one suite live" against C is REPORTED, not gated: it depends on the host's other load (`cq-ac-must-not-depend-on-concurrent-sessions`).
@@ -357,7 +397,7 @@ same suites. **Anchor.** `DECLARED_TOTAL=599` lives in the battery, outside this
 - [ ] AC8 (rebalance, only if Phase 4.0 passed; CTO Q3b + R2): in T2 pool phase at most T1's plus 30 s; the largest-to-smallest ratio of the arms' pooled walls at most 1.5; totality, the anti-vacuity floor, `ci-oracle-lane` G4 and `test-all-corpus-weight-budget` pass; failure set unchanged; predicted arm walls within about 15 percent of T2's measured pooled walls (a miss means the rebalance is dropped or recorded as informational only). A gain is CLAIMED only if T1 minus T2 is at least 50 s; otherwise the PR says "neutral on pool phase, kept for arm balance" or drops the commit. If Phase 4.0 failed: "not landed, paper-negative", no rebalance commit.
 - [ ] AC9: `git diff --quiet origin/main...HEAD -- .soleur-test-gate.json plugins/soleur/scripts/affected-tests.sh` exits 0 (`budget_seconds` untouched).
 - [ ] AC10: PR body uses `Ref #12013` always, `Closes #12231` only per AC7, and ends with the attribution line.
-- [ ] AC11: ADR-242 Decision 30 and runbook line 18 updated; `git grep -nF -e 'queued \`*\`' -e 'blocks everything after it' -e 'blocks every later' -- scripts knowledge-base/engineering/operations` returns nothing, and the only hits in the ADR-242 file are Decision 29 sentences the amendment marks superseded; `c4-count-parity` green.
+- [ ] AC11: ADR-242 Decision 30 and runbook line 18 updated; `git grep -nF -e 'queued \`*\`' -e 'blocks everything after it' -e 'blocks every later' -e 'breaks the \`*\` barrier' -e 'behind the \`*\` barrier' -- scripts knowledge-base/engineering/operations` returns nothing (the scheduler design comment around "`*` intersects everything and is the drain barrier" is rewritten by hand and checked by reading), and every hit in the ADR-242 file is a sentence of the Decision 29 or 2026-11-05 amendments that Decision 30 marks superseded by name; `c4-count-parity` green.
 - [ ] AC12: `python3 scripts/lint-guard-contract.py` on this plan, `bash scripts/test-all.sh` (full battery - the runner changed, so the gate runs full and this exercises the parked order) with all six `*` verdicts green, other results green or only pre-existing failures per `wg-when-tests-fail-and-are-confirmed-pre`.
 
 ### Post-merge (operator)
@@ -391,7 +431,7 @@ entry, the C/T1/T2 protocol with the keep rule, the measured contiguous split; a
 variant, the paper-check gate on lever 2, the AC7 amendment, and the six-suite order-dependence confirmation. No Product/UX surface
 (no UI file in either Files list); no legal, finance, marketing, sales, support or operations implication.
 
-## Observability
+## Signals (observability gate not triggered)
 
 Gate not triggered: the Files lists are repo-root `scripts/`, knowledge-base documents and measurement data, outside the gate's code
 paths, and the change adds no service, route, cron or infrastructure surface. The signal is the scheduler's own per-suite
