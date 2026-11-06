@@ -36,6 +36,26 @@ test('embedded query verifies a private byte snapshot before opening a transacti
   assert.deepEqual(denied.calls, []);
 });
 
+test('untrusted timeout options fail closed without running getters or opening a transaction', async () => {
+  const bytes = Buffer.from('SELECT synthetic_role_query');
+  const expected = createHash('sha256').update(bytes).digest('hex');
+  let getterCalls = 0;
+  const options = Object.defineProperty({}, 'timeoutMs', { get() { getterCalls++; throw Error('private'); } });
+  for (const input of [options, null, [], new Proxy({}, { ownKeys() { throw Error('private'); } })]) {
+    const db = fakeDatabase();
+    const result = await inspectEmbeddedRoles(db, bytes, expected, input);
+    assert.deepEqual(result, { state: 'failed', observed_count: null, holder_coverage: 'unknown', writer_clearance: false });
+    assert.deepEqual(db.calls, []);
+  }
+  assert.equal(getterCalls, 0);
+  let trapCalls = 0;
+  const proxy = new Proxy({ timeoutMs: 10 }, { getOwnPropertyDescriptor() { trapCalls++; throw Error('private'); } });
+  const db = fakeDatabase();
+  assert.equal((await inspectEmbeddedRoles(db, bytes, expected, proxy)).state, 'failed');
+  assert.equal(trapCalls, 1);
+  assert.deepEqual(db.calls, []);
+});
+
 test('embedded query snapshots bytes before an asynchronous adapter can mutate them', async () => {
   const bytes = Buffer.from('SELECT synthetic_role_query');
   const expected = createHash('sha256').update(bytes).digest('hex');

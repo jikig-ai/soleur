@@ -4159,6 +4159,21 @@
   `1ee0d6af49ad7039e9af9fb7569f07f53b49064e` without textual conflicts; its
   deployment-infrastructure changes have not been qualified on this recovery
   head. Refresh and reconcile main again at any later final review.
+- A further local merge incorporated main through
+  `93c5bd6ffc3417025026473686365ba04d099aa9` without textual conflicts. This
+  is not a qualification of the merged head or permission to collect.
+- The role-only embedded collector formerly evaluated a timeout getter before
+  its failure handler, allowing a thrown diagnostic to escape. It now rejects
+  accessor options and sanitizes descriptor errors before its own transaction
+  call; 49 related offline tests passed. Independent review confirmed this
+  narrow behavior and noted that proxy traps can still execute or block before
+  the deadline is armed. Those traps are not sandboxed, and this change does
+  not establish backend shutdown, isolation or collection authority.
+- Independent CTO review found the interim held-draft path can lose text and
+  attachment references on remount both before and after the hold reply. The
+  shared send path lacks authenticated engine identity before socket send, so
+  a pre-send cache would also retain other engines' drafts. Privacy review and
+  a safe scoped design are required; no such preservation guarantee exists.
 - Independent local review found the injected Firestore v2 authority adapter
   accepted another command while an earlier POST remained unresolved. A
   process-local latch now refuses concurrent and changed commands and clears

@@ -13,7 +13,14 @@ function validRole(value) {
 }
 
 export async function inspectEmbeddedRoles(database, bytes, expectedSha256, options = {}) {
-  const timeoutMs = options.timeoutMs ?? 15000;
+  let timeoutMs;
+  try {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return failure();
+    // Proxy descriptor traps can execute or block before the deadline starts.
+    const descriptors = Object.getOwnPropertyDescriptors(options);
+    if (descriptors.timeoutMs && !Object.hasOwn(descriptors.timeoutMs, 'value')) return failure();
+    timeoutMs = descriptors.timeoutMs?.value ?? 15000;
+  } catch { return failure(); }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15000) return failure();
   try {
     if (typeof database?.begin !== 'function') return failure();
