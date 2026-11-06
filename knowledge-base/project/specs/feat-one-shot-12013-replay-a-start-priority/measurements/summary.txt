@@ -47,7 +47,7 @@ Comparison (pool phase = wall minus the `engaged` offset):
 - wall: 2992 s -> 2134 s (-858 s); pool phase 2703 s -> 1882 s (-821 s); cold derive 278 s -> 244 s (not the lever).
 - replay-a start offset from pool start: 1296 s -> 0 s. replay-b and -c: 1297/1298 s -> 0 s.
 - Seconds with at most one suite live after engagement: 1098 s -> 112 s.
-- replay-a pooled wall 1404 s -> 1513 s (it now shares the machine with more suites at its start; the arms are the run's tail).
+- replay-a pooled wall 1404 s -> 1513 s (it now shares the machine with more suites at its start). It ends at +1765 s in the treatment while the run ends at +2134 s: the arms are no longer the run's tail, and the last suites are the web-platform group's.
 - Failures: the same single suite in both readings, `apps/web-platform [repo-wide+component]`, the known clone artifact.
 - Landed criteria (plan AC8): replay-a starts within 120 s of pool start: yes (0 s). Pool-phase wall at least 300 s below the control: yes
   (821 s, one control). No failure the control does not share: yes.
