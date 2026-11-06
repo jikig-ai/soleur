@@ -59,3 +59,19 @@ All dedup'd findings fixed inline: D3 → `_skip_link` helper + `islink` guards 
 **Round-1 anomaly:** the main 8-seat panel ran (§Review Phase above + tally agent_rounds) but its `Reviewed-By-Soleur`/`Reviewed-Coverage` branch trailer was never emitted — the PR body's `Reviewed-Coverage: sequential-fallback` line is the PLAN-phase placeholder ("review seats to follow per pipeline"), not panel evidence. A late accurate main-panel attestation is owed at trailer time; the fix round attests `--fix-round` keys only.
 
 Seat reports: `/var/tmp/review-12235-{security-sentinel,code-quality-analyst,git-history-analyzer,pattern-recognition-specialist,architecture-strategist,agent-native-reviewer,test-design-reviewer,semgrep-sast}-fixround1.md`
+
+## Fix-round 2 (ADR-267, --since 53d274bda8 → 4e04b731bb) — 2026-11-06
+
+Same 9-seat resolution (all round-1 reporting seats via `--finding-seats` + path map). All round-1 dispositions confirmed CLOSED by re-driven repros (12-mutant battery by test-design; live symlink repros by security/agent-native; suite 70/70→71/71 green; live lint unclassified:0/advisory:0).
+
+### Round-2 findings → dispositions (commit 4e04b731bb + follow-on edits)
+
+- **R2-F1 (P3, ×3 seats)** H6 anchor `scheduled-supabase-watchdog.yml › the COUNT read` names a non-site (`COUNT` is `printf|grep -c`, not a gh read) — actual out-of-class site is `HAS_ESC`/`HAS_ESC_RC` (marker :440). FIXED: anchor renamed. (architecture, pattern NF1, code-quality F1)
+- **R2-F2 (P3)** `_add`'s leaf `islink` guard deletes green — no fixture plants a symlinked `.yml`/`action.yml` FILE. FIXED: new H13 (linked workflow `.yml` + linked `action.yml` in own sub_dir, asserts ≥2 skip advisories + no census rows). (agent-native P3-1)
+- **R2-F3 (P3)** H11 doesn't pin the `symlink skipped` advisory — `_skip_link`-drop mutants survived. FIXED: `grep -q 'symlink skipped'` added to both H11 arms. (test-design F-r2-1)
+- **R2-F4 (P3, pre-existing, same family)** `gh issue edit --add-label needs-attention || true` — a swallowed label failure posts the sentinel + no-ops all future runs. FIXED: `|| ::warning::` arm (visible, comment still posts). (pattern NF2)
+- Nits fixed: `.github/$escape dir` label (".github/github"), `matches=` anchor disambiguation, `mkdir -p || FATAL` on H11 outside trees, dead `rm -rf` at old :1062.
+
+**Stale-stray:** a seat's probe left `scripts/.h1probe.Yv6eyj7B.sh` (196KB suite copy) untracked in the worktree — removed.
+
+Seat reports: `/var/tmp/review-12235-*-fixround2.md`; verification pass: `/var/tmp/review-12235-verifier-final.md`
