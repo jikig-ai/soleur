@@ -917,22 +917,35 @@ done
 # DERIVED, not a literal list: every tracked file that names the canary (outside the plan/spec history and this probe) must
 # be named in the RETIREMENT header, so a suite added later that hardcodes the canary cannot be missed by the deletion PR.
 ref_n=0
+refs_seen=()
 in_git=0; git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
 while IFS= read -r ref; do
   [[ -n "$ref" ]] || continue
   ref_n=$((ref_n + 1))
   key="${ref##*/}"; [[ "$key" =~ ^(ADR-[0-9]+)- ]] && key="${BASH_REMATCH[1]}"   # an ADR is named by its number
+  refs_seen+=("$key")
   if grep -qF -- "$key" <<<"$retire_block"; then pass "RETIREMENT header names the referrer ${key}"; else fail "RETIREMENT header lacks the referrer ${ref}"; fi
 done < <(git -C "$HERE" grep -lE 'silent_canary|probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
-# Anti-vacuity: the derivation must have found the files that are known to carry the canary.
-if [[ "$in_git" -eq 0 ]]; then pass "the referrer derivation is skipped outside a git checkout (nothing to enumerate)"; elif [[ "$ref_n" -ge 6 ]]; then pass "the referrer derivation found $ref_n files (>= 6)"; else fail "the referrer derivation found only $ref_n files; git grep did not run or the tree moved"; fi
+# Anti-vacuity: the derivation must have found EXACTLY the files that still name the canary (the set below). This is
+# an explicit set, not a floor: a vacuous derivation and an extra or a dropped referrer both fail. It is a count derived
+# from live repo state after the #12189 retirement removed the .tf and the send-failed suite from the set and the census
+# joined it (the two INTENDED_DESTROYS entries); it shrinks again when #12270 removes the kept targets and entries.
+# Each referrer is named by the key the RETIREMENT header must carry: its basename, or its number for an ADR.
+EXPECTED_REFERRERS="apply-web-platform-infra.yml
+betterstack-alert-structure.test.sh
+egress-gw-alert.test.sh
+ADR-218
+betterstack-log-query.md
+cron-egress-blocked.md
+test-infra-privileged-tier-census.sh"
+if [[ "$in_git" -eq 0 ]]; then pass "the referrer derivation is skipped outside a git checkout (nothing to enumerate)"; elif [[ "$(printf '%s\n' "${refs_seen[@]}" | LC_ALL=C sort)" == "$(printf '%s\n' "$EXPECTED_REFERRERS" | LC_ALL=C sort)" ]]; then pass "the referrer derivation found exactly the $ref_n expected files"; else fail "the referrer derivation found a different set than the expected $(printf '%s\n' "$EXPECTED_REFERRERS" | wc -l) files (found $ref_n): git grep did not run, the tree moved, or a file now names the canary"; fi
 if grep -qE 'attributes\.name[[:space:]]*==' <<<"$sut_code"; then pass "incident matching is exact .attributes.name equality"; else fail "incident matching is not exact .attributes.name equality"; fi
 if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
 
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=430
+MIN_ASSERTIONS=429
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1
