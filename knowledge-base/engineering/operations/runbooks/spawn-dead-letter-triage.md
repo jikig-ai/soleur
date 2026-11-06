@@ -17,6 +17,7 @@ suffix. The suffix tells you which path produced the event (#8803, ADR-042 §I6,
 | `(cancelled)` | Inngest cancelled the run (API, dashboard or bulk cancel) before the finish timeout. |
 | `(timed_out)` | Probably the 10-minute `timeouts.finish` cutoff: `extra.elapsedMs` ≥ 600000. It is a heuristic, measured from when the event was queued, so a manual cancel of a run that waited in the queue can read as `timed_out`. |
 | `(settle_failed)` | The settle step itself failed, or the lifecycle envelope failed validation. The card may still show "Working". |
+| `(stale_working)` | No Inngest lifecycle event ever fired — the row sat on "Working" past finish-timeout+margin and the `cron-agent-spawn-stale-settle` sweep settled it (#8839). This is the lost-run class: the row IS settled; the question is why the run vanished. |
 
 Every step below reads data; none needs a host shell.
 
@@ -42,6 +43,8 @@ The fields to read:
 **`(cancelled)`.** Someone cancelled the run at the Inngest level. If the founder had clicked Stop, the event is `cancelled_by_operator` at warning level and nobody is paged. A paged `(cancelled)` means no Stop was pending, or the envelope carried no timestamp to prove the cancel preceded the timeout. Who cancelled it is recorded only in the Inngest dashboard, which has no read path without a host shell today; note the run id and move on.
 
 **`(settle_failed)`.** The card may still read "Working". If `extra.err.message` is `agent-on-spawn-settle: lifecycle envelope failed validation`, the envelope was malformed or foreign, and the event carries only `failedRunId` (when it had a valid shape). Otherwise the settle's database write, or the `onFailure` forward, failed past its retries. There is no automated re-drive: record each `actionSendId` on #8839, which tracks the backstop. The alert pages once per issue per day, so list every event in the issue (the events endpoint above, `query=` the issue's message), not only the latest one.
+
+**`(stale_working)`.** The row is already settled — the sweep wrote the terminal `failure_reason` — so this is a "why did the run vanish" investigation, not a stuck card. `extra.currentTurnStartedAt`/`createdAt` show the last write the (lost) run made; `extra.actionSendId` is the spawn. A `(stale_working)` page means Inngest lost run state or the run predates the #8803 settle handlers: check the Inngest host's health around the row's last write (the `scheduled-inngest-health` workflow and `scripts/inngest-host-state.sh`), and whether the dead-letter cluster coincides with an inngest-server restart or host replace. `cancelled_by_operator` under this suffix is the non-paging form: the founder had clicked Stop before the run vanished.
 
 **No suffix, `leader_internal_error`.** An in-step error that no classifier arm recognised, for example a failed cost write after billing. The first ~10 minutes after a deploy (the finish timeout) can bring one false page per in-flight retry: a StepError thrown by the previous build has no tag, so a genuine Anthropic error in `extra.err.message` reads as `leader_internal_error`. That is the known rollout artifact.
 

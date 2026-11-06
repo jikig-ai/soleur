@@ -61,6 +61,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",
   },
+  "cron-agent-spawn-stale-settle": {
+    placement: "volume-bound",
+    reason: "reaches server/workspace-resolver.ts (WORKSPACES_ROOT) through the shared agent-on-spawn-requested module that exports its settle handler (#8839)",
+  },
   "cron-agent-native-audit": {
     placement: "host-affine",
     reason: "spawnClaudeEval in an ephemeral clone (process-local single-flight, ADR-243 §2)",

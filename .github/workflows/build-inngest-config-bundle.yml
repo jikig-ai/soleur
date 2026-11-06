@@ -14,7 +14,11 @@
 #   • The signing job is gated on `environment: inngest-config-signing`, whose required-reviewer
 #     rule (github_repository_environment, inngest-config-signing.tf) holds the run in "Waiting"
 #     before any step executes — the human gate on CI-workflow compromise, the named top residual
-#     RCE path (HARD-7). id-token:write is scoped to this job only (least privilege).
+#     RCE path (HARD-7). Since #8780 the environment also carries a main-only
+#     deployment_branch_policy (ADR-241 D2): GitHub evaluates it against the run's ref BEFORE the
+#     reviewer prompt, so a dispatch from a non-`main` ref is refused at admission — the reviewer
+#     is shown a branch NAME, not a diff, and would otherwise approve a signing run built from
+#     branch bytes. id-token:write is scoped to this job only (least privilege).
 #   • Promotion is SEPARATE (HARD-6): this workflow does NOT write INNGEST_CONFIG_DIGEST. It emits
 #     the published IMAGE@DIGEST. Promotion is a Terraform write of inngest-config-digest.tf (no
 #     standing CI write-token into the isolated soleur-inngest/prd), and no automated route applies

@@ -30,6 +30,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-action-required-sla",
   "cron-actions-queue-health-dispatch",
   "cron-agent-native-audit",
+  "cron-agent-spawn-stale-settle",
   "cron-anthropic-cost-report",
   "cron-anthropic-credit-probe",
   "cron-approval-expiry",

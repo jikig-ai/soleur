@@ -38,6 +38,11 @@ export const CLAUDE_BUDGET_USD: Readonly<Record<string, number>> = Object.freeze
   "oneshot-recheck-4217-calibration": 5, // no funded run — execution-tier default
 });
 
+// NO entry for `cron-agent-spawn-stale-settle` (#8839): it is a pure
+// select+UPDATE sweep with no Claude spawn site, so `budgetFlags` must keep
+// throwing on its name — a silently-added cap would imply an LLM surface the
+// function does not have (zero Anthropic spend by design; Task Design).
+
 /** The CLI flag pair for one spawn site. Throws on an unknown site rather than running uncapped. */
 export function budgetFlags(site: string): string[] {
   const usd = CLAUDE_BUDGET_USD[site];

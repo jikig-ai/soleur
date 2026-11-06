@@ -435,7 +435,7 @@ jobs:
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
             --search "$ISSUE_SEARCH" \
-            --json number --jq '.[0].number // empty')
+            --json number --jq '.[0].number // empty') || { echo "::error::integration-suites: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             echo "Existing tracking issue #$EXISTING — adding comment."
@@ -462,6 +462,7 @@ jobs:
           set -euo pipefail
           ISSUE_SEARCH='in:title "[ci/integration-suites] Nightly integration suites failed"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the stale tracker open; the next green run retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --state open \
             --search "$ISSUE_SEARCH" \
             --json number --jq '.[0].number // empty')
