@@ -4,10 +4,13 @@
 #
 # DISPATCH-ONLY, and a production act. The authorization is the owner's fresh in-session go naming the exact command (mode, key, typed
 # confirm). The typed confirm below is a fat-finger guard, NOT an authorization: the infra-privileged environment has ZERO required
-# reviewers (#11923), so the string is derivable from public inputs. The guard therefore also refuses a ref other than main, a
-# bot actor and any actor outside the committed owner allowlist; until the reviewer-gated environment exists a rotate of
-# inngest_manual_trigger_secret_prd, kb_drift_ingest_signing_key and github_webhook_secret is refused (approval_environment_missing).
-# A personal access token of the owner still passes (residual).
+# reviewers by design (#11923), so the string is derivable from public inputs. The authorization is therefore the owner's in-session
+# go PLUS the reviewer approval the `approve` job waits on: every rotate dispatch holds at the reviewer-gated
+# `key-rotate-approval` environment before the first production-mutating job, and the guard's kk_chk_approval LIVE-verifies the
+# environment's protection_rules (a referenced-but-absent environment auto-creates unprotected and refuses
+# approval_environment_unprotected). The guard also refuses a ref other than main, a bot actor and any actor outside the
+# committed owner allowlist. A personal access token of the owner can still dispatch, but the reviewer's click remains a
+# distinct human act (residual, bounded by the gate).
 # `mode=plan` is the read-only rehearsal (it reads Doppler value-silently and plans, it writes nothing). There is no converge mode and
 # no redeploy-only mode: recovery is a fresh `rotate` of the same key under a fresh typed confirm. A GitHub "re-run" is refused by
 # every write job (a re-run reuses the first attempt's guard outputs and would bypass the go).
@@ -21,9 +24,15 @@
 # THE ORDER:
 #   guard     no environment, no Doppler credential: a redaction sanity step (an ordering and sanity step; the safety weight is the
 #             no-stream design), then the refusal ladder. Writes nothing.
+#   approve   environment key-rotate-approval, no secret values: mode=rotate only; the run waits here for the reviewer
+#             click and stamps approval_epoch (authorization_stale measures from it, not the guard's go).
 #   apply     environment infra-privileged: re-checks, value-silent pre-state, plan, projection, exact gate, apply, post-state.
+#             Egress apply-A also feeds the old CURRENT into the PREVIOUS variable (env only, never argv).
 #   redeploy  no environment, no Doppler credential: re-checks, then track.sh (canary then prod) with the deploy trio in THAT step's
-#             env only, then the verdict. The only job that names the trio (the census is text-level; #9294).
+#             env only, then the vector-restart fan-out (egress only, the same trio), then the verdict. The only job that
+#             names the trio (the census is text-level; #9294).
+#   clear     egress only, environment infra-privileged: plan+apply -replace of PREVIOUS with the var default "", then a
+#             value-silent verify that EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads empty or absent.
 #   notify    the ONLY job with issues:write: files the one action-required issue after a write that did not end green.
 #
 # LOCKS. Workflow group inngest-key-rotate (never cancelled; the literal shared with the sibling route gives whole-run mutual
@@ -131,9 +140,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/key-rotate.sh guard
 
-  apply:
+  # The reviewer gate (#11923): a dedicated job on the key-rotate-approval environment (required_reviewers + a main
+  # branch policy). It carries NO secret values, so the environment needs no seeded values — rebinding apply's own
+  # `environment:` would force the DOPPLER_TOKEN_INFRA_PRIVILEGED env-secret onto a second environment, a value the
+  # Terraform GitHub App cannot write (ADR-100/ADR-241). Runs for mode=rotate only; mode=plan never pauses. The one
+  # output stamps the approval time so authorization_stale survives an approval wait of any length.
+  approve:
     needs: guard
-    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply == 'true' && needs.guard.outputs.redaction_ok == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.mode == 'rotate' }}
+    environment: key-rotate-approval
+    runs-on: ubuntu-24.04
+    # (KK_APPROVE_STEP_S + KR_JOB_SLACK_S) / 60 of the script's BUDGET TABLE.
+    timeout-minutes: 11
+    permissions:
+      contents: read
+    outputs:
+      approval_epoch: ${{ steps.approve.outputs.approval_epoch }}
+    steps:
+      # KK_APPROVE_STEP_S / 60. No checkout, no secret values: the stamp is all this job does after the reviewer click.
+      - name: Stamp the approval time
+        id: approve
+        timeout-minutes: 1
+        run: echo "approval_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+  apply:
+    needs: [guard, approve]
+    # !cancelled(): a job-level if: without a status-check function is implicitly success() && <expr>, and a SKIPPED need
+    # (approve, under mode=plan) makes success() false — a needs.<job>.result read does NOT suppress it (reboot/redeploy/clear convention).
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_apply == 'true' && needs.guard.outputs.redaction_ok == 'true' && (needs.guard.outputs.mode == 'plan' || needs.approve.result == 'success') }}
     environment: infra-privileged
     runs-on: ubuntu-24.04
     # (KK_APPLY_STEP_S + KR_JOB_SLACK_S) / 60 of the script's BUDGET TABLE.
@@ -176,7 +210,9 @@ jobs:
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEY: ${{ needs.guard.outputs.key }}
-          EFF_GUARD_EPOCH: ${{ needs.guard.outputs.guard_epoch }}
+          # authorization_stale measures from the reviewer approval (an approval wait of any length is anticipated);
+          # guard_epoch stays the plan-mode fallback (plan skips approve).
+          EFF_GUARD_EPOCH: ${{ needs.approve.outputs.approval_epoch || needs.guard.outputs.guard_epoch }}
           GH_TOKEN: ${{ github.token }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: bash scripts/key-rotate.sh apply
@@ -186,8 +222,9 @@ jobs:
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.run_redeploy == 'true' && needs.apply.result == 'success' }}
     runs-on: ubuntu-24.04
     # KK_REDEPLOY_JOB_S / 60 of the script's BUDGET TABLE: the pipeline's own 4800 s ceiling plus the step slack plus the 10 minutes of
-    # the Re-checks step; the step timeouts below sum to 102 minutes (checkout 2 + Re-checks 10 + track 85 + Verdict 5).
-    timeout-minutes: 105
+    # the Re-checks step plus the 15-minute vector leg; the step timeouts below sum to 117 minutes (checkout 2 + Re-checks 10
+    # + track 85 + vector 15 + Verdict 5).
+    timeout-minutes: 120
     concurrency:
       group: web-1-swap
       cancel-in-progress: false
@@ -229,8 +266,24 @@ jobs:
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/key-rotate.sh redeploy track
 
-      # Step 3: exports a verdict on EVERY path (rotate_ok, rotated_redeploy_failed, owner_step_pending). Fails the job on everything
-      # except rotate_ok. No trio here.
+      # Step 3 (egress only, #11920): the vector restart fan-out. Runs AFTER the fleet redeploy — Vector restarted first
+      # would send the new token while the app still ran the old env. The same trio as the track step and nothing else;
+      # the step polls the merged deploy-status until every host reports a fresh component=vector success frame.
+      # KK_VECTOR_STEP_S / 60.
+      - name: Vector restart (egress only)
+        id: vector
+        if: ${{ steps.track.outcome == 'success' && needs.guard.outputs.key == 'egress_audit_ingest_token' }}
+        timeout-minutes: 15
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEY: ${{ needs.guard.outputs.key }}
+          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: bash scripts/key-rotate.sh redeploy vector
+
+      # Step 4: exports a verdict on EVERY path (rotate_ok, vector_restarted, rotated_redeploy_failed, owner_step_pending).
+      # Fails the job on everything except rotate_ok and vector_restarted. No trio here.
       - name: Verdict
         id: final
         if: ${{ always() }}
@@ -240,13 +293,63 @@ jobs:
           EFF_KEY: ${{ needs.guard.outputs.key }}
           EFF_RECHECK_OUTCOME: ${{ steps.recheck.outcome }}
           EFF_TRACK_OUTCOME: ${{ steps.track.outcome }}
+          EFF_VECTOR_OUTCOME: ${{ steps.vector.outcome }}
         run: bash scripts/key-rotate.sh redeploy verdict
+
+  # Egress only (#11920): after the vector leg confirms every host on the fresh frame, clear
+  # EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS by -replace with the var default "" and verify the read-back is empty or absent.
+  # Holds the same Terraform serializer as the apply job; PREVIOUS stays set on any non-green path (the lossless
+  # direction — the old token remains accepted until every host is proven on the new one).
+  clear:
+    needs: [guard, apply, redeploy]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' && needs.guard.outputs.mode == 'rotate' && needs.guard.outputs.key == 'egress_audit_ingest_token' && needs.redeploy.result == 'success' }}
+    environment: infra-privileged
+    runs-on: ubuntu-24.04
+    # (KK_CLEAR_STEP_S + KR_JOB_SLACK_S) / 60 of the script's BUDGET TABLE.
+    timeout-minutes: 50
+    concurrency:
+      group: terraform-apply-web-platform-host
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      verdict: ${{ steps.clear.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        timeout-minutes: 3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 3
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # KK_CLEAR_STEP_S / 60. Plan+apply -replace of PREVIOUS with the var default "", then a value-silent verify.
+      - name: Clear EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS
+        id: clear
+        timeout-minutes: 40
+        env:
+          EFF_MODE: ${{ needs.guard.outputs.mode }}
+          EFF_KEY: ${{ needs.guard.outputs.key }}
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/key-rotate.sh clear
 
   # The last job: the ONLY job with issues:write. A job that is cancelled or killed after the first write leaves no verdict, no stop
   # sentence and no issue; this files the one action-required issue when a write happened (or may have), and closes the key's earlier
   # open key-rotate issues on rotate_ok. No concurrency group (it must never be the replaced one).
   notify:
-    needs: [guard, apply, redeploy]
+    needs: [guard, apply, redeploy, clear]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.guard.outputs.go == 'true' && needs.guard.outputs.mode == 'rotate' }}
     runs-on: ubuntu-24.04
     # (KR_NOTIFY_S + KR_JOB_SLACK_S) / 60.
@@ -270,5 +373,7 @@ jobs:
           EFF_APPLY_VERDICT: ${{ needs.apply.outputs.verdict }}
           EFF_RESULT_REDEPLOY: ${{ needs.redeploy.result }}
           EFF_REDEPLOY_VERDICT: ${{ needs.redeploy.outputs.verdict }}
+          EFF_RESULT_CLEAR: ${{ needs.clear.result }}
+          EFF_CLEAR_VERDICT: ${{ needs.clear.outputs.verdict }}
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/key-rotate.sh notify
