@@ -1268,6 +1268,17 @@ PYX
   else
     fail "G4 row4 the oracle-index-check manifest step could not be extracted from ci.yml ($(head -c 120 "$SANDBOX/oic.err"))"
   fi
+  # Guard 4 row 5: the leg's checkout carries full history. At the default depth 1 `origin/main` is not a ref, so the
+  # manifest's test-all-affected rows degrade to `undecidable-diff` and go red on the first oracle-only run (PR #12245).
+  _oic_depth="$(python3 - "$CI_YML" 2>/dev/null <<'PYX' || echo "parse-failed"
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+job = (doc.get("jobs") or {}).get("oracle-index-check") or {}
+co = [s for s in (job.get("steps") or []) if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout@")]
+print(len(co), (co[0].get("with") or {}).get("fetch-depth", "unset") if len(co) == 1 else "n/a")
+PYX
+)"
+  check_eq "G4 row5 the oracle-index-check leg has exactly one checkout and it declares fetch-depth 0" "$_oic_depth" "1 0"
 fi
 
 # Self-registration: this sentinel is a registered suite with its own edge array (Phase 4 wiring).

@@ -2193,6 +2193,11 @@ jobs:
         # collapses to the manifest step's not-oracle-only no-op instead of paying a full clone.
         if: needs.oracle-selection.outputs.oracle_only == 'true'
         with:
+          # fetch-depth: 0 is LOAD-BEARING, not hygiene: at the default depth 1 `origin/main` is not a ref, so
+          # `git diff origin/main...HEAD` fails inside the manifest's test-all-affected rows (f, k, k2, k3, k3b),
+          # the runner degrades to `MODE=full (degraded: undecidable-diff)` and those rows go red on the first
+          # oracle-only run (PR #12245). ci-oracle-lane.sh documents the same contract for its own checkout.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Run the oracle-validation manifest
