@@ -711,8 +711,8 @@ fi
 
 # --- A10: conservative backfill (#12013) -----------------------------------------------
 # A candidate may launch iff a slot is free, it conflicts with no LIVE suite, and it conflicts with nothing
-# still queued AHEAD of it. `*` conflicts with everything: a queued `*` blocks every later suite, and a `*`
-# candidate launches only with the pool drained and nothing queued before it. SOLEUR_PJ_FIFO=1 restores the
+# still queued AHEAD of it. `*` conflicts with everything, so it runs alone: the scheduler PARKS it and launches it
+# at the drain, after every non-`*` suite (#12231), so a queued `*` holds nothing back. SOLEUR_PJ_FIFO=1 restores the
 # strict FIFO the runner had before (the A/B control of the measurement). Order of suites that share a token
 # is registration order in both modes; only INDEPENDENT suites may jump a blocked head.
 

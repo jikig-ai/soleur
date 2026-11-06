@@ -213,8 +213,9 @@ else
 fi
 
 # 7. Start-first order of the replay arms (#12013). In the pooled gate a suite starts as the registration stream reaches it
-#    and a queued `*` (drain-barrier) suite blocks every later launch; the replay arms are the longest suites, so they are
-#    registered first. Over the runner's REAL raw registration stream (--enumerate-commands all, not the label-deduplicated
+#    (a `*` drain-barrier suite is parked until the drain since #12231, so it no longer holds later launches back; the
+#    "no `*` before the last arm" assertion below stays as a start-first guard in its own right); the replay arms are the
+#    longest suites, so they are registered first. Over the runner's REAL raw registration stream (--enumerate-commands all, not the label-deduplicated
 #    map): every label under the arm prefix (at least three) appears exactly once, no registration runs the whole battery
 #    (by label, or by argv without --rows), each arm's 1-based row is at most the pool width, and no row before the last arm
 #    carries a `*` token. Nothing is asserted about any other suite's order, the total, or the --rows ranges (the totality

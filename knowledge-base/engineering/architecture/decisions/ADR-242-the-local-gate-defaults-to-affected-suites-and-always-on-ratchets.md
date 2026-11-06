@@ -1002,3 +1002,17 @@ A scheduler-level priority or weight-ordered buffering (a priority cannot start 
 ### Known limits and next levers (unchanged by this decision)
 
 Finished workers are reaped only when the pool saturates or at drain (evidence bar on #12013); edge narrowing for the replay arms is #12151 and narrowing the `lock:test-all` derivation is #12152. Both are still deferred. New from the treatment reading: `replay-a` ends at +1765 s but the run ends at +2134 s, and the last suites to finish (`operator-script`, `ship-phase-7-poll-fixtures`, `dev-ledger-parity`) register after the `*` barrier at `test-all-capacity-signal`, so the arms are no longer the tail and #12231 is now the larger lever. The arms are also unbalanced (pooled 1513 s, 570 s and 530 s for 193, 193 and 213 rows), so a pooled run cannot finish before about 252 + 1513 s; rebalancing the `--rows` split by weight is the next lever after that and needs a re-split and a manifest re-pin. The pool-phase floor (sum of walls / 4) is about 1546 s here, so the 600 s bar needs roughly 2.5 times less work, not only better ordering.
+
+## Amendment — 2026-11-06 (#12231)
+
+Measurements, method and the mutant outcomes live in `knowledge-base/project/specs/feat-one-shot-12231-star-suites-last/measurements/summary.txt`; this amendment records only the decision. Rulings by the CTO agent on 2026-11-06 are in that spec's `decision-challenges.md`.
+
+### Decision 30: park the `*` (drain-barrier) suites until the drain
+
+A suite whose lane token set contains `*` is parked by the pooled scheduler. `_pj_fill` no longer launches it, adds it to the skipped set, or lets it hold anything back; `_pj_drain` sets a flag once, and from then on a fill that finds the pool empty after its pass launches the head of the parked queue. The `*` suites therefore run alone, after every non-`*` suite has been launched and reaped, in registration order among themselves. Suites that share a non-`*` token keep registration order as before.
+
+What does not change: registration, the rendered order, the verdict lines, the `TEST_TIMING_LOG` rows, the terminal marker and the exit code (launch timing is the only thing that moves), and `SOLEUR_PJ_FIFO=1`, which stays strict FIFO and keeps the old barrier semantics. Parking is a single-class launch deferral. It is not the scheduler-level priority or weight-ordered buffering that Decision 29 rejected: registration, streaming and the lock-holder stamping are untouched.
+
+Consequence, recorded: a budget kill before the drain leaves every `*` suite unrun and absent from the provisional-red sidecar, so a red `*` suite can only defer to CI and never reach `failed-before-budget`.
+
+This supersedes, by name, three sentences of earlier amendments, which stay as written: the 2026-11-05 amendment's "a queued `*` still blocks everything after it" and its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the skip-ahead conflict by making the `*` invisible to backfill), and Decision 29's "a queued `*` (drain barrier) suite blocks every later launch", its "behind the `*` barrier", and the sentence that every `*` suite now waits for the arms to drain.
