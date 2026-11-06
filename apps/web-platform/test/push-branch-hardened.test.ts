@@ -772,7 +772,7 @@ describe("pushBranch hardened", () => {
       failing("", { killed: true, signal: "SIGTERM" });
       const p = pushBranch(hardenedOpts());
       await expect(p).rejects.toThrow(/MAY HAVE been pushed/);
-      await expect(p).rejects.toThrow(/Check the remote branch before asking for a new approval/);
+      await expect(p).rejects.toThrow(/Ask the user to check the remote branch before asking for a new approval/);
       await expect(p).rejects.toThrow(/^Git push failed: /);
       expect(h.reports.filter(([, o]) => o.op === "push-failed-after-consume")).toEqual([failedReport("timeout")]);
     });

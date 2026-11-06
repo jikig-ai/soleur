@@ -103,7 +103,7 @@ const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup probl
 const OBJECT_STORE_TOO_LARGE_TEXT =
   "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace; nothing was pushed";
 const PUSH_TIMED_OUT_TEXT =
-  "Git push failed: the push timed out and the branch MAY HAVE been pushed to the remote. Check the remote branch before asking for a new approval.";
+  "Git push failed: the push timed out and the branch MAY HAVE been pushed to the remote. Ask the user to check the remote branch before asking for a new approval.";
 
 /** Every reason a hardened push can be refused before the push ran: the creator's, the sha check's and the commit check's. */
 export type IsolatedRefusalReason =
