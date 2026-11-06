@@ -2426,6 +2426,21 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
   "scripts/test-all.sh"
 )
 
+# plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh — derived edges could not reach its real inputs
+# (they are composed through $REAL_SCRIPTS/$REAL_REFS/$OLD_FIXTURE, never literal); declared from the paths it reads:
+# the SUT and the whole scripts/+references/ dirs it `cp -R`s into per-case sandboxes (:142), the pinned emitted
+# fixture, and the sourced git-fixture-env (:96). Fixture-shape apps/web-platform literals (:129, :368) are scratch-repo
+# mentions — accept rows, not edges (suite :8 "the real apps/web-platform tree is never touched").
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_REFRESH_STAGE_A_TEST_SH_PATHS=(
+  "plugins/soleur/skills/constraint-scaffold/references/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/"
+  "plugins/soleur/skills/constraint-scaffold/test/fixtures/"
+  "plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+  "scripts/test-all.sh"
+)
+
 # plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_CREATE_FROM_ORIGIN_MAIN_TEST_SH_PATHS=(
