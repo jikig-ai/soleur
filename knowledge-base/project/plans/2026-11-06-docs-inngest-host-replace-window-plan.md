@@ -14,7 +14,14 @@ requires_cpo_signoff: true
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06. **Halts run and passed:** User-Brand Impact (4.6), Scope Check (4.12, one unfenced section, no `BLOCKED` marker), PAT-shaped variable sweep (4.8, no hits). **Skipped with reason:** Observability (4.7) and Task Design (4.13), because the plan edits no code and adds no autonomous surface; Encryption Posture (4.10) and Guard Contract (4.11), because it introduces no store, connection or guard; UI wireframe (4.9); Downtime and Cutover (4.55), because the plan changes nothing and the replace's own downtime is the runbook's.
+
+**Cited facts re-resolved live this pass:** PRs #11535, #12210 and #12186 are MERGED (merge times as stated in the plan); origin/main tip is bd89194eed; the plan cites no AGENTS rule ids; every run id, SHA and job name was also checked by the Kieran seat against `gh`. **Review passes already applied:** the 5-seat plan-review panel, the CPO conditions and CTO rulings T1 to T5 (see `decision-challenges.md`). One wording fix in this pass: row c1 no longer asserts which `.tf` file the dead-man alert lands in.
+
 ## Overview
+
 
 Epic #9927 agreed in session on 2026-11-06 that one bundled window is planned for the next
 Inngest host replace (ADR-282 addendum of 2026-11-06, ruling D6). This document is that plan,
@@ -99,8 +106,7 @@ full mode on the then-current main tip immediately before the go. A merge to
 to `scripts/test-all.sh` or the sole-copy pin files, or to the config bundle or digest of row c2,
 invalidates every row: all of them are re-cleared and the window slips if one cannot be. A docs-only
 merge invalidates nothing. Rows c1 and c2 are the planned exception to ruling D2's "only documents
-land before the window": D6 names them as blocking prerequisites, c1 edits
-`betterstack-logs-alerts.tf` (so it voids any earlier a2 and b reading), and they land before the
+land before the window": D6 names them as blocking prerequisites, c1 is a Better Stack alert change that will land under `apps/web-platform/infra/` (the sibling alerts are in `betterstack-logs-alerts.tf`; its exact file is not yet chosen), so it voids any earlier a2 and b reading, and they land before the
 window on their own gates, not inside the window session.
 
 | Row | Precondition | Class | State 2026-11-06 |
@@ -162,8 +168,7 @@ evidence: ci.yml run 42229510432, event `push`, same SHA, where `test-scripts` a
 
 Refreshed 2026-11-06T14:50Z: the last command above, run against tip bd89194eed, prints
 `apps/web-platform/infra/server.tf` and `plugins/soleur/test/terraform-target-parity.test.ts`, so the
-d802784259 run no longer qualifies on the current tip. Row c1 will add `betterstack-logs-alerts.tf`
-to that set. A new `merge_group` or `workflow_dispatch` run of ci.yml on the final tip is needed.
+d802784259 run no longer qualifies on the current tip. Row c1's alert change will add a `.tf` file under `apps/web-platform/infra/`, which that path list also covers. A new `merge_group` or `workflow_dispatch` run of ci.yml on the final tip is needed.
 
 ### a3 - The owner closes #12213 (operator(scope))
 
