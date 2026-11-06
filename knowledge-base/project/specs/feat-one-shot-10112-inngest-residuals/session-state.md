@@ -22,3 +22,10 @@ soleur:plan (full run, sequential-fallback fan-out), soleur:deepen-plan (halt-ga
 - cto_spawns=1 (one batched spawn covered rows: item 3 write-vs-decline, item 3 mechanism, item 4 share-vs-accept, item 4 fallback)
 - Rulings: all confirmed assumed defaults — write the DR procedure (widen `prd` for one reviewed window + revert), accept resolver duplication in writing. Plan AC5 amended with the statically-verified-not-drilled caveat.
 - Gate re-run: PASS (6 rows examined)
+
+## Pipeline Progress (2026-11-06)
+- Work subagent: 5 commits through 49d8852968; gates green (terraform validate, rehearsal 91/91, plan-shape 28/28, ledger PASS, markdownlint clean). AC1-AC7 PASS, AC8/AC9 VERIFIED for ship body.
+- Branch pushed: origin/feat-one-shot-10112-inngest-residuals @ 49d8852; draft PR #12218; mergeable=MERGEABLE mergeStateStatus=BEHIND (merge origin/main at ship).
+- Affected gate: `bash scripts/test-all.sh --affected` launched bg, log /tmp/affected-10112.log — was queued on sibling lock (contention from .worktrees/feat-one-shot-bun-pair-ratchet-accept-cleanup).
+- Review panel: 10 seats spawned bg (git-history-analyzer 001c9ab4, pattern-recognition a620dbf5, architecture-strategist e748dc40, security-sentinel 38e58fa2, performance-oracle 1eb06757, data-integrity-guardian 6873423d, agent-native-reviewer 1cfdc7fa, code-quality-analyst 73ccb82a, test-design-reviewer b0c8d886, semgrep-sast 99776270). PANEL_SHA=49d8852968. seats=10 tally.
+- Next: collect seats → resolve findings (fix-round per ADR-267 if any) → qa → compound → ship (Closes #10112, annotate epic #10390) → DONE.
