@@ -97,7 +97,7 @@ DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the 
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
 resubmission once the owner's own comment exists and A5 is done.
 
-Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653).
+Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>).
 
 ## After signing (owner)
 
