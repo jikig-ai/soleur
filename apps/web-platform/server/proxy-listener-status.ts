@@ -30,7 +30,7 @@ export type ProxyState =
   | "no_allowlist"
   | "error";
 
-export type ProxyDisabledReason = "disabled" | "no_bind" | "no_allowlist";
+export type ProxyDisabledReason = "disabled" | "no_bind" | "no_allowlist" | "error";
 
 export interface ProxyStatus {
   state: ProxyState;
