@@ -35,8 +35,9 @@
 # GUARD 4 MATRIX MAPPING (manifest parity): row 1 → check_manifest bogus-member copy;
 # row 2 → check_manifest empty copy; row 3 → check_manifest copy that drops lint-orphan-test-suites;
 # row 4 → row_index_job (the extracted oracle-index-check step must propagate a member's non-zero
-# exit into the leg verdict); row 5 → check_manifest reordered copy (a different member order is a
-# PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
+# exit into the leg verdict); row 4b → the leg's checkout declares fetch-depth 0 and is gated on
+# oracle_only (a static pin of ci.yml); row 5 → check_manifest reordered copy (a different member
+# order is a PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
 # registration, and every live registration whose label matches the declared oracle-SUT name class
 # (affected|lint-orphan-test-suites|ci-pr|ci-path-gating) must be a member OR named in a commented
 # exclusion line — a NEW oracle-machinery registration cannot silently escape the leg.
