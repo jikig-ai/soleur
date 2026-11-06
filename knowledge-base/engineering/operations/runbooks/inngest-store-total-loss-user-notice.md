@@ -33,37 +33,44 @@ Each constraint is traceable to the C1 finding in `inngest-luks-cutover-6894.md`
 
 ## The drafted notice
 
-Copy the block, fill every `[...]` field, remove any line the fill table marks conditional, then send through the channel the incident owner and counsel choose.
+Copy the block, fill every `[...]` field, remove any line the fill table marks conditional, then send through the channel the incident owner and counsel choose. Before sending, search the copied block for `[` — any match means a missed field; do not send.
 
-> **Subject: An incident affected some automated work in your Soleur workspace**
+> **Subject: We lost automated work in your Soleur workspace**
 >
-> On [DATE UTC] we lost the store Soleur uses to queue and run automated work — drafts, reminders and approved actions waiting to execute — and the history of those runs.
+> On [DATE UTC] we lost the store Soleur uses to queue and run automated work — drafts, reminders and approved actions waiting to execute[IF-PROJECT-LOSS: , and the history of those runs].
+>
+> We're sorry — we know some of this work mattered on a deadline.
 >
 > What this means for you:
 >
-> - Automated work queued or in progress at [LOSS TIME UTC] on [DATE] did not complete and was not automatically retried.
-> - Drafts, reminders or follow-up actions you expected around that time may never have appeared.
-> - Run history for affected work is not available.
-> - Your repositories, knowledge base content and account records were not stored there.
+> - One-off work queued or in progress at [LOSS TIME UTC] — drafts, reminders, approved actions — did not complete and was not automatically retried.
+> - Reminders you had set — for any future date — may never fire.
+> - Drafts or follow-up actions you expected around that time may never have appeared.[IF-PROJECT-LOSS:
+> - Run history for affected work cannot be recovered.]
+> - Your repositories and knowledge base content live in other systems and were not part of this store.
 >
-> What we did: the store was rebuilt and your automations re-registered; work scheduled since [RESTORE TIME UTC] runs normally.
+> What we did: [IF-RESTORED: we rebuilt the store and re-registered your automations; work scheduled since [RESTORE TIME UTC] runs normally.]
 >
 > What to do:
 >
-> - Check your dashboard for drafts or reminders you expected but never received, and re-trigger the underlying action where you can.
-> - If you approved an action around [DATE] that never executed, approve it again — an approval click is safe to repeat within 23 hours of the original.
+> - Think back over what you expected around [DATE] — a draft, a reminder, a follow-up — and re-run the action that would have created it where you can.
+> - If you approved an action around [DATE] that never ran, approve it again[IF-WITHIN-23H: — a re-click within 23 hours of the original approval re-sends it][IF-PAST-23H: — that replays the request for us].
 > - If a reminder that mattered did not fire, re-create it.
-> - If something you lost is not covered above, write to [SUPPORT ROUTE].
+> - If something you lost is not covered above, reach us at [SUPPORT ROUTE].
 >
-> [ONE-SENTENCE follow-up line — owner fills at send time, e.g. the rebuild is verified and the watch is in place.]
+> [ONE-SENTENCE follow-up line — owner fills at send time, e.g. "We've verified the rebuilt system and are watching it closely."]
+>
+> — The Soleur team
 
 ## Fill fields
 
-| Placeholder | Supplied by | Source |
+| Placeholder / conditional | Supplied by | Source |
 |---|---|---|
 | `[DATE UTC]`, `[DATE]` | incident owner | the loss-mode finding's timestamps (the row that landed on "After a total loss") |
 | `[LOSS TIME UTC]` | incident owner | the loss-mode finding — the point the store became unreadable |
-| `[RESTORE TIME UTC]` | incident owner | the rebuild/restore record; include the "work scheduled since" sentence only if the store is verifiably serving again |
+| `[IF-PROJECT-LOSS: …]` (two spots) | incident owner | include only when the loss-mode finding lost the Postgres history project too (the `Volume deleted …, or project loss` row); for a volume-only loss the history survives, so delete both bracketed clauses and the bullet they mark — claiming lost history then is false |
+| `[IF-RESTORED: …]` + `[RESTORE TIME UTC]` | incident owner | include the whole "What we did" line only when the rebuild/restore record verifies the store is serving again; delete it otherwise |
+| `[IF-WITHIN-23H: …]` / `[IF-PAST-23H: …]` | incident owner | keep exactly one: the 23-hour clause only if the notice goes out within 23 hours of the oldest affected approvals (#10543); the alternative clause otherwise |
 | `[SUPPORT ROUTE]` | incident owner | the support channel in force at send time (in-app, email alias, or status page per the incident's channel decision) |
 | `[ONE-SENTENCE follow-up line]` | incident owner | the incident's verified end state — never a promise (see Constraints: no armed-reminder restoration promise) |
 | re-arm verdict | incident owner | whether `inngest-rearm-reminders.sh` ran; if it did not run or covered only part of the store, delete nothing from "What to do" — the re-create-it line already carries the correct advice, and no sentence may claim reminders were restored |
