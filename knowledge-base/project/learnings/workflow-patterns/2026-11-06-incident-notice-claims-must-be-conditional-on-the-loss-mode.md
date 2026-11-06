@@ -6,7 +6,7 @@ category: workflow-patterns
 
 # Incident-notice claims must be conditional on the loss mode that produced them
 
-A pre-drafted user notice for a total loss of the Inngest store shipped its first draft with flat claims ("we lost ... the history of those runs", "Run history ... is not available"). The user-impact seat BLOCKED: run history lives in the dedicated Postgres project, which survives in 4 of the 5 loss modes the runbook enumerates — only a project loss destroys it. A volume-only-loss victim would have been wrongly told recoverable history was gone.
+A pre-drafted user notice for a total loss of the Inngest store shipped its first draft with flat claims ("we lost ... the history of those runs", "Run history ... is not available"). The user-impact seat BLOCKED: run history lives in the dedicated Supabase Postgres project, which survives every loss mode the runbook enumerates (the `project loss` row names the Hetzner project, not Supabase). A volume-only-loss victim would have been wrongly told recoverable history was gone — and a first-pass fix then re-anchored the conditional on the wrong provider's project, caught by the fix-round.
 
 Same class twice more in one file: "your account records were not stored there" was falsifiable comfort (payloads carried founderId, email hashes, invoiceIds), and the 23-hour re-approval window was stated unconditionally though it anchors to the original approval, not to notice receipt.
 

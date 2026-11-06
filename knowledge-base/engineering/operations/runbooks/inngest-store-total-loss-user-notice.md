@@ -11,7 +11,7 @@ related_issues: [10664, 9927]
 
 # Runbook: pre-drafted user notice for a total loss of the Inngest store
 
-**TL;DR:** the standing draft of the user notice the repository owner sends after a total loss of the Inngest store — queued events, in-flight run state, armed reminders, approved-but-unexecuted actions, and run history. Fill the `[...]` fields, send nothing else. Whether and when a notice goes out is the CLO's call, not this file's.
+**TL;DR:** the standing draft of the user notice the repository owner sends after a total loss of the Inngest store — queued events, in-flight run state, armed reminders, approved-but-unexecuted actions, and (only if the Postgres history project is also lost) run history. Fill the `[...]` fields, send nothing else. Whether and when a notice goes out is the CLO's call, not this file's.
 
 ## What this file is
 
@@ -37,7 +37,7 @@ Copy the block, fill every `[...]` field, remove any line the fill table marks c
 
 > **Subject: We lost automated work in your Soleur workspace**
 >
-> On [DATE UTC] we lost the store Soleur uses to queue and run automated work — drafts, reminders and approved actions waiting to execute[IF-PROJECT-LOSS: , and the history of those runs].
+> On [DATE UTC] we lost the store Soleur uses to queue and run automated work — drafts, reminders and approved actions waiting to execute[IF-HISTORY-LOST: , and the history of those runs].
 >
 > We're sorry — we know some of this work mattered on a deadline.
 >
@@ -45,7 +45,7 @@ Copy the block, fill every `[...]` field, remove any line the fill table marks c
 >
 > - One-off work queued or in progress at [LOSS TIME UTC] — drafts, reminders, approved actions — did not complete and was not automatically retried.
 > - Reminders you had set — for any future date — may never fire.
-> - Drafts or follow-up actions you expected around that time may never have appeared.[IF-PROJECT-LOSS:
+> - Drafts or follow-up actions you expected around that time may never have appeared.[IF-HISTORY-LOST:
 > - Run history for affected work cannot be recovered.]
 > - Your repositories and knowledge base content live in other systems and were not part of this store.
 >
@@ -68,7 +68,7 @@ Copy the block, fill every `[...]` field, remove any line the fill table marks c
 |---|---|---|
 | `[DATE UTC]`, `[DATE]` | incident owner | the loss-mode finding's timestamps (the row that landed on "After a total loss") |
 | `[LOSS TIME UTC]` | incident owner | the loss-mode finding — the point the store became unreadable |
-| `[IF-PROJECT-LOSS: …]` (two spots) | incident owner | include only when the loss-mode finding lost the Postgres history project too (the `Volume deleted …, or project loss` row); for a volume-only loss the history survives, so delete both bracketed clauses and the bullet they mark — claiming lost history then is false |
+| `[IF-HISTORY-LOST: …]` (two spots) | incident owner | include only when the dedicated Supabase Postgres history project is also lost — no enumerated loss mode covers that (the `Volume deleted …, or project loss` row names the Hetzner project, not Supabase). In every enumerated mode the history survives, so delete both bracketed clauses — claiming lost history then is false |
 | `[IF-RESTORED: …]` + `[RESTORE TIME UTC]` | incident owner | include the whole "What we did" line only when the rebuild/restore record verifies the store is serving again; delete it otherwise |
 | `[IF-WITHIN-23H: …]` / `[IF-PAST-23H: …]` | incident owner | keep exactly one: the 23-hour clause only if the notice goes out within 23 hours of the oldest affected approvals (#10543); the alternative clause otherwise |
 | `[SUPPORT ROUTE]` | incident owner | the support channel in force at send time (in-app, email alias, or status page per the incident's channel decision) |
