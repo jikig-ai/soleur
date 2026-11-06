@@ -526,6 +526,11 @@ reset_defaults; A_RES=open; CANARY_AGE=$((STALE_S + 1000)); build_fixtures
 run_case "SOLEUR_FT_EARLIEST=now is not an ISO time -> ignored, the canary proxy says stale -> action_required" 5 "SOLEUR_FT_EARLIEST=now"
 run_case "SOLEUR_FT_EARLIEST=garbage is ignored -> the canary proxy says stale -> action_required" 5 "SOLEUR_FT_EARLIEST=not-a-time"
 run_case "a FRESH SOLEUR_FT_EARLIEST wins over an old canary incident -> not_yet" 2 "SOLEUR_FT_EARLIEST=$(iso $((NOW - 100)))"
+# a date-only earliest (the common tracker spelling) is honoured, not silently ignored
+reset_defaults; A_RES=open; CANARY_AGE=3000; build_fixtures
+run_case "date-only SOLEUR_FT_EARLIEST 2 days old and a young canary -> action_required (the date is honoured)" 5 "SOLEUR_FT_EARLIEST=$(date -u -d "@$((NOW - 172800))" +%F)"
+reset_defaults; A_RES=open; CANARY_AGE=$((STALE_S + 1000)); build_fixtures
+run_case "date-only SOLEUR_FT_EARLIEST tomorrow and an old canary -> not_yet (the date is honoured)" 2 "SOLEUR_FT_EARLIEST=$(date -u -d "@$((NOW + 172800))" +%F)"
 # host folding in rows_in_window
 reset_defaults; A_RES=open; CANARY_AGE=3000
 ROSTER_BQ='[{"host":"soleur-web-platform","n":"4"},{"host":"ok\n","n":"2"},{"host":"has space","n":"1"},{"host":"a@b.example","n":"1"}]'; build_fixtures
@@ -599,6 +604,7 @@ done
 # DERIVED, not a literal list: every tracked file that names the canary (outside the plan/spec history and this probe) must
 # be named in the RETIREMENT header, so a suite added later that hardcodes the canary cannot be missed by the deletion PR.
 ref_n=0
+in_git=0; git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
 while IFS= read -r ref; do
   [[ -n "$ref" ]] || continue
   ref_n=$((ref_n + 1))
@@ -606,14 +612,14 @@ while IFS= read -r ref; do
   if grep -qF -- "$key" <<<"$retire_block"; then pass "RETIREMENT header names the referrer ${key}"; else fail "RETIREMENT header lacks the referrer ${ref}"; fi
 done < <(git -C "$HERE" grep -lE 'silent_canary|probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
 # Anti-vacuity: the derivation must have found the files that are known to carry the canary.
-if [[ "$ref_n" -ge 6 ]]; then pass "the referrer derivation found $ref_n files (>= 6)"; else fail "the referrer derivation found only $ref_n files; git grep did not run or the tree moved"; fi
+if [[ "$in_git" -eq 0 ]]; then pass "the referrer derivation is skipped outside a git checkout (nothing to enumerate)"; elif [[ "$ref_n" -ge 6 ]]; then pass "the referrer derivation found $ref_n files (>= 6)"; else fail "the referrer derivation found only $ref_n files; git grep did not run or the tree moved"; fi
 if grep -qE 'attributes\.name[[:space:]]*==' <<<"$sut_code"; then pass "incident matching is exact .attributes.name equality"; else fail "incident matching is not exact .attributes.name equality"; fi
 if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
 
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=267
+MIN_ASSERTIONS=269
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1

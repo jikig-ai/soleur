@@ -140,6 +140,9 @@ BQ="${EGRESS_GW_SILENT_BQ:-${REPO_ROOT}/scripts/betterstack-query.sh}"
 TF="${EGRESS_GW_SILENT_TF:-${REPO_ROOT}/apps/web-platform/infra/betterstack-logs-alerts.tf}"
 ANCHOR_ID="${EGRESS_GW_SILENT_ANCHOR_ID:-1047829421}"
 ROSTER="${EGRESS_GW_SILENT_ROSTER:-soleur-web-platform soleur-web-2}"
+# Operator env, but it is printed in the public verdict: keep only well-formed, de-duplicated host names.
+ROSTER="$(for h in $ROSTER; do [[ "$h" =~ ^[A-Za-z0-9._-]{1,63}$ ]] && printf '%s\n' "$h"; done | sort -u | tr '\n' ' ')"
+ROSTER="${ROSTER% }"
 PAGE_CAP="${EGRESS_GW_SILENT_PAGE_CAP:-50}"
 
 PROD_NAME="soleur-egress-gw-probe-silent-prd"
@@ -466,7 +469,7 @@ if [[ "$V_PROD" == open ]]; then
   stale=0
   EARL_EPOCH=""
   # ISO-8601 shapes only: GNU date also parses "now" and "1 day ago" against the live clock, and "now" is never stale.
-  if [[ "${SOLEUR_FT_EARLIEST:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[T\ ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$ ]]; then
+  if [[ "${SOLEUR_FT_EARLIEST:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}([T\ ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$ ]]; then
     EARL_EPOCH="$(date -u -d "${SOLEUR_FT_EARLIEST}" +%s 2>/dev/null || true)"
   fi
   if [[ "$EARL_EPOCH" =~ ^[0-9]+$ ]]; then
