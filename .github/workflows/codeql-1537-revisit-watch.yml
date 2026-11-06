@@ -89,9 +89,14 @@ jobs:
             exit 0
           fi
 
-          # Idempotency: only comment once per closure.
-          if gh issue view "$track_num" --repo "$GH_REPO" --json comments \
-              --jq '.comments[].body' 2>/dev/null | grep -cF "$SENTINEL" >/dev/null; then
+          # Idempotency: only comment once per closure. The read must
+          # distinguish a transient gh failure from a clean "not yet pinged"
+          # — piping `gh` into `grep -c` reads failure as empty and would
+          # re-post the sentinel comment on every API blip.
+          comments_body="$(gh issue view "$track_num" --repo "$GH_REPO" \
+            --json comments --jq '.comments[].body' 2>/dev/null)" \
+            || { echo "::warning::codeql-1537-watch: tracking-issue read failed (transient?) — no-op this run"; exit 0; }
+          if grep -qF "$SENTINEL" <<<"$comments_body"; then
             echo "Tracking issue #${track_num} already pinged for this closure; nothing to do."
             exit 0
           fi

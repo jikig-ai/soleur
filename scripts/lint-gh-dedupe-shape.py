@@ -545,17 +545,30 @@ def scan_file(path: str, rel: str):
 def collect(root: str, quiet: bool = False):
     targets = []
 
+    def _skip_link(path):
+        if not quiet:
+            print("dedupe-shape: advisory: symlink skipped: "
+                  f"{path} — the census covers tracked files, "
+                  "not linked content")
+
     def _add(path):
         if os.path.islink(path):
-            if not quiet:
-                print("dedupe-shape: advisory: symlink skipped: "
-                      f"{path} — the census covers tracked files, "
-                      "not linked content")
+            _skip_link(path)
             return
         targets.append(path)
 
-    wf_dir = os.path.join(root, ".github", "workflows")
-    if os.path.isdir(wf_dir):
+    # isdir()/listdir() follow ancestor links silently — a linked `.github`,
+    # `workflows` or `actions` DIRECTORY lets the census read outside the
+    # scan root under in-root relpaths (the files inside are not themselves
+    # links, so `_add`'s leaf check cannot see the escape).
+    gh_dir = os.path.join(root, ".github")
+    if os.path.islink(gh_dir):
+        _skip_link(gh_dir)
+        return targets
+    wf_dir = os.path.join(gh_dir, "workflows")
+    if os.path.islink(wf_dir):
+        _skip_link(wf_dir)
+    elif os.path.isdir(wf_dir):
         for name in sorted(os.listdir(wf_dir)):
             if name.endswith((".yml", ".yaml")):
                 _add(os.path.join(wf_dir, name))
@@ -563,17 +576,14 @@ def collect(root: str, quiet: bool = False):
     # lives in its own directory under .github/actions/. BOUND (recorded,
     # like the head's bounds above): exactly one level — a composite action
     # nested deeper (uses: ./.github/actions/a/b) is not enumerated.
-    act_dir = os.path.join(root, ".github", "actions")
-    if os.path.isdir(act_dir):
+    act_dir = os.path.join(gh_dir, "actions")
+    if os.path.islink(act_dir):
+        _skip_link(act_dir)
+    elif os.path.isdir(act_dir):
         for sub in sorted(os.listdir(act_dir)):
             sub_dir = os.path.join(act_dir, sub)
             if os.path.islink(sub_dir):
-                # isdir() follows links — a linked dir would let the census
-                # read outside the scan root under an in-root path.
-                if not quiet:
-                    print("dedupe-shape: advisory: symlink skipped: "
-                          f"{sub_dir} — the census covers tracked files, "
-                          "not linked content")
+                _skip_link(sub_dir)
                 continue
             if not os.path.isdir(sub_dir):
                 continue

@@ -648,8 +648,9 @@ Files to Create/Edit); the mechanical UI-surface override does not fire.
   `plan_pr` sentry-alert-reference gate passes (or the expected-artifact diff shows only
   the one id).
 - [ ] AC10: `git log --format='%s' | grep -c 'docs(specs): record merge + post-merge verification'`
-  ≥ 1 on the branch — the cherry-pick lands with its own hash (`git log --oneline` shows
-  subjects only, so a `5a8ffe` grep is unsatisfiable); `git diff` of `session-state.md`
+  ≥ 1 on the branch — the cherry-pick lands with its own hash and the source `5a8ffe`
+  is unreachable from this branch, so a `5a8ffe` grep on the branch log is
+  unsatisfiable; `git diff` of `session-state.md`
   vs its pre-pick blob shows only the +8 MERGED-record lines.
 - [ ] AC11: WS2 work-time re-verification ran and was recorded in the commit message or
   PR body (env `ok` + `lastCheckIn` evidence); if it failed, the unrouted entry persists

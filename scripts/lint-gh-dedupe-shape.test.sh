@@ -435,6 +435,15 @@ if grep -q 'advisory.*:9:.*EXISTING' <<<"$_qout"; then
 else
   fail "G9c the quoted site lands in the advisory census" "advisory row naming :9:" "$(printf '%s' "$_qout" | tr '\n' ' ')"
 fi
+# G9d -- pin the summary's exact `advisory: <n> quoted-capture` shape: H6's
+# count parse greps that literal and defaults to 0 when the format drifts,
+# so a drifted summary silently satisfies the ceiling on a non-empty list.
+if grep -q 'advisory: 1 quoted-capture' <<<"$_qout"; then
+  pass "G9d the advisory summary keeps the H6-parsed shape"
+else
+  fail "G9d the advisory summary keeps the H6-parsed shape" \
+    "'advisory: 1 quoted-capture' in summary" "$(printf '%s' "$_qout" | tr '\n' ' ')"
+fi
 
 # G10 -- a quoted site that IS handled (`||`) leaves the advisory too.
 r="$(mkfix quotedhandled)"
@@ -699,10 +708,10 @@ assert_fires "G22 control: the bad line FIRES" "$r" 11
 r="$(mkfix emptyroot)"
 rm -rf "$r/.github"
 out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
-if [[ "$rc" == "2" ]]; then
+if [[ "$rc" == "2" ]] && grep -q 'no .github/workflows' <<<"$out"; then
   pass "H1 a root with no workflows dir exits 2, not 0"
 else
-  fail "H1 a root with no workflows dir exits 2, not 0" "rc=2" "rc=$rc ($out)"
+  fail "H1 a root with no workflows dir exits 2, not 0" "rc=2 + 'no .github/workflows' message" "rc=$rc ($out)"
 fi
 
 # H2 -- workflows present but ZERO census sites is a vacuity RED, not a pass
@@ -718,10 +727,10 @@ jobs:
       - run: echo hello
 YAML
 out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
-if [[ "$rc" == "2" ]]; then
+if [[ "$rc" == "2" ]] && grep -q 'zero census sites' <<<"$out"; then
   pass "H2 a zero-census tree exits 2 (vacuity), not 0"
 else
-  fail "H2 a zero-census tree exits 2 (vacuity), not 0" "rc=2" "rc=$rc ($out)"
+  fail "H2 a zero-census tree exits 2 (vacuity), not 0" "rc=2 + 'zero census sites' message" "rc=$rc ($out)"
 fi
 
 # H3 -- VERIFY THE VERIFIER: plant the defect into a copy of a live workflow
@@ -770,24 +779,30 @@ fi
 # bump in this file (architecture/pattern seats: unmeasured re-growth
 # channel).
 # Ceiling is the post-resolution live count (#12092): all 13 prior advisory
-# sites were dispositioned — normalized (machinery-drain:188, codeql-1537:84)
-# or `# dedupe:`-marked (supabase-watchdog:512, actions-queue-health:228,
-# devin-docs-drift:400/465, marketplace-drift:612/811/901,
-# prod-version-drift:263/426/561/604). Adjacent out-of-class reads
-# (inngest-health:699, rehearsal-skip-monitor:341, supabase-watchdog:440,
-# auto-label-security:31/34) were marked/normalized as recorded decisions and
-# were never advisory rows. The pin is EQUALITY (mutation row 5): raising the
-# constant above the live count reds the suite — a bump needs a review-gated
-# reason, not a silent edit.
+# sites were dispositioned — normalized (scheduled-machinery-drain.yml › the
+# `matches=` keep-open read's outside-`||` arm, codeql-1537-revisit-watch.yml
+# › the `track_num` lookup's outside-`||` arm) or `# dedupe:`-marked
+# (scheduled-supabase-watchdog.yml › `CANDIDATES`,
+# scheduled-actions-queue-health.yml › the open-issues read,
+# scheduled-devin-docs-drift.yml › the two `list_rc` reads,
+# scheduled-marketplace-drift.yml › the three `list_rc` reads,
+# scheduled-prod-version-drift.yml › the four `list_rc` reads). Adjacent
+# out-of-class reads (scheduled-inngest-health.yml › `HAS_ESCALATION`,
+# scheduled-rehearsal-skip-monitor.yml › `cur_title`,
+# scheduled-supabase-watchdog.yml › the `COUNT` read, auto-label-security.yml
+# › the `^sec:` title check + `HAS_LABEL` marker) were marked/normalized as
+# recorded decisions and were never advisory rows. The pin is EQUALITY
+# (mutation row 5): raising the constant above the live count reds the
+# suite — a bump needs a review-gated reason, not a silent edit.
 ADVISORY_CEILING=0
 adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
 # No advisory section at all means zero sites — the section is suppressed
 # when the list is empty, and an unparsed empty is 0, not a missing count.
 adv_n="${adv_n:-0}"
 if [[ "$adv_n" -eq "$ADVISORY_CEILING" ]]; then
-  pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
+  pass "H6 live quoted-advisory count == $ADVISORY_CEILING (got ${adv_n:-0})"
 else
-  fail "H6 live quoted-advisory count <= $ADVISORY_CEILING" "<=$ADVISORY_CEILING" "$adv_n"
+  fail "H6 live quoted-advisory count == $ADVISORY_CEILING" "==$ADVISORY_CEILING" "$adv_n"
 fi
 
 # H7 -- the scan root covers composite actions: an undispositioned
@@ -914,6 +929,148 @@ if [[ "$rc" == "1" ]] && grep -q 'actions/zzz/action.yml:7:' "$TMP/act.txt" \
 else
   fail "H9 a defect in the second action.yml after a compliant first fires" \
     "rc=1 naming actions/zzz/action.yml:7" "rc=$rc; $(tr '\n' ' ' < "$TMP/act.txt")"
+fi
+
+# H10 -- a SYMLINKED action subdir is skipped, not scanned: isdir() follows
+# links, so a linked `.github/actions/<name>` would let the census read
+# outside the scan root under in-root relpaths (the files inside are not
+# themselves links — the leaf check cannot see the escape). Fixture carries a
+# handled workflow capture so the run is non-vacuous, plus a linked action
+# dir whose outside action.yml holds a bare capture that must NOT appear.
+r="$(mkfix linkleaf)"
+mkdir -p "$r/.github/actions/real" "$TMP/outside-leaf" \
+  || { echo "FATAL: mkdir actions failed"; exit 2; }
+assert_fixture_dir "$r"
+assert_fixture_dir "$TMP/outside-leaf"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/real/action.yml" <<'YAML'
+name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$TMP/outside-leaf/action.yml" <<'YAML'
+name: evil
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number)
+YAML
+ln -s "$TMP/outside-leaf" "$r/.github/actions/evil" \
+  || { echo "FATAL: ln -s failed"; exit 2; }
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/link.txt"
+if [[ "$rc" == "0" ]] && grep -q 'symlink skipped' "$TMP/link.txt" \
+   && ! grep -q 'actions/evil/action.yml' "$TMP/link.txt" \
+   && ! grep -q 'unclassified: [1-9]' "$TMP/link.txt"; then
+  pass "H10 a symlinked action subdir is skipped with an advisory"
+else
+  fail "H10 a symlinked action subdir is skipped with an advisory" \
+    "rc=0 + 'symlink skipped' advisory + no actions/evil rows" "rc=$rc; $(tr '\n' ' ' < "$TMP/link.txt")"
+fi
+
+# H11 -- an ancestor-level escape is refuse-shaped, not scanned: `.github` or
+# `.github/workflows` as a symlink leaves zero in-root targets, and the
+# zero-targets refusal (rc=2) beats reading outside content. Also pins the
+# 'zero scan targets' refusal message (renamed this PR).
+for escape in workflows github; do
+  r="$(mkfix "link$escape")"
+  case "$escape" in
+    workflows)
+      mkdir -p "$TMP/outside-wf"
+      assert_fixture_dir "$TMP/outside-wf"
+      cat > "$TMP/outside-wf/evil.yml" <<'YAML'
+name: evil
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number)
+YAML
+      rm -rf "$r/.github/workflows"
+      ln -s "$TMP/outside-wf" "$r/.github/workflows" || { echo "FATAL: ln -s failed"; exit 2; }
+      ;;
+    github)
+      mkdir -p "$TMP/outside-gh/workflows"
+      assert_fixture_dir "$TMP/outside-gh"
+      cat > "$TMP/outside-gh/workflows/evil.yml" <<'YAML'
+name: evil
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number)
+YAML
+      rm -rf "$r/.github"
+      ln -s "$TMP/outside-gh" "$r/.github" || { echo "FATAL: ln -s failed"; exit 2; }
+      ;;
+  esac
+  out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+  if [[ "$rc" == "2" ]] && grep -q 'zero scan targets' <<<"$out" \
+     && ! grep -q 'evil.yml' <<<"$out"; then
+    pass "H11 a symlinked .github/$escape refuses rc=2 (zero targets), not a scan"
+  else
+    fail "H11 a symlinked .github/$escape refuses rc=2 (zero targets), not a scan" \
+      "rc=2 + 'zero scan targets' + no evil.yml rows" "rc=$rc; $(printf '%s' "$out" | tr '\n' ' ')"
+  fi
+done
+
+# H12 -- a symlinked `.github/actions` dir skips the actions census while the
+# real workflows tree still scans: outside action.yml content must NOT read
+# as an in-root finding.
+r="$(mkfix linkactroot)"
+mkdir -p "$TMP/outside-actions/evil" || { echo "FATAL: mkdir failed"; exit 2; }
+assert_fixture_dir "$r"
+assert_fixture_dir "$TMP/outside-actions"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$TMP/outside-actions/evil/action.yml" <<'YAML'
+name: evil
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number)
+YAML
+rm -rf "$r/.github/actions" 2>/dev/null
+ln -s "$TMP/outside-actions" "$r/.github/actions" \
+  || { echo "FATAL: ln -s failed"; exit 2; }
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/linka.txt"
+if [[ "$rc" == "0" ]] && grep -q 'symlink skipped' "$TMP/linka.txt" \
+   && ! grep -q 'evil/action.yml' "$TMP/linka.txt" \
+   && ! grep -q 'unclassified: [1-9]' "$TMP/linka.txt"; then
+  pass "H12 a symlinked .github/actions skips the actions census only"
+else
+  fail "H12 a symlinked .github/actions skips the actions census only" \
+    "rc=0 + 'symlink skipped' advisory + no evil/action.yml rows" "rc=$rc; $(tr '\n' ' ' < "$TMP/linka.txt")"
 fi
 
 # --- verdict ----------------------------------------------------------------
