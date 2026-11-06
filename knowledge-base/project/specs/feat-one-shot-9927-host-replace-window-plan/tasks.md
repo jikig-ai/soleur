@@ -4,16 +4,16 @@ Plan: `knowledge-base/project/plans/2026-11-06-docs-inngest-host-replace-window-
 
 ## Phase 1 - Refresh the ledger on the ship day
 
-- [ ] 1.1 Re-run every read-only command in Part 1 of the plan (rows a1, a2, a3, b, c1, c2, f, g) on the then-current `origin/main`.
-  - [ ] 1.1.1 Where a state moved, append a dated `Refreshed <UTC time>:` line under the row; never rewrite the earlier reading.
-  - [ ] 1.1.2 Do not dispatch the Main Health Monitor; do not close any issue; no production write.
-- [ ] 1.2 Re-read #9927, #12213 and the 12:00Z/18:00Z monitor slots; update row a1 and the Part 3 date table if a slot has run.
+- [x] 1.1 Re-run every read-only command in Part 1 of the plan (rows a1, a2, a3, b, c1, c2, f, g) on the then-current `origin/main`.
+  - [x] 1.1.1 Where a state moved, append a dated `Refreshed <UTC time>:` line under the row; never rewrite the earlier reading.
+  - [x] 1.1.2 Do not dispatch the Main Health Monitor; do not close any issue; no production write.
+- [x] 1.2 Re-read #9927, #12213 and the 12:00Z/18:00Z monitor slots; update row a1 and the Part 3 date table if a slot has run.
 
 ## Phase 2 - Lint and checks
 
-- [ ] 2.1 Run Acceptance Criteria 1 to 7 of the plan and fix any hit.
-- [ ] 2.2 Run `python3 scripts/lint-infra-no-human-steps.py` on the plan and on `decision-challenges.md` (both exit 0).
-- [ ] 2.3 Confirm `git diff --quiet origin/main...HEAD -- apps .github scripts plugins` exits 0.
+- [x] 2.1 Run Acceptance Criteria 1 to 7 of the plan and fix any hit.
+- [x] 2.2 Run `python3 scripts/lint-infra-no-human-steps.py` on the plan and on `decision-challenges.md` (both exit 0).
+- [x] 2.3 Confirm `git diff --quiet origin/main...HEAD -- apps .github scripts plugins` exits 0.
 
 ## Phase 3 - Ship
 

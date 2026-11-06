@@ -534,16 +534,16 @@ None.
 
 ## Acceptance Criteria
 
-- [ ] 1. The file has exactly four unfenced headings starting `## Part ` (`grep -c '^## Part ' <file>` prints 4) and ten ledger row headings (`grep -c '^### [a-g]' <file>` prints 10).
-- [ ] 2. Every paragraph that cites a CI run id also names its run kind: `awk -v RS= '/(42171723678|42216139949|42223420689|42229510432|40332015744)/ && !/(workflow_dispatch|[`]push[`]|merge_group)/' <file>` prints nothing.
-- [ ] 3. Part 2's step table has rows 1, 1a, 2, 3 and 4, each with a non-empty last cell (`awk '/^## Part 2/,/^## Part 3/' <file> | grep '^| [0-9]' | awk -F'|' '$4 ~ /^ *$/' | wc -l` prints 0).
-- [ ] 4. Part 3 contains the word PROPOSAL and the dates 2026-11-09 and 2026-12-08, and says the orphan-sweeps re-look is superseded.
-- [ ] 5. Part 4 contains no question mark (`awk '/^## Part 4/,/^<!-- lint-infra-ignore end -->/' <file> | grep -c '?'` prints 0).
-- [ ] 6. The L3 vocabulary limits hold (patterns are bracket-split so this line does not match itself): `grep -nEi 'backed[ ]up|recoverabl[e]|complian[t]|DPA[ ]in[ ]place|approved[ ]by[ ]the[ ]CLO|owner-signe[d]|ready[ ]to[ ]attes[t]|pending[ ]attestatio[n]' <file>` prints nothing, and `grep -nE '\b(signe[d]|attest[e]d)\b' <file> | grep -v 'not a signed record'` prints nothing.
-- [ ] 7. Nothing is dispatched or edited: `grep -n 'gh workflow ru[n]' <file>` hits only the two lines inside the fenced block marked "display only, not a go"; `git diff origin/main...HEAD --name-only` lists only paths under `knowledge-base/` (the three files, ship's archive move, and the pipeline-written `knowledge-base/INDEX.md` and `specs/<branch>/session-state.md` if present); `git diff --quiet origin/main...HEAD -- apps .github scripts plugins` exits 0.
-- [ ] 8. `python3 scripts/lint-infra-no-human-steps.py knowledge-base/project/plans/2026-11-06-docs-inngest-host-replace-window-plan.md` exits 0; the PR body matches `Ref #9927` and does not match `(Closes|Fixes|Resolves) #9927`.
-- [ ] 9. `decision-challenges.md` carries the rows T1 to T5, T4-o, T5-o, O-date, O-go, R-orphan, R-panel, P-thr and P-doc, each with Class in {technical, taste, operator (...)}.
-- [ ] 10. The Domain Review records the CPO sign-off and the PR carries no other sign-off claim.
+- [x] 1. The file has exactly four unfenced headings starting `## Part ` (`grep -c '^## Part ' <file>` prints 4) and ten ledger row headings (`grep -c '^### [a-g]' <file>` prints 10).
+- [x] 2. Every paragraph that cites a CI run id also names its run kind: `awk -v RS= '/(42171723678|42216139949|42223420689|42229510432|40332015744)/ && !/(workflow_dispatch|[`]push[`]|merge_group)/' <file>` prints nothing.
+- [x] 3. Part 2's step table has rows 1, 1a, 2, 3 and 4, each with a non-empty last cell (`awk '/^## Part 2/,/^## Part 3/' <file> | grep '^| [0-9]' | awk -F'|' '$4 ~ /^ *$/' | wc -l` prints 0).
+- [x] 4. Part 3 contains the word PROPOSAL and the dates 2026-11-09 and 2026-12-08, and says the orphan-sweeps re-look is superseded.
+- [x] 5. Part 4 contains no question mark (`awk '/^## Part 4/,/^<!-- lint-infra-ignore end -->/' <file> | grep -c '?'` prints 0).
+- [x] 6. The L3 vocabulary limits hold (patterns are bracket-split so this line does not match itself): `grep -nEi 'backed[ ]up|recoverabl[e]|complian[t]|DPA[ ]in[ ]place|approved[ ]by[ ]the[ ]CLO|owner-signe[d]|ready[ ]to[ ]attes[t]|pending[ ]attestatio[n]' <file>` prints nothing, and `grep -nE '\b(signe[d]|attest[e]d)\b' <file> | grep -v 'not a signed record'` prints nothing.
+- [x] 7. Nothing is dispatched or edited: `grep -n 'gh workflow ru[n]' <file>` hits only the two lines inside the fenced block marked "display only, not a go"; `git diff origin/main...HEAD --name-only` lists only paths under `knowledge-base/` (the three files, ship's archive move, and the pipeline-written `knowledge-base/INDEX.md` and `specs/<branch>/session-state.md` if present); `git diff --quiet origin/main...HEAD -- apps .github scripts plugins` exits 0.
+- [x] 8. `python3 scripts/lint-infra-no-human-steps.py knowledge-base/project/plans/2026-11-06-docs-inngest-host-replace-window-plan.md` exits 0; the PR body matches `Ref #9927` and does not match `(Closes|Fixes|Resolves) #9927`.
+- [x] 9. `decision-challenges.md` carries the rows T1 to T5, T4-o, T5-o, O-date, O-go, R-orphan, R-panel, P-thr and P-doc, each with Class in {technical, taste, operator (...)}.
+- [x] 10. The Domain Review records the CPO sign-off and the PR carries no other sign-off claim.
 
 ## Test Scenarios
 
