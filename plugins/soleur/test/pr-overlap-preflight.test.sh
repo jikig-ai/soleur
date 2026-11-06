@@ -1133,7 +1133,7 @@ ONESHOT_BLOCK="$(cat <<'BLOCKEOF'
 BLOCKEOF
 )"
 SHIP_BLOCK="$(cat <<'BLOCKEOF'
-Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with any hold carrying a `Gate:` or a `Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)): exit 1 or 2 stops arming; exit 3 does not (the hand check at the draft exit stands, and nothing evaluable changed).
+Before Phase 6.45 archives the plan and rulings file, run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/pr-overlap-preflight.sh" --mode merge` (add `--vehicle <N|this>` from the `overlap vehicle` row of decision-challenges.md when it exists): exit 10 or 12 stops arming; 2 retries once then continues with the notice; 0, 11, 13 continue. If the plan has a `## Operator Holds` section with a `Gate:`/`Delegation:` line, run `hold-gate-eval.sh --plan <plan>` again now ([operator-holds.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/operator-holds.md)): exit 1 or 2 stops arming.
 BLOCKEOF
 )"
 ref_block() { # ref_block <heading ERE> -> the first ```text block under that heading in the reference
