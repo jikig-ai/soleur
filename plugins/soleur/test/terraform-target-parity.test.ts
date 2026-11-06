@@ -118,7 +118,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // -target= presence pins for the new environment resources.
 // 358 -> 366 (#11923/#11920, +6 incl. the #8780 merge, exact): the key-rotate-approval + egress-PREVIOUS -target pins (2) and the
 // Guard-5 satellite derivation rows (the must-PASS satellite conformance + three mutation rows).
-const TEST_FLOOR = 366;
+// 366 -> 367 (#12167 PR-G, +1): the nonlocal_bind_sysctl pair test (both resources SSH-provisioned and targeted by the SSH stage of
+// apply-web-platform-infra.yml). This change adds exactly one test row, so the floor moves by exactly one.
+const TEST_FLOOR = 367;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -159,7 +161,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
 // #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
 // #10455 b: raised 20 -> 22 for terraform_data.web_bash_synthetic_install and terraform_data.web_bash_synthetic_install_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 22;
+// #12167 PR-G: raised 22 -> 24 for terraform_data.nonlocal_bind_sysctl and terraform_data.nonlocal_bind_sysctl_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 24;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -329,6 +332,16 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #12167 PR-G — the nonlocal-bind sysctl reaches BOTH running hosts through the SSH stage of
+  // apply-web-platform-infra.yml (web-2 over its bastion forward, like journald_persistent_web2).
+  // A missing -target leaves that host without the sysctl until its next -replace, silently.
+  test("nonlocal_bind_sysctl and its web-2 twin are SSH-provisioned and targeted by apply-web-platform-infra.yml (#12167)", () => {
+    for (const n of ["nonlocal_bind_sysctl", "nonlocal_bind_sysctl_web2"]) {
+      expect(sshProvisioned).toContain(n);
+      expect(webPlatformTargets.has(n)).toBe(true);
+    }
   });
 
   // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
