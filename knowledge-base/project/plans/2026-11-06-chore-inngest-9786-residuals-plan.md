@@ -329,6 +329,10 @@ No cross-domain implications detected — infrastructure/tooling change. Product
 - **Ship-time:** never push while `test-all` is queued on the advisory lock; `deploy-script-tests` GuardA may be expected-red on main pending the carrier bake — distinguish before treating as real-red.
 - **Fixture-name drift:** the suite's `rehearsal_inngest_inngest_luks` fixture doesn't match the real resource name — normalize to `hcloud_volume.rehearsal_inngest_luks` at work time so the fixtures mirror the real inventory.
 
+## Deepen-Plan Gate Record
+
+Sequential-fallback run (2026-11-06): Phase 4.6 user-brand PASS (threshold none + sensitive-path scope-out bullet); 4.7 observability PASS (all fields populated; `discoverability_test.command` first token `grep` allowlisted, zero shell-active bytes, literal `expected_output`); 4.8 PAT-scan PASS (no GitHub-write token/variable introduced); 4.9 UI-wireframe SKIP (no UI surface); 4.10 encryption posture PASS (populated, removal recorded); 4.11 guard contract assessed-SKIP (no new guard/gate/lint authored — fixture-inventory update to the existing plan-shape suite only; `lint-guard-contract.py` detection does not fire); 4.12 scope check PASS (exactly one unfenced section, all asks mapped, no BLOCKED marker); 4.13 task design SKIP (no new autonomous-task surface); 4.4 precedent-diff SKIP (no scheduled job); 4.5 network-outage SKIP (no trigger tokens); 4.55 downtime/cutover SKIP (diff induces no production-offline operation — the DR recipe's host-replace is a documented pre-existing dispatch path). Sharp-edges pass applied: probe command runs clean and prints the expected literal.
+
 ## Open Code-Review Overlap
 
 - `#10112` — this plan's own issue (the overlap query returns it because its body names the files).
