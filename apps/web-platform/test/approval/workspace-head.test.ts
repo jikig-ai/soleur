@@ -141,6 +141,18 @@ describe("readWorkspaceHeadSha: what it returns", () => {
     expect(readWorkspaceHeadSha(dir)).toBe(head);
   });
 
+  test("a packed-only branch among several packed refs returns the sha of THE NAMED ref, not of the first line", () => {
+    const { dir, head } = mkRepo(2);
+    git(dir, "branch", "aaa", "HEAD~1");
+    const other = git(dir, "rev-parse", "aaa");
+    expect(other).not.toBe(head);
+    git(dir, "pack-refs", "--all");
+    const packed = readFileSync(join(dir, ".git", "packed-refs"), "utf8");
+    expect(packed.indexOf(`${other} refs/heads/aaa`)).toBeGreaterThan(-1); // precondition: the other branch is packed too ...
+    expect(packed.indexOf(`${other} refs/heads/aaa`)).toBeLessThan(packed.indexOf(`${head} refs/heads/main`)); // ... and listed first
+    expect(readWorkspaceHeadSha(dir)).toBe(head);
+  });
+
   test("a loose ref shadows a stale packed entry", () => {
     const { dir, head } = mkRepo();
     git(dir, "pack-refs", "--all");

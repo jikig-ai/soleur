@@ -462,6 +462,29 @@ describe("createIsolatedPushDir", () => {
       expect(readdirSync(tmp)).toEqual([]); // nothing was created under TMPDIR either
     });
 
+    test("a HOME under the workspace, TMPDIR or WORKSPACES_ROOT refuses as setup_failed and creates nothing", () => {
+      process.env.WORKSPACES_ROOT = join(base, "wsroot");
+      const homes: Array<[string, string]> = [
+        ["the workspace", join(ws, "inner-home")],
+        ["TMPDIR", join(tmp, "inner-home")],
+        ["WORKSPACES_ROOT", join(base, "wsroot", "inner-home")],
+      ];
+      for (const [label, inner] of homes) {
+        mkdirSync(inner, { recursive: true });
+        process.env.HOME = inner;
+        expect(reasonOf(), label).toBe("setup_failed");
+        expect(existsSync(join(inner, ".soleur-push")), label).toBe(false);
+      }
+    });
+
+    test("a pre-existing .soleur-push that is a symlink elsewhere refuses as setup_failed and writes nothing through it", () => {
+      const elsewhere = join(base, "elsewhere");
+      mkdirSync(elsewhere);
+      symlinkSync(elsewhere, soleurRoot());
+      expect(reasonOf()).toBe("setup_failed");
+      expect(readdirSync(elsewhere)).toEqual([]);
+    });
+
     test("an injected write failure at EVERY write step maps to setup_failed, leaves no directory and leaks no path", () => {
       h.writes = 0;
       createIsolatedPushDir(ws).dispose();
