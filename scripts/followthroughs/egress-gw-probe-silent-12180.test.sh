@@ -238,7 +238,7 @@ run_case() {
       BETTERSTACK_API_TOKEN=dummy-token EGRESS_GW_SILENT_BQ="$MOCK" EGRESS_GW_SILENT_TF="$TF" \
       EGRESS_GW_SILENT_NOW_EPOCH="$NOW" EGRESS_GW_SILENT_ANCHOR_ID="$ANCHOR_ID" EGRESS_GW_SILENT_FLOOR_EPOCH="$FLOOR" \
       EGRESS_GW_SILENT_ROSTER="soleur-web-platform soleur-web-2" "$@" \
-      bash -c 'printf "%s" "$$" > "$1"; shift; exec "$@"' _ "$WORK/probe.pid" "$SUT" 2>&1)" || rc=$?
+      bash -c 'printf "%s" "$$" > "$1"; shift; if [[ -n "${EGS_DROP_STDERR:-}" ]]; then exec "$@" 2>/dev/null; fi; exec "$@"' _ "$WORK/probe.pid" "$SUT" 2>&1)" || rc=$?
   LAST_OUT="$out"; LAST_RC="$rc"
   if [[ "$rc" -eq 1 ]]; then fail "$desc -- exit 1 is FORBIDDEN (the sweeper reads it as FAIL) :: ${out:0:300}"; return; fi
   if [[ "$expected" == any ]]; then pass "$desc (exit=$rc)"
@@ -746,6 +746,101 @@ reset_defaults; DECLARED=4; build_fixtures
 run_case "a // comment naming the canary header is not a declaration -> PASS" 0
 field_is "canary_declared=0"
 
+# ── review round 1: rows aimed at the survivors the panel found (defaults, scoping, ordering, shapes, wiring) ─────────────
+# The PINNED floor, the default anchor id and the default roster are what the sweeper actually runs with; every other row passes a
+# seam. Run once with all three seams empty on a clock set so that the fixture floor IS the pin.
+PIN="$(sed -nE 's/^APPLY_FLOOR_EPOCH=([0-9]+).*/\1/p' "$SUT")"
+if [[ "$(date -u -d "@${PIN:-0}" '+%Y-%m-%dT%H:%M:%SZ')" == "2026-11-06T12:16:03Z" ]]; then pass "APPLY_FLOOR_EPOCH is the vetted apply time 2026-11-06T12:16:03Z"; else fail "APPLY_FLOOR_EPOCH is not 2026-11-06T12:16:03Z (${PIN:-unset})"; fi
+RUNBOOK="$HERE/../../knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+if [[ -f "$RUNBOOK" ]] && grep -qF -- '2026-11-06T12:16:03Z' "$RUNBOOK"; then pass "the runbook names the same pinned instant"; else fail "the runbook does not name the pinned instant 2026-11-06T12:16:03Z"; fi
+NOW_SAVED=$NOW; NOW=$((PIN + 20000))
+reset_defaults; build_fixtures
+run_case "the pinned floor, default anchor id and default roster (all three seams empty) on a clock 20000 s after the pin -> PASS" 0 EGRESS_GW_SILENT_FLOOR_EPOCH= EGRESS_GW_SILENT_ANCHOR_ID= EGRESS_GW_SILENT_ROSTER=
+field_is "quiet_age_s=20000"
+reset_defaults; ROSTER_BQ='[{"host":"soleur-web-platform","n":"41"}]'; build_fixtures
+run_case "the default roster with web-2 silent (roster seam empty) -> action_required" 5 EGRESS_GW_SILENT_FLOOR_EPOCH= EGRESS_GW_SILENT_ANCHOR_ID= EGRESS_GW_SILENT_ROSTER=
+field_is "rows_in_window=soleur-web-2:0,soleur-web-platform:41"
+NOW=$NOW_SAVED
+# quiet_since and the open-incident set are PRODUCTION-only: unrelated and canary incidents never move either
+reset_defaults; build_fixtures
+patch "$WORK/incidents.json" '.data |= map(if .id == "7001" or .id == "5555" then .attributes.resolved_at = $r else . end) | .data += [{id:"7004",type:"incident",attributes:{name:"Unrelated monitor",started_at:$s,resolved_at:null,cause:"x"}}]' --arg r "$(iso $((NOW - 100)))" --arg s "$(iso $((FLOOR - 4000)))"
+run_case "unrelated and canary incidents resolved 100 s ago plus an unrelated open pre-floor incident -> PASS, quiet_since is production-only" 0
+field_is "quiet_age_s=20000"; field_is "pre_floor_open_prod_incident=0"
+# an open anchor that started INSIDE the slack window is still an open pre-floor incident (the anchor is excluded from the recurrence set by id)
+reset_defaults; A_RES=open; A_START=$((NOW - 20000 - 100)); build_fixtures
+run_case "anchor open and started 100 s before the floor, quiet 20000 s -> action_required (an open anchor always blocks)" 5
+field_is "pre_floor_open_prod_incident=1"; field_is "anchor_resolved_by=unknown"
+# the production-alert findings do not wait for the soak
+for st in paused absent shape; do
+  reset_defaults; PROD_ALERT=$st; FLOOR_AGE=100; build_fixtures
+  run_case "production alert $st while the soak is still running -> action_required, not not_yet" 5
+  field_is "prod_alert=$st"
+done
+# ordering (CTO ruling 2026-11-06): a canary/pin disagreement is raised AFTER the production findings, so it never masks them
+reset_defaults; ALERT_LIVE=1; CANARY_ALERT_AGE=$((FLOOR_AGE + SLACK + 1)); PROD_ALERT=paused; build_fixtures
+run_case "canary alert too early AND the production alert paused -> action_required (the production finding wins)" 5
+field_is "prod_alert=paused"
+reset_defaults; CANARY_BEFORE=$((SLACK + 1)); PROD_ALERT=absent; build_fixtures
+run_case "canary incident too early AND the production alert absent -> action_required" 5
+reset_defaults; CANARY_BEFORE=$((SLACK + 1)); NEWER=1; build_fixtures
+run_case "canary incident too early AND a recurrence -> action_required (the recurrence wins)" 5
+field_is "newer_prod_incident=1"
+# timestamp shapes the real vendor emits: non-zero millis and a +00:00 offset
+reset_defaults; build_fixtures
+patch "$WORK/incidents.json" '.data |= map(if .id == "7001" then .attributes.started_at = "2026-11-04T21:00:03.768+00:00" else . end)'
+run_case "a listed incident with .768 millis and a +00:00 offset -> PASS (it parses)" 0
+# cardinality and agreement
+reset_defaults; build_fixtures
+patch "$WORK/alerts.json" '.data += [.data[] | select(.attributes.name == $n)]' --arg n "$PROD_NAME"
+run_case "the production alert is listed twice -> unknown" 3
+reset_defaults; build_fixtures
+patch "$WORK/incidents.json" '.data |= map(if .id == "1047829421" then .attributes.name = "Some other alert" else . end)'
+run_case "the listed anchor carries a different name than the single read -> unknown" 3
+# the .tf must be the file that declares the production alert (an empty or unrelated file is not 'canary retired')
+reset_defaults; build_fixtures; : > "$TF"
+run_case "a zero-byte .tf -> unknown, never 'canary retired'" 3
+reset_defaults; build_fixtures; printf 'locals {\n  unrelated = 1\n}\n' > "$TF"
+run_case "a .tf that does not declare the production alert -> unknown" 3
+# the roster: a malformed entry is not silently dropped, and a glob cannot expand
+reset_defaults; build_fixtures
+run_case "a roster entry outside the host-name shape -> unknown (a shrunken roster never reads as a complete one)" 3 "EGRESS_GW_SILENT_ROSTER=soleur-web-platform soleur-web-2 bad!host"
+field_is "rows_in_window=unknown"
+run_case "a glob in the roster is refused, not expanded -> unknown" 3 "EGRESS_GW_SILENT_ROSTER=*"
+# malformed pagination must not read as 'end of list'
+for ep in alerts incidents; do
+  reset_defaults; build_fixtures
+  # (the incident walk stops at the anchor's page before it reads pagination, so the anchor is removed to make it keep walking)
+  if [[ "$ep" == incidents ]]; then patch "$WORK/$ep.json" '.data |= map(select(.id != "1047829421" and .id != "1031046761")) | .pagination = "not-an-object"'; else patch "$WORK/$ep.json" '.pagination = "not-an-object"'; fi
+  run_case "a $ep body whose pagination is a string -> unknown (not an end-of-list)" 3
+  expect_out "the pagination refusal names the host only" 'unreadable pagination in GET https://[a-z.]+ \(bytes='
+done
+# a leading-zero clock seam is canonicalised, not read as octal
+reset_defaults; build_fixtures
+run_case "a leading-zero clock seam is canonical -> PASS" 0 "EGRESS_GW_SILENT_NOW_EPOCH=0${NOW}"
+# the retired message tells the operator to drop the label
+reset_defaults; CANARY_INC=0; ALERT_LIVE=0; DECLARED=0; build_fixtures
+run_case "retired canary (second look) -> action_required" 5
+expect_out "the retired message tells the operator to remove the follow-through label" 'follow-through label'
+# the rows read: both union branches carry the window, and the aggregation and format are present
+reset_defaults; A_RES=open; FLOOR_AGE=3000; build_fixtures
+run_case "sql shape probe (open anchor, diagnostic read)" 2
+if [[ "$(grep '^BQ ' "$CALLS" | grep -o "dt >= '" | wc -l | tr -d ' ')" == 2 ]]; then pass "the window predicate is on BOTH union branches"; else fail "the window predicate is not on both union branches"; fi
+expect_calls "the rows read aggregates per host in the pinned order and format" "GROUP BY host ORDER BY host FORMAT JSONEachRow"
+expect_calls "the rows read counts rows" "count() AS n"
+# transport flags the stub records
+reset_defaults; build_fixtures
+run_case "transport-flag probe (compliant fixture)" 0
+expect_calls "every GET pins the scheme" "--proto =https"
+expect_calls "every GET refuses redirects" "--max-redirs 0"
+expect_calls "every GET carries a 20 s cap" "-m 20"
+expect_calls "the incident listing asks for 50 per page" "per_page=50"
+# the verdict line: exactly one per run, and on STDOUT
+if [[ "$(printf '%s\n' "$LAST_OUT" | grep -c '^SOLEUR_EGRESS_GW_SILENT_SOAK ')" == 1 ]]; then pass "exactly one verdict line per run"; else fail "the verdict line is not printed exactly once"; fi
+run_case "stdout-only probe (stderr dropped)" 0 EGS_DROP_STDERR=1
+expect_out "the verdict line is on stdout, not stderr" '^SOLEUR_EGRESS_GW_SILENT_SOAK verdict=pass '
+# source pins for two internal guards no input can reach (defense in depth)
+if grep -qF 'paired with exit' "$SUT" && grep -qF 'the pass preconditions were not all established' "$SUT"; then pass "the verdict pairing refusal and the pass-precondition assertion are present"; else fail "the verdict pairing refusal or the pass-precondition assertion is missing"; fi
+
 # ── negative controls: every assertion helper must RED on a deliberately wrong input ─────────
 # The floor counts assertions; it cannot tell a helper that stopped asserting from one that works. Each control runs a
 # helper against known state, expects exactly one failure, then restores the counters.
@@ -795,7 +890,7 @@ if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then f
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=364
+MIN_ASSERTIONS=415
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1

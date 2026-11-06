@@ -30,27 +30,36 @@
 # 12:10Z, before the apply at 12:16Z) and never count. ONE soak clock replaces the three age gates the first version
 # had: quiet_since = max(FLOOR, the latest resolved_at of any listed exact-name production incident), and the pass
 # needs NOW - quiet_since >= SOAK_S (4 h). An exact-name production incident that started before the floor and is
-# still open blocks a pass (exit 2 until QUIET_STALE_S past quiet_since, then exit 5).
+# still open blocks a pass (exit 2 until QUIET_STALE_S past quiet_since, then exit 5). A recurrence is permanent by design: one
+# production incident at or after the floor minus slack returns exit 5 at every sweep, resolved or not, until a human acts (the
+# poller #12190, or a deliberate re-pin); nobody should replace the floor with a moving one. A manual resolve of a still-open
+# PRE-floor incident restarts the soak instead of blocking it: accepted residual (CTO ruling 2026-11-06; the resolver is
+# presumed owner-class, which is unverified, and a misfiring alert reopens inside the 4 h window and counts as a recurrence).
 #
 # THE PIN IS A STORED VALUE. It is the canary alert's `created_at` (2026-11-06T12:16:03.768Z) from apply run
 # 42216140017, which ran 12:14:26Z to 12:17:27Z, so the production alert's shape change landed somewhere inside that
 # run and the pin may be later than the true change by up to about 1.6 minutes (the slack covers it). It is a literal
 # because the exit-0 read happens AFTER the canary alert is deleted, when no alert exists to read. A reshape of the
 # production alert's evaluated query, `on_missing_data` or `query_period` that keeps `higher_than 0` is invisible to the
-# shape check, so the PR that makes such a change must re-pin APPLY_FLOOR_EPOCH by hand (a code-level detector that
+# shape check, so a follow-up commit measured from that apply run (the reshape PR itself cannot know the apply time) must
+# re-pin APPLY_FLOOR_EPOCH by hand (a code-level detector that
 # hashes the alert block beside the pin is documented in ADR-218 as a follow-up, not built). The live canary incident's
 # `started_at` and the canary alert's `created_at` (while it exists) bound the pin from above at run time: a listed
-# canary started or created earlier than FLOOR - SLACK_S is exit 3 (a re-created canary needs a re-pin). Alert
+# canary started or created earlier than FLOOR - SLACK_S is exit 3 (the pin sits later than the canary by more than the slack: move
+# the pin back, or delete and re-create the canary; a re-created canary is later than the pin and passes). That exit 3 is raised
+# AFTER the production-alert and recurrence findings (CTO ruling), so it never masks them. Alert
 # `updated_at` is vendor churn (it bumps about every five minutes with no apply) and is never read.
 #
 # BLIND SPOT. The incident walk stops at the page that carries the anchor, so a production incident OLDER than the
-# anchor is invisible to it, whether it is still open or resolves after the floor. The vendor status filter that would
+# anchor's page is invisible to it (older ones on the anchor's own page of 50 are read), whether it is still open or resolves
+# after the floor. The vendor status filter that would
 # close the gap is unverified, so the walk is unchanged.
 #
 # Incidents are matched on EXACT `.attributes.name` equality for both alerts. No startswith/test/contains: a
 # canary cause that quotes the production alert name must never read as a production recurrence.
 #
-# VERDICT LINE (stdout, one per run, printed only by verdict()):
+# VERDICT LINE (stdout, one per run; formatted only by emit_line(), printed by verdict() and, on the two no-verdict paths, by the
+# mktemp-failure branch and the EXIT trap, which call emit_line directly):
 #   SOLEUR_EGRESS_GW_SILENT_SOAK verdict=<v> prod_incident=<open|resolved|unknown> resolved_age_s=<n>
 #     newer_prod_incident=<0|1> canary=<fired|absent|unknown> canary_alert_live=<1|0|unknown>
 #     canary_declared=<0|1> prod_alert=<ok|absent|paused|shape|unknown> anchor_resolved_by=<none|actor|unknown>
@@ -58,9 +67,10 @@
 #   One field per condition, so a caller can read any of them whatever the overall verdict. The first ten fields keep
 #   their names and order; the last two were appended by #12189. `prod_incident`, `resolved_age_s` and
 #   `anchor_resolved_by` describe the ANCHOR and are informational: `anchor_resolved_by` says only whether the anchor
-#   was resolved by an ACTOR (a user or API token) or by the alert recovering, the identity is never printed, and no
-#   verdict depends on it (OBSERVED 2026-11-06: resolved_by is "API" on 1047829421 and null on the auto-resolved
-#   1048111600). `newer_prod_incident` means a production incident other than the anchor started at or after
+#   has an ACTOR (a user or API token) in resolved_by or null (that a null means the alert recovered is inferred, not measured),
+#   the identity is never printed, and no
+#   verdict depends on it (OBSERVED 2026-11-06: resolved_by is "API" on 1047829421 and null on
+#   1048111600, resolved_at 12:10Z). `newer_prod_incident` means a production incident other than the anchor started at or after
 #   FLOOR - SLACK_S. `quiet_age_s` is NOW - quiet_since (-1 until read). `pre_floor_open_prod_incident` is 1 when an
 #   exact-name production incident is open and is not counted as a recurrence. A field that was not read yet when the
 #   run ended is `unknown`; resolved_age_s is -1 when the anchor is open or unread; rows_in_window is `na` when no
@@ -72,20 +82,24 @@
 #                                                    started at or after FLOOR - SLACK_S (other than the anchor) and none
 #                                                    is open; at least SOAK_S have passed since quiet_since; a canary
 #                                                    incident exists; EVERY roster host has rows in the trailing 15
-#                                                    minutes; and the canary is neither declared nor live.
+#                                                    minutes; and the canary is neither declared nor live. Exit 0 also needs
+#                                                    the vendor to keep listing the canary incident after its alert is deleted
+#                                                    (unverified); if it does not, the retired exit 5 below applies.
 #   2   NOT YET          verdict=not_yet         -> an exact-name production incident is open (inside QUIET_STALE_S), or
 #                                                    the soak has not run its 4 h, or the canary alert is too young
 #   3   CANNOT ESTABLISH verdict=unknown         -> any read failure, unparseable payload, truncated list, bad env, a
 #                                                    floor or canary cross-check that disagrees, or rows unreadable on
 #                                                    the pass path
 #   5   ACTION REQUIRED  verdict=action_required -> the sweeper comments. Any of: production alert deleted, paused or
-#                                                    reverted; a production incident at or after the floor (recurrence);
+#                                                    reverted; a production incident at or after the floor minus slack (recurrence);
 #                                                    canary absent with the canary alert live (evaluator blind for this
 #                                                    query shape -> heartbeat poller #12190, production alert stays armed),
 #                                                    paused, or never created, or retired with its incident unreadable;
 #                                                    an open production incident past QUIET_STALE_S; a roster host with
 #                                                    no rows; or all verification held but the canary is still declared or
-#                                                    live (delete it). None of these wait for the 4 h window.
+#                                                    live (delete it). The production-alert, recurrence and canary-state findings do not wait for the 4 h window; the roster-host
+#                                                    and delete-the-canary findings are reached only after it, and the
+#                                                    open-incident one only past QUIET_STALE_S.
 #   78  xtrace refusal (#7797)
 #   exit 1 is NEVER used: to the sweeper 1 is FAIL, which can reopen a human-closed tracker. An EXIT trap remaps
 #   a stray 1 (and any path that exits without a verdict) to verdict=unknown / 3.
@@ -120,7 +134,7 @@
 # Observability layer: 6 (sweeper workflow run log + the tracker issue comment the sweeper posts).
 # cq-test-fixtures-synthesized-only: no live response is captured into this file.
 #
-# RETIREMENT: when the canary is deleted (follow-up PR, as soon as a canary incident has been observed), touch every
+# RETIREMENT: when the canary is deleted (follow-up PR, once this probe's exit 5 asks for the deletion), touch every
 #   site below in the same change; the count suites flip -1 here exactly as they flipped +1 when the canary landed.
 #   (1) apps/web-platform/infra/betterstack-logs-alerts.tf: delete the local egress_gw_probe_silent_canary_sql and the
 #       resources logtail_exploration.egress_gw_probe_silent_canary and logtail_exploration_alert.egress_gw_probe_silent_canary
@@ -147,6 +161,9 @@
 #   (9) APPLY_FLOOR_EPOCH below: it has no outside anchor once the canary incident disappears. When the canary pair is
 #       deleted, leave the pin as it is (it is the recurrence floor for the lifetime of this tracker), and re-pin it by hand in
 #       any later PR that reshapes the production alert's evaluated query, `on_missing_data` or `query_period`.
+#   (10) The canary's mirror issue (#12242) closes itself when its incident leaves the open list: confirm that after the apply and
+#       do NOT close it by hand (a hand close files a fresh P1 at the next 15-minute run). If the vendor keeps the incident open
+#       after its alert is deleted, say so on tracker #12189.
 #   After the sweeper PASS closes the tracker, closed_precheck never runs this again; the script stays as the reproduction.
 
 set -uo pipefail
@@ -173,9 +190,17 @@ ANCHOR_ID="${EGRESS_GW_SILENT_ANCHOR_ID:-1047829421}"
 # Re-pin by hand in the PR that changes the production alert's evaluated query, on_missing_data or query_period.
 APPLY_FLOOR_EPOCH=1793967363
 FLOOR="${EGRESS_GW_SILENT_FLOOR_EPOCH:-$APPLY_FLOOR_EPOCH}"
-ROSTER="${EGRESS_GW_SILENT_ROSTER:-soleur-web-platform soleur-web-2}"
-# Operator env, but it is printed in the public verdict: keep only well-formed, de-duplicated host names.
-ROSTER="$(for h in $ROSTER; do [[ "$h" =~ ^[A-Za-z0-9._-]{1,63}$ ]] && printf '%s\n' "$h"; done | sort -u | tr '\n' ' ')"
+ROSTER_RAW="${EGRESS_GW_SILENT_ROSTER:-soleur-web-platform soleur-web-2}"
+# Operator env, but it is printed in the public verdict: keep only well-formed, de-duplicated host names. An entry outside the
+# host-name shape is NOT silently dropped (a shrunken roster would then read as a complete one): it marks the roster bad, and the
+# rows read on the pass path is then unknown. Globbing is off so a stray `*` cannot expand against the working directory.
+ROSTER=""; ROSTER_BAD=0
+set -f
+for h in $ROSTER_RAW; do
+  if [[ "$h" =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then ROSTER+="${h}"$'\n'; else ROSTER_BAD=1; fi
+done
+set +f
+ROSTER="$(printf '%s' "$ROSTER" | sort -u | tr '\n' ' ')"
 ROSTER="${ROSTER% }"
 PAGE_CAP="${EGRESS_GW_SILENT_PAGE_CAP:-50}"
 
@@ -185,7 +210,7 @@ CANARY_RESOURCE="egress_gw_probe_silent_canary"
 EMITTER_TAG="egress-gw-probe"
 SOAK_S=14400            # 4 h
 QUIET_STALE_S=15300     # 4 h + 15 min grace: an open pre-floor production incident older than this past quiet_since is a finding
-SLACK_S=300             # subtracted ONLY in the recurrence comparison, never from the soak clock
+SLACK_S=300             # subtracted from the floor in every floor comparison (FLOOR_LO), never from the soak clock
 ROWS_WINDOW_S=900       # rows_in_window reads the trailing 15 min: the alert's own query window
 CANARY_MIN_AGE_S=1200   # a canary alert younger than this has not had one evaluation cycle: not_yet, not blind
 ALERTS_HOST="telemetry.betterstack.com"
@@ -195,6 +220,7 @@ INCIDENTS_HOST="uptime.betterstack.com"
 V_PROD=unknown; V_AGE=-1; V_NEWER=unknown; V_CANARY=unknown; V_ALIVE=unknown; V_DECL=unknown; V_ROWS=na
 V_PALERT=unknown; V_RBY=unknown; V_QUIET=-1; V_PREOPEN=unknown
 ROWS_OK=unknown
+XCHECK_MSG=""          # a canary/pin cross-check that disagrees: raised as `unknown` after the production findings
 VERDICT_DONE=0
 # The ONE place the verdict line is formatted: the mktemp-failure path, verdict() and the EXIT trap all call it.
 emit_line() { # <verdict>
@@ -208,12 +234,19 @@ WORK="$(mktemp -d -t egs-probe.XXXXXXXX)" || {
   exit 3
 }
 
-# THE chokepoint: the only place a SOLEUR_EGRESS_GW_SILENT_SOAK line is printed and the only place the contract
-# exit codes are chosen. <verdict> <exit>
+# THE chokepoint: the only place the contract exit codes are chosen (the line itself is formatted by emit_line, which the
+# mktemp-failure path and the EXIT trap also call). <verdict> <exit>
 verdict() {
+  local word="$1" code="$2"
+  # The pairing is part of the contract: exit 0 is reserved for `pass` and `pass` is exit 0 only. A call site that edits one
+  # half (an `action_required 0`) would CLOSE the tracker over a finding, so the pairing is refused rather than trusted.
+  if [[ "$word" == pass && "$code" != 0 ]] || [[ "$word" != pass && "$code" == 0 ]]; then
+    transient "internal: verdict ${word} paired with exit ${code}; refused"
+    word=unknown; code=3
+  fi
   VERDICT_DONE=1
-  emit_line "$1"
-  exit "$2"
+  emit_line "$word"
+  exit "$code"
 }
 transient() { printf 'TRANSIENT: %s\n' "$1" >&2; }
 action() { printf 'ACTION REQUIRED: %s\n' "$1" >&2; }
@@ -249,6 +282,7 @@ _bearer_ok "${BETTERSTACK_API_TOKEN}" || unknown "BETTERSTACK_API_TOKEN is unusa
 [[ "$PAGE_CAP" =~ ^[0-9]+$ && "$PAGE_CAP" -ge 1 ]] || unknown "page cap is not a positive integer"
 NOW="${EGRESS_GW_SILENT_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[0-9]+$ ]] || unknown "the clock is not an epoch"
+NOW=$((10#$NOW))
 # The floor is canonicalised (a leading zero would be octal in $(( )) and breaks --argjson) and digit-capped.
 [[ "$FLOOR" =~ ^[0-9]{1,12}$ ]] || unknown "the apply floor is not an epoch"
 FLOOR=$((10#$FLOOR))
@@ -279,7 +313,7 @@ http_get() { # <url> <outfile>
 # concatenated `.data[]` objects as a JSON array. With a stop epoch the walk ends at the first page whose OLDEST
 # started_at is <= it (the endpoint is newest-first, so everything after that page is older than the anchor).
 paged_get() { # <host> <path> [stop-epoch]
-  local host="$1" url="https://$1$2" stop="${3:-}" page=0 body="$WORK/page.json" oldest
+  local host="$1" url="https://$1$2" stop="${3:-}" page=0 body="$WORK/page.json" oldest bad_host
   : > "$WORK/pages.ndjson"
   while [[ -n "$url" ]]; do
     page=$((page + 1))
@@ -300,7 +334,9 @@ paged_get() { # <host> <path> [stop-epoch]
       oldest="$(jq -r '[.data[] | .attributes.started_at // empty | (try (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch empty)] | min // empty' "$body" 2>/dev/null)"
       if [[ "$oldest" =~ ^[0-9]+$ ]] && [[ "$oldest" -le "$stop" ]]; then break; fi
     fi
-    url="$(jq -r '.pagination.next // empty' "$body")"
+    # A malformed `pagination` (a string, an array) must not read as "end of list": that would truncate the walk silently.
+    url="$(jq -r 'if (.pagination | type) == "object" then (.pagination.next // empty) elif .pagination == null then empty else error("pagination") end' "$body" 2>/dev/null)" \
+      || { printf 'unreadable pagination in GET https://%s (bytes=%s)\n' "$host" "$(wc -c < "$body" | tr -d '[:space:]')" >&2; return 1; }
   done
   jq -s '.' "$WORK/pages.ndjson"
 }
@@ -366,7 +402,7 @@ if [[ "$(printf '%s' "$projected" | jq -r --arg id "$ANCHOR_ID" --arg n "$PROD_N
       '[.[] | select(.id == $id and .name == $n and .epoch == $a)] | length')" != "1" ]]; then
   unknown "the listed anchor ${ANCHOR_ID} disagrees with the single read on name or start time: inconsistent API answer"
 fi
-# ...and on whether it is resolved: the new ladder reads the open set from the list and the anchor's state from the single
+# ...and on whether it is resolved: the verdict ladder reads the open set from the list and the anchor's state from the single
 # read, so a disagreement would feed it an inconsistent anchor.
 list_open="$(printf '%s' "$projected" | jq -r --arg id "$ANCHOR_ID" '[.[] | select(.id == $id)][0] | (.resolved_epoch == null)' 2>/dev/null)"
 single_open=false; [[ -z "$A_RES_EPOCH" ]] && single_open=true
@@ -388,14 +424,14 @@ CANARY_EPOCH=""
 if [[ "$n_canary_inc" -gt 0 ]]; then
   V_CANARY=fired; CANARY_EPOCH="$(printf '%s' "$canary_inc" | jq -r '.[0].epoch' 2>/dev/null)"
   [[ "$CANARY_EPOCH" =~ ^[0-9]+$ ]] || unknown "the canary incident's start is not a time"
-  # The canary incident bounds the pin from above: a canary that started earlier than the floor minus slack means the
-  # pin sits after the canary by more than the slack (or the canary was re-created): re-pin by hand.
-  [[ "$CANARY_EPOCH" -ge "$FLOOR_LO" ]] || unknown "a listed canary incident started earlier than the apply floor minus slack: the pin is after the canary, or the canary was re-created; re-pin APPLY_FLOOR_EPOCH by hand"
+  # The canary incident bounds the pin from above: a canary that started earlier than the floor minus slack means the pin sits
+  # later than the canary by more than the slack. Recorded here and raised as `unknown` after the production findings.
+  [[ "$CANARY_EPOCH" -ge "$FLOOR_LO" ]] || XCHECK_MSG="a listed canary incident started earlier than the apply floor minus slack: the pin sits later than the canary by more than the slack; move APPLY_FLOOR_EPOCH back, or delete and re-create the canary"
 else
   V_CANARY=absent
 fi
 # The open pre-floor set: exact-name production incidents with no resolve that are not counted as a recurrence (the anchor
-# included, whatever its start). The soak origin: the later of the floor and the latest resolve of any listed production incident.
+# included, whatever its start). The soak origin (quiet_since): the later of the floor and the latest resolve of any listed production incident.
 PRE_OPEN="$(printf '%s' "$projected" | jq -r --arg id "$ANCHOR_ID" --argjson lo "$FLOOR_LO" \
   '[.[] | select(.is_prod and .resolved_epoch == null and (.id == $id or .epoch < $lo))] | length' 2>/dev/null)"
 [[ "$PRE_OPEN" =~ ^[0-9]+$ ]] || unknown "the open pre-floor incident set is unreadable"
@@ -430,8 +466,11 @@ CANARY_CREATED="$(printf '%s' "$alerts_proj" | jq -r '[.canary[] | .created_epoc
 if [[ "$live" -gt 0 ]]; then
   # A listed canary alert must carry a parseable creation time at or after the floor minus slack: otherwise the pin is
   # later than the canary, or the canary is not the one the pin was measured on.
-  [[ "$CANARY_CREATED" =~ ^[0-9]+$ ]] || unknown "the listed canary alert carries no parseable created_at: the pin cannot be cross-checked"
-  [[ "$CANARY_CREATED" -ge "$FLOOR_LO" ]] || unknown "the listed canary alert was created earlier than the apply floor minus slack: re-pin APPLY_FLOOR_EPOCH by hand"
+  if ! [[ "$CANARY_CREATED" =~ ^[0-9]+$ ]]; then
+    XCHECK_MSG="the listed canary alert carries no parseable created_at: the pin cannot be cross-checked"
+  elif [[ "$CANARY_CREATED" -lt "$FLOOR_LO" ]]; then
+    XCHECK_MSG="the listed canary alert was created earlier than the apply floor minus slack: the pin sits later than the canary by more than the slack; move APPLY_FLOOR_EPOCH back, or delete and re-create the canary"
+  fi
 fi
 # The production alert must be in the listing exactly once, unpaused and in the inverted shape. A listing that does
 # not carry it is not evidence of a healthy alert: deleted, or an incomplete answer; either needs a human.
@@ -447,6 +486,9 @@ esac
 # ── (4) Is the canary still declared? (comment lines dropped first) ──────────────────────────
 [[ -r "$TF" ]] || unknown "betterstack-logs-alerts.tf is not readable at ${TF}"
 tf_stripped="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
+# The file must be the one that declares the PRODUCTION alert: an empty or unrelated file would otherwise read as "canary retired".
+grep -qE '^[[:space:]]*resource[[:space:]]+"logtail_exploration_alert"[[:space:]]+"egress_gw_probe_silent"[[:space:]]*\{' <<<"$tf_stripped" \
+  || unknown "betterstack-logs-alerts.tf does not declare the production alert resource: the canary declaration cannot be read from it"
 V_DECL=0
 # Any of the three pieces keeps the canary declared: a half-deleted canary (alert gone, exploration or SQL local left)
 # must not read as retired. A block comment reads as declared: a safe deadlock, not a false pass.
@@ -465,8 +507,8 @@ read_rows() {
   V_ROWS=unknown; ROWS_OK=unknown
   local w_start d_start d_end WINDOW UNION sql bq_rc bq_out answered line rows ok_tok field
   w_start=$((NOW - ROWS_WINDOW_S))
-  if [[ -z "$ROSTER" ]]; then
-    transient "rows_in_window skipped: the roster is empty, so no host can be proven emitting; rows_in_window is unknown"
+  if [[ -z "$ROSTER" || "$ROSTER_BAD" == 1 ]]; then
+    transient "rows_in_window skipped: the roster is empty or carries an entry outside the host-name shape, so no host set can be proven emitting; rows_in_window is unknown"
     return 0
   fi
   if [[ -f "$BQ" ]] && [[ -n "${BETTERSTACK_QUERY_HOST:-}" && -n "${BETTERSTACK_QUERY_USERNAME:-}" && -n "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
@@ -499,7 +541,7 @@ read_rows() {
       # Roster hosts come first, at most 10 other hosts follow, and everything else is folded into `other`.
       if rows="$(printf '%s\n' "$bq_out" | jq -r -s --arg roster "$ROSTER" '
           ($roster | split(" ") | map(select(length > 0)) | sort) as $ro
-          | ([.[] | {host: ((.host // "") | if ([match("\\A[A-Za-z0-9._-]{1,63}\\z")] | length) > 0 then . else "other" end), n: ((.n // 0) | tonumber)}]) as $r0
+          | ([.[] | {host: ((.host // "") | if ([match("\\A[A-Za-z0-9._-]{1,63}\\z")] | length) > 0 then . else "other" end), n: ((.n // 0) | tonumber | if . < 0 then 0 else . end)}]) as $r0
           | ([$r0[].host] | unique | map(select(. != "other" and (. as $h | $ro | any(. == $h) | not)))) as $extra
           | ($extra[:10]) as $keep
           | ($r0 | map(.host as $h | if $h != "other" and ($ro | any(. == $h) | not) and ($keep | any(. == $h) | not) then .host = "other" else . end)) as $r
@@ -519,8 +561,7 @@ read_rows() {
   fi
 }
 # Diagnostic read: only when something needs the host picture (an open pre-floor incident or a recurrence).
-ROWS_DONE=0
-if [[ "$PRE_OPEN" -gt 0 || "$V_NEWER" == 1 ]]; then read_rows; ROWS_DONE=1; fi
+if [[ "$PRE_OPEN" -gt 0 || "$V_NEWER" == 1 ]]; then read_rows; fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────────────────────
 # Built from VALIDATED values (a numeric id and canonical timestamps re-rendered from the parsed epochs), never from the
@@ -539,9 +580,11 @@ case "$V_PALERT" in
     verdict action_required 5 ;;
 esac
 if [[ "$V_NEWER" == 1 ]]; then
-  action "a ${PROD_NAME} incident started at or after the apply floor (recurrence; projected): ${proj_newer}. rows_in_window=${V_ROWS} (the trailing 15 minutes) separates an evaluator fault (rows on both hosts now) from an emitter or ingest fault (a host with none). Response: the poller (#12190); any Better Stack write needs the owner's per-command go-ahead; never a revert."
+  action "a ${PROD_NAME} incident started at or after the apply floor minus 300 s (recurrence; projected): ${proj_newer}. rows_in_window=${V_ROWS} (the trailing 15 minutes) separates an evaluator fault (rows on both hosts now) from an emitter or ingest fault (a host with none). Response: the poller (#12190); any Better Stack write needs the owner's per-command go-ahead; never a revert."
   verdict action_required 5
 fi
+# A canary/pin disagreement qualifies only the canary evidence, so it is raised after the findings about production above.
+[[ -z "$XCHECK_MSG" ]] || unknown "$XCHECK_MSG"
 if [[ "$V_CANARY" == absent && "$V_ALIVE" == 1 ]]; then
   if [[ "$CANARY_PAUSED" == true ]]; then
     action "the canary alert ${CANARY_NAME} is live but PAUSED, so no canary incident can exist. This is not an evaluator finding: unpause it (a Better Stack write needing the owner's per-command go-ahead) or let the apply re-arm it."
@@ -559,15 +602,15 @@ if [[ "$V_CANARY" == absent && "$V_DECL" == 1 ]]; then
   verdict action_required 5
 fi
 if [[ "$V_CANARY" == absent ]]; then
-  action "the canary is retired (its alert is gone from the live listing and from the declaration) and no canary incident is listed any more, so canary=fired cannot be re-read here. If an earlier sweep comment on this tracker already read canary=fired, close the tracker by hand citing that comment. Do not build the heartbeat poller on this evidence: whether the vendor keeps a canary incident after its alert is deleted is unverified."
+  action "the canary is retired (its alert is gone from the live listing and from the declaration) and no canary incident is listed any more, so canary=fired cannot be re-read here. If an earlier sweep comment on this tracker already read canary=fired, close the tracker by hand citing that comment and remove its follow-through label (a closed tracker that keeps the label draws a comment at every sweep). Do not build the heartbeat poller on this evidence: whether the vendor keeps a canary incident after its alert is deleted is unverified."
   verdict action_required 5
 fi
 if [[ "$PRE_OPEN" -gt 0 ]]; then
   if [[ "$V_QUIET" -gt "$QUIET_STALE_S" ]]; then
-    action "an open ${PROD_NAME} incident that started before the apply is still open ${V_QUIET}s after the soak origin (more than 4 h + 15 min): the inverted shape did not clear it. rows_in_window=${V_ROWS} (the trailing 15 minutes; rows on both hosts means an empty-window read or a vendor that never auto-resolves; a host with none is real silence). Response: the poller (#12190); close this tracker in favor of #12190 with its follow-through label removed; a manual resolve is a Better Stack write needing the owner's per-command go-ahead."
+    action "an open ${PROD_NAME} incident that started before the apply is still open ${V_QUIET}s after quiet_since (more than 4 h + 15 min): the inverted shape did not clear it. rows_in_window=${V_ROWS} (the trailing 15 minutes; rows on both hosts means an empty-window read or a vendor that never auto-resolves; a host with none is real silence). Response: the poller (#12190); close this tracker in favor of #12190 with its follow-through label removed; a manual resolve is a Better Stack write needing the owner's per-command go-ahead."
     verdict action_required 5
   fi
-  transient "an open ${PROD_NAME} incident that started before the apply is still open (inside the horizon): the soak origin is ${V_QUIET}s ago; rows_in_window=${V_ROWS}"
+  transient "an open ${PROD_NAME} incident that started before the apply is still open (inside the horizon): quiet_since is ${V_QUIET}s ago; rows_in_window=${V_ROWS}"
   verdict not_yet 2
 fi
 if [[ "$V_QUIET" -lt "$SOAK_S" ]]; then
@@ -576,7 +619,8 @@ if [[ "$V_QUIET" -lt "$SOAK_S" ]]; then
 fi
 # The pass path proves BOTH roster hosts are emitting now: a green production alert over a silent host is exactly the
 # evaluator fault the canary cannot rule out. Unreadable is unknown (3); a roster host with no rows is a finding (5).
-[[ "$ROWS_DONE" == 1 ]] || read_rows
+# (Both diagnostic triggers exit above, so this is the only read on the pass path.)
+read_rows
 if [[ "$ROWS_OK" == unknown ]]; then
   unknown "the pass path needs rows from the trailing 15 minutes on every roster host and the read did not establish them (rows_in_window=${V_ROWS})"
 fi
@@ -587,5 +631,11 @@ fi
 if [[ "$V_DECL" == 1 || "$V_ALIVE" == 1 ]]; then
   action "all verification held (no ${PROD_NAME} incident at or after the apply for >= 4 h, rows on every roster host, canary incident seen) but the canary is still declared in betterstack-logs-alerts.tf or still live in the alert listing: delete the canary (its incident, P1 mirror issue and email should not outlive their job; the deletion needs the owner's per-command go-ahead and the standalone [ack-destroy] line). The RETIREMENT: header of this script lists every site to touch."
   verdict action_required 5
+fi
+# Defense in depth: the ladder above tests the BAD value of each member, so assert the conjunction of the GOOD values here, where a
+# state the ladder did not model (an unset member, a new enum value) lands on unknown instead of on the pass.
+if [[ "$V_PALERT" != ok || "$V_NEWER" != 0 || "$V_CANARY" != fired || "$V_ALIVE" != 0 || "$V_DECL" != 0 ||
+      "$PRE_OPEN" != 0 || "$ROWS_OK" != 1 || "$V_QUIET" -lt "$SOAK_S" ]]; then
+  unknown "the pass preconditions were not all established (internal inconsistency); no pass is granted"
 fi
 verdict pass 0
