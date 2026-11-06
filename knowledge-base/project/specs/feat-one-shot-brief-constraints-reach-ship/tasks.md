@@ -5,23 +5,23 @@ Branch: `feat-one-shot-brief-constraints-reach-ship` | Draft PR: #12246 | Deferr
 
 ## Phase 1: RED (tests first)
 
-- 1.1 Add rows T18a-T18p to `plugins/soleur/test/ship-battery-owed.test.sh` (fixtures: committed vs untracked token, behind main, ruleset unreadable, infra paths committed/untracked/staged, unresolved diff, wrong section/branch, empty/two-space/control-only words, `- constraint:` line, two sections, sanitize + 200-byte cut, reference-derived parity).
-  - 1.1.1 Each of T18a-c isolates one condition (4, 2, 1); T18d is all of them at once.
+- 1.1 Add rows T18a-T18p to `plugins/soleur/test/ship-battery-owed.test.sh` (fixtures: committed vs untracked token, behind main, ruleset unreadable, infra paths committed/untracked/unstaged/renamed-in/C-quoted, from the root and a subdirectory, unresolved diff, wrong section/branch, empty/two-space/control-only/non-ASCII-only words, `- constraint:` line, appended-after-blank-line token, two sections, ASCII filter + 200-byte cut, reference-derived parity) plus the `assert_not_reason` and `parity_rc` helpers.
+  - 1.1.1 Each of T18a-c isolates one condition (4, 2, 1) and carries a same-fixture no-token control (`git branch -m`); T18d is all of them at once.
   - 1.1.2 Reject rows assert the fall-through reason and the absence of `operator ci-is-the-gate`.
 - 1.2 Add the `mut18` helper and mutants T18q-s (arm disabled, arm's `INFRA_RE` grep removed, condition-2 `-z` guard removed).
 - 1.3 Run only `bash plugins/soleur/test/ship-battery-owed.test.sh`; confirm the new rows are RED for the right reason.
 
 ## Phase 2: GREEN
 
-- 2.1 `plugins/soleur/skills/ship/scripts/battery-owed.sh`: token read (sanitize before the emptiness test), `-z` stand-down guards on conditions 1 and 2, the arm after `INFRA_RE=` (committed diff + working tree, grep rc handled), three `undecidable` prefixes, header contract and trust statement.
-- 2.2 Create `plugins/soleur/skills/one-shot/references/operator-constraints.md` (what/where/append-after-arm, `- constraint:` prefix, replace-not-append, token + phrase list, Recover and lifetime note, fenced example).
+- 2.1 `plugins/soleur/skills/ship/scripts/battery-owed.sh`: token read (`LC_ALL=C`, section boundaries, ASCII-and-markup filter before the emptiness test), `-z` stand-down guards on conditions 1 and 2, the arm after `INFRA_RE=` (three NUL-delimited rename-free sources from the repo root, per-source failure exits, grep rc handled, labelled untrusted words), three `undecidable` prefixes, header contract and trust statement.
+- 2.2 Create `plugins/soleur/skills/one-shot/references/operator-constraints.md` (what/where/append-after-arm, `- constraint:` prefix, contiguous bullets and own-heading appends, typed-brief-only source, save-and-restore on a resumed run, replace-not-append, token + phrase list, only-the-token-is-machine-read note, Recover and lifetime note, fenced example).
 - 2.3 `plugins/soleur/skills/ship/SKILL.md`: hunks S1-S4 only. `plugins/soleur/skills/one-shot/SKILL.md`: hunks O1-O2 only. Re-measure with `wc -c` and `python3 scripts/lint-skill-body-budget.py --base origin/main`; do not touch `skill-body-budget.json`.
-- 2.4 Re-run the single suite until green; set `print_results` to the exact green count; run Guard 1 mutation rows 4-11 once by hand on a copy.
+- 2.4 Re-run the single suite until green; set `print_results` to the exact green count; run Guard 1 mutation rows 4-14 once by hand on a copy.
 - 2.5 `scripts/lib/test-affected-paths.sh`: one declared edge for `operator-constraints.md` in the `SHIP_BATTERY_OWED_TEST_SH` array.
 
 ## Phase 3: Document
 
-- 3.1 ADR-242 amendment (`## Amendment — 2026-11-06 (#12246)`, em dash) via `soleur:architecture`, plus the ADR-183 pointer amendment.
+- 3.1 ADR-242 amendment (`## Amendment — 2026-11-06 (#12246)`, em dash; four skip channels; ADR-276 qualification) via `soleur:architecture`, plus the ADR-183 pointer amendment and, if the ADR lint allows, an ADR-276 pointer.
 - 3.2 `bash plugins/soleur/test/c4-count-parity.test.sh` (no C4 change).
 
 ## Phase 4: Targeted checks (single suites only)
@@ -29,6 +29,7 @@ Branch: `feat-one-shot-brief-constraints-reach-ship` | Draft PR: #12246 | Deferr
 - 4.1 `scripts/lint-skill-body-budget.py`, `scripts/lint-orphan-test-suites.sh`, `plugins/soleur/test/fixture-relative-assert.test.sh`.
 - 4.2 `bun test` of `components.test.ts`, `plan-skeleton-checkpoint.test.ts`, `fullsuite-merge-gate.test.ts`.
 - 4.3 The four sibling ship suites named in the plan.
+- 4.3.1 Time `ship-battery-owed.test.sh` once; share one fixture across T18j-n if it would exceed 1.5x and +10 s.
 - 4.4 Smoke test: hand-written token in this branch's `session-state.md`, run `battery-owed.sh`, keep the verdict line for the Test plan.
 
 ## Phase 5: Ship under the same constraint
