@@ -1279,12 +1279,12 @@ doc = yaml.safe_load(open(sys.argv[1]))
 job = (doc.get("jobs") or {}).get("oracle-index-check") or {}
 co = [s for s in (job.get("steps") or []) if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout@")]
 if len(co) == 1:
-    print(len(co), (co[0].get("with") or {}).get("fetch-depth", "unset"), co[0].get("if", "unset"))
+    print(len(co), (co[0].get("with") or {}).get("fetch-depth", "unset"), co[0].get("if", "unset"), "first" if (job.get("steps") or [None])[0] is co[0] else "late")
 else:
     print(len(co), "n/a")
 PYX
 )"
-  check_eq "G4 row4b the oracle-index-check leg has exactly one checkout, with fetch-depth 0, gated on oracle_only" "$_oic_depth" "1 0 needs.oracle-selection.outputs.oracle_only == 'true'"
+  check_eq "G4 row4b the oracle-index-check leg has exactly one checkout: first step, fetch-depth 0, gated on oracle_only" "$_oic_depth" "1 0 needs.oracle-selection.outputs.oracle_only == 'true' first"
 fi
 
 # Self-registration: this sentinel is a registered suite with its own edge array (Phase 4 wiring).
