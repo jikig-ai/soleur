@@ -45,3 +45,11 @@ trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - 6.1 Targeted vitest: the files in the plan's Files lists plus `test/approval/decide-boundary.test.ts`, `test/approval/runner-census.test.ts`, `test/git-data-ssh-dial-sweep.test.ts`, `test/git-data-ssh-connect-bound.test.ts`, `test/git-data-key-sweep.test.ts`, `test/github-tools-push-grant.test.ts`, `test/cc-dispatcher-real-factory.test.ts`; `npx tsc --noEmit` in `apps/web-platform`. CI is the ship gate; the PR test plan records that the slow local `--affected` battery was not awaited.
 - 6.2 Before every push both token greps print nothing (diff and log forms in the plan's acceptance criteria).
 - 6.3 PR title `fix(approval): ...`, body `Ref #9601` (never `Closes`), states that nothing here discharges the flip and the sandbox-write limb stays UNVERIFIED.
+
+## Implementation status (Phases 1-3, code and tests)
+
+Done (see the commits on the branch): 1.1-1.5, 2.1-2.6, 3.1-3.2. Notes: the positive TLS control trusts the test CA through
+`GIT_SSL_CAINFO` supplied via the test-only builder seam, because `SSL_CERT_FILE` was measured not to be honoured by git's libcurl
+on git 2.56; `env_path_unsafe` is mapped to the plain `Push could not be prepared` error (the environment is the server's, not the
+agent's); `hardened` http extraHeader / env-config vectors are URL-scoped because the unscoped key is reset by the later `-c`.
+Phase 4 (mutation battery) and Phase 5 (ADR, handover) belong to other agents.
