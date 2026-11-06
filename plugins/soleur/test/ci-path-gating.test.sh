@@ -83,33 +83,39 @@ for o in settings_json worktrees webplat client_pii sweep; do
     fail "B1: detect output $o missing"; fi
 done
 
-# B2 — each gated job has `needs: detect` and an `if:` naming its output.
+# B2 — the gated members live folded in `quality-advisory` (#12089): the
+# umbrella carries `needs: detect` and each member STEP's `if:` names its
+# detect output (the folded jobs' `needs: detect`-gated conditions were pushed
+# down onto the member steps).
 declare -A GATE=( [settings-json-integrity]=settings_json [stray-worktree-marker-block]=worktrees \
   [userid-bypass-lint]=webplat [client-pii-grep]=client_pii [sweep-completeness]=sweep )
+ADV=$(awk -v j="  quality-advisory:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
+if printf '%s' "$ADV" | grep -c >/dev/null 'needs: detect'; then pass; else
+  fail "B2: quality-advisory missing needs: detect"; fi
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
-  block=$(awk -v j="  $job:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -c >/dev/null 'needs: detect' \
-     && printf '%s' "$block" | grep -c >/dev/null "outputs.$out"; then pass; else
-    fail "B2: $job missing needs: detect / outputs.$out"; fi
+  if printf '%s' "$ADV" | grep -c >/dev/null "outputs.$out" \
+     && printf '%s' "$ADV" | grep -c >/dev/null "id: $job"; then pass; else
+    fail "B2: $job missing member step / outputs.$out condition"; fi
 done
 
-# B3 — the two required jobs carry no `needs: detect` edge.
-for req in guard-script-fixture-tests markdown-lint; do
-  block=$(awk -v j="  $req:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -c >/dev/null 'needs: detect'; then
-    fail "B3: required job $req reads needs: detect"; else pass; fi
-done
+# B3 — the required umbrella carries no `needs: detect` edge (required contexts
+# must not depend on an advisory probe job). Anchored to the 4-space YAML key
+# (job-attribute indent); the 2-space comments mention it as prose.
+block=$(awk -v j="  quality-guards:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
+if printf '%s' "$block" | grep -c >/dev/null '^    needs: detect'; then
+  fail "B3: required job quality-guards reads needs: detect"; else pass; fi
 
 # B4a — gated jobs run even when detect FAILS (needs.detect.result escape) —
 # skip on proof, never on uncertainty.
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
-  block=$(awk -v j="  $job:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
-  if printf '%s' "$block" | grep -c >/dev/null 'always()' \
-     && printf '%s' "$block" | grep -c >/dev/null "needs.detect.result != 'success'"; then pass; else
-    fail "B4a: $job lacks the detect-failure escape"; fi
+  if printf '%s' "$ADV" | grep -c >/dev/null "outputs.$out"; then pass; else
+    fail "B4a: $job output condition missing in quality-advisory"; fi
 done
+if printf '%s' "$ADV" | grep -c >/dev/null 'always()' \
+   && printf '%s' "$ADV" | grep -c >/dev/null "needs.detect.result != 'success'"; then pass; else
+  fail "B4a: quality-advisory lacks the detect-failure escape (always() + result != success)"; fi
 # B4b — same exit-status-capture rule for the detect job's file list.
 if grep -q 'if ! files=$(gh api --paginate' "$PQG"; then pass; else
   fail "B4b: detect job must gate on gh api EXIT STATUS"; fi

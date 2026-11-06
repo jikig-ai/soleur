@@ -362,18 +362,18 @@ rename_away() {
 
 dispatch_ok() {
   local f="$1" line in_job=0 seen_steps=0 job_has_if=0 step_n=0
-  local backstop_step=0 gate_step=0 step_has_if=0 step_has_event=0 step_has_sha=0
-  local gate_if=1 gate_event=0 gate_sha=0
+  local backstop_step=0 gate_step=0 step_has_if=0 step_if_text="" step_has_event=0 step_has_sha=0
+  local gate_if=1 gate_if_text="" gate_event=0 gate_sha=0
   [[ -f "$f" ]] || return 1
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ ^[[:space:]]*# ]]; then
       continue
     fi
-    if [[ "$in_job" == 0 && "$line" == "  enforce:" ]]; then
+    if [[ "$in_job" == 0 && "$line" == "  quality-guards:" ]]; then
       in_job=1
       continue
     fi
-    if [[ "$in_job" == 1 && "$line" =~ ^[[:space:]]{2}[A-Za-z0-9_-]+:[[:space:]]*$ && "$line" != "  enforce:" ]]; then
+    if [[ "$in_job" == 1 && "$line" =~ ^[[:space:]]{2}[A-Za-z0-9_-]+:[[:space:]]*$ && "$line" != "  quality-guards:" ]]; then
       break
     fi
     [[ "$in_job" == 1 ]] || continue
@@ -386,11 +386,13 @@ dispatch_ok() {
     if [[ "$line" =~ ^[[:space:]]{6}-[[:space:]] ]]; then
       step_n=$((step_n + 1))
       step_has_if=0
+      step_if_text=""
       step_has_event=0
       step_has_sha=0
     fi
     if [[ "$line" =~ ^[[:space:]]+if: ]]; then
       step_has_if=1
+      step_if_text="$line"
     fi
     if [[ "$line" == *"EVENT_NAME:"* ]]; then
       step_has_event=1
@@ -404,11 +406,15 @@ dispatch_ok() {
     if [[ "$line" == *"bash scripts/lint-art30-reverification.sh"* ]]; then
       gate_step=$step_n
       gate_if=$step_has_if
+      gate_if_text="$step_if_text"
       gate_event=$step_has_event
       gate_sha=$step_has_sha
     fi
   done < "$f"
-  [[ "$job_has_if" == 0 && "$gate_step" -gt "$backstop_step" && "$backstop_step" -gt 0 && "$gate_if" == 0 && "$gate_event" == 1 && "$gate_sha" == 1 ]]
+  # Post-#12089 the enforce members are steps of `quality-guards`; the folded
+  # `!cancelled()` guard is the allowed always-run form, any other step-level
+  # event if: is not.
+  [[ "$job_has_if" == 0 && "$gate_step" -gt "$backstop_step" && "$backstop_step" -gt 0 &&      ( "$gate_if" == 0 || "$gate_if_text" == *"!cancelled()"* ) &&      "$gate_event" == 1 && "$gate_sha" == 1 ]]
 }
 
 # --- rows -------------------------------------------------------------------
@@ -597,14 +603,16 @@ expect_rc "row 22 log-driver with date ids and a word" 0 "$RC"
 assert_fixture_dir "$SANDBOX"
 cat > "$SANDBOX/workflow-good.yml" <<'EOF'
 jobs:
-  enforce:
+  quality-guards:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce legal-doc cross-document lockstep
         run: echo legal
       - name: Enforce BACKSTOP_REVISION bump on memory-backstop hook changes
+        if: ${{ !cancelled() }}
         run: bash scripts/check-backstop-revision.sh
       - name: Enforce Art. 30 re-verification triggers
+        if: ${{ !cancelled() }}
         env:
           EVENT_NAME: ${{ github.event_name }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
@@ -612,7 +620,7 @@ jobs:
 EOF
 cat > "$SANDBOX/workflow-bad.yml" <<'EOF'
 jobs:
-  enforce:
+  quality-guards:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce legal-doc cross-document lockstep
@@ -631,9 +639,9 @@ else
   pass "row 23 removed invocation is RED"
 fi
 if dispatch_ok "$WORKFLOW"; then
-  pass "row 23 real enforce job invokes the script after the backstop"
+  pass "row 23 real quality-guards umbrella invokes the script after the backstop"
 else
-  fail "row 23 real enforce job is missing the script step"
+  fail "row 23 real quality-guards umbrella is missing the script step"
 fi
 
 reset_seed

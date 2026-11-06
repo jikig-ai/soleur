@@ -243,7 +243,7 @@ try:
         if line.strip() and not line.lstrip().startswith("#"):
             names.add(line)
     req_jobs = [n for n, j in jobs.items() if (j or {}).get("name") in names]
-    if len(req_jobs) < 5:
+    if len(req_jobs) < 1:
         tags.append("W-REQUIRED-COUNT")
     for n in req_jobs:
         if "smoke-relevance" in needs(jobs[n]) or "smoke-tests" in needs(jobs[n]):
@@ -1275,8 +1275,8 @@ wf_mut if-flip-to-eq-true "W-IF" "outputs.smoke != 'false'" "outputs.smoke == 't
 wf_mut if-drop-cancelled "W-IF" " && !cancelled()" ""
 wf_mut if-drop-event-conjunct "W-IF" "if: github.event_name == 'pull_request' && !cancelled() && (" "if: (!cancelled()) && ("
 wf_mut needs-extra "W-NEEDS" $'    needs: smoke-relevance\n' $'    needs: [smoke-relevance, scan]\n'
-wf_mut needs-added-to-required-job "W-REQUIRED-EDGE:lint-fixture-content" $'  lint-fixture-content:\n    name: lint fixture content\n' \
-  $'  lint-fixture-content:\n    name: lint fixture content\n    needs: smoke-relevance\n'
+wf_mut needs-added-to-required-job "W-REQUIRED-EDGE:secret-guards" $'  secret-guards:\n    name: secret-guards\n' \
+  $'  secret-guards:\n    name: secret-guards\n    needs: smoke-relevance\n'
 wf_mut step-continue-on-error "W-COE-STEP" $'        id: relevance\n' $'        id: relevance\n        continue-on-error: true\n'
 wf_mut step-shell-dropped "W-SHELL" $'        id: relevance\n        shell: bash\n' $'        id: relevance\n'
 wf_mut job-continue-on-error "W-COE" $'    timeout-minutes: 5\n' $'    timeout-minutes: 5\n    continue-on-error: true\n'
