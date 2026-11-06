@@ -737,7 +737,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=8
+probe_schema=9
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -758,6 +758,10 @@ redis_expires=n/a
 data_mount_devid=n/a
 data_mount_base=n/a
 registry_fns=n/a
+# #8525 probe_schema=9. Same unconditional-emit contract as every field above: bound here so no
+# code path can leave it unset and silently drop a field from the row. `n/a` = the question does
+# not apply on this host (web role); `__UNREADABLE__` = it applied and could not be answered.
+data_luks=n/a
 
 case "$host_role" in
 dedicated)
@@ -794,6 +798,7 @@ dedicated)
     # naming the backing kernel device, which separates "failed open onto the root disk" from
     # "attached to some other volume".)
     data_mount_devid=__UNREADABLE__
+    data_luks=__UNREADABLE__
     ;;
   *)
     # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device AND
@@ -906,6 +911,46 @@ dedicated)
   # (No whitespace guard on data_mount_base: the charset guard above already rejects every
   # character outside [A-Za-z0-9_.-], whitespace included, and the two sentinels it can otherwise
   # hold are `n/a` and `__UNREADABLE__`. A second guard here would be unreachable.)
+
+  # ── #8525 probe_schema=9: is the mount's backing device a LUKS container? ─────────────────
+  # `data_mount_devid` proves WHICH device backs /mnt/data; it does not prove the bytes sit
+  # inside dm-crypt — the encryption-posture ledger's live_verification reads this field.
+  # THE SIGNATURE IS READ OFF THE BACKING DEVICE, NEVER THE MAPPER NODE: on a LUKS mount
+  # src=/dev/mapper/inngest-redis reports TYPE=ext4 (the filesystem inside the container),
+  # so blkid on the mount source would emit `ext4` on an encrypted store — the exact
+  # confident-wrong-answer shape. For a /dev/mapper source the backing device is the one
+  # `cryptsetup status` names on its `device:` line (the same discriminator cloud-init-registry
+  # uses): that names the partition (sdb1) on a partitioned layout, where the crypto_LUKS
+  # signature actually lives — /dev/$data_mount_base (the parent disk) would read `unknown`
+  # there. For a RAW source the mount sits on the device itself, whose TYPE is the fs
+  # signature: `ext4` is then the honest "not a container" reading, emitted verbatim.
+  #
+  # Sentinels, identical contract to the siblings: `__UNREADABLE__` when the source read
+  # failed (bound above), when cryptsetup refuses to name the backing device (a non-crypt
+  # mapper, a missing tool, a timeout — each says the QUESTION was refused, not the bytes),
+  # or when blkid yields nothing parseable. NEVER `no`/`unknown`: a refused question must
+  # never be read as a plaintext verdict, the same polarity the rest of this row carries.
+  #
+  # EVERY CALL IS timeout-BOUNDED, for the same reason as the calls above it: a stall before
+  # the unconditional emit loses the whole row.
+  case "$data_mount_src" in
+  /dev/mapper/*)
+    _luks_backing="$(timeout 5 cryptsetup status "${data_mount_src##*/}" 2>/dev/null \
+      | sed -n 's/^[[:space:]]*device:[[:space:]]*//p' | head -1 || true)"
+    case "$_luks_backing" in
+    '' | *[!A-Za-z0-9_./-]*) data_luks=__UNREADABLE__ ;;
+    *)
+      data_luks="$(timeout 5 blkid -o value -s TYPE "$_luks_backing" 2>/dev/null || true)"
+      case "$data_luks" in '' | *[!A-Za-z0-9_.-]*) data_luks=__UNREADABLE__ ;; esac
+      ;;
+    esac
+    unset _luks_backing
+    ;;
+  *)
+    data_luks="$(timeout 5 blkid -o value -s TYPE "$data_mount_src" 2>/dev/null || true)"
+    case "$data_luks" in '' | *[!A-Za-z0-9_.-]*) data_luks=__UNREADABLE__ ;; esac
+    ;;
+  esac
 
   # ── #8015 probe_schema=8: registry evidence, so G18 stops passing vacuously ───────────────
   # The #7674 probe grants PASS to a host that answers /health and owns NOTHING -- which is the
@@ -1050,10 +1095,14 @@ dedicated)
       # says "confirm before emptying anything", and a count alone makes that unfollowable without
       # SSH — the fallback this repo forbids (hr-no-ssh-fallback-in-runbooks).
       #
-      # NAMES ONLY, NEVER VALUES. This ships to Better Stack. Key NAMES are structural metadata;
-      # key VALUES are run payloads that can carry customer data, so nothing here reads a value.
-      # Even the names are reduced to their first two colon segments, so `inngest:run:<uuid>`
-      # contributes `inngest:run:*` and the identifier never leaves the box.
+      # NAMES ONLY, NEVER VALUES — AND, SINCE SCHEMA 8, ONLY SEGMENTS THE ALLOWLIST CALLS A
+      # CATEGORY. This ships to Better Stack. Key NAMES are structural metadata; key VALUES are
+      # run payloads that can carry customer data, so nothing here reads a value. The sentence
+      # this block once carried — "the identifier never leaves the box" — was FALSE as written:
+      # the pre-schema-8 two-segment reduction passed segment 2 VERBATIM, so `estate:<ULID>:runs:1`
+      # shipped `estate:<ULID>:*` whole. Measured by #8013 against the live row: a 26-char ULID
+      # reached the third-party warehouse on every fire. The rule now is the ALLOWLIST in the awk
+      # below: a segment is emitted only if it looks like a category; anything else becomes `*`.
       #
       # ⚠️ SANITISATION IS LOAD-BEARING. Key names are the FIRST value in this row that anything
       # writing to Redis can influence, and the row is parsed by whitespace tokens on `name=`. A
@@ -1283,7 +1332,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks"
 
 # --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
 # Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
@@ -1314,7 +1363,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -1640,7 +1689,7 @@ After=network-online.target
 Wants=network-online.target
 # SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
 # on an aborted first boot a missing file must SKIP the start, never FAIL it into the
-# RestartSec=5 crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
+# RestartSec crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
 # attempted, an absent file still fails the unit — the fail-closed contract is retained.
 # A skipped server is a DARK server — the designed off-box detectors are the web-1-fed
 # betteruptime_heartbeat.inngest_consumer beat (armed; dies in ~4 min when the dedicated host
@@ -1681,7 +1730,15 @@ EnvironmentFile=/etc/default/inngest-server
 # the script would falsify all four.
 ExecStart=/usr/bin/doppler run --config @@DOPPLER_CONFIG@@ -- /usr/local/bin/inngest-server-launch.sh @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@
 Restart=on-failure
-RestartSec=5
+# #8080: 300, not 5. The class this quiets is the flip-guard BLOCK loop: with the cutover flag
+# outside {armed,flipping,flushed,done} the P1-5 ExecStartPre refuses every start, and at
+# RestartSec=5 the journald rows measured ~229 BLOCK + ~271 doppler-wrapper per 500-row window
+# ≈ 55k rows/day on 2026-09-11 (the #7577 row-count tracker, knowledge-base/operations/
+# expenses.md). Same loop semantics at 300 s ≈ ~1k rows/day. NO StartLimitBurst is set, so the
+# unit never latches `failed` and inngest-cutover-flip.sh's bare `systemctl start` needs no
+# reset-failed. Baked-carrier: takes effect on the next image + host replace, like the
+# probe_schema=9 emit above.
+RestartSec=300
 User=deploy
 Group=deploy
 # Resource guardrails: cx33 has 8GB RAM + 4 vCPU shared with web-platform.

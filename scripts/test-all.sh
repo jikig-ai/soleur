@@ -4342,7 +4342,8 @@ _aff_runner_banner() {
 # lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
 # #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
-_MIN_ALWAYS_ON_DECLARED=112
+# #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5726,6 +5727,13 @@ if want_scripts; then
   # tree.
   run_suite "scripts/lint-gh-argv-arg" bash scripts/lint-gh-argv-arg.test.sh
   run_suite "scripts/lint-gh-argv-arg-live" python3 scripts/lint-gh-argv-arg.py
+  # #9659. Same both-halves shape: a bare/silent `VAR=$(gh issue|pr list|search)` dedupe
+  # capture under `set -euo pipefail` aborts the step mid-alarm with no breadcrumb — the
+  # class #9612 normalized kept re-growing past its enumeration. The unit suite proves the
+  # classifier's buckets on fixtures (and carries the planted-defect verify-the-verifier);
+  # the live scan proves every census site is wrapped, ||-handled, or `# dedupe:`-marked.
+  run_suite "scripts/lint-gh-dedupe-shape" bash scripts/lint-gh-dedupe-shape.test.sh
+  run_suite "scripts/lint-gh-dedupe-shape-live" python3 scripts/lint-gh-dedupe-shape.py
   # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
   # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
   run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
@@ -6181,6 +6189,7 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  run_suite "scripts/inngest-luks-field-8525" bash scripts/followthroughs/inngest-luks-field-8525.test.sh
   # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
   # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would

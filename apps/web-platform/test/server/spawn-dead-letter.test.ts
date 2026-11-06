@@ -299,7 +299,7 @@ describe("spawnDeadLetterMessage / lifecycle suffix (#8803)", () => {
 
   it("yields a distinct string per lifecycle", async () => {
     const { spawnDeadLetterMessage } = await load();
-    const lifecycles = ["failed", "cancelled", "timed_out", "settle_failed"] as const;
+    const lifecycles = ["failed", "cancelled", "timed_out", "settle_failed", "stale_working"] as const;
     const messages = lifecycles.map((l) =>
       spawnDeadLetterMessage("leader_internal_error", CLASS, l),
     );

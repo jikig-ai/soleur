@@ -240,6 +240,11 @@ write_files:
       # #7220 AC-B2.3 — lockstep with webhook.service (parity §4b asserts the directives);
       # rationale single-sourced there.
       StartLimitIntervalSec=0
+      # DELIBERATELY UNCONDITIONED (#10078): no ConditionPathExists on
+      # /etc/default/webhook-deploy — written unconditionally before first start,
+      # so absence is a real fault and the crash-loop IS the signal (receivers:
+      # the webhook_bound :9000 bind gate + betteruptime_monitor.github_webhook_failures).
+      # Lockstep with webhook.service (rationale single-sourced there).
 
       [Service]
       Type=simple
@@ -627,8 +632,8 @@ runcmd:
   - systemctl enable --now orphan-reaper.timer
   - systemctl enable --now bwrap-userns-sysctl.service
 
-  # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 4 web-host probes (#6438/#6548, #10455 b). The baked
-  # web-probe-envwrite.sh writes the 4 /etc/default/web-<probe> EnvironmentFiles (per-host token +
+  # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 5 web-host probes (#6438/#6548, #10455 b). The baked
+  # web-probe-envwrite.sh writes the 5 probe EnvironmentFiles (per-host token +
   # EXPECTED_IP + endpoints) that the SSH remote-exec provisioners write only on web-1 — WITHOUT
   # these a fresh cattle host's probe units fail to start (missing EnvironmentFile). Token is passed
   # as an env var (same root-only exposure class as the webhook-deploy printf above; the read-scoped

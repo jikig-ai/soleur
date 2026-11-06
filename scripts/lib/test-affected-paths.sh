@@ -151,6 +151,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
+  "scripts/lint-gh-dedupe-shape-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"

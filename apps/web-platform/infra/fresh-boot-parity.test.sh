@@ -180,6 +180,89 @@ for d in $PROBE_DESTS; do
   fi
 done
 
+# ── 12b. ENV-FILE CONDITIONING (#10078, the #9962/#9939 skip-vs-fail pattern): all FIVE probe
+#        services fed by web-probe-envwrite.sh — the four web-<probe> units above PLUS
+#        inngest-consumer-probe.service (same writer, same arming block, same class — the
+#        unit the issue's enumeration missed) — carry ConditionPathExists= on their env file
+#        in [Unit], with EnvironmentFile= kept unprefixed in [Service] (fail-closed on a real
+#        start). A missing late-runcmd env file must SKIP the timer-driven start, never FAIL
+#        it into an every-cadence journal storm; the service-level condition re-evaluates on
+#        every fire, so the probe self-heals when the file appears. ──
+# unit:envfile:beat triples — beat is the betteruptime_heartbeat token each unit's own
+# SKIP-VS-FAIL comment must name as the detector that does not share the gated dependency.
+COND_UNITS="inngest-consumer-probe.service:/etc/default/inngest-consumer-probe:inngest_consumer
+            web-bash-synthetic.service:/etc/default/web-bash-synthetic:web_bash_synthetic
+            web-git-data-probe.service:/etc/default/web-git-data-probe:git_data_prd
+            web-private-nic-guard.service:/etc/default/web-private-nic-guard:web_nic_guard
+            web-zot-consumer-probe.service:/etc/default/web-zot-consumer-probe:web_zot_consumer"
+for triple in $COND_UNITS; do
+  unit_f="${triple%%:*}"; rest="${triple#*:}"
+  env_f="${rest%%:*}"; beat="${rest#*:}"
+  svc="$DIR/$unit_f"
+  [[ -s "$svc" ]] || { no "12b: missing probe unit $unit_f"; continue; }
+  # Section-scoped extraction: ConditionPathExists= is valid in [Unit] only and
+  # EnvironmentFile= in [Service] only — anywhere else systemd logs an unknown lvalue and the
+  # property silently dies (the inert-lvalue class from the #9962 Session Errors).
+  _unitsec="$(awk '/^\[Unit\]/{u=1;next} /^\[/{u=0} u' "$svc")"
+  _svcsec="$(awk '/^\[Service\]/{s=1;next} /^\[/{s=0} s' "$svc")"
+  if [[ -n "$_unitsec" && -n "$_svcsec" ]]; then
+    ok "12b: $unit_f [Unit]/[Service] sections extract"
+  else
+    no "12b: could not extract $unit_f [Unit]/[Service] — the remaining arms for this unit are vacuous"
+    continue
+  fi
+  # SET IDENTITY, not cardinality: the sorted [Unit] condition path-set must equal the sorted
+  # [Service] EnvironmentFile path-set — an unconditioned env file, a condition on a foreign
+  # path, or a coordinated mismatched pair all fail where a count comparison would pass.
+  _ef_set="$(printf '%s\n' "$_svcsec" | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+  _cx_set="$(printf '%s\n' "$_unitsec" | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+  if [[ -n "$_ef_set" && "$_ef_set" == "$_cx_set" && "$_cx_set" == "$env_f" ]]; then
+    ok "12b: $unit_f [Unit] condition path-set ≡ [Service] EnvironmentFile path-set ($env_f)"
+  else
+    no "12b: $unit_f EF set={${_ef_set}} vs condition set={${_cx_set}} (want exactly {$env_f}) — an unconditioned env file can fail a start"
+  fi
+  # Unprefixed retention: `EnvironmentFile=-` would mask the missing file even on a real
+  # start attempt — the fail-closed contract the #9962 precedent deliberately retains.
+  if printf '%s\n' "$_svcsec" | grep -cxF "EnvironmentFile=$env_f" >/dev/null \
+     && ! printf '%s\n' "$_svcsec" | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null; then
+    ok "12b: $unit_f EnvironmentFile= stays unprefixed in [Service] (fail-closed on a real start)"
+  else
+    no "12b: $unit_f EnvironmentFile= is missing, misplaced, or '-' tolerant-prefixed — the fail-closed contract is gone"
+  fi
+  # RESET LINES: a bare `Directive=` empties the list wholesale — the set extractors drop the
+  # empty token, so this check is file-wide, not section-scoped.
+  if ! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' "$svc" >/dev/null; then
+    ok "12b: $unit_f carries no bare EnvironmentFile=/ConditionPathExists= reset lines"
+  else
+    no "12b: $unit_f carries a bare reset line — systemd reset semantics empty the set invisibly to the other arms"
+  fi
+  # SKIP-VS-FAIL comment contract: names the writer's own fatal channel and the heartbeat
+  # beat that reports the dark state — a skip must never be silent.
+  if grep -qF 'SKIP-VS-FAIL' "$svc" && grep -qF 'web_probe_envwrite' "$svc" && grep -qF "$beat" "$svc"; then
+    ok "12b: $unit_f SKIP-VS-FAIL comment names web_probe_envwrite + the $beat beat"
+  else
+    no "12b: $unit_f lost its SKIP-VS-FAIL comment (must name the boot-emit fatal channel + its own heartbeat beat)"
+  fi
+done
+# 12b MUTATION CONTROL: dropping one condition line must break the set-identity arm — run the
+# SAME predicate against a copy with the condition stripped, so a drifted needle or laxer
+# predicate reds here rather than certifying a vacuous comparison.
+_MUT_SVC="$PAR_SCR/web-git-data-probe.mutated.service"
+grep -vxF 'ConditionPathExists=/etc/default/web-git-data-probe' "$DIR/web-git-data-probe.service" > "$_MUT_SVC"
+if cmp -s "$DIR/web-git-data-probe.service" "$_MUT_SVC"; then
+  no "12b mutation: condition-strip did not land — the control is vacuous"
+else
+  _m_unitsec="$(awk '/^\[Unit\]/{u=1;next} /^\[/{u=0} u' "$_MUT_SVC")"
+  _m_svcsec="$(awk '/^\[Service\]/{s=1;next} /^\[/{s=0} s' "$_MUT_SVC")"
+  _m_ef="$(printf '%s\n' "$_m_svcsec" | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+  _m_cx="$(printf '%s\n' "$_m_unitsec" | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+  if [[ "$_m_ef" == "$_m_cx" ]]; then
+    no "12b mutation: a unit missing ConditionPathExists=/etc/default/web-git-data-probe still satisfies the set-identity predicate"
+  else
+    ok "12b mutation: dropping the condition breaks the set-identity arm (EF={$_m_ef} vs CX={${_m_cx:-<empty>}})"
+  fi
+fi
+
 # ── 13. The probe SSH provisioners are RETAINED (Phase 2 adds coverage; Phase 5 removes SSH) ──
 for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_install web_bash_synthetic_install web_bash_synthetic_install_web2; do
   if grep -qE "resource \"terraform_data\" \"$r\"" "$SRV"; then
@@ -588,7 +671,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=199  # 166 + 20 for the runtime Bash synthetic joining the probe lists (#10455 b): 2 scripts, 2 units, 1 dest, 2 retained provisioners; + 13 for the #10697 fix round: 13b (web-2 derivation + 3 mutations), 13c (2 per-resource pins + 7 mutations)
+EXPECTED_ASSERTIONS=225  # 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="
