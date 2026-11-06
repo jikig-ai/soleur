@@ -34,7 +34,7 @@
  * Opt-in: callers that do not set `hardened` keep their exact legacy argv and environment.
  */
 
-import { isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, normalize, sep } from "node:path";
 
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
 
@@ -72,7 +72,12 @@ export const HARDENED_GIT_ARGS: readonly string[] = [
 /** The only transport a hardened push may use. An environment variable beats every repo-level `protocol.*.allow`. */
 export const HARDENED_ALLOW_PROTOCOL = "https";
 
-/** Brand set only by `createIsolatedPushDir`; `assertIsolatedPushDir` is the runtime check callers run before a token is minted. */
+/**
+ * Brand carried by a handle that `createIsolatedPushDir` returned. It is a symbol exported from this leaf (the creator cannot be
+ * imported here), so it guards against a stray value, NOT against forgery: any module can attach it. The control that holds is
+ * the SHAPE check in `assertIsolatedPushDir` (below) on top of it; a module-private registry was rejected because registering
+ * would need a function this leaf exports, and an exported function is callable by anyone.
+ */
 export const ISOLATED_PUSH_DIR_BRAND: unique symbol = Symbol("soleur.isolatedPushDir");
 
 /** A server-created isolated bare GIT_DIR plus the one workspace object directory it may read as an alternate. */
@@ -91,7 +96,35 @@ export function isSafeGitPath(p: string): boolean {
   return typeof p === "string" && p.length > 0 && isAbsolute(p) && !/[:"\\\n\0]/.test(p);
 }
 
-/** Throws unless `value` is a branded handle whose two paths are safe. A stray `true`, an `as any` object or a relative path refuses. */
+function isUnderPath(path: string, root: string): boolean {
+  return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+}
+
+/** A normalized absolute path with no trailing separator (`..` segments and `//` are what `normalize` would rewrite). */
+function isCanonicalPath(p: string): boolean {
+  return normalize(p) === p && (p === sep || !p.endsWith(sep));
+}
+
+/**
+ * The shape a creator-made handle always has: `gitDir` is `<...>/.soleur-push/run-<x>` and the alternate is `<ws>/.git/objects`
+ * with `gitDir` outside `<ws>`. Pure path arithmetic (this leaf has no fs). A forged handle that names `<ws>/.git`, the
+ * workspace, or any directory that is not a `run-*` child of a `.soleur-push` directory is refused; a forged handle that DOES have
+ * this shape and points at an agent-writable directory is not caught here (the creator's placement check covers the real ones).
+ */
+function hasIsolatedShape(gitDir: string, alt: string): boolean {
+  if (!isCanonicalPath(gitDir) || !isCanonicalPath(alt)) return false;
+  const run = basename(gitDir);
+  if (!run.startsWith("run-") || run.length <= "run-".length) return false;
+  if (basename(dirname(gitDir)) !== ".soleur-push") return false;
+  if (basename(alt) !== "objects" || basename(dirname(alt)) !== ".git") return false;
+  const workspace = dirname(dirname(alt));
+  return !isUnderPath(gitDir, workspace) && !isUnderPath(workspace, gitDir);
+}
+
+/**
+ * Throws unless `value` is a branded handle whose two paths are safe AND have the isolated shape. A stray `true`, an `as any`
+ * object, a relative path or a handle pointing at `<workspace>/.git` refuses.
+ */
 export function assertIsolatedPushDir(value: unknown): asserts value is IsolatedPushDir {
   const v = value as Partial<IsolatedPushDir> | null | undefined;
   if (
@@ -101,7 +134,8 @@ export function assertIsolatedPushDir(value: unknown): asserts value is Isolated
     typeof v.gitDir !== "string" ||
     typeof v.alternateObjectDirectory !== "string" ||
     !isSafeGitPath(v.gitDir) ||
-    !isSafeGitPath(v.alternateObjectDirectory)
+    !isSafeGitPath(v.alternateObjectDirectory) ||
+    !hasIsolatedShape(v.gitDir, v.alternateObjectDirectory)
   ) {
     throw new Error("hardened git invocation requires an isolated push directory");
   }
@@ -109,7 +143,9 @@ export function assertIsolatedPushDir(value: unknown): asserts value is Isolated
 
 /**
  * The hardened child environment for a git run from an isolated directory. `extra` carries the per-call variables (the
- * askpass wiring); it is applied last. Never reads or spreads `process.env` wholesale.
+ * askpass wiring) and is applied BEFORE the pinned keys, so it can never overwrite `GIT_DIR`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
+ * `GIT_ALLOW_PROTOCOL`, `HOME` or the shared hardening environment (it can still add a non-reserved key such as the askpass
+ * wiring or a test-only `GIT_SSL_CAINFO`). Never reads or spreads `process.env` wholesale.
  */
 export function buildIsolatedGitEnv(
   dir: IsolatedPushDir,
@@ -121,11 +157,11 @@ export function buildIsolatedGitEnv(
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
+  Object.assign(env, extra);
   Object.assign(env, GIT_HARDENING_ENV);
   env.GIT_DIR = dir.gitDir;
   env.GIT_ALTERNATE_OBJECT_DIRECTORIES = dir.alternateObjectDirectory;
   env.GIT_ALLOW_PROTOCOL = HARDENED_ALLOW_PROTOCOL;
   env.HOME = dir.gitDir;
-  Object.assign(env, extra);
   return env as NodeJS.ProcessEnv;
 }

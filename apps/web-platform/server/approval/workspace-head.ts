@@ -15,7 +15,7 @@
  * Every refusal throws `WorkspaceHeadUnreadable` with a closed `reason`; no path or file content leaves in the message.
  */
 
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
 export type WorkspaceHeadReason =
@@ -35,8 +35,12 @@ export class WorkspaceHeadUnreadable extends Error {
   }
 }
 
-/** Why `readSmallRegularFile` refused. `ENOENT` / `ENOTDIR` mean "absent"; everything else means "present but unusable". */
-export type SmallFileFailure = "ENOENT" | "ENOTDIR" | "NOT_REGULAR" | "TOO_LARGE" | "SHORT_READ" | "IO";
+/**
+ * Why `readSmallRegularFile` refused. `ENOENT` / `ENOTDIR` mean "absent"; `ELOOP` (a symlink as the final component),
+ * `NOT_REGULAR`, `TOO_LARGE` and `SHORT_READ` mean "present and not what a plain file would be" (planted content); `IO` is any
+ * other operating-system failure (`EACCES`, `EMFILE`, `EIO`, ...), which says nothing about what the file holds.
+ */
+export type SmallFileFailure = "ENOENT" | "ENOTDIR" | "ELOOP" | "NOT_REGULAR" | "TOO_LARGE" | "SHORT_READ" | "IO";
 
 export class SmallFileError extends Error {
   constructor(readonly code: SmallFileFailure) {
@@ -60,7 +64,7 @@ export function readSmallRegularFile(path: string, maxBytes: number): string {
     fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    throw new SmallFileError(code === "ENOENT" || code === "ENOTDIR" ? code : "IO");
+    throw new SmallFileError(code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP" ? code : "IO");
   }
   try {
     const st = fstatSync(fd);
@@ -87,11 +91,12 @@ export function readSmallRegularFile(path: string, maxBytes: number): string {
   }
 }
 
-const HEX40 = /^[0-9a-f]{40}$/;
+/** Exactly 40 lowercase hex: the one literal the gate reader, the creator's `shallow` check and the hardened push all share. */
+export const HEX40 = /^[0-9a-f]{40}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEAD_MAX_BYTES = 4 * 1024;
 const REF_MAX_BYTES = 4 * 1024;
-const PACKED_REFS_MAX_BYTES = 8 * 1024 * 1024;
+const PACKED_REFS_MAX_BYTES = 1024 * 1024;
 
 /** `refs/...`, no empty/`.`/`..` component, no `.lock` suffix, and none of the characters git forbids in a ref name. */
 function isSafeRefName(name: string): boolean {
@@ -122,8 +127,8 @@ function packedRefSha(body: string, name: string): string | undefined {
     if (sp !== 40) continue;
     if (line.slice(sp + 1) !== name) continue;
     const sha = line.slice(0, sp);
+    // `sp === 40` above, so a sha256 (64-hex) id cannot reach here: its separator sits at 64 and the line is skipped.
     if (HEX40.test(sha)) return sha;
-    if (HEX64.test(sha)) throw new WorkspaceHeadUnreadable("not_hex40");
     throw new WorkspaceHeadUnreadable("ref_invalid");
   }
   return undefined;
@@ -151,13 +156,9 @@ export function readWorkspaceHeadSha(workspacePath: string): string {
     throw new WorkspaceHeadUnreadable("git_dir_not_plain");
   }
 
-  try {
-    statSync(join(gitDir, "reftable"));
-    throw new WorkspaceHeadUnreadable("reftable");
-  } catch (err) {
-    if (err instanceof WorkspaceHeadUnreadable) throw err;
-    // Absent (the normal case) or unstatable: the files backend is the only one this reader understands, and the HEAD read below fails closed on anything odd.
-  }
+  // Present = the reftable backend, which this reader does not understand. Absent or unstatable (the normal case): the files
+  // backend, and the HEAD read below fails closed on anything odd. `existsSync` never throws.
+  if (existsSync(join(gitDir, "reftable"))) throw new WorkspaceHeadUnreadable("reftable");
 
   let head: string;
   try {

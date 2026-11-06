@@ -25,16 +25,16 @@ const TOKEN = ["ghs", "_", "a".repeat(40)].join("");
 
 vi.mock("../server/github-app", () => ({ generateInstallationToken: async () => ["ghs", "_", "a".repeat(40)].join("") }));
 vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
-// Test-only: the production clamp is `https`; the file-transport vectors need local bare remotes, so the `extra` argument (applied
-// last by the builder, exactly as the askpass wiring is) widens the allowed set for those tests only. The same seam supplies
-// `GIT_SSL_CAINFO` for the positive TLS control: measured on this git build, `SSL_CERT_FILE` is NOT honoured by git's libcurl (it has
+// Test-only: the production clamp is `https`; the file-transport vectors need local bare remotes, so this wrapper applies the
+// widened `GIT_ALLOW_PROTOCOL` to the RESULT of the real builder (which pins it and ignores it in `extra`), for those tests only.
+// The `extra` argument supplies `GIT_SSL_CAINFO` for the positive TLS control (a non-reserved key the builder passes through): measured on this git build, `SSL_CERT_FILE` is NOT honoured by git's libcurl (it has
 // a compiled-in CA bundle path), so the allowlisted variable cannot carry the test CA.
 vi.mock("../server/git-hardened-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/git-hardened-env")>();
   return {
     ...actual,
     buildIsolatedGitEnv: (dir: import("../server/git-hardened-env").IsolatedPushDir, extra: Readonly<Record<string, string>> = {}) =>
-      actual.buildIsolatedGitEnv(dir, { ...extra, GIT_ALLOW_PROTOCOL: h.protocol, ...h.extraEnv }),
+      ({ ...actual.buildIsolatedGitEnv(dir, { ...extra, ...h.extraEnv }), GIT_ALLOW_PROTOCOL: h.protocol }),
   };
 });
 
@@ -542,6 +542,19 @@ describe("push from an isolated GIT_DIR (real git)", () => {
       expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(sha);
     }, 60_000);
 
+    test("a garbage pack .rev (reverse index) in the workspace object store is not parsed: the push still succeeds", async () => {
+      git(ws, "gc", "-q");
+      const idx = readdirSync(join(ws, ".git", "objects", "pack")).find((f) => f.endsWith(".idx")) as string;
+      const rev = join(ws, ".git", "objects", "pack", idx.replace(/\.idx$/, ".rev"));
+      rmSync(rev, { force: true }); // git writes pack side files read-only
+      writeFileSync(rev, "RIDX garbage that is not a reverse index");
+      h.protocol = "https:file";
+      const r = await runIsolated(ws, ["push", remote, refspec()]);
+      expect(r.ok, r.stderr).toBe(true);
+      expect(r.stderr).not.toMatch(/reverse-index/);
+      expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(sha);
+    }, 60_000);
+
     test("a crafted .gitmodules in the pushed tree is only data", async () => {
       writeFileSync(join(ws, ".gitmodules"), '[submodule "x"]\n\tpath = x\n\turl = ext::sh -c "touch /tmp/never"\n');
       git(ws, "add", ".gitmodules");
@@ -588,7 +601,7 @@ describe("push from an isolated GIT_DIR (real git)", () => {
       expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(sha);
     }, 30_000);
 
-    test("config, HEAD and index at mode 000 (precondition: unreadable for this uid): the push still succeeds", async () => {
+    test.skipIf(process.getuid?.() === 0)("(skipped as uid 0) config, HEAD and index at mode 000 (precondition: unreadable for this uid): the push still succeeds", async () => {
       for (const entry of ["config", "HEAD", "index"]) {
         chmodSync(join(ws, ".git", entry), 0);
         expect(() => readFileSync(join(ws, ".git", entry))).toThrow();

@@ -15,7 +15,8 @@
  * object store) and `.git/shallow` (through `readSmallRegularFile`, validated). What it does not cover, stated exactly: a swap
  * of the object store AFTER these checks (non-atomic) exposes object bytes of another repository for a sha the agent already
  * knows, and the bytes of regular object files are not inspected. A server SIGKILL/OOM skips `dispose()` and leaks a directory
- * holding only `HEAD`, `config` and `shallow` (no token: the token lives only in the child's environment).
+ * holding `HEAD`, `config`, `shallow` and, if the kill came mid-push, the `.askpass-<uuid>.sh` script (token-free: the token
+ * lives only in the child's environment).
  *
  * Placement: `$HOME/.soleur-push/run-*` (mode 0700), never `/tmp` and never under `TMPDIR` (`TMPDIR` is forwarded to the
  * sandbox CLI). The agent shares the server's uid, so mode 0700 is not the control; path placement is, and it rests on the
@@ -26,17 +27,18 @@
  */
 
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
+  opendirSync,
   realpathSync,
   rmSync,
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { isAbsolute, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 
-import { readSmallRegularFile, SmallFileError } from "./approval/workspace-head";
+import { HEX40, readSmallRegularFile, SmallFileError } from "./approval/workspace-head";
 import { AGENT_SESSION_TMP_ROOT } from "./agent-session-tmp";
 import { ISOLATED_PUSH_DIR_BRAND, isSafeGitPath, type IsolatedPushDir } from "./git-hardened-env";
 
@@ -46,6 +48,7 @@ export type IsolatedPushDirReason =
   | "alternate_path_unsafe"
   | "shallow_invalid"
   | "env_path_unsafe"
+  | "object_store_too_large"
   | "setup_failed";
 
 /** The directory could not be created. `reason` is the closed discriminator; the message is static and carries no path. */
@@ -61,14 +64,28 @@ export interface IsolatedPushDirHandle extends IsolatedPushDir {
   dispose(): void;
 }
 
-/** Entry cap of the object-store walk: a bounded listing, never an unbounded one (git auto-gc triggers well below it). */
-const OBJECT_WALK_ENTRY_CAP = 10_000;
+/**
+ * Entry cap of the object-store walk, charged per entry as it is read (a bounded listing, never an unbounded one). It is an
+ * availability bound, not a tamper signal: a legitimate workspace that has never been garbage-collected holds one loose file per
+ * object (measured: 10 458 loose entries with no auto-gc), and git's own `gc.auto` threshold is on the order of thousands, so the
+ * cap sits far above it. Over the cap is `object_store_too_large`, an infrastructure refusal, never `object_store_redirect`.
+ */
+export const OBJECT_WALK_ENTRY_CAP = 250_000;
+/** Test seam: `createIsolatedPushDir(ws, { objectWalkEntryCap })`. Production callers pass nothing. */
+export interface IsolatedPushDirLimits {
+  readonly objectWalkEntryCap?: number;
+}
 const SHALLOW_MAX_BYTES = 64 * 1024;
 const SOLEUR_PUSH_ROOT = ".soleur-push";
-const HEX40 = /^[0-9a-f]{40}$/;
+const WORKSPACES_ROOT_DEFAULT = "/workspaces";
+const WORKTREE_ROOT_DEFAULT = "/var/lib/soleur/worktrees";
 const FAN_OUT = /^[0-9a-f]{2}$/;
 
-/** The server-written `config`: no remotes, no hooks, and the parsers of attacker-influenced acceleration files switched off. */
+/**
+ * The server-written `config`: no remotes, no hooks, and the parsers of the acceleration files git would otherwise read from the
+ * alternate switched off (commit-graph, multi-pack-index, bitmaps and the pack reverse index). A pack `.idx` and the pack itself
+ * are still parsed: they are the object bytes the push exists to read.
+ */
 const ISOLATED_CONFIG = [
   "[core]",
   "\trepositoryformatversion = 0",
@@ -77,6 +94,7 @@ const ISOLATED_CONFIG = [
   "\tmultiPackIndex = false",
   "[pack]",
   "\tuseBitmaps = false",
+  "\treadReverseIndex = false",
   "\tthreads = 1",
   "[gc]",
   "\tauto = 0",
@@ -87,68 +105,133 @@ function isUnder(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-/** Resolve through symlinks when the path exists (so a symlinked PATH entry cannot hide under the workspace), else use it as written. */
+/**
+ * Resolve through symlinks: the path itself when it exists, else its deepest existing ancestor plus the missing tail (a missing
+ * leaf under a symlinked directory still lands where the link points, and the agent could create it).
+ */
 function resolveIfExists(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
+  const tail: string[] = [];
+  let probe = p;
+  for (;;) {
+    try {
+      return tail.length === 0 ? realpathSync(probe) : join(realpathSync(probe), ...tail.reverse());
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) return p;
+      tail.push(basename(probe));
+      probe = parent;
+    }
   }
 }
 
+/**
+ * The ONE list of directories the agent can write (or that hold other tenants' trees), used for BOTH the `HOME` placement check
+ * and the `PATH` / `SSL_CERT_*` check: the resolved workspace, the forwarded `TMPDIR`, the CLI session tmp root, the workspaces
+ * root and the worktree root. The sandbox's own set is `workspaceTenantDenyRoots()` (server/workspace-resolver.ts); importing that
+ * module pulls in the error reporter, so this mirrors its two environment variables and defaults and a parity test pins it.
+ * Each root is listed as written and, when it exists, resolved.
+ */
+export function agentWritableRoots(ws: string): string[] {
+  const raw = [
+    ws,
+    AGENT_SESSION_TMP_ROOT,
+    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,
+    process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT,
+  ];
+  if (process.env.TMPDIR && isAbsolute(process.env.TMPDIR)) raw.push(process.env.TMPDIR);
+  const out = new Set<string>();
+  for (const r of raw) {
+    const trimmed = r.length > 1 ? r.replace(/\/+$/, "") : r;
+    if (trimmed === "" || trimmed === sep) continue; // a root of "/" would put everything under it; it is never a tenant root
+    out.add(trimmed);
+    out.add(resolveIfExists(trimmed));
+  }
+  return [...out];
+}
+
+/** True when `path`, as written or resolved through symlinks, is at or under any of `roots`. */
+function underAny(path: string, roots: readonly string[]): boolean {
+  const resolved = resolveIfExists(path);
+  return roots.some((root) => isUnder(resolved, root) || isUnder(path, root));
+}
+
 /** Step 0 (no write): the child resolves `PATH`, `SSL_CERT_FILE` and `SSL_CERT_DIR` from the environment it is given. */
-function assertEnvPathsSafe(ws: string): void {
-  const tmpdirEnv = process.env.TMPDIR;
-  const unsafeRoots = [ws];
-  if (tmpdirEnv && isAbsolute(tmpdirEnv)) unsafeRoots.push(resolveIfExists(tmpdirEnv));
+function assertEnvPathsSafe(roots: readonly string[]): void {
   const candidates: string[] = [];
   for (const entry of (process.env.PATH ?? "").split(":")) if (entry && isAbsolute(entry)) candidates.push(entry);
   for (const v of [process.env.SSL_CERT_FILE, process.env.SSL_CERT_DIR]) if (v && isAbsolute(v)) candidates.push(v);
   for (const c of candidates) {
-    const resolved = resolveIfExists(c);
-    if (unsafeRoots.some((root) => isUnder(resolved, root) || isUnder(c, root))) {
-      throw new IsolatedPushDirRefusal("env_path_unsafe");
-    }
+    if (underAny(c, roots)) throw new IsolatedPushDirRefusal("env_path_unsafe");
   }
 }
 
-function listDir(path: string): Dirent[] {
-  return readdirSync(path, { withFileTypes: true });
+type EntryKind = "file" | "dir" | "other";
+
+/**
+ * What an entry is. Only a regular file or a directory is acceptable: a symlink, FIFO, socket or device is not an object (a FIFO
+ * at an object path blocks git's open). A filesystem that reports no entry type falls back to `lstat` (never follows a link).
+ */
+function kindOf(parent: string, e: Dirent): EntryKind {
+  if (e.isFile()) return "file";
+  if (e.isDirectory()) return "dir";
+  if (e.isSymbolicLink() || e.isFIFO() || e.isSocket() || e.isBlockDevice() || e.isCharacterDevice()) return "other";
+  const st = lstatSync(join(parent, e.name));
+  return st.isFile() ? "file" : st.isDirectory() ? "dir" : "other";
 }
 
 /**
  * Names and entry types only, never a file read: `objects`, `objects/pack`, `objects/info` and every loose fan-out directory.
- * A symlink anywhere refuses (it could name another store), as does a chain file under `objects/info` or an over-cap walk.
+ * Each directory is streamed (`opendirSync`, closed in a `finally`) and every entry is charged against ONE shared budget as it is
+ * read, so a huge directory aborts at the cap instead of being listed first. Anything that is not a regular file or a directory
+ * (a symlink could name another store, a FIFO would block git) refuses, as does a chain file under `objects/info`.
  */
-function assertObjectStorePlain(objects: string): void {
-  let budget = OBJECT_WALK_ENTRY_CAP;
-  const take = (entries: Dirent[]): void => {
-    budget -= entries.length;
-    if (budget < 0) throw new IsolatedPushDirRefusal("object_store_redirect");
-    for (const e of entries) if (e.isSymbolicLink()) throw new IsolatedPushDirRefusal("object_store_redirect");
-  };
-  const top = listDir(objects);
-  take(top);
-  for (const e of top) {
-    if (!e.isDirectory()) continue;
-    if (e.name !== "pack" && e.name !== "info" && !FAN_OUT.test(e.name)) continue;
-    const children = listDir(join(objects, e.name));
-    take(children);
-    if (e.name === "info") {
-      for (const c of children) {
-        if (c.name === "alternates" || c.name === "http-alternates") throw new IsolatedPushDirRefusal("object_store_redirect");
+function assertObjectStorePlain(objects: string, cap: number): void {
+  let budget = cap;
+  const scan = (path: string, visit: (e: Dirent, kind: EntryKind) => void): void => {
+    const dir = opendirSync(path);
+    try {
+      for (let e = dir.readSync(); e !== null; e = dir.readSync()) {
+        if (--budget < 0) throw new IsolatedPushDirRefusal("object_store_too_large");
+        const kind = kindOf(path, e);
+        if (kind === "other") throw new IsolatedPushDirRefusal("object_store_redirect");
+        visit(e, kind);
+      }
+    } finally {
+      try {
+        dir.closeSync();
+      } catch {
+        /* already closed by an error path */
       }
     }
+  };
+  const subdirs: string[] = [];
+  scan(objects, (e, kind) => {
+    if (kind === "dir" && (e.name === "pack" || e.name === "info" || FAN_OUT.test(e.name))) subdirs.push(e.name);
+  });
+  for (const name of subdirs) {
+    scan(join(objects, name), (e) => {
+      if (name === "info" && (e.name === "alternates" || e.name === "http-alternates")) {
+        throw new IsolatedPushDirRefusal("object_store_redirect");
+      }
+    });
   }
 }
 
-/** The validated lines of `<ws>/.git/shallow`, or `undefined` when the workspace is not shallow. */
+/**
+ * The validated lines of `<ws>/.git/shallow`, or `undefined` when the workspace is not shallow. Content the agent could have
+ * planted (a symlink, a non-regular file, an oversized file, a file that changed under the read, a non-hex line) is
+ * `shallow_invalid`; an operating-system failure that says nothing about the content (`EACCES`, `EMFILE`, `EIO`) is
+ * `setup_failed`; a missing file means the workspace is not shallow.
+ */
 function readShallow(gitDir: string): string | undefined {
   let body: string;
   try {
     body = readSmallRegularFile(join(gitDir, "shallow"), SHALLOW_MAX_BYTES);
   } catch (err) {
-    if (err instanceof SmallFileError && err.code === "ENOENT") return undefined;
+    if (err instanceof SmallFileError) {
+      if (err.code === "ENOENT") return undefined;
+      if (err.code === "IO") throw new IsolatedPushDirRefusal("setup_failed");
+    }
     throw new IsolatedPushDirRefusal("shallow_invalid");
   }
   const lines = body.split("\n").filter((l, i, all) => !(l === "" && i === all.length - 1));
@@ -167,10 +250,12 @@ function wrapFs<T>(fn: () => T, enoent: IsolatedPushDirReason = "git_dir_not_pla
   }
 }
 
-export function createIsolatedPushDir(workspacePath: string): IsolatedPushDirHandle {
+export function createIsolatedPushDir(workspacePath: string, limits: IsolatedPushDirLimits = {}): IsolatedPushDirHandle {
   // Steps 1-4 and the HOME checks resolve BEFORE the first write; the temp directory is created last.
   if (typeof workspacePath !== "string" || !isAbsolute(workspacePath)) throw new IsolatedPushDirRefusal("git_dir_not_plain");
-  const ws = wrapFs(() => realpathSync(workspacePath));
+  // A workspace ROOT that does not exist is the server's own state (setup_failed); a missing `.git` below it is `git_dir_not_plain`.
+  const ws = wrapFs(() => realpathSync(workspacePath), "setup_failed");
+  const roots = agentWritableRoots(ws);
   const gitDir = join(ws, ".git");
   const objects = join(gitDir, "objects");
 
@@ -182,10 +267,10 @@ export function createIsolatedPushDir(workspacePath: string): IsolatedPushDirHan
   if (!isSafeGitPath(objects)) throw new IsolatedPushDirRefusal("alternate_path_unsafe");
 
   // 0. (after the workspace is resolved, before any write) the environment the child will resolve programs and trust stores from.
-  assertEnvPathsSafe(ws);
+  assertEnvPathsSafe(roots);
 
   // 3. The object store walk, names and types only.
-  wrapFs(() => assertObjectStorePlain(objects));
+  wrapFs(() => assertObjectStorePlain(objects, limits.objectWalkEntryCap ?? OBJECT_WALK_ENTRY_CAP));
 
   // 4. `shallow`, validated, carried over.
   const shallow = readShallow(gitDir);
@@ -193,10 +278,8 @@ export function createIsolatedPushDir(workspacePath: string): IsolatedPushDirHan
   // 5. Placement: under the server HOME, never `/tmp`, never anywhere the sandbox is configured to write.
   const homeEnv = process.env.HOME;
   if (!homeEnv || !isAbsolute(homeEnv)) throw new IsolatedPushDirRefusal("setup_failed");
-  const home = wrapFs(() => realpathSync(homeEnv));
-  const forbidden = [ws, AGENT_SESSION_TMP_ROOT, process.env.WORKSPACES_ROOT || "/workspaces"];
-  if (process.env.TMPDIR && isAbsolute(process.env.TMPDIR)) forbidden.push(resolveIfExists(process.env.TMPDIR));
-  if (forbidden.some((f) => isUnder(home, f))) throw new IsolatedPushDirRefusal("setup_failed");
+  const home = wrapFs(() => realpathSync(homeEnv), "setup_failed");
+  if (underAny(home, roots)) throw new IsolatedPushDirRefusal("setup_failed");
 
   const pushRoot = join(home, SOLEUR_PUSH_ROOT);
   let dir: string | undefined;

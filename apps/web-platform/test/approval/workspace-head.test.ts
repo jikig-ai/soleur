@@ -3,7 +3,7 @@
  * agent-writable `.git/config`, an inherited `GIT_DIR` and a planted `commondir` cannot change what the gate displays.
  *
  * Real git builds the fixtures and is the oracle for the differential tests; the reader itself is asserted to spawn nothing
- * (a spawn counter over `child_process`) and to import only `node:fs` / `node:path` / `./canonical` (a content test).
+ * (a spawn counter over `child_process`) and to import only `node:fs` / `node:path` (a content test).
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -13,6 +13,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -293,6 +294,24 @@ describe("readWorkspaceHeadSha: fail-closed refusals (each with a closed reason,
     expect(refusal(dir).reason).toBe("ref_invalid");
   });
 
+  test("a symlinked refs/heads directory leading to a SIBLING whose name merely starts with .git (`.git2`) is refused (containment needs the separator)", () => {
+    const { dir } = mkRepo();
+    const sibling = join(dir, ".git2");
+    mkdirSync(sibling);
+    renameSync(join(dir, ".git", "refs", "heads"), join(sibling, "heads"));
+    symlinkSync(join(sibling, "heads"), join(dir, ".git", "refs", "heads"));
+    expect(refusal(dir).reason).toBe("ref_invalid");
+  });
+
+  test("a packed-refs file over 1 MiB is not read (ref_unresolvable)", () => {
+    const { dir, head } = mkRepo();
+    git(dir, "pack-refs", "--all");
+    const packed = join(dir, ".git", "packed-refs");
+    writeFileSync(packed, `# pack-refs\n${head} refs/heads/main\n${`${head} refs/heads/pad\n`.repeat(30_000)}`);
+    expect(statSync(packed).size).toBeGreaterThan(1024 * 1024);
+    expect(refusal(dir).reason).toBe("ref_unresolvable");
+  });
+
   test("a symlinked loose ref FILE", () => {
     const { dir } = mkRepo();
     const loose = join(dir, ".git", "refs", "heads", "main");
@@ -376,11 +395,13 @@ describe("readWorkspaceHeadSha: fail-closed refusals (each with a closed reason,
     expect(refusal(c.dir)).toBeInstanceOf(WorkspaceHeadUnreadable);
   });
 
-  test("an oversized HEAD (over 4 KiB) and an unreadable (mode 000) HEAD", () => {
+  test("an oversized HEAD (over 4 KiB) is head_unreadable", () => {
     const a = mkRepo();
     writeFileSync(join(a.dir, ".git", "HEAD"), `ref: refs/heads/${"x".repeat(5000)}\n`);
     expect(refusal(a.dir).reason).toBe("head_unreadable");
+  });
 
+  test.skipIf(process.getuid?.() === 0)("(skipped as uid 0) an unreadable (mode 000) HEAD is head_unreadable", () => {
     const b = mkRepo();
     const headFile = join(b.dir, ".git", "HEAD");
     chmodSync(headFile, 0);
@@ -431,10 +452,10 @@ describe("workspace-head.ts: module boundary", () => {
   const src = readFileSync(join(__dirname, "../../server/approval/workspace-head.ts"), "utf8");
   const code = stripComments(src);
 
-  test("imports only node:fs, node:path and ./canonical (so decide-boundary and the dependency rules stay satisfied)", () => {
+  test("imports only node:fs and node:path (so decide-boundary and the dependency rules stay satisfied)", () => {
     const specs = [...code.matchAll(/\bfrom\s*(["'])([^"']+)\1/g)].map((m) => m[2]);
     expect(specs.length).toBeGreaterThan(0);
-    for (const s of specs) expect(["node:fs", "node:path", "./canonical"], s).toContain(s);
+    for (const s of specs) expect(["node:fs", "node:path"], s).toContain(s);
     expect(code).not.toMatch(/import\s*\(/);
     expect(code).not.toMatch(/\brequire\s*\(/);
   });

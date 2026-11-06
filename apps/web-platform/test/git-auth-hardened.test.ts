@@ -23,7 +23,8 @@ vi.mock("../server/git-hardened-env", async (importOriginal) => {
   return {
     ...actual,
     buildIsolatedGitEnv: (dir: import("../server/git-hardened-env").IsolatedPushDir, extra: Readonly<Record<string, string>> = {}) =>
-      actual.buildIsolatedGitEnv(dir, h.allowFile ? { ...extra, GIT_ALLOW_PROTOCOL: "https:file" } : extra),
+      // `extra` can no longer override the pinned protocol (A2), so the test-only widening is applied to the RESULT.
+      ({ ...actual.buildIsolatedGitEnv(dir, extra), ...(h.allowFile ? { GIT_ALLOW_PROTOCOL: "https:file" } : {}) }),
   };
 });
 

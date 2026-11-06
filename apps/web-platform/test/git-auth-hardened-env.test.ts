@@ -4,7 +4,7 @@
  * BEFORE a token is minted. The legacy form is asserted unchanged next to it, so "opt-in" is a tested claim.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,7 +29,13 @@ vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), 
 
 import { gitWithInstallationAuth } from "../server/git-auth";
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "../server/inngest/functions/_git-hardening";
-import { HARDENED_ENV_ALLOWLIST, ISOLATED_PUSH_DIR_BRAND, type IsolatedPushDir } from "../server/git-hardened-env";
+import {
+  HARDENED_ENV_ALLOWLIST,
+  ISOLATED_PUSH_DIR_BRAND,
+  buildIsolatedGitEnv,
+  type IsolatedPushDir,
+} from "../server/git-hardened-env";
+import { stripComments } from "./approval/source-scan";
 
 // Every secret (and every git/proxy knob) the server process holds or could be handed: none may reach a hardened child. Names, not
 // values: the point is that a NEW allowlist entry naming any of them is a red test.
@@ -65,6 +71,7 @@ const CANARY_KEYS = [
 ];
 
 describe("gitWithInstallationAuth child env and argv", () => {
+  let base: string;
   let root: string;
   let iso: IsolatedPushDir;
   const ALT = "/ws/parent/work/.git/objects";
@@ -75,7 +82,10 @@ describe("gitWithInstallationAuth child env and argv", () => {
     calls.length = 0;
     mint.mockClear();
     for (const k of CANARY_KEYS) process.env[k] = "canary-value";
-    root = mkdtempSync(join(tmpdir(), "git-auth-env-"));
+    // The isolated shape the creator always produces: `<home>/.soleur-push/run-<x>`.
+    base = mkdtempSync(join(tmpdir(), "git-auth-env-"));
+    root = join(base, ".soleur-push", "run-fixture");
+    mkdirSync(root, { recursive: true });
     iso = { gitDir: root, alternateObjectDirectory: ALT, [ISOLATED_PUSH_DIR_BRAND]: true };
   });
   afterEach(() => {
@@ -84,7 +94,7 @@ describe("gitWithInstallationAuth child env and argv", () => {
     delete process.env.GIT_INDEX_FILE;
     delete process.env.GIT_WORK_TREE;
     delete process.env.GIT_DIR;
-    rmSync(root, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   });
 
   test("hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child; GIT_DIR is the isolated directory", async () => {
@@ -146,6 +156,19 @@ describe("gitWithInstallationAuth child env and argv", () => {
       { ...iso, alternateObjectDirectory: "/ws/a:b/.git/objects" },
       { ...iso, gitDir: `${root}\n` },
       "isolated",
+      // FORGED handles: the exported brand plus syntactically safe paths, but not the shape `createIsolatedPushDir` produces.
+      { ...iso, gitDir: "/ws/parent/work/.git" }, // the workspace .git itself
+      { ...iso, gitDir: "/ws/parent/work/.git/objects" },
+      { ...iso, gitDir: "/ws/parent/work" },
+      { ...iso, gitDir: `${base}/.soleur-push/not-a-run` }, // right parent, wrong child
+      { ...iso, gitDir: `${base}/.soleur-push/run-` }, // empty run suffix
+      { ...iso, gitDir: `${base}/elsewhere/run-x` }, // right child, wrong parent
+      { ...iso, gitDir: `${root}/../run-other` }, // not normalized
+      { ...iso, gitDir: `${root}/` }, // trailing separator
+      { ...iso, gitDir: "/ws/parent/work/.soleur-push/run-x" }, // looks right but lives INSIDE the alternate's workspace
+      { ...iso, alternateObjectDirectory: "/ws/parent/work/.git/objects/" },
+      { ...iso, alternateObjectDirectory: "/ws/parent/work/objects" }, // not <ws>/.git/objects
+      { ...iso, alternateObjectDirectory: `${root}/../objects` },
     ];
     for (const b of bad) {
       calls.length = 0;
@@ -190,6 +213,51 @@ describe("gitWithInstallationAuth child env and argv", () => {
     for (const k of SERVER_SECRET_KEYS) expect(HARDENED_ENV_ALLOWLIST, k).not.toContain(k);
     // The allowlist itself carries no secret-shaped name (a new entry must be argued for in a reviewed diff, not slip in).
     for (const k of HARDENED_ENV_ALLOWLIST) expect(k, k).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD|URL|PROXY/);
+  });
+
+  test("the allowlist is EXACTLY the forwarded set (dropping or adding any key is a red test)", () => {
+    expect([...HARDENED_ENV_ALLOWLIST].sort()).toEqual(["HOME", "LANG", "LC_ALL", "PATH", "SSL_CERT_DIR", "SSL_CERT_FILE", "TMPDIR"]);
+    const saved = new Map<string, string | undefined>();
+    for (const k of HARDENED_ENV_ALLOWLIST) saved.set(k, process.env[k]);
+    for (const k of ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR", "LANG", "LC_ALL"]) process.env[k] = `forwarded-${k}`;
+    try {
+      const env = buildIsolatedGitEnv(iso);
+      for (const k of ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR", "LANG", "LC_ALL"]) expect(env[k], k).toBe(`forwarded-${k}`);
+    } finally {
+      for (const [k, v] of saved) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  test("buildIsolatedGitEnv: `extra` can add a non-reserved key but can never overwrite a pinned one", () => {
+    const evil = {
+      GIT_DIR: "/ws/parent/work/.git",
+      HOME: "/home/evil",
+      GIT_ALLOW_PROTOCOL: "ext:file",
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/other/objects",
+      GIT_CONFIG_GLOBAL: "/ws/evil-gitconfig",
+      GIT_NO_REPLACE_OBJECTS: "0",
+      GIT_SSL_CAINFO: "/test/ca.pem", // the one test-only seam: a non-reserved key
+    };
+    const env = buildIsolatedGitEnv(iso, evil);
+    expect(env.GIT_DIR).toBe(root);
+    expect(env.HOME).toBe(root);
+    expect(env.GIT_ALLOW_PROTOCOL).toBe("https");
+    expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBe(ALT);
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(env.GIT_NO_REPLACE_OBJECTS).toBe("1");
+    expect(env.GIT_SSL_CAINFO).toBe("/test/ca.pem");
+  });
+
+  test("git-hardened-env.ts is a leaf: it imports only node:path and the shared hardening constants, never the creator or fs", () => {
+    const code = stripComments(readFileSync(join(__dirname, "../server/git-hardened-env.ts"), "utf8"));
+    const specs = [...code.matchAll(/\bfrom\s*(["'])([^"']+)\1/g)].map((m) => m[2]);
+    expect([...specs].sort()).toEqual(["./inngest/functions/_git-hardening", "node:path"]);
+    expect(code).not.toMatch(/import\s*\(/);
+    expect(code).not.toMatch(/\brequire\s*\(/);
+    expect(code).not.toMatch(/git-isolated-push-dir|node:fs|child_process/);
   });
 
   test("hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command", async () => {

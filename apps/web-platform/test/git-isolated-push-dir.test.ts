@@ -4,7 +4,7 @@
  * contains the approved commit, so only the check (never a missing commit) can refuse; every refusal also asserts that nothing
  * was written (the temp directory is created last).
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -20,8 +20,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
@@ -71,8 +72,16 @@ vi.mock("node:fs", async () => {
 });
 
 import { AGENT_SESSION_TMP_ROOT } from "../server/agent-session-tmp";
-import { IsolatedPushDirRefusal, createIsolatedPushDir } from "../server/git-isolated-push-dir";
+import {
+  IsolatedPushDirRefusal,
+  OBJECT_WALK_ENTRY_CAP,
+  agentWritableRoots,
+  createIsolatedPushDir,
+} from "../server/git-isolated-push-dir";
 import { isSafeGitPath } from "../server/git-hardened-env";
+
+// The chmod-based fixtures cannot make a path unreadable for uid 0 (root bypasses the mode bits), so those tests skip as root.
+const isRoot = process.getuid?.() === 0;
 
 const roots: string[] = [];
 afterAll(() => {
@@ -87,7 +96,7 @@ const git = (cwd: string, ...args: string[]): string =>
     env: gitFixtureEnv(cwd),
   }).trim();
 
-const ENV_KEYS = ["HOME", "TMPDIR", "PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "WORKSPACES_ROOT"] as const;
+const ENV_KEYS = ["HOME", "TMPDIR", "PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "WORKSPACES_ROOT", "WORKTREE_ROOT"] as const;
 
 describe("createIsolatedPushDir", () => {
   let base: string;
@@ -146,6 +155,7 @@ describe("createIsolatedPushDir", () => {
     delete process.env.SSL_CERT_FILE;
     delete process.env.SSL_CERT_DIR;
     delete process.env.WORKSPACES_ROOT;
+    delete process.env.WORKTREE_ROOT;
     h.spawns = 0;
     h.writes = 0;
     h.failAt = 0;
@@ -186,6 +196,7 @@ describe("createIsolatedPushDir", () => {
             "\tmultiPackIndex = false",
             "[pack]",
             "\tuseBitmaps = false",
+            "\treadReverseIndex = false",
             "\tthreads = 1",
             "[gc]",
             "\tauto = 0",
@@ -274,11 +285,29 @@ describe("createIsolatedPushDir", () => {
       expect(reasonOf()).toBe("git_dir_not_plain");
     });
 
-    test("a missing .git, a missing workspace and a relative path", () => {
+    test("a missing .git is git_dir_not_plain; a missing workspace root is the server's own state (setup_failed)", () => {
       rmSync(join(ws, ".git"), { recursive: true });
       expect(reasonOf()).toBe("git_dir_not_plain");
-      expect(reasonOf(join(base, "nowhere"))).toBe("git_dir_not_plain");
+      expect(reasonOf(join(base, "nowhere"))).toBe("setup_failed");
+    });
+
+    test("a relative workspace path is refused even when it EXISTS relative to the current directory", () => {
       expect(reasonOf("relative/ws")).toBe("git_dir_not_plain");
+      const rel = relative(process.cwd(), ws);
+      expect(isSafeGitPath(rel)).toBe(false);
+      expect(realpathSync(rel)).toBe(ws); // the premise: without the absolute-path rule this resolves to a real workspace
+      expect(reasonOf(rel)).toBe("git_dir_not_plain");
+    });
+
+    test("a workspace reached through a symlinked ancestor is accepted, and the alternate is the REAL path", () => {
+      const link = join(base, "link-to-base");
+      symlinkSync(base, link);
+      const dir = createIsolatedPushDir(join(link, "ws"));
+      try {
+        expect(dir.alternateObjectDirectory).toBe(join(ws, ".git", "objects"));
+      } finally {
+        dir.dispose();
+      }
     });
 
     test("no raw fs error, path or cause escapes a refusal", () => {
@@ -350,12 +379,89 @@ describe("createIsolatedPushDir", () => {
       expect(reasonOf()).toBe("object_store_redirect");
     });
 
-    test("an object-store walk above the entry cap is refused, not run unbounded", () => {
+    test("the production entry cap sits far above git's gc.auto thresholds (a legitimate pre-gc store must not dead-end)", () => {
+      expect(OBJECT_WALK_ENTRY_CAP).toBeGreaterThanOrEqual(100_000);
+    });
+
+    test("an object-store walk above the entry cap is refused as object_store_too_large (not tamper), and a store just under it passes", () => {
       const pack = join(ws, ".git", "objects", "pack");
       mkdirSync(pack, { recursive: true });
-      for (let i = 0; i < 10_001; i++) writeFileSync(join(pack, `x${i}`), "");
+      const baseline = (): number => {
+        let n = 0;
+        for (const top of readdirSync(join(ws, ".git", "objects"))) {
+          n++;
+          const p = join(ws, ".git", "objects", top);
+          if (statSync(p).isDirectory() && (top === "pack" || top === "info" || /^[0-9a-f]{2}$/.test(top))) n += readdirSync(p).length;
+        }
+        return n;
+      };
+      for (let i = 0; i < 40; i++) writeFileSync(join(pack, `x${i}`), "");
+      const total = baseline();
+      const probe = (cap: number): string | "ok" => {
+        try {
+          createIsolatedPushDir(ws, { objectWalkEntryCap: cap }).dispose();
+          return "ok";
+        } catch (e) {
+          return (e as IsolatedPushDirRefusal).reason;
+        }
+      };
+      expect(probe(total)).toBe("ok");
+      expect(probe(total - 1)).toBe("object_store_too_large");
+      expect(created()).toEqual([]);
+    });
+
+    test("a FIFO at the approved commit's loose-object path is refused (object_store_redirect), never opened", { timeout: 10_000 }, () => {
+      const dir = join(ws, ".git", "objects", sha.slice(0, 2));
+      const name = readdirSync(dir)[0];
+      rmSync(join(dir, name));
+      execFileSync("mkfifo", [join(dir, name)]);
       expect(reasonOf()).toBe("object_store_redirect");
-    }, 30_000);
+    });
+
+    test("a FIFO named pack-<40hex>.idx is refused (object_store_redirect)", { timeout: 10_000 }, () => {
+      git(ws, "gc", "-q");
+      execFileSync("mkfifo", [join(ws, ".git", "objects", "pack", `pack-${"a".repeat(40)}.idx`)]);
+      expect(reasonOf()).toBe("object_store_redirect");
+    });
+
+    test("a FIFO as the objects/info entry and a unix socket under objects/pack are refused", { timeout: 10_000 }, async () => {
+      mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true });
+      const fifo = join(ws, ".git", "objects", "info", "commit-graph");
+      execFileSync("mkfifo", [fifo]);
+      expect(reasonOf()).toBe("object_store_redirect");
+      rmSync(fifo);
+      mkdirSync(join(ws, ".git", "objects", "pack"), { recursive: true });
+      const sock = join(ws, ".git", "objects", "pack", "s.sock");
+      const srv = createServer();
+      await new Promise<void>((resolve, reject) => srv.once("error", reject).listen(sock, resolve));
+      try {
+        expect(reasonOf()).toBe("object_store_redirect");
+      } finally {
+        await new Promise<void>((resolve) => srv.close(() => resolve()));
+      }
+    });
+
+    test("a garbage pack .rev in the alternate is not parsed (readReverseIndex off); the same git with it on prints the corruption (control)", () => {
+      git(ws, "gc", "-q");
+      const packDir = join(ws, ".git", "objects", "pack");
+      const idx = readdirSync(packDir).find((f) => f.endsWith(".idx")) as string;
+      const rev = join(packDir, idx.replace(/\.idx$/, ".rev"));
+      rmSync(rev, { force: true }); // git writes pack side files read-only
+      writeFileSync(rev, "garbage-not-a-rev-file");
+      const dir = createIsolatedPushDir(ws);
+      try {
+        const env = { ...gitFixtureEnv(base), GIT_DIR: dir.gitDir, GIT_ALTERNATE_OBJECT_DIRECTORIES: dir.alternateObjectDirectory };
+        const run = (...pre: string[]) =>
+          spawnSync("git", [...pre, "pack-objects", "--revs", "--stdout"], { input: `${sha}\n`, env, encoding: "latin1" });
+        const off = run();
+        expect(off.status).toBe(0);
+        expect(String(off.stderr)).not.toMatch(/reverse-index/);
+        const on = run("-c", "pack.readReverseIndex=true");
+        expect(String(on.stderr), "control: the garbage .rev is parsed when the setting is on").toMatch(/reverse-index/);
+      } finally {
+        dir.dispose();
+      }
+    });
 
     test("a workspace path containing ':' (it would split GIT_ALTERNATE_OBJECT_DIRECTORIES)", () => {
       const colon = join(base, "a:b");
@@ -405,6 +511,33 @@ describe("createIsolatedPushDir", () => {
       expect(reasonOf()).toBe("shallow_invalid");
     });
 
+    test("an empty .git/shallow means a non-shallow workspace: no shallow file is written", () => {
+      writeFileSync(join(ws, ".git", "shallow"), "");
+      const dir = createIsolatedPushDir(ws);
+      try {
+        expect(existsSync(join(dir.gitDir, "shallow"))).toBe(false);
+      } finally {
+        dir.dispose();
+      }
+    });
+
+    test("a directory as .git/shallow is planted content (shallow_invalid)", () => {
+      mkdirSync(join(ws, ".git", "shallow"));
+      expect(reasonOf()).toBe("shallow_invalid");
+    });
+
+    test.skipIf(isRoot)("(skipped as uid 0) an unreadable .git/shallow (EACCES) says nothing about its content: setup_failed", () => {
+      const shallow = join(ws, ".git", "shallow");
+      writeFileSync(shallow, `${shaA}\n`);
+      chmodSync(shallow, 0);
+      expect(() => readFileSync(shallow)).toThrow(); // precondition: the plant is effective for this uid
+      try {
+        expect(reasonOf()).toBe("setup_failed");
+      } finally {
+        chmodSync(shallow, 0o644);
+      }
+    });
+
     test("an oversized shallow (over 64 KiB), a non-hex line, a short hex line, an uppercase line and a symlinked shallow", () => {
       const shallow = join(ws, ".git", "shallow");
       writeFileSync(shallow, `${shaA}\n`.repeat(1700)); // 41 * 1700 = 69 700 bytes
@@ -423,22 +556,40 @@ describe("createIsolatedPushDir", () => {
   });
 
   describe("environment paths the child will resolve (step 0, before any write)", () => {
-    test("PATH containing a directory under the workspace or under TMPDIR", () => {
-      const inWs = join(ws, "bin");
-      mkdirSync(inWs);
-      process.env.PATH = `${inWs}:${saved.PATH ?? ""}`;
-      expect(reasonOf()).toBe("env_path_unsafe");
-      const inTmp = join(tmp, "bin");
-      mkdirSync(inTmp);
-      process.env.PATH = `${inTmp}:${saved.PATH ?? ""}`;
-      expect(reasonOf()).toBe("env_path_unsafe");
+    // Every directory the agent can write (or that holds other tenants' trees) is refused for PATH, SSL_CERT_FILE and SSL_CERT_DIR
+    // alike: ONE root list serves the env check and the HOME placement check.
+    const rootCases = (): Array<[string, string]> => {
+      process.env.WORKSPACES_ROOT = join(base, "wsroot");
+      process.env.WORKTREE_ROOT = join(base, "wtroot");
+      return [
+        ["the workspace", join(ws, "bin")],
+        ["TMPDIR", join(tmp, "bin")],
+        ["the session tmp root", join(AGENT_SESSION_TMP_ROOT, "0123456789abcdef", "bin")],
+        ["WORKSPACES_ROOT", join(base, "wsroot", "other-tenant", "bin")],
+        ["WORKTREE_ROOT", join(base, "wtroot", "other-tenant", "bin")],
+      ];
+    };
+
+    test.each(["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR"] as const)("%s under any agent-writable root is refused as env_path_unsafe", (key) => {
+      for (const [label, entry] of rootCases()) {
+        process.env.PATH = saved.PATH ?? "";
+        delete process.env.SSL_CERT_FILE;
+        delete process.env.SSL_CERT_DIR;
+        process.env[key] = key === "PATH" ? `${entry}:${saved.PATH ?? ""}` : entry;
+        expect(reasonOf(), `${key} under ${label}`).toBe("env_path_unsafe");
+      }
     });
 
-    test("SSL_CERT_FILE / SSL_CERT_DIR under the workspace or TMPDIR", () => {
-      process.env.SSL_CERT_FILE = join(ws, "ca.pem");
+    test("a PATH entry that is a SYMLINK resolving into a root is refused (the resolved path is what the child runs)", () => {
+      mkdirSync(join(ws, "bin"));
+      const links = join(base, "links");
+      mkdirSync(links);
+      symlinkSync(join(ws, "bin"), join(links, "innocent"));
+      process.env.PATH = `${join(links, "innocent")}:${saved.PATH ?? ""}`;
       expect(reasonOf()).toBe("env_path_unsafe");
-      delete process.env.SSL_CERT_FILE;
-      process.env.SSL_CERT_DIR = join(tmp, "certs");
+      process.env.PATH = saved.PATH ?? "";
+      symlinkSync(join(tmp), join(links, "to-tmp"));
+      process.env.SSL_CERT_DIR = join(links, "to-tmp", "certs");
       expect(reasonOf()).toBe("env_path_unsafe");
     });
 
@@ -446,14 +597,38 @@ describe("createIsolatedPushDir", () => {
       process.env.SSL_CERT_FILE = join(base, "elsewhere-ca.pem");
       createIsolatedPushDir(ws).dispose();
     });
+
+    test("the mirrored root list contains every sandbox tenant deny root (parity with workspaceTenantDenyRoots)", async () => {
+      const { workspaceTenantDenyRoots } = await import("../server/workspace-resolver");
+      for (const env of [{}, { WORKSPACES_ROOT: join(base, "wsroot"), WORKTREE_ROOT: join(base, "wtroot") }]) {
+        delete process.env.WORKSPACES_ROOT;
+        delete process.env.WORKTREE_ROOT;
+        Object.assign(process.env, env);
+        const mine = agentWritableRoots(ws);
+        for (const root of workspaceTenantDenyRoots()) expect(mine, JSON.stringify(env)).toContain(root);
+        expect(mine).toContain(ws);
+        expect(mine).toContain(AGENT_SESSION_TMP_ROOT);
+        expect(mine).toContain(tmp);
+      }
+    });
   });
 
   describe("HOME and failure handling", () => {
-    test("HOME unset, relative or unwritable refuses as setup_failed and does NOT fall back to the temp directory", () => {
+    test("HOME unset, relative (even when it exists relative to the cwd) or nonexistent refuses as setup_failed", () => {
       delete process.env.HOME;
       expect(reasonOf()).toBe("setup_failed");
       process.env.HOME = "relative/home";
       expect(reasonOf()).toBe("setup_failed");
+      const relHome = relative(process.cwd(), home);
+      expect(realpathSync(relHome)).toBe(home); // the premise: without the absolute-path rule this resolves
+      process.env.HOME = relHome;
+      expect(reasonOf()).toBe("setup_failed");
+      process.env.HOME = join(base, "no-such-home");
+      expect(reasonOf()).toBe("setup_failed");
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    test.skipIf(isRoot)("(skipped as uid 0) an unwritable HOME refuses as setup_failed and does NOT fall back to the temp directory", () => {
       process.env.HOME = home;
       chmodSync(home, 0o500);
       expect(() => writeFileSync(join(home, "probe"), "x")).toThrow(); // precondition: the plant is effective for this uid
@@ -462,18 +637,36 @@ describe("createIsolatedPushDir", () => {
       expect(readdirSync(tmp)).toEqual([]); // nothing was created under TMPDIR either
     });
 
-    test("a HOME under the workspace, TMPDIR or WORKSPACES_ROOT refuses as setup_failed and creates nothing", () => {
+    test("a HOME under the workspace, TMPDIR, the session tmp root, WORKSPACES_ROOT or WORKTREE_ROOT refuses as setup_failed and creates nothing", () => {
       process.env.WORKSPACES_ROOT = join(base, "wsroot");
+      process.env.WORKTREE_ROOT = join(base, "wtroot");
+      const sessionHome = join(AGENT_SESSION_TMP_ROOT, `iso-test-${process.pid}-${Date.now()}`);
       const homes: Array<[string, string]> = [
         ["the workspace", join(ws, "inner-home")],
         ["TMPDIR", join(tmp, "inner-home")],
+        ["the session tmp root", sessionHome],
         ["WORKSPACES_ROOT", join(base, "wsroot", "inner-home")],
+        ["WORKTREE_ROOT", join(base, "wtroot", "inner-home")],
       ];
-      for (const [label, inner] of homes) {
-        mkdirSync(inner, { recursive: true });
-        process.env.HOME = inner;
-        expect(reasonOf(), label).toBe("setup_failed");
-        expect(existsSync(join(inner, ".soleur-push")), label).toBe(false);
+      try {
+        for (const [label, inner] of homes) {
+          mkdirSync(inner, { recursive: true });
+          process.env.HOME = inner;
+          expect(reasonOf(), label).toBe("setup_failed");
+          expect(existsSync(join(inner, ".soleur-push")), label).toBe(false);
+        }
+      } finally {
+        rmSync(sessionHome, { recursive: true, force: true });
+      }
+    });
+
+    test("a HOME whose real path contains ':' or a double quote refuses as setup_failed (the directory would be an unsafe GIT_DIR)", () => {
+      for (const name of ["ho:me", 'ho"me']) {
+        const odd = join(base, name);
+        mkdirSync(odd);
+        process.env.HOME = odd;
+        expect(reasonOf(), name).toBe("setup_failed");
+        expect(existsSync(join(odd, ".soleur-push")) ? readdirSync(join(odd, ".soleur-push")) : [], name).toEqual([]);
       }
     });
 
