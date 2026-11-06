@@ -105,9 +105,9 @@ const git = (cwd: string, ...args: string[]): string =>
   realExec("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
 
 const STATIC_PLAIN = "Workspace git directory is not a plain repository directory";
-const PREPARE_FAILED = "Push could not be prepared (server-side setup problem); nothing was pushed";
+const PREPARE_FAILED = "Push could not be prepared (server-side setup problem)";
 const TOO_LARGE =
-  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace; nothing was pushed";
+  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace";
 
 /** The exact shape of one hardened-push report: its own static message, the closed enum as a tag AND in extra, no Error object. */
 const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";

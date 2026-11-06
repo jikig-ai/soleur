@@ -98,10 +98,10 @@ const PUSH_FAILED_MESSAGE = "cc-push: the hardened push failed after the Owner's
 const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not be removed";
 
 /** Shown to the model for an infrastructure refusal (the server's state, not the workspace): static, no path, no cause. */
-const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem); nothing was pushed";
+const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem)";
 /** The object store has more entries than the walk cap: infrastructure, with its own static text so the model can say what to do. No path. */
 const OBJECT_STORE_TOO_LARGE_TEXT =
-  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace; nothing was pushed";
+  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace";
 const PUSH_TIMED_OUT_TEXT =
   "Git push failed: the push timed out and the branch MAY HAVE been pushed to the remote. Ask the user to check the remote branch before asking for a new approval.";
 
@@ -232,8 +232,8 @@ type CommitCheck = "present" | "absent" | "timeout" | "failed";
  */
 async function checkCommitPresent(isolated: IsolatedPushDirHandle, commitSha: string): Promise<CommitCheck> {
   try {
-    // Imported lazily, like inflight-checkpoint.ts: sibling test files mock `child_process` with factories that lack `execFile`,
-    // and a module-level binding of it would crash at load in every file that transitively imports this one.
+    // Imported lazily, like inflight-checkpoint.ts, so that sibling test files which mock `child_process` with factories lacking
+    // `execFile` still load this module (a missing export then fails only on use, inside this try, and never at import time).
     const { execFile } = await import("node:child_process");
     return await new Promise<CommitCheck>((resolve) => {
       try {

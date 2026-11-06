@@ -26,7 +26,7 @@ const TOKEN = ["ghs", "_", "a".repeat(40)].join("");
 vi.mock("../server/github-app", () => ({ generateInstallationToken: async () => ["ghs", "_", "a".repeat(40)].join("") }));
 vi.mock("../server/logger", () => ({ createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
 // Test-only: the production clamp is `https`; the file-transport vectors need local bare remotes, so this wrapper applies the
-// widened `GIT_ALLOW_PROTOCOL` to the RESULT of the real builder (which pins it and ignores it in `extra`), for those tests only.
+// widened `GIT_ALLOW_PROTOCOL` to the RESULT of the real builder (which pins it; a `GIT_ALLOW_PROTOCOL` key in `extra` throws), for those tests only.
 // The `extra` argument supplies `GIT_SSL_CAINFO` for the positive TLS control (a non-reserved key the builder passes through): measured on this git build, `SSL_CERT_FILE` is NOT honoured by git's libcurl (it has
 // a compiled-in CA bundle path), so the allowlisted variable cannot carry the test CA.
 vi.mock("../server/git-hardened-env", async (importOriginal) => {
