@@ -970,7 +970,7 @@ Unconditional skip-ahead (breaks the `*` barrier); a stderr tee instead of a sid
 
 ## Amendment — 2026-11-06 (#12013)
 
-Raw rows: `knowledge-base/project/specs/feat-one-shot-12013-replay-a-start-priority/measurements/` (`summary.txt` holds the method and every derived figure below). Ruled by CTO agent, 2026-11-06: static start-first registration over a scheduler priority; the `*`-last lever is a separate change; cold readings of one pinned diff in a private clone decide the claim (full text in `decision-challenges.md` beside the measurements).
+Raw rows: `knowledge-base/project/specs/archive/20261106-151254-feat-one-shot-12013-replay-a-start-priority/measurements/` (`summary.txt` holds the method and every derived figure below). Ruled by CTO agent, 2026-11-06: static start-first registration over a scheduler priority; the `*`-last lever is a separate change; cold readings of one pinned diff in a private clone decide the claim (full text in `decision-challenges.md` beside the measurements).
 
 **Outcome.** The 10-minute bar of #12013 is still not met. One control and one treatment of the same replayed diff (162 of 740 runnable registrations) took 2992 s and 2134 s of wall; the pool phase fell from 2703 s to 1882 s (-821 s). This change is `Ref #12013`; the issue stays open.
 
