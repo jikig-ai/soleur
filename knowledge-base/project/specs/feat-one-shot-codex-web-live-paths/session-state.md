@@ -4186,7 +4186,10 @@
   and a later connection read. Independent review correctly found that the
   original test did not prove overlapping transactions, lost responses,
   restarts or provider suppression; the held transaction and rollback cases
-  were added after that review. Follow-up review required observing the
+  were added after that review. A later simulation deliberately discards a
+  locally observed insert response, closes that connection, and reads the row
+  from a freshly opened connection. It does not model an actual lost database
+  reply or a process restart. Follow-up review required observing the
   competitor in PostgreSQL before commit; the test now confirms a lock wait
   through a third connection in both commit and rollback cases; the latter
   allows the waiting insert to win. An insert result inside a transaction is

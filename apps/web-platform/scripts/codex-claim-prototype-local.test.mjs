@@ -129,6 +129,19 @@ try {
   assert.equal(await readSyntheticTurn(second, laterRead), 'accepted');
   assert.equal(await readSyntheticTurn(restarted, laterRead), 'accepted');
   assert.equal(await claimSyntheticTurn(restarted, laterRead), 'existing_row');
+  const discarded = { ...turn, turn: 'discarded-response-synthetic' };
+  const transient = connect();
+  try {
+    await assert.rejects((async () => {
+      await claimSyntheticTurn(transient, discarded);
+      throw new Error('synthetic discarded response');
+    })(), /synthetic discarded response/);
+  } finally { await transient.end({ timeout: 2 }); }
+  const fresh = connect();
+  try {
+    assert.equal(await readSyntheticTurn(fresh, discarded), 'accepted');
+    assert.equal(await claimSyntheticTurn(fresh, discarded), 'existing_row');
+  } finally { await fresh.end({ timeout: 2 }); }
   console.log('synthetic claim prototype passed');
 } finally {
   await first.end({ timeout: 2 });
