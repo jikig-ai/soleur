@@ -838,6 +838,29 @@ gate was supplied by the branch it polices. They now run main's gate. The limita
 narrowed, not removed: a deliberate actor who can land a commit on `main` still reaches
 them. ADR-169 and ADR-220 carry superseding callouts to the same effect.
 
+### Input cap and the dispatch-input note (relocated 2026-11-06, #8780 — byte gate)
+
+NOTE: 25-input cap since 2025-12-04; 9 used (5 inngest-backstop-retire inputs retired).
+Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
+the concurrency group is a shared literal and survives the split). Re-derive the count:
+  awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
+    | grep -cE '^      [a-z_]+:$'
+A literal copied from a sibling PR's base is stale the moment either lands.
+
+Typo-guard for the two destructive recut paths (ignored by every other target). It is NOT
+the authorization:
+
+  * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
+    that job is the sole human authorization (DP-11 F8). HARD-RETIRED by #6604 step 7 (PR B):
+    the job's first step exits 1 on every dispatch, before any credential or plan.
+  * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
+    menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
+    only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
+    — no reviewer, but main-only, so a non-`main` dispatch is refused first.
+
+Each job accepts only its OWN literal, so a token typed for one target cannot authorize
+the other.
+
 ## plan_only
 
 `plan_only` (boolean dispatch input, default false) is the incident-recovery REHEARSAL
