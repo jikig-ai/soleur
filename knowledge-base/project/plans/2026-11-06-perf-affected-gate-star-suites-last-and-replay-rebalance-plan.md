@@ -215,7 +215,7 @@ committed mutant harness). Re-take the enumeration: diff empty.
 4.0 **Paper check first.** Re-run the list-schedule what-if (4 slots, the 162 treatment walls in file order, the `*` suite removed,
 lane tokens ignored; baseline must reproduce pool end 1611 s with `approval-guard1-mutation` starting at 945 s) over contiguous
 splits using the per-arm walls (a, b, c scaled from the pooled walls by site share). Commit it as `measurements/rebalance_whatif.py`
-with its output. Proceed only if the best contiguous split beats lever 1 alone by at least 30 s of predicted pool end; otherwise stop
+with its output. Proceed only if a contiguous split that satisfies the AC8 balance bound (largest to smallest arm wall at most 1.5) beats lever 1 alone by at least 30 s of predicted pool end (CTO ruling 2026-11-06, work phase); otherwise stop
 here, record "not landed, paper-negative" for lever 2, and skip 4.1 to 4.4 and the T2 reading. Run 4.1 before the quiet-host window if
 it proceeds.
 4.1 Measurement-only hook (NOT committed): wrap the `in_range` call in a throwaway copy of the battery so each gated site appends
@@ -454,3 +454,7 @@ paths, and the change adds no service, route, cron or infrastructure surface. Th
 - The plan-time model over-predicts on the treatment reading (2497 vs 1882 s); no model number is a result.
 - Three foreign `test-all.sh` runs share the CPU today; `measure.sh` aborts a reading started beside them.
 - The C-tests commit leaves the branch red; do not push it alone (squash merge makes this safe).
+
+## Work-phase outcome: lever 2 not landed
+
+Phase 4.0 ran on 2026-11-06 (`measurements/rebalance_whatif.out.txt`): the baseline reproduces the previous treatment reading (pool end 1611 s, `approval-guard1-mutation` start 945 s); the best split (1-212 / 213-301 / 302-599) is predicted +40 s with arm walls 1569 / 263 / 781 s; the best split within the 1.5x bound is predicted 78 s worse. The CTO ruled to stop: no rebalance commit, no per-site measurement, no T2 reading. The PR carries lever 1 only; the per-site measurement is the unspent prerequisite recorded on #12263. Tasks 4.1 to 4.4 and the T2 reading are cancelled by this ruling.

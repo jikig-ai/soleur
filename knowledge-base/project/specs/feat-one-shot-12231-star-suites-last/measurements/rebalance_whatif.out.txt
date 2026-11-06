@@ -1,0 +1,6 @@
+baseline (lever 1 alone): pool end 1611 s; approval-guard1-mutation starts 945 s; sum of walls / 4 = 1545 s; the model reproduces the treatment reading if these are 1611 / 945
+searched 178503 contiguous splits
+best split 1-212 / 213-301 / 302-599: arm walls [1569, 263, 781] s, predicted pool end 1571 s (+40 s vs baseline)
+equal split 1-200 / 201-399 / 400-599: arm walls [1534, 582, 498] s, predicted pool end 1601 s (+10 s vs baseline)
+best split with arm walls within a 1.5x ratio: 1-111 / 112-268 / 269-599: arm walls [870, 864, 878] s, predicted pool end 1689 s (-78 s vs baseline)
+gate: predicted gain of at least 30 s -> PROCEED

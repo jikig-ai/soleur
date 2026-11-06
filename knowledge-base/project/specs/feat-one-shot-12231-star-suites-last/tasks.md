@@ -26,7 +26,7 @@ Issue: #12231 (`Ref #12013`; follow-up #12263). Branch: feat-one-shot-12231-star
 - 3.2 Re-take the enumeration; diff must be empty
 
 ## Phase 4: Rebalance (gated, one droppable commit)
-- 4.0 Paper check `measurements/rebalance_whatif.py` (baseline must reproduce 1611 s / 945 s); proceed only on a predicted gain of at least 30 s, else record "not landed, paper-negative" and skip 4.1 to 4.4 and T2
+- 4.0 (DONE; lever 2 NOT LANDED by CTO ruling 2026-11-06 - 4.1 to 4.4 and T2 are cancelled) Paper check `measurements/rebalance_whatif.py` (baseline must reproduce 1611 s / 945 s); proceed only on a predicted gain of at least 30 s, else record "not landed, paper-negative" and skip 4.1 to 4.4 and T2
 - 4.1 Throwaway `in_range` timing hook; per-site cost and unconditional share from the three arms run concurrently; commit `site-costs.tsv`
 - 4.2 Two-cut search minimizing the simulated pool end; `split.py` + output
 - 4.3 One commit: three `run_suite` lines, `ci-oracle-lane-suites.txt`, the drift-mutant `sed` literal derived from the manifest, three rows of `suite-durations.tsv` (`src=estimate`), the replay-a row of `suite-weight-exemptions.tsv`; regen only as a no-diff check

@@ -18,4 +18,4 @@ None blocking. Foreign test-all.sh runs in sibling worktrees are a contention ri
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; cto, dhh/kieran/simplicity/architecture/test-design reviewers, learnings-researcher.
 
-cto_spawns=4
+cto_spawns=5
