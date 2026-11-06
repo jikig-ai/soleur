@@ -57,8 +57,9 @@ Generate the gate into `apps/web-platform` (default mode — detect Next.js, req
 `components/` and `server/` to exist under the target, emit config + shared runner + CI workflow,
 capture the initial baseline, **prove the gate bites** (see Bite-proof below), then write the
 boundary README and the agent-instructions pointer last). Non-destructive: refuses to overwrite an
-existing `.cjs`, runner, or workflow (there is no `--force`); the baseline JSON is the only
-re-writable artifact, and only via `--refresh-baseline`; the README block and the pointer line are
+existing `.cjs`, runner, or workflow (there is no `--force`); only two artifacts are ever re-written:
+the baseline JSON via `--refresh-baseline`, and the Stage A auto-recovery workflow via
+`--refresh-stage-a` (below); the README block and the pointer line are
 append-once (marker-keyed, never rewritten):
 
 ```bash
@@ -76,6 +77,51 @@ gate, and the fix is the listed import, not a re-run. In refresh mode nothing is
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-baseline
 ```
+
+Refresh a stale auto-recovery workflow (agent-only; never shown to the founder). Run it when a repo that
+already installed the scaffold carries an old claude-code-action pin in its Stage A workflow, or when
+the plugin's Stage A template changed: the default mode refuses to overwrite, so the first install's
+pin stays. The workflow must be committed and the tree clean. `--refresh-stage-a` re-emits exactly
+one file, `apps/web-platform/.github/workflows/fix-constraints-stage-a.yml`, and only when the installed
+bytes are an exact historical emission listed in
+[fix-constraints-stage-a.emitted.sha256](./references/fix-constraints-stage-a.emitted.sha256). It
+converges the file on the **current** template, so it is a content upgrade (install command, model id,
+token wiring) as well as a pin bump, and it normalises the file mode to 0644. The current template
+installs with `npm ci`, so the target needs a committed `package-lock.json`. Soleur's own
+repo-root dogfood copy is hand-maintained and is not reachable by this flag.
+
+Outcomes and the next step:
+
+| Exit | Meaning | Next step |
+|---|---|---|
+| 0 | `already current`, or `refreshed` | after `refreshed`: review with `git diff` and commit |
+| 67 | workflow untracked, or tree dirty | commit the workflow / the other changes, re-run |
+| 69 | run lock held | wait and re-run (a lock whose owner died clears on the next run; a lock with no owner pid yet is honoured for a minute) |
+| 69 | no sha256 tool, a repository under `/proc`, `/sys` or `/dev`, or an I/O failure (mktemp, render, chmod, mv) | fix the tool or location; a re-run alone does not help |
+| 70 | no `.dependency-cruiser.cjs`, or no stage-a workflow | restore the file from git; installs that predate the two-stage split have no Stage A file |
+| 75 | refused, file left byte-unchanged | see below |
+| 143 | interrupted | review `git diff`; the file is replaced only by a final atomic rename |
+
+Exit **75** means: the installed copy is edited or from a version the ledger does not know (the report
+shows only the template-side differences, never your file: read your own file and merge by hand; after
+a hand merge the flag keeps refusing, because the file is no longer a known emission), is newer than
+this plugin's template (update the plugin; there is no downgrade), is a symlink or behind one (replace
+it with a regular file by hand), has no tracked `package-lock.json` beside it (commit one, or merge by
+hand; checked only when a write would happen, so an already-current file still exits 0), or changed
+while the command ran (re-run). There is no bite-proof: the swap changes none of
+config, runner or baseline. If the run is SIGKILLed, delete the leftover untracked
+`.fix-constraints-stage-a.*` file next to the workflow (never `git add -A`):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/constraint-scaffold/scripts/constraint-scaffold.sh" --refresh-stage-a
+```
+
+**Authors of a Stage A template change:** when [fix-constraints-stage-a.template](./references/fix-constraints-stage-a.template) changes,
+the ledger must gain a row (the regeneration command is in the ledger header), but only if the change
+keeps the frozen Stage A to Stage B interface (workflow name, artifact-name prefixes, `meta.json`
+schema) and the `contents: read` permission set (ADR-071 amendment 2026-11-05). The template is never
+edited for this: any template edit changes its own emission hash, and a test case reddens until the row
+is appended.
 
 ## What it emits (into `apps/web-platform/`)
 
@@ -123,10 +169,14 @@ that it ran green once:
 7. The helper removes the worktree (also on INT/TERM — the handler exits 143 with the worktree gone).
    One verdict line on stdout: `constraint-scaffold: bite-proof pass -> fail(no-client-to-server-secret@direct, no-client-to-server-secret-transitive@via-hop) -> pass depcruise=<version>`.
 
+**Exit code 75** is `--refresh-stage-a` only: it removes nothing and leaves the workflow byte-unchanged
+(see the refresh block above).
+
 **Exit codes 71–74 and what the agent does next.** Every bite failure prints
 `constraint-scaffold: bite-proof FAILED (<code>): <msg>` and the last 40 lines of the relevant log
 on stdout. In **default mode** the self-cleanup is armed before the first artifact is written and
-disarmed only after the bite has passed, so this holds for every failure in between — 66..74, an
+disarmed only after the bite has passed, so this holds for every failure in between — 66..74 (75 is
+stage-a-mode only, removes nothing, and leaves the file byte-unchanged), an
 unusable `TMPDIR`, a `set -e` abort, an INT/TERM (143), a runner interrupted by a terminal Ctrl-C
 (130): the script removes every artifact this run emitted (config, runner, the three workflows, the
 baseline; empty `scripts/` and `.github/workflows/` directories are removed too) and says so — the
@@ -161,6 +211,14 @@ suite drives every failure arm through a fixture-owned stub `depcruise` reached 
 dependency-cruiser; every 71/72/73/74 arm through the stub; both rule names asserted on their own
 probe files; worktree removal on success, on failure and on TERM; default-mode self-cleanup leaving
 the fixture tree as it was; and the `TMPDIR`-inside-repo refusal.
+
+`test/refresh-stage-a.test.sh` (scripts shard) pins `--refresh-stage-a`: refresh of a ledger-listed
+emission (mode 0644), the already-current no-op, refusal of an edited or newline-stripped copy with no
+echo of the user's file, the guard order (70 before 67 before 69; symlink before tree; lockfile only when a write would happen), the no-downgrade
+rule, fail-closed on a missing, empty or comment-only ledger, the ledger itself (newest row last, unique,
+64-hex), the empty-digest arm, symlinked file / `.github` / `apps`, the `package-lock.json` precondition,
+the run-lock rows (owner-less grace, dead owner, EPERM), that no other emitted file is written, that
+neither the script nor the ledger carries a pin literal, and the frozen Stage A to Stage B interface.
 
 `test/boundary.test.sh` (scripts shard) proves the gate is not vacuous: a value import of `server/**`
 via the `@/server/…` alias FAILS, an `import type` of the same PASSES, route-group/metacharacter

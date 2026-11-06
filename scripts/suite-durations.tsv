@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1261
-# generated-at=2026-11-05T17:04:12Z
+# generated-at=2026-11-05T17:51:21Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -123,6 +123,7 @@ plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	2180	measured
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	412	measured
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	97	measured
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	147	measured
+plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh	1261	floor
 plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	82	measured
 plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	886	measured
 plugins/soleur/skills/eval-harness/test/extract-block.test.sh	217	measured

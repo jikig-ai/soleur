@@ -676,6 +676,10 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=tls_private_key.proxy_server \
+              -target=tls_self_signed_cert.proxy_server \
+              -target=doppler_secret.proxy_tls_key \
+              -target=doppler_secret.proxy_tls_cert \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=tls_private_key.inngest_link \
