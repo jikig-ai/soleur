@@ -14,8 +14,8 @@
 #      everything (the drain barrier) and disjoint token sets do not conflict.
 #   6. The replay arms' explicit override: empty tokens, equal to the derived set
 #      minus lock:test-all (#12013).
-#   7. Start-first order (#12013): the three replay arms start with the pool, in
-#      the runner's real registration stream (see the section for the contract).
+#   7. Start-first order (#12013): the replay arms start with the pool, in the
+#      runner's real registration stream (see the section for the contract).
 
 set -euo pipefail
 
@@ -218,7 +218,9 @@ fi
 #    map): every label under the arm prefix (at least three) appears exactly once, no registration runs the whole battery
 #    (by label, or by argv without --rows), each arm's 1-based row is at most the pool width, and no row before the last arm
 #    carries a `*` token. Nothing is asserted about any other suite's order, the total, or the --rows ranges (the totality
-#    suite tiles those; ci-oracle-lane compares each arm's argv). Rationale and measurements: ADR-242, decision 29.
+#    suite tiles those; ci-oracle-lane compares each arm's argv). Scope limits, stated: an arm is any label under the arm prefix
+#    (section 6 shares that coupling); a whole-battery registration under another label WITH a --rows range is the totality
+#    suite's to catch (its tiling check), not this guard's. Rationale and measurements: ADR-242, decision 29.
 SF_W=4   # the local gate's pool width: the SOLEUR_TEST_JOBS default of the affected-tests wrapper; the guard cannot detect a change of it
 SF_ARM_PREFIX="${replay_file%.test.sh}-"
 # start_first_ok — stdin: one `label<TAB>tokens<TAB>argv` row per registration, in order. Prints one violation per line.
@@ -312,6 +314,7 @@ sf_expect_red "a * row between the arms, all arms within the width"       star  
 sf_expect_red "a * row first, above the arms"                             star  "star0|*" "$SFA|" "$SFB|" "$SFC|"
 sf_expect_red "a * row on the row just before the last arm"               star  "$SFA|" "$SFB|" "s|*" "$SFC|"
 sf_expect_red "empty input (no arms found)"                               arms
+sf_expect_red "only two arms registered"                                  arms  "$SFA|" "$SFB|"
 
 # 7.R Runner-copy mutants, built from the real runner under the file's own temp dir. The runner resolves its libs and shard
 #     tables beside itself, so the copy gets the repo's lib directory by symlink and the tables by glob copy (the glob names
@@ -378,8 +381,8 @@ else
 fi
 
 # Dispatch floor, reported directly (never through fail()): deleting a block of assertions lowers PASSES.
-# 12 assertions before section 7, plus the 12 it adds (instrument, 8 synthetic, 2 runner-copy mutants, live check).
-(( PASSES < 24 )) && { printf '[FATAL] only %s assertions passed, expected at least 24\n' "$PASSES"; exit 1; }
+# 12 assertions before section 7, plus the 13 it adds (instrument, 9 synthetic, 2 runner-copy mutants, live check).
+(( PASSES < 25 )) && { printf '[FATAL] only %s assertions passed, expected at least 25\n' "$PASSES"; exit 1; }
 echo ""
 echo "=== test-suite-lanes: $PASSES passed, $FAILURES failed ==="
 (( FAILURES == 0 )) || exit 1

@@ -5604,9 +5604,10 @@ fi
 if want_scripts; then
   # START-FIRST (#12013): these arms are registered first on purpose. In the pooled
   # local gate a suite starts as the registration stream reaches it, and a queued `*`
-  # (drain barrier) suite blocks every later launch; an empty-token suite such as an
-  # arm starts as soon as a slot is free. The arms are the longest suites of the
-  # gate, so registered late they ended the run. The three move together: hoisting
+  # (drain barrier) suite blocks every later launch; with no `*` suite live or queued
+  # ahead of it, an empty-token suite such as an arm starts as soon as a slot is
+  # free. The arms include the longest suite of the gate (-a), so registered late
+  # they ended the run. The three move together: hoisting
   # only -a leaves -b and -c behind the barrier. Applies to a pooled run only (the
   # local --affected gate); serial runs and CI shard legs get the same order but no
   # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
