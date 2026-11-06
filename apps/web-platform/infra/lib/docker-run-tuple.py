@@ -98,12 +98,13 @@ _COMMON_ENV = {
 }
 # The session relay (server/session-proxy.ts, #12167 PR-E). The app container runs on the default docker bridge, where the HOST's
 # 10.0.1.x does not exist (listen EADDRNOTAVAIL), so the relay binds 0.0.0.0 INSIDE the container and the PROD start publishes the
-# port on the host's private IP: `-p "${PROXY_BIND:-127.0.0.1}:8443:8443"` (an empty PROXY_BIND is a loopback publish: unreachable by
-# peers, fail-closed, and the argv stays unconditional). The literal 0.0.0.0 is only safe because of that publish address, which is
+# port on the host's private IP: `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"` (an empty RELAY_PUBLISH_BIND is a loopback publish: unreachable by
+# peers, fail-closed, and the argv stays unconditional); ci-deploy.sh sets RELAY_PUBLISH_BIND to the host's private IP only when the
+# net.ipv4.ip_nonlocal_bind sysctl is 1 (the reboot race: the NIC address can be late), else leaves it empty. The literal 0.0.0.0 is only safe because of that publish address, which is
 # why the gate pins the publish, the literal bind and the port together. The canary publishes no 8443 and carries a literal EMPTY
 # bind (the app reports no_bind; no blue/green collision). The first-boot tuple has neither (unchanged).
 RELAY_PORT = "8443"
-RELAY_PUBLISH = "${PROXY_BIND:-127.0.0.1}:%s:%s" % (RELAY_PORT, RELAY_PORT)
+RELAY_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (RELAY_PORT, RELAY_PORT)
 RELAY_PROD_ENV = {"SOLEUR_PROXY_BIND": {"0.0.0.0"}, "SOLEUR_PROXY_PORT": {RELAY_PORT}}
 RELAY_CANARY_ENV = {"SOLEUR_PROXY_BIND": {""}}
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}

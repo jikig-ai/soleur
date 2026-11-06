@@ -331,7 +331,7 @@ readonly HOST_ID
 # would bind each other's address). Resolve from the 10.0.1.0/24 interface.
 # Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
 # PROXY_BIND is HOST-ONLY (#12167 PR-E): it is the address the prod container's relay port is PUBLISHED on
-# (`-p "${PROXY_BIND:-127.0.0.1}:8443:8443"`). The container itself binds 0.0.0.0 (a literal): the host's 10.0.1.x does not exist
+# (`-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"`). The container itself binds 0.0.0.0 (a literal): the host's 10.0.1.x does not exist
 # inside the default bridge netns, so handing it to the container as SOLEUR_PROXY_BIND failed listen with EADDRNOTAVAIL.
 # The match is anchored on `inet 10.0.1.x/` (as `ip -o` prints it): an unanchored grep read 10.0.1.5 out of an interface
 # at 210.0.1.5 (or 110.0.1.5) listed before the real address.
@@ -350,6 +350,26 @@ resolve_proxy_bind() {
 }
 PROXY_BIND="$(resolve_proxy_bind || true)"
 readonly PROXY_BIND
+
+# The address the prod container's relay port is PUBLISHED on (#12167 PR-E): the private IP only when the host can bind it even if the
+# NIC address is late. The Hetzner private NIC is a post-boot hot attach and nothing orders docker.service after it, so after a reboot a
+# publish on a not-yet-configured IP fails the WHOLE container start (80/443/3000 too). `net.ipv4.ip_nonlocal_bind=1` (shipped by its
+# own change) lets docker-proxy bind that address anyway, with the source IP preserved. Until the sysctl is EXACTLY 1 (or if the read
+# fails) the publish stays on loopback (unreachable by peers, today's behaviour) and one closed-grammar line says so. Prints the
+# address (empty = loopback fallback in the `-p` expansion); NEVER fails, so it can never fail a deploy.
+resolve_publish_ip() {
+  local nonlocal
+  nonlocal=$(sysctl -n net.ipv4.ip_nonlocal_bind 2>/dev/null) || nonlocal=""
+  if [[ -z "$PROXY_BIND" ]]; then
+    return 0
+  fi
+  if [[ "$nonlocal" == "1" ]]; then
+    printf '%s' "$PROXY_BIND"
+    return 0
+  fi
+  logger -t "$LOG_TAG" "relay_publish degraded=nonlocal_bind_unset"
+  return 0
+}
 
 # 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
 # After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
@@ -5281,10 +5301,10 @@ case "$COMPONENT" in
     CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
     # Session relay (#12167 PR-E): the app container is on the default docker bridge, so the relay cannot bind the host's private
-    # IP. Prod PUBLISHES 8443 on that IP (-p "${PROXY_BIND:-127.0.0.1}:8443:8443": an empty PROXY_BIND is a loopback publish, unreachable
-    # by peers) and binds 0.0.0.0 inside (-e SOLEUR_PROXY_BIND=0.0.0.0, SOLEUR_PROXY_PORT=8443). The canary publishes NO 8443 and gets a
+    # IP. Prod PUBLISHES 8443 on that IP (-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443": RELAY_PUBLISH_BIND is PROXY_BIND only when the
+    # net.ipv4.ip_nonlocal_bind sysctl is 1, else empty = a loopback publish, unreachable by peers) and binds 0.0.0.0 inside (-e SOLEUR_PROXY_BIND=0.0.0.0, SOLEUR_PROXY_PORT=8443). The canary publishes NO 8443 and gets a
     # literal EMPTY bind (the app reports no_bind), so blue/green never collides on the port; it is removed before prod starts.
-    # lib/docker-run-tuple.py pins all of it. Reboot caveat: a publish on an IP not yet configured fails the container start.
+    # lib/docker-run-tuple.py pins all of it. Reboot race: see resolve_publish_ip.
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
@@ -5659,6 +5679,9 @@ case "$COMPONENT" in
         exit 1
       fi
 
+      # Relay publish address (#12167 PR-E): read the nonlocal-bind sysctl NOW, just before the prod start (see resolve_publish_ip).
+      RELAY_PUBLISH_BIND="$(resolve_publish_ip)"
+
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
@@ -5701,7 +5724,7 @@ case "$COMPONENT" in
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:443:3443 \
         -p 0.0.0.0:3000:3000 \
-        -p "${PROXY_BIND:-127.0.0.1}:8443:8443" \
+        -p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443" \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.

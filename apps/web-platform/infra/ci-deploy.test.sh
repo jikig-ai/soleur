@@ -1778,6 +1778,17 @@ run_deploy() {
       chmod +x "$MOCK_DIR/ip"
     fi
 
+    # #12167 PR-E: `sysctl -n net.ipv4.ip_nonlocal_bind` is read before the prod `docker run` (the relay publish degrades to loopback unless it is
+    # exactly 1). The mock is ALWAYS installed so no deploy depends on the runner's real sysctl: stdout MOCK_SYSCTL_OUT (default 0, the
+    # realistic pre-sysctl host), exit MOCK_SYSCTL_RC (default 0); any other sysctl call is a silent no-op. Each read is recorded in
+    # MOCK_RELAY_SEQ_LOG as `sysctl`.
+    printf '%s\n' '#!/bin/bash' \
+      'if [[ "${1:-}" == "-n" && "${2:-}" == "net.ipv4.ip_nonlocal_bind" ]]; then' \
+      '  [[ -n "${MOCK_RELAY_SEQ_LOG:-}" ]] && printf "sysctl\n" >> "$MOCK_RELAY_SEQ_LOG"' \
+      '  printf "%s" "${MOCK_SYSCTL_OUT-0}"; exit "${MOCK_SYSCTL_RC:-0}"' \
+      'fi' 'exit 0' > "$MOCK_DIR/sysctl"
+    chmod +x "$MOCK_DIR/sysctl"
+
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
@@ -12940,7 +12951,7 @@ rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got
 # #12167 PR-E -- the session relay (:8443) is PUBLISHED on the host's private IP and bound 0.0.0.0 INSIDE the bridge netns.
 # The app container runs on the default docker bridge and publishes only 80/3000/443. The relay used to be handed the HOST's
 # 10.0.1.x as SOLEUR_PROXY_BIND, an address that does not exist in a bridge netns (listen EADDRNOTAVAIL) and the port was never
-# published. Prod now carries `-p "${PROXY_BIND:-127.0.0.1}:8443:8443"` (an empty PROXY_BIND is a loopback publish: unreachable by
+# published. Prod now carries `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"` (an empty PROXY_BIND is a loopback publish: unreachable by
 # peers, fail-closed, argv stays unconditional for the closed-world tuple gate), `-e SOLEUR_PROXY_BIND=0.0.0.0` and
 # `-e SOLEUR_PROXY_PORT=8443`; the canary publishes no 8443 and carries a literal empty SOLEUR_PROXY_BIND (no_bind, so no
 # blue/green collision). resolve_proxy_bind is anchored on `inet 10.0.1.x/`. After the prod swap a bounded best-effort peer
@@ -12993,7 +13004,7 @@ pe_row() { # <id> <ok 0|1> <pass text> <fail detail>
 
 # PE-1: a private IP resolves from `ip` (a 210.0.1.5 interface listed BEFORE it must not win) and is the PUBLISH address; the container
 # binds 0.0.0.0; the canary publishes no 8443 and carries a literal empty bind.
-pe_deploy pe1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL"
+pe_deploy pe1 MOCK_SYSCTL_OUT=1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL"
 PE_PROD="$(pe_line pe1 soleur-web-platform)"; PE_CAN="$(pe_line pe1 soleur-web-platform-canary)"
 PE_OK=1
 [[ "$PE_RC" -eq 0 ]] || PE_OK=0
@@ -13006,7 +13017,7 @@ pe_row "PE-1" "$PE_OK" "prod publishes 10.0.1.20:8443:8443 (the real address, no
   "rc=$PE_RC prod=[$(printf '%s' "$PE_PROD" | cut -c1-600)] canary=[$(printf '%s' "$PE_CAN" | cut -c1-300)]"
 
 # PE-2: no 10.0.1.x on the host (or an empty PROXY_BIND) -> a LOOPBACK publish (unreachable by peers, fail-closed), same argv shape.
-pe_deploy pe2 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"
+pe_deploy pe2 MOCK_SYSCTL_OUT=1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"
 PE_PROD="$(pe_line pe2 soleur-web-platform)"
 PE_OK=1
 [[ "$PE_RC" -eq 0 ]] || PE_OK=0
@@ -13187,15 +13198,44 @@ pe_row "PE-10" "$PE_OK" "the in-container node probe maps a peer to ok / denied 
 # PE-11: the publish and bind lines in the script text itself (comment-stripped), beside the closed-world gate that parses them.
 PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
 PE_OK=1; PE_MSG=""
-[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${PROXY_BIND:-127.0.0.1}:8443:8443"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod publish line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod publish line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-p [^ ]*8443')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [an other 8443 publish exists]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-e SOLEUR_PROXY_BIND=0.0.0.0 \')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod bind line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_PROXY_BIND= \\$')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [canary empty-bind line count != 1]"; }
 ! printf '%s\n' "$PE_SRC" | /usr/bin/grep -qF -- '-e SOLEUR_PROXY_BIND="$PROXY_BIND"' || { PE_OK=0; PE_MSG+=" [the host IP still reaches the container as the bind]"; }
 pe_row "PE-11" "$PE_OK" "comment-stripped script: one loopback-fallback publish, one literal 0.0.0.0 bind (prod), one literal empty bind (canary), the host IP never handed to the container as its bind" "$PE_MSG"
 
+# PE-12: the reboot-race gate. A publish on an IP that is not configured yet fails the whole container start, and docker-proxy can bind a
+# not-yet-configured address only with net.ipv4.ip_nonlocal_bind=1 (shipped by a separate PR). Until it is exactly 1 the prod publish
+# stays on loopback (today's behaviour) and ONE closed-grammar warning is logged; the deploy never fails because of it; and the read
+# happens BEFORE the prod docker run. Nothing else in the argv changes.
+PE_OK=1; PE_MSG=""
+for PE_X in "1|10.0.1.20|0|0" "0|127.0.0.1|0|1" "|127.0.0.1|0|1" "2|127.0.0.1|0|1" "1 |127.0.0.1|0|1" "yes|127.0.0.1|0|1" "1|127.0.0.1|1|1" "0|127.0.0.1|1|1" "|127.0.0.1|1|1"; do
+  PE_V="${PE_X%%|*}"; PE_REST="${PE_X#*|}"; PE_WANT="${PE_REST%%|*}"; PE_REST="${PE_REST#*|}"; PE_RCV="${PE_REST%%|*}"; PE_WARN="${PE_REST##*|}"
+  pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_SYSCTL_OUT="$PE_V" MOCK_SYSCTL_RC="$PE_RCV"
+  PE_PROD="$(pe_line pe12 soleur-web-platform)"
+  PE_W="$(/usr/bin/grep -cxF -- '-t ci-deploy relay_publish degraded=nonlocal_bind_unset' "$PE_DIR/pe12.log" || true)"
+  PE_S="$(/usr/bin/grep -n '^sysctl$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
+  PE_R="$(/usr/bin/grep -n '^run soleur-web-platform$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
+  [[ "$PE_RC" -eq 0 && "$(jq -r '.reason' "$PE_DIR/pe12.state" 2>/dev/null)" == "ok" \
+     && "$PE_PROD" == *" -p $PE_WANT:8443:8443 "* && "$PE_W" == "$PE_WARN" \
+     && "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* && "$PE_PROD" == *" -e SOLEUR_PROXY_PORT=8443 "* \
+     && -n "$PE_S" && -n "$PE_R" && "$PE_S" -lt "$PE_R" ]] \
+    || { PE_OK=0; PE_MSG+=" [sysctl='$PE_V' rc=$PE_RCV want -p $PE_WANT warn=$PE_WARN got warn=$PE_W rc=$PE_RC sysctl@${PE_S:-none} run@${PE_R:-none}: $(printf '%s' "$PE_PROD" | /usr/bin/grep -oE -- '-p [^ ]*8443:8443' || true)]"; }
+done
+# no private address at all: already loopback, so the degrade warning (about a private IP we could not publish on) is NOT logged
+pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO" MOCK_SYSCTL_OUT=0
+PE_PROD="$(pe_line pe12 soleur-web-platform)"
+[[ "$PE_PROD" == *" -p 127.0.0.1:8443:8443 "* && "$(/usr/bin/grep -cF -- 'relay_publish' "$PE_DIR/pe12.log" || true)" == 0 ]] || { PE_OK=0; PE_MSG+=" [no private address + sysctl 0 logged a degrade line or did not publish on loopback]"; }
+# static pins: ONE warning line in the closed grammar, no other relay_publish text, the read is `sysctl -n net.ipv4.ip_nonlocal_bind`
+PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -c 'relay_publish' || true)" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [relay_publish text count != 1 in comment-stripped source]"; }
+/usr/bin/grep -qF -- 'logger -t "$LOG_TAG" "relay_publish degraded=nonlocal_bind_unset"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [warning line is not the closed-grammar one]"; }
+/usr/bin/grep -qF -- 'sysctl -n net.ipv4.ip_nonlocal_bind' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the sysctl read is missing]"; }
+pe_row "PE-12" "$PE_OK" "publish IP is the private address only when 'sysctl -n net.ipv4.ip_nonlocal_bind' is exactly 1 (0, empty, 2, '1 ', non-numeric, or a failed read -> 127.0.0.1 plus one 'relay_publish degraded=nonlocal_bind_unset' line); read before the prod run; deploy ok in every case" "$PE_MSG"
+
 rm -rf "$PE_DIR"
-unset PE_DIR PE_IP_LO PE_IP_REAL PE_IP_DECOY PE_ROSTER_BODY PE_PROD PE_CAN PE_OK PE_MSG PE_RC PE_OUT PE_C PE_CASES PE_IN PE_REST PE_WANT PE_WANTRC PE_GOT PE_MUT PE_RM_CAN PE_RUN_PROD PE_RUN_CAN PE_RUNP PE_EXE1 PE_T PE_BODY PE_CALL PE_SWAP PE_DONE PE_LOGS PE_SRC PE_PORT_BASE PE_PIDS PE_M PE_W PE_UP PE_N PE_CA PE_CA2 PE_X PE_P PE_PEM
+unset PE_DIR PE_X PE_V PE_RCV PE_WARN PE_W PE_S PE_R PE_IP_LO PE_IP_REAL PE_IP_DECOY PE_ROSTER_BODY PE_PROD PE_CAN PE_OK PE_MSG PE_RC PE_OUT PE_C PE_CASES PE_IN PE_REST PE_WANT PE_WANTRC PE_GOT PE_MUT PE_RM_CAN PE_RUN_PROD PE_RUN_CAN PE_RUNP PE_EXE1 PE_T PE_BODY PE_CALL PE_SWAP PE_DONE PE_LOGS PE_SRC PE_PORT_BASE PE_PIDS PE_M PE_W PE_UP PE_N PE_CA PE_CA2 PE_X PE_P PE_PEM
 unset -f pe_deploy pe_line pe_probe_lines pe_row pe_resolve pe_js 2>/dev/null || true
 
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
@@ -13275,9 +13315,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # gained assertions (the key reads request / is ABSENT) without becoming rows. Measured from the green run (733/733).
 # review round 2 (#10934): raised 733 -> 735 (+2 PASS rows: 7.s4 the helper's token set equals write_state's enum set, 7.s5 write_state writes every token as itself,
 # an out-of-enum value as invalid and an empty value as ABSENT; each carries its own mutants inside the row). Measured from the green run (735/735).
-# #12167 PR-E: raised 739 (measured on main; the 735 above predates later rows) -> 750 (measured 750/750) with PE-1..PE-11 (relay publish argv x2, the anchored resolver table + its unanchored-grep mutant, canary-gone-before-prod
+# #12167 PR-E: raised 739 (measured on main; the 735 above predates later rows) -> 751 (PE-12, the nonlocal-bind gate, is the 12th row) with PE-1..PE-11 (relay publish argv x2, the anchored resolver table + its unanchored-grep mutant, canary-gone-before-prod
 # order, the peer-probe flow / closed grammar / skips / best-effort, the node probe against local TLS fixtures, and the static pins).
-CI_DEPLOY_ASSERT_FLOOR=750
+CI_DEPLOY_ASSERT_FLOOR=751
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
