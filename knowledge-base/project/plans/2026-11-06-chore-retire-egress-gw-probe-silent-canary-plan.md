@@ -11,6 +11,16 @@ lane: cross-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06. **Method:** the plan was already CTO-ruled and panel-reviewed (DHH, Kieran, code-simplicity) before this pass; deepen-plan ran the halt gates and a verification sweep instead of a broad agent fan-out, because the change is delete-only and every claim is checkable against the repo.
+
+**Key improvements carried in:** (1) the probe test's derived-referrer row and exact `MIN_ASSERTIONS` pin were found to move with the retirement and are now in Files to Edit under a follow-up CTO ruling; (2) the census insertion point is pinned after the existing ghcr entries (a mutation anchor in the ceiling suite depends on it); (3) managed versus live alert counts are stated separately; (4) the Observability block carries a credential-free discoverability command.
+
+**Gate dispositions.** 4.4 precedent: #11653 then #11785 are the sibling sequence (cited). 4.5 network: not triggered (the only keyword hit was a prose label, removed). 4.55 downtime: not triggered (Better Stack Logs only, no host). 4.6 user-brand: present, `none` with a scope-out line for the infra path. 4.7 observability: present with the 5-field block. 4.8 PAT: no match. 4.9 UI: no UI file. 4.10 encryption posture: not triggered (no store or connection is introduced; the `.tf` edit is a deletion). 4.11 guard contract: lint green, assemblies name the readers and the dict they share, matrices derived from the design. 4.12 scope check: one unfenced section, all rows mapped. 4.13 task design: no new autonomous task.
+
+**Verified live in this pass:** #12270, #12271, #12242, #12190 and #12268 are OPEN; #12180 is CLOSED; #12244 is MERGED; the only AGENTS rule id cited (`wg-when-deferring-a-capability-create-a`) exists; `apply-deploy-pipeline-fix.yml` mentions no `logtail` resource (zero hits) and `scheduled-terraform-drift.yml` applies nothing of this root; the latest main apply read "0 added, 0 changed, 0 destroyed".
+
 ## Overview
 
 The throwaway canary alert pair added by the #12180 inversion has done its job: the follow-through probe for tracker #12189 reads the canary as fired and every other check as held, and its only remaining ask is the pair's removal. This change removes the pair from the Better Stack logs-alerts Terraform, keeps the two bare apply targets for exactly one apply so the destroy is planned, and moves every count guard and document that describes the pair to the post-removal state.
@@ -137,7 +147,36 @@ No new architectural decision: this retires a throwaway control that ADR-218's 2
 
 ## Observability
 
-Phase 2.9 skip: delete-only plan (no new code or infra surface). Signals that remain after the retirement: the production alert `soleur-egress-gw-probe-silent-prd` (pages on a missing roster host), `soleur-egress-gw-probe-fail-prd`, and the follow-through probe whose verdict line is posted by the sweeper into tracker #12189. The post-merge read-only verification (Phase 5) covers the retirement itself.
+Delete-only change: no new code or infra surface. Phase 2.9 permits skipping the schema for a delete-only plan; the schema is nevertheless filled in below so the deepen-plan gate reads a complete block, and it describes what the retirement leaves behind.
+
+```yaml
+liveness_signal:
+  what: the production alert soleur-egress-gw-probe-silent-prd (missing roster hosts, higher_than 0) plus the follow-through probe verdict line
+  cadence: alert evaluated every 300 s over a 900 s window; probe read by the daily follow-through sweeper
+  alert_target: email via the Better Stack Logs alert; ACTION REQUIRED comment on tracker #12189 from the sweeper
+  configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf (egress_gw_probe_silent) and scripts/followthroughs/egress-gw-probe-silent-12180.sh
+error_reporting:
+  destination: the apply job log and its notify-apply-failure job (Better Stack and GitHub), the sweeper comment on #12189
+  fail_loud: a refused alert delete fails the apply step closed with state unchanged; a probe read failure is exit 3 (cannot establish), never a pass
+failure_modes:
+  - mode: the apply destroys something other than the canary pair
+    detection: destroy gate demands [ack-destroy]; the run log must read 2 destroyed; the probe prints prod_alert=absent if the production alert is lost
+    alert_route: apply failure notification plus ACTION REQUIRED on #12189
+  - mode: the vendor keeps the canary incident open after its alert is deleted
+    detection: read-only incident API (the probe's canary field) and the mirror issue #12242 staying open
+    alert_route: comment on #12189 (RETIREMENT item 10); resolve is an owner-gated Better Stack write
+  - mode: the vendor drops the canary incident with its alert
+    detection: probe exits 5 with the retired message
+    alert_route: sweeper ACTION REQUIRED comment on #12189; close by hand citing the last canary=fired comment
+logs:
+  where: GitHub Actions run logs for apply-web-platform-infra.yml and the sweeper; Better Stack Logs for the egress-gw-probe rows
+  retention: GitHub Actions default retention; Better Stack plan retention
+discoverability_test:
+  command: grep -cE '^resource "logtail_exploration_alert" "egress_gw_probe_silent(_canary)?" \{' apps/web-platform/infra/betterstack-logs-alerts.tf
+  expected_output: "1"
+```
+
+The command is credential-free and proves the declared end state (only the production alert header remains; it prints 2 before the retirement). The live end state is verified by the read-only checks in Phase 5.
 
 ## Infrastructure (IaC)
 
@@ -151,7 +190,7 @@ Existing per-merge push-triggered apply (`apply-web-platform-infra.yml`, `-targe
 
 ### Host fan-out
 
-Not applicable: no `terraform_data` SSH provisioner is touched.
+Not applicable: no `terraform_data` provisioner is touched.
 
 ### Distinctness / drift safeguards
 
@@ -335,7 +374,7 @@ Post-merge (agent-run, read-only, only after the go-ahead):
 - **Vendor behavior after the alert delete (unverified).** The canary incident may stay open, resolve, or disappear. Open: probe exit 0 and tracker closes, but #12242 keeps posting until an owner-gated resolve. Resolved: both close. Gone: probe exit 5 retired path, tracker closed by hand, mirror closes. All three are documented (Phase 2 task 2.1) and the post-merge checks distinguish them.
 - **`[ack-destroy]` breadth.** It acks every destroy in the targeted plan. Mitigation: the last main apply was clean ("0 destroyed"), and Phase 5 task 5.1 checks "2 to destroy" in the run log; a plan with any other destroy fails the stated expectation and is reported, not acked silently.
 - **Merge-time message loss.** If the squash message did not carry the standalone line, the apply fails closed at the destroy gate (no destroy happens); the PR body and Phase 4 task 4.3 make the line a dedicated commit so the `COMMIT_MESSAGES` setting carries it.
-- **Other workflows triggered by the same edit.** Editing `betterstack-logs-alerts.tf` also matches the push paths of `apply-deploy-pipeline-fix.yml`; its `-target` graph (deploy-pipeline `terraform_data` resources) reaches no `logtail_*` resource (zero mentions), so it cannot perform or pre-empt the destroy, and `scheduled-terraform-drift.yml` is plan-only. Only `apply-web-platform-infra.yml` applies the pair.
+- **Other workflows triggered by the same edit.** Editing `betterstack-logs-alerts.tf` also matches the push paths of `apply-deploy-pipeline-fix.yml`; its `-target` graph (deploy-pipeline `terraform_data` resources) reaches no `logtail_*` resource (zero mentions), so it cannot perform or pre-empt the destroy, and `scheduled-terraform-drift.yml` does not apply this root. Only `apply-web-platform-infra.yml` applies the pair.
 - **Conflicts with the three open PRs touching the workflow.** None edited here; low.
 
 **Sweeper action per probe exit code** (`scripts/sweep-followthroughs.sh`): exit 0 comments PASS and closes the tracker (it never reopens it); exit 5 comments ACTION REQUIRED and leaves the tracker open (a closed tracker stays closed); exit 2 and 3 are not-yet and cannot-establish and leave it open. Consequence for this change: between the merge and the apply landing, the probe reads a checkout without the canary but a live canary alert (`canary_alert_live=1`), which is the exit-5 "delete the canary" finding, never a pass; exit 0 becomes reachable only after the live alert is gone and the vendor still lists the incident (residual A).
