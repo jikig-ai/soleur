@@ -130,7 +130,7 @@ alert() { # <name> <paused> [operator] [value] [created_epoch]   (updated_at is 
     '{id:"1",type:"alert",attributes:{name:$n,paused:$p,operator:$op,value:$v,created_at:$ca,updated_at:$ua}}'
 }
 patch() { # <file> <jq filter> [jq args...]  -- a fixture edit that fails to apply is a failure, never a silent no-op
-  local f="$1" flt="$2" before; shift 2
+  local f="$WORK/${1#"$WORK"/}" flt="$2" before; shift 2   # rooted at $WORK (a mktemp -d), never at a bare positional
   before="$(cat "$f" 2>/dev/null)"
   if jq -c "$@" "$flt" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; then
     [[ "$(cat "$f")" != "$before" ]] || fail "fixture patch changed nothing: ${flt:0:70}"
