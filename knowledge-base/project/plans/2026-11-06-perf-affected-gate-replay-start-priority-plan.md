@@ -473,31 +473,31 @@ Gates (deterministic, no dependence on machine load): AC1 to AC7, AC9. Recorded 
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `scripts/lib/test-suite-lanes.test.sh` section 7 is RED on the unmodified runner (control run first) and GREEN after
+- [x] AC1. `scripts/lib/test-suite-lanes.test.sh` section 7 is RED on the unmodified runner (control run first) and GREEN after
   Phase 2; the runner-copy mutant (row 1) and each synthetic RED row (2 to 7) turn it RED and the H2 must-PASS rows stay green;
   the dispatch floor is raised (H3); the header comment of the file lists sections 6 and 7.
-- [ ] AC2. `bash scripts/test-all.sh --enumerate-commands all` lists `ci-pr-affected-replay-a`, `-b`, `-c` as the first three
+- [x] AC2. `bash scripts/test-all.sh --enumerate-commands all` lists `ci-pr-affected-replay-a`, `-b`, `-c` as the first three
   `SUITE_COMMAND` rows and each exactly once; argv byte-identical to before (`diff` of the three rows vs the Phase 0.1 record).
-- [ ] AC3. `bash scripts/lint-orphan-test-suites.sh`, `bash plugins/soleur/test/scripts-shard-totality.test.sh`,
+- [x] AC3. `bash scripts/lint-orphan-test-suites.sh`, `bash plugins/soleur/test/scripts-shard-totality.test.sh`,
   `bash scripts/test-all-parallel-scheduler.test.sh`, `bash scripts/ci-oracle-lane.test.sh` and `bash scripts/guard-vacuity-floor.test.sh` are green, and `python3 -I scripts/ci-pr-affected-replay.py ratchet` exits 0 (an `oracle-inputs-changed` warning is expected because `scripts/test-all.sh` is edited). Section 7 introduces no new line that names the replay suite path: it reuses section 6's `replay_file` variable and the `*ci-pr-affected-replay-*` label pattern (the accept TSV accepts only the existing boundary line, and AC5 forbids editing it).
-- [ ] AC4. The suite population is unchanged: the registration count of `--enumerate-commands all` before and after (`diff <(sort measurements/before.enum.tsv) <(bash scripts/test-all.sh --enumerate-commands all | sort)` shows only the position change, no label or argv change; sorted, so it is empty) is equal and the
+- [x] AC4. The suite population is unchanged: the registration count of `--enumerate-commands all` before and after (`diff <(sort measurements/before.enum.tsv) <(bash scripts/test-all.sh --enumerate-commands all | sort)` shows only the position change, no label or argv change; sorted, so it is empty) is equal and the
   set of labels is identical (`diff <(sort before) <(sort after)` empty).
-- [ ] AC5. `git diff --stat origin/main...HEAD` shows no change to `scripts/lib/test-affected-paths.sh`,
+- [x] AC5. `git diff --stat origin/main...HEAD` shows no change to `scripts/lib/test-affected-paths.sh`,
   `scripts/ci-pr-affected-audit.accept.tsv`, `scripts/suite-durations*.tsv`, `scripts/suite-shard-legs.tsv`,
   `plugins/soleur/scripts/affected-tests.sh` or `.soleur-test-gate.json`; no `budget_seconds` change anywhere.
-- [ ] AC6. ADR-242 amendment (2026-11-06) written (decision, the three headline numbers, the "does not claim 600 s" statement, the
+- [x] AC6. ADR-242 amendment (2026-11-06) written (decision, the three headline numbers, the "does not claim 600 s" statement, the
   alternatives, pointers to `measurements/summary.txt`, #12231, #12151, #12152); the explanatory comment block sits above the moved
   registrations in `scripts/test-all.sh` (the runbook is not edited: the comment is the single place that states why).
 - [ ] AC7. The PR's required CI `test` check is green on the PR head (the PR edits the runner, so CI runs the full battery);
   the PR body says that this run is not the measurement; `bash plugins/soleur/test/c4-count-parity.test.sh` is green; the PR
   body says `Ref #12013`, no `Closes`.
-- [ ] AC8. (Recorded observation, CTO R3 as amended by Q3 to Q5 and D2.) A control, a treatment and, under the Phase 4 conditions, a
+- [x] AC8. (Recorded observation, CTO R3 as amended by Q3 to Q5 and D2.) A control, a treatment and, under the Phase 4 conditions, a
   second control of the pinned diff in a private clone with its own git-common-dir, each with loadavg, heavy processes and the
   derive-cache state at start and end, committed under `measurements/`. Landed = the `replay-a` start offset within 120 s of the
   `[parallel] mode engaged` line; pool-phase wall at least 300 s below the mean of the controls (advisory if the controls differ by
   more than 100 s); no failure the controls do not share. The model-versus-measured start for the control (5 percent) is a recorded
   note. The PR states the number of completed readings and says "not landed" if a criterion is missed.
-- [ ] AC9. #12231 exists (filed during planning) with re-evaluation criteria and the milestone; the deferral section of the PR
+- [x] AC9. #12231 exists (filed during planning) with re-evaluation criteria and the milestone; the deferral section of the PR
   body names #12231, #12151, #12152 and the reap evidence bar.
 
 ### Post-merge
