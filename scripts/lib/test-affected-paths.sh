@@ -506,11 +506,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CLOUD_INIT_STRIP_HELPERS_MUTATION_TEST_SH_PATHS=(
   "plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
-AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
-  "apps/web-platform/infra/seo-config-rules.tf"  # plugins/soleur/test/cloudflare-readonly.test.sh:347
-  "plugins/soleur/test/cloudflare-readonly.test.sh"
-  "scripts/lib/test-affected-paths.sh"  # THIS FILE
-)
 AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_MAIN_ALERT_GATE_TEST_SH_PATHS=(
   ".github/workflows/codeql-main-alert-gate.yml"  # plugins/soleur/test/codeql-main-alert-gate.test.sh:41
   "plugins/soleur/test/codeql-main-alert-gate.test.sh"

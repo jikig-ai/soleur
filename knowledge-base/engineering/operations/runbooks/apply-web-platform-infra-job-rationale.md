@@ -1254,3 +1254,14 @@ with queueing), because a bound below the ceiling reads a healthy slow run as "n
   So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
   the run summary page already carries these three statements. Without it the approval is
   ceremonial and "one human clicking twice" is the real control.
+
+## ack-destroy-steer
+
+The generic `[ack-destroy]` instruction is only surfaced when a delete/nested-removal component exists — ack is the correct resolution there. On a PURE reboot trip (`reboot_updates > 0` with zero deletes) the generic line contradicts the reboot-specific steer, so it is suppressed: ack-through would execute the transitively-included reboot on the unattended apply.
+
+STEER (#6538 / AC-B5). The pre-#6538 text read: "Add a line containing exactly '[ack-destroy]' ... or revert the trigger commit." During a scoped host retirement BOTH of its options are wrong, and this is the only instruction the operator sees:
+
+- `[ack-destroy]` authorizes a PARTIAL destroy. The per-PR apply's `-target` scope reaches `hcloud_server.web["web-2"]` but NOT `hcloud_volume.workspaces["web-2"]` (measured 2026-07-17: `0 to add, 1 to change, 1 to destroy`). Acking through kills the host and strands a 20 GB volume that bills forever with nothing attached to it.
+- "revert the trigger commit" blames an INNOCENT merge. While config says N hosts and state still says N+1, EVERY merge trips this. The trigger is not the cause.
+
+The safe resolution is to skip THAT merge's apply and let the supervised operator-local full-scope apply complete the retirement. `[ack-destroy]` is still offered (it remains correct for an ordinary intentional delete) but never bare — it carries the partial warning. (Relocated from the workflow file's inline comment, 2026-11-06, per the 490,000-byte workflow-size gate.)
