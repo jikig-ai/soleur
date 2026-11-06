@@ -4061,3 +4061,47 @@
   startup timeout and bounded cleanup remain unverified. No stop or clearance
   claim follows. The fixture force-drops only its uniquely created database on
   teardown so a failed interruption probe cannot hide the original failure.
+
+### Isolated recovery continuation — 2026-11-06
+
+- Preserved all 144 original uncommitted entries byte-for-byte in local
+  snapshot `201d3bb00ec2603fcaaa0719acad210032f06584`. The original worktree
+  remains at `60465968d0dfe271fcfbf4c3a0c0a8e80e74ebbb` with its 144 entries.
+  The attempted default rebase was aborted in the isolated worktree after it
+  began replaying 311 non-merge commits while dropping prior merge resolutions.
+  Main was instead merged locally through `4e0f90b56cd4731609186e72974c7767691bd7eb`;
+  the resulting merge is not yet qualified, pushed, or approved for shipping.
+- Independent review confirmed that inspection timeout can settle while the
+  database transaction continues. Backend stop, owner identity, independent
+  authority, vault and writer fencing are not established by a public Promise
+  settling or an injected observer reporting success. The synthetic dedicated
+  lifecycle and catalog unit tests passed; they do not prove live stop.
+- Independent integration review found a held Codex draft can lose its recovery
+  cache after socket handoff followed by a credential error. A focused
+  regression in `test/ws-client-resume-history.test.tsx` fails on the current
+  implementation; do not retry, dispatch or clear the held draft based on an
+  unverified outcome. Completion needs correlated admission/settlement,
+  attachment preservation, and a rechecked no-duplicate recovery path.
+- Preliminary CLO review remains BLOCKED. Both the branch and main contain
+  different migrations with prefixes `174` and `175`; earlier claims that
+  those numbers were distinct were incorrect. Earlier main also contains
+  duplicate `141` and `162` prefixes. A number collision alone does not prove
+  the actual ledger rejects a migration: inspect ledger identity and deployed
+  hashes and prove schema equivalence. Do not edit frozen migration bytes or
+  infer shared-ledger state from filenames. The legal disclosure's parenthesized
+  2026-09-27 date is not a verified merge date; final CLO review must correct
+  the conditional wording across mirrors before publication. Preliminary CLO
+  review proposed deployment-conditioned wording; it has been applied to both
+  disclosure surfaces, but neither those underlying claims nor the other legal
+  records have final verification.
+- Source inspection of `apps/web-platform/scripts/run-migrations.sh` shows
+  `public._schema_migrations` is keyed by full filename, forward files apply in
+  filename order, same-prefix collisions warn, and a legacy renamed row can
+  trigger explicit reconciliation. This is a source property, not an observed
+  shared ledger or proof of equivalent applied schemas. Existing main already
+  contains multiple same-prefix filenames; the frozen `174` and `175` branch
+  migrations still need the exact ledger/hash and ordering investigation.
+- No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
+  or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
+  authorization is still required for independently reviewed exact collection
+  commands, and again for the writer window after collection.

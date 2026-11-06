@@ -173,6 +173,8 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
   it("retains a resent held draft when a credential error follows socket handoff", async () => {
     mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
     const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const scope = codexHeldTurnCache.acceptToken(syntheticScopeToken());
     act(() => result.current.resendMessage(retainedMessage));
     expect(ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([chat]);
     serverSend({ type: "error", errorCode: "key_invalid", message: "Synthetic credential failure" });
@@ -180,7 +182,9 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       content: "Keep this original draft",
       attachments: chat.attachments,
     }));
-    expect(result.current.hasPendingCodexHistoryTransfer).toBe(true);
+    expect(codexHeldTurnCache.get(scope, "conv-history-ack")).toEqual([
+      expect.objectContaining({ clientTurnId: chat.clientTurnId, message: expect.objectContaining({ content: chat.content, attachments: chat.attachments }) }),
+    ]);
     expect(ws.send).toHaveBeenCalledTimes(1);
   });
 
