@@ -4155,6 +4155,16 @@
   integrated head. At that head the focused offline tracker/transport tests,
   synthetic guard tests and selected UI tests passed. Those checks do not
   supersede the red client suite or the missing authority and fencing work.
+- Independent local review found the injected Firestore v2 authority adapter
+  accepted another command while an earlier POST remained unresolved. A
+  process-local latch now refuses concurrent and changed commands and clears
+  only after an exact retained receipt; a separately simulated stalled POST,
+  late commit, reentrant submit and changed intent are tested. This is not a
+  durable, cross-instance or authenticated fence. The adapter now also rejects
+  duplicate decoded keys in provider documents using the existing bounded
+  parser. The related authority, reservation and HTTP offline suites passed
+  44 tests. The independent reviewer found no further concrete issue within
+  the latch's narrowly stated single-instance model, but did not run tests.
 - No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection

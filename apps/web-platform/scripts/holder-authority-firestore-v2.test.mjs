@@ -53,6 +53,55 @@ test('delayed and lost commits require exact later retained receipt', async () =
  assert.equal((await store.submit(input('arm','unarmed',0,'2'))).state, 'persisted_unverified');
 });
 
+test('an unresolved write blocks other commands until exact receipt reconciliation', async () => {
+ const f = fixture(), store = adapter(f), first = input('prepare','unprepared',0);
+ f.delayNext();
+ assert.equal((await store.submit(first)).state, 'unknown');
+ const calls = f.calls.length;
+ assert.equal((await store.submit(input('prepare','unprepared',0,'2'))).state, 'unknown');
+ assert.equal(f.calls.length, calls);
+ const altered = input('prepare','unprepared',0);
+ altered.clock = JSON.stringify({ lower_ms: 90001, upper_ms: 90011 });
+ assert.equal((await store.submit(altered)).state, 'unknown');
+ assert.equal(f.calls.length, calls);
+ assert.equal((await store.submit(first)).state, 'unknown');
+ assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
+ assert.equal(f.release(), true);
+ assert.equal((await store.submit(first)).state, 'historical_unverified');
+ assert.equal((await store.submit(input('arm','unarmed',0,'2'))).state, 'persisted_unverified');
+});
+
+test('a stalled active request refuses concurrent submits and remains unresolved after timeout', async () => {
+ const f = fixture(); let release, started;
+ const waiting = new Promise(resolve => { release = resolve; });
+ const entered = new Promise(resolve => { started = resolve; });
+ const store = adapter({ request: async req => {
+   if (req.method === 'POST') { started(); await waiting; }
+   return f.request(req);
+ } });
+ const first = input('prepare','unprepared',0);
+ const pending = store.submit(first);
+ await entered;
+ assert.equal((await store.submit(first)).state, 'unknown');
+ assert.equal((await store.submit(input('prepare','unprepared',0,'2'))).state, 'unknown');
+ assert.equal((await pending).state, 'unknown');
+ assert.equal((await store.submit(input('prepare','unprepared',0,'2'))).state, 'unknown');
+ release();
+ await new Promise(resolve => setImmediate(resolve));
+ assert.equal((await store.submit(first)).state, 'historical_unverified');
+});
+
+test('a transport callback cannot reenter submit', async () => {
+ const f = fixture(); let store, reentered;
+ store = adapter({ request: async req => {
+   if (req.method === 'POST') reentered = await store.submit(input('prepare','unprepared',0,'2'));
+   return f.request(req);
+ } });
+ assert.equal((await store.submit(input('prepare','unprepared',0))).state, 'persisted_unverified');
+ assert.equal(reentered.state, 'unknown');
+ assert.equal(f.calls.filter(c => c.method === 'POST').length, 1);
+});
+
 test('refuses v1, truncated history and altered exact updateTime', async () => {
  const f = fixture(), store = adapter(f); await store.submit(input('prepare','unprepared',0));
  const good = JSON.parse(f.doc); f.raw(JSON.stringify({ ...good, schema_version: 1 }));
@@ -61,6 +110,20 @@ test('refuses v1, truncated history and altered exact updateTime', async () => {
  assert.equal((await store.submit(input('arm','unarmed',0,'2'))).state, 'unknown');
  const bad = { request: async req => req.method === 'GET' ? { status: 200, body: JSON.stringify({ name: 'projects/demo-project/databases/(default)/documents/holder_evidence_operations/' + base.operation_id, fields: { payload: { stringValue: JSON.stringify(good) } }, updateTime: '2026-01-01T00:00:00.123456789Z' }) } : (() => { throw Error('must not write'); })() };
  assert.equal((await adapter(bad).submit(input('arm','unarmed',0,'2'))).state, 'unknown');
+});
+
+test('refuses duplicate provider document keys and escaped aliases', async () => {
+ const f = fixture(); await adapter(f).submit(input('prepare','unprepared',0));
+ const doc = JSON.stringify({ name: 'projects/demo-project/databases/(default)/documents/holder_evidence_operations/' + base.operation_id,
+   fields: { payload: { stringValue: f.doc } }, updateTime: f.time });
+ for (const body of [doc.replace('{"name":', '{"name":"wrong","name":'),
+   doc.replace('"fields":{"payload":', '"fields":{"payload":{},"payload":'),
+   doc.replace('"updateTime":', '"\\u0075pdateTime":"2026-01-01T00:00:00.000001Z","updateTime":')]) {
+   let posts = 0;
+   const store = adapter({ request: async req => { if (req.method === 'POST') posts++; return { status: 200, body }; } });
+   assert.equal((await store.submit(input('arm','unarmed',0,'2'))).state, 'unknown');
+   assert.equal(posts, 0);
+ }
 });
 
 test('a stalled response getter cannot start a late POST', async () => {
