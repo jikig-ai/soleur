@@ -231,24 +231,89 @@ describe("gitWithInstallationAuth child env and argv", () => {
     }
   });
 
-  test("buildIsolatedGitEnv: extra can add a non-reserved key but can never overwrite a pinned one", () => {
-    const evil = {
-      GIT_DIR: "/ws/parent/work/.git",
-      HOME: "/home/evil",
-      GIT_ALLOW_PROTOCOL: "ext:file",
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/other/objects",
-      GIT_CONFIG_GLOBAL: "/ws/evil-gitconfig",
-      GIT_NO_REPLACE_OBJECTS: "0",
-      GIT_SSL_CAINFO: "/test/ca.pem", // the one test-only seam: a non-reserved key
-    };
-    const env = buildIsolatedGitEnv(iso, evil);
+  // The ONLY keys `extra` may carry: the askpass wiring `gitWithInstallationAuth` builds (git-auth.ts `authEnv`) and the one
+  // test-only seam (a CA bundle for the local TLS server). Everything else is refused, so a future caller cannot reach PATH,
+  // TMPDIR, SSL_CERT_*, LANG, LC_ALL or an unpinned GIT_* / loader variable through `extra`.
+  const AUTH_ENV = {
+    GIT_ASKPASS: "/ws/parent/.soleur-push/run-fixture/.askpass-x.sh",
+    GIT_INSTALLATION_TOKEN: "ghs_token",
+    GIT_USERNAME: "x-access-token",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_TERMINAL_PROGRESS: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+  };
+
+  test("buildIsolatedGitEnv: the production authEnv and the test-only GIT_SSL_CAINFO seam are accepted and land in the child env", () => {
+    const env = buildIsolatedGitEnv(iso, { ...AUTH_ENV, GIT_SSL_CAINFO: "/test/ca.pem" });
+    for (const [k, v] of Object.entries(AUTH_ENV)) expect(env[k], k).toBe(k === "GIT_CONFIG_GLOBAL" ? "/dev/null" : v);
+    expect(env.GIT_SSL_CAINFO).toBe("/test/ca.pem");
     expect(env.GIT_DIR).toBe(root);
     expect(env.HOME).toBe(root);
-    expect(env.GIT_ALLOW_PROTOCOL).toBe("https");
-    expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBe(ALT);
-    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
-    expect(env.GIT_NO_REPLACE_OBJECTS).toBe("1");
-    expect(env.GIT_SSL_CAINFO).toBe("/test/ca.pem");
+  });
+
+  test.each([
+    // pinned keys
+    "GIT_DIR",
+    "HOME",
+    "GIT_ALLOW_PROTOCOL",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_CONFIG_SYSTEM",
+    // allowlisted-but-unpinned passthrough keys
+    "PATH",
+    "TMPDIR",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "LANG",
+    "LC_ALL",
+    // unpinned git and loader variables
+    "GIT_EXEC_PATH",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_TRACE",
+    "GIT_SSH_COMMAND",
+    "GIT_PROXY_COMMAND",
+    "LD_PRELOAD",
+    "NODE_OPTIONS",
+    "HTTPS_PROXY",
+    "git_dir", // case variants are other keys to the OS, still refused
+  ])("buildIsolatedGitEnv: extra carrying %s is refused (an explicit allowed set, not a denylist)", (key) => {
+    expect(() => buildIsolatedGitEnv(iso, { ...AUTH_ENV, [key]: "/evil" })).toThrow(/environment key is not allowed/);
+    expect(() => buildIsolatedGitEnv(iso, { [key]: "/evil" })).toThrow(/environment key is not allowed/);
+  });
+
+  test("buildIsolatedGitEnv: the refusal names no value (the token and askpass path never appear in the error)", () => {
+    let err: unknown;
+    try {
+      buildIsolatedGitEnv(iso, { GIT_INSTALLATION_TOKEN: "ghs_secret_value", LD_PRELOAD: "/evil.so" });
+    } catch (e) {
+      err = e;
+    }
+    expect((err as Error).message).not.toMatch(/ghs_secret_value|\/evil\.so/);
+  });
+
+  test("buildIsolatedGitEnv: the allowlisted passthrough keys come from the server environment, not from extra, and the pins always win", () => {
+    const saved = process.env.PATH;
+    process.env.PATH = "/usr/bin";
+    try {
+      // The two allowed keys that the shared hardening environment also pins: the pinned value wins over what `extra` carries.
+      const env = buildIsolatedGitEnv(iso, { ...AUTH_ENV, GIT_CONFIG_GLOBAL: "/ws/evil-gitconfig", GIT_CONFIG_NOSYSTEM: "0" });
+      expect(env.PATH).toBe("/usr/bin");
+      expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+      expect(env.GIT_DIR).toBe(root);
+      expect(env.GIT_ALLOW_PROTOCOL).toBe("https");
+      expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBe(ALT);
+      expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+      expect(env.GIT_NO_REPLACE_OBJECTS).toBe("1");
+    } finally {
+      if (saved === undefined) delete process.env.PATH;
+      else process.env.PATH = saved;
+    }
   });
 
   test("git-hardened-env.ts is a leaf: it imports only node:path and the shared hardening constants, never the creator or fs", () => {
@@ -256,6 +321,7 @@ describe("gitWithInstallationAuth child env and argv", () => {
     const specs = [...code.matchAll(/\bfrom\s*(["'])([^"']+)\1/g)].map((m) => m[2]);
     expect([...specs].sort()).toEqual(["./inngest/functions/_git-hardening", "node:path"]);
     expect(code).not.toMatch(/import\s*\(/);
+    expect(code).not.toMatch(/^\s*import\s*["']/m); // a side-effect import (`import "node:fs"`) has no `from`
     expect(code).not.toMatch(/\brequire\s*\(/);
     expect(code).not.toMatch(/git-isolated-push-dir|node:fs|child_process/);
   });

@@ -99,6 +99,9 @@ const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not b
 
 /** Shown to the model for an infrastructure refusal (the server's state, not the workspace): static, no path, no cause. */
 const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem); nothing was pushed";
+/** The object store has more entries than the walk cap: infrastructure, with its own static text so the model can say what to do. No path. */
+const OBJECT_STORE_TOO_LARGE_TEXT =
+  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace; nothing was pushed";
 const PUSH_TIMED_OUT_TEXT =
   "Git push failed: the push timed out and the branch MAY HAVE been pushed to the remote. Check the remote branch before asking for a new approval.";
 
@@ -220,32 +223,42 @@ type CommitCheck = "present" | "absent" | "timeout" | "failed";
 /**
  * `git rev-parse --verify --quiet <sha>^{commit}` in the isolated directory (async: the event loop is never blocked, and a stalled
  * child is killed at the timeout). Exit status 1 is git's documented answer for "not a valid commit here"; any other outcome (a
- * timeout, a spawn failure such as ENOENT or EMFILE, exit 128 for a broken store) says nothing about the commit and is not
- * `absent`. (`cat-file -e <sha>^{commit}` is not used: for a missing object it exits 128, the same status as every other fatal error.)
+ * timeout, a spawn failure such as ENOENT or EMFILE, exit 128 for a broken store, a synchronous throw) says nothing about the commit
+ * and is not `absent`. (`cat-file -e <sha>^{commit}` is not used: for a missing object it exits 128, the same status as every other
+ * fatal error.) `^{commit}` peels an annotated tag object to the commit it points at, so a zero exit alone would accept a tag-object
+ * sha; the printed sha must equal the approved one, else the commit is `absent` (the push of a non-commit sha would only be
+ * rejected by the remote after the approval is spent). Everything, the import included, runs inside the `try`: the caller has a
+ * directory to remove and no handle to remove it with, so this function never rejects.
  */
 async function checkCommitPresent(isolated: IsolatedPushDirHandle, commitSha: string): Promise<CommitCheck> {
-  const { execFile } = await import("node:child_process");
-  return new Promise<CommitCheck>((resolve) => {
-    try {
-      execFile(
-        "git",
-        [...HARDENED_GIT_ARGS, "rev-parse", "--verify", "--quiet", `${commitSha}^{commit}`],
-        {
-          cwd: isolated.gitDir,
-          env: buildIsolatedGitEnv(isolated),
-          timeout: HARDENED_COMMIT_CHECK_TIMEOUT_MS,
-        },
-        (err) => {
-          if (!err) return resolve("present");
-          const e = err as { code?: unknown; killed?: boolean; signal?: string };
-          if (e.killed === true || e.signal === "SIGTERM") return resolve("timeout");
-          resolve(e.code === 1 ? "absent" : "failed");
-        },
-      );
-    } catch {
-      resolve("failed");
-    }
-  });
+  try {
+    // Imported lazily, like inflight-checkpoint.ts: sibling test files mock `child_process` with factories that lack `execFile`,
+    // and a module-level binding of it would crash at load in every file that transitively imports this one.
+    const { execFile } = await import("node:child_process");
+    return await new Promise<CommitCheck>((resolve) => {
+      try {
+        execFile(
+          "git",
+          [...HARDENED_GIT_ARGS, "rev-parse", "--verify", "--quiet", `${commitSha}^{commit}`],
+          {
+            cwd: isolated.gitDir,
+            env: buildIsolatedGitEnv(isolated),
+            timeout: HARDENED_COMMIT_CHECK_TIMEOUT_MS,
+          },
+          (err, stdout) => {
+            if (!err) return resolve(String(stdout).trim() === commitSha ? "present" : "absent");
+            const e = err as { code?: unknown; killed?: boolean; signal?: string };
+            if (e.killed === true || e.signal === "SIGTERM") return resolve("timeout");
+            resolve(e.code === 1 ? "absent" : "failed");
+          },
+        );
+      } catch {
+        resolve("failed");
+      }
+    });
+  } catch {
+    return "failed";
+  }
 }
 
 /**
@@ -270,7 +283,7 @@ async function prepareIsolatedPush(workspacePath: string, commitSha: string | un
     if (TAMPER_REASONS.has(reason)) {
       throw new ApprovedCommitUnavailableError("Workspace git directory is not a plain repository directory");
     }
-    throw new Error(PREPARE_FAILED_TEXT);
+    throw new Error(reason === "object_store_too_large" ? OBJECT_STORE_TOO_LARGE_TEXT : PREPARE_FAILED_TEXT);
   }
   const check = await checkCommitPresent(isolated, commitSha);
   if (check === "present") return isolated;

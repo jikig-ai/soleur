@@ -50,8 +50,9 @@ export class SmallFileError extends Error {
 }
 
 /**
- * Read a small file the agent may have replaced. The ONLY place this pattern is written (workspace HEAD, loose ref,
- * `packed-refs`, and the creator's `shallow` copy):
+ * Read a small file the agent may have replaced. The one helper this PR's readers share (workspace HEAD, loose ref,
+ * `packed-refs`, and the creator's `shallow` copy; other server code, such as `resolve-protected-branches.ts` and
+ * `compound-promote-create-gates.ts`, writes the same open on its own):
  *  - `O_NOFOLLOW`: a symlink as the final component is refused (the kernel, not a pre-open `lstat`, so there is no
  *    check-then-open window);
  *  - `O_NONBLOCK`: opening a FIFO returns at once instead of waiting for a writer;

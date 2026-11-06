@@ -96,7 +96,8 @@ export function isSafeGitPath(p: string): boolean {
   return typeof p === "string" && p.length > 0 && isAbsolute(p) && !/[:"\\\n\0]/.test(p);
 }
 
-function isUnderPath(path: string, root: string): boolean {
+/** True when `path` is `root` or lies under it (pure path arithmetic; the one definition, also used by the creator). */
+export function isUnder(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
@@ -118,7 +119,7 @@ function hasIsolatedShape(gitDir: string, alt: string): boolean {
   if (basename(dirname(gitDir)) !== ".soleur-push") return false;
   if (basename(alt) !== "objects" || basename(dirname(alt)) !== ".git") return false;
   const workspace = dirname(dirname(alt));
-  return !isUnderPath(gitDir, workspace) && !isUnderPath(workspace, gitDir);
+  return !isUnder(gitDir, workspace) && !isUnder(workspace, gitDir);
 }
 
 /**
@@ -142,10 +143,29 @@ export function assertIsolatedPushDir(value: unknown): asserts value is Isolated
 }
 
 /**
- * The hardened child environment for a git run from an isolated directory. `extra` carries the per-call variables (the
- * askpass wiring) and is applied BEFORE the pinned keys, so it can never overwrite `GIT_DIR`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
- * `GIT_ALLOW_PROTOCOL`, `HOME` or the shared hardening environment (it can still add a non-reserved key such as the askpass
- * wiring or a test-only `GIT_SSL_CAINFO`). Never reads or spreads `process.env` wholesale.
+ * The only keys `buildIsolatedGitEnv`'s `extra` may carry: the askpass wiring `gitWithInstallationAuth` builds (`authEnv` in
+ * git-auth.ts) and `GIT_SSL_CAINFO`, the one test-only seam (a CA bundle for the suite's local TLS server). An explicit set, not a
+ * denylist: any other key (`PATH`, `TMPDIR`, `SSL_CERT_*`, `LANG`, `LC_ALL`, an unpinned `GIT_*` such as `GIT_EXEC_PATH`,
+ * `GIT_OBJECT_DIRECTORY` or `GIT_CONFIG_COUNT`, a loader variable) is refused, so the environment the creator's `PATH` /
+ * `SSL_CERT_*` check validated is the environment the child gets.
+ */
+const EXTRA_ENV_KEYS: ReadonlySet<string> = new Set([
+  "GIT_ASKPASS",
+  "GIT_INSTALLATION_TOKEN",
+  "GIT_USERNAME",
+  "GIT_TERMINAL_PROMPT",
+  "GIT_TERMINAL_PROGRESS",
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_SSL_CAINFO",
+]);
+
+/**
+ * The hardened child environment for a git run from an isolated directory. `extra` carries the per-call variables (the askpass
+ * wiring) and may hold ONLY the keys in `EXTRA_ENV_KEYS` (anything else throws, with a static message that names no value). The
+ * allowlisted server variables are copied after `extra`, then the shared hardening environment and the pinned keys, so nothing in
+ * `extra` can overwrite `GIT_DIR`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_ALLOW_PROTOCOL`, `HOME`, the passthrough keys or the shared
+ * hardening environment. Never reads or spreads `process.env` wholesale.
  */
 export function buildIsolatedGitEnv(
   dir: IsolatedPushDir,
@@ -153,11 +173,14 @@ export function buildIsolatedGitEnv(
 ): NodeJS.ProcessEnv {
   assertIsolatedPushDir(dir);
   const env: Record<string, string> = {};
+  for (const key of Object.keys(extra)) {
+    if (!EXTRA_ENV_KEYS.has(key)) throw new Error("hardened git invocation: environment key is not allowed");
+    env[key] = extra[key];
+  }
   for (const key of HARDENED_ENV_ALLOWLIST) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  Object.assign(env, extra);
   Object.assign(env, GIT_HARDENING_ENV);
   env.GIT_DIR = dir.gitDir;
   env.GIT_ALTERNATE_OBJECT_DIRECTORIES = dir.alternateObjectDirectory;

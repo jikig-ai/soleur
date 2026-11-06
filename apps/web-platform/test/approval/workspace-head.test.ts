@@ -312,6 +312,29 @@ describe("readWorkspaceHeadSha: fail-closed refusals (each with a closed reason,
     expect(refusal(dir).reason).toBe("ref_unresolvable");
   });
 
+  test("a ~500 KiB packed-refs file (a repository with thousands of branches) resolves a target listed at the very END", () => {
+    const { dir, head } = mkRepo(2);
+    const other = git(dir, "rev-parse", "HEAD~1");
+    git(dir, "pack-refs", "--all");
+    const packed = join(dir, ".git", "packed-refs");
+    const pad = Array.from({ length: 8000 }, (_, i) => `${other} refs/heads/pad-${String(i).padStart(5, "0")}\n`).join("");
+    writeFileSync(packed, `# pack-refs with: peeled fully-peeled sorted \n${pad}${head} refs/heads/zzz-main\n`);
+    writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/zzz-main\n");
+    const size = statSync(packed).size;
+    expect(size).toBeGreaterThan(400 * 1024); // the premise: far above a 64 KiB bound ...
+    expect(size).toBeLessThan(1024 * 1024); // ... and below the real cap
+    expect(readWorkspaceHeadSha(dir)).toBe(head);
+  });
+
+  test("a packed-refs entry whose first 40 characters are not lowercase hex is never returned as a sha (ref_invalid), even with a valid line after it", () => {
+    const { dir, head } = mkRepo();
+    git(dir, "pack-refs", "--all");
+    writeFileSync(join(dir, ".git", "packed-refs"), `${"z".repeat(40)} refs/heads/main\n${head} refs/heads/main\n`);
+    expect(refusal(dir).reason).toBe("ref_invalid");
+    writeFileSync(join(dir, ".git", "packed-refs"), `${head.toUpperCase()} refs/heads/main\n`);
+    expect(refusal(dir).reason).toBe("ref_invalid");
+  });
+
   test("a symlinked loose ref FILE", () => {
     const { dir } = mkRepo();
     const loose = join(dir, ".git", "refs", "heads", "main");
@@ -457,6 +480,7 @@ describe("workspace-head.ts: module boundary", () => {
     expect(specs.length).toBeGreaterThan(0);
     for (const s of specs) expect(["node:fs", "node:path"], s).toContain(s);
     expect(code).not.toMatch(/import\s*\(/);
+    expect(code).not.toMatch(/^\s*import\s*["']/m); // a side-effect import (`import "node:child_process"`) has no `from`
     expect(code).not.toMatch(/\brequire\s*\(/);
   });
 

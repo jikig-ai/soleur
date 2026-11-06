@@ -26,7 +26,14 @@ import { join, relative, sep } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
-const h = vi.hoisted(() => ({ spawns: 0, writes: 0, failAt: 0 }));
+const h = vi.hoisted(() => ({
+  spawns: 0,
+  writes: 0,
+  failAt: 0,
+  /** Fault injection for the object-store walk: a read of a path ending in `suffix` throws an error with `code`. */
+  opendirFault: null as null | { suffix: string; code: string },
+  lstatFault: null as null | { suffix: string; code: string },
+}));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -45,7 +52,8 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// A fault-injection seam over the fs WRITE calls only: the Nth write (1-based) throws `ENOSPC`. Reads are untouched.
+// A fault-injection seam over the fs WRITE calls only: the Nth write (1-based) throws `ENOSPC`. Reads are untouched, except the two
+// walk reads (`opendirSync`, `lstatSync`) that a test can make fail for ONE path to stand in for a concurrent `git gc`.
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const inject = (): void => {
@@ -68,6 +76,18 @@ vi.mock("node:fs", async () => {
       inject();
       return actual.writeFileSync(...a);
     }) as typeof actual.writeFileSync,
+    opendirSync: ((...a: Parameters<typeof actual.opendirSync>) => {
+      if (h.opendirFault && String(a[0]).endsWith(h.opendirFault.suffix)) {
+        throw Object.assign(new Error(`${h.opendirFault.code}: injected`), { code: h.opendirFault.code });
+      }
+      return actual.opendirSync(...a);
+    }) as typeof actual.opendirSync,
+    lstatSync: ((...a: Parameters<typeof actual.lstatSync>) => {
+      if (h.lstatFault && String(a[0]).endsWith(h.lstatFault.suffix)) {
+        throw Object.assign(new Error(`${h.lstatFault.code}: injected`), { code: h.lstatFault.code });
+      }
+      return actual.lstatSync(...a);
+    }) as typeof actual.lstatSync,
   };
 });
 
@@ -159,10 +179,14 @@ describe("createIsolatedPushDir", () => {
     h.spawns = 0;
     h.writes = 0;
     h.failAt = 0;
+    h.opendirFault = null;
+    h.lstatFault = null;
   });
 
   afterEach(() => {
     h.failAt = 0;
+    h.opendirFault = null;
+    h.lstatFault = null;
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -379,6 +403,44 @@ describe("createIsolatedPushDir", () => {
       expect(reasonOf()).toBe("object_store_redirect");
     });
 
+    describe("an entry that disappears between the listing and its scan (a concurrent git gc) is gone, not tamper", () => {
+      const fanOut = (): string => {
+        const name = readdirSync(join(ws, ".git", "objects")).find((n) => /^[0-9a-f]{2}$/.test(n));
+        if (!name) throw new Error("fixture has no loose fan-out directory");
+        return name;
+      };
+
+      test("a fan-out directory that vanishes before its scan is skipped (ENOENT), the creation succeeds", () => {
+        h.opendirFault = { suffix: `/objects/${fanOut()}`, code: "ENOENT" };
+        createIsolatedPushDir(ws).dispose();
+      });
+
+      test("a FIFO entry that vanishes before its lstat is skipped (ENOENT), the creation succeeds; present, it is still a redirect", { timeout: 10_000 }, () => {
+        const dir = join(ws, ".git", "objects", fanOut());
+        const fifo = join(dir, "f".repeat(38));
+        execFileSync("mkfifo", [fifo]);
+        expect(reasonOf()).toBe("object_store_redirect"); // control: the same entry, not vanished
+        h.lstatFault = { suffix: `/${"f".repeat(38)}`, code: "ENOENT" };
+        createIsolatedPushDir(ws).dispose();
+      });
+
+      test("every other errno on that scan stays an infrastructure refusal (setup_failed), and a vanished objects directory itself stays git_dir_not_plain", () => {
+        h.opendirFault = { suffix: `/objects/${fanOut()}`, code: "EACCES" };
+        expect(reasonOf()).toBe("setup_failed");
+        h.opendirFault = { suffix: `/objects/${fanOut()}`, code: "EMFILE" };
+        expect(reasonOf()).toBe("setup_failed");
+        h.opendirFault = { suffix: "/.git/objects", code: "ENOENT" };
+        expect(reasonOf()).toBe("git_dir_not_plain");
+      });
+
+      test("the pack and info directories are scanned the same way (a vanished objects/pack is gone too)", () => {
+        h.opendirFault = { suffix: "/objects/pack", code: "ENOENT" };
+        createIsolatedPushDir(ws).dispose();
+        h.opendirFault = { suffix: "/objects/info", code: "ENOENT" };
+        createIsolatedPushDir(ws).dispose();
+      });
+    });
+
     test("the production entry cap sits far above git's gc.auto thresholds (a legitimate pre-gc store must not dead-end)", () => {
       expect(OBJECT_WALK_ENTRY_CAP).toBeGreaterThanOrEqual(100_000);
     });
@@ -555,7 +617,7 @@ describe("createIsolatedPushDir", () => {
     });
   });
 
-  describe("environment paths the child will resolve (step 0, before any write)", () => {
+  describe("environment paths the child will resolve (step 3, before any write)", () => {
     // Every directory the agent can write (or that holds other tenants' trees) is refused for PATH, SSL_CERT_FILE and SSL_CERT_DIR
     // alike: ONE root list serves the env check and the HOME placement check.
     const rootCases = (): Array<[string, string]> => {
@@ -593,12 +655,70 @@ describe("createIsolatedPushDir", () => {
       expect(reasonOf()).toBe("env_path_unsafe");
     });
 
+    test("a root that is itself a symlink: HOME, PATH and SSL_CERT_* under the symlink TARGET and under the LINK path are all refused", () => {
+      const target = join(base, "real-wsroot");
+      mkdirSync(join(target, "inner"), { recursive: true });
+      mkdirSync(join(target, "bin"));
+      const link = join(base, "link-wsroot");
+      symlinkSync(target, link);
+      process.env.WORKSPACES_ROOT = link;
+      for (const [label, inner] of [
+        ["the target", join(target, "inner")],
+        ["the link", join(link, "inner")],
+      ]) {
+        process.env.HOME = inner;
+        expect(reasonOf(), `HOME via ${label}`).toBe("setup_failed");
+      }
+      process.env.HOME = home;
+      for (const key of ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR"] as const) {
+        for (const [label, entry] of [
+          ["the target", join(target, "bin")],
+          ["the link", join(link, "bin")],
+        ]) {
+          process.env.PATH = saved.PATH ?? "";
+          delete process.env.SSL_CERT_FILE;
+          delete process.env.SSL_CERT_DIR;
+          process.env[key] = key === "PATH" ? `${entry}:${saved.PATH ?? ""}` : entry;
+          expect(reasonOf(), `${key} via ${label}`).toBe("env_path_unsafe");
+        }
+      }
+    });
+
+    test("the same holds for a symlinked WORKTREE_ROOT and a symlinked TMPDIR", () => {
+      for (const key of ["WORKTREE_ROOT", "TMPDIR"] as const) {
+        const target = join(base, `real-${key}`);
+        mkdirSync(join(target, "inner"), { recursive: true });
+        symlinkSync(target, join(base, `link-${key}`));
+        process.env[key] = join(base, `link-${key}`);
+        process.env.HOME = join(target, "inner");
+        expect(reasonOf(), `HOME under the target of ${key}`).toBe("setup_failed");
+        process.env.HOME = home;
+        process.env.PATH = `${join(target, "bin")}:${saved.PATH ?? ""}`;
+        expect(reasonOf(), `PATH under the target of ${key}`).toBe("env_path_unsafe");
+        process.env.PATH = saved.PATH ?? "";
+        process.env.TMPDIR = tmp;
+        delete process.env.WORKTREE_ROOT;
+      }
+    });
+
+    test("a PATH entry INSIDE a root that is a symlink pointing OUTSIDE it is refused (the agent can retarget the link after the check)", () => {
+      const outside = join(base, "outside-bin");
+      mkdirSync(outside);
+      symlinkSync(outside, join(ws, "bin"));
+      process.env.PATH = `${join(ws, "bin")}:${saved.PATH ?? ""}`;
+      expect(reasonOf()).toBe("env_path_unsafe");
+      process.env.PATH = saved.PATH ?? "";
+      symlinkSync(outside, join(tmp, "certs"));
+      process.env.SSL_CERT_DIR = join(tmp, "certs");
+      expect(reasonOf()).toBe("env_path_unsafe");
+    });
+
     test("control: an ordinary PATH and a trust store elsewhere are accepted", () => {
       process.env.SSL_CERT_FILE = join(base, "elsewhere-ca.pem");
       createIsolatedPushDir(ws).dispose();
     });
 
-    test("the mirrored root list contains every sandbox tenant deny root (parity with workspaceTenantDenyRoots)", async () => {
+    test("the mirrored root list contains every sandbox tenant deny root (a ONE-WAY subset check against workspaceTenantDenyRoots)", async () => {
       const { workspaceTenantDenyRoots } = await import("../server/workspace-resolver");
       for (const env of [{}, { WORKSPACES_ROOT: join(base, "wsroot"), WORKTREE_ROOT: join(base, "wtroot") }]) {
         delete process.env.WORKSPACES_ROOT;

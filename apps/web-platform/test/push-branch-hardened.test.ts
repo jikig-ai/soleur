@@ -8,6 +8,7 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { execFileSync as realExec } from "node:child_process";
 import {
   existsSync,
+  readFileSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -33,6 +34,8 @@ const h = vi.hoisted(() => ({
   handles: [] as string[],
   /** Fault injection for the async commit check: the callback receives this error instead of running git. */
   execFileFault: null as null | Record<string, unknown>,
+  /** Makes the async commit check throw SYNCHRONOUSLY (a bad argument or env value), before any callback exists. */
+  execFileThrows: false,
   /** Test seam passed to the real creator (the object-walk entry cap). */
   limits: {} as { objectWalkEntryCap?: number },
   /** Makes the creator refuse with this reason (to exercise a reason push-branch does not know). */
@@ -51,6 +54,7 @@ vi.mock("child_process", async () => {
     // The hardened commit check is async: observed here the same way (recorded, then delegated to the real execFile).
     execFile: (cmd: string, args: string[], opts: Rec["opts"], cb: (err: unknown) => void) => {
       h.execCalls.push({ args, opts });
+      if (h.execFileThrows) throw new TypeError("synchronous execFile failure");
       if (h.execFileFault) {
         const fault = h.execFileFault;
         queueMicrotask(() => cb(Object.assign(new Error("Command failed"), fault)));
@@ -102,6 +106,8 @@ const git = (cwd: string, ...args: string[]): string =>
 
 const STATIC_PLAIN = "Workspace git directory is not a plain repository directory";
 const PREPARE_FAILED = "Push could not be prepared (server-side setup problem); nothing was pushed";
+const TOO_LARGE =
+  "Push could not be prepared: the workspace repository has too many object entries to push from; run git gc in the workspace; nothing was pushed";
 
 /** The exact shape of one hardened-push report: its own static message, the closed enum as a tag AND in extra, no Error object. */
 const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";
@@ -161,6 +167,7 @@ describe("pushBranch hardened", () => {
     h.disposeThrows = false;
     h.disposeCode = undefined;
     h.execFileFault = null;
+    h.execFileThrows = false;
     h.limits = {};
     h.creatorThrows = null;
     root = realpathSync(mkdtempSync(join(tmpdir(), "push-hard-")));
@@ -460,7 +467,7 @@ describe("pushBranch hardened", () => {
       expect(h.reports).toEqual([refusedReport("env_path_unsafe")]);
     });
 
-    test("an object store above the walk cap is infrastructure (object_store_too_large), not a tamper refusal", async () => {
+    test("an object store above the walk cap is infrastructure (object_store_too_large) with its own static text, not a tamper refusal", async () => {
       h.limits = { objectWalkEntryCap: 3 };
       let err: unknown;
       try {
@@ -469,7 +476,10 @@ describe("pushBranch hardened", () => {
         err = e;
       }
       expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
-      expect((err as Error).message).toBe(PREPARE_FAILED);
+      expect((err as Error).message).toBe(TOO_LARGE); // its own static text: the model can tell the user what to do (git gc)
+      expect((err as Error).message).not.toBe(PREPARE_FAILED);
+      expect((err as Error).message).not.toMatch(/\//); // no path
+      expect((err as Error).message).not.toContain(root);
       expect(h.reports).toEqual([refusedReport("object_store_too_large")]);
       expect(h.authCalls).toHaveLength(0);
       expect(leftovers()).toEqual([]);
@@ -513,6 +523,51 @@ describe("pushBranch hardened", () => {
       h.execFileFault = { code: 1 };
       await expect(pushBranch(hardenedOpts())).rejects.toBeInstanceOf(ApprovedCommitUnavailableError);
       expect(h.reports).toEqual([refusedReport("commit_absent")]);
+    });
+
+    test("a SYNCHRONOUS throw from the commit check is infrastructure (commit_check_failed), never commit_absent, and the directory is removed", async () => {
+      h.execFileThrows = true;
+      let err: unknown;
+      try {
+        await pushBranch(hardenedOpts());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).not.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect((err as Error).message).toBe(PREPARE_FAILED);
+      expect(h.reports).toEqual([refusedReport("commit_check_failed")]);
+      expect(h.authCalls).toHaveLength(0);
+      expect(existsSync(h.handles[0])).toBe(false);
+      expect(leftovers()).toEqual([]);
+    });
+
+    test("an annotated-tag OBJECT sha is not the approved commit: rev-parse peels it to its commit, so the printed sha must equal the approved one (commit_absent)", async () => {
+      git(work, "tag", "-a", "-m", "m", "t1");
+      const tagObject = git(work, "rev-parse", "refs/tags/t1");
+      expect(tagObject).not.toBe(sha); // the premise: a distinct object that peels to the commit
+      expect(git(work, "rev-parse", `${tagObject}^{commit}`)).toBe(sha);
+      await expect(pushBranch(hardenedOpts({ commitSha: tagObject }))).rejects.toBeInstanceOf(ApprovedCommitUnavailableError);
+      expect(h.reports).toEqual([refusedReport("commit_absent")]);
+      expect(h.authCalls).toHaveLength(0);
+      expect(leftovers()).toEqual([]);
+    });
+
+    test("the approved commit itself is present (control for the tag-object test: same repository, the commit sha)", async () => {
+      git(work, "tag", "-a", "-m", "m", "t1");
+      await pushBranch(hardenedOpts());
+      expect(h.authCalls).toHaveLength(1);
+      expect(h.reports).toEqual([]);
+    });
+
+    test("the commit check's lazy import runs INSIDE the try (a rejected import must not leak the directory: the caller holds no handle yet)", () => {
+      // An import() rejection cannot be induced from a test, so the property is pinned on the source text of the one function.
+      const src = readFileSync(join(__dirname, "../server/push-branch.ts"), "utf8");
+      const body = src.slice(src.indexOf("async function checkCommitPresent("), src.indexOf("async function prepareIsolatedPush("));
+      expect(body.length).toBeGreaterThan(200);
+      const tryAt = body.indexOf("try {");
+      const importAt = body.indexOf('await import("node:child_process")');
+      expect(tryAt).toBeGreaterThan(-1);
+      expect(importAt).toBeGreaterThan(tryAt);
     });
 
     test("a REAL spawn failure (git not found on PATH) is commit_check_failed, not commit_absent", async () => {
