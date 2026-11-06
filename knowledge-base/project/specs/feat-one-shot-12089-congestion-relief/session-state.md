@@ -46,3 +46,10 @@
 - Open findings to synthesize post-panel: P3 member() dedup/parity-sentinel, P4 if:-spelling drift, P4 quality-advisory permissions-union note, P2 perf expectations for post-merge #12089 comment (quality-guards MQ thin margin ~9%; umbrella-row p90 may exceed old member maxima ~350s), P3 shared-runner contamination watch.
 - After panel: resolve findings → fix-commit targeted round (ADR-267, review --fix-round --since <panel-sha>) → soleur:qa → soleur:compound → soleur:ship. Merge path: gh pr merge --admin (operator-authorized — REQUIRED, auto-merge deadlocks; ask operator at ship time).
 - Census baseline still running (shell 3d50b2): attach result to #12089 before merge.
+
+## Review Panel Complete
+- 7 seats + 3 design-pass seats done. No blocking defects; mechanism justified/sound/verified.
+- Fix batch applied + pushed: `2f5224359b` — persist-credentials:false on quality-advisory, stale context-name comments (5 sites), NEW scripts/lint-umbrella-aggregate.sh (registered), "enforce" removed from SYNTHETIC_CHECK_NAMES (+6 test updates), ADR-276 dated amendment, art30 exact-form pin, W1d re-anchor, smoke-gate !=1, ci-path-gating per-member slices, if:-spelling normalized, tf comment counts 23→10/25→12, tasks.md guards-env fix, ADR-032 amendments (admin-merge-ready note + enqueue window + non-queued PRs).
+- Follow-up issue filed: #12276 (umbrella-consolidation deferred nits).
+- Next: fix-commit targeted round (review --fix-round --since 5df484e5aa) → soleur:qa → soleur:compound → soleur:ship. Merge via operator `gh pr merge --admin` (auto-merge deadlocks by design — old context names pend forever; admin-merge-ready.sh will refuse on ABSENT old names → raw operator command per ADR-032 note).
+- PR body already documents landing path. Census baseline (task 3.5) attach to #12089 before merge.
