@@ -19,6 +19,37 @@ Issue #10664 (the Inngest LUKS arc follow-up tracker, OPEN) carries one unchecke
 
 **Observation (not a work target):** the tracker's "orphan-sweep steps keep the loader-exported token and have no notification path" checkbox is stale — the work shipped in merged PR #10936 (`fix(infra): orphan sweeps read the read-only Hetzner token only and email on failure`, merged 2026-10-24). Editing the issue body is out of scope; the checkbox stays as-is.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Sections enhanced:** gate verification over all sections; no content rewrites needed
+**Research agents used:** none — `Reviewed-Coverage: sequential-fallback` (this session has no subagent-spawn capability; the Phase 1/4/5 fan-outs ran as direct repo reads by the orchestrator, and no independent review ran)
+
+### Halt-gate results (deepen-plan)
+
+| Gate | Verdict |
+|---|---|
+| 4.6 User-Brand Impact | PASS — section present, threshold `single-user incident`, concrete body |
+| 4.7 Observability | SKIP — pure-docs (every Files-to-Edit path is `knowledge-base/` or `.md`) |
+| 4.8 PAT-shaped variables | PASS — zero matches |
+| 4.9 UI wireframe | SKIP — no UI-surface file |
+| 4.10 Encryption posture | SKIP — no store or connection |
+| 4.11 Guard contract | SKIP — no guard deliverable |
+| 4.12 Scope Check | PASS — one live section, all subsections, no unmapped/BLOCKED rows |
+| 4.13 Task design | SKIP — no new autonomous-task surface |
+| 4.5 Network-outage | SKIP — trigger tokens appear only inside the lint-rule description, not as a plan subject |
+| 4.55 Downtime & Cutover | SKIP — no infra/offline-inducing operation |
+
+### Key Improvements
+
+1. AC verification commands were executed at plan-write time (existence/absence greps, the `lint-infra` `--changed` invocation) — the plan file itself was caught once by `lint-infra-no-human-steps.py` and fixed with the documented carve-out.
+2. The stale-checkbox observation (orphan-sweep item shipped in PR #10936) is recorded in Overview + AC8 rather than edited into the issue body, per the brief.
+3. `decision-challenges.md` passed `technical-ruling-gate.sh --branch` (1 taste row; no technical rows — no forks existed).
+
+### New Considerations Discovered
+
+- `Reviewed-Coverage: sequential-fallback` — the plan-review panel, domain-leader spawns, CPO sign-off consult and `soleur:gdpr-gate` invocation this session could not run are flagged here and in `## Domain Review`; `soleur:review`-time conditional agents (`user-impact-reviewer` at this threshold, `soleur:marketing:copywriter` for user-facing copy) are the coverage path.
+
 ## Problem Statement / Motivation
 
 A total loss of the Inngest store (the sole-copy Redis AOF LUKS volume plus, in the worst case, the dedicated Supabase Postgres history project) is a rare, high-pressure incident. The cutover runbook's "After a total loss: who tells affected users" section (`knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md`, §562+) already fixes who sends (the repository owner, as a product notice via `soleur:incident`), who is covered (all active users as a floor — not a ceiling), and what must never be claimed. What it does not contain is the notice text itself. Drafting user-facing wording mid-incident — while a 72-hour Art. 33 assessment clock may be running and the C1 finding constrains every claim — is exactly the blank-page failure the tracker item exists to remove.
