@@ -1,0 +1,26 @@
+# Decision challenges (plan phase, headless)
+
+Rulings and findings persisted during planning of the egress-gateway canary retirement (Ref #12189). The
+brief (delete the pair, keep the two `-target` lines for one apply, flip the counts, record the vendor-retention
+residual, no Better Stack write from this session) is the default and is not re-asked. No holds are recorded.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Probe transport extraction (RETIREMENT item 8: move `http_get` / `paged_get` / `_bearer_ok` onto `scripts/lib/bearer-curl.sh`) in this PR or a separate one | technical | Ruled by CTO agent, 2026-11-06: defer to a tracked follow-up (#12271); the probe is byte-identical in this PR except one comment-only STATUS line - a refactor of the live verdict path cannot be told apart from a verdict regression when it ships in the same change as an irreversible destroy, and the brief's scope list omits it. |
+| `egress-gw-alert.test.sh` G2b: delete wholesale versus keep a retirement-window pin (kept `-target` lines present) | technical | Ruled by CTO agent, 2026-11-06: delete G2b wholesale, add no window pin; drop the `CANARY_NAME` / `CANARY_RESOURCE` Terraform-equality probe pins (nothing left to compare against), keep the `PROD_NAME` and `EMITTER_TAG` pins and the exact-count rows (4 to 2 resources, 4 to 2 names, 2 to 1 consumer, 8 to 6 blocks). The window is already guarded by the census G4c (a base-declared deletion is honoured only while its root still targets it bare) and the structure suite's apply-parity stray check (reads INTENDED_DESTROYS); the unrun mutant (drop the target, keep the entry) is run once against a scratch copy of the real tree in the work phase and recorded in the PR body. |
+| ADR-218 form: append a new dated amendment versus edit the existing 2026-11-06 amendment in place | technical | Ruled by CTO agent, 2026-11-06: append a NEW dated amendment (date 2026-11-06 or later, citing #12189) recording the end state (alert counts stated separately: Terraform-managed 19 to 18, live 20 to 19; Enforcement pins; canary decision table retired); leave old amendment text untouched and add inline bracketed `[Amendment ...: superseded by ...]` pointers on the now-false sentences, as the ADR already does elsewhere. |
+| Probe header: leave byte-identical versus one comment-only STATUS line; the probe test's `ref_n >= 6` referrer floor and exact `MIN_ASSERTIONS` | technical | Ruled by CTO agent, 2026-11-06: add ONE comment-only STATUS line inside the RETIREMENT block (sites 1, 3b, 4, 5, 6, 7 done; 2 and 3 pending #12270; 10 pending the apply; 8 deferred to #12271; 9 unchanged); remove no token. Follow-up ruling, same day, after plan review showed the referrer set falls from 8 files to about 5: edit `egress-gw-probe-silent-12180.test.sh` in this PR, replacing the `ref_n -ge 6` row with an explicit expected-referrer-set assertion equal to the measured survivors and re-pinning `MIN_ASSERTIONS` to the printed total after checking the delta equals (old referrer count minus new) plus deliberate rows; both are derived-count flips, not baseline ratchets, stated in the commit message with #12270 named as the next shrink. Keeping canary tokens in comments to hold 6 and 430 is rejected. |
+| Pre-merge evidence refresh: re-run the probe read-only and post its verdict line on #12189 | technical | Ruled by CTO agent, 2026-11-06: yes, once, just before asking for the merge go-ahead. The only `canary=fired` citation today is the pre-soak manual read of 12:33Z (issuecomment-6684919763) and the sweeper's first scheduled read is after 2026-11-07T00:00Z; a current citation costs one GitHub comment and no Better Stack write. Unnecessary only if a sweeper comment reading `canary=fired` already exists by then. |
+| Functional-overlap registry search (plan Phase 1.5b) | technical | Skipped by the planner, 2026-11-06: a delete-only retirement adds no capability that a community skill or agent could overlap; recorded here so the skip is visible rather than silent. |
+| Merge, auto-merge, any apply or workflow dispatch, and any Better Stack write (resolve, pause, delete) | operator (production-mutating) | Not done and not planned in this session. The destroy happens only through the merged PR's apply. The work phase stops after review and CI and asks for an explicit per-command go-ahead naming the merge. |
+| Hand-closing the canary mirror issue #12242 | operator (production-mutating) | Not done. The mirror closes it when the incident leaves the vendor's open list; if the vendor keeps the incident open, resolving it is a Better Stack write needing the owner's per-command go-ahead. |
+
+## Notes
+
+- All five technical forks were settled in one CTO consult (plus one same-day follow-up on the probe test floor) with the evidence in the plan; no further technical fork
+  arose while drafting. The count flips (19 to 18, the exact-count rows, PRESENCE_ROWS and MUT_ROWS) are mechanical
+  consequences, re-derived from a run, never edited to fit.
+- Two follow-up issues were filed for deferrals: #12270 (remove the two kept `-target` lines and the two
+  INTENDED_DESTROYS entries after the destroy applies) and #12271 (the probe transport extraction).
