@@ -36,7 +36,12 @@
 # variables that subvert TLS, name resolution or the loaded libraries hidden from curl only (the caller's own environment is not mutated).
 
 # Refuse to be loaded under xtrace. `return` ends a `source`; `exit` covers a direct execution.
-case "$-" in *x*) printf 'bearer-curl: refusing to run under xtrace: this helper handles a live credential and -x would print it. No secret has been read.\n' >&2; return 78 2>/dev/null || exit 78 ;; esac # mut:xtrace-source
+case "$-" in
+  *x*)
+    printf 'bearer-curl: refusing to run under xtrace: this helper handles a live credential and -x would print it (see #7797). No secret has been read.\n' >&2
+    return 78 2>/dev/null || exit 78 # mut:xtrace-source
+    ;;
+esac
 
 BC_TOKEN=""; BC_STATUS="000"; BC_RC=1; BC_BODY=""; BC_ERR=""
 
