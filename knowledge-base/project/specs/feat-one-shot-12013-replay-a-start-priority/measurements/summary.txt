@@ -1,0 +1,55 @@
+# Measurements: replay arms registered first, two cold readings (Ref #12013)
+
+Method (a measurement method only; it bypasses nothing in a ship path):
+- Each reading is a fresh `git clone` of the worktree into its own directory (own git-common-dir, so the advisory lock is its
+  own and the pool engages; empty per-worktree derive cache, so cold). `apps/web-platform/node_modules` and the root `node_modules`
+  are symlinked to the worktree's so the web-platform arm engages as in the three prior readings (a first control without them
+  ended at +526 s on the arm's refusal; that reading was discarded and the sequence restarted).
+- `origin/main` in the clone is set to the tree under test, so the runner edit is part of the base and the gate is not degraded to full.
+- Pinned diff: the pick `7af192071d` (web-platform, 8 files): added files removed, modified files restored to the parent's content,
+  committed. Selection 162 of 740 runnable registrations (always-on 118, edge 44).
+- Command: `env -u CI SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<file> bash scripts/test-all.sh --affected`, output stamped per line.
+- Order in one session: control (`3d4a9567ba`, before the edit), then treatment (`da5462990e`, the edit). Same host, back to back,
+  no synthetic load; the machine carried its ordinary sibling-session load (recorded at each start and end in `*.notes.txt`).
+  Pool start = the `[parallel] mode engaged` line. The 18k-line stamped logs are not committed.
+- The second control was not run: the treatment's pool-phase gain (821 s) is far outside the 150 s band around the 300 s bar, and the
+  load averages at start and end did not differ materially (control 8.4 to 5.7, treatment 5.7 to 8.7). One control, one treatment.
+- Caveat: the treatment tree `da5462990e` has the runner edit; the guard in `scripts/lib/test-suite-lanes.test.sh` was changed after
+  it (a table-copy line, so the guard names no tsv file); the runner is byte-identical in the PR head.
+
+Derived by /var/tmp/m12013/derive.sh from the stamped logs (copied from its output):
+
+reading=control1 rc=1 head=name=control1 commit=3d4a9567ba head=48e914d33b origin_main=3d4a9567ba
+wall_s=2992 cold_derive_s=278 engaged_at_s=289 suite_phase_s=2703
+loadavg_start: loadavg_start=8.42 8.27 10.21 | loadavg_end=5.71 6.69 9.45
+AFFECTED_SUMMARY selected=162 of=740 always_on=118 edge=44 fallback=none
+replay-a: start=+1585s (pool offset 1296s) rc=0, 1404190ms
+replay-b: start=+1586s (pool offset 1297s) rc=0, 578789ms
+replay-c: start=+1587s (pool offset 1298s) rc=0, 551979ms
+seconds_with_at_most_one_suite_live=1098 (after engagement, to last event)
+=== 752 suites: 161 passed, 1 failed, 0 killed (unresolved — coverage not obtained), 590 skipped (declined — not relevant to this diff), 578 not-affected (selection — diff does not reach them) ===
+failed:
+[FAIL] apps/web-platform [repo-wide+component] (131206ms) log=/var/tmp/soleur-test-all-logs/measure-clone-12013-control1
+
+reading=treatment rc=1 head=name=treatment commit=da5462990e head=85864583d3 origin_main=da5462990e
+wall_s=2134 cold_derive_s=244 engaged_at_s=252 suite_phase_s=1882
+loadavg_start: loadavg_start=5.71 6.69 9.45 | loadavg_end=8.67 9.68 10.81
+AFFECTED_SUMMARY selected=162 of=740 always_on=118 edge=44 fallback=none
+replay-a: start=+252s (pool offset 0s) rc=0, 1512678ms
+replay-b: start=+252s (pool offset 0s) rc=0, 570220ms
+replay-c: start=+252s (pool offset 0s) rc=0, 530179ms
+seconds_with_at_most_one_suite_live=112 (after engagement, to last event)
+=== 752 suites: 161 passed, 1 failed, 0 killed (unresolved — coverage not obtained), 590 skipped (declined — not relevant to this diff), 578 not-affected (selection — diff does not reach them) ===
+failed:
+[FAIL] apps/web-platform [repo-wide+component] (150416ms) log=/var/tmp/soleur-test-all-logs/measure-clone-12013-treatmen
+
+Comparison (pool phase = wall minus the `engaged` offset):
+- wall: 2992 s -> 2134 s (-858 s); pool phase 2703 s -> 1882 s (-821 s); cold derive 278 s -> 244 s (not the lever).
+- replay-a start offset from pool start: 1296 s -> 0 s. replay-b and -c: 1297/1298 s -> 0 s.
+- Seconds with at most one suite live after engagement: 1098 s -> 112 s.
+- replay-a pooled wall 1404 s -> 1513 s (it now shares the machine with more suites at its start; the arms are the run's tail).
+- Failures: the same single suite in both readings, `apps/web-platform [repo-wide+component]`, the known clone artifact.
+- Landed criteria (plan AC8): replay-a starts within 120 s of pool start: yes (0 s). Pool-phase wall at least 300 s below the control: yes
+  (821 s, one control). No failure the control does not share: yes.
+- Not claimed: the 600 s bar (the cold gate is still about 2.1 ks); a result for diffs that select a different suite mix; a two-control
+  confidence band. The model-versus-measured start for this control was not re-run.

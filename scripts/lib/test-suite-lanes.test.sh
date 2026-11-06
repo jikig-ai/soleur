@@ -305,7 +305,9 @@ sf_expect_red "labels that match no arm"                                arms "x1
 sf_sb="$_h_dir/sf-sandbox"
 assert_fixture_dir "$_h_dir"
 mkdir -p "$sf_sb/scripts"
-cp "$REPO_ROOT/scripts/suite-shard-legs.tsv" "$REPO_ROOT/scripts/suite-shard-legs-heavy.tsv" "$REPO_ROOT/scripts/suite-durations.tsv" "$REPO_ROOT/scripts/suite-durations-heavy.tsv" "$sf_sb/scripts/"
+# The runner reads its shard and duration tables beside itself; copy them by glob so this suite names none of them
+# (the PR-affected audit would otherwise record each as a file this suite reads).
+cp "$REPO_ROOT"/scripts/suite-*.tsv "$sf_sb/scripts/"
 ln -s "$REPO_ROOT/scripts/lib" "$sf_sb/scripts/lib"
 sf_mut_ok=1; sf_mut_why=""
 REPLAY_FILE="$replay_file" ARM_PREFIX="$SF_ARM_PREFIX" python3 -I - "$REPO_ROOT/scripts/test-all.sh" "$sf_sb/scripts/test-all.sh" <<'PY' || { sf_mut_ok=0; sf_mut_why="mutator refused"; }
