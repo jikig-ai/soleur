@@ -4169,11 +4169,21 @@
   parser. The related authority, reservation and HTTP offline suites passed
   44 tests. The independent reviewer found no further concrete issue within
   the latch's narrowly stated single-instance model, but did not run tests.
-- A draft Pencil wireframe now depicts expired-notice, notice-review and
-  unresolved-draft states. Its three rendered screens were inspected after
+- A draft Pencil wireframe now depicts expired-notice, notice-review,
+  unresolved-draft and unavailable-draft states. The rendered screens were inspected after
   fixing an initial flex-layout placement error. It is a design artifact,
   not proof that these states or their retention promises are implemented;
   actual UI QA, complete copy review and the resend protocol remain open.
+- Preliminary independent CLO review caught a draft statement incorrectly
+  saying saved history may be sent. The wireframe now follows the existing
+  disclosure's distinction: an explicit resend may send the message to OpenAI,
+  later messages use the selected binding, saved history is not transferred,
+  and charges may apply. It also makes cache availability conditional, includes
+  an unavailable state and labels copying as text-only. CLO re-review requires
+  replacing the account/mode design placeholder with verified non-secret copy
+  and testing that unsupported attachments remain preserved and never dispatch.
+  Actual route/mode behavior, final copy, processing basis, rights, retention,
+  deletion and restore remain unverified.
 - Ruled by CTO agent, 2026-11-06: the next resend increment is an offline-only
   disposable PostgreSQL claim/status prototype with `accepted` or `unknown`
   outcomes and no re-arm. Bind one immutable logical turn to trusted subject,
