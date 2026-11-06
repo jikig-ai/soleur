@@ -412,20 +412,20 @@ Product, Legal, Marketing, Finance, Operations, Sales, Support: no implications 
 
 ## Acceptance Criteria
 
-- [ ] AC1: Against the compliant fixture (floor 20000 s ago, both hosts with rows, anchor resolved by an actor with `resolved_by` "API"-shaped value, a pre-floor resolved decoy, the canary alert absent and its incident listed, not declared) the probe exits 0 with `anchor_resolved_by=actor` printed. (suite)
-- [ ] AC2: A production incident that started before the floor, is resolved, and has `resolved_by` null never sets `newer_prod_incident=1`; one started at floor minus 300 does; one at floor minus 301 does not. (suite, two non-collinear fixtures)
-- [ ] AC3: An open exact-name production incident that started before the floor yields exit 2 inside `quiet_since + 15300` and exit 5 after. (suite)
-- [ ] AC4: With the soak at 14399 s -> exit 2; 14400 s and 14401 s -> pass path (non-collinear fixtures). (suite)
-- [ ] AC5: Warehouse failure / absent credentials / non-row answer / empty roster -> exit 3; a roster host at zero -> exit 5; an extra host never covers a missing roster host. (suite)
-- [ ] AC6: A listed canary alert with a missing, unparseable or too-early `created_at`, duplicate canary alerts, a canary incident earlier than floor minus slack, a floor after now, a floor before the anchor's start, and an anchor open-state disagreement between the two reads each yield exit 3. (suite)
-- [ ] AC7: Canary alert absent + incident absent + not declared -> exit 5 with text distinct from "DELETED or NEVER CREATED"; declared -> the old text. (suite)
-- [ ] AC8: The verdict line has twelve fields in the pinned order; exit 1 is never produced (existing forbidden-exit-1 harness plus the source pin). (suite)
-- [ ] AC9: The SUT code does not read `SOLEUR_FT_EARLIEST` or alert `updated_at`, and a fresh or ancient `SOLEUR_FT_EARLIEST` leaves the verdict unchanged. (suite)
-- [ ] AC10: `bash scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` is green with `MIN_ASSERTIONS` re-pinned from the green run; it fails against the unmodified probe (recorded in the Phase 1 commit message).
-- [ ] AC11: The runbook and ADR-218 contain the OBSERVED wording for incidents 1048111600 (null) and 1047829421 ("API") and a list of what is NOT measured; `git grep -n 'ASSUMED'` over the runbook and the ADR's new amendment returns nothing that is still false; ADR-218's earlier text is byte-identical outside the appended amendment (`git diff` shows additions only in that file).
-- [ ] AC12: `egress-gw-alert.test.sh`, `c4-count-parity.test.sh` and `test-argv-bearer-sweep.sh` pass unchanged.
+- [x] AC1: Against the compliant fixture (floor 20000 s ago, both hosts with rows, anchor resolved by an actor with `resolved_by` "API"-shaped value, a pre-floor resolved decoy, the canary alert absent and its incident listed, not declared) the probe exits 0 with `anchor_resolved_by=actor` printed. (suite)
+- [x] AC2: A production incident that started before the floor, is resolved, and has `resolved_by` null never sets `newer_prod_incident=1`; one started at floor minus 300 does; one at floor minus 301 does not. (suite, two non-collinear fixtures)
+- [x] AC3: An open exact-name production incident that started before the floor yields exit 2 inside `quiet_since + 15300` and exit 5 after. (suite)
+- [x] AC4: With the soak at 14399 s -> exit 2; 14400 s and 14401 s -> pass path (non-collinear fixtures). (suite)
+- [x] AC5: Warehouse failure / absent credentials / non-row answer / empty roster -> exit 3; a roster host at zero -> exit 5; an extra host never covers a missing roster host. (suite)
+- [x] AC6: A listed canary alert with a missing, unparseable or too-early `created_at`, duplicate canary alerts, a canary incident earlier than floor minus slack, a floor after now, a floor before the anchor's start, and an anchor open-state disagreement between the two reads each yield exit 3. (suite)
+- [x] AC7: Canary alert absent + incident absent + not declared -> exit 5 with text distinct from "DELETED or NEVER CREATED"; declared -> the old text. (suite)
+- [x] AC8: The verdict line has twelve fields in the pinned order; exit 1 is never produced (existing forbidden-exit-1 harness plus the source pin). (suite)
+- [x] AC9: The SUT code does not read `SOLEUR_FT_EARLIEST` or alert `updated_at`, and a fresh or ancient `SOLEUR_FT_EARLIEST` leaves the verdict unchanged. (suite)
+- [x] AC10: `bash scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` is green with `MIN_ASSERTIONS` re-pinned from the green run; it fails against the unmodified probe (recorded in the Phase 1 commit message).
+- [x] AC11: The runbook and ADR-218 contain the OBSERVED wording for incidents 1048111600 (null) and 1047829421 ("API") and a list of what is NOT measured; `git grep -n 'ASSUMED'` over the runbook and the ADR's new amendment returns nothing that is still false; ADR-218's earlier text is byte-identical outside the appended amendment (`git diff` shows additions only in that file).
+- [x] AC12: `egress-gw-alert.test.sh`, `c4-count-parity.test.sh` and `test-argv-bearer-sweep.sh` pass unchanged.
 - [ ] AC13: PR body uses `Ref #12189` and `Ref #12180` and no `Closes`; a corrective comment is posted on #12189.
-- [ ] AC14: A read-only live run is recorded in the PR body: before 16:16:03Z `verdict=not_yet`; after it, `verdict=action_required` with the delete-the-canary message (the canary is still declared and live), never exit 0 while the canary exists.
+- [x] AC14: A read-only live run is recorded in the PR body: before 16:16:03Z `verdict=not_yet`; after it, `verdict=action_required` with the delete-the-canary message (the canary is still declared and live), never exit 0 while the canary exists.
 
 ## Test Scenarios
 
