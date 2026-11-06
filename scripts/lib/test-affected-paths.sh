@@ -1258,6 +1258,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/git-data-rung2-rehearsal.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:1896
   ".github/workflows/git-data-cutover.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:9122
   ".github/workflows/cutover-inngest.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4824
+  ".github/workflows/build-inngest-bootstrap-image.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4583 readFileSync's the workflow for the arm↔gate parity pin
   ".github/workflows/inngest-key-rotate.yml"
   # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
   ".github/workflows/key-rotate.yml"
@@ -4808,6 +4809,16 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   ".github/workflows/"
   "scripts/lint-gh-argv-arg.py"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-gh-dedupe-shape — the suite `cp -r`s the whole real .github tree into a scratch repo and
+# runs the linter over it (a planted-regression probe on each workflow), so EVERY .github file's state
+# feeds the verdict; dir entry, not a per-workflow name list.
+AFFECTED_SCRIPTS_LINT_GH_DEDUPE_SHAPE_PATHS=(
+  ".github/"
+  "scripts/lint-gh-dedupe-shape.py"
+  "scripts/lint-gh-dedupe-shape.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # apps/web-platform/infra/inngest-luks-sole-copy — derivation cannot reach these: the suite sources the
