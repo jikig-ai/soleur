@@ -112,9 +112,13 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 349 -> 353 (#9927 item 10, +4): the G2f registration pin (live, mutation matrix, must-PASS rows) and its ci.yml wiring pin - Guard 1 stays registered in the required test-scripts leg.
 // Exact: grep -cE '^\s*test\(' = 353.
 // 353 -> 354 (#11857, +1): token_drift ordering and closure row (inventory-named doppler_config blocks vs depends_on, the per-merge -target list and the operator-applied exclusions; mutants and a must-pass fixture run through the same function). Exact: 354.
-// 354 -> 360 (#11923/#11920, +6): the key-rotate-approval + egress-PREVIOUS -target pins (2) and the
+// 354 -> 358 (#8780, +4): the publish-admission pins — the exactly-{main} membership pin for
+// inngest_config_signing + release_publish inside DP-11 F8, the two job<->environment bindings
+// (reusable-release.yml::release, build-inngest-bootstrap-image.yml::build), and the three
+// -target= presence pins for the new environment resources.
+// 358 -> 366 (#11923/#11920, +6 incl. the #8780 merge, exact): the key-rotate-approval + egress-PREVIOUS -target pins (2) and the
 // Guard-5 satellite derivation rows (the must-PASS satellite conformance + three mutation rows).
-const TEST_FLOOR = 360;
+const TEST_FLOOR = 366;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1329,18 +1333,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
-  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
-  //     amendment) and exist only after the multi-host flip, which must move all
-  //     four to a -target list in the same change (doppler_secret, not the
-  //     CI-published token types the test forces).
+  //   - the host↔host proxy TLS quartet (tls_private_key.proxy_server,
+  //     tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key,
+  //     doppler_secret.proxy_tls_cert) LEFT this set at the multi-host flip (#12167 /
+  //     ADR-118 amendment 2026-09-27): host_proxy_tls_enabled now defaults true and all
+  //     four ride the per-merge saved plan, key and cert together. Pinned by the
+  //     "#8754 PR-B" describe below.
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
-  "tls_private_key.proxy_server",
-  "tls_self_signed_cert.proxy_server",
-  "doppler_secret.proxy_tls_key",
-  "doppler_secret.proxy_tls_cert",
   // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
   // (monitor, web-1 pool, LB on app.soleur.ai). Stays deliberately excluded after
   // the 2026-10-30 CF_API_TOKEN widen (the 2026-10-27 code-10000 premise below is
@@ -4269,6 +4270,21 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     "key_rotate_approval",
   ]);
 
+  // (#8780 review) The mirror ratchet: environments that are reviewer-less BY
+  // DESIGN. REVIEWERS_RATCHET only ratchets the keep-reviewers direction —
+  // nothing stopped a well-meaning `reviewers { users = [54279] }` being added
+  // to `release_publish` or `infra_privileged`, which silently DEADLOCKS every
+  // unattended publish/apply the environment exists to admit (the auto-mint
+  // dispatches, the push-arm releases run with no human in the loop). The
+  // admission gate on these envs is the exactly-{main} policy, and adding a
+  // reviewer does not strengthen it — it converts a batch pipeline into a
+  // prompt nobody is hired to answer. Same shape as the ratchet above: named
+  // members must be IN the population, or a rename drops the guard.
+  const REVIEWER_LESS_RATCHET = new Set([
+    "infra_privileged",
+    "release_publish",
+  ]);
+
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
     const header =
       /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
@@ -4316,6 +4332,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
     // widened property below is vacuous for exactly the class it was widened for.
     expect(names).toContain("infra_privileged");
+    // (#8780) The reviewer-less publish-admission environment must be IN the
+    // population for the same reason: deleting release-publish-environment.tf would
+    // silently drop the reviewer-less limb's second member with the suite still green.
+    expect(names).toContain("release_publish");
     // (#11923) The rotation-approval environment must be IN the population — its
     // ratchet membership is only load-bearing if the extractor actually sees it.
     expect(names).toContain("key_rotate_approval");
@@ -4328,6 +4348,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     ).toBeGreaterThan(0);
 
     const seenRatchet = new Set<string>();
+    const seenLessRatchet = new Set<string>();
     for (const env of envs) {
       const ids = env.users
         .split(",")
@@ -4343,6 +4364,23 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
             `Removing its reviewers converts a human authorization into an auto-approve (DP-11 F8; #6730).`,
         ).toBeGreaterThan(0);
         continue;
+      }
+
+      if (REVIEWER_LESS_RATCHET.has(env.name)) {
+        seenLessRatchet.add(env.name);
+        // A `reviewers` BLOCK of any shape — users, teams, a var-indirect
+        // list — deadlocks the unattended jobs these environments exist to
+        // admit. Pinning the block's absence (not just an empty users list)
+        // covers every spelling, since `env.body` is comment-stripped.
+        expect(
+          /\breviewers\b/.test(env.body),
+          `github_repository_environment.${env.name} is in REVIEWER_LESS_RATCHET and gained a reviewers block. ` +
+            `These environments admit UNATTENDED jobs — a required reviewer does not strengthen the gate, ` +
+            `it deadlocks every publish/apply that runs with no human present ` +
+            `(ADR-241 D2; #8780). Remove the reviewers block.`,
+        ).toBe(false);
+        // No `continue`: the branch-policy limb below is their ONLY gate and
+        // must still be proven intact.
       }
 
       // A reviewer-less environment relies entirely on the branch policy, so the policy
@@ -4378,6 +4416,64 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
           `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
       ).toBe(true);
     }
+    for (const name of REVIEWER_LESS_RATCHET) {
+      expect(
+        seenLessRatchet.has(name),
+        `REVIEWER_LESS_RATCHET names ${name}, but no github_repository_environment by that name was found ` +
+          `in the infra root. Either it was renamed (update the ratchet and confirm the new name still ` +
+          `carries NO reviewers) or it was deleted. An unmatched ratchet entry is an unenforced one.`,
+      ).toBe(true);
+    }
+  });
+
+  // (#8780) Asserted, not merely permitted: the DP-11 disjunction ALLOWS a ratchet
+  // environment to also carry a main-only policy ("a branch policy on top of them is
+  // additive"), but the loop `continue`s past every REVIEWERS_RATCHET member after
+  // checking reviewers, so nothing above ever reads `inngest_config_signing`'s policy.
+  // Its admission half is pinned here. `release_publish` is reviewer-less, so the
+  // exactly-{main} set IS its only gate — a missing env, a dropped `main` policy, or a
+  // second wider policy all take it out of the set.
+  // (#8780 review) `release_publish` is an ADMISSION gate, not a credential
+  // carrier — the tf header's "Do NOT attach a github_actions_environment_secret"
+  // was prose-only until this pin. A secret or variable bound to it re-widens the
+  // boundary the design keeps narrow (every `environment: release-publish` job
+  // inherits it), and nothing else goes red: the -target allow-list does not stop
+  // a sibling PR adding resource + target in one diff.
+  test("no environment secret or variable is bound to release_publish", () => {
+    const offenders: string[] = [];
+    const re =
+      /resource\s+"github_actions_environment_(?:secret|variable)"\s+"([A-Za-z0-9_]+)"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(stripped)) !== null) {
+        if (/release[-_]publish\b/.test(m[2])) offenders.push(m[1]);
+      }
+    }
+    expect(
+      offenders,
+      `environment secret/variable resources bound to release_publish: ${JSON.stringify(offenders)} — ` +
+        `release_publish is reviewer-less and secrets-free by design (ADR-241 D2). A bound secret widens ` +
+        `the admission gate into a credential carrier and the environment's only remaining protection ` +
+        `is the branch policy — binding GITHUB_TOKEN-scoped publish jobs to it was the deliberate narrowness.`,
+    ).toEqual([]);
+  });
+
+  test("inngest_config_signing and release_publish are each in the exactly-{main} policy set (#8780)", () => {
+    expect(
+      mainOnlyPolicyEnvs.has("inngest_config_signing"),
+      `inngest_config_signing is in REVIEWERS_RATCHET (reviewers stay) AND must carry an exactly-{main} ` +
+        `deployment-policy set — the additive shape #8780 added for publish admission ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("inngest_config_signing") ?? [])])}). ` +
+        `Without it a non-main dispatch of build-inngest-config-bundle.yml reaches the reviewer prompt.`,
+    ).toBe(true);
+    expect(
+      mainOnlyPolicyEnvs.has("release_publish"),
+      `release_publish is reviewer-less — its ONLY gate is an exactly-{main} deployment-policy set ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("release_publish") ?? [])])}). ` +
+        `Without it a workflow_dispatch of a publish workflow runs from any ref (#8780, ADR-241 D2).`,
+    ).toBe(true);
   });
 
   // The must-trip side of the branch-policy limb. Every deployment policy on the live
@@ -4456,6 +4552,75 @@ resource "github_repository_environment_deployment_policy" "synthetic_any" {
     // authorizing one thing and getting another.
     expect(wf).toMatch(/^permissions:\n\s{2}contents:\s*read\s*$/m);
     expect(wf).not.toMatch(/contents:\s*write/);
+  });
+});
+
+// ─── #8780: publish-admission pins. Every publish-path job in the three
+//     dispatchable workflows is bound to an environment whose deployment-policy
+//     set is exactly {main} (the DP-11 limb above asserts the policy half; these
+//     assert the job↔environment half and the apply wiring). A YAML-side
+//     dispatch-ref guard was deliberately NOT the mechanism — a dispatch runs
+//     the selected ref's bytes, so only the server-side environment policy is
+//     outside the blast radius (ADR-241 D2). ─────────────────────────────────
+describe("publish-path jobs declare a main-only admission environment (#8780)", () => {
+  test("reusable-release.yml's `release` job declares environment: release-publish", () => {
+    // The single publish chokepoint: both callers (web-platform-release.yml and
+    // version-bump-and-release.yml) reach it through `uses:`, and `environment:` is
+    // valid only HERE — a caller's `uses:` job cannot declare one, and the called
+    // job's environment is evaluated against the calling run's ref. `\s{4}` pins
+    // JOB-level indentation: a step-level `environment:` at six spaces is ignored
+    // by GitHub, so a looser anchor would certify nothing (same family as the
+    // web-platform-infra-apply pins above).
+    const wf = readFileSync(
+      resolve(REPO_ROOT, ".github/workflows/reusable-release.yml"),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "release");
+    expect(jobBlock, "release job not found in reusable-release.yml").not.toEqual(
+      "",
+    );
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("build-inngest-bootstrap-image.yml's `build` job declares environment: release-publish", () => {
+    // The bootstrap image's publish arm keeps `packages: write` + `id-token: write`
+    // — the admission gate is what keeps a non-main dispatch from exercising them.
+    // `bump-cloud-init-pin` keeps `infra-privileged` (it mints a Tier-B App token);
+    // this pin covers `build` only.
+    const wf = readFileSync(
+      resolve(
+        REPO_ROOT,
+        ".github/workflows/build-inngest-bootstrap-image.yml",
+      ),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "build");
+    expect(
+      jobBlock,
+      "build job not found in build-inngest-bootstrap-image.yml",
+    ).not.toEqual("");
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("the three new environment resources are in the -target= allow-list", () => {
+    // The targeted apply prunes any *.tf resource not in this list, so without
+    // these lines the environment and its policy are declared and never applied —
+    // and the FIRST job that references `release-publish` auto-creates it
+    // unprotected (the auto-create hazard ADR-241 D2 records). Presence, not
+    // position: extractAllTargets strips comments, so a commented-out line reds.
+    const targets = extractAllTargets(
+      readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
+    );
+    for (const addr of [
+      "github_repository_environment.release_publish",
+      "github_repository_environment_deployment_policy.release_publish_main",
+      "github_repository_environment_deployment_policy.inngest_config_signing_main",
+    ]) {
+      expect(
+        targets.has(addr),
+        `missing -target=${addr} in apply-web-platform-infra.yml's allow-list`,
+      ).toBe(true);
+    }
   });
 });
 
@@ -6336,7 +6501,7 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(res).not.toMatch(/ignore_changes/);
   });
 
-  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default true after the multi-host flip (#12167)", () => {
     const src = tf("proxy-tls.tf");
     const quartet: Array<[string, string]> = [
       ["tls_private_key", "proxy_server"],
@@ -6352,7 +6517,8 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(ungated).toEqual([]);
     const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
     expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
-    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*true\s*$/m);
+    expect(v).not.toMatch(/^\s*default\s*=\s*false\s*$/m);
   });
 
   test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
@@ -6362,16 +6528,33 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
   });
 
-  test("no workflow targets the gated resources or overrides their gate variables", () => {
-    const gated = [
+  test("the proxy-TLS quartet rides the per-merge saved plan (key and cert together), out of the exclusion set (#12167)", () => {
+    // Inverted from "no workflow targets the gated resources" at the multi-host flip (ADR-118
+    // amendment 2026-09-27). Targeting the cert alone writes a cert to prd with no matching key,
+    // so the four are asserted as a unit: all in, or the row is red.
+    const quartet = [
       "tls_private_key.proxy_server",
       "tls_self_signed_cert.proxy_server",
       "doppler_secret.proxy_tls_key",
       "doppler_secret.proxy_tls_cert",
-      "doppler_secret.inngest_config_digest",
     ];
+    expect(missingFrom(quartet, planTargets)).toEqual([]);
+    expect(presentIn(quartet, OPERATOR_APPLIED_EXCLUSIONS)).toEqual([]);
+    // The saved plan is the ONLY route: the dispatch jobs must not carry any of the four. The
+    // birth gate demands zero destroys, so it cannot grade a SAN-driven cert replace.
+    const dispatchJobs = ["web_host_create", "web_host_replace"];
+    const dispatchTargets = extractAllTargets(dispatchJobs.map((j) => extractJobBlock(wf, j)).join("\n"));
+    expect(dispatchTargets.has("hcloud_server.web")).toBe(true); // non-vacuity
+    expect(presentIn(quartet, dispatchTargets)).toEqual([]);
+  });
+
+  test("no workflow targets the still-gated resources or overrides any gate variable", () => {
+    const gated = ["doppler_secret.inngest_config_digest"];
     expect(presentIn(gated, anyFormTargets)).toEqual([]);
     expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // host_proxy_tls_enabled is flipped by its variables.tf default, never by a workflow
+    // input, -var or TF_VAR route (the "no TF_VAR route" ruling for #12167).
+    expect(writeSurface).not.toMatch(/TF_VAR_host_proxy_tls_enabled/i);
     // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
     expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
     expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);

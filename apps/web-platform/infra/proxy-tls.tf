@@ -20,9 +20,11 @@
 # cert-expiry monitor covers it (see Observability). "Contract before consumer":
 # the config was declared in 3.A so the proxy server/client in 3.B could load it.
 #
-# COUNT-GATED ON var.host_proxy_tls_enabled (default false) until the multi-host flip,
-# so every reference is `[0]`. Rationale and the flip checklist: the ADR-118 amendment
-# (#8754).
+# COUNT-GATED ON var.host_proxy_tls_enabled (default true since the multi-host flip,
+# #12167), so every reference is `[0]`. All four resources ride the per-merge saved
+# plan in apply-web-platform-infra.yml (key and cert together: a cert in prd without
+# its key is unusable). SOLEUR_PROXY_BIND is not a Doppler value; ci-deploy.sh
+# resolves it per host. Rationale and flip record: the ADR-118 amendment (#8754).
 
 resource "tls_private_key" "proxy_server" {
   count = var.host_proxy_tls_enabled ? 1 : 0

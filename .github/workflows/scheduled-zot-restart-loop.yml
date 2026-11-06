@@ -312,6 +312,7 @@ jobs:
           # positive evidence that ingest resumed — by construction, not by inference. Without
           # this, a reporter that stays quiet after restoration leaves [ci/betterstack-ingest-dark]
           # open falsely while this issue says the opposite about the same warehouse.
+          # dedupe: benign — || STALE_DARK="" on a close-path read: a gh fault closes nothing; the ingest-dark issue stays open = alarm persists.
           STALE_DARK=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"' --json number --jq '.[0].number // empty') || STALE_DARK=""
           if [[ -n "$STALE_DARK" ]]; then
@@ -397,6 +398,7 @@ jobs:
           # emit the body to the run log (layer 6) and let the next run file. Since #8495 the lookup
           # LISTS by label (not search-index-backed), so a just-created issue is always visible.
           search_rc=0
+          # dedupe: fail-closed — deliberate search_rc: an unreadable search cannot tell new from existing, so the body is emitted to the log and nothing is filed (documented above).
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || search_rc=$?
           if [[ "$search_rc" -ne 0 ]]; then
             echo "::error::ingest-dark: the issue search failed (rc=${search_rc}), so this run cannot tell a new occurrence from an existing one and is NOT filing. Body follows; the next run will file."
@@ -549,6 +551,7 @@ jobs:
             '[ci/registry-private-nic] Registry host has no private NIC' \
             '[ci/registry-private-nic] Registry private-NIC boot race self-healed' \
             '[ci/registry-private-nic] Private-NIC guard went dark'; do
+            # dedupe: benign — close-path read in the per-title loop: a gh fault aborts remaining closes; every affected issue stays open = alarm persists.
             N=$(gh issue list --repo "$GH_REPO" --state open --search "in:title \"$T\"" --json number --jq '.[0].number // empty')
             if [[ -n "$N" ]]; then
               gh issue close "$N" --repo "$GH_REPO" --comment "Registry private NIC healthy again at ${NOW} (newest boot: nic_ok=true, converged_by=already, reboot_count=0). Run: ${RUN_URL}"
@@ -567,11 +570,13 @@ jobs:
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           # Close EACH class with its OWN-title search — never a union search across the two titles
           # (a union close-search would close the wrong issue; #5562 plan R5 / union-AC trap).
+          # dedupe: benign — close-path read: a gh fault leaves the issue open; the alarm persists.
           STALE_LOOP=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/zot-restart-loop] Zot registry restart-loop recurrence detected"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_LOOP" ]]; then
             gh issue close "$STALE_LOOP" --repo "$GH_REPO" --comment "Zot registry serving healthy again at ${NOW} (newest boot flat, no OOM). Run: ${RUN_URL}"
           fi
+          # dedupe: benign — close-path read: a gh fault leaves the issue open; the alarm persists.
           STALE_SILENT=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/zot-telemetry-silent] Zot SOLEUR_ZOT_DISK reporter went dark"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_SILENT" ]]; then
@@ -582,6 +587,7 @@ jobs:
           # measurement as fact. The evidence GREEN actually produces is different and still
           # sufficient: anchored SOLEUR_ZOT_DISK rows are present in the 3h window, so the
           # warehouse is demonstrably accepting writes. Own-title search, never a union.
+          # dedupe: benign — close-path read: a gh fault leaves the issue open; the alarm persists.
           STALE_DARK=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_DARK" ]]; then
@@ -823,6 +829,7 @@ jobs:
           fi
 
           # A FAIL proves the probe evaluated, so any open probe-defect issue is stale.
+          # dedupe: benign — || DEFECTS="" on a close-path read: a gh fault closes no defect issues; they stay open = alarm persists.
           DEFECTS=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title | jq -r --arg t "$DEFECT_TITLE" '.[] | select(.title | contains($t)) | .number') || DEFECTS=""
           for N in $DEFECTS; do
             gh issue close "$N" --repo "$GH_REPO" --comment "A FAIL run proves the probe evaluated, so the probe defect is cleared at ${NOW}. Run: ${RUN_URL}"
@@ -876,6 +883,7 @@ jobs:
           BREACH_TITLE='[ci/zot-fill-rate] Registry store fill rate projects a breach'
           DEFECT_TITLE='[ci/zot-fill-rate] Registry fill-rate probe defect'
           # ONE lookup for both titles, filtered per title below. A failed lookup closes nothing.
+          # dedupe: benign — deliberate || { ::warning::; exit 0; }: a failed lookup closes nothing this run; the warning breadcrumb records the miss.
           LIST=$(gh issue list --repo "$GH_REPO" --state open --label "ci/zot-fill-rate" --limit 100 --json number,title,updatedAt) || { echo "::warning::zot-fill-rate: the open-issue lookup failed; nothing is closed this run."; exit 0; }
           # The breach issue closes on hysteresis. updatedAt is the proxy for "last FAIL" (each FAIL
           # run comments): close only an issue quiet for 6 hours, so a store sitting at the

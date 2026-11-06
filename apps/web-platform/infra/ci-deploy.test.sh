@@ -545,6 +545,10 @@ create_docker_mock() {
 _ltok_in=""; case " $* " in *" --password-stdin "*) [ -t 0 ] || _ltok_in="$(timeout 2 cat)" ;; esac
 mode="${MOCK_DOCKER_MODE:-default}"
 
+# #10479: `docker port <name> 3443/tcp` (the host :443 pre-swap check). Answered WITHOUT a DOCKER_TRACE line so the exact-order
+# trace rows are unchanged. Default rc 1 = the running prod container does not publish 3443, i.e. it does not own host :443.
+if [[ "${1:-}" == "port" ]]; then exit "${MOCK_DOCKER_PORT_RC:-1}"; fi
+
 # #9871 canary DIAG bundle. The bundle is ONE `docker exec ... /bin/sh -c <script> soleur-canary-diag`;
 # the trailing literal is `$0` inside the script and is the token this arm keys on. It sits BEFORE the
 # Guard-2 argv recorder and the bwrap-substring arms on purpose: the script text itself names bwrap, so
@@ -1654,6 +1658,15 @@ create_base_mocks() {
   create_mock_sudo "$mock_dir"
   create_mock_chown "$mock_dir"
   create_mock_seq "$mock_dir"
+  # #10479: `ss -ltnH 'sport = :443'` (the host :443 pre-swap check). The default reports nothing listening, so a runner that
+  # really has something on :443 cannot redden every deploy row. MOCK_SS_443=1 reports a listener; MOCK_SS_FAIL=1 fails the call.
+  cat > "$mock_dir/ss" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_SS_FAIL:-}" == "1" ]]; then exit 1; fi
+if [[ "${MOCK_SS_443:-}" == "1" ]]; then printf 'LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*\n'; fi
+exit 0
+MOCK
+  chmod +x "$mock_dir/ss"
   # #10453 (F4 follow-up): MOCK_OD_FAIL=1 makes `od` produce nothing (the smoke's nonce source), so the "no weak nonce" row can
   # reach the fallback. Installed ONLY on request: every other row keeps the real `od`.
   if [[ "${MOCK_OD_FAIL:-}" == "1" ]]; then printf '#!/bin/bash\nexit 1\n' > "$mock_dir/od"; chmod +x "$mock_dir/od"; fi
@@ -1920,6 +1933,45 @@ assert_inngest_docker_trace() {
 assert_inngest_docker_trace "inngest deploy routes through docker pull (trace mode)"
 
 echo ""
+echo "--- #10479: host :443 pre-swap check ---"
+h443_deploy() {
+  # $1 = scenario name; the remaining args are VAR=value pairs exported for the mocks.
+  local name="$1"; shift
+  H443_DIR="$(mktemp -d)"
+  H443_OUT="$(
+    export CI_DEPLOY_STATE="$H443_DIR/state"
+    for kv in "$@"; do export "$kv"; done
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  )" && H443_RC=0 || H443_RC=$?
+  H443_REASON="$(jq -r '.reason' "$H443_DIR/state" 2>/dev/null)"
+  H443_TRACE="$(printf '%s\n' "$H443_OUT" | { grep '^DOCKER_TRACE:' || true; } | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')"
+  rm -rf "$H443_DIR"
+}
+h443_check() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == ok ]]; then PASS=$((PASS + 1)); echo "  PASS: $1"; else FAIL=$((FAIL + 1)); echo "  FAIL: $1 (rc=$H443_RC reason=$H443_REASON trace=$H443_TRACE)"; fi
+}
+
+h443_deploy in-use MOCK_SS_443=1
+[[ "$H443_RC" -ne 0 && "$H443_REASON" == host_443_in_use && "$H443_TRACE" == "image|pull|stop|rm|run" ]] \
+  && h443_check "host :443 held by something else: refused (host_443_in_use) after the plugin seed, before the canary starts or the old container stops" ok \
+  || h443_check "host :443 held by something else: refused (host_443_in_use) after the plugin seed, before the canary starts or the old container stops" bad
+
+h443_deploy unavailable MOCK_SS_FAIL=1
+[[ "$H443_RC" -ne 0 && "$H443_REASON" == host_443_check_unavailable && "$H443_TRACE" == "image|pull|stop|rm|run" ]] \
+  && h443_check "ss unavailable: fails CLOSED (host_443_check_unavailable), canary never started, old container untouched" ok \
+  || h443_check "ss unavailable: fails CLOSED (host_443_check_unavailable), canary never started, old container untouched" bad
+
+h443_deploy owned MOCK_SS_443=1 MOCK_DOCKER_PORT_RC=0
+[[ "$H443_RC" -eq 0 && "$H443_TRACE" == "image|pull|stop|rm|run|run|exec|stop|rm|stop|rm|ps|run" ]] \
+  && h443_check "the running prod container already owns :443 (docker port succeeds): a redeploy proceeds" ok \
+  || h443_check "the running prod container already owns :443 (docker port succeeds): a redeploy proceeds" bad
+
+h443_deploy free
+[[ "$H443_RC" -eq 0 && "$H443_TRACE" == "image|pull|stop|rm|run|run|exec|stop|rm|stop|rm|ps|run" ]] \
+  && h443_check "nothing on :443: the deploy proceeds" ok \
+  || h443_check "nothing on :443: the deploy proceeds" bad
+
 echo "--- Empty/missing command ---"
 assert_exit_contains "empty command rejected" 1 "no command provided" ""
 

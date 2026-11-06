@@ -405,6 +405,7 @@ jobs:
             # it never writes $GITHUB_OUTPUT and the always() heartbeat reads failure_mode='' → 'ok'
             # (a missed escalation page for that cycle). Degrade a gh blip to empty CREATED instead:
             # empty → restart_ok_from_age treats it as first-occurrence soft (self-heals next */15 tick).
+            # dedupe: benign — deliberate || true inside (#6407 F2): a gh blip degrades to empty CREATED = first-occurrence-soft; aborting here would break the always() heartbeat.
             CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || true)
             # Escalation decision via the extracted, unit-tested resolver (#6407 review, test-design
             # Finding A): functions_query_degraded stays soft while the open-issue age < window (or on
@@ -438,6 +439,7 @@ jobs:
           # shellcheck source=/dev/null
           source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
           GIVE_UP_WINDOW_MIN=45
+          # dedupe: benign — age-gate read: a gh fault aborts the step, suppressing auto-restart (the conservative direction); the filing + heartbeat paths do not read restart_ok.
           CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-down --state open --json createdAt --jq '.[0].createdAt // empty')
           RESTART_OK=$(restart_ok_from_age "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
           echo "restart_ok=$RESTART_OK" >> "$GITHUB_OUTPUT"
@@ -746,16 +748,19 @@ jobs:
           # Healthy means BOTH liveness AND pool are fine. Close each class's issue
           # with its OWN title search — never a union search (a union close-search
           # would close the wrong issue; #5562 plan R5 / union-AC trap).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_DOWN=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-down] Inngest health watchdog failed"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_DOWN" ]]; then
             gh issue close "$STALE_DOWN" --repo "$GH_REPO" --comment "${STATE_TXT}. Run: ${RUN_URL}"
           fi
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_POOL=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_POOL" ]]; then
             gh issue close "$STALE_POOL" --repo "$GH_REPO" --comment "Inngest session pool back under threshold at ${NOW}. Run: ${RUN_URL}"
           fi
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_PROBE" ]]; then
@@ -763,6 +768,7 @@ jobs:
           fi
           # #6374: close the liveness-probe-unavailable issue once the probe path is
           # reachable AND healthy again (the deploy-race window closed / CF-Access recovered).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_LIVENESS_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_LIVENESS_PROBE" ]]; then
@@ -771,6 +777,7 @@ jobs:
           # #6407: close the functions-degraded issue once the /v0/gql functions read is
           # healthy again (the transient blip cleared). Without this close the soft issue rots
           # open forever (state-machine Q4 dead-end).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_FUNCTIONS_DEGRADED=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_FUNCTIONS_DEGRADED" ]]; then
@@ -778,6 +785,7 @@ jobs:
           fi
           # #8077 review: close the disabled-unattributed alarm once the web unit is serving again or
           # carries a valid op=quiesce-web marker (both read as an empty failure_mode).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_UNATTRIBUTED=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_UNATTRIBUTED" ]]; then
@@ -845,6 +853,7 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the durability issue open; the next durable run retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" \
             --search 'in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE" ]]; then
@@ -1764,6 +1773,7 @@ jobs:
           set -euo pipefail
           # Self-closing, mirroring the sibling inngest-down issue's recovery comment. An
           # action-required issue that outlives its cause trains the operator to ignore the label.
+          # dedupe: benign — deliberate || true inside: a gh fault yields empty EXISTING; the drift issue stays open = alarm persists.
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-drift]"' \
             --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [[ -n "$EXISTING" ]]; then
@@ -1782,6 +1792,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # dedupe: benign — deliberate || true inside: a gh fault yields empty EXISTING; the version issue stays open = alarm persists.
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-version]"' \
             --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [[ -n "$EXISTING" ]]; then

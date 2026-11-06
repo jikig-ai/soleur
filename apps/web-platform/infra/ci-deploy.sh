@@ -3416,6 +3416,31 @@ write_seccomp_profile_hash() {
   return 0
 }
 
+# #10479 (ADR-321): host :443 pre-swap check. The prod `docker run` publishes `-p 0.0.0.0:443:3443`;
+# the canary deliberately does not, so a conflict on host :443 (a stray listener, a stale docker-proxy)
+# would otherwise surface only AFTER the old container was stopped and removed, and the
+# production_start_failed arm does not restart the previous image. So refuse here, before any
+# container is touched, and the old container keeps serving. Fails CLOSED: if `ss` is missing or errors
+# the answer is unknown and the deploy is refused with a distinct reason.
+# Skipped when the running prod container already publishes 3443: it owns :443, a redeploy is fine.
+# Sets HOST_443_REASON (a fixed literal; final_write_state splices the reason into JSON unquoted).
+HOST_443_REASON=""
+host_443_preflight() {
+  local listeners
+  if docker port soleur-web-platform 3443/tcp >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! listeners="$(ss -ltnH 'sport = :443' 2>/dev/null)"; then
+    HOST_443_REASON="host_443_check_unavailable"
+    return 1
+  fi
+  if [[ -n "$listeners" ]]; then
+    HOST_443_REASON="host_443_in_use"
+    return 1
+  fi
+  return 0
+}
+
 # Resolve env file: download secrets from Doppler to a temp file (chmod 600).
 # Cleaned up automatically via EXIT trap after resolve_env_file. Exits on any failure -- no fallback.
 resolve_env_file() {
@@ -5243,6 +5268,13 @@ case "$COMPONENT" in
     fi
     INNGEST_LINK_REASON="" # hygiene: a later hunk must not see a stale scrub reason after a non-strict continue
 
+    # #10479: refuse before any container is touched if host :443 is held by something else.
+    if ! host_443_preflight; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: host :443 is not available to the prod container ($HOST_443_REASON) — keeping previous version"
+      final_write_state 1 "$HOST_443_REASON"
+      exit 1
+    fi
+
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
     # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
@@ -5663,6 +5695,7 @@ case "$COMPONENT" in
         -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
         -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
         -p 0.0.0.0:80:3000 \
+        -p 0.0.0.0:443:3443 \
         -p 0.0.0.0:3000:3000 \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above

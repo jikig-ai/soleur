@@ -19,12 +19,15 @@
 
 # Health monitor for the LB origin pool. Probes the REAL CF→origin path: the zone's
 # config rule sets `ssl = "flexible"` for app.soleur.ai (seo-config-rules.tf), so the
-# edge dials the origin over plain HTTP. cloud-init publishes the app container on host
-# :80 only (`-p 0.0.0.0:80:3000`); nothing listens on :443 — a type=https monitor (the
+# edge dials the origin over plain HTTP. The app container also publishes host :443
+# (`-p 0.0.0.0:443:3443`, #10479 / ADR-321), but that listener is INERT until an Origin CA
+# certificate is loaded, so until then nothing answers on :443 — a type=https monitor (the
 # 2026-11-01 create shape) fails TCP connect and permanently reports every origin down,
-# which the B1 self-fallback then hides. An http/:80 GET /health replicates the request
-# shape traffic actually takes. The origin firewall permits CF IPs on BOTH :80 and :443
-# (firewall.tf) — permit ≠ listener.
+# which the B1 self-fallback then hides. The monitor stays http/:80 until the listener is
+# proven on BOTH hosts and the monitor is shown to trust an Origin CA certificate (ADR-321
+# flip preconditions). An http/:80 GET /health replicates the request shape traffic
+# actually takes. The origin firewall permits CF IPs on BOTH :80 and :443 (firewall.tf) —
+# permit ≠ listener.
 resource "cloudflare_load_balancer_monitor" "web" {
   account_id       = var.cf_account_id
   type             = "http"
