@@ -4165,6 +4165,11 @@
   parser. The related authority, reservation and HTTP offline suites passed
   44 tests. The independent reviewer found no further concrete issue within
   the latch's narrowly stated single-instance model, but did not run tests.
+- A draft Pencil wireframe now depicts expired-notice, notice-review and
+  unresolved-draft states. Its three rendered screens were inspected after
+  fixing an initial flex-layout placement error. It is a design artifact,
+  not proof that these states or their retention promises are implemented;
+  actual UI QA, complete copy review and the resend protocol remain open.
 - No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection
