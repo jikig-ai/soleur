@@ -1266,6 +1266,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/git-data-rung2-rehearsal.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:1896
   ".github/workflows/git-data-cutover.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:9122
   ".github/workflows/cutover-inngest.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4824
+  ".github/workflows/build-inngest-bootstrap-image.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4583 readFileSync's the workflow for the arm↔gate parity pin
   ".github/workflows/inngest-key-rotate.yml"
   # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
   ".github/workflows/key-rotate.yml"
@@ -1728,6 +1729,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
+  # S4 manifest member (test-argv-bearer-sweep.sh:4336,5466): the stage names the script in S4_SCRIPT_MANIFEST /
+  # S4_REPLAY_FILES and executes/scans its real content under the recording curl.
+  "scripts/key-rotate.sh"
   # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
   # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
   "scripts/betterstack-ingest-probe.sh"
@@ -2427,6 +2431,21 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/constraint-scaffold/references/"
   "plugins/soleur/skills/constraint-scaffold/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh — derived edges could not reach its real inputs
+# (they are composed through $REAL_SCRIPTS/$REAL_REFS/$OLD_FIXTURE, never literal); declared from the paths it reads:
+# the SUT and the whole scripts/+references/ dirs it `cp -R`s into per-case sandboxes (:142), the pinned emitted
+# fixture, and the sourced git-fixture-env (:96). Fixture-shape apps/web-platform literals (:129, :368) are scratch-repo
+# mentions — accept rows, not edges (suite :8 "the real apps/web-platform tree is never touched").
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_REFRESH_STAGE_A_TEST_SH_PATHS=(
+  "plugins/soleur/skills/constraint-scaffold/references/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/"
+  "plugins/soleur/skills/constraint-scaffold/test/fixtures/"
+  "plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
   "scripts/test-all.sh"
 )
 
@@ -4816,6 +4835,16 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   ".github/workflows/"
   "scripts/lint-gh-argv-arg.py"
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-gh-dedupe-shape — the suite `cp -r`s the whole real .github tree into a scratch repo and
+# runs the linter over it (a planted-regression probe on each workflow), so EVERY .github file's state
+# feeds the verdict; dir entry, not a per-workflow name list.
+AFFECTED_SCRIPTS_LINT_GH_DEDUPE_SHAPE_PATHS=(
+  ".github/"
+  "scripts/lint-gh-dedupe-shape.py"
+  "scripts/lint-gh-dedupe-shape.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # apps/web-platform/infra/inngest-luks-sole-copy — derivation cannot reach these: the suite sources the

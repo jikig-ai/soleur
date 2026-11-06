@@ -167,13 +167,13 @@
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
 21	apps/web-platform/infra/ci-deploy.sh
-13	apps/web-platform/infra/ci-deploy.test.sh
+14	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
 1	apps/web-platform/infra/cron-egress-enforce-probe.sh
-9	apps/web-platform/infra/cron-egress-firewall.test.sh
+11	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
 8	apps/web-platform/infra/cron-egress-resolve.sh
 2	apps/web-platform/infra/cutover-inngest-workflow.test.sh
@@ -222,7 +222,7 @@
 1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
-106	apps/web-platform/infra/key-rotate-workflow.test.sh
+112	apps/web-platform/infra/key-rotate-workflow.test.sh
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
@@ -489,7 +489,7 @@
 2	scripts/infra-config-red-alert.test.sh
 8	scripts/inngest-key-rotate.sh
 1	scripts/kb-staleness-metric.sh
-3	scripts/key-rotate.sh
+4	scripts/key-rotate.sh
 9	scripts/learning-retrieval-bench.sh
 2	scripts/lib/git-data-boot-signal-poll.sh
 6	scripts/lib/mutation-harness-controls.sh
@@ -547,7 +547,7 @@
 3	scripts/test-all-orphan-log-retention.test.sh
 7	scripts/test-all-parallel-benchmark.test.sh
 8	scripts/test-all-parallel-contention.test.sh
-8	scripts/test-all-parallel-scheduler.test.sh
+6	scripts/test-all-parallel-scheduler.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
 9	scripts/test-all.sh
 2	scripts/test-all-weight-drift.test.sh

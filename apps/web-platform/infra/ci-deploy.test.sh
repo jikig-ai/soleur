@@ -337,8 +337,12 @@ case "$verb" in
     # in tests, matching pre-#6178 blanket-mock behavior).
     # `show -p ActiveEnterTimestamp --value …` prints MOCK_SYSTEMCTL_ACTIVE_ENTER (default empty —
     # systemd's value for a unit that has not entered active since boot): inngest_quiesce_state's
-    # void rule reads it.
-    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
+    # void rule reads it. #11920: a try-restart that actually fired records its OWN fresh value in
+    # $_sdir/active_enter_ts (written by the try-restart arm below) — the post-restart read the
+    # vector verify makes; the env var stays the PRE-restart baseline.
+    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then
+      if [[ -e "$_sdir/active_enter_ts" ]]; then cat "$_sdir/active_enter_ts"; else printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
+    fi
     exit 0
     ;;
   stop)
@@ -351,6 +355,21 @@ case "$verb" in
     exit 0 ;;
   enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
   start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  try-restart)
+    # #11920: try-restart restarts ONLY an active unit — on an inactive one it is a SILENT
+    # exit-0 no-op (the shape the vector verify, not sudo rc, must catch). Honors the legacy
+    # blanket fail plus MOCK_SYSTEMCTL_TRY_RESTART_FAIL; MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE
+    # models an accepted restart whose ActiveEnterTimestamp nevertheless does not move. A
+    # restart that fires records a fresh timestamp in $_sdir/active_enter_ts (the `show` arm
+    # above reads it back; MOCK_SYSTEMCTL_ACTIVE_ENTER_AFTER overrides the value).
+    [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]] && exit 1
+    [[ "${MOCK_SYSTEMCTL_TRY_RESTART_FAIL:-}" == "1" ]] && exit 1
+    if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]] \
+       && ! { [[ "$_stateful" == "1" ]] && [[ -e "$_sdir/stopped" ]]; } \
+       && [[ "${MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE:-}" != "1" ]]; then
+      printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER_AFTER:-$(date)}" > "$_sdir/active_enter_ts"
+    fi
+    exit 0 ;;
 esac
 # restart + any other verb honor the legacy blanket fail toggle (existing tests).
 if [[ "${MOCK_SYSTEMCTL_FAIL:-}" == "1" ]]; then
@@ -529,6 +548,24 @@ mode="${MOCK_DOCKER_MODE:-default}"
 # #10479: `docker port <name> 3443/tcp` (the host :443 pre-swap check). Answered WITHOUT a DOCKER_TRACE line so the exact-order
 # trace rows are unchanged. Default rc 1 = the running prod container does not publish 3443, i.e. it does not own host :443.
 if [[ "${1:-}" == "port" ]]; then exit "${MOCK_DOCKER_PORT_RC:-1}"; fi
+
+# #12167 PR-E. MOCK_RELAY_SEQ_LOG records `run <--name>`, `stop|rm <name>` and `probe <peer>` in order (the canary-gone-before-prod and
+# probe-after-swap rows). The relay peer probe is the one `docker exec` carrying RELAY_PROBE_PEER=: it is answered here, in EVERY mode and
+# without a DOCKER_TRACE line (so no exact-order trace row changes), with MOCK_RELAY_PROBE_OUT on stdout (printf, no newline: the real script
+# prints none) and MOCK_RELAY_PROBE_RC as its exit code; its flattened argv goes to MOCK_RELAY_PROBE_LOG.
+if [[ -n "${MOCK_RELAY_SEQ_LOG:-}" ]]; then
+  case "${1:-}" in
+    stop|rm) printf '%s %s\n' "$1" "${*: -1}" >> "$MOCK_RELAY_SEQ_LOG" ;;
+    run) _rn=""; _rp=""; for _ra in "$@"; do [[ "$_rp" == "--name" ]] && _rn="$_ra"; _rp="$_ra"; done; printf 'run %s\n' "$_rn" >> "$MOCK_RELAY_SEQ_LOG" ;;
+  esac
+fi
+if [[ "${1:-}" == "exec" && "$*" == *"RELAY_PROBE_PEER="* ]]; then
+  printf '%s\n' "$*" | tr '\n' ' ' | sed 's/ $//' >> "${MOCK_RELAY_PROBE_LOG:-/dev/null}"
+  printf '\n' >> "${MOCK_RELAY_PROBE_LOG:-/dev/null}"
+  _rpeer="${*#*RELAY_PROBE_PEER=}"; printf 'probe %s\n' "${_rpeer%% *}" >> "${MOCK_RELAY_SEQ_LOG:-/dev/null}"
+  printf '%s' "${MOCK_RELAY_PROBE_OUT:-}"
+  exit "${MOCK_RELAY_PROBE_RC:-0}"
+fi
 
 # #9871 canary DIAG bundle. The bundle is ONE `docker exec ... /bin/sh -c <script> soleur-canary-diag`;
 # the trailing literal is `$0` inside the script and is the token this arm keys on. It sits BEFORE the
@@ -1753,6 +1790,23 @@ run_deploy() {
       export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
     fi
     create_base_mocks "$MOCK_DIR"
+    # #12167 PR-E: MOCK_IP_ADDR_OUT (set, even empty) puts an `ip` mock first on PATH that prints it verbatim for every call, so
+    # resolve_proxy_bind and the self-IP filters see a known `ip -4 -o addr show`. Unset = the runner's real `ip`, as before.
+    if [[ -n "${MOCK_IP_ADDR_OUT+x}" ]]; then
+      printf '#!/bin/bash\nprintf "%%s\\n" "$MOCK_IP_ADDR_OUT"\n' > "$MOCK_DIR/ip"
+      chmod +x "$MOCK_DIR/ip"
+    fi
+
+    # #12167 PR-E: `sysctl -n net.ipv4.ip_nonlocal_bind` is read before the prod `docker run` (the relay publish degrades to loopback unless it is
+    # exactly 1). The mock is ALWAYS installed so no deploy depends on the runner's real sysctl: stdout MOCK_SYSCTL_OUT (default 0, the
+    # realistic pre-sysctl host), exit MOCK_SYSCTL_RC (default 0); any other sysctl call is a silent no-op. Each read is recorded in
+    # MOCK_RELAY_SEQ_LOG as `sysctl`.
+    printf '%s\n' '#!/bin/bash' \
+      'if [[ "${1:-}" == "-n" && "${2:-}" == "net.ipv4.ip_nonlocal_bind" ]]; then' \
+      '  [[ -n "${MOCK_RELAY_SEQ_LOG:-}" ]] && printf "sysctl\n" >> "$MOCK_RELAY_SEQ_LOG"' \
+      '  printf "%s" "${MOCK_SYSCTL_OUT-0}"; exit "${MOCK_SYSCTL_RC:-0}"' \
+      'fi' 'exit 0' > "$MOCK_DIR/sysctl"
+    chmod +x "$MOCK_DIR/sysctl"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -6797,6 +6851,113 @@ for qs_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled
     "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
 done
 unset qs_case qs_want qs_reason
+
+# --- #11920: restart vector — the no-SSH egress-token-rotation lever ----------------------
+# The arm runs `sudo /usr/bin/systemctl try-restart vector.service` — the EXACT argv of the
+# already-live DROPIN_TRY_RESTART sudoers grant — then verifies is-active=active AND an
+# ActiveEnterTimestamp advanced past a baseline taken BEFORE the verb (try-restart on an
+# inactive unit is a silent exit-0 no-op: the VERIFY, not sudo rc, is the gate), and fans
+# out AFTER the local verify passes (quiesce ordering). The inngest quiesce/health checks
+# do NOT apply to vector.
+echo ""
+echo "--- Restart vector (#11920) ---"
+
+# The grant argv is read back out of the shipped sudoers file — the lockstep pin is against
+# the live grant, not a restated literal, so drifting EITHER side goes red. An empty read
+# fails the assert arm (never vacuous).
+VR_SUDOERS="$SCRIPT_DIR/deploy-inngest-bootstrap.sudoers"
+VR_GRANT="$(grep -oE '/usr/bin/systemctl try-restart vector\.service' "$VR_SUDOERS" | head -1 || true)"
+
+# Happy path + argv lockstep: active unit whose timestamp advances past the pre-verb baseline
+# → success. The sudo log must carry the grant's exact argv line and never the plain
+# `restart` argv (Guard 3 mutation 3 — argv drift is a sudo denial on a real host).
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SUDO_LOG="$ROW_DIR/sudo" MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")"'
+ok=0
+if [[ -n "$VR_GRANT" && "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_RC" -eq 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qxF "$VR_GRANT" "$ROW_DIR/sudo" \
+     && ! grep -qxF '/usr/bin/systemctl restart vector.service' "$ROW_DIR/sudo" \
+     && [[ "$(jq -r '.component // ""' "$ROW_DIR/state" 2>/dev/null)" == "vector" ]] \
+     && grep -qF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector succeeds on an active unit — exact try-restart argv in the sudo log, component=vector frame" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC grant='$VR_GRANT' sudo=$(cat "$ROW_DIR/sudo" 2>/dev/null | tr '\n' '|')"
+
+# try-restart itself denied/failed (rc≠0 — e.g. a host missing the DROPIN_TRY_RESTART grant)
+# → vector_restart_failed BEFORE the verify.
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_TRY_RESTART_FAIL=1 MOCK_SUDO_LOG="$ROW_DIR/sudo"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qxF "$VR_GRANT" "$ROW_DIR/sudo" 2>/dev/null \
+     && ! grep -qF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: sudo/try-restart rc≠0 → vector_restart_failed (verify never reached)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# Guard 3 mutation 5: a stub systemctl that exits 0 on try-restart while is-active reports
+# inactive (the try-restart no-op on an inactive unit — silent by design). sudo rc alone
+# would pass this; the VERIFY must catch it → vector_restart_unverified.
+run_inngest_row "restart vector _ _" 'export MOCK_SUDO_LOG="$ROW_DIR/sudo"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qF 'VECTOR_RESTART_VERIFY: is-active=inactive' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: exit-0-but-inactive (try-restart no-op) → vector_restart_unverified" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# The second verify half: unit IS active but ActiveEnterTimestamp did not advance past the
+# pre-verb baseline (accepted restart that did not actually re-enter active) → unverified.
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_TRY_RESTART_NOADVANCE=1 MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")"'
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && grep -qF 'VECTOR_RESTART_VERIFY: ActiveEnterTimestamp did not advance' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: active but timestamp not advanced → vector_restart_unverified" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+
+# Fan-out (Guard 3 mutation 2): with SOLEUR_DEPLOY_PEERS armed the SAME `restart vector _ _`
+# forwards to every peer AFTER the local restart+verify pass — quiesce ordering, proven by
+# the logger line order VERIFY:ok → FANOUT:accepted → SUCCESS.
+VRF_DIR="$(mktemp -d)"
+jq -n '[{id:"deploy-peer","trigger-rule":{match:{type:"payload-hmac-sha256",secret:"fixture-fanout-secret",parameter:{source:"header",name:"X-Signature-256"}}}}]' \
+  > "$VRF_DIR/hooks.json"
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SUDO_LOG="$ROW_DIR/sudo" MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")" SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="'"$VRF_DIR"'/hooks.json"'
+ok=0
+_vln="$(grep -nF 'VECTOR_RESTART_VERIFY: ok' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+_fln="$(grep -nF 'FANOUT: peer 10.9.9.9 accepted' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+_sln="$(grep -nF 'SUCCESS: restart vector' "$ROW_DIR/logger" 2>/dev/null | head -1 | cut -d: -f1 || true)"
+if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" \
+     && -n "$_vln" && -n "$_fln" && -n "$_sln" \
+     && "$_vln" -lt "$_fln" && "$_fln" -lt "$_sln" ]]; then ok=1; fi
+row_verdict "restart vector fans out to peers AFTER local restart+verify (VERIFY → FANOUT → SUCCESS ordering)" "$ok" \
+  "reason=$ROW_REASON verify@$_vln fanout@$_fln success@$_sln"
+unset _vln _fln _sln
+
+# A peer that does NOT accept the forward fails the arm loud — mirrors the quiesce/enable
+# arms' `*_peer_fanout_unaccepted` contract (the peer's own verdict is unreadable here).
+run_inngest_row "restart vector _ _" 'export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d "@'"$((QS_NOW - 120))"'")" SOLEUR_DEPLOY_PEERS="10.9.9.9" SOLEUR_HOOKS_JSON="'"$VRF_DIR"'/hooks.json" MOCK_CURL_DEPLOY_PEER_CODE=500'
+ok=0
+if [[ "$ROW_REASON" == "vector_peer_fanout_unaccepted" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qF 'FANOUT: peer 10.9.9.9 NOT accepted' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector: a non-accepted peer fan-out → vector_peer_fanout_unaccepted" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+rm -rf "$VRF_DIR"; unset VRF_DIR VR_SUDOERS VR_GRANT
+
+# Component scoping: the allowlist stays CLOSED — an inert component still refuses
+# component_not_restartable (vector's addition did not widen it).
+assert_state_contains "restart of an inert component rejected (component_not_restartable)" \
+  "component_not_restartable" "1" \
+  "restart grafana _ _"
+
+# Quiesce-check scoping: the inngest-only refusal must NOT leak into the vector arm. Seed the
+# quiesced-inngest shape (inactive+disabled+valid marker): if the refusal ran here it would
+# exit inngest_quiesced_restart_refused BEFORE the verb — instead the vector arm still runs
+# try-restart (a no-op on the inactive stub) and lands vector_restart_unverified on verify.
+run_inngest_row "restart vector _ _" 'qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "vector_restart_unverified" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+     && grep -qx 'try-restart' "$ROW_DIR/verbs" \
+     && ! grep -qF 'INNGEST_RESTART_REFUSED' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart vector skips the inngest quiesce refusal (quiesced inngest shape + marker → arm still runs)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
 
 # inngest_quiesce_state, driven DIRECTLY (the contract §2 tri-state): extracted from ci-deploy.sh by
 # its definition line and run against the systemctl mock. Covers the marker-validity and void rules
@@ -12912,6 +13073,297 @@ unset FO94_OK FO94_MSG FO94_N FO94_REFUSE_OK FO94_REFUSE_MSG FO94_REFUSE_N FO94_
 rm -rf "$FO99"; unset FO99 FO99_E FO99_E_RC FO99_ARGV_N FO99_REFUSE_N _s _c _got _want _case _label _sec _mode _logmsg FO99_SECRETS FO99_CMDS FO99_LONG FO99_RAN FO99_BAD FO99_BADMSG FO99_ARGV_OK FO99_ARGV_MSG \
   FO99_REFUSE_OK FO99_REFUSE_MSG FO99_SNIP_N; unset -f fo99_run fo99_oracle
 
+# ---------------------------------------------------------------------------------------------------------------------
+# #12167 PR-E -- the session relay (:8443) is PUBLISHED on the host's private IP and bound 0.0.0.0 INSIDE the bridge netns.
+# The app container runs on the default docker bridge and publishes only 80/3000/443. The relay used to be handed the HOST's
+# 10.0.1.x as SOLEUR_PROXY_BIND, an address that does not exist in a bridge netns (listen EADDRNOTAVAIL) and the port was never
+# published. Prod now carries `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"` (an empty PROXY_BIND is a loopback publish: unreachable by
+# peers, fail-closed, argv stays unconditional for the closed-world tuple gate), `-e SOLEUR_PROXY_BIND=0.0.0.0` and
+# `-e SOLEUR_PROXY_PORT=8443`; the canary publishes no 8443 and carries a literal empty SOLEUR_PROXY_BIND (no_bind, so no
+# blue/green collision). resolve_proxy_bind is anchored on `inet 10.0.1.x/`. After the prod swap a bounded best-effort peer
+# probe prints `relay_peer_probe peer=<ip> result=ok|refused|timeout|tls|denied` and never fails the deploy.
+# Rows: PE-1/2 argv (private IP, loopback fallback), PE-3 resolver table + mutant, PE-4 canary removed before prod starts,
+# PE-5..9 probe flow, PE-10 JS outcomes against local TLS fixtures, PE-11 static pins.
+echo ""
+echo "--- #12167 PR-E: relay publish, anchored resolver, peer probe ---"
+
+PE_DIR="$(mktemp -d)"
+assert_fixture_dir "$PE_DIR"
+PE_IP_LO='1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever'
+PE_IP_REAL='2: enp7s0    inet 10.0.1.20/32 brd 10.0.1.20 scope global dynamic enp7s0\       valid_lft 86000sec preferred_lft 86000sec'
+PE_IP_DECOY='3: br9    inet 210.0.1.5/24 brd 210.0.1.255 scope global br9\       valid_lft forever preferred_lft forever'
+PE_ROSTER_BODY='KEY=value
+DOPPLER_PROJECT=soleur
+DOPPLER_CONFIG=prd
+DOPPLER_ENVIRONMENT=prd
+GITHUB_APP_ID=4242
+GITHUB_APP_PRIVATE_KEY=mock-prd-app-key'
+printf '%s\nSOLEUR_HOST_ROSTER={"web-1":"10.0.1.20","web-2":"10.0.1.21"}\n' "$PE_ROSTER_BODY" > "$PE_DIR/roster2.env"
+printf '%s\nSOLEUR_HOST_ROSTER={"web-1":"10.0.1.20","web-2":"10.0.1.21","web-3":"10.0.1.22"}\n' "$PE_ROSTER_BODY" > "$PE_DIR/roster3.env"
+printf '%s\nSOLEUR_HOST_ROSTER={"web-1":"10.0.1.20"}\n' "$PE_ROSTER_BODY" > "$PE_DIR/rosterself.env"
+printf '%s\nSOLEUR_HOST_ROSTER={"web-1":"10.0.1.20","web-2":"10.0.1.21; touch /tmp/pwned","web-3":"evil.example","web-4":"10.0.1.21","web-5":"10.0.1.21","web-6":"10.0.1.20"}\n' "$PE_ROSTER_BODY" > "$PE_DIR/rostergarbage.env"
+printf '%s\n' "$PE_ROSTER_BODY" > "$PE_DIR/noroster.env"
+
+# pe_deploy <label> [VAR=value ...]: one apparmor-trace deploy; leaves $PE_DIR/<label>.{out,log,seq,exec} and PE_RC.
+# The probe's own `docker exec` is answered by the mock (MOCK_RELAY_PROBE_OUT / _RC) and recorded in MOCK_RELAY_SEQ_LOG.
+pe_deploy() {
+  local label="$1"; shift
+  PE_RC=0
+  : > "$PE_DIR/$label.log"; : > "$PE_DIR/$label.seq"; : > "$PE_DIR/$label.exec"
+  PE_OUT="$(
+    export MOCK_DOCKER_MODE=apparmor-trace MOCK_LOGGER_CAPTURE_FILE="$PE_DIR/$label.log" MOCK_RELAY_SEQ_LOG="$PE_DIR/$label.seq" \
+           MOCK_RELAY_PROBE_LOG="$PE_DIR/$label.exec" CI_DEPLOY_STATE="$PE_DIR/$label.state"
+    local kv
+    for kv in "$@"; do export "$kv"; done
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  )" || PE_RC=$?
+  printf '%s\n' "$PE_OUT" > "$PE_DIR/$label.out"
+}
+pe_line() { # <label> <name soleur-web-platform | soleur-web-platform-canary>: the docker run args line of that container
+  /usr/bin/grep '^DOCKER_RUN_ARGS:' "$PE_DIR/$1.out" | /usr/bin/grep -F -- "--name $2 " | head -n 1
+}
+pe_probe_lines() { /usr/bin/grep -F 'relay_peer_probe' "$PE_DIR/$1.log" || true; }
+pe_row() { # <id> <ok 0|1> <pass text> <fail detail>
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $1 $3"; else FAIL=$((FAIL + 1)); echo "  FAIL: $1 $3 -- $4"; fi
+}
+
+# PE-1: a private IP resolves from `ip` (a 210.0.1.5 interface listed BEFORE it must not win) and is the PUBLISH address; the container
+# binds 0.0.0.0; the canary publishes no 8443 and carries a literal empty bind.
+pe_deploy pe1 MOCK_SYSCTL_OUT=1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL"
+PE_PROD="$(pe_line pe1 soleur-web-platform)"; PE_CAN="$(pe_line pe1 soleur-web-platform-canary)"
+PE_OK=1
+[[ "$PE_RC" -eq 0 ]] || PE_OK=0
+[[ "$PE_PROD" == *" -p 10.0.1.20:8443:8443 "* ]] || PE_OK=0
+[[ "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* ]] || PE_OK=0
+[[ "$PE_PROD" == *" -e SOLEUR_PROXY_PORT=8443 "* ]] || PE_OK=0
+[[ "$PE_PROD" != *"10.0.1.5"* && "$PE_PROD" != *"-e SOLEUR_PROXY_BIND=10."* ]] || PE_OK=0
+[[ -n "$PE_CAN" && "$PE_CAN" != *8443* && "$PE_CAN" == *" -e SOLEUR_PROXY_BIND= -e "* && "$PE_CAN" != *"SOLEUR_PROXY_PORT"* ]] || PE_OK=0
+pe_row "PE-1" "$PE_OK" "prod publishes 10.0.1.20:8443:8443 (the real address, not the 210.0.1.5 decoy listed first), binds 0.0.0.0, SOLEUR_PROXY_PORT=8443; canary: no 8443, literal empty SOLEUR_PROXY_BIND" \
+  "rc=$PE_RC prod=[$(printf '%s' "$PE_PROD" | cut -c1-600)] canary=[$(printf '%s' "$PE_CAN" | cut -c1-300)]"
+
+# PE-2: no 10.0.1.x on the host (or an empty PROXY_BIND) -> a LOOPBACK publish (unreachable by peers, fail-closed), same argv shape.
+pe_deploy pe2 MOCK_SYSCTL_OUT=1 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_DECOY"
+PE_PROD="$(pe_line pe2 soleur-web-platform)"
+PE_OK=1
+[[ "$PE_RC" -eq 0 ]] || PE_OK=0
+[[ "$PE_PROD" == *" -p 127.0.0.1:8443:8443 "* && "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* ]] || PE_OK=0
+[[ "$PE_PROD" != *"-p 0.0.0.0:8443"* && "$PE_PROD" != *"-p :8443"* && "$PE_PROD" != *"-p 8443"* ]] || PE_OK=0
+pe_row "PE-2" "$PE_OK" "no private address (only a 210.0.1.5 decoy) -> prod publishes 127.0.0.1:8443:8443, never 0.0.0.0 or an unqualified 8443" \
+  "rc=$PE_RC prod=[$(printf '%s' "$PE_PROD" | cut -c1-600)]"
+
+# PE-3: resolve_proxy_bind itself, executed from the real script text against a stubbed `ip`. The anchored `inet 10.0.1.x/` match is
+# compared with the OLD unanchored grep as a mutant: it must disagree on the 210.0.1.5-first input, so the row is not vacuous.
+awk '/^resolve_proxy_bind\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT" > "$PE_DIR/resolver.sh"
+pe_resolve() { # <resolver file> <ip output>: prints the resolved address (empty when none) and the rc
+  local f="$1" out="$2"
+  ( ip() { printf '%s\n' "$PE_IP_FIXTURE"; }; PE_IP_FIXTURE="$out"; unset SOLEUR_PROXY_BIND_OVERRIDE
+    # shellcheck disable=SC1090
+    source "$f"; r="$(resolve_proxy_bind)" && rc=0 || rc=$?; printf '%s|%s' "$r" "$rc" )
+}
+# the OLD resolver, rebuilt from the real function by swapping the extraction line (a MUTANT of the new text)
+awk '{ if ($0 ~ /ip=\$\(ip -4 -o addr show/) print "  ip=$(ip -4 -o addr show 2>/dev/null | grep -oE '"'"'10\\.0\\.1\\.[0-9]+'"'"' | head -1 || true)"; else print }' "$PE_DIR/resolver.sh" > "$PE_DIR/resolver-old.sh"
+PE_OK=1; PE_MSG=""
+declare -a PE_CASES=(
+  "$PE_IP_LO"$'\n'"$PE_IP_REAL|10.0.1.20|0"
+  "$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL|10.0.1.20|0"
+  "$PE_IP_DECOY|NONE|1"
+  "3: br9    inet 110.0.1.7/24 scope global br9|NONE|1"
+  "4: eth1    inet 10.0.1.9/24 scope global eth1"$'\n'"$PE_IP_REAL|10.0.1.9|0"
+  "$PE_IP_LO|NONE|1"
+)
+for PE_C in "${PE_CASES[@]}"; do
+  PE_IN="${PE_C%|*|*}"; PE_REST="${PE_C#"$PE_IN"|}"; PE_WANT="${PE_REST%|*}"; PE_WANTRC="${PE_REST##*|}"
+  [[ "$PE_WANT" == NONE ]] && PE_WANT=""
+  PE_GOT="$(pe_resolve "$PE_DIR/resolver.sh" "$PE_IN")"
+  [[ "$PE_GOT" == "${PE_WANT}|${PE_WANTRC}" ]] || { PE_OK=0; PE_MSG+=" [got '$PE_GOT' want '${PE_WANT}|${PE_WANTRC}' for: $(printf '%s' "$PE_IN" | head -c 60)]"; }
+done
+# the override still wins, verbatim
+PE_GOT="$( ( SOLEUR_PROXY_BIND_OVERRIDE=10.9.9.9; source "$PE_DIR/resolver.sh"; resolve_proxy_bind ) )"
+[[ "$PE_GOT" == "10.9.9.9" ]] || { PE_OK=0; PE_MSG+=" [override lost: '$PE_GOT']"; }
+# the mutant (old unanchored grep) must resolve the decoy-first input to the SUBSTRING 10.0.1.5
+PE_MUT="$(pe_resolve "$PE_DIR/resolver-old.sh" "$PE_IP_LO"$'\n'"$PE_IP_DECOY"$'\n'"$PE_IP_REAL")"
+[[ "$PE_MUT" == "10.0.1.5|0" ]] || { PE_OK=0; PE_MSG+=" [mutant (unanchored grep) did not resolve 10.0.1.5 from 210.0.1.5: '$PE_MUT' -- the row cannot tell the two apart]"; }
+pe_row "PE-3" "$PE_OK" "resolve_proxy_bind: anchored on 'inet 10.0.1.x/' (210.0.1.5 and 110.0.1.7 never resolve, a decoy listed first loses to the real address, override verbatim); the old unanchored grep resolves 10.0.1.5 from 210.0.1.5" "$PE_MSG"
+
+# PE-4: the canary is stopped and removed BEFORE the prod container starts (no blue/green :8443 collision, and the prod publish never races a canary).
+pe_deploy pe4 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL"
+PE_RUN_CAN="$(/usr/bin/grep -n '^run soleur-web-platform-canary$' "$PE_DIR/pe4.seq" | head -n 1 | cut -d: -f1 || true)"
+PE_RM_CAN="$(awk -v a="${PE_RUN_CAN:-0}" 'NR > a && $0 == "rm soleur-web-platform-canary" { print NR; exit }' "$PE_DIR/pe4.seq")"
+PE_RUN_PROD="$(/usr/bin/grep -n '^run soleur-web-platform$' "$PE_DIR/pe4.seq" | head -n 1 | cut -d: -f1 || true)"
+PE_OK=1
+[[ -n "$PE_RM_CAN" && -n "$PE_RUN_PROD" && -n "$PE_RUN_CAN" ]] || PE_OK=0
+[[ "$PE_OK" -eq 1 && "$PE_RUN_CAN" -lt "$PE_RM_CAN" && "$PE_RM_CAN" -lt "$PE_RUN_PROD" ]] || PE_OK=0
+pe_row "PE-4" "$PE_OK" "docker run canary < docker rm canary < docker run prod (the canary is gone before the prod publish)" "seq=[$(tr '\n' ',' < "$PE_DIR/pe4.seq")]"
+
+# PE-5: the probe -- one `docker exec` per OTHER roster peer, after the prod run, a closed-grammar journal line, argv free of the cert.
+pe_deploy pe5 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster3.env" MOCK_RELAY_PROBE_OUT=ok
+PE_OK=1
+[[ "$PE_RC" -eq 0 ]] || PE_OK=0
+[[ "$(jq -r '.reason' "$PE_DIR/pe5.state" 2>/dev/null)" == "ok" ]] || PE_OK=0
+PE_PL="$(pe_probe_lines pe5)"
+[[ "$(wc -l <<<"$PE_PL")" -eq 2 ]] || PE_OK=0
+/usr/bin/grep -qxF -- '-t ci-deploy relay_peer_probe peer=10.0.1.21 result=ok' <<<"$PE_PL" || PE_OK=0
+/usr/bin/grep -qxF -- '-t ci-deploy relay_peer_probe peer=10.0.1.22 result=ok' <<<"$PE_PL" || PE_OK=0
+/usr/bin/grep -qF -- 'peer=10.0.1.20' <<<"$PE_PL" && PE_OK=0
+[[ "$(wc -l < "$PE_DIR/pe5.exec")" -eq 2 ]] || PE_OK=0
+/usr/bin/grep -qE '^exec -e RELAY_PROBE_PEER=10\.0\.1\.21 -e RELAY_PROBE_PORT=8443 soleur-web-platform node -e ' "$PE_DIR/pe5.exec" || PE_OK=0
+/usr/bin/grep -qE -- '-----BEGIN|-e PROXY_TLS|--env-file' "$PE_DIR/pe5.exec" && PE_OK=0
+PE_RUNP="$(/usr/bin/grep -n '^run soleur-web-platform$' "$PE_DIR/pe5.seq" | head -n 1 | cut -d: -f1 || true)"
+PE_EXE1="$(/usr/bin/grep -n '^probe ' "$PE_DIR/pe5.seq" | head -n 1 | cut -d: -f1 || true)"
+[[ -n "$PE_RUNP" && -n "$PE_EXE1" && "$PE_RUNP" -lt "$PE_EXE1" ]] || PE_OK=0
+pe_row "PE-5" "$PE_OK" "two-peer roster minus self: one bounded docker exec per peer AFTER the prod run, journal 'relay_peer_probe peer=<ip> result=ok', no cert/key text on any argv, deploy ok" \
+  "rc=$PE_RC lines=[$(pe_probe_lines pe5 | tr '\n' ';')] exec=[$(cut -c1-160 "$PE_DIR/pe5.exec" | tr '\n' ';')] seq=[$(tr '\n' ',' < "$PE_DIR/pe5.seq")]"
+
+# PE-6: the result is a CLOSED grammar: each of the five tokens passes through as itself; anything else (output noise, injection, a
+# non-zero rc) is a `skipped=exec_failed` line that carries none of the output, and the deploy still succeeds.
+PE_OK=1; PE_MSG=""
+for PE_T in ok refused timeout tls denied; do
+  pe_deploy pe6 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT="$PE_T"
+  [[ "$(pe_probe_lines pe6)" == "-t ci-deploy relay_peer_probe peer=10.0.1.21 result=$PE_T" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [$PE_T -> $(pe_probe_lines pe6 | tr '\n' ';') rc=$PE_RC]"; }
+done
+for PE_T in 'ok extra' 'OK' 'result=denied' $'ok\nrefused' '$(id)' 'BEGIN CERTIFICATE' ''; do
+  pe_deploy pe6 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT="$PE_T"
+  [[ "$(pe_probe_lines pe6)" == "-t ci-deploy relay_peer_probe peer=10.0.1.21 skipped=exec_failed" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [noise '$(printf '%s' "$PE_T" | head -c 20)' -> $(pe_probe_lines pe6 | tr '\n' ';') rc=$PE_RC]"; }
+done
+pe_deploy pe6 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT=denied MOCK_RELAY_PROBE_RC=1
+[[ "$(pe_probe_lines pe6)" == "-t ci-deploy relay_peer_probe peer=10.0.1.21 skipped=exec_failed" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [rc 1 with a token -> $(pe_probe_lines pe6 | tr '\n' ';') rc=$PE_RC]"; }
+pe_deploy pe6 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT=ok MOCK_RELAY_PROBE_RC=124
+[[ "$(pe_probe_lines pe6)" == "-t ci-deploy relay_peer_probe peer=10.0.1.21 skipped=exec_failed" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [timeout(124) -> $(pe_probe_lines pe6 | tr '\n' ';') rc=$PE_RC]"; }
+[[ "$(jq -r '.reason' "$PE_DIR/pe6.state" 2>/dev/null)" == "ok" ]] || { PE_OK=0; PE_MSG+=" [state reason after a failed probe is not ok]"; }
+pe_row "PE-6" "$PE_OK" "closed grammar: the five result tokens pass as themselves; noise/injection/non-zero rc/timeout -> 'skipped=exec_failed' with none of the output; the deploy state stays ok" "$PE_MSG"
+
+# PE-7: skips are named, never silent, and run no exec: no private bind, no roster, only self, and non-IP / injected roster values are never dialled.
+PE_OK=1; PE_MSG=""
+pe_deploy pe7a MOCK_IP_ADDR_OUT="$PE_IP_LO" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT=ok
+[[ "$(pe_probe_lines pe7a)" == "-t ci-deploy relay_peer_probe skipped=no_bind" && ! -s "$PE_DIR/pe7a.exec" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [no_bind: $(pe_probe_lines pe7a | tr '\n' ';')]"; }
+pe_deploy pe7b MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_RELAY_PROBE_OUT=ok
+[[ "$(pe_probe_lines pe7b)" == "-t ci-deploy relay_peer_probe skipped=no_roster" && ! -s "$PE_DIR/pe7b.exec" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [no_roster: $(pe_probe_lines pe7b | tr '\n' ';')]"; }
+pe_deploy pe7c MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/rosterself.env" MOCK_RELAY_PROBE_OUT=ok
+[[ "$(pe_probe_lines pe7c)" == "-t ci-deploy relay_peer_probe skipped=no_peers" && ! -s "$PE_DIR/pe7c.exec" && "$PE_RC" -eq 0 ]] || { PE_OK=0; PE_MSG+=" [no_peers: $(pe_probe_lines pe7c | tr '\n' ';')]"; }
+pe_deploy pe7d MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/rostergarbage.env" MOCK_RELAY_PROBE_OUT=ok
+[[ "$(pe_probe_lines pe7d)" == "-t ci-deploy relay_peer_probe peer=10.0.1.21 result=ok" && "$(wc -l < "$PE_DIR/pe7d.exec")" -eq 1 && "$PE_RC" -eq 0 ]] \
+  && ! /usr/bin/grep -qE 'evil|touch|pwned' "$PE_DIR/pe7d.exec" "$PE_DIR/pe7d.log" || { PE_OK=0; PE_MSG+=" [garbage roster values: $(pe_probe_lines pe7d | tr '\n' ';') exec=$(wc -l < "$PE_DIR/pe7d.exec")]"; }
+pe_row "PE-7" "$PE_OK" "skips are named (no_bind / no_roster / no_peers) with no exec; a roster value that is not a 10.0.1.x address is never dialled or logged, and a duplicate peer is dialled once" "$PE_MSG"
+
+# PE-8: the probe never runs when the deploy did not reach the prod swap (canary failed), and never changes the exit code of one that did.
+pe_deploy pe8 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT=ok MOCK_DOCKER_MODE=trace MOCK_DOCKER_RUN_FAIL_CANARY=1
+PE_OK=1
+[[ "$PE_RC" -ne 0 && -z "$(pe_probe_lines pe8)" && ! -s "$PE_DIR/pe8.exec" ]] || PE_OK=0
+pe_deploy pe8 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_GAK_PRD_BODY="$PE_DIR/roster2.env" MOCK_RELAY_PROBE_OUT=ok MOCK_DOCKER_MODE=trace MOCK_DOCKER_RUN_FAIL_PROD=1
+[[ "$PE_RC" -ne 0 && -z "$(pe_probe_lines pe8)" && ! -s "$PE_DIR/pe8.exec" ]] || PE_OK=0
+pe_row "PE-8" "$PE_OK" "a failed canary or a failed prod start runs no peer probe (it only follows a successful prod swap)" "rc=$PE_RC lines=[$(pe_probe_lines pe8 | tr '\n' ';')]"
+
+# PE-9: static pins on the probe -- bounded by `timeout`, best-effort (`|| true` at the call site), the call sits after the prod swap and before
+# the success line, and the journal text is the closed grammar (no output interpolation beyond the validated peer and the enum result).
+PE_BODY="$(awk '/^relay_peer_probe\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT")"
+PE_OK=1; PE_MSG=""
+[[ -n "$PE_BODY" ]] || { PE_OK=0; PE_MSG+=" [relay_peer_probe not found]"; }
+/usr/bin/grep -qE 'timeout [0-9]+ docker exec ' <<<"$PE_BODY" || { PE_OK=0; PE_MSG+=" [docker exec not bounded by timeout]"; }
+PE_CALL="$(/usr/bin/grep -nE '^[[:space:]]+relay_peer_probe \|\| true$' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1 || true)"
+PE_SWAP="$(/usr/bin/grep -nF -- '--name soleur-web-platform \' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1 || true)"
+PE_DONE="$(/usr/bin/grep -nF -- 'echo "Deploy succeeded"' "$DEPLOY_SCRIPT" | head -n 1 | cut -d: -f1 || true)"
+[[ -n "$PE_CALL" && -n "$PE_SWAP" && -n "$PE_DONE" && "$PE_SWAP" -lt "$PE_CALL" && "$PE_CALL" -lt "$PE_DONE" ]] || { PE_OK=0; PE_MSG+=" [call order swap=$PE_SWAP call=$PE_CALL done=$PE_DONE]"; }
+PE_LOGS="$(printf '%s\n' "$PE_BODY" | /usr/bin/grep -oE 'logger -t "\$LOG_TAG" "[^"]*"' | sort -u || true)"
+[[ -n "$PE_LOGS" && "$(printf '%s\n' "$PE_LOGS" | /usr/bin/grep -c 'relay_peer_probe' || true)" -eq "$(printf '%s\n' "$PE_LOGS" | /usr/bin/grep -c . || true)" ]] || { PE_OK=0; PE_MSG+=" [a logger line outside the relay_peer_probe grammar]"; }
+! /usr/bin/grep -qE '\$out|\$\(' <<<"$PE_LOGS" || { PE_OK=0; PE_MSG+=" [a log line interpolates probe output]"; }
+pe_row "PE-9" "$PE_OK" "relay_peer_probe is timeout-bounded, called best-effort after the prod swap and before 'Deploy succeeded', and every journal line is in the closed relay_peer_probe grammar" "$PE_MSG"
+
+# PE-10: the probe's node script, extracted from the real ci-deploy.sh, against local TLS fixtures. One row, seven outcomes, each a
+# DIFFERENT mapping (so a script that always prints one token fails): ok, denied (a close frame right after the 101), refused (a
+# non-101 answer, a closed port), tls (an untrusted cert, no pinned cert at all) and timeout (a peer that accepts and never speaks TLS).
+awk "/^readonly RELAY_PROBE_JS='\$/{f=1;next} f&&/^'\$/{exit} f{print}" "$DEPLOY_SCRIPT" > "$PE_DIR/probe.js"
+PE_OK=1; PE_MSG=""
+if ! command -v node >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || [[ ! -s "$PE_DIR/probe.js" ]]; then
+  PE_OK=0; PE_MSG=" [node/openssl missing or the script was not extracted: $(wc -c < "$PE_DIR/probe.js") bytes]"
+else
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=pe10" -addext "subjectAltName=IP:127.0.0.1" -keyout "$PE_DIR/k.pem" -out "$PE_DIR/c.pem" -days 2 >/dev/null 2>&1 || PE_OK=0
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=pe10other" -addext "subjectAltName=IP:127.0.0.1" -keyout "$PE_DIR/k2.pem" -out "$PE_DIR/c2.pem" -days 2 >/dev/null 2>&1 || PE_OK=0
+  cat > "$PE_DIR/srv.js" <<'SRVEOF'
+const https = require("https"), fs = require("fs"), net = require("net");
+const dir = process.argv[2], mode = process.argv[3], port = Number(process.argv[4]);
+if (mode === "blackhole") {
+  net.createServer(() => {}).listen(port, "127.0.0.1");
+} else {
+  const s = https.createServer({ key: fs.readFileSync(dir + "/k.pem"), cert: fs.readFileSync(dir + "/c.pem") }, (q, r) => { r.writeHead(404); r.end(); });
+  s.on("upgrade", (q, sk) => {
+    if (mode === "nonws") { sk.end("HTTP/1.1 400 Bad Request\r\n\r\n"); return; }
+    sk.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n");
+    if (mode === "deny") { sk.write(Buffer.from([0x88, 0x02, 0x0f, 0xae])); sk.end(); }
+  });
+  s.listen(port, "127.0.0.1");
+}
+SRVEOF
+  PE_PORT_BASE=$((20000 + RANDOM % 20000))
+  PE_PIDS=()
+  for PE_M in ok:0 deny:1 nonws:2 blackhole:3; do
+    node "$PE_DIR/srv.js" "$PE_DIR" "${PE_M%%:*}" "$((PE_PORT_BASE + ${PE_M##*:}))" >/dev/null 2>&1 &
+    PE_PIDS+=("$!")
+  done
+  for PE_W in $(seq 1 50); do
+    PE_UP=0
+    for PE_N in 0 1 2 3; do (exec 3<>"/dev/tcp/127.0.0.1/$((PE_PORT_BASE + PE_N))") 2>/dev/null && PE_UP=$((PE_UP + 1)); done
+    [[ "$PE_UP" -eq 4 ]] && break
+    sleep 0.1
+  done
+  pe_js() { # <port> <pinned cert pem>
+    RELAY_PROBE_PEER=127.0.0.1 RELAY_PROBE_PORT="$1" PROXY_TLS_CERT="$2" RELAY_PROBE_TIMEOUT_MS=1500 timeout 20 node -e "$(cat "$PE_DIR/probe.js")" 2>/dev/null
+  }
+  PE_CA="$(cat "$PE_DIR/c.pem")"; PE_CA2="$(cat "$PE_DIR/c2.pem")"
+  for PE_X in "ok|$PE_PORT_BASE|$PE_CA" "denied|$((PE_PORT_BASE + 1))|$PE_CA" "refused|$((PE_PORT_BASE + 2))|$PE_CA" "refused|$((PE_PORT_BASE + 9))|$PE_CA" \
+              "tls|$PE_PORT_BASE|$PE_CA2" "tls|$PE_PORT_BASE|" "timeout|$((PE_PORT_BASE + 3))|$PE_CA"; do
+    PE_WANT="${PE_X%%|*}"; PE_REST="${PE_X#*|}"; PE_P="${PE_REST%%|*}"; PE_PEM="${PE_REST#*|}"
+    PE_GOT="$(pe_js "$PE_P" "$PE_PEM")"
+    [[ "$PE_GOT" == "$PE_WANT" ]] || { PE_OK=0; PE_MSG+=" [want $PE_WANT got '$PE_GOT' (port +$((PE_P - PE_PORT_BASE)))]"; }
+  done
+  kill "${PE_PIDS[@]}" 2>/dev/null || true
+  wait "${PE_PIDS[@]}" 2>/dev/null || true
+fi
+pe_row "PE-10" "$PE_OK" "the in-container node probe maps a peer to ok / denied / refused (non-101, closed port) / tls (untrusted cert, no pinned cert) / timeout against local TLS fixtures" "$PE_MSG"
+
+# PE-11: the publish and bind lines in the script text itself (comment-stripped), beside the closed-world gate that parses them.
+PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
+PE_OK=1; PE_MSG=""
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod publish line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-p [^ ]*8443')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [an other 8443 publish exists]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-e SOLEUR_PROXY_BIND=0.0.0.0 \')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod bind line count != 1]"; }
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_PROXY_BIND= \\$')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [canary empty-bind line count != 1]"; }
+! /usr/bin/grep -qF -- '-e SOLEUR_PROXY_BIND="$PROXY_BIND"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the host IP still reaches the container as the bind]"; }
+pe_row "PE-11" "$PE_OK" "comment-stripped script: one loopback-fallback publish, one literal 0.0.0.0 bind (prod), one literal empty bind (canary), the host IP never handed to the container as its bind" "$PE_MSG"
+
+# PE-12: the reboot-race gate. A publish on an IP that is not configured yet fails the whole container start, and docker-proxy can bind a
+# not-yet-configured address only with net.ipv4.ip_nonlocal_bind=1 (shipped by a separate PR). Until it is exactly 1 the prod publish
+# stays on loopback (today's behaviour) and ONE closed-grammar warning is logged; the deploy never fails because of it; and the read
+# happens BEFORE the prod docker run. Nothing else in the argv changes.
+PE_OK=1; PE_MSG=""
+for PE_X in "1|10.0.1.20|0|0" "0|127.0.0.1|0|1" "|127.0.0.1|0|1" "2|127.0.0.1|0|1" "1 |127.0.0.1|0|1" "yes|127.0.0.1|0|1" "1|127.0.0.1|1|1" "0|127.0.0.1|1|1" "|127.0.0.1|1|1"; do
+  PE_V="${PE_X%%|*}"; PE_REST="${PE_X#*|}"; PE_WANT="${PE_REST%%|*}"; PE_REST="${PE_REST#*|}"; PE_RCV="${PE_REST%%|*}"; PE_WARN="${PE_REST##*|}"
+  pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO"$'\n'"$PE_IP_REAL" MOCK_SYSCTL_OUT="$PE_V" MOCK_SYSCTL_RC="$PE_RCV"
+  PE_PROD="$(pe_line pe12 soleur-web-platform)"
+  PE_W="$(/usr/bin/grep -cxF -- '-t ci-deploy relay_publish degraded=nonlocal_bind_unset' "$PE_DIR/pe12.log" || true)"
+  PE_S="$(/usr/bin/grep -n '^sysctl$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
+  PE_R="$(/usr/bin/grep -n '^run soleur-web-platform$' "$PE_DIR/pe12.seq" | head -n 1 | cut -d: -f1 || true)"
+  [[ "$PE_RC" -eq 0 && "$(jq -r '.reason' "$PE_DIR/pe12.state" 2>/dev/null)" == "ok" \
+     && "$PE_PROD" == *" -p $PE_WANT:8443:8443 "* && "$PE_W" == "$PE_WARN" \
+     && "$PE_PROD" == *" -e SOLEUR_PROXY_BIND=0.0.0.0 "* && "$PE_PROD" == *" -e SOLEUR_PROXY_PORT=8443 "* \
+     && -n "$PE_S" && -n "$PE_R" && "$PE_S" -lt "$PE_R" ]] \
+    || { PE_OK=0; PE_MSG+=" [sysctl='$PE_V' rc=$PE_RCV want -p $PE_WANT warn=$PE_WARN got warn=$PE_W rc=$PE_RC sysctl@${PE_S:-none} run@${PE_R:-none}: $(printf '%s' "$PE_PROD" | /usr/bin/grep -oE -- '-p [^ ]*8443:8443' || true)]"; }
+done
+# no private address at all: already loopback, so the degrade warning (about a private IP we could not publish on) is NOT logged
+pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO" MOCK_SYSCTL_OUT=0
+PE_PROD="$(pe_line pe12 soleur-web-platform)"
+[[ "$PE_PROD" == *" -p 127.0.0.1:8443:8443 "* && "$(/usr/bin/grep -cF -- 'relay_publish' "$PE_DIR/pe12.log" || true)" == 0 ]] || { PE_OK=0; PE_MSG+=" [no private address + sysctl 0 logged a degrade line or did not publish on loopback]"; }
+# static pins: ONE warning line in the closed grammar, no other relay_publish text, the read is `sysctl -n net.ipv4.ip_nonlocal_bind`
+PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
+[[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -c 'relay_publish' || true)" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [relay_publish text count != 1 in comment-stripped source]"; }
+/usr/bin/grep -qF -- 'logger -t "$LOG_TAG" "relay_publish degraded=nonlocal_bind_unset"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [warning line is not the closed-grammar one]"; }
+/usr/bin/grep -qF -- 'sysctl -n net.ipv4.ip_nonlocal_bind' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the sysctl read is missing]"; }
+pe_row "PE-12" "$PE_OK" "publish IP is the private address only when 'sysctl -n net.ipv4.ip_nonlocal_bind' is exactly 1 (0, empty, 2, '1 ', non-numeric, or a failed read -> 127.0.0.1 plus one 'relay_publish degraded=nonlocal_bind_unset' line); read before the prod run; deploy ok in every case" "$PE_MSG"
+
+rm -rf "$PE_DIR"
+unset PE_DIR PE_X PE_V PE_RCV PE_WARN PE_W PE_S PE_R PE_IP_LO PE_IP_REAL PE_IP_DECOY PE_ROSTER_BODY PE_PROD PE_CAN PE_OK PE_MSG PE_RC PE_OUT PE_C PE_CASES PE_IN PE_REST PE_WANT PE_WANTRC PE_GOT PE_MUT PE_RM_CAN PE_RUN_PROD PE_RUN_CAN PE_RUNP PE_EXE1 PE_T PE_BODY PE_CALL PE_SWAP PE_DONE PE_LOGS PE_SRC PE_PORT_BASE PE_PIDS PE_M PE_W PE_UP PE_N PE_CA PE_CA2 PE_X PE_P PE_PEM
+unset -f pe_deploy pe_line pe_probe_lines pe_row pe_resolve pe_js 2>/dev/null || true
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
@@ -12989,7 +13441,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # gained assertions (the key reads request / is ABSENT) without becoming rows. Measured from the green run (733/733).
 # review round 2 (#10934): raised 733 -> 735 (+2 PASS rows: 7.s4 the helper's token set equals write_state's enum set, 7.s5 write_state writes every token as itself,
 # an out-of-enum value as invalid and an empty value as ABSENT; each carries its own mutants inside the row). Measured from the green run (735/735).
-CI_DEPLOY_ASSERT_FLOOR=735
+# #12167 PR-E: raised 739 (measured on main; the 735 above predates later rows) -> 751 (PE-12, the nonlocal-bind gate, is the 12th row) with PE-1..PE-11 (relay publish argv x2, the anchored resolver table + its unanchored-grep mutant, canary-gone-before-prod
+# order, the peer-probe flow / closed grammar / skips / best-effort, the node probe against local TLS fixtures, and the static pins).
+CI_DEPLOY_ASSERT_FLOOR=751
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

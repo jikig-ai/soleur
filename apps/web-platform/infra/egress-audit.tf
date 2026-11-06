@@ -8,12 +8,19 @@
 # (hr-tf-variable-no-operator-mint-default). The dedicated inngest host uses a different
 # Doppler project, never receives it and runs no gateway, so the sink never fires there.
 #
-# ROTATION (the route accepts the current AND the previous token, so the web hosts do not
-# have to restart in lockstep):
-#   1. copy the current value to EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS in Doppler soleur/prd;
-#   2. terraform apply -replace=random_id.egress_audit_ingest_token  (mints the new current);
-#   3. redeploy the app and restart Vector so both pick up the new current token;
-#   4. clear EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS once both have restarted.
+# ROTATION (#11920 — the route accepts the current AND the previous token, so the web hosts do not
+# have to restart in lockstep; scripts/key-rotate.sh drives all four legs):
+#   1. apply-A: terraform apply -replace=random_id.egress_audit_ingest_token (mints the new
+#      current) and -replace=doppler_secret.egress_audit_ingest_token_previous with
+#      TF_VAR_egress_audit_ingest_token_previous=<the pre-apply read of the old CURRENT> —
+#      one apply writes PREVIOUS=old AND CURRENT=new;
+#   2. redeploy the app so it reads CURRENT+PREVIOUS, then restart Vector on every web host
+#      (the ci-deploy `restart vector` webhook lever — Vector resolves the token via
+#      `doppler run` only at process start);
+#   3. clear apply: terraform apply -replace=doppler_secret.egress_audit_ingest_token_previous
+#      with the variable at its default "" once every host reports a fresh vector restart.
+# The empty string is the honest cleared sentinel — the ingest route skips empty values
+# (apps/web-platform/server/egress-audit-ingest.ts configuredTokens).
 #
 # State exposure: like the GitHub webhook secret in github-app.tf the value sits in Terraform
 # state. It authenticates a same-host hop only and rotates by one apply; ADR-288 records that
@@ -29,4 +36,24 @@ resource "doppler_secret" "egress_audit_ingest_token" {
   value      = "eai-${random_id.egress_audit_ingest_token.hex}"
   visibility = "masked"
   # NO ignore_changes — rotation is operator-explicit via -replace.
+}
+
+# #11920 — the grace-window PREVIOUS token. Written ONLY by `-replace` inside the rotate
+# and clear applies above (never by a routine apply): `ignore_changes = [value]` makes
+# targeted applies diff-free on it, so the scheduled drift check sees no noise and a merge
+# apply cannot early-clear the grace token — the same lifecycle pattern the four
+# inngest_* rotate secrets use, and the derivation
+# plugins/soleur/test/terraform-target-parity.test.ts uses to require flag `replace` for
+# its gate-table row. The value lands in terraform.tfstate like the CURRENT token's
+# (the disclosure above applies verbatim — a same-host-hop credential, ADR-288).
+resource "doppler_secret" "egress_audit_ingest_token_previous" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS"
+  value      = var.egress_audit_ingest_token_previous
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }
