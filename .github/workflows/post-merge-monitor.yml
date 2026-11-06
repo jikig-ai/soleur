@@ -118,6 +118,8 @@ jobs:
 
           ISSUE_NUM=""
           if [[ -n "$PR_NUM" ]]; then
+            # dedupe: benign — a failed PR body read yields empty and falls back to the
+            # commit-message parse below; a still-empty issue number warns and exits (visible).
             ISSUE_NUM=$(gh pr view "$PR_NUM" \
               --json body \
               --jq '.body' 2>/dev/null | grep -oP 'Ref #\K\d+' | head -1 || true)
@@ -135,6 +137,8 @@ jobs:
           fi
 
           # Verify the issue has a bot-fix label (defense-in-depth)
+          # dedupe: fail-closed — a failed label read yields empty, the -z arm below treats it
+          # as "no bot-fix label" and warns + skips: the gate never acts on a blind read.
           HAS_BOT_LABEL=$(gh issue view "$ISSUE_NUM" \
             --json labels \
             --jq '[.labels[].name] | any(startswith("bot-fix/")) // empty' 2>/dev/null || true)

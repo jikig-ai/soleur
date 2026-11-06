@@ -769,12 +769,147 @@ fi
 # quoted capture must earn a disposition, a marker, or a deliberate ceiling
 # bump in this file (architecture/pattern seats: unmeasured re-growth
 # channel).
-ADVISORY_CEILING=13
+# Ceiling is the post-resolution live count (#12092): all 13 prior advisory
+# sites are dispositioned — normalized (machinery-drain:188, codeql-1537:84,
+# inngest-health:699, rehearsal-skip-monitor:341) or `# dedupe:`-marked
+# (supabase-watchdog:512/440, actions-queue-health:228, devin-docs-drift:400/467,
+# marketplace-drift:612/813/904, prod-version-drift:263/427/563/607,
+# auto-label-security:31/34). A new undispositioned quoted capture reds here.
+ADVISORY_CEILING=0
 adv_n="$(grep -oE 'advisory: [0-9]+ quoted-capture' "$TMP/live.txt" | grep -oE '[0-9]+' | head -1)"
-if [[ -n "$adv_n" && "$adv_n" -le "$ADVISORY_CEILING" ]]; then
+# No advisory section at all means zero sites — the section is suppressed
+# when the list is empty, and an unparsed empty is 0, not a missing count.
+adv_n="${adv_n:-0}"
+if [[ "$adv_n" -le "$ADVISORY_CEILING" ]]; then
   pass "H6 live quoted-advisory count <= $ADVISORY_CEILING (got ${adv_n:-0})"
 else
   fail "H6 live quoted-advisory count <= $ADVISORY_CEILING" "<=$ADVISORY_CEILING" "$adv_n"
+fi
+
+# H7 -- the scan root covers composite actions: an undispositioned
+# `IDENT=$(gh issue list …)` inside `.github/actions/<name>/action.yml` is a
+# finding naming the action file (Guard 1 mutation row 1; #12092 surface 4).
+# The fixture still builds .github/workflows/ — the usage gate requires the
+# directory — and carries one handled census site so the detector is
+# non-vacuous on the compliant path.
+r="$(mkfix actfire)"
+mkdir -p "$r/.github/actions/fx" || { echo "FATAL: mkdir actions failed"; exit 2; }
+assert_fixture_dir "$r"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/fx/action.yml" <<'YAML'
+name: fx
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number)
+YAML
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/act.txt"
+if [[ "$rc" == "1" ]] && grep -q 'actions/fx/action.yml:7:' "$TMP/act.txt"; then
+  pass "H7 an undispositioned capture in action.yml is a finding naming the file"
+else
+  fail "H7 an undispositioned capture in action.yml is a finding naming the file" \
+    "rc=1 + 'actions/fx/action.yml:7:'" "rc=$rc; $(tr '\n' ' ' < "$TMP/act.txt")"
+fi
+
+# H8 -- handled and marked action.yml captures must-PASS (mutation row 4: a
+# must-PASS input that is not the canonical defect).
+r="$(mkfix actpass)"
+mkdir -p "$r/.github/actions/handled" "$r/.github/actions/marked" \
+  || { echo "FATAL: mkdir actions failed"; exit 2; }
+assert_fixture_dir "$r"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/handled/action.yml" <<'YAML'
+name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/marked/action.yml" <<'YAML'
+name: b
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # dedupe: fail-closed — deliberate bare capture: a failed read fails the step (fixture)
+        EXISTING=$(gh issue list --json number)
+YAML
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/act.txt"
+if [[ "$rc" == "0" ]] && grep -q 'unclassified: 0' "$TMP/act.txt"; then
+  pass "H8 handled and marked action.yml captures stay green"
+else
+  fail "H8 handled and marked action.yml captures stay green" \
+    "rc=0 + unclassified: 0" "rc=$rc; $(tr '\n' ' ' < "$TMP/act.txt")"
+fi
+
+# H9 -- a defect in a SECOND action.yml after a compliant first still fires
+# (mutation row 3: a check that stops at the first member is the defect
+# class).
+r="$(mkfix actsecond)"
+mkdir -p "$r/.github/actions/aaa" "$r/.github/actions/zzz" \
+  || { echo "FATAL: mkdir actions failed"; exit 2; }
+assert_fixture_dir "$r"
+cat > "$r/.github/workflows/ok.yml" <<'YAML'
+name: ok
+on: workflow_dispatch
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/aaa/action.yml" <<'YAML'
+name: first
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number) || { echo "::error::lookup failed"; exit 1; }
+YAML
+cat > "$r/.github/actions/zzz/action.yml" <<'YAML'
+name: second
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        EXISTING=$(gh issue list --json number)
+YAML
+out="$(python3 "$LINTER" --root "$r" 2>&1)"; rc=$?
+printf '%s\n' "$out" > "$TMP/act.txt"
+if [[ "$rc" == "1" ]] && grep -q 'actions/zzz/action.yml:7:' "$TMP/act.txt" \
+   && ! grep -q 'actions/aaa/action.yml.*unclassified' "$TMP/act.txt"; then
+  pass "H9 a defect in the second action.yml after a compliant first fires"
+else
+  fail "H9 a defect in the second action.yml after a compliant first fires" \
+    "rc=1 naming actions/zzz/action.yml:7" "rc=$rc; $(tr '\n' ' ' < "$TMP/act.txt")"
 fi
 
 # --- verdict ----------------------------------------------------------------
