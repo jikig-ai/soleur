@@ -1666,15 +1666,15 @@ mutate_lib stdin-doppler 's# 2>/dev/null </dev/null\)" \|\| return 1# 2>/dev/nul
 
 echo "=== Floor: the SUT answered every row ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-# Floors, committed from a green run (1807 assertions, 954 gh stub calls) at about 98%: a FLOOR, never equality. Re-measure and raise them when rows are added; a lower number is a deleted row.
-if (( n_calls >= 935 )); then
-  echo "  PASS: gh stub calls $n_calls >= 935"; PASS=$((PASS + 1))
+# Floors, committed from a green run (2009 assertions, 1000 gh stub calls, per-arm counts below) within 0.5%: a FLOOR, never equality. Re-measure and raise them when rows are added; a lower number is a deleted row.
+if (( n_calls >= 995 )); then
+  echo "  PASS: gh stub calls $n_calls >= 995"; PASS=$((PASS + 1))
 else
-  echo "  FAIL: gh stub calls $n_calls < 935 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
+  echo "  FAIL: gh stub calls $n_calls < 995 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-for armrow in "wa:1:the whole of Arm 14" "nser:1:answers that cannot be understood, escapes, repeats and dates" "bind:1:the hold must name its text" "tab:1:a tab cannot split a gate" "vu:1:valid_until" "bind2:1:what the binding reads" "chg:1:who reads the note" "vu2:1:valid_until, the day before, zones, calendar"; do
+for armrow in "wa:1270:the whole of Arm 14" "nser:405:answers that cannot be understood, escapes, repeats and dates" "bind:145:the hold must name its text" "tab:11:a tab cannot split a gate" "vu:40:valid_until" "bind2:13:what the binding reads" "chg:26:who reads the note" "vu2:51:valid_until, the day before, zones, calendar"; do
   arm_floor "${armrow%%:*}" "$(printf '%s' "$armrow" | cut -d: -f2)" "${armrow#*:*:}"
 done
 
-print_results 1770
+print_results 2000

@@ -57,8 +57,8 @@ the line. A hold is discharged only for an `accepted` answer whose record passed
 gate's hash, and whose hash equals the committed text's hash.
 
 **Name the text key in the `Hold:` line.** The `Hold:` line (the one line, not the lines under it) must contain the gate's key
-as a whole word, in any case, as the operator reads it (control characters and invisible marks removed, before the 160-character
-cut). A letter, digit, hyphen or underscore directly beside the key makes it part of a longer word: `wa-key` is named by
+as a whole word, in any case, after control characters and invisible marks are removed (the whole line counts, even past the 160-character
+display cut, so the check proves the plan's author named the text, not that the operator saw it named). A letter, digit, hyphen or underscore directly beside the key makes it part of a longer word: `wa-key` is named by
 `Wait for wa-key` or `(WA-KEY)` but not by `wa-key-two`, `xwa-key`, `wa-keys` or `wa-key_x`. The operator's quoted words are
 never rewritten to add it: the plan's author adds the key in a **separate clause marked as the author's**, after the operator's
 words, for example `- Hold: "do not ship until the founder accepts the terms update" [Text name (added by the plan's author): terms-update]`.

@@ -206,7 +206,7 @@ gate_web_acceptance() {
   WA_HASH=""
   key="${rest%% *}"; hash="${rest#* }"
   if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain text name and fingerprint"; return; fi # mut:wa-shape
-  # CTO ruling D1: the hold's own words (as the operator reads them: cleaned, before the 160-character cut) must name this text's key as a whole
+  # CTO ruling D1: the hold's own words (cleaned of control and bidi characters, but NOT cut at the 160-character display limit, so a key beyond that limit still binds; accepted residual of the lexical rule) must name this text's key as a whole
   # token, so a decision about one text cannot clear a wait about another thing. A letter, digit, hyphen or underscore beside the key makes it part of a longer word.
   clean_uncut "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z' | grep -Eq "(^|[^a-z0-9_-])${key}([^a-z0-9_-]|\$)" || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about; ask the plan's author to put the text name $key in the hold's words"; return; } # mut:wa-bind
   WA_HASH="$hash"
