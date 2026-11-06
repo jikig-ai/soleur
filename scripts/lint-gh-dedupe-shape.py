@@ -35,7 +35,9 @@ handler must sit OUTSIDE the capture.
 
 SCOPE
 -----
-`.github/workflows/*.yml|yaml` — the filing-path census class of #9659. The
+`.github/workflows/*.yml|yaml` AND `.github/actions/*/action.yml|yaml` —
+the composite-action `run:` blocks are the same filing surface (tracked
+residual of #12092; a capture there fails the census identically). The
 census class is the UNQUOTED assignment capture `IDENT=$(` — the abort-capable
 form. A `$(gh …)` in word-expansion position (`for n in $(…)`, `echo "$(…)"`)
 cannot abort the step — the substitution's rc is not the command's rc — so it
@@ -96,9 +98,11 @@ import sys
 
 # `gh` noun + verb that constitute the dedupe-read class. The bound is
 # DELIBERATE (tracked residual): `gh api` issues-GETs, `gh issue|pr view`
-# existence probes, quoted-capture twins, and composite action.yml run blocks
-# are adjacent read surfaces outside #9659's enumeration — a follow-up issue
-# names them; they are not silently missed.
+# existence probes, and quoted-capture twins are adjacent read surfaces
+# outside #9659's enumeration — a follow-up issue names them; they are not
+# silently missed. (Composite action.yml run blocks entered the scan root in
+# #12092; `gh` invoked through wrapper functions — e.g. `gh_app`/`gh_gate` —
+# stays unmatched, a recorded bound.)
 GH_DEDUPE_HEAD = re.compile(r"^\s*gh\s+(issue|pr)\s+(list|search)\b")
 
 # A `IDENT=` token abutting a `$(` or a `"` (the census class, and the quoted
@@ -540,20 +544,53 @@ def scan_file(path: str, rel: str):
 
 def collect(root: str, quiet: bool = False):
     targets = []
-    wf_dir = os.path.join(root, ".github", "workflows")
-    if os.path.isdir(wf_dir):
+
+    def _skip_link(path):
+        if not quiet:
+            print("dedupe-shape: advisory: symlink skipped: "
+                  f"{path} — the census covers tracked files, "
+                  "not linked content")
+
+    def _add(path):
+        if os.path.islink(path):
+            _skip_link(path)
+            return
+        targets.append(path)
+
+    # isdir()/listdir() follow ancestor links silently — a linked `.github`,
+    # `workflows` or `actions` DIRECTORY lets the census read outside the
+    # scan root under in-root relpaths (the files inside are not themselves
+    # links, so `_add`'s leaf check cannot see the escape).
+    gh_dir = os.path.join(root, ".github")
+    if os.path.islink(gh_dir):
+        _skip_link(gh_dir)
+        return targets
+    wf_dir = os.path.join(gh_dir, "workflows")
+    if os.path.islink(wf_dir):
+        _skip_link(wf_dir)
+    elif os.path.isdir(wf_dir):
         for name in sorted(os.listdir(wf_dir)):
-            if not name.endswith((".yml", ".yaml")):
+            if name.endswith((".yml", ".yaml")):
+                _add(os.path.join(wf_dir, name))
+    # Composite actions carry the same `run:`-block capture surface; each
+    # lives in its own directory under .github/actions/. BOUND (recorded,
+    # like the head's bounds above): exactly one level — a composite action
+    # nested deeper (uses: ./.github/actions/a/b) is not enumerated.
+    act_dir = os.path.join(gh_dir, "actions")
+    if os.path.islink(act_dir):
+        _skip_link(act_dir)
+    elif os.path.isdir(act_dir):
+        for sub in sorted(os.listdir(act_dir)):
+            sub_dir = os.path.join(act_dir, sub)
+            if os.path.islink(sub_dir):
+                _skip_link(sub_dir)
                 continue
-            t = os.path.join(wf_dir, name)
-            if os.path.islink(t):
-                if quiet:
-                    continue
-                print("dedupe-shape: advisory: symlink skipped: "
-                      f"{t} — the census covers tracked workflow files, "
-                      "not linked content")
+            if not os.path.isdir(sub_dir):
                 continue
-            targets.append(t)
+            for name in ("action.yml", "action.yaml"):
+                t = os.path.join(sub_dir, name)
+                if os.path.isfile(t) or os.path.islink(t):
+                    _add(t)
     return targets
 
 
@@ -573,7 +610,7 @@ def main() -> int:
 
     targets = collect(root, args.quiet)
     if not targets:
-        print(f"lint-gh-dedupe-shape: zero workflow files under {root} — "
+        print(f"lint-gh-dedupe-shape: zero scan targets under {root} — "
               "refusing to report a clean sweep of nothing.", file=sys.stderr)
         return 2
 
@@ -586,9 +623,9 @@ def main() -> int:
         advisory.extend(a)
 
     if not census:
-        print("lint-gh-dedupe-shape: zero census sites under "
-              f"{root}/.github/workflows — a 0-match census is a broken "
-              "detector, not a clean tree (vacuity).", file=sys.stderr)
+        print("lint-gh-dedupe-shape: zero census sites in the scan root "
+              f"under {root} — a 0-match census is a broken detector, "
+              "not a clean tree (vacuity).", file=sys.stderr)
         return 2
 
     n_handled = sum(1 for *_, v in census if v == "handled")
@@ -602,7 +639,7 @@ def main() -> int:
               "this line or within 2 lines above it")
 
     if not args.quiet:
-        print(f"dedupe-shape: scanned {len(targets)} workflow(s), "
+        print(f"dedupe-shape: scanned {len(targets)} file(s), "
               f"{len(census)} census site(s): {n_handled} handled, "
               f"{n_marked} marked")
     print(f"dedupe-shape: unclassified: {len(findings)}")
