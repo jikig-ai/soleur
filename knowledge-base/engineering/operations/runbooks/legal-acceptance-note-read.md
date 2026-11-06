@@ -4,7 +4,7 @@ Pull-only (ADR-319, amendment 2026-11-05). The note lives only in `legal_accepta
 anywhere (no email, issue or chat). The operator reads it personally, never an agent session: the verify endpoint returns
 `status`, `text_hash`, `decided_at` and `row_ok` only. The note is not readable through the endpoint or through any
 `service_role` path. This is a rule for you to follow, not a technical block: a database-owner credential could read it, and
-you hold that credential. Never paste the note into an agent session.
+you hold that credential, and so does the production migration pipeline (a CI secret that runs the migrate and verify steps); no agent session is meant to use either, which is a rule and not a control. Never paste the note into an agent session.
 
 Every query below runs in the SQL editor of the **production Supabase project** (prd), signed in with your own login: no ssh,
 no service key. Dev and prd are distinct projects; a row in dev is not a row in prd. Every query is scoped to the one founder id
@@ -57,7 +57,7 @@ select id from public.legal_acceptance
 on conflict do nothing;
 ```
 
-The `acked_at` of a row you insert is the time you inserted it, not the time the event was flushed. Then **resolve** the Sentry
+The `acked_at` of a row you insert is the time you inserted it, not the time the event was flushed, and a manually inserted acknowledgement is not proof that the event was ever sent; it only silences the signal for a row you have checked with the founder. Then **resolve** the Sentry
 issue (never archive it, so that a recurrence reopens it). If the founder does not recognise the decision, leave the row as it
 is and escalate; the record is evidence.
 
@@ -79,7 +79,8 @@ the hold). Do not edit the row. Treat it as a possible integrity incident: escal
 | `verify` | The lookup call in the endpoint | Check that migrations 184 and 185 are applied in prd and that Supabase is up; the gate shows "not available right now" and retries cleanly. |
 | `ack_state` | The reconciliation read in the endpoint | Same check; a "function not found" answer means the migration or the schema cache; the endpoint answered 503 and no 200. |
 | `ack` | The decide path could not write the acknowledgement (the flush threw, or the write failed) | The decision itself is recorded. The row will show as `row_without_event` when verified; reconcile it as above. |
-| `registry` | The legal text file could not be read | The text directory is missing from the image or unreadable; redeploy a build that contains `server/legal-acceptance/texts`. No data is at risk. |
+| `registry` | The legal text file could not be read, or is malformed | Read the error `code` on the event (`extra.code`). `read_failed`: the texts directory is missing or unreadable in the image; redeploy a build that contains `server/legal-acceptance/texts`. Any other code: the committed text file is malformed; edit the file. Nothing is wrong with the database either way. |
+| 401 (no event) | A caller sent a wrong or missing token | Unthrottled by design and not an event; paging is #12195. A burst of 401s in the request logs is the signal; rotate nothing unless the token is believed leaked. |
 | `config` | The token or the founder id is set but malformed (once per process; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
 
 After you have dealt with an event, resolve (never archive) its Sentry issue.
@@ -100,6 +101,20 @@ founder id), or each of them raises a false `row_without_event` when verified.
 
 When the secrets (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`, `LEGAL_ACCEPTANCE_FOUNDER_ID`) are applied (#12196): the container receives them
 through an env file that is frozen when the container is created, so a restart is not enough and a redeploy is needed. While the
-endpoint is dark the probe expects the body `{"error":"Not available"}` with `cache-control: no-store`, not just a 503. Schedule
-a pull of `store_failed`, `record_invalid`, `row_without_event` and the unacknowledged-rows query above at +1 hour and +24 hours
-after the redeploy.
+endpoint is dark the probe expects the body `{"error":"Not available"}` with `cache-control: no-store`, not just a 503. The ship
+session that merges the Terraform change arms the pulls (they are not left to memory): at +1 hour and +24 hours after the redeploy, run
+
+```bash
+# slow or false flushes (no Sentry event; one warning log line each)
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep "flush not confirmed"
+```
+
+and a Sentry Discover query over the last 24 hours, `feature:legal-acceptance op:[record_invalid,store_failed,row_without_event]`
+(read one issue with `scripts/sentry-issue.sh <issue id>`), and the unacknowledged-rows query above in the production SQL editor.
+All three must be empty, or each hit must be explained.
+
+## Rolling back migration 185
+
+The down file refuses while any acknowledgement row exists, so a rollback never drops evidence silently. Apply it with
+`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/web-platform/supabase/migrations/185_legal_acceptance_ack.down.sql` against the
+production project (your own owner login). A refusal exits non-zero and changes nothing. Acknowledgement rows stay on a rollback.

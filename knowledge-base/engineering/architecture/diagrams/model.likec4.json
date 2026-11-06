@@ -1128,7 +1128,7 @@
 },
 "technology": "Supabase (legal_acceptance, legal_reauth_event; mig 184; legal_acceptance_ack; mig 185)",
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it and only the operator holds one; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it; it is held by the operator and by the production migration pipeline, a CI secret, and no agent session is meant to use either; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
 },
 "title": "Legal Acceptances",
 "kind": "database",
@@ -2345,6 +2345,17 @@
 "id": "2iqc4z29wj0ob",
 "title": "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"
 },
+"2irl0iw5pzydk": {
+"technology": "Supabase SQL editor (owner login)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "platform.infra.legalAcceptanceStore"
+},
+"id": "2irl0iw5pzydk",
+"title": "The operator (the first founder) personally reads a Request changes note with an owner-level query in their own database login, following the legal-acceptance-note-read runbook. Pull-only: nothing pushes the note anywhere. Operator-only by policy: not readable through the endpoint or any service_role path; a database-owner credential could read it; the operator and the production migration pipeline (a CI secret) hold one, and no agent session is meant to use either"
+},
 "2ixzgyd476jhs": {
 "technology": "MCP tool → PostgREST",
 "source": {
@@ -2607,17 +2618,6 @@
 },
 "id": "34wi5wsojzgx9",
 "title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated"
-},
-"34xsbrxtph8mt": {
-"technology": "Supabase SQL editor (owner login)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "platform.infra.legalAcceptanceStore"
-},
-"id": "34xsbrxtph8mt",
-"title": "The operator (the first founder) personally reads a Request changes note with an owner-level query in their own database login, following the legal-acceptance-note-read runbook. Pull-only: nothing pushes the note anywhere. Operator-only by policy: not readable through the endpoint or any service_role path; a database-owner credential could read it and only the operator holds one"
 },
 "351viohfkymya": {
 "technology": "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)",
@@ -5641,8 +5641,8 @@
 "parent": null,
 "relations": [
 "23n87bgtkt6pf",
+"2irl0iw5pzydk",
 "2s7aers5b5t5n",
-"34xsbrxtph8mt",
 "3s4uhwwcpdu6u"
 ],
 "color": "gray",
@@ -17956,7 +17956,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it and only the operator holds one; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
+"txt": "Write-once record of a founder's decision on a legal text (accept, decline, request changes), keyed by (founder uuid, key, text sha256), with a database-computed row checksum, plus the short-lived single-use email-code challenge behind a Yes (ADR-319, #12011). No foreign key: the pseudonymous founder uuid outlives the account (Art. 17(3)(e)). The founder records through the authenticated record_legal_acceptance RPC (actor from auth.uid(), only a web-session audience accepted, every decision needs a server-issued intent); the intent, the email-code challenge, the read-only check and the acknowledgement RPCs are service_role RPCs. A small acknowledgement table (legal_acceptance_ack: acceptance id and time only, no founder id, no note; pseudonymous personal data through its key) is written after the accepted event is flushed and read by the check endpoint to emit row_without_event. No agent tool writes the record and no agent tool reads the note: a runtime-audience token can neither read nor write it. The agent can read four fields about ONE decision (status, text_hash, decided_at, row_ok) through the bearer-gated check endpoint, which takes the founder id from its own configuration; the note is not readable through the endpoint or any service_role path (a database-owner credential could read it; it is held by the operator and by the production migration pipeline, a CI secret, and no agent session is meant to use either; code holding the service key in-process is the stated ADR-319 residual). The Request changes note is read by pull only, by the operator personally, through an owner-level query in their own database login (founder -> legalAcceptanceStore below); nothing pushes it anywhere. Screens ship behind the approval-queue flag (PR-C); the check endpoint merges dark and answers 503 until its token and founder id are configured (PR-D)."
 },
 "tags": [],
 "notation": "Data store",
@@ -20606,7 +20606,7 @@
 },
 "parent": null,
 "relations": [
-"34xsbrxtph8mt"
+"2irl0iw5pzydk"
 ],
 "color": "gray",
 "line": "dashed",

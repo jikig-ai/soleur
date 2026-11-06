@@ -32,7 +32,7 @@ requires_cpo_signoff: true
 Last slice of #12011. The founder's web card (PR-C) and the write-once record (PR-B, migration 184) are live. PR-D lets a script read that record and closes the gaps PR-C named:
 
 1. A read-only check endpoint, `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>`, that returns `{status, text_hash, decided_at, row_ok}` for the configured founder and nothing else.
-2. A parameterised bearer secret name in `lib/internal-auth.ts`, so the endpoint has its own token (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`) and does not share the Inngest one.
+2. A named bearer secret read in the new `lib/internal-auth-named.ts` (a closed union of names; `lib/internal-auth.ts` is a census-bound path and is not edited, CTO ruling D2), so the endpoint has its own token (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`) and does not share the Inngest one.
 3. A `web-acceptance <key> <hash>` kind in the ship hold evaluator, so a hold backed by a founder's recorded Yes discharges by evidence.
 4. A pull-only delivery path for the Request changes note (the team reads it; nothing is pushed anywhere; no card copy changes).
 5. The emitter that makes the Sentry rule `legal-acceptance-row-without-event` live: a small acknowledgement table (migration 185) written after the `accepted` event is flushed, and a per-row reconciliation in the endpoint.
@@ -54,7 +54,7 @@ The PR body says `Ref #12011`, never `Closes`: #12011 stays open until the enabl
 | The founder page shows state for every verify result | `deriveLegalCardState` has six states; `invalid` has none, so the page shows a failed-checksum row as recorded | CTO F4: no card state in this PR (needs a wireframe, copy under the CLO gate, a service-role read from the page). The gap is written into the ADR amendment and filed as a follow-up; `invalid` is never collapsed into `none` anywhere PR-D touches |
 | "A registry read failure is 503, not 404" (CTO F5) | `getLegalText` in `server/legal-acceptance/canonical.ts` catches every `readFileSync` error and rethrows it as `unknown_key`, so an unreadable directory would read as 404 | Edit `canonical.ts` to throw a distinct `read_failed` for anything but ENOENT; the route maps `read_failed` and parse errors to 503 and only `unknown_key` to 404 |
 | The new C4 edges are enough | `model.c4` requires a regenerated `model.likec4.json` with every description change (the `c4-model-freshness` gate), the store description and a comment say no agent tool reaches the store, and the plugin components view lists neither `webapp` nor `doppler` | Phase D7 regenerates the JSON, rewrites both sentences, adds the operator read edge and extends the plugin view |
-| `lib/internal-auth.ts` is a free-standing helper | `scripts/home-census-trigger.sh` (`CENSUS_PATHS`) and its test bind `lib/internal-auth.ts` into the census gate | Task: run `home-census-trigger.test.sh` after the edit and update the bound set or its record if the pin moves |
+| `lib/internal-auth.ts` is a free-standing helper | `scripts/home-census-trigger.sh` (`CENSUS_PATHS`) and its test bind `lib/internal-auth.ts` into the census gate | Resolved by CTO ruling D2 (2026-11-05): `lib/internal-auth.ts` is not edited; the named-secret reader is the new `lib/internal-auth-named.ts`; run `home-census-trigger.test.sh` and the merge gate `git diff --quiet 8c77db1 HEAD -- <six CENSUS_PATHS>` |
 
 ## Research Insights
 
@@ -69,7 +69,7 @@ sed -n 14,20p .github/workflows/apply-web-platform-infra.yml                 -> 
 sed -n 1,5p apps/web-platform/server/index.ts                                -> import "../sentry.server.config";  (instrumentation.ts register() is NOT called with custom servers)
 ```
 
-Verify-the-negative sweep: "the agent never sees the note" holds in the SQL (`verify_legal_acceptance` builds its jsonb from `status`, `text_hash`, `decided_at`, `row_ok` only, migration 184) and no file under `plugins/` or the agent tools references `legal_acceptance` (this is a policy and a design choice, not an absolute control: a database-owner credential could read the note, and only the operator holds one); "no `.tf` in the PR" is enforced by AC13 as a diff-scope check. Post-edit self-audit: the dropped symbols (`verify_failed`, `ack_failed`, `HELD_UNROUTED`, the dedupe, Guard 4, Operator Hold 2) appear only in the Cut List and Plan Review Rulings, not in any phase, file list, test or acceptance criterion.
+Verify-the-negative sweep: "the agent never sees the note" holds in the SQL (`verify_legal_acceptance` builds its jsonb from `status`, `text_hash`, `decided_at`, `row_ok` only, migration 184) and no file under `plugins/` or the agent tools references `legal_acceptance` (this is a policy and a design choice, not an absolute control: a database-owner credential could read the note; the operator and the production migration pipeline, a CI secret, hold one, and no agent session is meant to use either); "no `.tf` in the PR" is enforced by AC13 as a diff-scope check. Post-edit self-audit: the dropped symbols (`verify_failed`, `ack_failed`, `HELD_UNROUTED`, the dedupe, Guard 4, Operator Hold 2) appear only in the Cut List and Plan Review Rulings, not in any phase, file list, test or acceptance criterion.
 
 **Premise validation (Phase 0.6).** #12011, #12080 and #12031 are open; draft PR #12187 is this branch's own PR (the collision pre-check reported it and foreign `test-all.sh` runs in two sibling worktrees, none touching these files). PR-C is merged as `15ce2469fa`. `verify_legal_acceptance`, `legal_acceptance_row_hash` and the four migration-184 RPCs exist on `origin/main`; migration 185 is free (latest on `origin/main` is 184; no open PR names 185). ADR-319 is the decision record for this store; ADR-320 is the newest ordinal and is relevant to the secrets plan. The mechanism (a bearer-gated read endpoint plus an evaluator kind) is the one the original plan, Phase D1/D2, already specified; none of it sits in an ADR's rejected-alternatives table.
 
@@ -129,12 +129,12 @@ Ruled by CTO agent, 2026-11-05 (binding):
 - F1: migration 185 adds a service-role-only ack table (acceptance id and `acked_at`, no founder id, no foreign key). The decide route writes the ack after `accepted` is emitted and `Sentry.flush` resolves true. The verify endpoint calls `ack_state` only when a row exists and emits `row_without_event` when there is no ack and the row is at least 120 s old (>= 120 s). Per verify call for the one row read, not a sweep. `row_without_event` is alert-only; if the reconciliation read fails or disagrees with the verify read, the endpoint answers 503 or 502 and never a partial 200 (the migrate job precedes deploy, so the functions exist when the code runs). Proves "the route did not ack", not "Sentry received the event": a `true` flush result does not prove delivery, so a missing `row_without_event` is not proof that the event was delivered.
 - F2: team-side pull only. No email, no Inngest function, no GitHub issue. The note stays in `legal_acceptance.requested_edit`; the team reads it with an owner-level query; no `service_role` RPC returns the note. No card copy change. The ADR enabling condition becomes "pull-only delivery, no push".
 - F3: `web-acceptance` becomes a known kind. With no `Delegation:` line, a plan whose non-reserved holds carry only `web-acceptance` gates is evaluated without a delegation; a plan mixing `web-acceptance` with another kind and no delegation exits 2, not 3; any other no-delegation plan keeps exit 3. `Operator-reserved:` holds still always stand.
-- F4: `invalid` is UNEVAL (exit 2), printed `the record failed its check`; the endpoint passes it through with `row_ok:false` and emits `record_invalid` (error). No new founder-page card state in this PR.
+- F4: `invalid` is UNEVAL (exit 2), printed `the saved decision looks damaged`; the endpoint passes it through with `row_ok:false` and emits `record_invalid` (error). No new founder-page card state in this PR.
 - F5: `GET /api/internal/legal-acceptance/[key]?hash=`, check order 503, 401, 400, 404, lookup; the key is checked against the registry (a registry read failure is 503, not 404); the hash is answered from the database for the exact hash; the mismatch against the committed text is the gate's job. Narrow `PUBLIC_PATHS` entry. The evaluator reads the token with `doppler secrets get LEGAL_ACCEPTANCE_VERIFY_TOKEN --plain --project soleur --config prd`.
 - F6: no `.tf` in this PR; the Terraform shape is plan-only under `## Operator Holds`; no `ignore_changes` (follow `egress-audit.tf`).
 - Follow-up on ADR-320: "Outside ADR-320 decision 1: read-only status token, reviewed under decision 4 on 2026-11-05. Rotating it does not repair a leak, and it would move out of Terraform if it ever gains write reach." The founder uuid is not a secret: it is entered by the operator into the Doppler dev and prd configs outside Terraform and checked by a read, never `TF_VAR`.
 
-Ruled by CLO agent, 2026-11-05 (draft, not legal advice): the no-note-text, pull-only mechanism adds no recipient, processor or transfer; emailing the note or filing a private issue is not acceptable now (a second, unerasable copy; GitHub is not a PA-40 recipient). The ack table carries no founder id, no note and no decision field, and is listed in PA-40(c). The endpoint must never return the note, must not collapse `invalid` into `none`, and no log line or Sentry payload may carry the note (tested). This PR updates PA-40 only, as an addendum conditioned on the merge (not past tense); the attestation line "the note reaches no one" is narrowed with a `Superseded` marker; the LIA receives a dated addendum recording its enforcement-read trigger as met (balancing outcome unchanged, CLO ruling 2026-11-05), and the three published documents are unchanged here and stay a gate before any non-operator founder. No card copy change.
+Ruled by CLO agent, 2026-11-05 (draft, not legal advice): the no-note-text, pull-only mechanism adds no recipient, processor or transfer; emailing the note or filing a private issue is not acceptable now (a second, unerasable copy; GitHub is not a PA-40 recipient). The ack table carries no founder id, no note and no decision field, and is listed in PA-40(c). The endpoint must never return the note, must not collapse `invalid` into `none`, and no log line or Sentry payload may carry the note (tested). This PR updates PA-40 only, as an addendum conditioned on the merge (not past tense); the attestation line "the note reaches no one" is narrowed with a `Superseded` marker; the LIA receives a dated addendum recording its enforcement-read trigger as met (balancing outcome unchanged, CLO ruling 2026-11-05), and the three published documents are amended here only for the third table and the status check (the DSAR lockstep gate requires it), with the final-form rewrite staying a gate before any non-operator founder. No card copy change.
 
 Plan review (2026-11-05), consolidated from the DHH, Kieran, simplicity, architecture and spec-flow seats and the CPO advisory. Mechanical findings were applied to this plan: the dedupe, the `HELD_UNROUTED` ratchet, the drafted-rules hold and Guard 4 as a separate guard were cut; `verify_failed` and `ack_failed` were merged into `store_failed`; the registry `read_failed` split, the no-delegation classification, the verdict plumbing and exit codes, the flush-throws case, the closed reason table, the C4 completeness items (regenerated JSON, rewritten no-agent-reach sentences, operator read edge, plugin view), the ADR-320 scope note, the order of operations and the AC numbering were added. CPO: signed off with conditions (the invalid-card-state follow-up filed before merge; enabling-condition wording; 8.1 as a tracked follow-through; CP2 to read "In progress (legal-acceptance slice)", never Done). Taste and user-challenge items are in `decision-challenges.md` (splitting the PR; no heal in the `already_recorded` branch; the production-write hold class).
 
@@ -252,7 +252,7 @@ liveness_signal:
 
 error_reporting:
   destination: "Sentry web-platform via SENTRY_DSN, feature=legal-acceptance"
-  fail_loud: "endpoint: 503 when the token or founder id is unset or malformed (a set-but-malformed value also emits one `store_failed`, stage `config`), then 401 on a wrong token, 400 on a malformed key or hash, then 503 when the registry cannot be read (step 4, after 401 and 400, never first; `store_failed`, stage `registry`), 503 when a database call fails or throws, and 502 on an unrecognised RPC payload; the hold evaluator keeps the hold and prints a distinct plain reason for every case (the check is not available right now, the check was refused, the text is not known to the deployed app, the answer was not understood, no decision recorded for this text version, the text differs from the committed one, declined, changes requested, the record failed its check, the text has expired, the wait does not name the text it is about, unreachable with the HTTP status and the curl code)"
+  fail_loud: "endpoint: 503 when the token or founder id is unset or malformed (a set-but-malformed value also emits one `store_failed`, stage `config`), then 401 on a wrong token, 400 on a malformed key or hash, then 503 when the registry cannot be read (step 4, after 401 and 400, never first; `store_failed`, stage `registry`), 503 when a database call fails or throws, and 502 on an unrecognised RPC payload; the hold evaluator keeps the hold and prints a distinct plain reason for every case (the check is not available right now, the check was refused, the text is not known to the deployed app, the answer was not understood, no decision recorded for this text version, the text differs from the committed one, declined, changes requested, the saved decision looks damaged, the text has expired, the wait does not name the text it is about, unreachable with the HTTP status and the curl code)"
 
 failure_modes:
   - mode: "a legal_acceptance row exists with no ack at least 120 s old (written outside the route, or the route died between commit and ack, or the flush failed)"
@@ -265,7 +265,7 @@ failure_modes:
     detection: "op=store_failed with tags.stage in verify, ack_state, ack, registry, config, through reportLegalOp (layer 2, pino -> Sentry mirror via reportSilentFallback); the endpoint answers 503 or 502, never a partial 200; a slow or false flush is a logger.warn only (layer 2 breadcrumb)"
     alert_route: "Sentry stream, no paging rule in this PR (follow-up #12195); layer 2; a lost ack later surfaces as row_without_event"
   - mode: "hold evaluator cannot reach the endpoint, has no token, or gets a non-validated body"
-    detection: "observability layer 7 (cli-stdout-artifact): the evaluator runs only in the operator's own /ship session, never hosted, and its stdout verdict (UNEVAL with the specific cause, exit 2) is the signal read in that session. No committed artifact is written; this is an explicit acceptance of the layer-7 residual: the verdict does not survive the session, and the PR body and the Done line carry the discharge"
+    detection: "observability layer 7 (cli-stdout-artifact): the evaluator runs only in the operator's own /ship session, never hosted, and its stdout verdict (UNEVAL with the specific cause, exit 2) is the signal read in that session. No committed artifact is written. That is an accepted residual, stated honestly: the verdict does not survive the session; the discharge is carried by the Done: line in the PR body; and the discoverability probe below shows only that the script ships the web-acceptance kind, not that any run succeeded"
     alert_route: "visible in the session and the PR body; no silent discharge"
 
 logs:
@@ -275,7 +275,7 @@ logs:
 discoverability_test:
   command: "grep -o web-acceptance plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"
   expected_output: "web-acceptance"
-  note: "the layer-7 residual for the evaluator is accepted explicitly (no committed artifact); the server-side modes are discoverable by feature=legal-acceptance in Sentry"
+  note: "this probe only shows that the script ships the web-acceptance kind. The evaluator's verdict is the Done: line in the PR body; no committed artifact is an accepted residual of layer 7. The server-side modes are discoverable by feature=legal-acceptance in Sentry"
 ```
 
 ## Encryption Posture
@@ -305,22 +305,7 @@ in_transit:
 
 **Assembly.** `known_kind`, `eval_gate`, the new `gate_web_acceptance` function and its helpers (input validation, local hash, token read via the shared bearer helper, curl call, body validation), the new `PERSON` result value and its mapping in the aggregation loop, the plan-level classification that decides between exit 3, exit 2 and evaluation (which routes through the same structural checks as today: stray-marker count, one section, no orphan gate, zero-hold check, `need_tools`), `print_result_line`, the grammar comment, and the three outcomes of every hold (`discharged`, `held`, `unevaluable`). All verdicts flow through `eval_gate` into the one aggregation loop: TRUE discharges, FALSE and PERSON stand (exit 1), UNEVAL stands (exit 2); the `Operator-reserved:` branch is a second chokepoint and stays untouched.
 
-Closed table of what the gate prints (every row is a test):
-
-| Endpoint answer | Verdict | Printed reason |
-|---|---|---|
-| committed text hash differs from the gate hash | FALSE | `hash mismatch` |
-| 200, `accepted`, `row_ok` true, echoed hash equal | TRUE | `decided <UTC date>` in the checked suffix |
-| 200, `none` | FALSE | `no decision recorded for this text version` |
-| 200, `declined` | PERSON | `declined; a revised text with a new hash is needed` |
-| 200, `changes_requested` | PERSON | `changes requested; read the note per knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md` |
-| 200, `invalid` | UNEVAL | `the record failed its check` |
-| 503 | UNEVAL | `endpoint not configured yet` |
-| 401 | UNEVAL | `token rejected` |
-| 404 | UNEVAL | `key not in the deployed registry` (a text added in the same PR is not deployed yet: such a hold is a post-merge hold) |
-| 400, 502, a non-JSON, extra-key or wrong-type body, a status outside the closed set, an echoed hash that differs | UNEVAL | `answer not understood` |
-| timeout, DNS or connect failure, oversize body, redirect | UNEVAL | `unreachable` |
-| no `doppler`, no token, a token that fails the shape guard, no hash tool | UNEVAL | `no access to the verify token` or `no hash tool` |
+Closed table of what the gate prints: **superseded.** The reason table lives in `plugins/soleur/skills/ship/references/operator-holds.md` section 1; the reasons are plain-language (for example "the check is not available right now (not switched on, or temporarily down)", "the saved decision looks damaged", "this text has expired; a revised text with a new hash is needed", "this wait does not name the legal text it is about"), and the table in the committed file, not a copy here, is the one every test row is checked against.
 
 **Mutation matrix.**
 
@@ -346,7 +331,7 @@ Closed table of what the gate prints (every row is a test):
 
 **Property.** The endpoint returns data only to a request carrying the exact configured token, only about the founder id in its own configuration, and the 200 body has exactly the four keys `status`, `text_hash`, `decided_at`, `row_ok`; `invalid` is passed through as `invalid` with `row_ok:false`; and the key and hash shapes it accepts are the same predicate in TypeScript, SQL and bash.
 
-**Assembly.** The route handler (check order), `readInternalBearerSecret(name)` and `bearerMatches`, the founder-id read and uuid check, the registry key check and the `read_failed` versus `unknown_key` split in `canonical.ts`, the `verifyAcceptance` wrapper (strict payload validation), the response builder, the `PUBLIC_PATHS` entry, `.env.example`, and the key and hash shapes (`KEY_RE`, `TEXT_HASH_RE`, the migration 184 and 185 predicates, the bash gate regexes). Every status the route can emit is in one closed set `{200, 400, 401, 404, 502, 503}` declared once and used by the tests.
+**Assembly.** The route handler (check order), `readNamedBearerSecret(name)` (from `lib/internal-auth-named.ts`) and `bearerMatches` (from `lib/internal-auth.ts`, unchanged), the founder-id read and uuid check, the registry key check and the `read_failed` versus `unknown_key` split in `canonical.ts`, the `verifyAcceptance` wrapper (strict payload validation), the response builder, the `PUBLIC_PATHS` prefix entry, `.env.example`, and the key and hash shapes (`KEY_RE`, `TEXT_HASH_RE`, the migration 184 and 185 predicates, the bash gate regexes). Every status the route can emit is in one closed set `{200, 400, 401, 404, 502, 503}` declared once and used by the tests.
 
 **Mutation matrix.**
 
@@ -360,7 +345,7 @@ Closed table of what the gate prints (every row is a test):
 | 6 | Map `invalid` to `none`, or drop `row_ok:false` | `invalid` has no collapse |
 | 7 | Turn an unknown key into 200 `none`, or a registry read failure (`read_failed`) into 404 | unknown key is 404, a failed read is 503 |
 | 8 | Accept a second, wrong token after a right one (two-token compare) | exactly one configured token |
-| 9 | Remove the `PUBLIC_PATHS` entry, or widen it to `/api/internal` | the middleware would 307 to `/login`, and the entry must stay narrow |
+| 9 | Remove the `PUBLIC_PATHS` entry, or widen it to `/api/internal` | the middleware would 307 to `/login`; the entry is a prefix entry (dynamic `[key]` segment) and every handler under it must check the bearer first |
 | 10 | Allow a 64-character key in `KEY_RE`, or uppercase hex in the bash hash check, or a leading hyphen in the bash key check | the three layers must refuse what the SQL CHECK refuses |
 
 **Harness rows.** Remove the RPC stub: the suite must fail. The cross-layer test extracts the SQL CHECK expression (migration 184, and the RPC argument checks in 185) and the bash regexes from the source files and compares them with `KEY_RE` and `TEXT_HASH_RE`; an empty extraction fails the test. Must-PASS inputs other than the canonical: the bare token without the Bearer prefix (the helper accepts both), a key at the 63-character limit and one at 62, a hash that is not the registry's current hash (answered from the database, not rejected).
@@ -458,7 +443,7 @@ A small sourced helper `plugins/soleur/scripts/lib/bearer-curl.sh` carries the t
 
 ### Phase D4 — Ack and ops on the decide path
 
-`ops.ts`: add `recordInvalid` (`record_invalid`, error) and `storeFailed` (`store_failed`, error; `tags.stage` in `verify`, `ack_state`, `ack`). `decideLegal` gets an injected `flushEvents` dependency: after `recorded` it emits `accepted`, returns the founder's result immediately, and off the request path (`after()` where it works under the custom server, otherwise a caught fire-and-forget promise) awaits a bounded flush (2 s) and, only when it returned true, calls `ackAcceptance`. A flush that returns false leaves the row unacknowledged; a flush or ack that throws is caught and reported as `store_failed` and never reaches the response or `decideRejected`. `already_recorded` never acks. Update `test/sentry-legal-acceptance-alert-op-contract.test.ts`: the derived op set includes the two new ops, which sit in a plain exempt list naming #12195 (no ratchet).
+`ops.ts`: add `recordInvalid` (`record_invalid`, error) and `storeFailed` (`store_failed`, error; `tags.stage` in `verify`, `ack_state`, `ack`, `registry`, `config`). `decideLegal` gets an injected `flushEvents` dependency: after `recorded` it emits `accepted`, returns the founder's result immediately, and off the request path (`after()` where it works under the custom server, otherwise a caught fire-and-forget promise) awaits a bounded flush (2 s) and, only when it returned true, calls `ackAcceptance`. A flush that returns false leaves the row unacknowledged; a flush or ack that throws is caught and reported as `store_failed` and never reaches the response or `decideRejected`. `already_recorded` never acks. Update `test/sentry-legal-acceptance-alert-op-contract.test.ts`: the derived op set includes the two new ops, which sit in a plain exempt list naming #12195 (no ratchet).
 
 ### Phase D5 — Delivery runbook (pull-only)
 
@@ -489,7 +474,7 @@ This reserves the apply decision to the operator. It is plan-only: this PR appli
 Not part of this PR. They gate turning `approval-queue` on for any founder. The flag is read with `workspaceId: null`, so it is effectively global: there is no canary and no per-user scope (the condition is "before the flag is on for anyone beyond the operator-run exercise"). Until the founder-page card state in item 7 ships, the flag stays off in prd, or the operator exercises the card in dev only.
 
 1. Counsel decides the retention period and the note redaction path (#12080, PA-40 item 17); the `(c-2)` placeholder is replaced.
-2. The three published privacy documents are updated together (and, before any non-operator founder, a named reader role for the note and a no-forwarding rule).
+2. The three published privacy documents are amended in this PR for the third table and the status check (the DSAR lockstep gate requires it because `dsar-export-allowlist.ts` changes; draft-marked, temporally qualified, mirrored, SHA pins refreshed). The final-form rewrite stays owed before any non-operator founder: the handling of the status check's output in an operator session (a counsel question, item 17(h)), the retention period, a named reader role for the note and a no-forwarding rule.
 3. Confirm the Supabase "single session per user" setting is off (the throwaway `verifyOtp` would otherwise end the founder's web session).
 4. Live browser check of the card (CI e2e is the authority).
 5. Card copy stays PROVISIONAL under the CLO sign-off gate; no placeholder wording is removed.
@@ -533,8 +518,8 @@ Open post-merge items from the task: 8.1 ADR-319 adopting to accepted after the 
 
 ## Files to Edit
 
-- `apps/web-platform/lib/internal-auth.ts` (parameterise the secret name)
-- `apps/web-platform/lib/routes.ts` (narrow `PUBLIC_PATHS` entry)
+- `apps/web-platform/lib/internal-auth-named.ts` (new: the named-secret reader; `lib/internal-auth.ts` is NOT edited, CTO ruling D2)
+- `apps/web-platform/lib/routes.ts` (`PUBLIC_PATHS` prefix entry)
 - `apps/web-platform/server/legal-acceptance/canonical.ts` (`read_failed` split)
 - `apps/web-platform/server/legal-acceptance/service.ts` (`verifyAcceptance`, `ackAcceptance`, `ackState`; injected flush; ack off the request path)
 - `apps/web-platform/app/api/legal-acceptance/[key]/decide/route.ts` (wire the injected flush and the off-path ack)
@@ -605,7 +590,7 @@ Open post-merge items from the task: 8.1 ADR-319 adopting to accepted after the 
 - **Unpaged new ops.** `record_invalid` and `store_failed` are visible in Sentry but page nobody until the follow-up rules are applied; the gate is loud at ship time in the meantime.
 - **The alert is pull-driven.** A row nobody verifies is not checked; the sweep follow-up carries a trigger (before the flag is on for a non-operator founder).
 - **A real Yes with a lost ack pages on each verify.** That is the intended signal; the runbook has the reconcile step. Healing it in `already_recorded` would hide a row pre-empted through the RPC.
-- **`internal-auth.ts` is bound into the census gate.** Run the census test after the edit.
+- **`internal-auth.ts` is bound into the census gate.** It is not edited (CTO ruling D2); the named-secret reader is the new `lib/internal-auth-named.ts`. Run the census test and the merge gate `git diff --quiet 8c77db1 HEAD -- <six CENSUS_PATHS>`.
 - **Migration number.** 185 is re-checked at PR time; a sibling can claim it first.
 - **ADR-320 is `proposed`.** The token ruling cites decision 4 and adds a scope note to ADR-320; if ADR-320 is accepted with a wider scope, the token moves out of Terraform.
 - **Not in scope:** #12020 to #12023, #12031, #12080, the founder-page invalid card state (follow-up), a sweep over unacked rows (follow-up), paging rules for the new ops (follow-up), and any copy change.

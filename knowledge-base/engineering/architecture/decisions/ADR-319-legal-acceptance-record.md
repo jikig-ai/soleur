@@ -231,10 +231,12 @@ configuration values exist and are well formed (see Hard limits).
 - Consequences, "gate before the flag is enabled beyond the canary": there is no canary. The flag is global (see Flag scope). The condition reads: before the flag is on for anyone beyond the operator-run exercise.
 - PR-C Enabling conditions, "no delivery path to the team until PR-D": restated below as pull-only delivery, no push.
 - PR-C Still open, "PR-D: the check endpoint and the hold evaluator that read the record": built here, dark.
+- Residual risk, "A holder of production credentials ...": the database-owner credential is held by the operator and by the production migration pipeline (a CI secret that runs the migrate and verify steps of the release workflow); no agent session is meant to use either, which is a rule and not a control. What else that pipeline credential set can mint (a founder session, for example) is not assessed here.
+- PR-C Enabling conditions, "The three published privacy documents are updated together": the three documents are amended in PR #12187 for the third table and the status check (draft-marked, temporally qualified, as the DSAR lockstep gate requires). The final-form rewrite stays an enabling condition before any non-operator founder.
 
 ### Decisions
 
-- **Read path as built.** `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>`. Check order: 503 (token or founder id unset or malformed), 401 (wrong token), 400 (malformed key or hash), then the registry read (503 if the registry cannot be read, which is
+- **Read path as built.** `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>`. Check order: 503 (token or founder id unset or malformed), 401 (wrong token), 400 (malformed key or hash), then the registry read (503 if the registry cannot be read or the committed text is malformed, which is
   step 4 and comes after 401 and 400, never first), 404 (key not in the registry), then the lookup (503 if a database call fails or throws, including the reconciliation read; 502 if the database answers a shape the endpoint does not recognise). The 200 body
   has exactly four keys: `status`, `text_hash`, `decided_at`, `row_ok`. The founder id comes from the endpoint's own configuration, never from the request. The hash is answered from the database for the exact hash asked; whether that hash equals the committed
   text is the gate's job. The token is its own secret, `LEGAL_ACCEPTANCE_VERIFY_TOKEN`, separate from the Inngest one. `lib/internal-auth.ts` is **not** changed by this PR: it is one of the census-bound paths (CLO ruling on #10455, discharged sha 8c77db1) and any
@@ -248,9 +250,9 @@ configuration values exist and are well formed (see Hard limits).
   migrate job precedes deploy), so the functions exist when the code that calls them runs.
 - **Note delivery: pull-only.** The note stays in `legal_acceptance.requested_edit`. No email, no Inngest function, no GitHub issue and no other push: that would create a second copy outside the retention and redaction decisions (#12080) and the agent holds
   the GitHub identity. The operator reads it personally with an owner-level query in their own Supabase login, following `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`. No `service_role` function returns the note, the card
-  copy is not changed, and the endpoint never returns it. The note is not readable through the endpoint or through any `service_role` path. A database-owner credential could read it, and that credential is held only by the operator; the restriction is a policy
+  copy is not changed, and the endpoint never returns it. The note is not readable through the endpoint or through any `service_role` path. A database-owner credential could read it; that credential is held by the operator and by the production migration pipeline (a CI secret), and no agent session is meant to use either, which is a rule and not a control; the restriction is a policy
   and a design choice, not an absolute control. The PR-C enabling condition "no delivery path to the team until PR-D" is restated as: pull-only delivery, no push.
-- **The `invalid` rule.** A row whose checksum no longer matches is `invalid`. The endpoint passes it through as `invalid` with `row_ok: false` and emits `record_invalid` (error); the gate treats it as unevaluable (exit 2, "the record failed its check"). It
+- **The `invalid` rule.** A row whose checksum no longer matches is `invalid`. The endpoint passes it through as `invalid` with `row_ok: false` and emits `record_invalid` (error); the gate treats it as unevaluable (exit 2, "the saved decision looks damaged"). It
   is never collapsed into `none` at any layer PR-D touches. **Standing gap:** the founder page still shows such a row as recorded, because the card has six states and none is `invalid`. Adding one needs a wireframe and counsel-gated copy, so it is
   deferred to #12193; it is an enabling condition before the `approval-queue` flag is on for anyone beyond the operator-run exercise.
 - **Hold-gate semantics.** `web-acceptance <key> <hash>` discharges a hold only when all of these hold: the endpoint answers `accepted` with `row_ok` true; the echoed hash equals the gate's hash; that hash equals the sha256 of the committed text; the text has
@@ -297,6 +299,8 @@ this PR; the draft rules are tracked in #12195 and are an enabling condition bef
 
 - The founder-page state for `invalid` (#12193), the sweep (#12194), paging for the two new ops (#12195), the Terraform secrets and the founder uuid (#12196).
 - The first real acceptance verified end to end by the gate, the post-deploy registry smoke (no text is committed, so every key answers 404) and the roadmap wording (#12197). Status moves to `accepted` only after the first.
+- Published documents: amended in this PR for the third table and the status check; still owed before any non-operator founder: the final-form rewrite (the handling of the status check's output in an operator session, which is a counsel question and not a recorded processing activity, the retention period, the reader role for the note).
+- #12195 (paging for `record_invalid` and `store_failed`) should use per-stage fingerprints: `store_failed` has a single static message, so an alert rule that groups by message would merge the stages; group by `tags.stage`.
 - The deletion path for `legal_acceptance` (#12080) must delete the `legal_acceptance_ack` row of every deleted `legal_acceptance` row, by `acceptance_id`, in the same operation. The ack table has no foreign key, so no cascade does it, and an ack row left behind keeps a
   pseudonymous marker and a timestamp for a decision whose record has been removed.
 - The pre-flip count check (above), run against the production project.
@@ -308,4 +312,4 @@ this PR; the draft rules are tracked in #12195 and are an enabling condition bef
 
 The C4 model gains three edges: the ship component to the web application (read-only HTTPS bearer to the check endpoint), the ship component to Doppler (read of the one token, once configured under #12196), and the founder to the legal-acceptance store (the operator's
 owner-level read of the note; operator-only by policy). The statement that no edge reaches the store from the agent side is replaced: the agent can read four fields about one decision through the endpoint; the note is not readable through the endpoint or any
-`service_role` path (a database-owner credential could read it, and the operator alone holds one). That is a policy and a design choice, not an absolute control.
+`service_role` path (a database-owner credential could read it; it is held by the operator and by the production migration pipeline, a CI secret, and no agent session is meant to use either). That is a policy and a design choice, not an absolute control.
