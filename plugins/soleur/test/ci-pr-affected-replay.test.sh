@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=599   # top-level `^mutate ` (473) + `^ow_mutate ` (126) call sites; ctl-* controls run ungated
+DECLARED_TOTAL=602   # top-level `^mutate ` (473) + `^ow_mutate ` (129) call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -3055,7 +3055,7 @@ ow_pr_obj() {   # ow_pr_obj <n> <branch> [head repo] [base repo]: one element of
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_issues_labels_s4_drain* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_issues_labels_s4_drain* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* "$GHFIX"/*issues_12129* "$GHFIX"/*issues_77777* "$GHFIX"/*issues_comments_88888* 2>/dev/null
   printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
@@ -3101,6 +3101,16 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
   [[ "${OW_BL_TIP_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=main")"
   [[ "${OW_BL_MERGE_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
   [[ "${OW_BL_TIP_FAIL:-}" != 1 ]] || fx_err "$OW_BL_PATH?ref=main"
+  printf '{"state":"open"}' | fx "repos/$R/issues/12129"   # the wall-discharge issue is not-closed by default, so every row below keeps the numeric wall legs unless it repoints the seam
+  case "${OW_DISCHARGE:-}" in   # a discharge row repoints SOAK_WALL_DISCHARGE_ISSUE/_COMMENT at 77777/88888; OW_DISCHARGE picks the fixture shape served there
+    "") ;;
+    closed) printf '{"state":"closed"}' | fx "repos/$R/issues/77777"; printf '{"body":"<!-- soleur-cto-ruling v1 --> kept"}' | fx "repos/$R/issues/comments/88888" ;;
+    open) printf '{"state":"open"}' | fx "repos/$R/issues/77777" ;;
+    gone) : > "$GHFIX/ERR404_$(keyof "repos/$R/issues/77777")" ;;
+    fail) fx_err "repos/$R/issues/77777" ;;
+    nocomment) printf '{"state":"closed"}' | fx "repos/$R/issues/77777"; : > "$GHFIX/ERR404_$(keyof "repos/$R/issues/comments/88888")" ;;
+    nomarker) printf '{"state":"closed"}' | fx "repos/$R/issues/77777"; printf '{"body":"a comment without the marker"}' | fx "repos/$R/issues/comments/88888" ;;
+  esac
   local dm di="" n=0   # the s4-drain label list: OW_DRAIN is a space-separated list of merged_at values ("null" = closed without merging)
   for dm in ${OW_DRAIN:-}; do n=$((n + 1)); di="${di:+$di,}{\"number\":$((900 + n)),\"pull_request\":{\"merged_at\":$([[ "$dm" == null ]] && echo null || echo "\"$dm\"")}}"; done
   printf '[%s]' "$di" | fx "repos/$R/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100"
@@ -3164,7 +3174,7 @@ ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stder
   RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_SENTINEL=""; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); OW_DRAIN=""; OW_RUNGONE=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
+ow_case() { : > "$GHLOG"; OW_SENTINEL=""; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); OW_DRAIN=""; OW_RUNGONE=""; OW_DISCHARGE=""; OW_DISCHARGE_KIND=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3190,6 +3200,12 @@ ow_u_skipped() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 
 ow_u_bigmax() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 286"); }
 ow_u_wall_all() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} $1"; done; }   # every unit takes the wall time $1
 ow_u_p95_240() { ow_u_wall_all 240; }
+ow_u_discharge() { OW_ENV=(SOAK_WALL_DISCHARGE_ISSUE=77777 SOAK_WALL_DISCHARGE_COMMENT=88888); OW_DISCHARGE="${OW_DISCHARGE_KIND:-closed}"; ow_u_slow; }
+ow_u_discharge_open() { OW_DISCHARGE_KIND=open; ow_u_discharge; }
+ow_u_discharge_gone() { OW_DISCHARGE_KIND=gone; ow_u_discharge; }
+ow_u_discharge_nocomment() { OW_DISCHARGE_KIND=nocomment; ow_u_discharge; }
+ow_u_discharge_nomarker() { OW_DISCHARGE_KIND=nomarker; ow_u_discharge; }
+ow_u_discharge_fail() { OW_DISCHARGE_KIND=fail; ow_u_discharge; }
 ow_u_max_at() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 $1"); }
 ow_u_max_285() { ow_u_max_at 285; }
 ow_u_nomarker() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 nomark 150"); }
@@ -3228,7 +3244,19 @@ row_ow_defect() { ow_variant ow_u_defect; [[ "$RC" -eq 2 ]] && grep -q 'window r
 row_ow_defect_first_ok() { ow_variant ow_u_defect_first_ok; [[ "$RC" -eq 2 ]] && ! grep -q 'restarted' <<<"$OWOUT" && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT"; }   # an exit 2 that first appears on the rerun was never reproduced
 row_ow_incident() { ow_variant ow_u_incident; [[ "$RC" -eq 0 ]] && ! grep -q 'restarted' <<<"$OWOUT" && grep -q 'units=8' <<<"$OWOUT"; }   # excluded, not counted, not a restart
 row_ow_unclassified() { ow_variant ow_u_unclassified; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT"; }
-row_ow_timeout() { ow_variant ow_u_timeout; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT" && grep -q 'wall max 300s is over 285' <<<"$OWOUT"; }   # a job killed at the timeout is an exit 2 unit and the ceiling sees its wall time
+row_ow_timeout() { ow_variant ow_u_timeout; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT" && grep -q 'wall max 300s is over 285' <<<"$OWOUT"; }   # a job killed at the timeout is an exit 2 unit and its wall time reaches the ceiling
+row_ow_discharge() {   # an accepted spend discharges the numeric wall legs: over-ceiling walls still PASS, the token prints, the measured walls still print
+  ow_variant ow_u_discharge
+  [[ "$RC" -eq 0 ]] && grep -q 'wall_discharge=accepted-spend-77777' <<<"$OWOUT" && grep -q 'wall_p95_s=241' <<<"$OWOUT" && ! grep -q 'wall p95 241s is over' <<<"$OWOUT"
+}
+row_ow_discharge_open() {   # the issue reopened: the numeric legs stand (the revocation mechanism)
+  ow_variant ow_u_discharge_open
+  [[ "$RC" -eq 2 ]] && grep -q 'wall p95 241s is over' <<<"$OWOUT" && grep -q 'wall_discharge=none' <<<"$OWOUT"
+}
+row_ow_discharge_gone() { ow_variant ow_u_discharge_gone; [[ "$RC" -eq 2 ]] && grep -q 'wall p95 241s is over' <<<"$OWOUT"; }
+row_ow_discharge_nocomment() { ow_variant ow_u_discharge_nocomment; [[ "$RC" -eq 2 ]] && grep -q 'wall p95 241s is over' <<<"$OWOUT"; }
+row_ow_discharge_nomarker() { ow_variant ow_u_discharge_nomarker; [[ "$RC" -eq 2 ]] && grep -q 'wall p95 241s is over' <<<"$OWOUT"; }
+row_ow_discharge_fail() { ow_variant ow_u_discharge_fail; [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: GitHub API read failed (the wall-discharge issue 77777' <<<"$OWOUT"; }
 row_ow_cancel_short() { ow_variant ow_u_cancelshort; [[ "$RC" -eq 0 ]] && grep -q 'units=8 ' <<<"$OWOUT"; }   # a cancellation that never ran the check to its end is not a unit
 row_ow_cancel_run() { ow_variant ow_u_cancelrun; [[ "$RC" -eq 0 ]] && grep -q 'runs_listed=9 units_read=8' <<<"$OWOUT" && ! grep -q 'actions_runs_5006_' "$GHLOG"; }   # a cancelled run spends no jobs read
 row_ow_paused() { ow_variant ow_u_paused; [[ "$RC" -eq 2 ]] && grep -q 'paused: the latest merge_group unit (run 6003) is red' <<<"$OWOUT"; }
@@ -3706,6 +3734,12 @@ chk "window probe: an exit 2 that first appears on the rerun (attempt 1 was fine
 chk "window probe: an exit 2 whose rerun passes is an incident: excluded, not counted, no restart" row_ow_incident
 chk "window probe: an exit 2 never rerun is unclassified (NOT YET)" row_ow_unclassified
 chk "window probe: a ratchet job killed at the timeout (>= 290 s) is an exit 2 unit and its wall time reaches the ceiling" row_ow_timeout
+chk "window probe: an accepted-spend discharge skips the numeric wall legs and prints wall=accepted-spend-<issue> (the ceilings stay RULED and the measured walls still print)" row_ow_discharge
+chk "window probe: a reopened discharge issue falls the wall legs back to numeric (the revocation mechanism)" row_ow_discharge_open
+chk "window probe: a gone discharge issue falls the wall legs back to numeric" row_ow_discharge_gone
+chk "window probe: a missing discharge comment falls the wall legs back to numeric" row_ow_discharge_nocomment
+chk "window probe: a discharge comment without the ruling marker does not discharge" row_ow_discharge_nomarker
+chk "window probe: a failed discharge read is CANNOT ESTABLISH (exit 3)" row_ow_discharge_fail
 chk "window probe: a job cancelled early (a concurrency cancel) is not a unit" row_ow_cancel_short
 chk "window probe: a cancelled run is skipped before any jobs read" row_ow_cancel_run
 chk "window probe: a red latest merge_group unit pauses the window (NOT YET)" row_ow_paused
@@ -3904,6 +3938,9 @@ ow_mutate retry-deadline-never $'(( SECONDS - T0 < BUDGET ))' $'(( SECONDS - T0 
 ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
 ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && (( SECONDS - T0' $'(( SECONDS - T0' row_ow_retry
 ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
+ow_mutate discharge-wall-gate-ignored $'if (( n_w > 0 )) && [ "$wall_discharge" = none ]; then' $'if (( n_w > 0 )); then' row_ow_discharge
+ow_mutate discharge-marker-dropped $'grep -q '"'"'soleur-cto-ruling'"'"'' $'grep -q '"'"'soleur-cto-ruling-absent'"'"'' row_ow_discharge
+ow_mutate discharge-closed-gate-dropped $'| jq -r '"'"'.state // empty'"'"' 2>/dev/null)" = closed ]; then' $'| jq -r '"'"'.state // empty'"'"' 2>/dev/null)" = open ]; then' row_ow_discharge
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
@@ -5200,7 +5237,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
 OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1307   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1313   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows + 6 wall-discharge rows (#12129); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
