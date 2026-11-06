@@ -4170,6 +4170,37 @@
   fixing an initial flex-layout placement error. It is a design artifact,
   not proof that these states or their retention promises are implemented;
   actual UI QA, complete copy review and the resend protocol remain open.
+- Ruled by CTO agent, 2026-11-06: the next resend increment is an offline-only
+  disposable PostgreSQL claim/status prototype with `accepted` or `unknown`
+  outcomes and no re-arm. Bind one immutable logical turn to trusted subject,
+  workspace, conversation, run, generation and a versioned exact-payload
+  commitment; differing bindings refuse, and a missing row is unknown. Test
+  concurrent sessions, lost responses and restarts with synthetic inputs.
+  The commitment is personal data, and a plain digest permits dictionary
+  confirmation. Key custody, rotation, retention, access, erasure and restore
+  remain unresolved. A future retry needs a durable admission fence in the
+  same serialization point and exclusion of legacy service-role writers and
+  old binaries; accepted or terminal attempts are never automatically retryable.
+  An unwired synthetic prototype and isolated Docker/PostgreSQL test now
+  exercise concurrently submitted same/different claims, a held uncommitted insert, rollback
+  and a later connection read. Independent review correctly found that the
+  original test did not prove overlapping transactions, lost responses,
+  restarts or provider suppression; the held transaction and rollback cases
+  were added after that review. Follow-up review required observing the
+  competitor in PostgreSQL before commit; the test now confirms a lock wait
+  through a third connection in both commit and rollback cases; the latter
+  allows the waiting insert to win. An insert result inside a transaction is
+  not durable acceptance.
+  The SQL helper was subsequently confined to
+  the test file; only the test fixture validates isolation, and a database name
+  is not an ownership boundary. These tests do not prove authentication,
+  privacy, lost-response recovery, process restart, a retry fence or provider
+  admission. The first two test invocations failed during fixture database
+  control without diagnostics; after adding redacted diagnostic output, the
+  missing-module RED test and subsequent synthetic runs completed. The earlier
+  transient control failures remain unexplained despite three subsequent clean
+  fixture runs. No production migration,
+  authenticated status API or provider qualification has been established.
 - No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection
