@@ -927,7 +927,7 @@ Next levers, in order (the decision rule above governs only the conditional lib 
 
 ## Amendment — 2026-11-05 (#12013)
 
-Raw rows: `knowledge-base/project/specs/feat-one-shot-12013-affected-gate-lock-chain/measurements/` (`summary.txt` holds the method and the derived figures; every number below comes from it). Rulings by the CTO agent on 2026-11-05 are in that spec's `decision-challenges.md` (F1 to F5 and two review dissents). This amendment supersedes by reference the previous amendment's "Known limit" paragraph on the serial `lock:test-all` chain and the budget-kill note; it does not rewrite them.
+Raw rows: `knowledge-base/project/specs/archive/20261106-052833-feat-one-shot-12013-affected-gate-lock-chain/measurements/` (`summary.txt` holds the method and the derived figures; every number below comes from it). Rulings by the CTO agent on 2026-11-05 are in that spec's `decision-challenges.md` (F1 to F5 and two review dissents). This amendment supersedes by reference the previous amendment's "Known limit" paragraph on the serial `lock:test-all` chain and the budget-kill note; it does not rewrite them.
 
 **Outcome.** The 10-minute bar of #12013 is still not met. Three cold readings of the same replayed diff (160 of 733 suites) at commit `3010ff00ca` took 3063 s and 3174 s with backfill and 3291 s for the strict-FIFO control, against 6522 s for the single earlier reading: the gate is about 52 percent faster and about 5.2 times over the bar. #12013 stays open at that measured gap. A budget kill after a red now exits 1 instead of 6.
 
