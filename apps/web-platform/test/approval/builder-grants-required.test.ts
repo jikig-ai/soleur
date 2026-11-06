@@ -39,10 +39,30 @@ function importsCheckGrant(sf: ts.SourceFile): boolean {
   );
 }
 
+/** Every interface in the parsed file that declares a `grants` member (optional or not). */
+function grantsInterfaces(sf: ts.SourceFile): ts.InterfaceDeclaration[] {
+  return sf.statements.filter(
+    (st): st is ts.InterfaceDeclaration =>
+      ts.isInterfaceDeclaration(st) && st.members.some((m) => ts.isPropertySignature(m) && m.name.getText() === "grants"),
+  );
+}
+
+/** `buildFooTools` -> `BuildFooToolsOpts`: the options interface a builder is paired with (CTO Fork 7, #11636). */
+function optsNameFor(fn: string): string {
+  return `${fn.charAt(0).toUpperCase()}${fn.slice(1)}Opts`;
+}
+
 /**
  * Derived by CONTENT, not by a hand-kept list: every server file that imports `checkGrant` reads grants, so the exported
- * builder in it (the exported `build*` function) and the options interface it takes are the subject. A fourth
+ * builders in it (the exported `build*` functions) and the options interfaces they take are the subject. A fourth
  * grant-reading builder is therefore covered the day it is written, without anyone remembering to list it here.
+ *
+ * Pairing (#11636): a file can hold more than one builder (github-tools.ts has `buildGithubTools` and
+ * `buildGithubPushBranchTool`), so each builder is paired with the grants-declaring interface NAMED after it
+ * (`Build<Rest>Opts`); a file whose builder has no such interface but declares exactly one grants interface keeps the older
+ * one-interface pairing. The options interface is still found by CONTENT (it must declare `grants`), never read back from
+ * the builder's own parameter: the "takes its options as <iface>" check below must be able to fail when the parameter type
+ * is changed.
  */
 function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
   const out: Array<{ file: string; fn: string; iface: string }> = [];
@@ -56,14 +76,12 @@ function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
         st.name.text.startsWith("build") &&
         (ts.getCombinedModifierFlags(st) & ts.ModifierFlags.Export) !== 0,
     );
-    // The options interface is found by CONTENT too (the interface in this file that declares a `grants` member, optional or
-    // not), never read back from the builder's own parameter: the "takes its options as <iface>" check below must be able to
-    // fail when the parameter type is changed.
-    const iface = sf.statements.find(
-      (st): st is ts.InterfaceDeclaration =>
-        ts.isInterfaceDeclaration(st) && st.members.some((m) => ts.isPropertySignature(m) && m.name.getText() === "grants"),
-    );
-    for (const f of fns) out.push({ file: relative(SERVER, full), fn: f.name!.text, iface: iface?.name.text ?? "" });
+    const ifaces = grantsInterfaces(sf);
+    for (const f of fns) {
+      const named = ifaces.find((i) => i.name.text === optsNameFor(f.name!.text));
+      const iface = named ?? (ifaces.length === 1 ? ifaces[0] : undefined);
+      out.push({ file: relative(SERVER, full), fn: f.name!.text, iface: iface?.name.text ?? "" });
+    }
   }
   return out;
 }
@@ -84,9 +102,11 @@ function findFunction(sf: ts.SourceFile, name: string): ts.FunctionDeclaration |
 }
 
 describe("the builder list is derived by content, with a floor", () => {
-  it(`finds at least ${BUILDERS_FLOOR} grant-reading builders and the three known ones among them`, () => {
+  it(`finds at least ${BUILDERS_FLOOR} grant-reading builders and the three known ones among them, plus the cc push builder`, () => {
     expect(BUILDERS.length).toBeGreaterThanOrEqual(BUILDERS_FLOOR);
-    expect(BUILDERS.map((b) => b.fn).sort()).toEqual(expect.arrayContaining(["buildGithubTools", "buildKbShareTools", "buildWorkspaceSettingsTools"]));
+    expect(BUILDERS.map((b) => b.fn).sort()).toEqual(
+      expect.arrayContaining(["buildGithubPushBranchTool", "buildGithubTools", "buildKbShareTools", "buildWorkspaceSettingsTools"]),
+    );
     for (const b of BUILDERS) expect(b.iface, `${b.fn} in ${b.file} must take a named options interface`).toMatch(/^[A-Z]\w+$/);
   });
 
@@ -114,6 +134,34 @@ describe("grants is a REQUIRED option of every grant-reading tool builder", () =
     expect(decl, `${fn} not found in ${file}`).toBeDefined();
     expect(decl!.parameters.length).toBeGreaterThanOrEqual(1);
     expect(decl!.parameters[0].type?.getText()).toBe(iface);
+  });
+
+  it("every interface that declares `grants` is some builder's options interface (a second interface cannot hide from the pairing)", () => {
+    const paired = new Set(BUILDERS.map((b) => `${b.file}#${b.iface}`));
+    const unpaired: string[] = [];
+    for (const full of listTs(SERVER)) {
+      const sf = ts.createSourceFile(full, readFileSync(full, "utf8"), ts.ScriptTarget.Latest, true);
+      if (!importsCheckGrant(sf)) continue;
+      for (const i of grantsInterfaces(sf)) if (!paired.has(`${relative(SERVER, full)}#${i.name.text}`)) unpaired.push(`${relative(SERVER, full)}#${i.name.text}`);
+    }
+    expect(unpaired).toEqual([]);
+  });
+
+  it("a file with two builders pairs each with its OWN options interface (the pairing is by name, not first-match)", () => {
+    const pair = Object.fromEntries(BUILDERS.filter((b) => b.file === "github-tools.ts").map((b) => [b.fn, b.iface]));
+    expect(pair).toEqual({
+      buildGithubTools: "BuildGithubToolsOpts",
+      buildGithubPushBranchTool: "BuildGithubPushBranchToolOpts",
+    });
+  });
+
+  it("the cc push builder takes a REQUIRED boolean `requireGrant` (a forgotten wiring does not compile)", () => {
+    const decl = findInterface(parse("github-tools.ts"), "BuildGithubPushBranchToolOpts");
+    expect(decl, "BuildGithubPushBranchToolOpts not found in github-tools.ts").toBeDefined();
+    const member = decl!.members.find((m): m is ts.PropertySignature => ts.isPropertySignature(m) && m.name.getText() === "requireGrant");
+    expect(member, "BuildGithubPushBranchToolOpts has no `requireGrant` member").toBeDefined();
+    expect(member!.questionToken, "requireGrant must not be optional").toBeUndefined();
+    expect(member!.type?.getText()).toBe("boolean");
   });
 
   it("the check is not vacuous: an optional `grants?` is seen as optional by the same reader", () => {
