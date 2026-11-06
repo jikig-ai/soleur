@@ -260,3 +260,23 @@ operator-minted tokens are not `cloudflare_api_token` resources and cannot be
 Terraform-managed at all. This is distinct from the AP-019 carve-out, which
 mutates a genuinely Terraform-declared value (a `proxied` DNS toggle) and
 self-reverts (**that ground is VOID from the #7640 apex cutover — see the AP-019 note in principles-register.md; post-cutover `listToggleRecords()` returns a subset and `restoreStateInner` refuses to restore it, making the toggle one-way**) — there is nothing here for Terraform to reconcile.
+
+## Amendment (#11181) — the retained-scope re-check covers `CF_API_TOKEN`
+
+The probe example above names `CF_API_TOKEN_RULESETS` literally, but the
+mandatory retained-scope re-check applies to every widened shared token. For
+`cf_api_token` (`CF_API_TOKEN` — the ops-owned user token
+`soleur-terraform-tunnel`: Tunnel, Access, DNS, Notifications) the covering set
+is the `default-token` profile of `soleur:cf-token-scope`:
+`cf-token-scope.sh --profile default-token` probes the four retained ledger
+abilities (account `cfd_tunnel`, account `access/apps`, zone `dns_records`,
+account `alerting/v3/policies`) plus two LB-readiness rows
+(`accounts/<acct>/lb/pools`, `zones/<zone>/load_balancers`), and
+`--expect-lb-scopes` is the post-widen assert that fails closed until both LB
+rows authorize. Verified live 2026-10-30: the widen appended account
+`Load Balancing: Monitors and Pools:Edit` and zone `Load Balancers:Edit` to the
+token; the assert run exited 0 (`PASS: LB scopes present`, `PASS: no scope
+dropped`) and `/user/tokens/verify` still reports `active`. The set is
+documented in the skill (`plugins/soleur/skills/cf-token-scope/SKILL.md` §
+Probe-set contract); per the #6755 amendment precedent the ADR points at the
+tooling rather than re-deriving it.
