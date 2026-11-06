@@ -3111,3 +3111,953 @@
   are accepted as preparation only; no blocking text finding, dissent none.
   This does not complete formal exact-head PR review. Offline command identity,
   order and shell-syntax checks pass; no operational transition was exercised.
+
+### Recovery continuation — 2026-10-27, holder-evidence preparation
+
+- Added `holder-evidence-preparation-2026-10-27.md` as an offline proposal
+  covering GitHub workflow/App paths, database effective privileges and active
+  sessions, Supabase/Doppler metadata, persistent consumers, limitations of
+  credential-holder inference, and private minimized retention. No collection
+  command or live provider query ran; the October 27 capture approval remains
+  consumed.
+- Session-start cleanup ran after approved escalation, but the sandboxed
+  attempt first failed on read-only lock paths. The cleanup then reported
+  contended locks and multiple GitHub metadata-query failures while preserving
+  affected branches/worktrees. No target feature worktree was reaped. A
+  separate post-cleanup PR probe hit mise's read-only install error; retrying
+  with login initialization disabled succeeded and confirmed PR #9051 remains
+  draft with auto-merge off. The gate ran `git worktree list`; its required
+  `.mcp.json` refresh was handled by the canonical gate.
+- The canonical Markdown invoker excluded the new project-spec document, so
+  its exit is not a lint result. A direct whitespace and relative-link scan
+  passed for all 147 lines; `git diff --check` passed for tracked edits. The
+  new document still needs independent Markdown/content review. The scoped
+  CTO agent could not return a review after hitting the agent usage limit.
+- PR #9051 remains open/draft with auto-merge off at remote head
+  `4225c68a3eb1e9bdb917f899ae85618848b2c691`; both feature branches remain
+  unpushed. The companion's remote-tracking ref is absent and its local head
+  remains `4f0c8407aba51fdd9c846c252e8d1edceb1cb3d1`. Collection approval,
+  writer clearance, restoration rehearsal, exact-head review, QA, preflight
+  and final CLO clearance remain incomplete.
+
+### Recovery continuation — 2026-10-27, independent proposal review
+
+- Independent read-only review found the holder proposal is not ready for an
+  exact collection approval: no executable bound collector or synthetic
+  failure tests exist, and coverage, minimization, deletion and visibility
+  requirements needed strengthening. The proposal now records those findings,
+  requires filtering before persistence and sets an absolute capture-based
+  deletion deadline. Its local discoverability command now matches the
+  untracked artifact. These edits do not constitute legal clearance.
+- No live collection, provider query, writer fencing, push or shared operation
+  was performed in this continuation. The consumed capture approval remains
+  consumed; the collector, GDPR gate and CLO review remain prerequisites.
+
+### Recovery continuation — offline projection prototype
+
+- Added an offline-only GitHub run-page projection and synthetic tests in
+  `apps/web-platform/scripts/holder-evidence-core*.mjs`. No provider calls,
+  credentials, receipt files, collection or shared state changes are involved.
+  A complete supplied-page walk does not establish a stable census or writer
+  clearance. The full collector, durable cleanup, independent review and
+  GDPR/CLO review remain open.
+- Corrected the preparation record's claim that the prior catalog collector was
+  untracked: `capture-codex-dev-catalog.mjs` exists in the branch. Its consumed
+  approval does not authorize any new collection.
+
+### Recovery continuation — bounded offline reader
+
+- Extended the synthetic-only prototype with an injected paginated reader,
+  a deadline and a source-state summary. It makes no provider calls, reads no
+  credentials and writes no receipts. Missing source states are `unsupported`;
+  overall holder coverage remains `unknown` and writer clearance remains false.
+  A real adapter must enforce transport byte limits and cancellation itself;
+  an uncooperative reader may continue after the local deadline.
+- Eleven local Node tests pass. Three targeted mutations of the missing-page,
+  redaction and unknown-coverage guards were detected. These tests do not
+  validate real provider pagination, source bindings, database coverage or
+  independent deletion. No collection approval is requested or implied.
+
+### Recovery continuation — GitHub response prototype
+
+- Added a dormant GitHub workflow-run response parser and injected transport
+  reader with stream-size, endpoint, redirect and link checks, plus a bounded
+  page walk that refuses changing totals and duplicate IDs. Only run ID and
+  status are projected; actor, ref, event and conclusion coverage is not yet
+  implemented. No real provider request, authentication or receipt occurred.
+- Eighteen synthetic tests pass. Page traversal and matching counts are interval
+  observations, not a stable inventory or writer exclusion. Source manifest,
+  actual authenticated transport, other sources, durable cleanup, privacy/CLO
+  and independent reviews remain open. The collector is not approval-ready.
+- Targeted stream-cap, next-link and changing-total mutants were detected after
+  repairing a vacuous changing-total fixture. See the synthetic stream
+  cancellation addendum in the engine-brief tooling learning.
+
+### Recovery continuation — workflow admission prototype
+
+- Added a bounded, injected GET reader and projection for workflow metadata,
+  tied to the three known numeric IDs and exact paths. Unexpected identity,
+  path or state refuses the result; no live transport or credential was used.
+  Twenty-one synthetic tests pass; isolated identity, path and state mutations
+  were detected after improving a vacuous identity fixture.
+- This is not a finished holder collector: current run projection still omits
+  actor, ref, event and conclusion; provider/database source coverage, source
+  binding, independent cleanup, GDPR/CLO and independent review remain open.
+  A complete response or page walk grants no writer clearance.
+- Added a synthetic per-workflow interval observation with admission checks
+  before and after the page walk and independent drift/failure states. A test
+  exposed a late request after timeout from an uncooperative transport; phase
+  abort checks corrected it. Twenty-four synthetic tests now pass. This does
+  not guarantee cancellation of an already-started uncooperative transport.
+
+### Recovery continuation — minimized run details
+
+- The offline GitHub prototype now projects numeric actor/triggering-actor IDs,
+  allowlisted event and conclusion classes, and a SHA-256 digest of a bounded
+  branch name. Unknown and absent fields stay unknown. A digest is potentially
+  identifying and cannot recover the requested ref; detail coverage remains
+  `partial` regardless of projection status. The representation requires
+  independent privacy/CLO review before any live use.
+- Twenty-six synthetic tests pass; targeted raw-ref, raw-event and false
+  detail-coverage mutations were detected. No provider request, credential,
+  receipt, shared operation or push occurred. Other sources, source/command
+  binding, durable cleanup and the remaining review and qualification chain
+  are still open.
+
+### Recovery continuation — synthetic PostgreSQL catalog arms
+
+- Added separate read-only query prototypes for role attributes, membership
+  and SET ROLE, effective table/column write privileges, and function EXECUTE
+  privilege. These are potential privileges, not proof of a usable route or a
+  fence. They omit session visibility, direct ACL/ownership detail, triggers,
+  policy evaluation, non-public schemas and other required catalog arms.
+- A synthetic local PostgreSQL 17 test exercised inherited and PUBLIC grants,
+  column-only INSERT/UPDATE, non-inheriting SET ROLE, RLS state and a
+  security-definer function. Its uniquely named database was dropped and its
+  deletion checked. Five isolated mutations were detected with a green baseline.
+  The SQL has no live runner: source binding, read-only transaction enforcement,
+  timeout, per-arm status and cap handling still need implementation and review.
+- No shared-development database connection or collection occurred; no push,
+  writer clearance or collection approval was requested.
+
+### Recovery continuation — session visibility prototype
+
+- Added a session metadata query that classifies application names instead of
+  returning them, omits SQL text, client addresses and backend IDs, reports
+  statistics visibility and a cap sentinel, and leaves write capability and
+  future reconnects unknown. It is a query prototype, with no live runner.
+- A disposable local database test used a separate synthetic restricted login
+  and a second backend. It found that filtering `backend_type` silently removes
+  restricted rows; the filter was removed, and the test now verifies that such
+  sessions remain visible with unknown state. Seven mutations, including that
+  filter and raw application names, were caught. The DB test verifies removal
+  of its synthetic database and login.
+- A failed earlier fixture left one synthetic database while its sleeping peer
+  backend was still active. After verifying owner and zero connections, that
+  exact local test database was dropped. The fixture now waits for its bounded
+  peer to exit before deletion. No shared-development connection occurred.
+
+### Recovery continuation — ACL and schema prototypes
+
+- Added direct relation/column ACL inventory, including PUBLIC and grant
+  options, and effective schema and database privileges. Effective table and
+  function queries now cover non-system schemas. A disposable local test
+  verifies direct and inherited grants in a synthetic non-public schema.
+- The local database test and twelve targeted mutations passed, including
+  PUBLIC column ACL, grant option, schema access and non-public table/function
+  coverage. The test verifies deletion of each synthetic database and login.
+- The prototypes still lack direct database/schema ACL detail, sequence and
+  materialized-view ownership/operations, trigger/policy evaluation, runner
+  enforcement, source binding, complete provider coverage, independent cleanup
+  and review. No live collector, shared-development operation or push occurred.
+
+### Recovery continuation — control ACLs and object metadata
+
+- Added direct database/schema ACL metadata, trigger identities, and RLS policy
+  metadata without policy expressions or function bodies. Policy effect is
+  always `unknown`. Synthetic tests cover PUBLIC policy roles, expression
+  presence, trigger mapping and direct grant options.
+- Added separate effective sequence privilege and materialized-view MAINTAIN
+  arms with ownership and schema usage. The updated synthetic local test and
+  two targeted object mutations pass; sixteen earlier targeted mutations also
+  passed before the object arm was added. Each test verifies deletion of its
+  disposable database and login.
+- Direct sequence ACLs, actual policy behavior, dependency/reachable-route
+  analysis, per-arm runner enforcement, binding, remaining provider sources,
+  independent durable cleanup and reviews remain open. No shared-development
+  connection, live collection, writer clearance or push occurred.
+
+### Recovery continuation — sequence ACL and result-state prototype
+
+- Added direct sequence ACL inventory and a synthetic grant-option assertion;
+  the local test and targeted mutation pass, with disposable resources removed.
+- Added synthetic-only per-arm count/status handling with a total deadline,
+  missing-arm and failure states, generic caps, and session-specific summary,
+  restricted-visibility and overflow checks. It outputs counts and fixed
+  statuses only, keeps overall holder coverage unknown and grants no clearance.
+  Thirty-three Node tests and four targeted status mutations pass.
+- This is not a database runner: it has no source binding, transport, read-only
+  enforcement, row-schema validation or receipt output. Actual policy behavior,
+  reachable routes, remaining providers, durable cleanup and independent/privacy
+  reviews remain open. No shared-development collection or push occurred.
+
+### Recovery continuation — read-only role runner prototype
+
+- Added an injected-adapter role-count runner that compares local runner/query
+  digests, opens a repeatable-read read-only transaction, verifies transaction
+  settings, validates role row shape and emits only counts. A local synthetic
+  PostgreSQL test passes, including a rejected write in a read-only transaction;
+  its disposable database was removed and deletion checked.
+- Forty Node tests pass. Six targeted runner mutations detected removed query
+  binding, read-only validation, deadline guard, row-shape validation, row cap
+  and decoded-byte cap. A deadline prevents later SQL from starting but does
+  not cancel an already-running adapter operation.
+- This is not a collection-ready command: it handles only role counts; its
+  file self-check occurs after module loading and is not independent execution
+  identity proof; driver/transport buffering is not bounded before allocation;
+  connection identity, read-only principal, remaining arms and providers,
+  durable receipt cleanup and independent technical/GDPR/CLO review remain
+  unproven. No live collection, shared-development connection or push occurred.
+
+### Recovery continuation — cursor and cancellation probe
+
+- The injected role-count runner now consumes one-row PostgreSQL cursor batches,
+  stops on the row or decoded-byte cap, and refuses later batches after its
+  deadline. Nine focused Node tests pass; row-cap, byte-cap and late-batch
+  mutations were detected. The synthetic PostgreSQL integration also verified
+  early cursor closure and a subsequent query in the same transaction.
+- A separate dedicated synthetic local connection cancelled an active sleep;
+  the server returned SQLSTATE 57014 and an independent local connection saw
+  no active probe afterward. This is one successful case, not a cancellation
+  guarantee: the installed driver's documentation explicitly notes races.
+  The runner does not yet perform cancellation or prove exclusive ownership.
+- Independent execution identity, driver/transport byte bounds before row
+  decoding, read-only-principal verification, remaining arms/providers,
+  durable cleanup and independent reviews remain open. No shared-development
+  connection, live collection or push occurred.
+
+### Recovery continuation — role and membership snapshot
+
+- The synthetic role runner now projects numeric role IDs and attributes
+  without role names. Catalog prototypes include matching IDs for membership,
+  effective privileges, sessions and direct ACL grantees. OIDs are scoped to
+  their observed database cluster and are not durable identity guarantees.
+- Added an injected role/membership runner using one repeatable-read read-only
+  snapshot and separate savepoints. It projects numeric IDs and fixed flags,
+  reports each arm separately and leaves coverage unknown. Synthetic fake and
+  local PostgreSQL tests pass, including a membership query failure isolated by
+  a real savepoint. Five targeted roster mutations and four cross-catalog ID
+  mutations were detected. The local synthetic database was removed and checked.
+- A full Node run exposed an arm-deadline race allowing a later arm to start in
+  the remaining fractional interval. A timeout now prevents any later arm from
+  starting; 49 tests and ten repeated full runs pass. This does not prove that
+  an already-running adapter operation stopped.
+- Source self-check still runs after module loading; transport cancellation,
+  independent execution identity, live principal verification, remaining
+  catalog/provider arms, receipt retention, technical review and GDPR/CLO review
+  remain open. No shared-development collection, writer clearance or push ran.
+
+### Recovery continuation — independent deletion and provider preparation
+
+- Expanded synthetic database IDs and principal classification, a dedicated
+  connection lifecycle model, and GitHub collaborator projection. Monotonic
+  deadline guards now reject results after synchronous event-loop stalls; they
+  do not preempt stalled code or prove cancellation. Role IDs are cluster-scoped,
+  not durable identities; policy effects and actual principal authority remain
+  unknown. Provider design records unresolved Supabase and Doppler coverage.
+- CTO ruled independent storage, cleanup and verification must be established
+  before collection; local RAM alone is insufficient. The retention design
+  records the candidate controls and R2 lifecycle timing limitation, without
+  claiming a deployed service or real deletion proof. A read-only infrastructure
+  investigation found the existing locked CLA bucket, workspace GC and DSAR
+  expiry sweep do not provide this deletion service; an object-only candidate
+  would need renewed review of the current directory/file storage contract.
+- A focused independent review found operation binding, authenticated job
+  readback, correlated dependencies and deadline-boundary gaps in the synthetic
+  retention model. Tests and model checks now bind claimed operation identities,
+  freshness and distinct dependency labels, and reject verification exactly at
+  the deadline. Labels and asserted authentication are not proof of independent
+  infrastructure. A synthetic Ed25519 attestation check was added, and follow-up
+  independent review identified missing owner binding and stale signatures;
+  regression tests and fixes cover both. The model does not consume verified
+  attestations, and signatures alone do not establish the underlying claims.
+- Eleven offline Node test files pass. An initial broad glob also directly ran
+  the local database helper without its harness and failed its required database
+  name assertion before connecting; the corrected offline selection excludes it.
+  The local integration was previously exercised through its Python harness.
+- No full bound collector, independent deletion service, reviewed Terraform or
+  executable live command exists yet. Collection approval is not ready to ask;
+  exact-head review, GDPR/CLO, fencing, writer-window approval, reconciliation,
+  qualification, QA, preflight and final clearance remain pending. The PR is to
+  remain draft, auto-merge off, and push held. No live collection or shared
+  operation occurred in this continuation.
+
+### Recovery continuation — synthetic attestation expiry boundary
+
+- A focused regression exposed that the offline signature checker accepted an
+  attestation at its exact expiry instant. The checker now rejects that instant;
+  a synthetic test also verifies acceptance one millisecond before expiry.
+  This is only a signature check: it does not establish real infrastructure,
+  deletion, collection admission, or writer clearance.
+- The holder collector, independently operated retention service and their
+  reviews remain incomplete. No live collection, shared operation, push or
+  approval request occurred. PR 9051 was observed open and draft with auto-merge
+  off and remote head `4225c68a3eb1e9bdb917f899ae85618848b2c691`.
+
+### Recovery continuation — pagination review and Supabase projection
+
+- An independent focused security review reproduced a collaborator-page
+  completeness defect: a `last` link to a later page without a `next` link
+  was ignored. The collaborator and workflow-run parsers now reject
+  contradictory pagination relations. Tests reproduced both failures before
+  the fixes and pass afterward; removing the collaborator last-page guard
+  caused its regression test to fail in an isolated synthetic mutation.
+- Added an offline Supabase organization-member projection with bounded
+  synthesized inputs and output allowlisting. It always reports partial
+  coverage. The documented example does not specify an identity format or
+  pagination; the current UUID-only restriction and role mapping are
+  conservative prototype assumptions and require review against the actual
+  source contract before use. No transport or receipt writer is present.
+- These checks do not establish real collector or retention readiness. No
+  provider collection, shared operation, push or approval request occurred.
+
+### Recovery continuation — follow-up pagination and preliminary CLO assessment
+
+- A second independent security review identified inconsistent last-page bounds
+  across collaborator pages and repeated traversals. The synthetic collector now
+  retains and compares observed bounds; the reproducer failed before the fix
+  and the eight focused tests pass afterward. No completeness claim extends
+  to unobserved provider changes or credential holders.
+- A preliminary independent CLO assessment keeps collection blocked. It calls
+  for source-specific purpose, controller capacity, affected persons and lawful
+  basis; notice and rights handling; register/disclosure assessment; actual
+  destination, recipients, transfer and copy controls; and demonstrated
+  deletion and separately justified retention of minimized records. Numeric
+  identifiers and ref digests may remain personal data. This is not final CLO
+  clearance, and no live collection or shared operation occurred.
+
+### Recovery continuation — 2026-10-28 technical ruling
+
+- The independent reviewer found a further collaborator pagination mismatch:
+  equal row sets could hide different page counts. The prototype now rejects
+  an empty subsequent page and compares page membership across traversals.
+  The regression failed before the fix, the nine focused tests pass, and a
+  synthetic mutant removing those checks was detected. Follow-up review found
+  no further concrete pagination defect in the examined logic; this remains an
+  interval observation, not collection or writer clearance.
+- The CTO selected a candidate independent retention architecture and identified
+  the single-vault host-loss and copy-verification gaps. The ruling and provider
+  references are recorded in `holder-retention-controller-design.md`. It does
+  not establish account availability, cost approval, legal clearance or a
+  functioning service. No provisioning or live collection occurred.
+- Twelve offline Node test files passed before the last pagination refinement;
+  its focused test file passed afterward. A follow-up CLO agent hit its usage
+  limit; the earlier preliminary CLO review remains valid only for its stated
+  scope, and the follow-up and final clearance remain open.
+
+### Recovery continuation — CLO follow-up and offline suite
+
+- The retried independent CLO follow-up completed. PA-8 is a candidate for
+  amendment but does not currently establish coverage for this holder roster
+  or vault. Source-specific legal gaps and proposed assessment work are recorded
+  in `holder-evidence-preparation-2026-10-27.md`. This preliminary assessment
+  is not final legal or GDPR clearance.
+- After the pagination refinement, all twelve explicitly selected offline Node
+  test files passed. The bound collector and real independent retention service
+  are still unimplemented, so a collection command remains unready for review
+  or approval. No live collection, provisioning, writer operation or push ran.
+
+### Recovery continuation — synthetic arming order
+
+- A new regression demonstrated that the synthetic retention model accepted an
+  armed ledger timestamp earlier than a worker job readback or verifier
+  readiness. The model now requires both job readbacks and verifier readback
+  and readiness to precede or coincide with arming. Separate cases cover each
+  input and refusal before capture; the regression failed before the fix and
+  the model and attestation test files pass afterward.
+- This is an offline model correction, not a durable ledger, independent
+  service, attestation integration, or proof of deletion. The collector,
+  infrastructure, reviews and separate collection and writer-window approvals
+  remain outstanding. No provider collection, provisioning, shared operation
+  or push was performed.
+
+### Recovery continuation — independent model review
+
+- Independent offline reviews found that the principal model could report
+  complete coverage without a bound role-by-target census, and that the
+  retention model could attribute cleanup to a scheduled worker before its
+  scheduled time. Regressions failed before the changes; coverage now remains
+  unknown until a census can be checked, and modeled scheduled execution must
+  follow the attributed worker's scheduled time. The principal, retention and
+  attestation test files pass. These models do not grant live clearance.
+- The collector review also identified that hashing a module pathname after
+  import cannot prove the bytes already executing. A live collector must bind
+  its complete executable dependency closure in a fresh isolated execution;
+  this concern has not yet been remediated or independently reproduced.
+  Infrastructure investigation found existing Hetzner patterns, but the
+  proposed independent multi-cloud workers and verifier need new provider,
+  account, identity and network contracts. No deployment was performed.
+- Independent follow-up verified the two model fixes and mutation-tested the
+  retention ordering guards. A scheduled time and asserted worker ID still do
+  not prove scheduler execution; the real service needs a bound execution
+  receipt and durable ordering. All twelve selected offline Node test files
+  passed. The principal model was subsequently adjusted to retain valid
+  positive signals from partial or malformed arms while retaining unknown
+  coverage; its focused regression passed.
+- The operator expressed approval for live collection and the writer window.
+  Their exact commands and independent reviews are still unavailable. The
+  explicit per-command authorization and technical/legal prerequisites remain
+  unsatisfied; this general approval is not a reviewed command set.
+- Added a disposable SQLite transition experiment and ten synthetic tests for
+  compare-and-swap, stale generation, process interruption and chronology. A
+  subprocess crash rolls back its direct uncommitted SQLite update; this does
+  not test a crash inside the transition or recovery after host loss.
+  An independent review caught backward timestamps and incorrect pre-capture
+  arming; both were fixed and the focused test passes. It relies on caller
+  claims and has no scheduler, authentication, vault, deletion or automatic
+  deadline enforcement; its explicit due-sweep must be called externally. An
+  independent review exposed and prompted a fix for stale capture after an
+  expired armed record. The experiment has no trusted global clock or
+  admission-time proof and is not a service or a basis for collection.
+
+### Recovery continuation — synthetic source handoff
+
+- Independent source-binding investigation proposed bundling the complete
+  executable closure and SQL, then separately verifying and passing the same
+  in-memory bytes to a fresh process. Added a synthetic-only experiment that
+  exercises that byte handoff, final-component symlink rejection, digest and
+  size refusal, filtered environment, and child failure. Six tests pass; an
+  independent review mutation confirmed that replacing child input with empty
+  bytes is detected. The experiment executes caller-supplied code and is not
+  a sandbox, reviewed launcher, complete bundle, or live collection command.
+- The runtime, launcher, parent directories, executable dependency closure,
+  independently approved digest, credentials, provider boundaries and retention
+  service remain unbound. A timeout does not establish descendant termination.
+  The existing database prototypes' post-import pathname hashes remain
+  insufficient for execution identity; the experiment does not change them.
+  No live collection, shared operation, provisioning or push was performed.
+- Re-ran the dormant role/roster runner against its isolated, uniquely named
+  local synthetic PostgreSQL database; its harness passed and verified the
+  database was removed. This does not test the live collector or clearance.
+- A CTO review selected Firestore `eur3` as a candidate independent control
+  ledger, with signed operation capsules for a proposed ledger-outage cleanup
+  path. Independent security review identified unresolved replay, authority,
+  revocation, rollback and clock risks; cleanup stays refused when authority
+  cannot be established. A synthetic signature-only capsule prototype and tests
+  were added; its signatures never grant cleanup or collection authority.
+  No cloud account, ledger or scheduler has been provisioned or tested.
+- A focused independent capsule review found unsigned extra fields and an
+  in-memory getter capable of changing a claim between validation and signature
+  verification. Tests reproduced both; the synthetic checker now rejects
+  unknown keys and snapshots data descriptors before validating and verifying.
+  The actual cleanup capsule's broader authority and replay contract is still
+  unimplemented.
+- Independent follow-up mutation tests detected removal of the capsule's
+  schema and snapshot guards. Thirteen selected offline Node test files, six
+  source-handoff tests and ten synthetic-ledger tests passed. These are not
+  provider, infrastructure, host-loss, deletion, privacy or final PR gates.
+
+### Recovery continuation — query bundle and ledger design
+
+- Split the role and roster query execution from their offline file loaders.
+  The execution cores copy and digest-check supplied SQL before opening a
+  transaction, reject invalid UTF-8, BOM, NUL and shared-memory inputs, and
+  preserve the read-only transaction and unknown holder clearance. Removed
+  post-import self-path hashes from the loaders; they never established
+  executing-code identity. An independent review mutation detected removal of
+  the SQL digest check.
+- The independent review found unbounded local reads after `stat`; the shared
+  fixture loader now uses bounded positional reads with an extra-byte growth
+  sentinel and nonblocking, no-follow open. Synthetic growth, truncation,
+  nonregular and invalid-size tests pass; an isolated mutation detected removal
+  of the growth sentinel. One synthetic PostgreSQL integration initially failed
+  without a diagnostic; five sequential retries passed. The harness now reports
+  a fixed, sanitized fixture-line marker rather than arbitrary child errors, but
+  the original failure's cause remains unconfirmed. A later instrumented failure
+  identified an immediate post-cancel server-activity assertion; the fixture now
+  waits for a bounded server-side stop observation. Five sequential runs passed
+  afterward. The earlier uninstrumented failure is not attributed to it.
+- A new offline query bundle embeds the two SQL snapshots and the roster core.
+  It returns a digest for the actual compiled bytes, rejects unexpected build
+  inputs and external imports, and has no provider transport, credentials or
+  receipt writer. The bundle passed against the disposable PostgreSQL fixture.
+  A reviewer demonstrated that esbuild metadata alone misses computed imports;
+  the builder now parses bounded JS snapshots for direct dynamic loading and
+  compiles those same snapshots. An independent isolated mutation and a
+  persistent end-to-end regression both confirmed refusal of the demonstrated
+  computed import. This syntactic check is not proof against all computed
+  execution. The final executable, launcher, runtime, dependency
+  closure, target identifiers and independent retention controls still require
+  full review and binding; this bundle is not a live collector or authorization.
+- An independent Firestore design review specified persistent per-transition
+  receipts for ambiguous commit outcomes, exact update-time comparison, and no
+  side effects in retryable transactions. Firestore's historical version window
+  and asynchronous TTL are recorded for CLO review. The real ledger adapter,
+  infrastructure, trusted clock, vault and independent cleanup service remain
+  unimplemented; no live provider collection or shared operation was performed.
+- A new independent preliminary CLO assessment found that the existing Google
+  posture entry does not establish Firestore's terms for this flow. The Article
+  30 scope, lawful basis, provider/transfer contracts, notice and rights across
+  historical versions and copies, DPIA screening, and deletion proof remain
+  open. The assessment is recorded in the holder preparation and is not final
+  clearance. Fifteen selected offline Node test files and the disposable
+  PostgreSQL bundled-query test pass.
+
+### Recovery continuation — isolated PostgreSQL substrate
+
+- Independent review found that the previous fixed-loopback fixture could have
+  connected to an existing local cluster. Both PostgreSQL harnesses now create
+  a uniquely labeled container with a random synthetic credential, no network
+  and no published port. The Python catalog test uses Docker exec against its
+  verified ID; the Node test uses a Docker-exec socket into that same container.
+  Both inspect ownership, requested and actual tmpfs mounts and isolation before
+  use, and cleanup is scoped to the random label and verified ID. A lost startup
+  is reported as unknown with a nonsecret ownership locator, not as cleanup.
+- Independent review and mocked tests covered no host-port fallback, the actual
+  postgres.js custom-socket startup, refusal, mount checks and owned cleanup.
+  After a separately approved test-image pull, the bundled runner and catalog
+  suites each passed in their own network-isolated container; a healthy Docker
+  listing showed no remaining containers with the fixture label. A targeted
+  table-insert mutation also failed as expected after its isolated baseline
+  passed. Sixteen selected offline Node test files passed. This tests a local
+  synthetic substrate only, not live fencing, provider identity or
+  retention. Host Node and the Docker daemon remain trusted test components.
+
+### Recovery continuation — restricted Firestore persistence boundary
+
+- Added an unwired Firestore REST persistence boundary with fixed endpoint
+  construction, conditional create/update requests, bounded response contract,
+  closed metadata schema and retained transition receipts. Offline mocks cover
+  concurrent attempts, lost responses, delayed commits, malformed responses,
+  conflicting IDs and time boundaries. It has no credentials or live transport;
+  its results explicitly deny capture authority and deletion verification.
+- Independent review found that an arming commit can return unknown after its
+  post-commit time check while another caller sees the persisted record. Until
+  durable readiness and trusted monotonic-time evidence are implemented, the
+  boundary refuses every transition except unarmed-to-armed and labels any
+  observed arming receipt `persisted_unverified`. An isolated mutation detected
+  removal of the transition guard. Source checks and advisory GDPR screening
+  do not replace the outstanding technical, CLO and compliance reviews.
+- Added an unwired HTTPS transport with a streaming response cap, fixed Google
+  host and project/database, and a snapshotted expected operation and immutable
+  base. It rejects non-ledger writes and does not follow redirects. The ledger
+  likewise pins its expected base; offline mocked integration and security
+  regressions pass. These caller-supplied bindings are not proof of approval.
+  An abort does not prove an in-flight commit stopped. Firestore account/IAM,
+  credential wiring, authoritative clock, durable readiness, vault, workers,
+  rollback recovery and deletion verification remain unimplemented. No
+  provider request, live collection, writer window or push was performed.
+- A follow-up independent review hit its model usage limit and produced no
+  result; a retry was requested. This does not discharge the review gate.
+- A further review demonstrated that a holder of the raw Firestore write
+  credential could construct a structurally valid forged commit or roll back
+  state: schema validation and unkeyed hashes are not authorization. The
+  prototype transport now refuses every POST before token acquisition. A
+  synthetic regression exercises a valid-looking forgery. A CTO ruling requires
+  a separate authenticated ledger authority to hold the sole write credential,
+  plus independent vault fencing and current authority checks. These controls
+  are not implemented. An independent reviewer confirmed refusal before token
+  acquisition and network access, and an isolated mutation removing the POST
+  guard failed the regression. A credentialed GET can still read a real record;
+  caller-injected transport and direct credential use remain trust boundaries.
+  Nineteen selected offline Node test files passed. A broad glob also invoked
+  the PostgreSQL helper without its Python fixture and failed its initial
+  synthetic-database assertion before connecting; the helper must run through
+  that fixture. No live provider request or collection was performed.
+- The CTO supplied a candidate Cloud Run authority contract with per-role
+  identities, typed commands, independent vault epoch and revocation checks,
+  conservative time bounds and real-substrate acceptance tests. Cloudflare
+  federation, identity propagation, the independent epoch and time substrates,
+  provider configuration and legal terms remain unverified. The design records
+  these as implementation gates. Five mocked fixture, ten synthetic ledger
+  and six synthetic source-binding Python tests passed; none is infrastructure
+  or retention proof. The PR remains open and draft, auto-merge disabled, with
+  remote head 4225c68a3eb1e9bdb917f899ae85618848b2c691.
+
+### Recovery continuation — 2026-10-29 offline boundaries
+
+- Nineteen previously selected offline Node test files passed. New synthetic
+  authority, manifest and POSIX vault experiments remain non-authorizing.
+  Independent review found and prompted fixes to shared-memory and byte-bound
+  checks; follow-up adversarial checks and the focused tests passed. This does
+  not bind an executing launcher or runtime.
+- Independent review reproduced a lock-replacement race in the fixture vault
+  when its directory can be modified by another actor. The fixture documents
+  that trust boundary and does not establish a real vault or deletion fence.
+- The v1 ledger and proposed authority use different receipt hashes, and v1
+  has no exact prepare receipt. The integration assessment and CTO's bounded
+  v2 reservation ruling are recorded in `holder-authority-ledger-integration.md`.
+  A new in-memory v2 fixture is under review; it does not establish durable
+  persistence, trusted time, identity, incident delivery or deletion. The v1
+  transport still refuses POST before acquiring credentials.
+- Independent public-source research did not establish an ambient Cloudflare
+  scheduled-worker issuer for the proposed Google identity path. A preliminary
+  CLO assessment also leaves the v2 control records, incident channel and copies
+  without final processing, retention or transfer clearance. No provider
+  account was queried or changed.
+- The v2 fixture review found its synthetic verification could be recorded at
+  or after the deadline, or even before capture start, under a misleading
+  terminal state. A correction and follow-up review are in progress. No live
+  collection, fencing, writer window, shared operation, push or ship gate ran.
+- The implementing agent hit its usage limit during timing-test follow-up; its
+  final status is not a test verdict. Its on-disk edits are being checked and
+  independently mutation-tested before relying on them.
+
+### Recovery continuation — offline review follow-up
+
+- The v2 fixture now reports only `verification_asserted_unverified`, marks
+  asserted deadline-or-later results late, and rejects asserted crossing or
+  backward clock intervals. Independent synthetic mutations detected removal
+  of timing, late and replay guards. Asserted clocks and fixture receipts do
+  not prove trusted time, authority or deletion.
+- Independent review found and prompted fixes for shared-memory/size spoofing,
+  mutable asynchronous chunks and options, unbounded empty chunks, endpoint
+  coercion and raw cleanup errors in the offline adapters. A Firestore abort
+  regression now checks the token supplier is not called after immediate abort;
+  an already-running supplier is not proven stopped. Independent targeted
+  mutations checked the latest endpoint, parser and pre-supplier guards; the
+  Firestore POST guard remains in place.
+- Twenty-five selected offline Node test files passed sequentially after edits
+  were frozen. The query bundle also passed its isolated synthetic PostgreSQL
+  fixture, and a same-host SIGKILL fixture test passed three cases. The latter
+  does not establish fsync durability, host-loss recovery or deletion scope.
+  The combined run that overlapped an agent's deliberately failing test was
+  not a stable-tree verdict; its cause was identified before the frozen rerun.
+- The real bound collector, separate authority, independent vault and workers,
+  fencing, restoration and privacy clearance remain incomplete. No live
+  collection, provider write, shared writer window, push or shipping occurred.
+
+### Recovery continuation — 2026-10-30 identity and clock preparation
+
+- The conditional-store fake validates its full asserted v2 history and refuses
+  malformed IDs, chronology, sticky-late values and reserved-slot exhaustion;
+  independent review found and prompted a pre-parse type and byte-cap fix. It
+  remains a fake without provider durability, trusted identity, clock or epoch.
+- The local IPC fixture's strengthened lock test observes the child waiting on
+  the actual lock device and inode in Linux `/proc/locks`, and confirms no
+  fixture appears while the lock is held. Independent mutation checks caught
+  lock and identity changes. It does not establish hostile same-UID safety,
+  actual deletion, independent scheduling or host-loss durability.
+- The CTO selected gated candidate identity and epoch/time substrates; the
+  retention design records their correlated dependencies and unresolved
+  proof. Independent public-source research found the Cloudflare certificate
+  requires an uploaded private key and that revocation behavior is unproven.
+  The bounded STS request builder hard-refuses transport; its certificate and
+  request checks are not proof of trust or account configuration.
+- The signed-time evidence verifier samples elapsed time after verification;
+  it cannot fence a later operation or prove the source's accuracy. Independent
+  review and targeted mutations checked fixed error handling and STS pre-parse
+  byte caps. Twenty-nine selected offline Node test files passed sequentially.
+  Provider credentials, infrastructure, legal clearance and live actions remain
+  unverified and unperformed. PR 9051 was observed open and draft with
+  auto-merge off, remote head 4225c68a3eb1e9bdb917f899ae85618848b2c691.
+
+### Recovery continuation — Google identity preparation
+
+- Public source inspection established that Wrangler and the examined
+  Cloudflare Terraform provider expose the same account mTLS certificate API.
+  Provider private-key state, plans, failure copies, access and retention still
+  require review and a dedicated apply serializer. No Terraform root was
+  drafted or applied. Google documents that service-account ID tokens cannot
+  be revoked; the authority and vault need their own current revocation fence.
+- `jose` 6.2.3 is declared directly in the app; npm and Bun lockfiles were
+  regenerated. An unwired Google ID-token verifier, bounded JWKS reader and
+  explicit fixed-host HTTPS transport passed synthetic RSA and mocked transport
+  tests. Injected keys/transport and the host clock do not establish Google key
+  provenance, trusted time, replay protection or authorization. Thirty-four
+  selected offline Node test files passed before the subsequent HTTP-boundary
+  work. No real provider request was made.
+- The unwired HTTP intent-preparation boundary was corrected after independent
+  review to separate administrator, collector, worker and verifier actions and
+  to reject ambiguous framing and post-parse deadline overruns. Follow-up review
+  found a hung request stream was not destroyed; a fix is in progress. This is
+  not a live authority, wire-framing proof, durable replay store or writer
+  clearance. All real collection and shipping prerequisites remain open.
+
+### Recovery continuation — authority and receipt-store boundaries
+
+- The HTTP preparation handler now destroys refused or timed-out requests;
+  independent synthetic review detected removal of that guard. Destruction
+  cannot prove an already-running dependency stopped or that a response was
+  delivered. An injected-transport Firestore v2 adapter now binds canonical
+  history and exact conditional preconditions; its whole-operation deadline
+  blocks a new POST after a slow read. An already-submitted POST may still
+  complete after an unknown result. Mock tests and independent mutations pass;
+  provider identity, strong reads, durability and rollback remain unproven.
+- The new unwired POSIX receipt-store candidate accepts bounded supplied bytes
+  behind injected authority, clock and epoch checks that refuse by default.
+  It does not delete. Independent review reproduced an orphan receipt when a
+  write crossed the deadline: refusal does not remove already-written bytes.
+  Follow-up tests cover that residue, hardlinks, tampering and local process
+  contention. Do not put live evidence in it before independent cleanup,
+  ownership, revocation, host-loss and copy controls are demonstrated.
+- Firestore's actual transport continues to refuse POST, and no provider was
+  contacted, shared writer fenced, live evidence collected or code pushed.
+
+### Recovery continuation — creation reservation
+
+- An independent deletion-contract review added parent-directory sync, mapped
+  and forked-handle inventory, and strict verification-time bounds. The CTO
+  selected a fixed, empty exclusive entry and an externally bound inode as a
+  gated creation candidate. Local `O_TMPFILE` observations are documented as
+  an alternative, not proof of target-platform behavior.
+- The unwired receipt store now syncs a pending reservation before invoking
+  its injected authority, creates and binds an empty inode before receipt bytes,
+  and rechecks the reservation-bound epoch and held/named entries. Independent
+  review reproduced and prompted fixes for lost reservation acknowledgment,
+  stale-epoch reopening and marker replacement; the 27 synthetic tests pass,
+  and targeted mutations detected removal of the revised guards.
+- Callback echoes do not prove independent authority or durable binding. The
+  marker and state can roll back together, same-UID path races remain, and
+  deadline-crossing writes can leave bytes. Deletion remains hard-refused;
+  no live receipt, provider request, writer window, push or ship gate ran.
+
+### Recovery continuation — reservation integration decision
+
+- The reservation integration gap now specifies a separately bounded
+  conditional reserve/bind record, exact canonical receipt comparisons and a
+  cross-runtime encoding with decimal filesystem identifiers. It requires an
+  admission and drain barrier because a separate epoch read cannot fence an
+  already admitted mutation. This is a local decision, not an independently
+  reviewed implementation or proof of provider behavior. A prior independent
+  CTO review attempt stopped at its usage limit without returning a ruling.
+- The receipt-store synthetic suite passed all 27 tests. The authority client,
+  durable reservation integration, deletion, drain protocol and real substrate
+  remain incomplete; the Firestore live POST hard-disable remains in place.
+  PR 9051 was observed open and draft, auto-merge off, with remote head
+  4225c68a3eb1e9bdb917f899ae85618848b2c691. No live collection, writer
+  action, infrastructure change, push or ship gate was performed.
+
+### Recovery continuation — reservation encoding prototype
+
+- Added unwired Python and JavaScript reservation shape validators with exact
+  canonical JSON ordering, uint64 decimal strings, bounded windows and a bind
+  digest tied to the complete reserve. Cross-language synthetic vectors passed,
+  including changed binding fields and integer overflow; the existing 27
+  receipt-store tests also passed. The Node/Python vector runner required an
+  approved unsandboxed invocation after sandboxed spawning failed.
+- This is a proposed encoding, not an authenticated protocol, durable record,
+  independent review, fencing mechanism or integration into the receipt store.
+  Keep the live POST disable and collection hold. Independent review and the
+  remaining authority, retention, legal and shipping gates remain open.
+
+### Recovery continuation — reservation encoding review
+
+- Independent review found that Python accepted an explicit null second
+  argument for a reserve where JavaScript refused it. A failing cross-language
+  test reproduced the mismatch; Python now distinguishes omission from null.
+  Frozen canonical byte and SHA-256 vectors also pin both request purposes.
+  The cross-language suite and 27 receipt-store tests pass after the fix.
+- Independent integration assessment recommends an unwired bounded reservation
+  record before transport integration. Reserve and bind currently share a
+  command ID, so replay checks must distinguish purpose and reject changed
+  requests within each purpose. The receipt-store encoding and callbacks are
+  not yet compatible with or authenticated by the authority. Inode replay,
+  durable admission and drain, provider behavior and privacy clearance remain
+  unresolved. No collection, provider write or writer window was performed.
+- An unwired in-memory reservation-record experiment now retains canonical
+  requests and digests and models conditional creation, binding and delayed
+  commits. Independent review found input exceptions, missing stored digests
+  and an inadequate delayed-write race model; fixes and synthetic tests are
+  present. Follow-up independent review verified the fixes and the added
+  competing delayed-bind and uncontested-bind scenarios. This fake proves no provider or
+  authorization property. A combined Node test invocation produced no output
+  and was interrupted; both suites passed when run separately. No live POST
+  guard was changed.
+
+### Recovery continuation — offline reservation builder
+
+- Added an unwired Python builder for the versioned reservation encoding.
+  Frozen byte and digest vectors cover reserve and bind with uint64 values;
+  malformed and oversized input is rejected before serialization. Four
+  synthetic tests and the existing reservation-record fixture test passed.
+  Independent review found the initial missing pre-serialization validation;
+  a failing regression reproduced it and the builder was corrected. This is
+  encoding only, not an authenticated client or an integrated vault.
+- A preliminary independent technical assessment identifies the sole vault
+  executor as the necessary admission/drain serialization point; restart,
+  old instances, blocked writes and uncertain sync remain unresolved. The
+  preliminary CLO assessment keeps collection blocked pending actual data
+  flows, contracts, transfers, retention, notice and rights evidence. Neither
+  assessment is final clearance. Firestore POST remains hard-disabled; no live
+  collection, provider write, writer window, push or ship gate was performed.
+
+### Recovery continuation — synthetic drain experiment
+
+- Recorded a preliminary vault-executor barrier candidate in the reservation
+  integration gap. Actual sole-executor enforcement, durable acknowledgment,
+  external epoch reconciliation, bounded latency and restoration remain open.
+- Added an unwired in-memory drain fixture and adversarial tests covering
+  admission closure, pending work, handles, uncertain outcomes, restart and
+  conflicting barriers. An independent reviewer reproduced a changing getter
+  that could falsely complete modeled work; a failing test and descriptor
+  snapshot correction followed, and the reviewer confirmed that narrow fix.
+  Focused tests pass. Isolated mutations detected removal of admission closure,
+  seal, outstanding-work and restart checks, plus combined loss of ambiguity
+  preservation and reintroduction of getter reads. A mutation of the redundant
+  uncertainty check alone survived because the separate per-mutation unknown
+  state still blocks acknowledgment; similarly an accessor-presence check alone
+  survived the independent value-type check. Neither surviving single mutation
+  establishes a real-world property.
+- The fixture's ordered calls, seal and results are assertions. It has no real
+  mutex, durable store, exclusive executor, authenticated peer, clock, deletion
+  or recovery authority. No live capture, Firestore write, writer window, push
+  or ship gate was performed.
+- Independent design review then found that the first fixture permitted a seal
+  while a mutation was active, inconsistent with the proposed single exclusive
+  mutation gate. The fixture now permits one active mutation and refuses a
+  seal until its work and handles finish; the candidate explicitly assumes a
+  queued barrier and admission closure while waiting. That queue, its crash
+  behavior and its ordering are unimplemented assumptions. Mutation results
+  above predate this revision and must not be treated as coverage of it.
+- A further independent review reproduced a reentrant Proxy during result
+  inspection that could obtain a modeled acknowledgment before the outer
+  completion returned. A failing regression and non-reentrant transition guard
+  corrected it; follow-up review confirmed the narrow fix. The revised tests
+  pass, and isolated mutations detected loss of admission closure, modeled
+  exclusivity, seal, busy-seal refusal, restart closure, ambiguity preservation,
+  accessor handling and the inspection guard. These results concern only the
+  ordered synthetic model and establish no actual vault fence.
+
+### Recovery continuation — reservation persistence adapter
+
+- Added an injected-transport reservation CAS adapter with a pinned operation,
+  generation and document path, exact reserve/bind bytes and digests, absent
+  creation and update-time binding preconditions, full bounded record checks,
+  and readback. It returns only unverified states and is not wired to the vault
+  or live Firestore transport. Google's documented conditional-write semantics
+  are recorded at https://docs.cloud.google.com/firestore/docs/reference/rest/v1/Precondition;
+  mock results do not verify an account or provider behavior.
+- Independent review found an unresolved-write race, reversed document-time
+  acceptance and duplicate JSON keys. Regressions and fixes now cover them;
+  re-review found no further concrete issue in this narrow injected boundary.
+  A local latch blocks conflicting attempts only in one running adapter; it
+  does not survive restart or coordinate multiple instances. A timeout cannot
+  interrupt synchronous injected code. A timestamp-ordering mutation first
+  survived because the test checked only the final result, not whether a POST
+  was attempted; the test now explicitly asserts no POST and kills the mutant.
+  Removing only the first unresolved check also survived because the later
+  unresolved read-only branch still blocks the write; removing both was caught.
+- Hetzner documents three physical block copies per volume. The material
+  inspected does not establish an individual-file replica-erasure deadline;
+  unlink and local readback are not proof of the required 24-hour all-copy
+  deletion. The retention design records this as an unresolved substrate and
+  legal question. No live collection, provider write or writer window ran.
+- A CTO candidate and independent security review describe a durable guard
+  that races an atomic reservation effect against a state-changing fence at
+  the same guard revision. The integration gap records the required stable
+  guard identity, exact history, direct-writer exclusion and rollback controls.
+  Ambiguous initial guard creation and restart recovery remain open; the
+  current process-local latch is not an implementation of this candidate.
+- Added an unwired guard commit-body builder and an injected-transport
+  orchestrator. The builder encodes the ready, pending, committed and terminal
+  fence transitions and atomic two-document reservation effect. Independent
+  review found a caller could pair fabricated payload bytes with a real
+  revision; the builder is explicitly non-authorizing, and the orchestrator
+  now obtains the name, payload and revision from its own read instead.
+  Independent review found no further concrete issue within this mocked scope.
+  Tests cover competing bootstraps, delayed claim/effect versus recovery in
+  both orders, lost fence response, timeout and late completion, substituted
+  pending state, bind predecessor changes, and unchanged fence revisions.
+  Targeted mutations detected omitted bootstrap, effect and reservation
+  preconditions and several orchestration checks. One mutation removing only
+  the wrapper's ready-content check survived because the builder independently
+  rejects non-ready content. The timeout and injected provider remain untrusted;
+  authentication, sole-writer IAM, actual persistence, rollback and vault
+  fencing are not implemented by these components.
+- The authority tests were extended with explicit no-POST assertions, real
+  pending-Promise timeout and late-release cases, two recoverers, a delayed
+  bootstrap, a fence losing to an effect, and an unchanged fence revision.
+  The first unchanged-revision mutation survived; a new regression now detects
+  it. These are synthetic transport tests, not a verified service or proof
+  that provider credentials and configured permissions enforce this protocol.
+- Added non-listening reservation identity preparation with scoped vault
+  subject, operation, generation, manifest, controller, epoch, vault inode and
+  time-window checks. It validates the canonical request and derives separate
+  caller/audience digests; Python and JavaScript tests pin the same vectors.
+  It never invokes a guard or provider and returns only unverified, explicitly
+  non-authorizing results. Independent review found that the original result
+  omitted the request digest and attempt ID; regressions and a correction now
+  retain both. The bearer signature is not over either value, the result is
+  forgeable, and neither supplied JWKS nor host clock is trusted. The eventual
+  authority must authenticate and replay-check the exact request itself.
+  Targeted mutations detected caller/audience digest, scope and output-attempt
+  checks. Removing the duplicate subject comparison alone survived because
+  the verifier independently pins that subject; it was not counted as a
+  detected mutation.
+- Added read-only, exact-committed-record reconciliation to the guarded
+  injected authority. Independent review found it needed a consistency filter
+  for guard and reservation revisions. The code conservatively requires equal
+  timestamps, with tests for older and newer mismatches and an actual timed-out
+  response after a synthetic commit. Google documentation inspected does not
+  prove timestamp equality identifies a shared commit, nor that every real
+  atomic commit exposes equal document timestamps. Separate reads, injected
+  provider, direct writers and restore remain untrusted; results stay
+  unverified. A legitimate later bind currently makes reserve reconciliation
+  unknown, and no production or vault authority follows.
+- Extended the actual offline PostgreSQL bundle with the function-privilege
+  SQL and an isolated per-arm projection. It selects only OIDs and flags,
+  never names, and explicitly reports filtered-query scope and unknown
+  function coverage. Independent review found and corrected a false-completeness
+  risk and null/throwing option failure; role/membership cross-reference is
+  now labeled as referring only to returned rows. The bundled runner passed
+  in a uniquely owned, network-isolated synthetic PostgreSQL container with
+  allowed/denied function execution, a forced per-arm SQL failure, and a
+  controlled SQL privilege mutation. This is local synthetic behavior, not
+  evidence of provider coverage, valid retention or writer clearance.
+
+### Recovery continuation — additional catalog arms
+
+- The extended bundle now embeds name-free schema, table/column, session and
+  relation-ACL queries in the same bounded read-only transaction as the roster
+  and function arms. Each reports filtered scope and unknown coverage; other
+  arms are explicitly unsupported. Column privileges use attribute numbers,
+  and the principal interpreter recognizes these without suppressing valid
+  positive signals when sibling fields are malformed. Independent review
+  found and prompted fixes for sparse and changing-length array inputs.
+- Session observation is limited to visible rows in the current database;
+  capped/restricted/unclassified cases are partial, and freshness, future
+  reconnects, write capability and holder coverage stay unknown. Independent
+  review prompted explicit cap reasons and consistent failure fields. The
+  relation-ACL projection includes PUBLIC and column grants, drops names and
+  rejects privilege types invalid for column scope. Independent review found
+  and prompted the latter validation.
+- Focused bundle/principal tests and the isolated synthetic PostgreSQL runner
+  pass, including direct/inherited grants, denied privileges, SQL fault and
+  mutation probes. The prior shared SQL is preserved for its existing
+  consumers; projected queries are separately bound. No live data, provider
+  write, collection, writer window, push or shipping action was performed.
+- All thirteen currently enumerated database arms now have filtered bundled
+  query walks, including policies, triggers, sequences, materialized views and
+  sequence ACLs. Each preserves unknown coverage; a `MAINTAIN` capability is
+  explicitly unknown even when an empty walk succeeds. Independent focused
+  review and the synthetic isolated PostgreSQL fixture cover relevant grants,
+  RLS metadata, arm errors, limits and redaction. This is not a complete
+  provider-holder inventory or a writer fence.
+- The GDPR advisory review found no literal mandatory v1 trigger in the scoped
+  changes, but identified role and membership names entering the bundle's
+  process. New separately pinned projected queries omit these names; an
+  independent recheck confirmed this narrow bundled-path change. The offline
+  legacy fixture loader still uses name-bearing queries and must be excluded
+  from any eventual live path. OIDs and session metadata remain potentially
+  personal; processing, retention, transfer and final CLO clearance are open.
+- Review also confirmed a runner timeout does not cancel the real underlying
+  transaction. The runner reports `backend_stop: unknown`. The installed
+  postgres.js `cancel()` does not return its canceller's promise; the local
+  fixture no longer presents `await cancel()` as a completion wait. A separate
+  dedicated-client quarantine and independently observed backend-stop path
+  still needs implementation and real-substrate verification.
+- A separately reviewed disposable PostgreSQL probe now runs the actual bundled
+  collector against an injected sleeping arm. It observes the exact synthetic
+  backend and query still active after timeout, then closes its dedicated client,
+  awaits transaction settlement and observes backend absence. A second probe
+  lets a timed-out arm finish without closing, confirms its result arrives only
+  after the timeout, and confirms no subsequent arm starts. A cancellation
+  control verifies that a canceled query does not count as result delivery.
+  The observer uses exact UTC microsecond text because the pinned driver
+  serializes timestamp parameters through millisecond-precision JavaScript
+  dates. These are local observations only: the collector does not implement
+  this lifecycle, and provider identity, observer privileges, pooler/reconnect,
+  startup timeout and bounded cleanup remain unverified. No stop or clearance
+  claim follows. The fixture force-drops only its uniquely created database on
+  teardown so a failed interruption probe cannot hide the original failure.
