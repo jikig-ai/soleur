@@ -174,7 +174,7 @@ jobs:
             # Merge-queue candidate (#5780): base_sha is an ancestor commit
             # already present in the fetch-depth:0 checkout — diff directly
             # against it (no ref to fetch). A vacuous pass here would post a
-            # green `enforce` on the temp ref WITHOUT checking the candidate
+            # green `quality-guards` member verdict on the temp ref WITHOUT checking the candidate
             # (P1-1/P1-5), so an empty base_sha is a HARD failure, never a
             # fall-through to surface_hit=false.
             if [ -z "${MERGE_GROUP_BASE_SHA:-}" ]; then
@@ -377,8 +377,8 @@ jobs:
           # The umbrella's token grants pull-requests: write (auto-close-scan
           # member) — stripping the persisted credential keeps a write-capable
           # token out of .git/config for the member steps. Members carrying gh
-          # calls pass GH_TOKEN explicitly; git fetches use the already-fetched
-          # full history (secret-scan.yml:163 pattern).
+          # calls pass GH_TOKEN explicitly; member git fetches are anonymous
+          # (public repo — secret-scan.yml:164 pattern).
           persist-credentials: false
 
       # ── member: settings-json-integrity (detect: settings_json) ──

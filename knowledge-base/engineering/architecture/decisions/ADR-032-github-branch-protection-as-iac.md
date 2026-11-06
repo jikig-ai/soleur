@@ -967,7 +967,9 @@ names and the old names stay Expected-forever. `gh pr merge --auto` would arm
 an entry that can never dequeue (its merge_group candidate contains the new
 workflows and produces only the new names; the entry ejects at the 120-min
 timeout). The landing path is therefore `gh pr merge --admin` once the 10
-reporting contexts (3 umbrellas + 7 unrenamed) are green — the old-name
+reporting CI-required contexts (3 umbrellas + 7 unrenamed) are green —
+cla-check/cla-evidence report via merge-queue-cla-synthetics and are
+unaffected — the old-name
 pending rows are expected-by-design, not a broken run. Note that
 `plugins/soleur/scripts/admin-merge-ready.sh` exits not-ready on the ABSENT
 old context names (it waits on required names that will never report), so the

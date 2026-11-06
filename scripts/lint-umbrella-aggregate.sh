@@ -12,6 +12,16 @@
 #   (b) ISOLATION: every member step's `if:` contains `!cancelled()` — the
 #       always-run clause that keeps one red member from hiding the rest.
 #   (c) EXISTENCE: an `aggregate` step exists in the job.
+#   (d) VERDICT-FLOW: coverage alone certifies wiring, not failure — the
+#       aggregate must also consume its member verdicts: `failed=0` init,
+#       `|| failed=1` on every member() call, and the `[ "$failed" -ne 0 ]`
+#       → `exit 1` tail. The member() body's discriminating lines
+#       (`skipped) ;;`, `*) any_fail=1`, the owed-verdict `return 1`, the
+#       pass `return 0`) are pinned as tokens — a one-character edit that
+#       flips skipped→success or drops the fail edge is a silent green.
+#   (e) CENSUS: UMBRELLAS below must equal the set of jobs containing an
+#       `- id: aggregate` step across .github/workflows/*.yml — a new
+#       umbrella added outside the census fails until registered.
 #
 # Text-parse lint: `- id:` and `member(` tokens only, no YAML library. The
 # member(...) call's THIRD argument is the single-quoted CSV of step ids.
@@ -148,8 +158,42 @@ for path, jobs in UMBRELLAS.items():
         if not members:
             fail(f"{path} `{job}`: no member steps found (anti-vacuity floor)")
 
+        # (d) verdict-flow — the verdict→exit edge and member() semantics
+        rb = "\n".join(run_block(agg[0]))
+        for tok in ("failed=0", 'if [ "$failed" -ne 0 ]', "exit 1"):
+            if tok not in rb:
+                fail(f"{path} `{job}` aggregate: verdict-flow token `{tok}` missing")
+        for mline in run_block(agg[0]):
+            if member_re.match(mline) and "|| failed=1" not in mline:
+                fail(f"{path} `{job}` aggregate: member() call lacks `|| failed=1`")
+        for tok in ("skipped) ;;", "*) any_fail=1", "owed a verdict", "return 1", "return 0"):
+            if tok not in rb:
+                fail(f"{path} `{job}` aggregate: member() semantics token `{tok}` missing")
+
+# (e) census — every `- id: aggregate` step in the tree must be a registered umbrella
+import glob
+
+discovered = set()
+for path in glob.glob(".github/workflows/*.yml"):
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for i, l in enumerate(lines):
+        if re.match(r"\s+- id: aggregate\s*$", l):
+            job = None
+            for j in range(i, -1, -1):
+                m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", lines[j])
+                if m:
+                    job = m.group(1)
+                    break
+            if job:
+                discovered.add((path, job))
+census = {(p, j) for p, jobs in UMBRELLAS.items() for j in jobs}
+for path, job in sorted(discovered - census):
+    fail(f"{path}: `- id: aggregate` in unregistered umbrella `{job}` — add to UMBRELLAS")
+for path, job in sorted(census - discovered):
+    fail(f"{path}: registered umbrella `{job}` has no `- id: aggregate` step")
+
 if failures:
     print(f"lint-umbrella-aggregate: FAIL ({len(failures)} finding(s))")
     sys.exit(1)
-print("lint-umbrella-aggregate: OK (5 umbrella jobs verified)")
+print(f"lint-umbrella-aggregate: OK ({sum(len(v) for v in UMBRELLAS.values())} umbrella jobs verified)")
 PYEOF
