@@ -4082,6 +4082,18 @@
   implementation; do not retry, dispatch or clear the held draft based on an
   unverified outcome. Completion needs correlated admission/settlement,
   attachment preservation, and a rechecked no-duplicate recovery path.
+- Ruled by CTO agent, 2026-11-06: implement the plan's authenticated
+  three-outcome claim/status protocol, with a fail-closed pending/unresolved
+  cache state before socket send. A socket write, generic credential error,
+  missing row, timeout or failed status is not evidence of non-dispatch.
+  Preserve the stable turn and payload through remount without making it
+  retryable; clear only on correlated authoritative acceptance, and permit
+  explicit same-ID retry only after positive non-dispatch plus atomic fencing.
+  The current acceptance callback is in-process and the wire has no correlated
+  status result; simply retaining the existing cache would be unsafe because
+  restore currently makes cached entries eligible for renewed acknowledgment.
+  Dissent: unresolved state may require the user to copy the bounded draft
+  until status reconciliation exists; safety takes precedence over retry.
 - Preliminary CLO review remains BLOCKED. Both the branch and main contain
   different migrations with prefixes `174` and `175`; earlier claims that
   those numbers were distinct were incorrect. Earlier main also contains
